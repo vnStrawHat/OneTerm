@@ -34,6 +34,12 @@ use oneterm_state::panel_names;
 /// `oneterm-terminal-view` cannot depend on this crate (that edge is a cycle:
 /// this crate already depends on it), so the list crosses through the command
 /// registry in `oneterm-state`.
+///
+/// Startup invariant: [`SshSessionStore::global`] panics when this crate's
+/// [`init`] has not run, so the composition root must call `init` *before* it
+/// installs the bundle holding this function pointer. It does
+/// (`oneterm_app::init`), which is what makes the panic unreachable rather than
+/// merely unlikely — the pointer does not exist until after the store does.
 pub fn saved_ssh_sessions(cx: &App) -> Vec<(u64, String)> {
     tree_builder::menu_entries(SshSessionStore::global(cx).read(cx).sessions())
 }

@@ -40,18 +40,23 @@ pub(crate) fn session_subtitle(s: &SshSession) -> String {
 /// (`IN-0033`).
 ///
 /// Unlike [`build_tree_items`] this neither sorts nor groups: the menu is a
-/// short flat list and storage order is the order `ssh_session.json` holds. A
-/// hand-edited entry with a blank label would otherwise render an invisible,
-/// unidentifiable row, so it falls back to its `host:port`.
+/// flat list and storage order is the order `ssh_session.json` holds.
+///
+/// The name carries the [`session_subtitle`] as well as the label, because
+/// nothing stops two saved sessions sharing a label and a menu row has no
+/// second line to disambiguate them the way the session tree's subtitle does.
+/// An entry whose label is blank (only a hand-edited file can produce one)
+/// shows the subtitle alone rather than an unidentifiable empty row.
 pub(crate) fn menu_entries(sessions: &[SshSessionEntry]) -> Vec<(u64, String)> {
     sessions
         .iter()
         .map(|entry| {
             let label = entry.session.label.trim();
+            let subtitle = session_subtitle(&entry.session);
             let name = if label.is_empty() {
-                format!("{}:{}", entry.session.host, entry.session.port)
+                subtitle
             } else {
-                label.to_string()
+                format!("{label} — {subtitle}")
             };
             (entry.id.raw(), name)
         })
@@ -275,9 +280,9 @@ mod tests {
         assert_eq!(
             menu_entries(&sessions),
             vec![
-                (7, "prod".to_string()),
-                (2, "alpha".to_string()),
-                (5, "db".to_string()),
+                (7, "prod — prod.example.test:22".to_string()),
+                (2, "alpha — even@alpha.example.test:22".to_string()),
+                (5, "db — db.example.test:22".to_string()),
             ]
         );
     }
@@ -288,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_entries_falls_back_to_host_and_port_for_a_blank_label() {
+    fn menu_entries_falls_back_to_the_subtitle_for_a_blank_label() {
         // Only a hand-edited ssh_session.json can get here: the session dialog
         // rejects an empty label.
         let mut session = entry(3, "placeholder", None);
@@ -302,6 +307,46 @@ mod tests {
     fn menu_entries_trims_a_padded_label() {
         let mut session = entry(4, "padded", None);
         session.session.label = "  staging  ".into();
-        assert_eq!(menu_entries(&[session]), vec![(4, "staging".into())]);
+        assert_eq!(
+            menu_entries(&[session]),
+            vec![(4, "staging — even@padded.example.test:22".into())]
+        );
+    }
+
+    /// Adopted from the independent verification of `US-0094` (`D2`): two saved
+    /// sessions may share a label, so the row text must still tell them apart,
+    /// and neither a non-ASCII label nor a long store may distort the mapping.
+    #[test]
+    fn verify_duplicate_unicode_and_fifty_entries() {
+        let mut first = entry(1, "alpha", None);
+        first.session.host = "10.9.0.1".into();
+        let mut second = entry(2, "alpha", None);
+        second.session.host = "10.9.0.2".into();
+        second.session.username = None;
+        let rows = menu_entries(&[first, second]);
+        assert_eq!(
+            rows,
+            vec![
+                (1, "alpha — 10.9.0.1:22".to_string()),
+                (2, "alpha — 10.9.0.2:22".to_string()),
+            ],
+            "duplicate labels must stay distinguishable by their subtitle"
+        );
+
+        let unicode = entry(9, "日本-🚀", None);
+        assert_eq!(
+            menu_entries(&[unicode]),
+            vec![(9, "日本-🚀 — 日本-🚀.example.test:22".to_string())]
+        );
+
+        let many: Vec<SshSessionEntry> = (1..=50)
+            .map(|id| entry(id, &format!("host-{id:02}"), None))
+            .collect();
+        let rows = menu_entries(&many);
+        assert_eq!(rows.len(), 50, "every stored session gets exactly one row");
+        assert_eq!(rows[0].0, 1);
+        assert_eq!(rows[49].0, 50);
+        assert!(rows[0].1.starts_with("host-01 — "));
+        assert!(rows[49].1.starts_with("host-50 — "));
     }
 }

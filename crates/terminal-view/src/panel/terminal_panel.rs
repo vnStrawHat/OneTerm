@@ -593,7 +593,15 @@ impl Panel for TerminalPanel {
             .tab_stop(false)
             .tooltip("New Terminal")
             .dropdown_menu(|menu, _, cx| {
-                let mut menu = menu;
+                // The saved-session section is as long as the user's
+                // `ssh_session.json`, so the popup must be able to scroll: the
+                // kit applies its height cap (half the window, at most 450px)
+                // only when `scrollable` is set, and without it a long list
+                // runs off the bottom of the window unreachable by mouse *and*
+                // by keyboard (`scroll_to_item` is a no-op outside a scrolling
+                // container). This menu has no submenus, which is the only
+                // thing `scrollable` gives up.
+                let mut menu = menu.scrollable(true);
                 // Platform-specific shells.
                 #[cfg(windows)]
                 {
