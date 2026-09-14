@@ -445,13 +445,9 @@ pub trait TerminalSession:
 /// The half of a session its backend keeps: the bytes-out side of its channel,
 /// how that channel is torn down, and the optional features it offers.
 ///
-/// `LocalSession` and `SshSession` implement this and nothing else — everything
-/// a [`TerminalSession`] does beyond it is [`PtySession`]'s and lives here once.
-/// The write/resize pair mirrors [`PtyTransport`](crate::PtyTransport), which a
-/// backend forwards to; it is restated here so the session reaches the channel
-/// without naming the backend's own (crate-private) transport type.
-///
-/// See `docs/terminal-backend.md` §9.
+/// `LocalSession` and `SshSession` implement this and nothing else; everything a
+/// [`TerminalSession`] does beyond it is [`PtySession`]'s. See
+/// `docs/terminal-backend.md` §9.
 pub trait PtyOwner: Send + Sync + 'static {
     /// Queue `bytes` for the child/remote (keystrokes, paste, OSC replies).
     fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError>;
@@ -467,16 +463,10 @@ pub trait PtyOwner: Send + Sync + 'static {
     }
 }
 
-/// The session body both PTY backends share: the engine handle, the OSC state
-/// cache, the IME compose buffer and the single event receiver, with
-/// [`TerminalRender`], [`TerminalInput`], [`TerminalIme`], [`TerminalLifecycle`]
-/// and [`TerminalSession`] implemented on it once.
-///
-/// The local shell and SSH sessions differ only in their
-/// [`TerminalCapabilities`], their [`SessionKind`], their grow-resize
-/// [`ResizePolicy`] and how the channel is torn down, so those are the two
-/// constructor arguments and the [`PtyOwner`] this session owns. Dropping the
-/// session drops the owner, which is where each backend's own teardown lives.
+/// The session body both PTY backends share, with [`TerminalRender`],
+/// [`TerminalInput`], [`TerminalIme`], [`TerminalLifecycle`] and
+/// [`TerminalSession`] implemented on it once. Dropping it drops the [`PtyOwner`],
+/// which is where each backend's own teardown lives.
 ///
 /// See `docs/terminal-backend.md` §9.
 pub struct PtySession<O: PtyOwner> {
@@ -515,28 +505,26 @@ impl<O: PtyOwner> PtySession<O> {
         }
     }
 
-    /// The backend half this session was built on.
+    /// The backend half this session was built on. Reached only by the backend
+    /// crates' own tests; production code goes through [`TerminalSession`].
+    #[doc(hidden)]
     pub fn owner(&self) -> &O {
         &self.owner
     }
 
-    /// The engine handle this session renders from.
+    /// The engine handle this session renders from. Test-only, as [`owner`](Self::owner).
+    #[doc(hidden)]
     pub fn term(&self) -> &SharedTerminal {
         &self.term
     }
 
-    /// The OSC state cache (title, cwd, liveness, line counters).
-    pub fn state(&self) -> &SharedState {
-        &self.state
-    }
-
-    /// How this backend grows the grid (DEC-0008).
+    /// How this backend grows the grid (DEC-0008). Test-only, as [`owner`](Self::owner).
+    #[doc(hidden)]
     pub fn resize_policy(&self) -> ResizePolicy {
         self.resize_policy
     }
 
-    /// A `TerminalModel` adapter for the shared terminal-model operations.
-    /// Cheap — just clones the `Arc` around the engine.
+    /// A `TerminalModel` adapter — cheap, just clones the `Arc` around the engine.
     fn model(&self) -> TerminalModel {
         TerminalModel::new(self.term.clone(), self.resize_policy)
     }
@@ -769,6 +757,134 @@ impl<O: PtyOwner> TerminalSession for PtySession<O> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A [`PtyOwner`] that records what the session forwards to it.
+    ///
+    /// `US-0091` made this possible: while the shared body was a macro, the only
+    /// way to exercise it was to spawn a real backend, so `crates/terminal` had
+    /// no test of the forwarding it now owns — and the PTY-resize hop had none
+    /// anywhere (deleting `pty_resize` from `resize` left all 372 tests green).
+    struct FakeOwner {
+        state: SharedState,
+        writes: Mutex<Vec<Vec<u8>>>,
+        resizes: Mutex<Vec<(u16, u16)>>,
+        /// `state.alive()` as `close()` saw it: the teardown must run first.
+        alive_at_close: Mutex<Option<bool>>,
+    }
+
+    impl PtyOwner for FakeOwner {
+        fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+            self.writes.lock().unwrap().push(bytes.to_vec());
+            Ok(())
+        }
+
+        fn pty_resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
+            self.resizes.lock().unwrap().push((rows, cols));
+            Ok(())
+        }
+
+        fn close(&self) -> Result<(), TerminalError> {
+            *self.alive_at_close.lock().unwrap() = Some(self.state.alive());
+            Ok(())
+        }
+    }
+
+    fn fake_session() -> PtySession<FakeOwner> {
+        let state = crate::backend::SharedSessionState::new_alive();
+        let term = crate::handle::new_shared_terminal(
+            crate::backend::GridSize {
+                cols: 80,
+                lines: 24,
+            },
+            crate::handle::DEFAULT_SCROLLBACK_LINES,
+        );
+        let (_events_tx, events_rx) = async_channel::bounded(4);
+        PtySession::new(
+            term,
+            state.clone(),
+            events_rx,
+            SessionKind::Local,
+            ResizePolicy::KeepViewportTop,
+            FakeOwner {
+                state,
+                writes: Mutex::default(),
+                resizes: Mutex::default(),
+                alive_at_close: Mutex::default(),
+            },
+        )
+    }
+
+    /// The PTY must learn the new size before the grid is grown, or the child
+    /// keeps rendering for the old `WINSIZE`.
+    #[test]
+    fn resize_tells_the_owner_and_then_grows_the_grid() {
+        let session = fake_session();
+        assert_eq!(session.query_state().rows, 24);
+
+        session.resize(30, 80).expect("a grow must be accepted");
+
+        assert_eq!(*session.owner().resizes.lock().unwrap(), [(30, 80)]);
+        assert_eq!(session.query_state().rows, 30);
+
+        // A resize to the size already in effect asks the owner nothing.
+        session.resize(30, 80).expect("a no-op resize is still Ok");
+        assert_eq!(session.owner().resizes.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn write_reaches_the_owner_while_alive_and_is_refused_once_closed() {
+        let session = fake_session();
+        session.write(b"ls\r").expect("write while alive");
+        assert_eq!(session.owner().writes.lock().unwrap()[0], b"ls\r".to_vec());
+
+        session.close().expect("close");
+
+        assert_eq!(session.write(b"after"), Err(TerminalError::Closed));
+        assert_eq!(session.owner().writes.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn close_runs_the_owner_teardown_before_liveness_flips() {
+        let session = fake_session();
+        assert!(session.alive());
+
+        session.close().expect("close");
+
+        assert_eq!(*session.owner().alive_at_close.lock().unwrap(), Some(true));
+        assert!(!session.alive());
+    }
+
+    #[test]
+    fn a_session_reports_its_owner_capabilities_its_kind_and_its_policy() {
+        let session = fake_session();
+        let capabilities = session.capabilities();
+
+        assert!(capabilities.logging.is_none());
+        assert!(capabilities.network_stats.is_none());
+        assert_eq!(session.kind(), SessionKind::Local);
+        assert_eq!(session.resize_policy(), ResizePolicy::KeepViewportTop);
+    }
+
+    #[test]
+    fn marked_text_round_trips_and_commit_writes_it_to_the_owner() {
+        let session = fake_session();
+        assert!(session.marked_text().is_none());
+
+        session.set_marked_text("compose".into());
+        assert_eq!(session.marked_text().as_deref(), Some("compose"));
+
+        session.commit_text("done");
+
+        assert!(session.marked_text().is_none());
+        assert_eq!(session.owner().writes.lock().unwrap()[0], b"done".to_vec());
+    }
+
+    #[test]
+    fn a_pty_session_hands_out_its_event_receiver_once() {
+        let session = fake_session();
+        assert!(session.take_events().is_some());
+        assert!(session.take_events().is_none());
+    }
 
     #[test]
     fn optional_capabilities_default_without_fake_implementations() {

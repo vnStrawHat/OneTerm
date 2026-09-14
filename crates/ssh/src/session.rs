@@ -868,7 +868,7 @@ mod tests {
         use oneterm_terminal::{TerminalError, TerminalInput};
 
         let (session, _listener, cmd_rx) = detached_session();
-        session.state().set_alive(false);
+        session.owner().state.set_alive(false);
 
         assert_eq!(session.write(b"ignored"), Err(TerminalError::Closed));
         assert!(cmd_rx.try_recv().is_err());

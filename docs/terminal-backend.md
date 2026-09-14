@@ -265,9 +265,9 @@ the new size before any output for it arrives, then `TerminalModel::resize_grid`
 takes anything convertible into `oneterm_vt::ResizePolicy` and `resize_grid` passes it
 straight to `Terminal::resize`.
 
-`ResizePolicy::BottomAnchor` anchors the bottom
-row: on a row grow it pulls `min(history, lines_added)` rows out of scrollback into the
-top of the viewport and moves the cursor down by that amount; on a column change it joins
+`ResizePolicy::BottomAnchor` anchors the bottom row: on a row grow it pulls
+`min(history, lines_added)` rows out of scrollback into the top of the viewport and moves
+the cursor down by that amount; on a column change it joins
 rows flagged wrapped and lets history fill the rows that vanished, or splits rows and
 pushes the top ones into history. That matches a Unix PTY or a remote shell, which reflow
 on their side and repaint, so SSH keeps it. conhost behind ConPTY does neither
@@ -401,7 +401,9 @@ The local listener already parses forwarded OSC 7 payloads into `SessionEvent::C
 
 > Original design sketch (the forked engine's `EventLoop` + an `ArcSwap` cache). The shipped code
 > described below the sketch differs: a custom `ShellEventLoop`, no `last_content`
-> cache, and `LocalTransport`/`OscRouter` from §5.3.
+> cache, `LocalTransport`/`OscRouter` from §5.3, and — since `US-0091` — no `TerminalSession`
+> on `LocalSession` at all: `spawn` returns `PtySession<LocalSession>` and the struct keeps
+> only the listener and the owner-thread join handle (the shell config is not retained).
 
 ```rust
 use the_forked_engine::{event_loop::EventLoop, sync::FairMutex, term::{Config, Term}, tty::{self, Options, Shell, WindowSize}};  // historical sketch; the fork is gone

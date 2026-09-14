@@ -23,12 +23,11 @@ use crate::event_loop::ShellEventLoop;
 use crate::session_terminal::local_resize_policy;
 use crate::transport::{LocalListener, LocalTransport};
 
-/// The PTY half of a local shell session: the transport, the shell config it
-/// was spawned with, and the owner thread to reap. `PtySession` owns one of
-/// these and everything else a terminal session does (`session_terminal.rs`).
+/// The PTY half of a local shell session: the transport and the owner thread to
+/// reap. `PtySession` owns one of these and everything else a terminal session
+/// does (`session_terminal.rs`).
 pub struct LocalSession {
     pub(crate) listener: LocalListener,
-    pub(crate) config: LocalShellConfig,
     owner_join: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
@@ -115,15 +114,9 @@ impl LocalSession {
             local_resize_policy(),
             Self {
                 listener,
-                config: cfg,
                 owner_join: Mutex::new(Some(owner_join)),
             },
         ))
-    }
-
-    /// The config this session was spawned with.
-    pub fn config(&self) -> &LocalShellConfig {
-        &self.config
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
