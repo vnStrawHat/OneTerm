@@ -11,7 +11,7 @@ Created: 2026-09-14
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [x] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -52,17 +52,22 @@ and open state, `sftp_table_state` and `zoomed_panel` restore exactly as they do
 
 ## Acceptance
 
-- [ ] Loading a document whose center holds `terminal` panels builds **zero** of them; the
+- [x] Loading a document whose center holds `terminal` panels builds **zero** of them; the
   subsequent `reset_center_only` builds exactly one. Asserted by build count, not by tree shape.
-- [ ] The right dock keeps its saved panel name, width and open state across
+  `load_layout_builds_no_center_panel_and_the_reset_builds_one` — 2 / 3 before the fix, 0 / 1
+  after (numbers in Evidence).
+- [x] The right dock keeps its saved panel name, width and open state across
   load → reset → save, and `zoomed_panel` still restores by name.
-- [ ] `pre_migration_fixture_loads_and_saves_without_semantic_drift` still passes untouched. It
+  `load_reset_center_and_save_round_trip` passes unchanged.
+- [x] `pre_migration_fixture_loads_and_saves_without_semantic_drift` still passes untouched. It
   drives `DockArea::load` directly and asserts the full center round-trips, which is the check
   that this fix did not reach into the dock crate's behaviour.
-- [ ] Ten consecutive launches of the built binary with a saved `docks.json` holding a center
+- [x] Ten consecutive launches of the built binary with a saved `docks.json` holding a center
   terminal: exactly one `cmd.exe` child per launch, no `#32770` "Application Error" dialog, and
-  no `cmd.exe` surviving application exit.
-- [ ] `pwsh scripts/ci-local.ps1` exits 0.
+  no `cmd.exe` surviving application exit. 10 / 10 clean; the same ten launches against a
+  `HEAD` build without the fix gave 2 `cmd.exe`, 2 `OpenConsole.exe`, the dialog in 9 runs and
+  2 orphans in 9 runs (tables in Evidence).
+- [x] `pwsh scripts/ci-local.ps1` exits 0. 60 sections, 1932 passed / 0 failed / 13 ignored.
 
 ## Documentation
 
@@ -103,7 +108,24 @@ lifecycle moves.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+Docs changed:
+
+- `docs/gui-layout.md` §Persistence — one sentence added after the existing "Startup intentionally
+  resets the center" claim: `load_layout` drops the document's center subtree (container name
+  kept, no children) before `DockArea::load`, because building a panel starts its session and a
+  `terminal` panel spawns a local shell that the reset would discard.
+- `crates/workspace/src/layout/workspace/persistence.rs` — `load_layout` doc comment says the same
+  at the seam, and names `BUG-0054` and the `0xc0000142` consequence.
+
+No change needed, and the recorded reason still holds:
+
+- `crates/workspace/src/layout/workspace/mod.rs` — the `OneTermWorkspace::new` doc comment already
+  states "load the old layout (keep right dock + settings), but reset the center". The
+  implementation now matches that sentence instead of contradicting it, so the comment was left
+  alone; the mechanism sentence went to the function that carries it.
+- `docs/gui-layout.md` §Panel registration and presentation, `docs/terminal-backend.md` §6.2,
+  `docs/agents/persistence.md` — reviewed, unchanged. No schema, panel-registration or session
+  lifecycle behaviour moved.
 
 ## Context
 
@@ -157,17 +179,17 @@ Version-mismatch prompt: unaffected. It reads `state.version`, and on "Yes" runs
 
 ## Plan
 
-- [ ] Add the failing focused assertion first: register a counting builder for
+- [x] Add the failing focused assertion first: register a counting builder for
   `panel_names::TERMINAL` in `layout_tests.rs` (an `Rc<Cell<usize>>` bumped per build, alongside
   the existing `NamedPanel`), load a document whose center holds two terminal panels, and assert
   the count is 0 after `load_layout` and 1 after `apply_center_reset`. Confirm it fails against
   current code with 2 / 3.
-- [ ] Drop the center subtree in `load_layout` before `DockArea::load`.
-- [ ] Update the `load_layout` doc comment and `docs/gui-layout.md` §Persistence.
-- [ ] Re-run the focused test, `cargo test -p oneterm-workspace`, then `cargo test --workspace`.
-- [ ] Ten-launch E2E on a release build with a saved center terminal; record per-launch child
-  counts and dialog presence.
-- [ ] `pwsh scripts/ci-local.ps1`.
+- [x] Drop the center subtree in `load_layout` before `DockArea::load`.
+- [x] Update the `load_layout` doc comment and `docs/gui-layout.md` §Persistence.
+- [x] Re-run the focused test, `cargo test -p oneterm-workspace`, then `cargo test --workspace`.
+- [x] Ten-launch E2E on a built binary with a saved center terminal; record per-launch child
+  counts and dialog presence. Run twice: with the fix and, as a `HEAD` baseline, without it.
+- [x] `pwsh scripts/ci-local.ps1`.
 
 ## Decisions
 
@@ -201,41 +223,106 @@ E2E, on Windows with a real desktop session:
 - After each exit, assert no `cmd.exe /K chcp 65001 >nul` survives.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Not implemented. Nothing below is proof of the fix; it is the pre-implementation baseline the
-acceptance is measured against, taken on
-`dist/oneterm-x86_64-pc-windows-msvc/oneterm.exe` (FileVersion 0.5.2.0, built 2026-09-11).
+Implemented on `5b42247` ("fix(workspace): do not build the persisted center at startup"), on top
+of `2f47366` on `feat/vt-engine`.
 
-| `docks.json` center | launches | new `cmd.exe` per launch | `#32770` dialog |
-| --- | --- | --- | --- |
-| holds `terminal` | 8 | 1–2 (two in 5) | 3 |
-| `children: []` | 4 | 1 every launch | none |
-| absent | 1 | 1 | none |
+### Focused proof
 
-One affected launch observed directly: app pid 13360 with children `cmd.exe` 11696, `cmd.exe`
-12688, `OpenConsole.exe` 2692; the dialog window belonged to `csrss.exe` pid 1464.
+`crates/workspace/src/layout/workspace/layout_tests.rs::load_layout_builds_no_center_panel_and_the_reset_builds_one`
+re-registers `panel_names::TERMINAL` with a builder that bumps an `Rc<Cell<usize>>`, loads a
+document whose center holds two terminals, and counts.
 
-Known gaps at planning time:
+| | after `load_layout` | after `apply_center_reset` |
+| --- | --- | --- |
+| before the fix | **2** (assertion failed, expected 0) | **3** (assertion failed, expected 1) |
+| after the fix | 0 | 1 |
 
-- The 1–2 spread is a sampler artefact (20–60 ms polling misses a shell that dies between
-  samples), not evidence that the second spawn is conditional. The E2E acceptance therefore
-  asserts the steady state (one child, no dialog) rather than trying to catch the corpse.
-- The baseline was taken on the packaged 0.5.2 binary; `HEAD` carries a newer bundled ConPTY pair
-  (1.24.2607.10001) and the `crates/pty` transport, which change the race width but not the
-  double spawn. The fix is verified on `HEAD`, so the ten-launch E2E is the honest comparison,
-  not this table.
-- No test can cover the race itself: it depends on Windows console-server attach timing. The
-  focused test pins the cause (the extra build), and the E2E covers the symptom.
+Both pre-fix numbers were read from real failures, the second by temporarily relaxing the first
+assertion to `2` and re-running, then restoring it. `load_reset_center_and_save_round_trip` and
+`pre_migration_fixture_loads_and_saves_without_semantic_drift` pass unchanged and untouched.
+`cargo test -p oneterm-workspace`: 12 passed / 0 failed.
+
+### Gate
+
+`pwsh scripts/ci-local.ps1` from the worktree, exit 0, all ten steps. Test totals across its two
+cargo-test steps: **60 sections, 1932 passed / 0 failed / 13 ignored**.
+
+### E2E, ten launches each
+
+Windows 11, interactive desktop. Binary: `target/fast-dev/oneterm.exe` built in this worktree
+(debug profile, so `config_dir()` is `target/` next to it — the owner's `~/.OneTerm/docks.json`
+was read once and never written). Before every launch the same fixture is copied to
+`target/docks.json`: a copy of the owner's real file — `version` 3, center `StackPanel` →
+`TabPanel` → two `terminal` leaves, right dock `agent_panel` 464 px closed. Each launch is
+`Start-Process -PassThru`; only that pid's process subtree is sampled (`Win32_Process`
+`ParentProcessId`, BFS) every 100 ms for 3 s, and only that pid is closed
+(`CloseMainWindow`, then `Stop-Process -Id <mine>`). `#32770` windows are enumerated for
+observation only and attributed by `GetWindowThreadProcessId`.
+
+With the fix (`5b42247`), runs 1-10 identical:
+
+| run | app pid | distinct `cmd.exe` | max live `cmd.exe` | `OpenConsole.exe` | `#32770` | survivors after exit |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 3256 | 1 | 1 | 1 | none | 0 |
+| 2 | 20332 | 1 | 1 | 1 | none | 0 |
+| 3 | 23424 | 1 | 1 | 1 | none | 0 |
+| 4 | 18132 | 1 | 1 | 1 | none | 0 |
+| 5 | 10196 | 1 | 1 | 1 | none | 0 |
+| 6 | 9384 | 1 | 1 | 1 | none | 0 |
+| 7 | 7088 | 1 | 1 | 1 | none | 0 |
+| 8 | 2836 | 1 | 1 | 1 | none | 0 |
+| 9 | 23848 | 1 | 1 | 1 | none | 0 |
+| 10 | 5476 | 1 | 1 | 1 | none | 0 |
+
+`HEAD` baseline — the same ten launches against the same build with only the four-line center
+drop removed from `load_layout` (edited in place, rebuilt, then restored from `5b42247`):
+
+| run | app pid | distinct `cmd.exe` | max live `cmd.exe` | `OpenConsole.exe` | `#32770` | survivors after exit |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 23104 | 2 | 2 | 2 | none | 2 |
+| 2 | 21808 | 2 | 2 | 2 | `cmd.exe - Application Error` | 2 |
+| 3 | 17656 | 2 | 2 | 2 | `cmd.exe - Application Error` | 2 |
+| 4 | 20576 | 2 | 2 | 2 | `cmd.exe - Application Error` | 2 |
+| 5 | 23740 | 2 | 2 | 2 | `cmd.exe - Application Error` | 2 |
+| 6 | 17652 | 2 | 2 | 2 | `cmd.exe - Application Error` | 2 |
+| 7 | 23296 | 2 | 2 | 2 | `cmd.exe - Application Error` | 2 |
+| 8 | 12148 | 2 | 2 | 2 | `cmd.exe - Application Error` | 2 |
+| 9 | 11944 | 2 | 2 | 2 | `cmd.exe - Application Error` | 2 |
+| 10 | 21512 | 2 | 2 | 2 | `cmd.exe - Application Error` | 0 |
+
+Every baseline dialog was owned by `csrss.exe` pid 1464, exactly as the intake recorded. Screenshot
+of one: [`evidence/BUG-0054-prefix-application-error-dialog.png`](evidence/BUG-0054-prefix-application-error-dialog.png)
+— "The application was unable to start correctly (0xc0000142). Click OK to close the application."
+Baseline survivors were stopped by pid, each one first observed as a descendant of this script's
+own launch; no process was ever matched by name or window title. Pre-existing `oneterm.exe`
+processes were enumerated before each launch and left alone.
+
+This upgrades the intake's planning baseline in two ways: the defect reproduces on `HEAD`
+**deterministically** (10/10 double spawns, 9/10 dialogs), not intermittently as the 0.5.2
+sampling suggested, and the two-shell count is steady rather than a 1-2 spread — the earlier
+spread was the coarse sampler, as the packet predicted.
+
+### Gaps
+
+- `BUG-0055` is untouched and still open: in the baseline runs both shells survived the app's
+  exit in 9 of 10 runs. With the fix there is no discarded session to leak, so the symptom does
+  not appear, but the orphan mechanism itself is not fixed here.
+- No test covers the race: it depends on Windows console-server attach timing. The focused test
+  pins the cause (the extra build); the E2E covers the symptom.
+- The E2E measures a `fast-dev` (debug) build, not the packaged release. The code path is the
+  same and the defect reproduced on it; a packaged-binary run was not repeated.
+- Non-Windows platforms take the same code path and waste the same shell, but only Windows was
+  measured.
 
 ## Handoff
 
-None — single-session packet. If the E2E cannot run (no interactive desktop), report the platform
-proof as unrun rather than inferring it from the focused test, and record it here.
+None — packet complete. `BUG-0055` continues independently.
