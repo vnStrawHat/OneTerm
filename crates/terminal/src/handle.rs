@@ -26,6 +26,7 @@ use oneterm_vt::{Config, Demand, OscClaims, Terminal};
 use parking_lot::{FairMutex, FairMutexGuard};
 
 use crate::backend::GridSize;
+use crate::osc_agent::{AGENT_OSC, LEGACY_AGENT_OSC};
 
 /// The terminal both backends and the UI share.
 pub type SharedTerminal = Arc<TerminalHandle>;
@@ -169,18 +170,39 @@ pub fn new_shared_terminal(size: GridSize, scrollback: usize) -> SharedTerminal 
 ///
 /// `OscClaims` is the extension point that replaces the fork's `report_osc`
 /// patch: the engine forwards only what is claimed here, and `crates/terminal`
-/// claims exactly the three numbers it interprets itself — OSC 7 (cwd), OSC 9
-/// (notification, `9;4` progress, `9;7` agent status) and OSC 133 (shell
-/// integration). Everything else the engine either handles natively (title,
-/// colours, hyperlinks, clipboard) or drops and counts, which is what the
-/// engine being replaced did.
+/// claims exactly the four numbers it interprets itself — OSC 7 (cwd), OSC 9
+/// (notification, `9;4` progress, and `9;7` for one more release), OSC 133
+/// (shell integration) and OSC 20308 (the agent channel). Everything else the
+/// engine either handles natively (title, colours, hyperlinks, clipboard) or
+/// drops and counts, which is what the engine being replaced did.
+///
+/// Claiming OSC 9 **large** also lifts the inline cap on notifications, which
+/// the security policy already truncates to 8 KiB — the parser's spill is
+/// transient, so the cost is a larger buffer while one oversized OSC is being
+/// parsed, the same exposure `claim_large(52)` already accepts.
+///
+/// `AGENT_OSC` is above the claim bitmap's 2048-bit range, so it lands in the
+/// sorted overflow list — which is the whole reason the table has one, and the
+/// reason moving the agent protocol to a five-digit number
+/// (`docs/osc-agent-status.md` §2.2) needed no engine change at all.
 fn adapter_config(scrollback: usize) -> Config {
     let mut claims = OscClaims::new();
-    claims.claim(7).claim(9).claim(133);
+    claims.claim(7).claim(133);
     // A memory ceiling, not a policy: who may write the clipboard stays in
     // `security_policy.rs`. Without it a legitimate large OSC 52 write is
     // truncated at the 2 KiB inline cap.
     claims.claim_large(52);
+    // The agent channel, both spellings, for the same reason — and this one is
+    // a **published** cap: `docs/osc-agent-status.md` § 3.4 tells third-party
+    // agents they may send up to 8 KiB of base64 and calls "< 4 KiB worst case"
+    // legitimate. Plain `claim` bounds the whole payload at `OSC_INLINE`
+    // (2 KiB), prefix included, so the real ceiling was ~2040 base64 bytes and
+    // everything above it was truncated by the parser and then dropped by
+    // `parse_agent_status` as malformed — a silent hole under the number we
+    // publish. The spill is transient (the parser doubles into it and shrinks
+    // back after each OSC), so this costs nothing in the steady state, and the
+    // 8 KiB cap itself is still enforced in `osc_agent`, not here.
+    claims.claim_large(AGENT_OSC).claim_large(LEGACY_AGENT_OSC);
     Config {
         scrollback_limit: scrollback.min(SCROLLBACK_MAX as usize) as u32,
         osc_claims: claims,
@@ -315,12 +337,12 @@ mod tests {
         assert!(handle.try_lock_unfair().is_some());
     }
 
-    /// The adapter claims the three OSC numbers it interprets itself; without
-    /// them the agent channel, the cwd tracker and shell integration go silent.
+    /// The adapter claims every OSC number it interprets itself; without them
+    /// the agent channel, the cwd tracker and shell integration go silent.
     #[test]
     fn the_adapter_claims_the_osc_numbers_it_routes() {
         let config = adapter_config(DEFAULT_SCROLLBACK_LINES);
-        for code in [7, 9, 133, 52] {
+        for code in [7, 9, 133, 52, AGENT_OSC] {
             assert!(
                 config.osc_claims.is_claimed(code),
                 "OSC {code} is not claimed"
@@ -331,6 +353,18 @@ mod tests {
             config.osc_claims.allows_large(52),
             "OSC 52 needs the large payload ceiling"
         );
+        // The agent channel publishes an 8 KiB cap (`docs/osc-agent-status.md`
+        // § 3.4), which a plain claim cannot deliver: `OSC_INLINE` bounds the
+        // whole payload at 2 KiB, prefix included. Both spellings need the
+        // ceiling, because the alias is parsed identically for one release and
+        // that includes how much of it there may be.
+        for code in [AGENT_OSC, LEGACY_AGENT_OSC] {
+            assert!(
+                config.osc_claims.allows_large(code),
+                "OSC {code} carries agent status and needs the large ceiling, \
+                 or the documented 8 KiB cap is unreachable"
+            );
+        }
     }
 
     #[test]

@@ -159,7 +159,7 @@ pub const FIXTURES: &[Fixture] = &[
     },
     Fixture {
         name: "osc_9_7",
-        about: "OneTerm's own: the OSC 9;7 agent channel between output lines",
+        about: "OneTerm's own: the agent channel between output lines",
         make: osc_9_7,
     },
 ];
@@ -259,6 +259,12 @@ fn sixel(target: usize) -> Vec<u8> {
     repeat_to(target, &image)
 }
 
+/// The fixture **name** is deliberately left at `osc_9_7` even though the agent
+/// channel moved to `OSC 20308;1` in `US-0088`: it is the key three recorded
+/// baseline tables (`US-0072`, `US-0073`, `US-0076`) compare against, and what
+/// it measures is OSC-payload throughput, which the number does not change.
+/// These bytes are fed to an in-process parser and never reach a terminal, so
+/// the ConEmu collision that moved the protocol does not apply here.
 fn osc_9_7(target: usize) -> Vec<u8> {
     repeat_to(
         target,

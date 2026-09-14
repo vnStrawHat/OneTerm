@@ -1319,24 +1319,59 @@ fn osc_133_marks_reach_the_cells_and_the_anchor_list() {
     assert_eq!(session.term.grid().anchors().live(), before + 2);
 }
 
+/// Collect the parameters of the first forwarded OSC carrying `code`.
+fn forwarded_osc(session: &Session, code: u32) -> Option<Vec<Vec<u8>>> {
+    session.batch.iter().find_map(|event| match event {
+        VtEvent::Osc {
+            code: seen, params, ..
+        } if *seen == code => Some(session.batch.params(*params).map(<[u8]>::to_vec).collect()),
+        _ => None,
+    })
+}
+
 #[test]
-fn osc_9_7_reaches_the_embedder_through_a_claim() {
-    // The extension point: the agent channel needs no engine change at all.
+fn osc_20308_reaches_the_embedder_through_a_claim() {
+    // The extension point, and the whole reason `US-0088` could move the agent
+    // channel to a five-digit number: 20308 is past the claim bitmap's 2048
+    // bits, so it exercises the sorted overflow list, and the engine still
+    // needs no change at all — it only routes the number.
+    let mut session = Session::with(claiming(20, 4, &[20308]));
+    session.feed(b"\x1b]20308;1;agent-status\x07");
+    assert_eq!(
+        forwarded_osc(&session, 20308).expect("a claimed OSC reaches the batch"),
+        vec![b"20308".to_vec(), b"1".to_vec(), b"agent-status".to_vec()]
+    );
+
+    // The support query is forwarded the same way; answering it is the
+    // embedder's business (`docs/osc-agent-status.md` § 3.2).
+    let mut session = Session::with(claiming(20, 4, &[20308]));
+    session.feed(b"\x1b]20308;0\x07");
+    assert_eq!(
+        forwarded_osc(&session, 20308).expect("the support query reaches the batch"),
+        vec![b"20308".to_vec(), b"0".to_vec()]
+    );
+
+    // Unclaimed, the same bytes are dropped and counted.
+    let mut session = Session::new(20, 4);
+    let stats = session.feed(b"\x1b]20308;1;agent-status\x07");
+    assert!(
+        !session
+            .batch
+            .iter()
+            .any(|event| matches!(event, VtEvent::Osc { .. }))
+    );
+    assert_eq!(stats.unhandled_sequences, 1);
+}
+
+/// `OSC 9;7` is the agent channel's deprecated alias, kept for one release
+/// (`docs/osc-agent-status.md` § 3.1). Its counterpart — asserting the claim is
+/// gone — belongs to the release that drops it.
+#[test]
+fn osc_9_7_still_reaches_the_embedder_during_the_alias_release() {
     let mut session = Session::with(claiming(20, 4, &[9]));
     session.feed(b"\x1b]9;7;agent-status\x07");
-
-    let forwarded: Vec<Vec<u8>> = session
-        .batch
-        .iter()
-        .find_map(|event| match event {
-            VtEvent::Osc {
-                code: 9, params, ..
-            } => Some(session.batch.params(*params).map(<[u8]>::to_vec).collect()),
-            _ => None,
-        })
-        .expect("a claimed OSC reaches the batch");
     assert_eq!(
-        forwarded,
+        forwarded_osc(&session, 9).expect("a claimed OSC reaches the batch"),
         vec![b"9".to_vec(), b"7".to_vec(), b"agent-status".to_vec()]
     );
 
@@ -1418,9 +1453,9 @@ fn claimed_osc_reaches_the_batch_without_allocating_per_osc() {
     // The fork allocates a `Vec` per OSC parameter plus an outer `Vec` on the
     // hot path. Measured through the batch's own capacities, because a
     // `GlobalAlloc` is an `unsafe` trait and this crate has none.
-    let mut session = Session::with(claiming(20, 4, &[9]));
+    let mut session = Session::with(claiming(20, 4, &[20308]));
     for _ in 0..64 {
-        session.feed(b"\x1b]9;7;warm\x07");
+        session.feed(b"\x1b]20308;1;warm\x07");
     }
     let (arena, params, events) = (
         session.batch.arena_capacity(),
@@ -1429,7 +1464,7 @@ fn claimed_osc_reaches_the_batch_without_allocating_per_osc() {
     );
 
     for _ in 0..1000 {
-        session.feed(b"\x1b]9;7;warm\x07");
+        session.feed(b"\x1b]20308;1;warm\x07");
     }
 
     assert_eq!(session.batch.arena_capacity(), arena);

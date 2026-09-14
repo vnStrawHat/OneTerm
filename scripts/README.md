@@ -46,7 +46,7 @@ versions are not guaranteed to stay on the NuGet flat container. Rationale and r
 | Script | Purpose |
 |---|---|
 | `osc-test.sh` / `osc-test.ps1` | Interactive OSC sequence tester — run **inside** a OneTerm terminal, pick one sequence at a time (`docs/osc-sequences-checklist.md`). |
-| `agent-status-demo.sh` / `agent-status-demo.ps1` | Emit OSC 9;7 agent-status events to exercise the Agent Panel (`docs/osc-agent-status.md`). |
+| `agent-status-demo.sh` / `agent-status-demo.ps1` | Emit OSC 20308;1 agent-status events to exercise the Agent Panel (`docs/osc-agent-status.md`). |
 | `test_highlight.sh` | Print sample output covering every semantic-highlight class (`docs/terminal-semantic-highlighting.md`); eyeball the colours. |
 
 The `.sh` / `.ps1` pairs are intentionally duplicated (Git Bash is not guaranteed on

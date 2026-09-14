@@ -1,4 +1,4 @@
-//! OSC 9;7 `seq` dedup helper (spec §4.1 / §8.3).
+//! Agent-status `seq` dedup helper (spec §4.1 / §8.3).
 //!
 //! `seq` dedup is per-(terminal, agent) state: each agent emitting into a
 //! terminal has its own monotonic `seq` counter, and the receiver must drop
@@ -63,7 +63,7 @@ impl AgentSeqWatermarks {
     }
 }
 
-/// Decide whether an OSC 9;7 event should be applied, updating the per-agent
+/// Decide whether an agent-status event should be applied, updating the per-agent
 /// `seq` watermark in place.
 ///
 /// Returns `true` if `ev.seq()` is strictly greater than the last applied

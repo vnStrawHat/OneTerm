@@ -146,10 +146,13 @@ and the `THIRD-PARTY-NOTICES.md` § 2 rows are deleted in the last packet, not t
   and `proptest` become direct workspace declarations. All six are already in `Cargo.lock`
   transitively, so the dependency graph does not grow; `docs/agents/dependencies.md` § 3 must
   record them.
-- [ ] Follow-up: OSC 9;7 collides with ConEmu's "run some process with arguments" sub-code
+- [x] Follow-up: OSC 9;7 collides with ConEmu's "run some process with arguments" sub-code
   (`research/prior-art.md` § 6.4). That is a defect in `docs/osc-agent-status.md`, not in the
   engine, and needs its own packet. The engine's OSC registration table makes either resolution
   a one-line registration change.
+  **Closed by `US-0088`** (`docs/spec-intakes/IN-0029-vt-engine/US-0088-agent-osc-20308.md`):
+  the channel moved to `OSC 20308;1`, with `9;7` kept as a deprecated alias for one release.
+  The prediction held — the engine side was exactly one number in one `claim_large` call.
 - [ ] Follow-up: while the vendored fork is still the shipping engine, the unbounded `osc_raw`
   remains reachable from any SSH session. Either cap it with one more vendor patch or accept the
   exposure for the migration window — an owner decision recorded in `IN-0029.md`.

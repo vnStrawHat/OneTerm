@@ -59,7 +59,7 @@ pub struct SessionState {
     pub last_exit_code: Option<i32>,
     /// Theme defaults for colour queries.
     pub default_colors: DefaultColors,
-    /// Last applied `seq` per agent id (OSC 9;7 dedup, spec §4.1 / §8.3),
+    /// Last applied `seq` per agent id (agent-status dedup, spec §4.1 / §8.3),
     /// bounded to `MAX_TRACKED_AGENTS` ids (SEC-04).
     pub last_agent_seq: AgentSeqWatermarks,
 }
@@ -73,6 +73,9 @@ pub struct SharedSessionState {
     tx_bytes: AtomicU64,
     absolute_line_count: AtomicUsize,
     clear_epoch: AtomicUsize,
+    agent_osc_unknown_subcodes: AtomicU64,
+    legacy_agent_osc_events: AtomicU64,
+    truncated_agent_osc: AtomicU64,
 }
 
 /// Handle to a [`SharedSessionState`].
@@ -92,6 +95,48 @@ impl SharedSessionState {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Count one `OSC 20308` sub-code the receiver does not implement, and
+    /// return the new total (`docs/osc-agent-status.md` §3: `2` and above are
+    /// reserved, so an unknown sub-code is ignored — but not invisibly).
+    pub fn count_unknown_agent_subcode(&self) -> u64 {
+        self.agent_osc_unknown_subcodes
+            .fetch_add(1, Ordering::Relaxed)
+            + 1
+    }
+
+    /// How many unrecognised `OSC 20308` sub-codes this session has dropped.
+    pub fn agent_osc_unknown_subcodes(&self) -> u64 {
+        self.agent_osc_unknown_subcodes.load(Ordering::Relaxed)
+    }
+
+    /// Count one event that arrived on the deprecated `OSC 9;7` alias and
+    /// return the session total, which is `1` on the first — the alias is
+    /// "parsed identically, counted, and logged once per session"
+    /// (`docs/osc-agent-status.md` §3.1), and one counter serves both: the
+    /// caller logs when this returns `1`.
+    pub fn count_legacy_agent_osc(&self) -> u64 {
+        self.legacy_agent_osc_events.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// How many events this session took on the deprecated alias.
+    pub fn legacy_agent_osc_events(&self) -> u64 {
+        self.legacy_agent_osc_events.load(Ordering::Relaxed)
+    }
+
+    /// Count one agent-status payload the parser had to cut at its cap, and
+    /// return the session total. Separate from the malformed-payload path,
+    /// which is silent by `docs/osc-agent-status.md` §3.5: a payload the
+    /// *terminal* dropped is the terminal's business to report, not the
+    /// agent's mistake.
+    pub fn count_truncated_agent_osc(&self) -> u64 {
+        self.truncated_agent_osc.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// How many agent-status payloads this session lost to the parser's cap.
+    pub fn truncated_agent_osc(&self) -> u64 {
+        self.truncated_agent_osc.load(Ordering::Relaxed)
     }
 
     /// Whether the child/remote is still running.

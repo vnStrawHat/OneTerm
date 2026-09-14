@@ -139,7 +139,7 @@ ESC ] 20308 ; 1 ; <base64-json> ST
   query (§ 3.2); `2` and above are reserved for future OneTerm extensions.
 - `<base64-json>` — the standard-base64 encoding of a UTF-8 JSON object
   (see §4). Base64 contains no `;`, so it survives the VT engine's
-  `;`-splitting intact (see §3.1). Must not contain the ST terminator bytes.
+  `;`-splitting intact (see §3.3). Must not contain the ST terminator bytes.
 - `ST` — String Terminator. **Use `BEL` (`\x07`)** for maximum compatibility.
   `ESC \` (`\x1b\\`) is also accepted.
 
@@ -190,6 +190,15 @@ reply before it, the terminal does not implement the protocol — no timeout to
 choose, no guess. A terminal that does not parse `20308` drops the query
 silently, which is exactly the behaviour the number was chosen for (§ 2.2).
 
+**This puts a requirement on the receiver, and it is easy to miss:** replies
+must reach the host in the order the sequences that caused them arrived. A
+terminal that batches a chunk of input and answers the sequences it recognises
+natively before the ones an extension handles will emit DA1 first and report
+itself unsupported. OneTerm did exactly that until `US-0088` — its event drain
+wrote every engine-produced reply in a first pass and the extension-produced
+ones in a second. If you implement this protocol on top of an existing engine,
+check that seam.
+
 **Or read `XTVERSION`.** `CSI > 0 q` answers `DCS > | OneTerm(<version>) ST`.
 That identifies the terminal but not the protocol version, so it is the weaker
 signal; use it only if the agent already issues `XTVERSION` for other reasons.
@@ -198,7 +207,7 @@ Emitting the sequence blind remains safe — the failure mode in every surveyed
 terminal is that nothing happens — so detection is an optimisation for agents
 that want to skip the work of building events nobody reads.
 
-### 3.1 The payload is always base64-wrapped
+### 3.3 The payload is always base64-wrapped
 
 Most VT engines split the OSC into parameters on `;` before the application
 sees them. (In xterm-derived parsers, byte `0x3B` (`;`) finalises the current
@@ -216,8 +225,11 @@ ESC ] 20308 ; 1 ; <base64(json)> ST
 - The agent encodes `JSON.stringify(payload)` with standard base64
   (`base64::engine::general_purpose::STANDARD` / `Buffer.from(...).toString("base64")`
   / equivalent) and writes `\x1b]20308;1;<b64>\x07`.
-- The receiver detects the `7` sub-code, takes the third parameter,
+- The receiver detects the `1` sub-code, takes the third parameter,
   base64-decodes it, then JSON-parses the result. There is only one wire form.
+  The deprecated `9;7` alias (§ 3.1) is the *same* third parameter behind a
+  different pair of leading ones, so it reaches the same decoder — which is why
+  porting an agent is a one-line change to the prefix it writes.
 - Trade-off: ~33 % size overhead. Acceptable for status events (typical
   payload < 300 bytes; even the largest `model` event is well under
   1 KiB raw).
@@ -228,7 +240,7 @@ ESC ] 20308 ; 1 ; <base64(json)> ST
 > that contained `;` (a timestamp string, an error message, a URL with query
 > params). Base64 sidesteps it entirely.
 
-### 3.2 Size cap
+### 3.4 Size cap
 
 The receiver **MUST** cap OSC 20308;1 payloads at **8 KiB** (measured on the
 base64 length, i.e. ~6 KiB of raw JSON after decode). Oversized payloads are
@@ -237,7 +249,18 @@ from flooding the terminal with multi-megabyte OSCs. Agent status payloads are
 small (< 1 KiB typical, < 4 KiB worst case), so the cap never hits legitimate
 use.
 
-### 3.3 Malformed-payload handling
+**The cap must also be *reachable*.** A VT parser usually bounds an OSC payload
+well below this — OneTerm's inline bound is 2 KiB, covering the whole payload
+including the `20308;1;` prefix — and cuts anything longer. A receiver that
+leaves the agent channel on that default publishes an 8 KiB cap while silently
+losing everything past ~2 KiB, which is inside the "< 4 KiB worst case" above:
+a large `model` or `approval` event simply disappears. Raise the parser's bound
+for this number, and treat a payload the parser *did* have to cut as a dropped
+event in its own right — never decode it. Truncated base64 can decode to a
+shorter well-formed event that the agent never sent, so it must not reach the
+JSON validator at all.
+
+### 3.5 Malformed-payload handling
 
 On any of: invalid base64, invalid UTF-8, invalid JSON, unknown schema
 version, unknown `type` — the receiver **MUST** drop the event silently (a
@@ -623,11 +646,11 @@ Cards are grouped by terminal tab and sorted by state priority (`blocked → err
 
 ## 6. Security considerations
 
-1. **Size cap.** Mandatory 8 KiB cap on the base64 payload (§3.2). Without
+1. **Size cap.** Mandatory 8 KiB cap on the base64 payload (§3.4). Without
    it, a malicious or buggy agent can flood the terminal with multi-megabyte
    OSCs and stall the parser.
 2. **Malformed payloads.** Invalid base64 / UTF-8 / JSON / schema version /
-   `type` MUST be dropped silently (§3.3). The terminal must never crash or
+   `type` MUST be dropped silently (§3.5). The terminal must never crash or
    render artefacts on a malformed agent OSC.
 3. **One-directional.** OSC 20308;1 carries no reply. A host that wants to act
    on an agent (approve, interrupt) does so through the terminal's input
@@ -649,7 +672,7 @@ Cards are grouped by terminal tab and sorted by state priority (`blocked → err
 
 ## 7. Rationale: why base64 (not raw JSON)
 
-This section records the investigation behind the §3.1 decision, kept for
+This section records the investigation behind the §3.3 decision, kept for
 future implementers who may be tempted to send raw JSON.
 
 **Question.** Do VT engines split the OSC payload on `;` before the
@@ -684,7 +707,7 @@ for status events.
 
 A conformance test suite for an OSC 20308;1 receiver should cover:
 
-1. **Valid payloads (all base64-wrapped per §3.1):**
+1. **Valid payloads (all base64-wrapped per §3.3):**
    - One valid payload per event type: `state`, `session`, `heartbeat`,
      `model`, `tool_call` (start/update/end), `file`, `approval`.
    - JSON whose string value contains `;` — base64-wrapped, must decode and

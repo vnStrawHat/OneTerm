@@ -1,6 +1,6 @@
 [package]
 name = "oneterm-agent-ui"
-description = "OneTerm Agent feature: the Agent Panel (right-dock fleet view of coding agents reporting via OSC 9;7)."
+description = "OneTerm Agent feature: the Agent Panel (right-dock fleet view of coding agents reporting via OSC 20308)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

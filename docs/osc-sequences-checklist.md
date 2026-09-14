@@ -153,16 +153,28 @@ ESC ] 8 ; ; ST               ← close link
 |:-----:|-----|----------|--------|---------|
 | ☑ | **9** | Desktop notification | `ESC]9;msg ST` | ✅ → toast. |
 | ☑ | **9;4** | Progress bar | `ESC]9;4;state;pct ST` | ✅ — state 0–4. |
-| ☑ | **9;7** | Agent status | see [`osc-agent-status.md`](osc-agent-status.md) | ✅ — OneTerm proposal. |
+| ☑ | **20308;1** | Agent status | see [`osc-agent-status.md`](osc-agent-status.md) | ✅ — OneTerm proposal. |
+| ☑ | **20308;0** | Agent-protocol support query | `ESC]20308;0 ST` → `ESC]20308;0;1;OneTerm;<ver> ST` | ✅ |
+| ☑ | **9;7** | Agent status — **deprecated alias** | see [`osc-agent-status.md`](osc-agent-status.md) § 3.1 | ⚠️ — accepted for one release, then dropped. |
 | ☐ | **9;1/2/3** | ConEmu misc (sleep/msgbox/tabtitle) | `ESC]9;1;ms ST` etc. | ❌ |
 | ☐ | **99** | Extended notification protocol | `ESC]99;i=ID;payload ST` | ❌ |
 | ☐ | **777** | urxvt notification | `ESC]777;notify;title;body ST` | ❌ |
 
 > ✅ **OneTerm**: OSC 9 (notification → toast via `window.push_notification`) and OSC 9;4
-> (progress → thin progress bar at the top edge of the terminal, state 0-4). Forwarded by the vendored
-> `alacritty_terminal` fork's `Event::Osc` hook (upstream drops OSC 9) to `OscRouter` →
-> `OscPayload::Notification`/`Progress` → `SessionEvent`. OSC 9;7 (agent status) is also supported, see
-> [`osc-agent-status.md`](osc-agent-status.md). Still ❌: 9;1/2/3, 99, 777.
+> (progress → thin progress bar at the top edge of the terminal, state 0-4). Forwarded through the
+> engine's OSC registration table (`OscClaims`) to `OscRouter` →
+> `OscPayload::Notification`/`Progress` → `SessionEvent`.
+>
+> **OSC 20308** is the agent channel — see [`osc-agent-status.md`](osc-agent-status.md). Sub-code `1`
+> is the status event and `0` the support query, answered on the transport; `2` and above are
+> reserved, and an unrecognised sub-code is ignored and counted.
+>
+> ⚠️ **OSC 9;7** carried the agent channel until `US-0088` and is kept as a deprecated alias for
+> **one release** — parsed identically, counted, and logged once per session. It is ConEmu's "run
+> some process with arguments" (§ 2.1), which is why it is going away: an agent emitting it under
+> ConEmu or cmder asks that terminal to spawn a process. Agents should emit `20308;1` only.
+>
+> Still ❌: 9;1/2/3, 99, 777.
 
 ---
 

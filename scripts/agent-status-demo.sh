@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Simulate coding-agent activity in OneTerm by emitting OSC 9;7 events.
+# Simulate coding-agent activity in OneTerm by emitting OSC 20308;1 events.
 #
 # Run this script inside a OneTerm terminal. The default scenario exercises the
 # folded Agent Panel card: session, model/context, lifecycle, tool, file, and
@@ -88,9 +88,9 @@ emit_event() {
 
     json="{\"v\":1,\"agent\":\"${AGENT}\",\"type\":\"${event_type}\",\"seq\":${SEQ},\"ts\":${timestamp}${fields}}"
     payload="$(printf '%s' "$json" | base64 | tr -d '\r\n')"
-    (( ${#payload} <= 8192 )) || fail "encoded payload exceeds the OSC 9;7 size cap"
+    (( ${#payload} <= 8192 )) || fail "encoded payload exceeds the agent-status size cap"
 
-    printf '%s]9;7;%s%s' "$ESC" "$payload" "$BEL"
+    printf '%s]20308;1;%s%s' "$ESC" "$payload" "$BEL"
     printf '  %-10s %s [%s]\n' "$event_type" "$description" "$AGENT"
     sleep_step
 }
@@ -223,7 +223,7 @@ fi
 [[ "$DELAY_MS" =~ ^[0-9]+$ ]] || fail "delay_ms must be a non-negative integer"
 validate_agent "$AGENT"
 
-printf 'OneTerm OSC 9;7 agent-status simulation: %s\n' "$SCENARIO"
+printf 'OneTerm OSC 20308 agent-status simulation: %s\n' "$SCENARIO"
 case "$SCENARIO" in
     demo)    scenario_demo ;;
     working) scenario_working ;;

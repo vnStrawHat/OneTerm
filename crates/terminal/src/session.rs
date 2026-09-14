@@ -147,7 +147,7 @@ pub enum SessionEvent {
     Notification(String),
     /// Taskbar progress (OSC 9;4) — the UI shows a progress indicator.
     Progress(TerminalProgress),
-    /// Coding-agent status event (OSC 9;7, see `docs/osc-agent-status.md`).
+    /// Coding-agent status event (OSC 20308;1, see `docs/osc-agent-status.md`).
     /// Wrapped in `Arc` so cloning on the fan-out path is cheap. `seq` dedup
     /// is already applied by the listener before forwarding.
     AgentStatus(std::sync::Arc<AgentStatusEvent>),

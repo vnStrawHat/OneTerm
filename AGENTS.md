@@ -19,7 +19,7 @@ Guide for AI agents (and contributors) when working with the **OneTerm** project
 - Connect to remote shells over SSH
 - Browse and transfer files over SFTP
 - Open local shells
-- Monitor coding agents in a live Agent Panel fed by the OSC 9;7 proposal ([spec](docs/osc-agent-status.md)). 
+- Monitor coding agents in a live Agent Panel fed by the OSC 20308 proposal ([spec](docs/osc-agent-status.md)). 
 - Powered by `Rust`, `alacritty_terminal`, `gpui`, `gpui-component`
 
 ---

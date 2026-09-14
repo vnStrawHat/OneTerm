@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Simulates coding-agent activity in OneTerm by emitting OSC 9;7 events.
+    Simulates coding-agent activity in OneTerm by emitting OSC 20308;1 events.
 
 .DESCRIPTION
     Run this script inside a OneTerm terminal. The default scenario exercises
@@ -80,10 +80,10 @@ function Send-AgentEvent {
     $json = $payload | ConvertTo-Json -Compress -Depth 8
     $base64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
     if ($base64.Length -gt 8192) {
-        throw 'Encoded payload exceeds the OSC 9;7 size cap.'
+        throw 'Encoded payload exceeds the agent-status size cap.'
     }
 
-    [Console]::Out.Write("$ESC]9;7;$base64$BEL")
+    [Console]::Out.Write("$ESC]20308;1;$base64$BEL")
     [Console]::Out.Flush()
     Write-Host ("  {0,-10} {1} [{2}]" -f $Type, $Description, $script:CurrentAgent)
 
@@ -292,7 +292,7 @@ function Invoke-MultiScenario {
     Send-State 'idle' 'Ready for the next prompt'
 }
 
-Write-Host "OneTerm OSC 9;7 agent-status simulation: $Scenario"
+Write-Host "OneTerm OSC 20308 agent-status simulation: $Scenario"
 switch ($Scenario) {
     'Demo'    { Invoke-DemoScenario }
     'Working' { Invoke-WorkingScenario }

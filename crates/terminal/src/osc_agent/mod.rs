@@ -1,26 +1,32 @@
-//! OSC 9;7 — Agent Status Event receiver.
+//! OSC 20308 — Agent Status Event receiver.
 //!
 //! Parses the agent side-channel described in `docs/osc-agent-status.md`:
 //! an agent running inside the terminal emits
 //!
 //! ```text
-//! ESC ] 9 ; 7 ; <base64-json> ST
+//! ESC ] 20308 ; 1 ; <base64-json> ST
 //! ```
 //!
 //! to report its lifecycle state, session identity, model/context, tool
 //! calls, file activity, and approval requests. The payload is **always**
-//! base64-wrapped (see spec §3.1: VT engines split the OSC on `;` before
+//! base64-wrapped (see spec §3.3: VT engines split the OSC on `;` before
 //! dispatch, so raw JSON cannot survive). The receiver:
 //!
 //! 1. takes the third parameter (`params[2]`) as the base64 blob,
-//! 2. enforces an 8 KiB cap on the base64 length (spec §3.2),
+//! 2. enforces an 8 KiB cap on the base64 length (spec §3.4),
 //! 3. base64-decodes + UTF-8-decodes + JSON-parses it,
 //! 4. validates the envelope (`v`, `agent`, `type`, `seq`, `ts`),
 //! 5. dispatches on `type` into a typed [`AgentStatusEvent`].
 //!
 //! On any malformed input (bad base64, bad UTF-8, bad JSON, unknown schema
 //! version, unknown `type`, missing required fields) the receiver drops
-//! the event silently (spec §3.3) — a `log::debug!` is allowed.
+//! the event silently (spec §3.5) — a `log::debug!` is allowed.
+//!
+//! For **one release** the sequence is also accepted under its old number,
+//! `ESC ] 9 ; 7 ; <base64-json> ST` (spec §3.1). The payload grammar, the cap
+//! and the validation are identical — only the two leading parameters moved —
+//! so both spellings land in exactly this parser. `9;7` is ConEmu's "run some
+//! process with arguments" (spec §2.1), which is why it is going away.
 //!
 //! `seq` dedup is **not** done here — it is per-(terminal, agent) state and
 //! belongs to the listener that owns the terminal's state cache. This module
@@ -45,7 +51,29 @@ pub use dedup::{AgentSeqWatermarks, MAX_TRACKED_AGENTS, should_apply};
 use base64::Engine;
 use serde::Deserialize;
 
-/// Maximum base64 payload length accepted on OSC 9;7 (spec §3.2).
+/// The agent channel's OSC number (spec §2.2): `20308` is `0x4F54`, the two
+/// ASCII bytes of `OT`, in the `10000..30000` band no surveyed terminal
+/// interprets. Sub-code `0` is the support query, `1` the status event, `2`+
+/// are reserved for future OneTerm extensions.
+pub const AGENT_OSC: u32 = 20308;
+
+/// The number the channel used before `US-0088`, accepted as a **deprecated
+/// alias for one release** (spec §3.1) and then dropped. `OSC 9` itself stays
+/// claimed for notifications and `9;4` progress, so only the `9;7` sub-code is
+/// the alias.
+pub const LEGACY_AGENT_OSC: u32 = 9;
+
+/// [`LEGACY_AGENT_OSC`]'s sub-code, as it appears on the wire.
+pub const LEGACY_AGENT_OSC_SUB: &[u8] = b"7";
+
+/// The protocol version reported by the support-query answer (spec §3.2).
+///
+/// Distinct from [`AGENT_STATUS_SCHEMA_VERSION`], which versions the JSON
+/// envelope: this one versions the sequence and its sub-codes. They happen to
+/// agree today.
+pub const AGENT_PROTOCOL_VERSION: u32 = 1;
+
+/// Maximum base64 payload length accepted on the agent channel (spec §3.4).
 ///
 /// ~6 KiB of raw JSON after decode. Oversized payloads are dropped silently.
 pub const MAX_AGENT_STATUS_BASE64_BYTES: usize = 8 * 1024;
@@ -59,7 +87,7 @@ pub const MAX_AGENT_ID_BYTES: usize = 64;
 /// receiver is upgraded to understand them (spec §4.1 `v`).
 pub const AGENT_STATUS_SCHEMA_VERSION: u32 = 1;
 
-/// One parsed OSC 9;7 event: the envelope (`agent`, `seq`, `ts`) plus the
+/// One parsed agent-status event: the envelope (`agent`, `seq`, `ts`) plus the
 /// type-specific [`AgentPayload`].
 ///
 /// The `v` version is validated during parsing and the `type` discriminator
@@ -77,7 +105,7 @@ pub struct AgentStatusEvent {
     pub payload: AgentPayload,
 }
 
-/// Type-specific payload of an OSC 9;7 event (spec §4.2).
+/// Type-specific payload of an agent-status event (spec §4.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentPayload {
     /// `type: "state"` — agent lifecycle state.
@@ -146,12 +174,12 @@ struct RawEnvelope {
     ts: u64,
 }
 
-/// Parse an OSC 9;7 base64 payload (the third OSC parameter, `params[2]`)
+/// Parse an agent-status base64 payload (the third OSC parameter, `params[2]`)
 /// into a typed [`AgentStatusEvent`].
 ///
-/// Returns `None` (silent drop, spec §3.3) on:
+/// Returns `None` (silent drop, spec §3.5) on:
 /// - empty/missing parameter,
-/// - base64 length > [`MAX_AGENT_STATUS_BASE64_BYTES`] (spec §3.2),
+/// - base64 length > [`MAX_AGENT_STATUS_BASE64_BYTES`] (spec §3.4),
 /// - invalid base64,
 /// - invalid UTF-8 after decode,
 /// - invalid JSON,
@@ -164,10 +192,10 @@ struct RawEnvelope {
 /// spec §4.1 / §4.2). `seq` dedup is **not** performed here — see the
 /// module docs.
 pub fn parse_agent_status(base64_param: &[u8]) -> Option<AgentStatusEvent> {
-    // §3.2 size cap on the base64 length.
+    // §3.4 size cap on the base64 length.
     if base64_param.len() > MAX_AGENT_STATUS_BASE64_BYTES {
         log::debug!(
-            "OSC 9;7 dropped: base64 payload {} bytes > cap {}",
+            "agent status dropped: base64 payload {} bytes > cap {}",
             base64_param.len(),
             MAX_AGENT_STATUS_BASE64_BYTES
         );
@@ -193,14 +221,14 @@ pub fn parse_agent_status_json(json: &str) -> Option<AgentStatusEvent> {
     let raw: RawEnvelope = serde_json::from_str(json).ok()?;
 
     if raw.v != AGENT_STATUS_SCHEMA_VERSION {
-        log::debug!("OSC 9;7 dropped: unknown schema version v={}", raw.v);
+        log::debug!("agent status dropped: unknown schema version v={}", raw.v);
         return None;
     }
 
     let agent = raw.agent;
     if agent.is_empty() || agent.len() > MAX_AGENT_ID_BYTES {
         log::debug!(
-            "OSC 9;7 dropped: agent id length {} outside 1..={}",
+            "agent status dropped: agent id length {} outside 1..={}",
             agent.len(),
             MAX_AGENT_ID_BYTES
         );
@@ -230,7 +258,7 @@ pub fn parse_agent_status_json(json: &str) -> Option<AgentStatusEvent> {
         "file" => payload!(FileEvent, File),
         "approval" => payload!(ApprovalEvent, Approval),
         other => {
-            log::debug!("OSC 9;7 dropped: unknown type {other:?}");
+            log::debug!("agent status dropped: unknown type {other:?}");
             return None;
         }
     };
@@ -242,15 +270,25 @@ pub fn parse_agent_status_json(json: &str) -> Option<AgentStatusEvent> {
     })
 }
 
-/// Build the raw OSC parameter slices for an OSC 9;7 event from a JSON string,
-/// for use in downstream listener tests (base64-wraps the JSON and prepends
-/// `"9"`, `"7"`). Available under `test-support` so backend crates don't need
-/// a direct `base64` dependency just to exercise the OSC 9;7 path.
+/// The two wire spellings the receiver accepts: the sequence, and the
+/// deprecated alias it keeps for one release (spec §3.1).
+///
+/// Tests iterate this instead of being written twice, so "both encodings reach
+/// the same handling" is proved by construction rather than by two copies that
+/// can drift apart.
 #[cfg(any(test, feature = "test-support"))]
-pub fn encode_osc97_params(json: &str) -> Vec<Vec<u8>> {
+pub const AGENT_OSC_PREFIXES: [[&[u8]; 2]; 2] = [[b"20308", b"1"], [b"9", LEGACY_AGENT_OSC_SUB]];
+
+/// Build the raw OSC parameter slices for an agent-status event from a JSON
+/// string and one of [`AGENT_OSC_PREFIXES`], for use in downstream listener
+/// tests (base64-wraps the JSON and prepends the number and sub-code).
+/// Available under `test-support` so backend crates don't need a direct
+/// `base64` dependency just to exercise the agent path.
+#[cfg(any(test, feature = "test-support"))]
+pub fn encode_agent_osc_params(prefix: [&[u8]; 2], json: &str) -> Vec<Vec<u8>> {
     vec![
-        b"9".to_vec(),
-        b"7".to_vec(),
+        prefix[0].to_vec(),
+        prefix[1].to_vec(),
         base64::engine::general_purpose::STANDARD
             .encode(json.as_bytes())
             .into_bytes(),
