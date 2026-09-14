@@ -281,7 +281,13 @@ impl<'a> RowRef<'a> {
         self.header.map_or(SeqNo::default(), |header| header.seq)
     }
 
-    pub(crate) fn flags(&self) -> RowFlags {
+    /// The row's content hints. `pub` because `oneterm-terminal`'s
+    /// `last_content_row` needs them to read `occ` correctly: `reset` sets
+    /// `flags = DIRTY | flags_for(template)` and *then* zeroes `occ`, so the
+    /// hints are the only thing that says whether an `occ == 0` row is blank or
+    /// painted with a non-default erase template (`US-0092`; `US-0090` had
+    /// narrowed this to `pub(crate)` when nothing outside used it).
+    pub fn flags(&self) -> RowFlags {
         self.header.map_or(RowFlags::empty(), |header| header.flags)
     }
 
