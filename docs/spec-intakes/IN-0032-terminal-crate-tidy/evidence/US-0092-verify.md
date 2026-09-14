@@ -385,3 +385,272 @@ Claude-Session: https://claude.ai/code/session_01Q6xr5jX29B2b6L4MGsoNdW
 ```
 
 `9112782`, `3fcc8fb`, `f963a94` — checked with `git log --format='%h%n%B' 4e83f31..f963a94`. OK.
+
+---
+
+# Re-verification of `5d3f9eb`
+
+Head re-verified: `5d3f9eb` on `worktree-agent-a7148a16449276544`
+(merge `55de205` of main `4bb088d`, then `c3a86c6`, `997180c`, `5d3f9eb`).
+Reviewed with `git diff 4bb088d..5d3f9eb`, in this worktree reset to `5d3f9eb`.
+Date: 2026-09-14
+
+## Verdict: **PASS**
+
+Both Major defects are fixed at the root, not at the symptom. The three tests I left behind were
+adopted verbatim and now pass; eight further tests written for this re-verification — including a
+200-step randomized comparator — also pass; both counted-work guards still bite with the original
+numbers after the rework; `ci-local.ps1` is green at exactly the totals the implementer reported;
+and the GUI reproduction of defect 2 was re-run on my own build at the same position and is now
+plain.
+
+No new defect found. Two notes, neither blocking, at the end.
+
+## 1. Defect 1 — `occ == 0` gated on the content hints: **fixed, and provably complete**
+
+`crates/terminal/src/content.rs:86-101`:
+
+```rust
+let styled = row
+    .flags()
+    .intersects(RowFlags::STYLED | RowFlags::HAS_EXTRAS | RowFlags::HAS_GRAPHEME);
+let occ = usize::from(row.occ());
+if !row.is_allocated() || (occ == 0 && !styled) { continue; }
+let cells = row.cells();
+let cells = if styled { cells } else { &cells[..occ.min(cells.len())] };
+```
+
+Both halves are gated on the same predicate, which is the right call: with a styled erase template
+the cells **above** `occ` are that template, so narrowing to `..occ` would have re-opened the same
+hole one layer down. A styled row scans full width.
+
+### Is there a row state where the hints are unset but the erase template is non-blank? **No.**
+
+The argument closes because the template space is tiny and fully enumerable.
+
+**Every template that reaches `Row::reset` / `Row::new`** (`crates/vt/src/grid/screen.rs`, all call
+sites: `:450`, `:470`, `:495`, `:497`, `:503`, `:520`, `:538`, `:557`, `:1391`, `:1504`, `:1530`)
+is either `Cell::EMPTY` or `self.cursor.erase`.
+
+**`cursor.erase` has exactly one writer** — `Screen::set_template`
+(`crates/vt/src/grid/screen.rs:590-598`), whose own doc says so:
+
+```rust
+let bg = interner.resolve_style(template.style_id()).bg;
+let erase = interner.style(&Style { bg, ..Style::DEFAULT });
+self.cursor.erase = Cell::EMPTY.with_style(erase);
+```
+
+So an erase cell is always `Cell::EMPTY` plus a style that differs from `Style::DEFAULT` **only in
+`bg`**. Check it against each of `is_blank_cell`'s five clauses
+(`crates/terminal/src/content.rs:35-48`):
+
+| `is_blank_cell` clause | erase template | hint that would catch a violation |
+| --- | --- | --- |
+| `text_char == ' '` | always — content is `Cell::EMPTY`'s `Scalar(' ')`, never a grapheme | `HAS_GRAPHEME` (moot here) |
+| `bg == Named(Background)` | **the only clause that can fail** | `STYLED` — `flags_for` sets it iff `style_id != StyleId::DEFAULT`, which for this style is iff `bg` is non-default |
+| `width != WideSpacer` | always Narrow — `Cell::EMPTY`'s width | none needed; a `WideSpacer` only exists where a glyph was *written*, and that sets `occ > 0` |
+| no `INVERSE`/underline/strikeout | always — `attrs` come from `Style::DEFAULT` | `STYLED` (moot) |
+| no hyperlink | always — extras come from `Cell::EMPTY` | `HAS_EXTRAS` (moot) |
+
+The one reachable failure mode is exactly the one `STYLED` covers. `HAS_EXTRAS` and `HAS_GRAPHEME`
+are unreachable for an erase template but correct to keep: they cover cells written through
+`RowMut::set`, and a hint can only ever over-approximate, which costs a scan and never a wrong
+answer.
+
+Note on the interner: if `interner.style(&Style::DEFAULT)` ever returned an id other than
+`StyleId::DEFAULT`, `STYLED` would be set for a *default* erase too — more scanning, never a
+missed row. The error direction is safe either way, so the argument does not rest on that.
+
+### Does any path clear the hints without clearing the cells? **No.**
+
+Every mutation of `RowHeader.flags` in the crate (`crates/vt/src/grid/row.rs`):
+
+| site | what it does | safe? |
+| --- | --- | --- |
+| `:170` `Row::reset` | **assigns** `DIRTY \| flags_for(template)` — the only clearing assignment — and fills the cells with that same template two lines earlier | yes, cells and hints change together |
+| `:102` `Row::from_cells` (reflow) | `DIRTY \| hints`, where `hints` is the complete set accumulated while visiting every cell | yes |
+| `:142`, `:396` | `remove(WRAPPED)` only | yes, not in the mask |
+| `:465` `set_wrapped` | `set(WRAPPED, ..)` only | yes |
+| `RowMut::set` / `fill` / `repair` | `insert(flags_for(cell))` — never clears | yes |
+
+No grapheme-GC or graphics-release sweep clears `CONTENT_HINTS`. `into_refitted` keeps them and its
+own comment notes they can then only over-approximate.
+
+Trap 36 inside `reset` (fill only `0..occ` when the last cell's style already matches the
+template's) does not open a gap either: the cells above `occ` are untouched-since-the-last-reset,
+so they hold the previous template, and the style-id equality that gates the short fill is exactly
+the condition under which `flags_for(old) == flags_for(new)`.
+
+### Tests
+
+The three I left behind were adopted verbatim and now pass. I added three more:
+
+| test | what it pins | result |
+| --- | --- | --- |
+| `last_content_row_sees_a_background_erased_row` (adopted) | `CSI 44 m` + `ED Below` | **pass** (was 0, now 4) |
+| `last_content_row_sees_a_background_erased_scroll_in` (adopted) | scroll under `CSI 41 m` | **pass** (was 2, now 3) |
+| `last_content_row_default_erase_stays_blank` (adopted) | the control | pass |
+| `last_content_row_blue_then_default_erase_is_blank` (new) | hints and cells clear together — blue erase then default erase reads blank again | pass |
+| `last_content_row_styled_blank_row_is_still_blank` (new) | the other direction: a row carrying `STYLED` but visually blank (coloured spaces) must not become content | pass |
+| `last_content_row_sees_a_background_erased_line` (new) | `EL` under a colour goes through `RowMut::fill`, which keeps `occ`, so the skip never fires — but the row is painted and must read as content | pass |
+
+```
+cargo test -p oneterm-terminal --lib last_content_row
+running 9 tests ... test result: ok. 9 passed; 0 failed
+```
+
+### `RowRef::flags()` restored to `pub`
+
+`git diff 4bb088d..5d3f9eb -- crates/vt` is **7 insertions, 1 deletion, one file** — the `flags()`
+signature plus its doc comment. Nothing else in `oneterm-vt`'s visibility moved. The doc comment
+records why `US-0090` had narrowed it and why it is back. Acceptable.
+
+## 2. Defect 2 — the viewport seam: **fixed**
+
+`crates/terminal-view/src/render/plan_cache.rs:171-172` and `:242-253`:
+
+```rust
+let scrolled_seam =
+    matches!(frame.update(), RenderUpdate::Partial { scrolled } if scrolled != 0);
+...
+let seed = |r: usize| dirty[r] || (scrolled_seam && r == 0);
+```
+
+The seam lands in `self.scan`, not `self.dirty`, so the existing mask-delta compare still decides
+whether a plan is rebuilt — which is the shape I recommended and the reason
+`scroll_shifts_plans_and_replans_only_scrolled_in_rows` survives untouched.
+
+### The four cases asked about
+
+| case | expected | why it holds | test |
+| --- | --- | --- | --- |
+| **`Full` update after a resize, viewport already scrolled** | row 0 rescanned | `Full` never rotates `self.keys` (`shift` is called only under `Partial`), so if the `RowId` at index 0 changed, `keys[0] != frame.row_key(0)` → dirty → seeded. And if it did *not* change, the top edge did not move, so row 0's mask cannot be stale. A resize additionally sets `restyled`, which clears every key. The seam seed is not what saves this case — dirtiness is | `url_v2_resize_while_scrolled_back` |
+| **scroll landing exactly on the head row** | correct mask | row 0 is then the head; its prefix is on screen, so the from-scratch answer and the cached answer agree, and the seed closes the run below it anyway | `url_v2_scroll_landing_on_the_head_row` (6 single-row forward steps across the run) |
+| **scroll further than the viewport height** | correct | `shift` drops every key when `distance >= len`; the engine reports such a jump as `Full` anyway. Either way all rows are dirty and rescanned | `url_v2_scroll_further_than_the_viewport` |
+| **scrolled frame where row 0 does not wrap** | 1 extra row, no extra plan | `connected(0)` is false in both frames, so `scan[0..=0]`; the delta compare leaves `dirty[0]` false when the mask is unchanged | `url_v2_scrolled_seam_costs_one_row_when_row_zero_does_not_wrap` — asserts `url_rows_scanned == 2` (one scrolled-in row + the seam) and `rows_planned == 1` |
+
+One more I checked by reading: the seam is inside the `if any_dirty` block, so a scrolled frame
+with no dirty row would skip it. That cannot happen — a scroll of distance *d* rotates the keys, so
+the *d* rows at one edge always hold the keys of rows that left, and mismatch.
+
+### The randomized comparator
+
+`url_v2_randomized_scroll_and_feed_matches_a_full_rescan` — 200 steps over an 8x28 viewport, driven
+by a fixed xorshift so a failure is reproducible: feed a wrapping URL, feed a short URL, feed a
+plain line, `scroll_back(1..5)`, `scroll_forward(1..5)`, `scroll_forward(1)`, or resize to one of
+16/22/28/34 columns. **Every frame** is compared row-by-row against a from-scratch `url_masks_into`
+of that same frame. Passes.
+
+This is the shape that would have caught defect 2 the first time: the bug needed a *forward* scroll
+past the head of a wrap run, which no hand-written case had reached.
+
+### Full plan_cache suite
+
+```
+cargo test -p oneterm-terminal-view --lib render::plan_cache::tests
+running 25 tests ... test result: ok. 25 passed; 0 failed
+```
+
+including all eight `url_v2_*` tests I left behind (adopted verbatim), the five new ones above, and
+`scroll_shifts_plans_and_replans_only_scrolled_in_rows` unchanged.
+
+## 3. Counted-work guards after the rework — re-tampered
+
+Both scoping hunks were reverted again (the `occ` skip + narrowing removed from `content.rs` while
+keeping the counter; `mark_scan_runs` forced to `scan.fill(true)`), the guards re-run, and the
+tamper reverted.
+
+| test | after the rework | tampered | numbers unchanged? |
+| --- | --- | --- | --- |
+| `last_content_row_cost_follows_the_content_not_the_viewport` | pass (2 / 2 cells at 40 and 80 columns) | **FAIL** `left: 1800, right: 3600` | yes |
+| `url_pass_scans_the_changed_rows_not_the_viewport` | pass (1 row) | **FAIL** `left: 45, right: 1` | yes |
+| `url_pass_rescans_the_whole_wrap_run_of_a_changed_row` | pass (3 rows) | **FAIL** `left: 5, right: 3` | yes |
+| `url_pass_rescans_a_continuation_row_whose_wrap_was_dropped` | pass (2 rows) | **FAIL** `left: 3, right: 2` | yes |
+
+All four still bite, at exactly the original numbers. In particular the H2 counter is still
+**2 cells at both 40 and 80 columns** — the hint gate did not cost the idle case anything, because
+a blank row below the prompt carries no content hint.
+
+`scroll_shifts_plans_and_replans_only_scrolled_in_rows` still asserts and passes both of its
+`rows_planned == 2` / `rows_candidate == 2` expectations.
+
+## 4. GUI — the seam position re-run on my own build
+
+`US-0092-fixed-scroll-forward.png` (the implementer's): viewport top at display row 204, mid-run,
+`gment-segment-…-tail-end` across rows 204-205 with the head above the top edge — and **plain**.
+Same position class as my `US-0092-verify-d-stale-underline.png`.
+
+I also re-ran my own reproduction end to end on a `fast-dev` build of `5d3f9eb`, replaying the
+exact sequence that produced the stale capture: same 200-URL fixture, same narrowing to a 1084x892
+client (the URL re-wraps over 5 rows), same 45 pad lines, then wheel **back** 8 notches and
+**forward** one notch at a time until the top lands mid-run.
+
+| | before (`f963a94`) | after (`5d3f9eb`) |
+| --- | --- | --- |
+| viewport top | display row 396 | display row 396 |
+| rows 396/397/398 (`/segment/…/tail-end`, head off-screen) | **underlined** | **plain** |
+| `line 200 see https://…` wrapping over rows 401-402 | underlined | underlined (unchanged) |
+| capture | `US-0092-verify-d-stale-underline.png` | `US-0092-verify2-seam-now-plain.png` |
+
+The third row of that table is the point: URL detection is still alive on the same screen, and only
+the headless continuation changed. That is the from-scratch answer.
+
+Process safety, again: `Get-Process oneterm` before launch → `2504`, `14804` (the owner's).
+`Start-Process -PassThru` gave me pid **3036**; only that pid was acted on, never by name or title;
+`CloseMainWindow()` closed it. After the run `2504` and `14804` were both **ALIVE** and `3036`
+gone. `target/terminal.json` and `target/urls.txt` were recreated for the run and deleted.
+
+## 5. ci-local.ps1
+
+Run from this worktree against the pristine `5d3f9eb` tree (my re-verification tests set aside for
+the run), `CARGO_BUILD_JOBS=3`:
+
+```
+ci-local: all checks passed.        (exit 0)
+sections: 60  passed: 1956  failed: 0  ignored: 14
+```
+
+Exactly the totals the implementer reported.
+
+(An earlier run failed at `cargo fmt --all -- --check` — the diff was entirely inside my own newly
+added tests, not the implementation. Fixed with `cargo fmt --all` and re-run.)
+
+## 6. Trailers
+
+All three non-merge commits (`c3a86c6`, `997180c`, `5d3f9eb`) carry both lines:
+
+```
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Q6xr5jX29B2b6L4MGsoNdW
+```
+
+## Notes (non-blocking)
+
+1. **A styled row now scans full width.** The gate is correct, but it means a row carrying any
+   content hint — which includes an ordinary coloured prompt — no longer gets the `..occ`
+   narrowing. This costs nothing in practice: `last_content_row` walks bottom-up and returns at the
+   first non-blank row, and the case the packet was about (an idle screen of unstyled blanks below
+   a prompt) still measures 2 cells at any width. Recorded so the next reader does not mistake it
+   for an oversight.
+2. **The seam is seeded unconditionally on a scrolled frame**, even when row 0's mask cannot have
+   changed. That is one row per scrolled frame, closed under its run — the right trade against
+   trying to prove the negative, and
+   `url_v2_scrolled_seam_costs_one_row_when_row_zero_does_not_wrap` pins the cost so a future
+   change cannot quietly widen it.
+
+## Tests added by this re-verification (uncommitted, in this worktree)
+
+- `crates/terminal/src/content_tests.rs`
+  - `last_content_row_blue_then_default_erase_is_blank`
+  - `last_content_row_styled_blank_row_is_still_blank`
+  - `last_content_row_sees_a_background_erased_line`
+- `crates/terminal-view/src/render/plan_cache.rs`
+  - `url_v2_randomized_scroll_and_feed_matches_a_full_rescan` (200 deterministic random steps)
+  - `url_v2_scrolled_seam_costs_one_row_when_row_zero_does_not_wrap`
+  - `url_v2_scroll_landing_on_the_head_row`
+  - `url_v2_scroll_further_than_the_viewport`
+  - `url_v2_resize_while_scrolled_back`
+
+All eight pass. `cargo fmt --all` applied. New screenshot:
+`evidence/US-0092-verify2-seam-now-plain.png`. Nothing committed, nothing pushed.

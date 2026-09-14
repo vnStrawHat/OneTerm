@@ -592,6 +592,43 @@ plus the helper `assert_masks_match_a_full_rescan`, which compares **every** row
 from-scratch `url_masks_into` of the same frame — a much stronger invariant than the row counts,
 and the reason defect 2 was caught at all.
 
+### Re-verification — PASS, and eight more adopted tests
+
+The verifier re-reviewed the rework and returned **PASS**; the report in
+[`evidence/US-0092-verify.md`](evidence/US-0092-verify.md) is the appended version covering both
+rounds, with `US-0092-verify2-seam-now-plain.png` confirming the seam position on the verifier's
+own build. They re-tampered all four counted-work guards against the reworked code and all four
+still fail against the old shape, so the proofs survived the fix.
+
+Eight further tests were left behind and are adopted verbatim here. All eight pass; none was a
+defect report, they close the gaps around the two fixes:
+
+| test | file | what it pins |
+| --- | --- | --- |
+| `last_content_row_blue_then_default_erase_is_blank` | `content_tests.rs` | hints and cells clear together — a blue erase followed by a default erase reads blank again |
+| `last_content_row_styled_blank_row_is_still_blank` | `content_tests.rs` | the other direction: a row carrying `STYLED` but visually blank (coloured spaces) must not become content |
+| `last_content_row_sees_a_background_erased_line` | `content_tests.rs` | `EL` under a colour goes through `RowMut::fill`, which keeps `occ`, so the skip never fires — and the painted row still reads as content |
+| `url_v2_randomized_scroll_and_feed_matches_a_full_rescan` | `plan_cache.rs` | 200 deterministic random scroll/feed steps, every row compared against a full rescan at every step |
+| `url_v2_scrolled_seam_costs_one_row_when_row_zero_does_not_wrap` | `plan_cache.rs` | the seam's price — one row per scrolled frame — so a future change cannot quietly widen it |
+| `url_v2_scroll_landing_on_the_head_row` | `plan_cache.rs` | the boundary landing exactly on the URL's head row |
+| `url_v2_scroll_further_than_the_viewport` | `plan_cache.rs` | a jump the cache cannot absorb (`Full`) |
+| `url_v2_resize_while_scrolled_back` | `plan_cache.rs` | a reflow taken while the viewport is in scrollback |
+
+After adopting them: `cargo test -p oneterm-terminal` 279 passed / 0 failed,
+`cargo test -p oneterm-terminal-view` 304 passed / 0 failed / 3 ignored;
+`cargo fmt --all -- --check` exits 0.
+
+Two non-blocking notes the verifier recorded, kept here so they are not later mistaken for
+oversights:
+
+1. **A styled row now scans full width** — the `..occ` narrowing is gated on the content hints, so
+   an ordinary coloured prompt row loses it. It costs nothing in practice: the walk is bottom-up
+   and returns at the first non-blank row, and the case this packet was about (an idle screen of
+   unstyled blanks below a prompt) still measures 2 cells at any width.
+2. **The seam is seeded on every scrolled frame**, even when row 0's mask cannot have changed.
+   That is the right trade against trying to prove the negative, and the cost is pinned by
+   `url_v2_scrolled_seam_costs_one_row_when_row_zero_does_not_wrap`.
+
 **The counted-work numbers are unchanged.** Every figure in the H1 and H2 tables above still
 holds, asserted by the same `assert_eq!`s:
 

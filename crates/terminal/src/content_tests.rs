@@ -330,3 +330,45 @@ fn last_content_row_default_erase_stays_blank() {
     feed(&mut term, b"x\r\n\x1b[H\x1b[J");
     assert_eq!(last_content_row(&term), 0);
 }
+
+/// `US-0092` rework check. The hints and the cells are cleared in the *same*
+/// call (`Row::reset` assigns `flags = DIRTY | flags_for(template)` and fills
+/// the cells with that template), so a blue erase followed by a default erase
+/// leaves neither a hint nor a coloured cell: the row must read blank again.
+#[test]
+fn last_content_row_blue_then_default_erase_is_blank() {
+    let mut term = terminal(GridSize { cols: 8, lines: 5 });
+    feed(&mut term, b"\x1b[44m\x1b[H\x1b[J");
+    assert_eq!(last_content_row(&term), 4, "blue first");
+    feed(&mut term, b"\x1b[0m\x1b[H\x1b[J");
+    assert_eq!(
+        last_content_row(&term),
+        0,
+        "the default erase clears the cells and the hint together"
+    );
+}
+
+/// The other direction of the hint gate: a row that carries `STYLED` but is
+/// visually blank (a printed space with a non-default foreground) must still
+/// read blank. The hint only costs a full-width scan, it must never invent
+/// content.
+#[test]
+fn last_content_row_styled_blank_row_is_still_blank() {
+    let mut term = terminal(GridSize { cols: 8, lines: 4 });
+    feed(&mut term, b"a\r\n\r\n\x1b[31m   \x1b[0m");
+    assert_eq!(
+        last_content_row(&term),
+        0,
+        "coloured spaces are not content"
+    );
+}
+
+/// `EL`/`ECH` under a colour go through `RowMut::fill`, which keeps `occ`, so
+/// the skip never fires there — but the row is still painted and must read as
+/// content.
+#[test]
+fn last_content_row_sees_a_background_erased_line() {
+    let mut term = terminal(GridSize { cols: 8, lines: 4 });
+    feed(&mut term, b"a\r\n\r\n\x1b[44m\x1b[2K");
+    assert_eq!(last_content_row(&term), 2, "a blue-erased line is content");
+}

@@ -947,6 +947,169 @@ mod tests {
         assert_masks_match_a_full_rescan(&h.cache, &frame, "wrap dropped in a skipped frame");
     }
 
+    /// `US-0092` re-verification: 200 randomized scroll / feed / resize steps,
+    /// every frame compared against a from-scratch `url_masks_into` of that same
+    /// frame. Deterministic (a fixed LCG), so a failure is reproducible.
+    ///
+    /// This is the shape that found defect 2: the bug needed a *forward* scroll
+    /// past the head of a wrap run, which no hand-written case had reached.
+    #[gpui::test]
+    fn url_v2_randomized_scroll_and_feed_matches_a_full_rescan(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(8, 28).build_with_fixture();
+
+        // xorshift, so the sequence is fixed and the failure reproducible.
+        let mut state: u64 = 0x9E3779B97F4A7C15;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        for step in 0..200 {
+            match next() % 8 {
+                // A URL long enough to wrap over two or three rows.
+                0 | 1 => {
+                    fixture.feed(b"go https://wrapped.test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa end\r\n")
+                }
+                2 => fixture.feed(b"short https://x.test/p\r\n"),
+                3 => fixture.feed(format!("plain line {step}\r\n").as_bytes()),
+                // Scroll back: rows arrive at the top, so they are dirty.
+                4 => fixture.scroll_back((next() % 5) as usize + 1),
+                // Scroll forward: rows leave the top without changing, which is
+                // where the viewport seam matters.
+                5 => fixture.scroll_forward((next() % 5) as usize + 1),
+                6 => fixture.scroll_forward(1),
+                _ => {
+                    let cols = [16u16, 22, 28, 34][(next() % 4) as usize];
+                    fixture.terminal().resize(
+                        oneterm_terminal::Size { rows: 8, cols },
+                        oneterm_terminal::ResizePolicy::Default.into(),
+                    );
+                }
+            }
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, style_key(13.0));
+            assert_masks_match_a_full_rescan(&h.cache, &frame, &format!("step {step}"));
+        }
+    }
+
+    /// The seam seed costs one row and no replan when display row 0 is not part
+    /// of a wrap run and its mask did not change (`US-0092` rework).
+    #[gpui::test]
+    fn url_v2_scrolled_seam_costs_one_row_when_row_zero_does_not_wrap(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(6, 30).build_with_fixture();
+        fixture.feed(b"aaa\r\nbbb\r\nccc\r\nddd\r\neee\r\nfff\r\nggg\r\nhhh\r\niii\r\njjj");
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+
+        fixture.scroll_back(3);
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+
+        // Forward one row: nothing wraps, so the seam is exactly one row and its
+        // mask is unchanged, so no plan is rebuilt for it.
+        fixture.scroll_forward(1);
+        resnapshot(&mut frame, &mut fixture);
+        let s = h.update(cx, &frame, style_key(13.0));
+        assert_eq!(s.url_rows_scanned, 2, "one scrolled-in row plus the seam");
+        assert_eq!(s.rows_planned, 1, "only the scrolled-in row replans");
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "seam with no wrap");
+    }
+
+    /// A scroll that lands the viewport top exactly on the head row of a wrap
+    /// run: the head's own prefix is on screen, so the mask is the full-rescan
+    /// mask and the run below it is rescanned with it (`US-0092` rework).
+    #[gpui::test]
+    fn url_v2_scroll_landing_on_the_head_row(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(6, 24).build_with_fixture();
+        fixture.feed(b"pre\r\nhttps://wrapped.test/aaaaaaaaaaaaaaaaaaaaaaaa\r\npost\r\none\r\ntwo\r\nthree\r\nfour");
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+
+        fixture.scroll_back(5);
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        for step in 0..6 {
+            fixture.scroll_forward(1);
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, style_key(13.0));
+            assert_masks_match_a_full_rescan(&h.cache, &frame, &format!("forward step {step}"));
+        }
+    }
+
+    /// A scroll larger than the viewport: the cache cannot shift, so every key
+    /// is dropped and every row rescanned — the seam is moot but must not break
+    /// the result (`US-0092` rework).
+    #[gpui::test]
+    fn url_v2_scroll_further_than_the_viewport(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(5, 24).build_with_fixture();
+        for i in 0..20 {
+            if i % 4 == 0 {
+                fixture.feed(b"https://wrapped.test/aaaaaaaaaaaaaaaaaaaaaaaa\r\n");
+            } else {
+                fixture.feed(format!("line {i}\r\n").as_bytes());
+            }
+        }
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+
+        fixture.scroll_back(12);
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "jumped back 12 rows");
+
+        fixture.scroll_forward(12);
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "jumped forward 12 rows");
+    }
+
+    /// A `Full` update (a resize) taken while the viewport is already scrolled
+    /// back: every key is dropped, so row 0 is rescanned by virtue of being
+    /// dirty and the seam seed is not what saves it (`US-0092` rework).
+    #[gpui::test]
+    fn url_v2_resize_while_scrolled_back(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(6, 30).build_with_fixture();
+        for i in 0..20 {
+            if i % 3 == 0 {
+                fixture.feed(b"https://wrapped.test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n");
+            } else {
+                fixture.feed(format!("line {i}\r\n").as_bytes());
+            }
+        }
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+
+        fixture.scroll_back(7);
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+
+        for cols in [18u16, 40, 24] {
+            fixture.terminal().resize(
+                oneterm_terminal::Size { rows: 6, cols },
+                oneterm_terminal::ResizePolicy::Default.into(),
+            );
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, style_key(13.0));
+            assert_masks_match_a_full_rescan(
+                &h.cache,
+                &frame,
+                &format!("resized to {cols} while scrolled back"),
+            );
+        }
+    }
+
     #[gpui::test]
     fn url_mask_delta_replans_continuation_row(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
