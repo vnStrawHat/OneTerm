@@ -10,7 +10,7 @@ Created: 2026-09-14
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
+- [x] In progress
 - [ ] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
@@ -48,36 +48,36 @@ macro expansion into one struct's `impl` blocks.
 
 ### In scope
 
-- [ ] **Delete `impl_pty_terminal_session!`** — `crates/terminal/src/session.rs:443-728`
+- [x] **Delete `impl_pty_terminal_session!`** — `crates/terminal/src/session.rs:443-728`
   (286 lines) and its `#[macro_export]`.
-- [ ] **Add the concrete type it specifies** in `crates/terminal`. The macro's own doc
+- [x] **Add the concrete type it specifies** in `crates/terminal`. The macro's own doc
   (`session.rs:446-453`) already names the design: *"The local shell and SSH sessions differ only
   in their `TerminalCapabilities`, their `SessionKind`, their grow-resize `ResizePolicy` and how
   the channel is torn down."* So one `PtySession` holding the standard fields the macro requires
   today (`term`, `listener`, `state`, `marked_text`, `event_rx`), plus the transport,
   `SessionKind`, an `oneterm_vt::ResizePolicy` and a close hook. The four traits are implemented
   once, on it.
-- [ ] **Rewrite both backends onto it**: `crates/local-shell/src/session_terminal.rs` (42 lines)
+- [x] **Rewrite both backends onto it**: `crates/local-shell/src/session_terminal.rs` (42 lines)
   and `crates/ssh/src/session_terminal.rs` (55 lines) lose their macro invocation; each keeps its
   `capabilities()` impl and its close function (`shutdown_owner`, `close_channel`), and
   `crates/local-shell/src/session.rs` / `crates/ssh/src/session.rs` change to own a `PtySession`.
-- [ ] **Delete `model::ResizePolicy` and its two `From` impls** —
+- [x] **Delete `model::ResizePolicy` and its two `From` impls** —
   `crates/terminal/src/model.rs:28-70`, 43 lines — and its re-export. `local_resize_policy()` in
   `crates/local-shell/src/session_terminal.rs` returns `oneterm_vt::ResizePolicy`
   (`KeepViewportTop` on Windows, `BottomAnchor` elsewhere), and `crates/ssh` passes
   `oneterm_vt::ResizePolicy::BottomAnchor`. The `DEC-0008` rationale comments on both stay; only
   the enum they name changes.
-- [ ] **Retire the two recorded gaps**: the comment block at
+- [x] **Retire the two recorded gaps**: the comment block at
   `crates/local-shell/src/session_terminal.rs:14-18` ("Naming the engine's enum here needs an API
   `crates/terminal` does not offer yet; see the `US-0083` packet's gap 1") and at
   `crates/ssh/src/session_terminal.rs:21-24` ("The engine value cannot be named here yet"). Both
   become false the moment this lands and must go with the code they describe.
-- [ ] **`TerminalPump::pending`**, if and only if it falls out for free. It is a
+- [ ] **`TerminalPump::pending`** — **not taken.** Not a one-line fall-out; see Gaps. If and only if it falls out for free. It is a
   `Mutex<Vec<SessionEvent>>` (`crates/terminal/src/backend/pump.rs:69`) whose own comment says it
   exists because the backends hold the pump by `&` at the lifecycle call sites; the audit notes
   (§4 H4) that B1 would let it become a plain field. Take it only if the concrete type makes it a
   one-line change — otherwise leave it and say so in Gaps. It is not this outcome.
-- [ ] The `crates/terminal` manifest line the fork era left in both backend crates, if the macro's
+- [x] The `crates/terminal` manifest line the fork era left in both backend crates — **already gone**; neither backend manifest names the fork (checked before touching), if the macro's
   removal makes it dead (`migration.md` records it surviving "long after no backend source named
   it"). Verify before touching.
 
@@ -103,32 +103,32 @@ macro expansion into one struct's `impl` blocks.
 
 ## Acceptance
 
-- [ ] **The macro is gone.** `grep -rn "impl_pty_terminal_session" crates/ docs/` returns only
+- [x] **The macro is gone.** `grep -rn "impl_pty_terminal_session" crates/ docs/` returns only
   historical references in `docs/spec-intakes/` and `docs/decisions/`, and none in `crates/`.
-- [ ] **`model::ResizePolicy` is gone.** `grep -rn "\bResizePolicy\b" crates/` names only
+- [x] **`model::ResizePolicy` is gone.** `grep -rn "\bResizePolicy\b" crates/` names only
   `oneterm_vt::ResizePolicy` and its own definition in `crates/vt`.
-- [ ] **Line delta recorded and honest.** 383 lines are deleted (286 macro + 42 + 55) plus 43 for
+- [ ] **Line delta recorded and honest — FAILS.** 383 lines are deleted (286 macro + 42 + 55) plus 43 for
   the enum. The audit estimates the replacement at about 230 lines and is explicit (§(d).2) that
   the net "could land anywhere between −80 and −200". Record the measured net. **A net worse than
   −80 fails this packet**: if the concrete type comes out bigger than that, the shape is wrong —
   most likely because ownership of `marked_text` / `event_rx` / `owner_join` did not move — and
   the packet stops and reports rather than shipping a wash.
-- [ ] **No test lost, no test assertion edited.** Baselines recorded at the branch point for
+- [x] **No test lost, no test assertion edited.** Baselines recorded at the branch point for
   `cargo test -p oneterm-terminal` (`backend_tests.rs` alone is 1 280 lines),
   `-p oneterm-local-shell` (1 395 test lines) and `-p oneterm-ssh` (2 807). Each after-count is
   greater than or equal to its baseline. A test body may move between files; an assertion that
   changes value is a behaviour change and fails this packet.
-- [ ] **The backend contract suite passes untouched**:
+- [x] **The backend contract suite passes untouched**:
   `cargo test -p oneterm-core -p oneterm-terminal -p oneterm-local-shell -p oneterm-ssh`, the
   portable set CI runs on ubuntu, macos and windows.
-- [ ] **Both `ResizePolicy` behaviours are still pinned by a test.** Windows local grows must keep
+- [x] **Both `ResizePolicy` behaviours are still pinned by a test.** Windows local grows must keep
   `KeepViewportTop` and SSH must keep `BottomAnchor` (`DEC-0008`). Name the tests that prove it; if
   none exists, add one — this is the one place where deleting the adapter enum could silently
   change behaviour, because both old variants convert and a wrong constant would compile.
-- [ ] **`cargo test -p oneterm-terminal` stops recompiling a macro that expands into two other
+- [x] **`cargo test -p oneterm-terminal` stops recompiling a macro that expands into two other
   crates.** Record the observation qualitatively; no stopwatch claim is required, and none should
   be made without `cargo build --timings`.
-- [ ] **`pwsh scripts/ci-local.ps1` exits 0**, with totals recorded.
+- [x] **`pwsh scripts/ci-local.ps1` exits 0**, with totals recorded.
 
 ## Documentation
 
@@ -227,19 +227,19 @@ wider form.
 
 ## Plan
 
-- [ ] Record branch-point test counts for `oneterm-terminal`, `oneterm-local-shell`,
+- [x] Record branch-point test counts for `oneterm-terminal`, `oneterm-local-shell`,
   `oneterm-ssh`, and the line counts of the four files involved.
-- [ ] Write `PtySession` in `crates/terminal/src/session.rs` next to the still-present macro,
+- [x] Write `PtySession` in `crates/terminal/src/session.rs` next to the still-present macro,
   moving each generated method body across unchanged. Compile with both present.
-- [ ] Move `crates/local-shell` onto it: the struct owns a `PtySession`, keeps `capabilities()`
+- [x] Move `crates/local-shell` onto it: the struct owns a `PtySession`, keeps `capabilities()`
   and `shutdown_owner`, and `local_resize_policy()` returns `oneterm_vt::ResizePolicy`. Run
   `cargo test -p oneterm-local-shell` against its baseline.
-- [ ] Move `crates/ssh` the same way. Run `cargo test -p oneterm-ssh`.
-- [ ] Delete the macro and `model::ResizePolicy` with its two `From` impls. Compile.
-- [ ] Confirm or add the two resize-policy behaviour tests.
-- [ ] Update `docs/terminal-backend.md` §9 and any `ResizePolicy` naming.
-- [ ] Measure the net line delta. If it is worse than −80, stop and report instead of shipping.
-- [ ] `cargo test --workspace`, then `pwsh scripts/ci-local.ps1`.
+- [x] Move `crates/ssh` the same way. Run `cargo test -p oneterm-ssh`.
+- [x] Delete the macro and `model::ResizePolicy` with its two `From` impls. Compile.
+- [x] Confirm or add the two resize-policy behaviour tests.
+- [x] Update `docs/terminal-backend.md` §9 and any `ResizePolicy` naming.
+- [x] Measure the net line delta. **It is worse than −80** (production −19, total 0), so this packet stops and reports; see Evidence.
+- [x] `cargo test --workspace`, then `pwsh scripts/ci-local.ps1`.
 
 ## Decisions
 
@@ -279,21 +279,176 @@ suite plus `-D warnings` across every consumer is stronger proof than a manual w
 check ever seems necessary here, the surface moved and the packet is out of scope.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record: the branch point and commit; the measured net line delta against the
-audit's −80 to −200 estimate, per file; the three test counts before and after; the two
-resize-policy test names and their output; whether `TerminalPump::pending` became a plain field or
-was left alone and why; whether the fork-era manifest line was dead and removed; and
-`ci-local.ps1`'s totals. Record any generated method whose body could not move across unchanged,
-with the reason.
+Branch point: `4bb088d` (`main`, "record the independent verification of `US-0090`").
+
+### FINDING — the line-delta gate fails, and the packet stops here
+
+The measured net is **production −19 lines, total 0 lines**, against the accepted band of
+**−80 to −200**. Per Acceptance ("a net worse than −80 fails this packet") the work is
+complete, green and behaviourally identical, but it is **not marked Implemented**: the
+measured numbers go back to the owner, who decides whether to accept a decoupling that is
+a line-count wash, or to revert the branch.
+
+The diagnosis Acceptance offers does **not** apply: ownership of `marked_text` and
+`event_rx` did move into `PtySession` exactly as specified. `owner_join` stayed with
+`LocalSession`, which is correct — it is the local PTY owner thread's join handle, needed
+by `LocalSession::drop`, and it is the backend's own state, not shared session state.
+
+Where the audit's estimate went wrong, measured:
+
+| | lines |
+| --- | --- |
+| `impl_pty_terminal_session!` + its doc (deleted) | 286 |
+| `model::ResizePolicy` + its two `From` impls + the doc block (deleted) | 44 |
+| the two `session_terminal.rs` (37 + 49 non-blank before, 33 + 38 after) | −15 |
+| `PtyOwner` + `PtySession` + the five `impl` blocks (added) | 325 (275 non-blank) |
+| `crates/ssh/src/session.rs` production (the `PtySession::new` call sites + `SSH_RESIZE_POLICY`) | +7 |
+| `crates/local-shell/src/session.rs` production | +1 |
+
+The four trait `impl`s alone are about 205 of the new 325 lines and are irreducible — the
+same 45 forwarding methods, written once instead of expanded twice. The remaining ~120 is
+the trait, the struct, the constructor, the helpers and the rustdoc that a **public**
+concrete type needs and a macro did not (the macro's generated methods inherited the
+traits' own docs). The audit's "about 230 lines" assumed roughly 25 lines of that overhead.
+
+What the packet does deliver, which the line count does not show: `crates/local-shell` and
+`crates/ssh` no longer expand 286 lines of `crates/terminal`'s source into themselves, the
+shared body is compiled once instead of twice, and the two `US-0083` / `US-0084` gaps are
+closed.
+
+### Measurements
+
+| | before (`4bb088d`) | after |
+| --- | --- | --- |
+| `cargo test -p oneterm-terminal` | 271 passed, 0 ignored | **271 passed, 0 ignored** |
+| `cargo test -p oneterm-local-shell` | 33 passed, 2 ignored | **33 passed, 2 ignored** |
+| `cargo test -p oneterm-ssh` | 67 passed, 0 ignored | **68 passed, 0 ignored** (+1, the new policy test) |
+| line count, the nine touched files, production only | 2062 | **2043 (−19)** |
+| line count, the nine touched files, including tests | 3112 | **3112 (0)** |
+| `pub` proxy count, `crates/terminal` | 267 | **272 (+5)** |
+| `pub` proxy count, `crates/vt` | 392 | 392 |
+
+Line counts are non-blank lines; "production only" cuts each file at its `#[cfg(test)]`
+and excludes the `_tests.rs` files. The `pub` proxy is `US-0090`'s own command, run over
+both trees with the same `grep`.
+
+`pwsh scripts/ci-local.ps1`: **all checks passed**, 60 test sections, **1941 passed, 0
+failed, 14 ignored**. The quoted branch-point figure was 1934 passed; the per-crate table
+above accounts for +1 (the new SSH policy test) on the three crates this packet touches,
+and no section disappeared (60 before and after, zero failures), so no test was lost. The
+remaining difference is in the quoted baseline, not in this branch.
+
+### The two resize-policy tests, run by name
+
+```text
+test session::session_tests::local_session_grow_policy_matches_conpty ... ok
+test session::tests::ssh_session_grow_policy_is_bottom_anchored ... ok
+test session::tests::ssh_grow_resize_pulls_scrollback_into_the_viewport_top ... ok
+```
+
+`local_session_grow_policy_matches_conpty` is the pre-existing test; only the enum it names
+changed (`oneterm_terminal::ResizePolicy::Default` is now `::BottomAnchor`, the same value —
+the deleted `From` mapped one to the other). `ssh_session_grow_policy_is_bottom_anchored` is
+**new**: `crates/ssh` had only the behavioural test, and with the policy no longer coming
+from one macro argument it is now named in two places (`connect` and the test helper), so a
+constant `SSH_RESIZE_POLICY` holds it and this test pins the constant.
+
+### Gaps
+
+- **`TerminalPump::pending` was left alone.** It is not a fall-out of this packet: the
+  `Mutex` is there because the two read loops hold the pump by `&` at their lifecycle call
+  sites (`crates/terminal/src/backend/pump.rs`), which has nothing to do with the macro.
+  Making it a plain field is a read-loop change, not a session change.
+- **`crates/terminal`'s public surface grew by 5 items** (`PtyOwner`, `PtySession`, and its
+  `new` / `term` / `state` / `resize_policy` / `owner`, against the deleted `ResizePolicy`
+  enum and its re-export), taking `US-0090`'s proxy count from 267 to 272 — just past that
+  packet's "at most 270" target. A concrete type has a public API where a macro had none.
+  Four of the five accessors exist because the backends' own tests reach through the session
+  for the engine handle, the state cache and the owner.
+- **`PtyOwner` restates `pty_write` / `pty_resize`.** `PtyTransport: Clone` is not object
+  safe and both backends' transport types are crate-private, so `PtySession` cannot be
+  generic over the transport without leaking a private type through a public signature.
+  Each backend forwards two methods (four lines each) to its own transport. The alternative
+  — making `LocalTransport` / `SshTransport` public — widens two backend crates' API to save
+  about 26 lines, which is the wrong trade for this intake.
+- **No generated method body was rewritten.** Every one moved across unchanged except the
+  five generated-input reports, where the macro's `concat!($label, " mouse input")` became
+  `self.report("mouse input", ...)`; the logged text is identical and the mouse path still
+  allocates nothing per event.
+- **`DefaultColors`'s root re-export is deleted**, which is `US-0090`'s deferred item
+  ("kept; it dies with the macro in `US-0091`"). The macro's `$crate::DefaultColors::new(...)`
+  was its only user outside `crates/terminal`. The type itself stays at
+  `oneterm_terminal::backend::DefaultColors`, because the public
+  `SharedState::set_default_colors` takes it; only `oneterm_terminal::DefaultColors` is gone.
+- **The fork-era manifest line was already gone** from both backend manifests before this
+  packet, so there was nothing to remove.
+- **No E2E and no GUI walk**, as the Verification Plan states.
+
+### Harness story row
+
+`harness.db` is not edited from this worktree. The row update, against the real schema:
+
+```python
+import sqlite3
+
+db = sqlite3.connect("harness.db")
+db.execute(
+    "UPDATE story SET status = ?, unit_proof = ?, integration_proof = ?, e2e_proof = ?, "
+    "platform_proof = ?, evidence = ?, last_verified_at = ?, last_verified_result = ? "
+    "WHERE id = ?",
+    (
+        "in_progress",
+        1,
+        1,
+        0,
+        1,
+        "ci-local.ps1 green (60 sections, 1941 passed, 0 failed, 14 ignored); "
+        "terminal 271=271, local-shell 33=33, ssh 67->68; line delta production -19, "
+        "total 0 - fails the -80 gate, returned to the owner",
+        "2026-09-14",
+        "fail",
+        "US-0091",
+    ),
+)
+db.commit()
+```
+
+## Reconciliation
+
+Docs changed by this packet:
+
+| document | change |
+| --- | --- |
+| `docs/terminal-backend.md` section 3 (crate table) | the `local-shell` / `ssh` rows now say each implements `PtyOwner` and returns a `PtySession` |
+| `docs/terminal-backend.md` section 5.3 (resize policy) | names `local_resize_policy()` and `SSH_RESIZE_POLICY`; records that the adapter enum is deleted and both backends name `oneterm_vt::ResizePolicy` |
+| `docs/terminal-backend.md` section 9 (the `TerminalSession` blockquote) | describes `PtySession<O: PtyOwner>` and what each backend still owns, instead of a macro |
+| `docs/terminal-backend.md` section 11 (file layout) | the three `session.rs` / `session_terminal.rs` entries |
+| `docs/spec-intakes/IN-0032-terminal-crate-tidy/US-0091-concrete-pty-session.md` | this packet |
+
+Reviewed, no change needed:
+
+- `docs/PROJECT.md` Important Boundaries ("Public contracts: `TerminalSession`,
+  `SessionFactory` ...") — **confirmed no edit needed**: the contract's shape is unchanged.
+  Not one method was added, removed, renamed or re-signed; only who implements it moved.
+- `IN-0029/low-level-design/migration.md` — history, not rewritten. Its record of
+  `impl_pty_terminal_session!` blocking `US-0083`'s and `US-0084`'s resize-policy change and
+  of the fork-era manifest line is what this packet closes.
+- `IN-0029/low-level-design/events-and-api.md` — reviewed; no forwarding method changed
+  what it calls on the engine.
+- `docs/decisions/` `DEC-0008` — reviewed; it does not name
+  `oneterm_terminal::model::ResizePolicy`, so nothing to re-word.
+- `docs/agents/crate-dependency-rules.md` — R8 and R10 hold: `PtySession` and `PtyOwner`
+  land in `crates/terminal`, which both backends already depend on; no new crate edge, no
+  new dependency, R3 untouched.
 
 ## Handoff
 
