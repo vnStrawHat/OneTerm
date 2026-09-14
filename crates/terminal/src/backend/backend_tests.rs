@@ -1030,11 +1030,13 @@ fn verify_the_8kib_cap_boundary_under_both_encodings() {
     }
 }
 
-/// The cap the spec publishes is only reachable if the engine lets the payload
-/// through. `OSC_INLINE` is 2048 bytes and `AGENT_OSC` is claimed with `claim`,
-/// not `claim_large`, so a larger payload is truncated by the parser and then
-/// dropped by `parse_agent_status` — well under the documented 8 KiB and under
-/// the "< 4 KiB worst case" §3.4 calls legitimate.
+/// A published cap has to be reachable, not just enforced: §3.4 tells agents
+/// they may send up to 8 KiB of base64, so 8 KiB of base64 must actually
+/// arrive. The engine bounds an OSC payload at `OSC_INLINE` (2048) unless the
+/// number is claimed *large*, and that bound covers the whole payload including
+/// the `20308;1;` prefix — so the claim in `adapter_config` is what makes the
+/// contract true, and this test is the gate on it. Sizes either side of both
+/// the old inline bound and the published cap.
 #[test]
 fn verify_the_documented_cap_is_reachable_through_the_engine() {
     let [new, _] = crate::osc_agent::AGENT_OSC_PREFIXES;
@@ -1170,6 +1172,10 @@ fn a_truncated_agent_payload_is_dropped_and_counted() {
         assert_eq!(f.state.truncated_agent_osc(), 1, "{:?}", prefix[0]);
         // Not miscounted as a malformed payload's neighbours.
         assert_eq!(f.state.agent_osc_unknown_subcodes(), 0, "{:?}", prefix[0]);
+        // An event that arrived on the alias arrived on the alias, whole or
+        // not: § 3.1 counts the spelling, not the survivors.
+        let legacy = u64::from(prefix[0] == b"9");
+        assert_eq!(f.state.legacy_agent_osc_events(), legacy, "{:?}", prefix[0]);
     }
 
     // A truncated reserved sub-code is still just an unknown sub-code.
@@ -1260,11 +1266,12 @@ fn verify_the_dead_shapes_produce_no_event_and_count_as_documented() {
     assert_eq!(f.state.legacy_agent_osc_events(), 1, "still counted");
 }
 
-/// The claim is numeric (`VtEvent::Osc { code }`) but the dispatch is a string
-/// match on `params[0]`, so a zero-padded number — which xterm-derived parsers
-/// accept and normalise — is claimed and forwarded by the engine and then
-/// dropped by the string arm. Pre-existing for OSC 7 / 9 / 133; `US-0088`
-/// inherits it for 20308.
+/// One number, one meaning: `ESC ] 020308 ; 0` is `ESC ] 20308 ; 0`.
+/// xterm-derived parsers accept a zero-padded OSC number, and the engine claims
+/// and forwards by numeric `code`, so the embedder's dispatch has to agree —
+/// it matches the parsed number rather than its spelling, which is also what
+/// keeps `AGENT_OSC` the single source of truth for the claim and the dispatch
+/// alike. Holds for OSC 7 / 9 / 133 too; see `osc::tests`.
 #[test]
 fn verify_a_zero_padded_osc_number_reaches_the_same_handler() {
     let f = local(16);

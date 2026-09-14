@@ -194,6 +194,14 @@ impl<T: PtyTransport> OscRouter<T> {
                 truncated,
             } => {
                 let params: Vec<&[u8]> = batch.params(*params).collect();
+                // Bookkeeping first, and *before* the truncation guard below:
+                // § 3.1 says the alias is "parsed identically, counted, and
+                // logged once per session", and an event that arrived on `9;7`
+                // arrived on `9;7` whether or not the parser could hold all of
+                // it. Counting it only when it survives would under-report
+                // exactly the agent whose payloads are too big — the one most
+                // worth telling the operator about.
+                self.note_agent_osc(*code, &params);
                 // A truncated payload is not a short payload, it is a corrupt
                 // one: the base64 was cut mid-stream, so decoding it yields
                 // either an error or — worse — a shorter valid event that the
@@ -213,7 +221,6 @@ impl<T: PtyTransport> OscRouter<T> {
                     );
                     return;
                 }
-                self.note_agent_osc(*code, &params);
                 match parse_osc(&params) {
                     Some(payload) => self.handle_osc_payload(payload, *terminator, out),
                     None => log::debug!(

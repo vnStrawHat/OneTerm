@@ -337,12 +337,12 @@ mod tests {
         assert!(handle.try_lock_unfair().is_some());
     }
 
-    /// The adapter claims the three OSC numbers it interprets itself; without
-    /// them the agent channel, the cwd tracker and shell integration go silent.
+    /// The adapter claims every OSC number it interprets itself; without them
+    /// the agent channel, the cwd tracker and shell integration go silent.
     #[test]
     fn the_adapter_claims_the_osc_numbers_it_routes() {
         let config = adapter_config(DEFAULT_SCROLLBACK_LINES);
-        for code in [7, 9, 133, 52] {
+        for code in [7, 9, 133, 52, AGENT_OSC] {
             assert!(
                 config.osc_claims.is_claimed(code),
                 "OSC {code} is not claimed"
@@ -353,6 +353,18 @@ mod tests {
             config.osc_claims.allows_large(52),
             "OSC 52 needs the large payload ceiling"
         );
+        // The agent channel publishes an 8 KiB cap (`docs/osc-agent-status.md`
+        // § 3.4), which a plain claim cannot deliver: `OSC_INLINE` bounds the
+        // whole payload at 2 KiB, prefix included. Both spellings need the
+        // ceiling, because the alias is parsed identically for one release and
+        // that includes how much of it there may be.
+        for code in [AGENT_OSC, LEGACY_AGENT_OSC] {
+            assert!(
+                config.osc_claims.allows_large(code),
+                "OSC {code} carries agent status and needs the large ceiling, \
+                 or the documented 8 KiB cap is unreachable"
+            );
+        }
     }
 
     #[test]
