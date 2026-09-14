@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use async_channel::{Receiver, Sender, TrySendError};
-use oneterm_vt::render::MouseReporting;
+use oneterm_vt::MouseReporting;
 use oneterm_vt::{
     Cell, CellContent, CellWidth, CursorShape, EventBatch, Extras, ModeSnapshot, Pos, Rgb,
     SelectionKind, Side, Size, Style, Terminal,

@@ -15,14 +15,14 @@ use crate::render::{MouseEncoding, MouseProtocol, MouseReporting};
 
 /// Title-stack depth (deviation D14). The reference caps at 4096, which no
 /// program approaches and which is a cheap memory sink.
-pub const TITLE_STACK_MAX: usize = 16;
+pub(crate) const TITLE_STACK_MAX: usize = 16;
 
 /// Kitty keyboard flag-stack depth, Ghostty's shape: fixed size, no heap.
-pub const KEYBOARD_STACK_MAX: usize = 8;
+pub(crate) const KEYBOARD_STACK_MAX: usize = 8;
 
 /// One terminal mode.
 ///
-/// Every variant that carries state has a bit in [`Modes`]; `DecCoLm` is listed
+/// Every variant that carries state has a bit in `Modes`; `DecCoLm` is listed
 /// because both `h` and `l` act (trap 40) even though nothing is stored.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Mode {
@@ -69,7 +69,7 @@ pub enum Mode {
     /// `? 2004`.
     BracketedPaste,
     /// `? 2026`. The bit is not stored: the real state lives in
-    /// [`crate::render::SyncState`] (deviation D4).
+    /// `crate::render::SyncState` (deviation D4).
     SyncUpdate,
     /// `? 2027`. Recognised and inert (R-56).
     GraphemeClusters,
@@ -278,7 +278,7 @@ impl From<bool> for ModeState {
 
 /// The stored mode bits.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Modes {
+pub(crate) struct Modes {
     bits: u32,
 }
 
@@ -296,11 +296,11 @@ impl Default for Modes {
 }
 
 impl Modes {
-    pub fn contains(&self, mode: Mode) -> bool {
+    pub(crate) fn contains(&self, mode: Mode) -> bool {
         mode.bit().is_some_and(|bit| self.bits & bit != 0)
     }
 
-    pub fn set(&mut self, mode: Mode, on: bool) {
+    pub(crate) fn set(&mut self, mode: Mode, on: bool) {
         let Some(bit) = mode.bit() else { return };
         if on {
             self.bits |= bit;
@@ -311,7 +311,7 @@ impl Modes {
 
     /// Setting any mouse reporting mode clears the other two first; unsetting
     /// clears only that one. The reference's asymmetry, reproduced.
-    pub fn set_mouse_reporting(&mut self, mode: Mode) {
+    pub(crate) fn set_mouse_reporting(&mut self, mode: Mode) {
         self.set(Mode::MouseClick, false);
         self.set(Mode::MouseDrag, false);
         self.set(Mode::MouseMotion, false);
@@ -319,7 +319,7 @@ impl Modes {
     }
 
     /// The composite the mouse encoder needs, as one accessor.
-    pub fn mouse_reporting(&self) -> Option<MouseProtocol> {
+    pub(crate) fn mouse_reporting(&self) -> Option<MouseProtocol> {
         let reporting = if self.contains(Mode::MouseMotion) {
             MouseReporting::AnyEvent
         } else if self.contains(Mode::MouseDrag) {
@@ -378,7 +378,7 @@ bitflags! {
 
 /// How `CSI = Ps ; Pb u` combines the new flags with the live ones.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum FlagApply {
+pub(crate) enum FlagApply {
     Replace,
     Union,
     Difference,
@@ -388,7 +388,7 @@ pub enum FlagApply {
 /// `pop(n >= len)` resets the whole stack, which removes the denial-of-service
 /// vector of a client sending a huge pop count.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct FlagStack {
+pub(crate) struct FlagStack {
     flags: [KeyboardFlags; KEYBOARD_STACK_MAX],
     len: u8,
     /// The live flags, which can legitimately differ from the stack top after
@@ -397,27 +397,19 @@ pub struct FlagStack {
 }
 
 impl FlagStack {
-    pub fn live(&self) -> KeyboardFlags {
+    pub(crate) fn live(&self) -> KeyboardFlags {
         self.live
     }
 
     /// What `CSI ? u` reports: the top of the stack, not the live flags.
-    pub fn top(&self) -> KeyboardFlags {
+    pub(crate) fn top(&self) -> KeyboardFlags {
         match self.len {
             0 => KeyboardFlags::empty(),
             len => self.flags[len as usize - 1],
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.len as usize
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn apply(&mut self, flags: KeyboardFlags, how: FlagApply) {
+    pub(crate) fn apply(&mut self, flags: KeyboardFlags, how: FlagApply) {
         self.live = match how {
             FlagApply::Replace => flags,
             FlagApply::Union => self.live | flags,
@@ -428,7 +420,7 @@ impl FlagStack {
     /// `CSI > Ps u`. A full stack drops the oldest entry, which is the fix for
     /// the reference's overflow bug — it pops the *title* stack here
     /// (deviation D15).
-    pub fn push(&mut self, flags: KeyboardFlags) {
+    pub(crate) fn push(&mut self, flags: KeyboardFlags) {
         if self.len as usize == KEYBOARD_STACK_MAX {
             self.flags.rotate_left(1);
             self.len -= 1;
@@ -439,7 +431,7 @@ impl FlagStack {
     }
 
     /// `CSI < Ps u`. Popping at or beyond the depth resets the stack.
-    pub fn pop(&mut self, count: u16) {
+    pub(crate) fn pop(&mut self, count: u16) {
         let count = count as usize;
         self.len = if count >= self.len as usize {
             0
@@ -452,31 +444,31 @@ impl FlagStack {
 
 /// One stack per screen, swapped on an alternate-screen swap.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct KeyboardStacks {
+pub(crate) struct KeyboardStacks {
     pub active: FlagStack,
     inactive: FlagStack,
 }
 
 impl KeyboardStacks {
-    pub fn swap(&mut self) {
+    pub(crate) fn swap(&mut self) {
         std::mem::swap(&mut self.active, &mut self.inactive);
     }
 
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         *self = KeyboardStacks::default();
     }
 }
 
 /// The current title and the `CSI 22 t` / `CSI 23 t` stack.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct TitleState {
+pub(crate) struct TitleState {
     pub title: Option<String>,
     stack: Vec<Option<String>>,
 }
 
 impl TitleState {
     /// `CSI 22 t`. Overflow drops the oldest entry (deviation D14).
-    pub fn push(&mut self) {
+    pub(crate) fn push(&mut self) {
         if self.stack.len() >= TITLE_STACK_MAX {
             self.stack.remove(0);
         }
@@ -484,15 +476,15 @@ impl TitleState {
     }
 
     /// `CSI 23 t`. `None` means the stack was empty and nothing is applied.
-    pub fn pop(&mut self) -> Option<Option<String>> {
+    pub(crate) fn pop(&mut self) -> Option<Option<String>> {
         self.stack.pop()
     }
 
-    pub fn depth(&self) -> usize {
+    pub(crate) fn depth(&self) -> usize {
         self.stack.len()
     }
 
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.title = None;
         self.stack.clear();
     }

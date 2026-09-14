@@ -13,7 +13,7 @@ use crate::cell::Rgb;
 /// Slots in the override table: 256 indexed colours, then foreground,
 /// background, cursor, the eight dim variants, bright foreground and dim
 /// foreground.
-pub const COLOR_COUNT: usize = 269;
+pub(crate) const COLOR_COUNT: usize = 269;
 
 const FOREGROUND: usize = 256;
 const BACKGROUND: usize = 257;
@@ -143,7 +143,7 @@ impl ColorOverrides {
 }
 
 /// `#rrggbb` or `rgb:rr/gg/bb`, the two forms `xparse_color` accepts.
-pub fn parse_color(spec: &[u8]) -> Option<Rgb> {
+pub(crate) fn parse_color(spec: &[u8]) -> Option<Rgb> {
     match spec {
         [b'#', rest @ ..] => parse_legacy_color(rest),
         [b'r', b'g', b'b', b':', rest @ ..] => parse_rgb_color(rest),

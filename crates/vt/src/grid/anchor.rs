@@ -78,7 +78,7 @@ impl Anchors {
         Anchors::default()
     }
 
-    pub fn register(&mut self, kind: AnchorKind, pos: Pos) -> AnchorId {
+    pub(crate) fn register(&mut self, kind: AnchorKind, pos: Pos) -> AnchorId {
         let anchor = Anchor {
             kind,
             pos,
@@ -103,7 +103,7 @@ impl Anchors {
 
     /// Move an anchor, reviving it: the caller has just told us where its
     /// content is.
-    pub fn set(&mut self, id: AnchorId, pos: Pos) {
+    pub(crate) fn set(&mut self, id: AnchorId, pos: Pos) {
         if let Some(anchor) = self.entries.get_mut(id.0 as usize) {
             anchor.pos = pos;
             anchor.alive = true;
@@ -114,7 +114,7 @@ impl Anchors {
         self.entries.get(id.0 as usize).map(|anchor| anchor.kind)
     }
 
-    pub fn release(&mut self, id: AnchorId) {
+    pub(crate) fn release(&mut self, id: AnchorId) {
         if let Some(anchor) = self.entries.get_mut(id.0 as usize) {
             anchor.alive = false;
             if !self.free.contains(&id) {

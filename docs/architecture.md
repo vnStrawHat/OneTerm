@@ -9,7 +9,8 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Layer | Crate | Current responsibility | Entry points |
 |---|---|---|---|
 | Domain | `oneterm-core` | Errors, SSH/local configuration, SFTP contracts | `crates/core/src/lib.rs`, `crates/core/src/sftp.rs` |
-| Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search, printable-output logging | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/session.rs`, `crates/terminal/src/logging.rs` |
+| Terminal engine | `oneterm-vt` | OneTerm's own VT engine (`IN-0029`, `DEC-0014`): bytes to grid, damage and render state, reflow, selection, graphics. A leaf — no OneTerm dependency, no UI framework, no lock, no interior mutability | `crates/vt/src/lib.rs`, `crates/vt/src/terminal/`, `crates/vt/src/grid/`, `crates/vt/src/render/`, `crates/vt/src/parser/` |
+| Terminal adapter | `oneterm-terminal` | The gpui-free half of the terminal feature: the engine lock (`TerminalHandle`), the shared backend pump, the session contract, encoding, OSC, search, printable-output logging | `crates/terminal/src/lib.rs`, `crates/terminal/src/handle.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/session.rs`, `crates/terminal/src/backend/`, `crates/terminal/src/logging.rs` |
 | PTY transport | `oneterm-pty` | Pseudo-console transport with no grid: ConPTY (bundled `conpty.dll` first, `kernel32` as the fallback) or `openpty`, behind `PseudoConsole` / `EventedPty` / `OnResize` | `crates/pty/src/lib.rs`, `crates/pty/src/windows.rs`, `crates/pty/src/unix.rs` |
 | Completion engine | `oneterm-completion` | Auto-completion engine (gpui-free): embedded command catalogs, line parsing + subcommand resolution, matching/ranking, in-session history, secret redaction | `crates/completion/src/lib.rs`, `crates/completion/src/engine.rs`, `crates/completion/src/catalog.rs`, `crates/completion/src/history.rs`, `crates/completion/src/redact.rs` |
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
@@ -23,7 +24,11 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Feature | `oneterm-session-ui` | Session tree and SSH connection dialogs | `crates/session-ui/src/lib.rs`, `crates/session-ui/src/connect_dialog.rs` |
 | Feature | `oneterm-settings-ui` | General Settings window | `crates/settings-ui/src/lib.rs` |
 | Feature | `oneterm-agent-ui` | Agent fleet view and cards | `crates/agent-ui/src/lib.rs` |
+| Shared services | `oneterm-actions` | GPUI-free action contracts shared by the shell and the feature crates | `crates/actions/src/lib.rs` |
+| Shared services | `oneterm-theme` | Theme definitions, the built-in theme list, and the generated `AppIcon` set | `crates/theme/src/lib.rs`, `crates/theme/src/theme.rs`, `crates/theme/src/icon.rs` |
+| Shared services | `oneterm-highlight` | Semantic syntax highlighting engine (gpui-free) | `crates/highlight/src/lib.rs` |
 | Wiring | `oneterm-app` | Installs backends, initializes features, opens the workspace | `crates/app/src/lib.rs`, `crates/app/src/init.rs` |
+| Tooling | `oneterm-tools` | Developer tools outside the layering: the VT parity corpus and its replayer, the five benchmark tiers, and the `doom-fire` / `pty-throughput` / `sftp-dev-server` / `vt-corpus` / `vt-bench` binaries. Nothing depends on it | `crates/tools/src/lib.rs`, `crates/tools/src/corpus.rs`, `crates/tools/src/bench.rs`, `crates/tools/src/bin/` |
 
 ## Dependency direction
 

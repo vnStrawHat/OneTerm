@@ -144,7 +144,7 @@ impl RenderRow {
 
     /// Phase 2, outside the lock: named and indexed colours become pixels.
     /// Idempotent, because a resolved `Rgb` maps to itself.
-    pub(crate) fn map_colors(&mut self, palette: &Palette) {
+    pub fn map_colors(&mut self, palette: &Palette) {
         for run in &mut self.runs {
             run.style.fg = crate::cell::Color::Rgb(palette.resolve(run.style.fg));
             run.style.bg = crate::cell::Color::Rgb(palette.resolve(run.style.bg));

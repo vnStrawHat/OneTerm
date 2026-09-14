@@ -72,7 +72,7 @@ pub enum CursorOrigin {
 ///   leaves plain blanks rather than decorated ones.
 ///
 /// Keeping both on the cursor is what lets the erase paths stay off the
-/// interner: the pair is recomputed once, in [`Screen::set_template`], whenever
+/// interner: the pair is recomputed once, in `Screen::set_template`, whenever
 /// the SGR template changes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cursor {
@@ -95,7 +95,7 @@ impl Cursor {
     }
 
     /// What a printed glyph inherits.
-    pub fn template(&self) -> Cell {
+    pub(crate) fn template(&self) -> Cell {
         self.template
     }
 
@@ -189,11 +189,11 @@ impl TabStops {
         }
     }
 
-    pub fn is_stop(&self, col: u16) -> bool {
+    pub(crate) fn is_stop(&self, col: u16) -> bool {
         self.stops.get(col as usize).copied().unwrap_or(false)
     }
 
-    pub fn set(&mut self, col: u16) {
+    pub(crate) fn set(&mut self, col: u16) {
         if let Some(stop) = self.stops.get_mut(col as usize) {
             *stop = true;
         }
@@ -205,12 +205,12 @@ impl TabStops {
         }
     }
 
-    pub fn clear_all(&mut self) {
+    pub(crate) fn clear_all(&mut self) {
         self.stops.fill(false);
     }
 
     /// `CSI ? 5 W` (correction C10, wired up in `US-0076`).
-    pub fn reset_defaults(&mut self) {
+    pub(crate) fn reset_defaults(&mut self) {
         for (col, stop) in self.stops.iter_mut().enumerate() {
             *stop = col as u16 % TAB_INTERVAL == 0;
         }
@@ -364,7 +364,7 @@ impl Screen {
         self.screen_top() - self.offset as u64
     }
 
-    pub fn viewport(&self) -> Viewport {
+    pub(crate) fn viewport(&self) -> Viewport {
         Viewport {
             top: self.visible_top(),
             rows: self.rows,
@@ -382,7 +382,7 @@ impl Screen {
     }
 
     /// Row id to screen index, or `None` when the row is in history.
-    pub fn index_of(&self, id: RowId) -> Option<u16> {
+    pub(crate) fn index_of(&self, id: RowId) -> Option<u16> {
         let top = self.screen_top();
         if id < top || id > self.newest {
             return None;
@@ -396,7 +396,7 @@ impl Screen {
 
     /// A viewport-coordinate region as a row-id range (N-13): the anchor list
     /// only ever sees row ids.
-    pub fn rows_of(&self, region: ScrollRegion) -> Range<RowId> {
+    pub(crate) fn rows_of(&self, region: ScrollRegion) -> Range<RowId> {
         let region = self.clamp_region(region);
         let top = self.screen_top() + region.top as u64;
         let bottom = self.screen_top() + region.bottom as u64;
@@ -436,8 +436,8 @@ impl Screen {
     /// with the cursor's erase cell: an unwritten slot already reads as plain
     /// blanks, so giving it the current background-erase colour would repaint
     /// every untouched column of the row the moment one glyph lands on it.
-    /// Deliberate background-erase blanking is [`Screen::blank_row`] and
-    /// [`Screen::blank_slot`], which the scroll and reset paths call explicitly.
+    /// Deliberate background-erase blanking is `Screen::blank_row` and
+    /// `Screen::blank_slot`, which the scroll and reset paths call explicitly.
     /// (Found by the `US-0076` parity gate: it is what made `sgr`'s trailing
     /// blanks carry `48;5;1` where the reference leaves them default.)
     pub fn row_mut(&mut self, id: RowId) -> RowMut<'_> {
@@ -504,7 +504,7 @@ impl Screen {
     }
 
     /// Reset a screen-relative range with the background-erase template.
-    pub fn reset_rows(&mut self, rows: Range<u16>) {
+    pub(crate) fn reset_rows(&mut self, rows: Range<u16>) {
         let end = rows.end.min(self.rows);
         for index in rows.start..end {
             let id = self.screen_top() + index as u64;
@@ -577,7 +577,7 @@ impl Screen {
         &self.cursor
     }
 
-    pub fn cursor_mut(&mut self) -> &mut Cursor {
+    pub(crate) fn cursor_mut(&mut self) -> &mut Cursor {
         &mut self.cursor
     }
 
@@ -587,7 +587,7 @@ impl Screen {
     /// foreground, the attributes, the hyperlink or the semantic that a printed
     /// glyph would inherit — the reference's `bg.into()` rule — while the erase
     /// paths themselves never touch the interner.
-    pub fn set_template(&mut self, template: Cell, interner: &mut Interner) {
+    pub(crate) fn set_template(&mut self, template: Cell, interner: &mut Interner) {
         let bg = interner.resolve_style(template.style_id()).bg;
         let erase = interner.style(&Style {
             bg,
@@ -602,12 +602,12 @@ impl Screen {
     }
 
     /// `DECSC`.
-    pub fn save_cursor(&mut self) {
+    pub(crate) fn save_cursor(&mut self) {
         self.saved_cursor = self.cursor;
     }
 
     /// `DECRC`.
-    pub fn restore_cursor(&mut self) {
+    pub(crate) fn restore_cursor(&mut self) {
         self.cursor = self.saved_cursor;
         self.clamp_cursors();
         self.debug_assert_integrity();
@@ -615,7 +615,7 @@ impl Screen {
 
     /// Screen-relative positioning. The caller applies origin mode by passing a
     /// region-relative index through [`Screen::goto_origin`].
-    pub fn goto(&mut self, index: u16, col: u16) {
+    pub(crate) fn goto(&mut self, index: u16, col: u16) {
         self.cursor.pos = Pos {
             row: self.row_of_index(index),
             col: col.min(self.cols - 1),
@@ -636,13 +636,13 @@ impl Screen {
         self.goto(index, col);
     }
 
-    pub fn move_forward(&mut self, n: u16) {
+    pub(crate) fn move_forward(&mut self, n: u16) {
         self.cursor.pos.col = self.cursor.pos.col.saturating_add(n).min(self.cols - 1);
         self.cursor.pending_wrap = false;
         self.debug_assert_integrity();
     }
 
-    pub fn move_backward(&mut self, n: u16) {
+    pub(crate) fn move_backward(&mut self, n: u16) {
         self.cursor.pos.col = self.cursor.pos.col.saturating_sub(n);
         self.cursor.pending_wrap = false;
         self.debug_assert_integrity();
@@ -663,7 +663,7 @@ impl Screen {
     /// [`Screen::screen_top`], so history stays unaddressable either way. A
     /// cursor parked above the region cannot reverse-wrap at all, for the same
     /// reason: the row above it is not the region's to write.
-    pub fn backspace(&mut self, reverse_wrap: bool) {
+    pub(crate) fn backspace(&mut self, reverse_wrap: bool) {
         if self.cursor.pos.col == 0 {
             let floor = self.row_of_index(self.region.top);
             if !reverse_wrap || self.cursor.pos.row <= floor {
@@ -686,7 +686,7 @@ impl Screen {
         self.debug_assert_integrity();
     }
 
-    pub fn carriage_return(&mut self) {
+    pub(crate) fn carriage_return(&mut self) {
         self.cursor.pos.col = 0;
         self.cursor.pending_wrap = false;
         self.debug_assert_integrity();
@@ -703,7 +703,7 @@ impl Screen {
 
     // ── Scroll region ───────────────────────────────────────────────────────
 
-    pub fn region(&self) -> ScrollRegion {
+    pub(crate) fn region(&self) -> ScrollRegion {
         self.region
     }
 
@@ -725,7 +725,7 @@ impl Screen {
     /// (`US-0076`): the reference's one-based validity test can produce an
     /// **empty** region, which [`Screen::set_region`]'s `top < bottom` contract
     /// cannot express, and it never homes the cursor itself.
-    pub fn set_region_raw(&mut self, top: u16, bottom: u16) {
+    pub(crate) fn set_region_raw(&mut self, top: u16, bottom: u16) {
         let bottom = bottom.min(self.rows);
         self.region = ScrollRegion {
             top: top.min(bottom),
@@ -746,7 +746,7 @@ impl Screen {
     /// The count clamps to the region height, so the short-region case (C3)
     /// reaches the same path as every other count: the region rotates by its own
     /// height and is then blank.
-    pub fn scroll_up(
+    pub(crate) fn scroll_up(
         &mut self,
         region: ScrollRegion,
         n: u16,
@@ -864,7 +864,7 @@ impl Screen {
 
     /// `SD`, `RI` at the region top, `IL`. Trap 18: never pulls rows back out of
     /// scrollback; it always blanks the top `n` rows of the region.
-    pub fn scroll_down(
+    pub(crate) fn scroll_down(
         &mut self,
         region: ScrollRegion,
         n: u16,
@@ -901,7 +901,7 @@ impl Screen {
 
     /// `IL`. Trap 16: a complete no-op when the cursor is outside the region,
     /// and the cursor's row is the origin rather than the region's top.
-    pub fn insert_lines(&mut self, n: u16, anchors: &mut Anchors) -> Option<ScrollReport> {
+    pub(crate) fn insert_lines(&mut self, n: u16, anchors: &mut Anchors) -> Option<ScrollReport> {
         let index = self.cursor_row_index();
         if !self.region.contains(index) {
             return None;
@@ -914,7 +914,7 @@ impl Screen {
     }
 
     /// `DL`. Trap 16, as [`Screen::insert_lines`].
-    pub fn delete_lines(&mut self, n: u16, anchors: &mut Anchors) -> Option<ScrollReport> {
+    pub(crate) fn delete_lines(&mut self, n: u16, anchors: &mut Anchors) -> Option<ScrollReport> {
         let index = self.cursor_row_index();
         if !self.region.contains(index) {
             return None;
@@ -928,7 +928,7 @@ impl Screen {
 
     /// `LF`, `IND`, `NEL`. A cursor below the region walks down to the bottom
     /// row and then stops (trap 16).
-    pub fn linefeed(&mut self, anchors: &mut Anchors) -> Option<ScrollReport> {
+    pub(crate) fn linefeed(&mut self, anchors: &mut Anchors) -> Option<ScrollReport> {
         let next = self.cursor_row_index() + 1;
         if next == self.region.bottom {
             let region = self.region;
@@ -943,7 +943,7 @@ impl Screen {
     }
 
     /// `RI`.
-    pub fn reverse_index(&mut self, anchors: &mut Anchors) -> Option<ScrollReport> {
+    pub(crate) fn reverse_index(&mut self, anchors: &mut Anchors) -> Option<ScrollReport> {
         let index = self.cursor_row_index();
         if index == self.region.top {
             let region = self.region;
@@ -980,17 +980,17 @@ impl Screen {
 
     // ── Tab stops ───────────────────────────────────────────────────────────
 
-    pub fn tabs(&self) -> &TabStops {
+    pub(crate) fn tabs(&self) -> &TabStops {
         &self.tabs
     }
 
-    pub fn tabs_mut(&mut self) -> &mut TabStops {
+    pub(crate) fn tabs_mut(&mut self) -> &mut TabStops {
         &mut self.tabs
     }
 
     /// `HT`. Trap 3: a pending wrap wraps the line and **returns**, consuming
     /// the tab.
-    pub fn put_tab(&mut self, count: u16, autowrap: bool, anchors: &mut Anchors) {
+    pub(crate) fn put_tab(&mut self, count: u16, autowrap: bool, anchors: &mut Anchors) {
         if self.cursor.pending_wrap {
             // The reference returns either way: with `DECAWM` reset its
             // `wrapline` does nothing and the tab is still consumed.
@@ -1032,7 +1032,7 @@ impl Screen {
     /// Width is decided per scalar, which is what the engine being replaced does
     /// and what the parity corpus pins; a zero-width scalar joins the previous
     /// cell's cluster instead of taking a column of its own.
-    pub fn print(
+    pub(crate) fn print(
         &mut self,
         c: char,
         mode: PrintMode,
@@ -1182,7 +1182,7 @@ impl Screen {
     // ── Erase, insert, delete ───────────────────────────────────────────────
 
     /// `EL`. Trap 2: `EL 0` erases nothing while the pending wrap is armed.
-    pub fn erase_line(&mut self, mode: LineClear) {
+    pub(crate) fn erase_line(&mut self, mode: LineClear) {
         if matches!(mode, LineClear::Right) && self.cursor.pending_wrap {
             return;
         }
@@ -1198,7 +1198,7 @@ impl Screen {
     }
 
     /// `ECH`.
-    pub fn erase_chars(&mut self, n: u16) {
+    pub(crate) fn erase_chars(&mut self, n: u16) {
         let (col, cols) = (self.cursor.pos.col, self.cols);
         let end = col.saturating_add(n).min(cols);
         let (id, template) = (self.cursor.pos.row, self.cursor.erase);
@@ -1207,21 +1207,21 @@ impl Screen {
     }
 
     /// `DCH`, correction C1: a plain shift left by `n`.
-    pub fn delete_chars(&mut self, n: u16) {
+    pub(crate) fn delete_chars(&mut self, n: u16) {
         let (id, col, template) = (self.cursor.pos.row, self.cursor.pos.col, self.cursor.erase);
         self.row_mut(id).delete_cells(col, n, template);
         self.debug_assert_integrity();
     }
 
     /// `ICH`.
-    pub fn insert_blanks(&mut self, n: u16) {
+    pub(crate) fn insert_blanks(&mut self, n: u16) {
         let (id, col, template) = (self.cursor.pos.row, self.cursor.pos.col, self.cursor.erase);
         self.row_mut(id).insert_cells(col, n, template);
         self.debug_assert_integrity();
     }
 
     /// `ED`.
-    pub fn erase_display(
+    pub(crate) fn erase_display(
         &mut self,
         mode: DisplayClear,
         anchors: &mut Anchors,
@@ -1265,7 +1265,11 @@ impl Screen {
     /// `ED 2` on the primary screen. Trap 9: the occupied part of the screen is
     /// scrolled into scrollback rather than discarded, and a user who is
     /// scrolled back keeps seeing the same content.
-    pub fn clear_viewport(&mut self, anchors: &mut Anchors, interner: &Interner) -> ScrollReport {
+    pub(crate) fn clear_viewport(
+        &mut self,
+        anchors: &mut Anchors,
+        interner: &Interner,
+    ) -> ScrollReport {
         let positions = self.occupied_rows(interner);
         let region = ScrollRegion::full(self.rows);
         // The ordinary scroll rule already holds the scrolled-back view still:
@@ -1295,7 +1299,7 @@ impl Screen {
     }
 
     /// `ED 3`. Trap 10: the view snaps back to the bottom.
-    pub fn clear_history(&mut self, anchors: &mut Anchors) -> Option<RowId> {
+    pub(crate) fn clear_history(&mut self, anchors: &mut Anchors) -> Option<RowId> {
         self.offset = 0;
         if self.history_len() == 0 {
             self.debug_assert_integrity();
@@ -1335,7 +1339,7 @@ impl Screen {
     /// This is the alternate screen's entry wipe — the reference's
     /// `inactive_grid.reset_region(..)`, which is a background-erase clear and
     /// emphatically not a `RIS`.
-    pub fn clear_all_rows(&mut self, anchors: &mut Anchors) {
+    pub(crate) fn clear_all_rows(&mut self, anchors: &mut Anchors) {
         let rows = self.rows_of(ScrollRegion::full(self.rows));
         anchors.shift_region(rows.clone(), 0, rows);
         self.offset = 0;
@@ -1580,7 +1584,7 @@ impl Screen {
 
     /// The one rehome: the user edited the configured scrollback depth. O(live
     /// rows), and deliberately not on the resize path (R-30).
-    pub fn set_scrollback_limit(&mut self, limit: u32, anchors: &mut Anchors) {
+    pub(crate) fn set_scrollback_limit(&mut self, limit: u32, anchors: &mut Anchors) {
         let limit = limit.min(crate::grid::SCROLLBACK_MAX);
         if limit == self.scrollback_limit {
             return;
@@ -1612,7 +1616,7 @@ impl Screen {
         self.debug_assert_integrity();
     }
 
-    pub fn scrollback_limit(&self) -> u32 {
+    pub(crate) fn scrollback_limit(&self) -> u32 {
         self.scrollback_limit
     }
 
@@ -1626,13 +1630,13 @@ impl Screen {
 
     // ── Batch stamping ──────────────────────────────────────────────────────
 
-    pub fn seq(&self) -> SeqNo {
+    pub(crate) fn seq(&self) -> SeqNo {
         self.seq
     }
 
     /// Opens a batch: the stamp every row written from here on carries, and the
     /// lower bound of the rows this batch can have touched.
-    pub fn set_seq(&mut self, seq: SeqNo) {
+    pub(crate) fn set_seq(&mut self, seq: SeqNo) {
         self.seq = seq;
         self.batch_lo = self.screen_top();
     }
@@ -1645,7 +1649,7 @@ impl Screen {
     /// keeps its place on the screen where a content anchor follows its
     /// content); the entries are the authority under reflow, which reads them
     /// back through `Anchors::remap`.
-    pub fn sync_anchors(&self, anchors: &mut Anchors) {
+    pub(crate) fn sync_anchors(&self, anchors: &mut Anchors) {
         anchors.set(self.cursor_anchor, self.cursor.pos);
         anchors.set(self.saved_cursor_anchor, self.saved_cursor.pos);
         anchors.set(
@@ -1661,11 +1665,11 @@ impl Screen {
         self.cursor_anchor
     }
 
-    pub fn saved_cursor_anchor(&self) -> AnchorId {
+    pub(crate) fn saved_cursor_anchor(&self) -> AnchorId {
         self.saved_cursor_anchor
     }
 
-    pub fn viewport_anchor(&self) -> AnchorId {
+    pub(crate) fn viewport_anchor(&self) -> AnchorId {
         self.viewport_anchor
     }
 
@@ -1699,7 +1703,7 @@ impl Screen {
     }
 
     /// Rows whose cells are actually materialised.
-    pub fn allocated_rows(&self) -> usize {
+    pub(crate) fn allocated_rows(&self) -> usize {
         self.slots.iter().flatten().count()
     }
 
@@ -1758,7 +1762,7 @@ impl Screen {
 
     /// The full walk. Every row's id matches its slot, every row is the right
     /// width, no wide pair is broken, and no content hint has a false negative.
-    pub fn assert_integrity(&self) {
+    pub(crate) fn assert_integrity(&self) {
         self.debug_assert_integrity();
         if !cfg!(debug_assertions) {
             return;
@@ -1788,7 +1792,7 @@ impl Screen {
 
     /// Every interned id a live cell names still resolves. Split out because it
     /// needs the terminal's interner, which a screen does not own.
-    pub fn assert_interned_ids_resolve(&self, interner: &Interner) {
+    pub(crate) fn assert_interned_ids_resolve(&self, interner: &Interner) {
         if !cfg!(debug_assertions) {
             return;
         }

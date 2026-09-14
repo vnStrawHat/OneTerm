@@ -4,7 +4,8 @@
 //! Named for the verification list in
 //! `docs/spec-intakes/IN-0029-vt-engine/low-level-design/events-and-api.md`.
 
-use crate::event::{ClipboardKind, EVENT_ARENA_SOFT, EventBatch, StringTerm, VtEvent};
+use crate::event::batch::EVENT_ARENA_SOFT;
+use crate::event::{ClipboardKind, EventBatch, StringTerm, VtEvent};
 use crate::grid::{ScrollRegion, Size, TerminalGrid};
 
 fn batch_with_a_title(title: &str) -> EventBatch {

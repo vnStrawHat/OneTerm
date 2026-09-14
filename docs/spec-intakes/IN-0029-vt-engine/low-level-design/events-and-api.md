@@ -289,6 +289,21 @@ pub mod testing;    // not cfg-gated
 
 Everything else is `pub(crate)`, including the whole `parser` and `dispatch` modules.
 
+> **As shipped (`US-0090`).** The block above is the design-time sketch; the authority is
+> `crates/vt/src/lib.rs`, and it diverges in three ways worth naming. `parser` **is** public,
+> because `crates/terminal/src/logging.rs` drives its own parser over the session log and needs
+> five of its types; `grid` and `intern` are public for the same reason (`grid::Screen` for
+> `crates/tools`' corpus replayer, `grid::{DEFAULT_SCROLLBACK, SCROLLBACK_MAX}` and
+> `intern::Hyperlink` for the adapter), and the other eight root modules are `pub(crate)`. The
+> `pub use` list is narrower than this sketch: `ByteSpan`, `StrSpan`, `ParamSpans`, `Placement`,
+> `MAX_DIMENSION`, `ResizeOutcome`, `ThemeColors`, `CursorStyle`, `ModeState`, `Watermark`,
+> `EngineView`, `SyncState`, `TerminalGrid`, `StyleId`, `GraphemeId`, `GRAPHEME_MAX_LEN`,
+> `SEMANTIC_ESCAPE_CHARS`, `Invalidation`, `ColorOverrides` and `FeedStats`-adjacent span types
+> had no consumer in any crate and were dropped or narrowed. `RowRef` and `cluster_width` stayed
+> published with no consumer, on purpose: the first is the damage hint `US-0092` reads, the second
+> is the mode-2027 entry point implemented ahead of the mode. `anchor`, `damage`, `strip` and
+> `testing` in the sketch never became modules of those names.
+
 ## Edge Cases and Failure Modes
 
 - [ ] **A batch not drained before the next `feed`** — debug assertion; release clears and

@@ -1,9 +1,10 @@
 //! `TerminalModel` over the new engine.
 //!
-//! The ten ConPTY resize tests this file used to hold live in
-//! [`super::legacy_resize`], still pinned against the engine being replaced
-//! (R-44). What is left here is what the *adapter* owns: that the model's
-//! operations reach the engine and come back in the reference's coordinates.
+//! The ten ConPTY resize tests this file used to hold were pinned against the
+//! engine being replaced (R-44) and retired with the fork at `US-0087`; the
+//! cell-exact resize contract is now `oneterm_vt::reflow`'s own. What is left
+//! here is what the *adapter* owns: that the model's operations reach the
+//! engine and come back in the coordinates the view expects.
 
 use oneterm_vt::SelectionKind;
 
@@ -86,8 +87,8 @@ fn scrolling_back_moves_the_display_offset_not_the_cursor_line() {
 }
 
 /// DEC-0008 at the adapter: the policy the backend picked reaches the engine.
-/// The cell-exact contract is `legacy_resize`'s (old engine) and
-/// `oneterm_vt::reflow::tests::keep_viewport_top_*` (new engine).
+/// The cell-exact contract is the engine's own
+/// (`oneterm_vt::reflow::tests::keep_viewport_top_*`).
 #[test]
 fn resize_grid_applies_the_backend_policy() {
     let size = GridSize { cols: 10, lines: 5 };

@@ -83,11 +83,10 @@ pub struct RenderPlacement {
 
 /// The engine fields one update reads, borrowed as the disjoint fields they are.
 ///
-/// `US-0076`'s `Terminal::render_update(&mut self, state, now)` is a shim that
-/// builds one of these from its own fields; the split exists because `Terminal`
-/// does not exist yet and because the render state must not be able to reach
-/// anything else.
-pub struct EngineView<'a> {
+/// [`crate::Terminal::render_update`] builds one of these from its own fields;
+/// the split exists so the render state can borrow exactly the fields it reads
+/// and reach nothing else.
+pub(crate) struct EngineView<'a> {
     pub grid: &'a TerminalGrid,
     pub interner: &'a Interner,
     pub sync: &'a mut SyncState,
@@ -142,7 +141,7 @@ impl RenderState {
     }
 
     /// Phase 1, under the caller's lock.
-    pub fn begin_update(&mut self, engine: EngineView<'_>, now: Instant) -> RenderUpdate {
+    pub(crate) fn begin_update(&mut self, engine: EngineView<'_>, now: Instant) -> RenderUpdate {
         let EngineView {
             grid,
             interner,

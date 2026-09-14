@@ -26,7 +26,7 @@ use crate::cell::{CONTENT_LIMIT, Style};
 
 /// Codepoints kept per cell. Longer clusters are truncated, not rejected: the
 /// pinned fork stores an unbounded `Vec<char>` per cell instead.
-pub const GRAPHEME_MAX_LEN: usize = 16;
+pub(crate) const GRAPHEME_MAX_LEN: usize = 16;
 /// Absolute sweep trigger, not a fraction of an id space (R-27): the id space
 /// is the cell's 21 content bits, and these constants keep the arena inside a
 /// few megabytes while making a sweep rare.
@@ -100,8 +100,8 @@ pub struct InternTable<T> {
     name: &'static str,
 }
 
-pub type StyleSet = InternTable<Style>;
-pub type ExtrasTable = InternTable<Extras>;
+pub(crate) type StyleSet = InternTable<Style>;
+pub(crate) type ExtrasTable = InternTable<Extras>;
 
 impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
     fn new(name: &'static str) -> Self {
@@ -233,7 +233,7 @@ impl GraphemeArena {
         arena
     }
 
-    /// Never fails. A cluster longer than [`GRAPHEME_MAX_LEN`] is truncated and
+    /// Never fails. A cluster longer than `GRAPHEME_MAX_LEN` is truncated and
     /// counted; a full arena returns id 0, which resolves to a single space.
     pub fn intern(&mut self, cluster: &[char]) -> GraphemeId {
         let cluster = if cluster.len() > GRAPHEME_MAX_LEN {
@@ -322,7 +322,7 @@ impl GraphemeArena {
         GraphemeRemap(map)
     }
 
-    /// Clusters truncated at [`GRAPHEME_MAX_LEN`].
+    /// Clusters truncated at `GRAPHEME_MAX_LEN`.
     pub fn truncated(&self) -> u32 {
         self.truncated
     }
@@ -365,7 +365,7 @@ impl GraphemeRemap {
 /// occurrence, so a stream of un-`id=`-ed `OSC 8` links would otherwise grow the
 /// table and its index map without limit — attacker-reachable from any SSH
 /// session (`US-0076` owns this bound).
-pub const HYPERLINK_TABLE_LIMIT: usize = 65_535;
+pub(crate) const HYPERLINK_TABLE_LIMIT: usize = 65_535;
 
 /// One OSC 8 hyperlink.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]

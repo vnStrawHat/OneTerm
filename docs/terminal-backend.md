@@ -15,10 +15,11 @@
 > The architecture survived the swap; the dependency did not, and §4 below records what
 > replaced it.
 >
-> Zed source files referenced (same rev lock `1d217ee39…`):
-> - `crates/terminal/src/terminal.rs` — model + EventLoop + PTY.
-> - `crates/terminal_view/src/terminal_element.rs` — custom `Element` rendering the grid.
-> - `crates/terminal_view/src/terminal_view.rs` — View + IME (`ImeState`).
+> Zed source files referenced (paths in **Zed's** tree, same rev lock `1d217ee39…`,
+> not this repository's):
+> - `zed/crates/terminal/src/terminal.rs` — model + EventLoop + PTY.
+> - `zed/crates/terminal_view/src/terminal_element.rs` — custom `Element` rendering the grid.
+> - `zed/crates/terminal_view/src/terminal_view.rs` — View + IME (`ImeState`).
 >
 > **Core decisions** (see brainstorm history):
 > 1. **Local and SSH do not know about each other** — each keeps only its transport
@@ -143,7 +144,10 @@ Since IN-0029 `US-0081` the engine is `oneterm_vt::Terminal`, which holds **no l
 atomic and no interior mutability** and takes `&mut self`: the synchronisation is the
 embedder's choice, and `crates/terminal` makes it `parking_lot::FairMutex`. The shared
 handle is `oneterm_terminal::SharedTerminal` = `Arc<TerminalHandle>`
-(`crates/terminal/src/handle.rs`), which owns that mutex and one `oneterm_vt::Demand`.
+(`crates/terminal/src/handle.rs`), which owns that mutex — directly around
+`oneterm_vt::Terminal`, with no wrapper between — and one `Demand`. `Demand` is the
+adapter's own primitive and lives beside the policy that uses it, in the same file
+(`US-0090` moved it out of `crates/vt`, which now holds no interior mutability at all).
 
 **The demand/yield handshake** the design adds on top of fairness: a fair mutex hands
 the lock over on unlock, but a pump that unlocks and immediately relocks still beats a
@@ -154,15 +158,18 @@ at a chunk boundary. `US-0082` wired the adapter's half of it:
   path calls it — `query_state()` and `terminal_info()` run on the same thread and are
   O(1) under the lock, so making them raise it would ask the pump to yield several times
   per frame for reads that never wait.
-- `TerminalHandle::take_render_demand()` is the pump's half: "is a frame waiting for
-  me?", cleared by the asking. A read loop calls it at a chunk boundary — **after** that
-  batch's reply bytes have left (R-37, § 5.3) — and drops its guard when it answers
-  `true`. Both pumps do: `ssh_main_task` since `US-0084` (it locks per chunk, so its
-  answer to a raised flag is to yield the tokio task before the next chunk relocks; a
-  waiting frame gets the engine in about 400 us under a flood) and the local loop since
-  `US-0083` (`crates/local-shell/src/event_loop.rs`, the shape the 354 ms starvation was
-  measured on). `lock_unfair` / `try_lock_unfair` survive as aliases of `lock` /
-  `try_lock` until the last caller is rewritten.
+- `TerminalHandle::render_demand_raised()` is the pump's half: "is a frame waiting for
+  me?". The asking takes nothing away — the waiter clears its own demand once it holds
+  the lock (`US-0082` rework), so a standing `true` means a frame is still outside.
+  A read loop calls it at a chunk boundary — **after** that batch's reply bytes have
+  left (R-37, § 5.3) — and drops its guard when it answers `true`. Both pumps do:
+  `ssh_main_task` since `US-0084` (it locks per chunk, so its answer to a raised flag is
+  to yield the tokio task before the next chunk relocks; a waiting frame gets the engine
+  in about 400 us under a flood) and the local loop since `US-0083`
+  (`crates/local-shell/src/event_loop.rs`, the shape the 354 ms starvation was measured
+  on). (It was called `take_render_demand()` until `US-0090`; the verb was residue from
+  the one-shot flag the rework replaced, and the twin `render_demand_raised()` that read
+  the same value went with the rename.)
 
   How long a frame waits is `bytes-per-lock-hold / parse rate`, so the read is capped at
   `MAX_LOCKED_READ` (64 KiB), the bytes handed to one `advance`. ConPTY delivers 82 bytes
@@ -443,11 +450,11 @@ impl LocalSession {
 custom `ShellEventLoop<P: EventedPty + OnResize>` on a dedicated "PTY owner"
 thread — the PTY is created, polled and dropped there. It reads with a
 heap-allocated 1 MiB buffer into `TerminalPump::advance` under a
-`try_lock_unfair` guard (falling back to `lock_unfair` only when the buffer is
+`TerminalHandle::try_lock()` guard (blocking on `lock()` only when the buffer is
 full), answers colour queries with the same guard, then calls
 `finish_batch_blocking`. Each read takes at most `MAX_LOCKED_READ` (64 KiB), so
 one lock hold is bounded in bytes. At each chunk boundary it asks
-`take_render_demand()` and, when a frame is waiting, answers that batch's colour
+`render_demand_raised()` and, when a frame is waiting, answers that batch's colour
 queries, drops the guard and finishes the batch there (§ 5.1) instead of holding
 it until the pipe runs dry. The poller waits **without a timeout**: every
 `ShellNotifier::send` and the child watcher call `poller.notify()`, so an idle
@@ -605,7 +612,7 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
 - Per data chunk (`US-0084`): `TerminalPump::process_chunk` feeds the engine and drains
   that batch under the lock — replies out first (R-37) — then, the lock released,
   `finish_batch(true).await` sends the batch's events before the `Output` hint (§5.3), and
-  the loop asks `SharedTerminal::take_render_demand()` and yields the task when a frame is
+  the loop asks `SharedTerminal::render_demand_raised()` and yields the task when a frame is
   waiting (§5.1). No `crates/ssh` **source file** names the engine — the shared pump is the
   whole of the terminal side, and the fork's last manifest line left with `US-0085`.
 - RSA keys authenticate with `rsa-sha2-*` chosen from the server's `server-sig-algs`
@@ -859,8 +866,7 @@ crates/
 │   ├── session.rs            # TerminalRender/Input/Ime/Lifecycle + TerminalSession façade, SessionEvent, TerminalCapabilities
 │   ├── handle.rs             # TerminalHandle: the FairMutex + the render-demand flag
 │   ├── model.rs              # TerminalModel: snapshot / snapshot_into / query_state / input
-│   ├── content.rs            # TerminalContent: the RenderState it owns + the legacy shape
-│   ├── engine_shim.rs        # the compatibility conversion (deleted at US-0085)
+│   ├── content.rs            # TerminalContent: the RenderState it owns, in the engine's own vocabulary
 │   ├── palette.rs / color_classification.rs / osc_color.rs
 │   ├── key_encode.rs / mouse_encode.rs / paste.rs / search.rs
 │   ├── osc.rs / osc_agent/ / url_policy.rs / security_policy.rs

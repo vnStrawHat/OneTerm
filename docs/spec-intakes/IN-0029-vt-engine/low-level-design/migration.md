@@ -112,7 +112,7 @@ packet's:
 | --- | --- | --- |
 | `US-0081` shim | all of `crates/terminal`; in `crates/local-shell` and `crates/ssh` **only** the type of the shared terminal, its construction call and the `Cargo.toml` line that adds `oneterm-vt` | their read loops, their transports, their resize paths, their tests |
 | `US-0082` `crates/terminal` native | `model.rs`, `session.rs`, `content.rs`, `search.rs`, `url*.rs`, `palette.rs`, `osc_color.rs`, `logging.rs`, `test_support.rs`, `backend/` | any other crate |
-| `US-0083` `local-shell` native | `take_render_demand()` at the chunk boundary and the guard dropped when it answers `true` — the loop that holds the lock across reads, so the one that needs it; the `oneterm-pty` token constants replace the last local ones | `crates/terminal`; **not** the manifest line (see below) |
+| `US-0083` `local-shell` native | the demand check at the chunk boundary (`take_render_demand()` as `US-0083` wrote it, `render_demand_raised()` since `US-0090`) and the guard dropped when it answers `true` — the loop that holds the lock across reads, so the one that needs it; the `oneterm-pty` token constants replace the last local ones | `crates/terminal`; **not** the manifest line (see below) |
 | `US-0084` `ssh` native | the same yield check for the tokio task | `crates/terminal`; **not** the manifest line |
 
 **Neither backend can delete its `alacritty_terminal` manifest line, and `US-0084` measured why.**
@@ -233,7 +233,7 @@ The shim's `LegacySnapshot` is gone; these four shapes are what `US-0083`, `US-0
 build against.
 
 **`TerminalHandle` — the lock and the demand flag in one place.** `SharedTerminal =
-Arc<TerminalHandle>` wraps `FairMutex<Engine>` plus one `Demand`
+Arc<TerminalHandle>` wraps `FairMutex<oneterm_vt::Terminal>` plus one `Demand`
 ([`damage-and-render-state.md`](damage-and-render-state.md) § "Fairness and reply latency"):
 
 - `Demand` is a **count of waiting renderers**, not a one-shot flag: `raise()` before blocking,
@@ -241,12 +241,23 @@ Arc<TerminalHandle>` wraps `FairMutex<Engine>` plus one `Demand`
 - `lock_for_render()` is **raise, lock, release** — the waiter clears its own demand, on
   acquisition. The render side is already wired: `TerminalModel::snapshot` and `snapshot_into` go
   through it.
-- `take_render_demand() -> bool` is the **pump's** yield check: call it at a chunk boundary,
+- `render_demand_raised() -> bool` is the **pump's** yield check: call it at a chunk boundary,
   **after the batch's replies have left** (R-37), and drop the guard when it answers `true`. It
-  **reads without clearing** — the name is kept so both pump loops read unchanged — so a standing
-  demand survives more than one ask and a pump may yield at several consecutive boundaries while a
-  frame is queued. `render_demand_raised()` is the same read, for diagnostics.
-- `lock()`, `lock_unfair()` and `try_lock_unfair()` still compile at today's call sites.
+  **reads without clearing**, so a standing demand survives more than one ask and a pump may yield
+  at several consecutive boundaries while a frame is queued.
+- `lock()` and `try_lock()` are the pump's two acquires.
+
+**Updated at `US-0090`**, which is what this section now describes; `US-0082` shipped it in a shape
+this paragraph used to record and that no longer exists. Gone with that packet: the `Engine`
+newtype the mutex used to wrap (a `Deref` to `Terminal` whose only inherent method was an empty
+`exit()`); `take_render_demand()`, which had been a non-consuming read since the `US-0082` rework
+and was renamed onto what it does; the duplicate `render_demand_raised()` "same read, for
+diagnostics" that shared its body byte for byte, which is the name that survived; and
+`lock_unfair()` / `try_lock_unfair()`, byte-identical to `lock()` / `try_lock()` because
+`parking_lot`'s fairness lives in `unlock`. `Demand` also moved crate, from
+`crates/vt/src/render/demand.rs` to `crates/terminal/src/handle.rs`, and is `pub(crate)` there:
+the public door is `TerminalHandle`'s three methods — `lock_for_render()`, `raise_render_demand()`
+and `render_demand_raised()`.
 
 It is measured, and the difference is not marginal. Re-measured after the count fix, one pump thread
 feeding 4 MiB as 1024 chunks and checking at each boundary: honoured, **1 batch / about 0.9 ms**;
@@ -290,7 +301,8 @@ and lost its flag to the pump. The fix is in `crates/terminal`, not in either ba
 must stay observable until the renderer actually acquires the lock**, so the flag is cleared by the
 acquisition rather than by the question. It is owned as a `US-0082` rework.
 
-**`US-0084` wired the SSH half.** `ssh_main_task` calls `take_render_demand()` at the chunk
+**`US-0084` wired the SSH half.** `ssh_main_task` calls the demand check
+(`take_render_demand()` as `US-0084` wrote it, `render_demand_raised()` since `US-0090`) at the chunk
 boundary, after `finish_batch` has sent the batch's events and after the replies have left, and
 yields rather than dropping a guard — it locks per chunk, so it has no guard to drop, which is a
 strictly stronger answer. Measured under a loopback flood, a waiting frame gets the engine in

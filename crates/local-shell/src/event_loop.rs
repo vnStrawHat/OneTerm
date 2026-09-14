@@ -8,7 +8,7 @@
 //!
 //! The loop holds that guard across consecutive reads, which is what makes a
 //! flood fast and a waiting frame slow — so it asks
-//! [`SharedTerminal::take_render_demand`] at each chunk boundary and hands the
+//! [`SharedTerminal::render_demand_raised`] at each chunk boundary and hands the
 //! lock over when a frame is waiting (§ 5.1 of `docs/terminal-backend.md`).
 //!
 //! The loop is generic over the PTY (`EventedPty + OnResize`) so tests drive it
@@ -433,10 +433,8 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                             let engine = match &mut terminal {
                                 Some(engine) => engine,
                                 None => {
-                                    let guard = match self.term.try_lock_unfair() {
-                                        None if unprocessed >= READ_BUFFER_SIZE => {
-                                            self.term.lock_unfair()
-                                        }
+                                    let guard = match self.term.try_lock() {
+                                        None if unprocessed >= READ_BUFFER_SIZE => self.term.lock(),
                                         None => continue,
                                         Some(guard) => guard,
                                     };
@@ -474,7 +472,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                         // `poll.wait` and the session freezes. The next pass
                         // keeps draining the pipe into `buf` and re-locks once
                         // the frame is done.
-                        if self.term.take_render_demand()
+                        if self.term.render_demand_raised()
                             && let Some(guard) = terminal.take()
                         {
                             let queries = self.pump.take_color_queries();
@@ -520,7 +518,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                     // if still held), fall back to the theme default, then reply.
                     let queries = self.pump.take_color_queries();
                     if !queries.is_empty() {
-                        let guard = terminal.take().unwrap_or_else(|| self.term.lock_unfair());
+                        let guard = terminal.take().unwrap_or_else(|| self.term.lock());
                         let replies = self.pump.color_replies(&guard, queries);
                         drop(guard);
                         #[cfg(feature = "terminal-diagnostics")]

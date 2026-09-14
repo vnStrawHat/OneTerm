@@ -5,7 +5,7 @@
 //! reads only the **encoding** half of it (`? 1005` / `? 1006`).
 
 use oneterm_vt::ModeSnapshot;
-use oneterm_vt::render::MouseEncoding;
+use oneterm_vt::MouseEncoding;
 
 /// Mouse button for terminal encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,7 +187,7 @@ pub fn encode_wheel_event(
 
 #[cfg(test)]
 mod tests {
-    use oneterm_vt::render::{MouseProtocol, MouseReporting};
+    use oneterm_vt::{MouseProtocol, MouseReporting};
 
     use super::*;
 

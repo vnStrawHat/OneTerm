@@ -430,7 +430,7 @@ fn row_events_are_not_forwarded() {
     let f = local(16);
     let events = route(&f.router, |batch| {
         batch.push(VtEvent::RowsTrimmed { oldest: RowId(3) });
-        batch.push(VtEvent::GraphicReleased(oneterm_vt::intern::GraphicId(1)));
+        batch.push(VtEvent::GraphicReleased(oneterm_vt::GraphicId(1)));
     });
     assert!(events.is_empty());
 }

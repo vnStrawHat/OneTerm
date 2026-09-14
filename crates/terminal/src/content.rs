@@ -18,11 +18,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use oneterm_vt::intern::Hyperlink;
-use oneterm_vt::render::{ModeSnapshot, RenderCursor, RenderPlacement, RenderRow};
 use oneterm_vt::{
-    Attrs, CellWidth, Color, CursorShape, GraphicData, GraphicId, HyperlinkId, NamedColor,
-    RenderState, RenderUpdate, RowId, SelectionRange, Size, Terminal,
+    Attrs, CellWidth, Color, CursorShape, GraphicData, GraphicId, Hyperlink, HyperlinkId,
+    ModeSnapshot, NamedColor, RenderCursor, RenderPlacement, RenderRow, RenderState, RenderUpdate,
+    RowId, SelectionRange, Size, Terminal,
 };
 
 /// A blank cell = space + default background + no decoration (hyperlink,

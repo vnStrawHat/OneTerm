@@ -1,11 +1,10 @@
 //! The parser's memory bounds, measured rather than argued.
 //!
-//! This is what survives the differential oracle. `US-0073`'s verifier wrote a
-//! wide `vte`-backed differential next to it (2 000 generated buffers, seventy
-//! adversarial sequences at five chunkings, every split point of seven
-//! terminator-bearing sequences); the oracle and its crate retired with the fork
-//! at `US-0087`, and the chunking invariant it proved is pinned by
-//! `parser::props::arbitrary_bytes_never_panic_and_chunking_is_invariant`.
+//! This is what survives the differential oracle `US-0073`'s verifier ran once
+//! against the fork. That oracle retired with the fork at `US-0087`; the
+//! chunking invariant it proved is pinned by
+//! `parser::props::arbitrary_bytes_never_panic_and_chunking_is_invariant`, and
+//! nothing in the workspace depends on a second parser any more.
 //!
 //! What could not move into a unit test is this file: the counting allocator has
 //! to be a `#[global_allocator]`, which only an integration test can install.

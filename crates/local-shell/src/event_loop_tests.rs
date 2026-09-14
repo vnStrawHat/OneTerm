@@ -567,7 +567,7 @@ fn a_flooding_loop_hands_the_engine_to_a_waiting_frame() {
         let stop = Arc::clone(&stop);
         std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
-                term.demand().raise();
+                term.raise_render_demand();
                 std::thread::sleep(Duration::from_millis(16));
             }
         })

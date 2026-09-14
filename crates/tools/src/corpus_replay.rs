@@ -24,13 +24,11 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::time::Instant;
 
-use oneterm_vt::cell::{Attrs, Cell, CellContent, CellWidth, Color};
-use oneterm_vt::event::VtEvent;
-use oneterm_vt::grid::{RowId, Screen, Size};
-use oneterm_vt::intern::{HyperlinkId, Interner};
-use oneterm_vt::render::MouseEncoding;
-use oneterm_vt::terminal::{CursorShape, KeyboardFlags, Mode};
-use oneterm_vt::{Config, EventBatch, Terminal};
+use oneterm_vt::grid::Screen;
+use oneterm_vt::{
+    Attrs, Cell, CellContent, CellWidth, Color, Config, CursorShape, EventBatch, HyperlinkId,
+    Interner, KeyboardFlags, Mode, MouseEncoding, RowId, Size, Terminal, VtEvent,
+};
 
 use crate::corpus::{GridExpect, Recording, RowExpect, StateExpect};
 
