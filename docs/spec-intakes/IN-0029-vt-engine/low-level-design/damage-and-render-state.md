@@ -24,6 +24,28 @@ The current per-frame copy costs 29.9 us at 200x50, 0.18 % of a 60 Hz budget
 shape, not of speed: it scales with change rather than with viewport area, and it removes the
 reason `query_line_range_cells` had to exist instead of a general snapshot.
 
+The premise binds the consumers too, not just `render_update`. `US-0092` (`IN-0032`) brought the
+last two viewport-area loops above this layer into line: the view's URL mask rescans the changed
+rows closed under their wrap runs, plus the viewport's top seam on a scrolled frame, rather than
+the whole viewport (`crates/terminal-view/src/render/plan_cache.rs`); and `last_content_row` skips
+a row that `RowHeader.occ` says has not been touched since its last reset **and** whose content
+hints say that reset used a plain template (`crates/terminal/src/content.rs`). The URL pass is
+therefore **not** documented as deliberately whole-viewport anywhere; a future change that widens
+either scan back to the viewport contradicts `DEC-0015`.
+
+Two traps the verification of `US-0092` pinned, because a consumer that reads these hints will
+meet both:
+
+- **`occ == 0` is not "blank".** `Row::reset` fills the row with the erase template and *then*
+  zeroes `occ`, so after a background-colour erase the cells carry a non-default background while
+  `occ` reads 0. `reset` also replaces the flags with `DIRTY | flags_for(template)`, so the
+  content hints — not `occ` — are what says whether such a row is visually blank.
+- **A viewport-relative derivation has a dependency no row key expresses.** A value computed for
+  display row 0 from the row *above* it (the URL mask's wrap extension is the case in hand)
+  changes when the viewport boundary moves, and a scroll moves it with every row's
+  `(RowId, SeqNo)` unchanged. `RenderUpdate::Partial { scrolled }` is the signal; the top seam has
+  to be recomputed on any non-zero scroll.
+
 ## Design
 
 ### Sequence numbers

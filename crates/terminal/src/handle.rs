@@ -125,6 +125,11 @@ impl TerminalHandle {
     /// on the same thread and are O(1) under the lock, so making them raise the
     /// flag would ask the pump to yield several times per frame for reads that
     /// never wait.
+    ///
+    /// That premise held everywhere except `terminal_info`'s `last_content_row`,
+    /// which scanned the whole viewport on an idle screen; `US-0092` made it
+    /// cost the content instead. So the premise is true again, and nothing here
+    /// needs to move onto `lock_for_render`.
     pub fn lock_for_render(&self) -> FairMutexGuard<'_, Terminal> {
         self.demand.raise();
         let engine = self.engine.lock();

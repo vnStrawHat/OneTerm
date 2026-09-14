@@ -12,7 +12,9 @@ mod mask;
 
 pub(crate) use detect::detect_url_at;
 pub(crate) use hover::UrlHover;
+#[cfg(test)]
 pub(crate) use mask::url_masks_into;
+pub(crate) use mask::{fill_wraps, url_masks_rows_into};
 
 /// A URL detected at a position in the terminal.
 #[derive(Clone, Debug, PartialEq)]

@@ -18,6 +18,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use oneterm_vt::grid::RowFlags;
 use oneterm_vt::{
     Attrs, CellWidth, Color, CursorShape, GraphicData, GraphicId, Hyperlink, HyperlinkId,
     ModeSnapshot, NamedColor, RenderCursor, RenderPlacement, RenderRow, RenderState, RenderUpdate,
@@ -46,6 +47,12 @@ fn is_blank_cell(cell: oneterm_vt::Cell, term: &Terminal) -> bool {
             .is_none()
 }
 
+// Cells `last_content_row` examined, for the counted-work test (`US-0092`).
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CELLS_EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Index (0-based from the top of the active screen) of the last row **with
 /// content**. Returns `0` when the whole screen is blank.
 ///
@@ -58,7 +65,43 @@ pub fn last_content_row(term: &Terminal) -> usize {
     let top = screen.screen_top();
     for index in (0..rows).rev() {
         let row = screen.row(top + u64::from(index));
-        if row.cells().iter().any(|cell| !is_blank_cell(*cell, term)) {
+        // `RowHeader.occ` is "the reference's over-approximating hint: no column
+        // at or above `occ` has been touched since the last reset"
+        // (`crates/vt/src/grid/row.rs:61-63`). False positives are allowed,
+        // never false negatives — exactly what a skip needs, and what keeps
+        // this O(content) rather than O(viewport) on an idle screen where every
+        // row below the prompt is blank (`US-0092`).
+        //
+        // **`occ == 0` is "untouched since the reset", not "blank"**, and the
+        // two part company at a background-colour erase: `Row::reset` fills the
+        // row with the erase template and *then* zeroes `occ`
+        // (`crates/vt/src/grid/row.rs:161-171`), so after `CSI 44 m` + `ED` — or
+        // any scroll, `IL`, `DL` under a non-default background, which is what
+        // every full-screen TUI does — the cells carry `bg = Blue` while `occ`
+        // reads 0. `is_blank_cell` calls those cells content, so skipping them
+        // loses the gutter timestamps on painted lines (`US-0092` verification,
+        // defect 1). `reset` also sets `flags_for(template)`, so the row itself
+        // says the template was not plain: the content hints answer this for
+        // free, and they over-approximate in the safe direction.
+        let styled = row
+            .flags()
+            .intersects(RowFlags::STYLED | RowFlags::HAS_EXTRAS | RowFlags::HAS_GRAPHEME);
+        let occ = usize::from(row.occ());
+        if !row.is_allocated() || (occ == 0 && !styled) {
+            continue;
+        }
+        // Same reason the skip is gated: with a styled erase template the cells
+        // above `occ` are that template, not blanks, so the narrowing only holds
+        // when the row carries no content hint.
+        let cells = row.cells();
+        let cells = if styled {
+            cells
+        } else {
+            &cells[..occ.min(cells.len())]
+        };
+        #[cfg(test)]
+        CELLS_EXAMINED.with(|n| n.set(n.get() + cells.len()));
+        if cells.iter().any(|cell| !is_blank_cell(*cell, term)) {
             return usize::from(index);
         }
     }

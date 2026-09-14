@@ -165,6 +165,90 @@ fn last_content_row_finds_the_last_written_row() {
     assert_eq!(last_content_row(&term), 1);
 }
 
+/// The answer plus the cells the scan examined (`US-0092`).
+fn last_content_row_cost(term: &Terminal) -> (usize, usize) {
+    CELLS_EXAMINED.with(|n| n.set(0));
+    let row = last_content_row(term);
+    (row, CELLS_EXAMINED.with(|n| n.get()))
+}
+
+/// `US-0092` counted work: on the idle screen — a prompt on row 0 and blanks
+/// below, which is `last_content_row`'s worst case and the common case —
+/// doubling the column count must not change the work. Before the `occ` skip it
+/// doubled, because every blank cell of every blank row cost three interner
+/// lookups.
+#[test]
+fn last_content_row_cost_follows_the_content_not_the_viewport() {
+    let mut narrow = terminal(GridSize {
+        cols: 40,
+        lines: 45,
+    });
+    feed(&mut narrow, b"$ ");
+    let mut wide = terminal(GridSize {
+        cols: 80,
+        lines: 45,
+    });
+    feed(&mut wide, b"$ ");
+
+    let (row, narrow_cells) = last_content_row_cost(&narrow);
+    assert_eq!(row, 0);
+    let (row, wide_cells) = last_content_row_cost(&wide);
+    assert_eq!(row, 0);
+    assert_eq!(
+        narrow_cells, wide_cells,
+        "doubling the columns must not change the work"
+    );
+    assert_eq!(
+        wide_cells, 2,
+        "the two cells the prompt actually occupies, not 45 x 80"
+    );
+}
+
+/// The six cases the skip must not get wrong. `occ` over-approximates, so a row
+/// that was written and then cleared is still examined — and must still be
+/// reported as blank.
+#[test]
+fn last_content_row_pins_the_blank_definition() {
+    let mut blank = terminal(GridSize { cols: 8, lines: 5 });
+    feed(&mut blank, b"");
+    assert_eq!(last_content_row(&blank), 0, "an all-blank screen");
+
+    let mut last = terminal(GridSize { cols: 8, lines: 3 });
+    feed(&mut last, b"a\r\nb\r\nc");
+    assert_eq!(last_content_row(&last), 2, "content on the last row");
+
+    let mut first = terminal(GridSize { cols: 8, lines: 5 });
+    feed(&mut first, b"a");
+    assert_eq!(last_content_row(&first), 0, "content on row 0 only");
+
+    // A wide glyph: its second column is a `WideSpacer`, which is not blank.
+    let mut wide = terminal(GridSize { cols: 8, lines: 4 });
+    feed(&mut wide, "a\r\n\r\n日".as_bytes());
+    assert_eq!(last_content_row(&wide), 2, "a wide pair is content");
+
+    // A row whose only content is an OSC 8 link on a space cell.
+    let mut link = terminal(GridSize { cols: 8, lines: 4 });
+    feed(
+        &mut link,
+        b"a\r\n\r\n\x1b]8;;https://a.test\x07 \x1b]8;;\x07",
+    );
+    assert_eq!(last_content_row(&link), 2, "a hyperlink cell is content");
+
+    // Written then cleared: `occ` still says the row was touched, so the skip
+    // must not fire and the row must read as blank again.
+    let mut cleared = terminal(GridSize { cols: 8, lines: 4 });
+    feed(&mut cleared, b"a\r\n\r\ngone\x1b[2K");
+    assert_eq!(
+        last_content_row(&cleared),
+        0,
+        "a cleared row is blank again"
+    );
+    assert!(
+        last_content_row_cost(&cleared).1 > 0,
+        "and it was actually examined, not skipped"
+    );
+}
+
 /// Colours and attributes arrive as runs of resolved values; the run boundaries
 /// must land on the right columns or a whole run paints in the wrong colour.
 #[test]
@@ -202,4 +286,89 @@ fn hyperlinks_are_reachable_by_id() {
     assert!(row.cells[2].hyperlink.is_none());
     let link = content.hyperlink(id).expect("the strings");
     assert_eq!(link.uri.as_ref(), "https://a.test");
+}
+
+/// `US-0092` verification (V1). A row erased with a non-default background —
+/// background-colour erase, which every full-screen TUI uses — is *visually*
+/// non-blank: `is_blank_cell` rejects it because `style.bg` is not
+/// `NamedColor::Background`. But `Row::reset` fills the cells with the erase
+/// template and then sets `occ = 0` (`crates/vt/src/grid/row.rs:161-171`), so
+/// the `occ == 0` skip walks straight past it.
+#[test]
+fn last_content_row_sees_a_background_erased_row() {
+    // `ED Below` from row 0 with a blue erase template: every row below the
+    // cursor is painted blue, and `reset_rows` zeroes their `occ`.
+    let mut term = terminal(GridSize { cols: 8, lines: 5 });
+    feed(&mut term, b"\x1b[44m\x1b[H\x1b[J");
+    assert_eq!(
+        last_content_row(&term),
+        4,
+        "a blue-erased screen is content down to the last row"
+    );
+}
+
+/// Same hazard through the other `reset()` door: a scroll with a background
+/// colour set blanks the incoming row to the erase template.
+#[test]
+fn last_content_row_sees_a_background_erased_scroll_in() {
+    let mut term = terminal(GridSize { cols: 8, lines: 4 });
+    // Fill the screen, then scroll one line in with a red background set.
+    feed(&mut term, b"a\r\nb\r\nc\r\nd");
+    feed(&mut term, b"\x1b[41m\r\n");
+    assert_eq!(
+        last_content_row(&term),
+        3,
+        "the red row scrolled in is content"
+    );
+}
+
+/// The control for the two above: with the default background the same
+/// sequences really are blank, so the skip is right to fire there.
+#[test]
+fn last_content_row_default_erase_stays_blank() {
+    let mut term = terminal(GridSize { cols: 8, lines: 5 });
+    feed(&mut term, b"x\r\n\x1b[H\x1b[J");
+    assert_eq!(last_content_row(&term), 0);
+}
+
+/// `US-0092` rework check. The hints and the cells are cleared in the *same*
+/// call (`Row::reset` assigns `flags = DIRTY | flags_for(template)` and fills
+/// the cells with that template), so a blue erase followed by a default erase
+/// leaves neither a hint nor a coloured cell: the row must read blank again.
+#[test]
+fn last_content_row_blue_then_default_erase_is_blank() {
+    let mut term = terminal(GridSize { cols: 8, lines: 5 });
+    feed(&mut term, b"\x1b[44m\x1b[H\x1b[J");
+    assert_eq!(last_content_row(&term), 4, "blue first");
+    feed(&mut term, b"\x1b[0m\x1b[H\x1b[J");
+    assert_eq!(
+        last_content_row(&term),
+        0,
+        "the default erase clears the cells and the hint together"
+    );
+}
+
+/// The other direction of the hint gate: a row that carries `STYLED` but is
+/// visually blank (a printed space with a non-default foreground) must still
+/// read blank. The hint only costs a full-width scan, it must never invent
+/// content.
+#[test]
+fn last_content_row_styled_blank_row_is_still_blank() {
+    let mut term = terminal(GridSize { cols: 8, lines: 4 });
+    feed(&mut term, b"a\r\n\r\n\x1b[31m   \x1b[0m");
+    assert_eq!(
+        last_content_row(&term),
+        0,
+        "coloured spaces are not content"
+    );
+}
+
+/// `EL`/`ECH` under a colour go through `RowMut::fill`, which keeps `occ`, so
+/// the skip never fires there — but the row is still painted and must read as
+/// content.
+#[test]
+fn last_content_row_sees_a_background_erased_line() {
+    let mut term = terminal(GridSize { cols: 8, lines: 4 });
+    feed(&mut term, b"a\r\n\r\n\x1b[44m\x1b[2K");
+    assert_eq!(last_content_row(&term), 2, "a blue-erased line is content");
 }
