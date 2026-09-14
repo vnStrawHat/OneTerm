@@ -36,8 +36,8 @@ pub mod test_support;
 pub mod url_policy;
 
 pub use backend::{
-    GridSize, OscRouter, PtyTransport, SessionEventSink, SharedSessionState, SharedState,
-    TerminalPump,
+    ByteBudget, GridSize, OscRouter, PtyTransport, SessionEventSink, SharedSessionState,
+    SharedState, TerminalPump,
 };
 pub use color_classification::is_decorative_character;
 pub use content::{LineRangeCells, SnapshotCell, TerminalContent, last_content_row};

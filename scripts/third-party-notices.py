@@ -78,7 +78,7 @@ MIT licence text (Windows Terminal):
 
 | Data | Upstream | Base revision | Licence | Attribution |
 |---|---|---|---|---|
-| VT parity corpus, 45 reference captures (`crates/vt/tests/corpus/alacritty-ref/`) | <https://github.com/alacritty/alacritty> via <https://github.com/zed-industries/alacritty> | `fcf32feacb367b75ec84dd40f041e4fd411d3cc1` | Apache-2.0 | `crates/vt/tests/corpus/NOTICE` |
+| VT parity corpus, 45 reference captures (`crates/tools/corpus/alacritty-ref/`) | <https://github.com/alacritty/alacritty> via <https://github.com/zed-industries/alacritty> | `fcf32feacb367b75ec84dd40f041e4fd411d3cc1` | Apache-2.0 | `crates/tools/corpus/NOTICE` |
 
 Copyright 2016 Joe Wilm, The Alacritty Project Contributors. Only `alacritty.recording`
 (carried as `recording`), `size.json` and `config.json` are reused, unmodified — 936 KiB.

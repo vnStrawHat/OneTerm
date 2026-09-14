@@ -532,6 +532,13 @@ owner loops use different channel implementations:
   budget. The source-of-truth constants are `SSH_COMMAND_QUEUE_CAPACITY`,
   `SSH_COMMAND_BYTE_BUDGET`, `LOCAL_COMMAND_QUEUE_CAPACITY`, and
   `LOCAL_COMMAND_BYTE_BUDGET`.
+- The byte budget itself is **one** mechanism, `ByteBudget<LIMIT>` in
+  `crates/terminal/src/backend/byte_budget.rs` (`US-0093`): an atomic total that
+  reserves at enqueue and releases on delivery, refusing a reservation that
+  would cross `LIMIT` **or** overflow `usize`. The two constants above are the
+  `LIMIT` each backend instantiates it with and stay with their backends — the
+  value is each backend's policy, identical by coincidence rather than by
+  contract, so either may change without touching the other.
 - Writes preserve FIFO order and are atomic at enqueue time: the complete write is
   accepted, or `TerminalError::QueueFull`/`TerminalError::Closed` is returned.
   Paste uses the same write path and therefore cannot bypass the byte budget.
@@ -882,6 +889,7 @@ crates/
 │   ├── factory.rs            # PtySize + SessionFactory
 │   └── backend/              # shared pump layer (§5.3)
 │       ├── transport.rs      # PtyTransport trait
+│       ├── byte_budget.rs    # ByteBudget<LIMIT>: the shared write reservation (§6.5)
 │       ├── state.rs          # SharedState (title/cwd/clipboard/counters)
 │       ├── event_sink.rs     # SessionEventSink (coalescible hint / reliable send)
 │       ├── osc_router.rs     # OscRouter<T>: the EventBatch drain

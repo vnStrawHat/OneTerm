@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
 use log::error;
@@ -30,7 +30,7 @@ use oneterm_pty::{
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
 use oneterm_core::{TerminalLogConfig, report_best_effort};
-use oneterm_terminal::{SharedTerminal, TerminalPump, local_log_identity};
+use oneterm_terminal::{ByteBudget, SharedTerminal, TerminalPump, local_log_identity};
 
 use crate::transport::{LocalListener, LocalTransport};
 
@@ -94,7 +94,7 @@ pub(crate) enum ShellMsg {
 struct ShellControl {
     pending_resize: std::sync::Mutex<Option<WindowSize>>,
     shutdown: AtomicBool,
-    queued_input_bytes: AtomicUsize,
+    queued_input_bytes: ByteBudget<LOCAL_COMMAND_BYTE_BUDGET>,
 }
 
 /// Notifier for the UI to send messages to the event loop (replaces
@@ -120,25 +120,14 @@ impl ShellNotifier {
         match msg {
             ShellMsg::Input(bytes) => {
                 let length = bytes.len();
-                let reserved = self
-                    .control
-                    .queued_input_bytes
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                        current
-                            .checked_add(length)
-                            .filter(|&next| next <= LOCAL_COMMAND_BYTE_BUDGET)
-                    })
-                    .is_ok();
-                if !reserved {
+                if !self.control.queued_input_bytes.reserve(length) {
                     return Err(io::Error::new(
                         io::ErrorKind::WouldBlock,
                         "local-shell command byte budget is full",
                     ));
                 }
                 if let Err(error) = self.sender.try_send(bytes) {
-                    self.control
-                        .queued_input_bytes
-                        .fetch_sub(length, Ordering::AcqRel);
+                    self.control.queued_input_bytes.release(length);
                     return Err(match error {
                         mpsc::TrySendError::Full(_) => io::Error::new(
                             io::ErrorKind::WouldBlock,
@@ -360,9 +349,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                 match self.pty.writer().write(bytes) {
                     Ok(0) => break,
                     Ok(n) => {
-                        self.control
-                            .queued_input_bytes
-                            .fetch_sub(n, Ordering::AcqRel);
+                        self.control.queued_input_bytes.release(n);
                         if n >= bytes.len() {
                             write_queue.pop_front();
                         } else {
