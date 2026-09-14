@@ -160,7 +160,11 @@ licence position clean are:
   (carried as `recording`), `size.json` and `config.json` are taken — 936 KiB; upstream's 44 MiB
   of `grid.json` is deliberately **not** carried, having been used once as a cross-check oracle at
   `US-0072`. Attribution lives in `crates/tools/corpus/NOTICE` and in
-  `THIRD-PARTY-NOTICES.md` § 2. The expectation files next to each recording (`grid.expect`,
+  `THIRD-PARTY-NOTICES.md` § 2. Since `US-0093` the corpus sits in `crates/tools`, whose package
+  expression is `Apache-2.0 AND GPL-3.0-only` (the GPL term is `doom-fire.rs`, § 2 of
+  `THIRD-PARTY-NOTICES.md`); `crates/tools/Cargo.toml` states that the GPL term does not reach
+  `corpus/`, which is third-party Apache-2.0 data carried under its own `NOTICE`, compiled into
+  nothing and never published. The expectation files next to each recording (`grid.expect`,
   `state.expect`, `expected-diffs.json`) are OneTerm's own work, Apache-2.0. Since `US-0087`
   this corpus is the **only** Alacritty-derived material in the repository: the vendored
   `alacritty_terminal` / `vte` fork that OneTerm shipped until then was deleted with the

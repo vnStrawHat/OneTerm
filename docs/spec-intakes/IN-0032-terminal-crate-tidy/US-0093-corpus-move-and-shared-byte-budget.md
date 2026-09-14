@@ -474,11 +474,13 @@ atomic's own method name and signature — the local-shell assertions read
 | `oneterm-vt` lib | 364 (+2 ignored) | 364 (+2 ignored) | 0 |
 | `oneterm-vt` `parser_limits.rs` | 0 (+1 ignored) | 0 (+1 ignored) | 0 |
 | `oneterm-vt` `us0087_cleanup_rows.rs` | 6 | 6 | 0 |
-| `oneterm-terminal` | 285 | **287** | **+2** (the two `ByteBudget` tests) |
+| `oneterm-terminal` | 285 | **290** | **+5** — 2 `ByteBudget` tests in this packet, 3 adopted from the independent verification |
 | `oneterm-local-shell` | 33 (+2 ignored) | 33 (+2 ignored) | 0 |
 | `oneterm-ssh` | 68 | 68 | 0 |
 
-No count shrank. The local-shell suite — which carries the lock-wait measurements — stays green at
+No count shrank. `oneterm-terminal` was **287** at `103b97e`, the state the CI totals below
+were measured in; the three verification tests adopted afterwards take it to **290**.
+The local-shell suite — which carries the lock-wait measurements — stays green at
 a comparable runtime (9.5 s before, 10.3 s after, both well inside their own bounds).
 `cargo test -p oneterm-vt` no longer carries 3.2 MB it never opened, and its counts are identical:
 that was the point.
@@ -500,6 +502,13 @@ that was the point.
 `main`'s baseline is 60 / 1 971 / 0 / 14, so sections and ignored are identical and passed is
 **+2** — exactly the two `ByteBudget` tests. Nothing else moved.
 
+Measured at `103b97e`, before the independent verification's three `ByteBudget` tests were
+adopted. Those add 3 to one section and nothing else, so the figure is **1 976** at the current
+head; re-measured directly with `cargo test -p oneterm-terminal` → **290 passed, 0 failed,
+0 ignored**, with `cargo fmt --all`, `python scripts/check-doc-paths.py` and
+`python scripts/check-english.py` green. The rest of `ci-local.ps1` is unaffected: the adoption
+touches one `#[cfg(test)]` module in one file.
+
 `cargo deny check licenses bans advisories`: **licenses ok, bans ok, advisories FAILED**. The
 failure is `RUSTSEC-2026-0xxx` on `rustls 0.23.40` (TLS 1.3 handshake messages accepted across
 encryption-level boundaries), which the advisory database gained after `deny.toml`'s `ignore`
@@ -510,6 +519,27 @@ the same way on `main`. `licenses ok` is the half this packet could have broken 
 moving Apache-2.0 data into the crate carrying the `GPL-3.0-only` term leaves the crate-scoped
 exception satisfied and no new licence encountered. The `rustls` advisory needs a dependency bump
 or a `deny.toml` entry and belongs to whoever owns that upgrade, not here.
+
+### Independent verification
+
+**PASS-WITH-NOTES** —
+[`evidence/US-0093-verify.md`](evidence/US-0093-verify.md). The verifier re-measured every
+claim above to the same number and found no defect in code, data or the licence position. The
+three defects were all in `IN-0032.md` and are fixed: `D1` the `corpus/oneterm/` Open Decision
+left unticked though the default was taken (now settled in `US-0090`'s pattern), `D2` the
+closure block citing no evidence file (now a four-row table), `D3` the closure block's
+one-sentence line accounting reading as a net of +6 when the real net is +29 production /
++58 total (now spelled out as 48 + 4 − 23 and 77 + 4 − 23). Note `N1` is also taken:
+`docs/license-analysis.md` § 3 now cross-references the `crates/tools/Cargo.toml` statement that
+the GPL term does not reach the corpus. Note `N4` is recorded in Gaps and answered with a doc
+line on `ByteBudget::release`.
+
+The verification's three tests are **adopted verbatim** into
+`crates/terminal/src/backend/byte_budget.rs` as `mod verify_us0093` (only its module doc
+changed, since it said to delete the module with the verification worktree): a contended
+concurrency test with `LIMIT = 20 < THREADS * CHUNK` asserting the total is never observed above
+`LIMIT` and returns to exactly 0; a refusal at the real 4 MiB ceiling leaving the total
+untouched; and `reserve(0)` succeeding at the ceiling. `oneterm-terminal` 287 → 290.
 
 ### Gaps
 
@@ -522,6 +552,16 @@ or a `deny.toml` entry and belongs to whoever owns that upgrade, not here.
 - **The `oneterm/` corpus provenance now sits one crate further from the engine.** Deliberate; see
   Decisions. If a future owner disagrees, moving that one subdirectory back is a `git mv` plus a
   one-line change to `corpus::oneterm_dir()`.
+- **`ByteBudget::release` has no underflow guard.** `fetch_sub` past zero panics in debug and
+  wraps in release. Both deleted copies behaved identically, so this is not a regression — but it
+  is now a `pub` item on a lower crate, so the method's doc says to release exactly what was
+  reserved. A checked release would need a decision about what to do on the error path, which no
+  caller has today; raised by the independent verification as `N4`.
+- **`cargo deny check advisories` is red on `main` independently of this packet.**
+  `RUSTSEC-2026-0285` (`rustls 0.23.40`, via `russh`) post-dates `deny.toml`'s `ignore` list, so
+  CI's `cargo-deny` job fails on `main` and on this branch alike. `Cargo.lock` is byte-identical
+  to `main` here, so nothing in this packet can have caused or can fix it; it needs a dependency
+  bump or a `deny.toml` entry from whoever owns that upgrade.
 - **`crates/vt/fuzz` seeding was repointed by reading, not by running.** Its `cp` comment now says
   `../../tools/corpus/alacritty-ref/*/recording`; `cargo-fuzz` is Linux-and-nightly only and is
   deliberately outside the workspace, so nothing here executes it.

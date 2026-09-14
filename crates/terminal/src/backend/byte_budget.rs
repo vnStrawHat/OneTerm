@@ -36,6 +36,9 @@ impl<const LIMIT: usize> ByteBudget<LIMIT> {
     }
 
     /// Give a reservation back once its payload was delivered or dropped.
+    ///
+    /// Release exactly what was reserved: like the two copies this replaced,
+    /// releasing more panics in debug and wraps in release.
     pub fn release(&self, bytes: usize) {
         self.0.fetch_sub(bytes, Ordering::AcqRel);
     }
@@ -73,5 +76,88 @@ mod tests {
         assert!(budget.reserve(1));
         assert!(!budget.reserve(usize::MAX), "no wrap-around");
         assert_eq!(budget.load(Ordering::Acquire), 1);
+    }
+}
+
+#[cfg(test)]
+mod verify_us0093 {
+    //! `US-0093`'s independent verification wrote these three and they are kept:
+    //! the packet's own tests cover the limit, the refusal and the `checked_add`
+    //! guard single-threaded, while these pin the contended case, a refusal at
+    //! the real 4 MiB ceiling, and `reserve(0)`.
+    use super::*;
+    use std::sync::Arc;
+
+    /// N threads hammer reserve/release against a small `LIMIT`: the running
+    /// total must never be observed above `LIMIT`, and must land back on 0.
+    #[test]
+    fn concurrent_reserve_and_release_never_exceed_the_limit_and_return_to_zero() {
+        // LIMIT < THREADS * CHUNK, so the budget is genuinely contended and the
+        // ceiling is actually reached — otherwise the assertion never fires.
+        const LIMIT: usize = 20;
+        const THREADS: usize = 8;
+        const ROUNDS: usize = 20_000;
+        const CHUNK: usize = 7;
+
+        let budget = Arc::new(ByteBudget::<LIMIT>::default());
+        let peak = Arc::new(AtomicUsize::new(0));
+        let granted = Arc::new(AtomicUsize::new(0));
+
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                let budget = Arc::clone(&budget);
+                let peak = Arc::clone(&peak);
+                let granted = Arc::clone(&granted);
+                scope.spawn(move || {
+                    for _ in 0..ROUNDS {
+                        if budget.reserve(CHUNK) {
+                            granted.fetch_add(1, Ordering::Relaxed);
+                            let seen = budget.load(Ordering::Acquire);
+                            peak.fetch_max(seen, Ordering::Relaxed);
+                            assert!(seen <= LIMIT, "observed {seen} bytes over LIMIT {LIMIT}");
+                            std::thread::yield_now();
+                            budget.release(CHUNK);
+                        }
+                    }
+                });
+            }
+        });
+
+        assert_eq!(
+            budget.load(Ordering::Acquire),
+            0,
+            "every reservation was released"
+        );
+        let peak = peak.load(Ordering::Relaxed);
+        assert!(peak <= LIMIT, "peak {peak} exceeded LIMIT {LIMIT}");
+        assert!(
+            granted.load(Ordering::Relaxed) > 0,
+            "the test did no work at all"
+        );
+    }
+
+    /// The real 4 MiB ceiling both backends instantiate: a refusal must leave
+    /// the running total untouched and the last byte must still fit.
+    #[test]
+    fn a_refused_reservation_leaves_the_total_untouched() {
+        const LIMIT: usize = 4 * 1024 * 1024;
+        let budget = ByteBudget::<LIMIT>::default();
+        assert!(budget.reserve(LIMIT - 1));
+        assert!(!budget.reserve(2), "two over the remaining one is refused");
+        assert_eq!(budget.load(Ordering::Acquire), LIMIT - 1);
+        assert!(budget.reserve(1), "the last byte still fits");
+        assert_eq!(budget.load(Ordering::Acquire), LIMIT);
+        budget.release(LIMIT);
+        assert_eq!(budget.load(Ordering::Acquire), 0);
+    }
+
+    /// `reserve(0)` always succeeds, even at the ceiling. Both deleted copies
+    /// behaved this way; pinned so a later change is a deliberate one.
+    #[test]
+    fn a_zero_byte_reservation_always_succeeds() {
+        let budget = ByteBudget::<4>::default();
+        assert!(budget.reserve(4));
+        assert!(budget.reserve(0), "zero bytes fit even at the ceiling");
+        assert_eq!(budget.load(Ordering::Acquire), 4);
     }
 }
