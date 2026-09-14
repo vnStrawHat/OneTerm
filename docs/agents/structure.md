@@ -72,7 +72,7 @@ OneTerm/
 │   │       │                       #   PtyTransport trait, OscRouter<T> (the EventBatch drain),
 │   │       │                       #   SessionState (title/cwd/clipboard/exit), event_sink, pump
 │   │       ├── content.rs / model.rs / palette.rs / key_encode.rs / mouse_encode.rs
-│   │       ├── osc.rs / osc_color.rs / osc_agent/ / url.rs / url_policy.rs / search.rs / paste.rs / security_policy.rs …
+│   │       ├── osc.rs / osc_color.rs / osc_agent/ / url_policy.rs / search.rs / paste.rs / security_policy.rs …
 │   │       └── test_support.rs     # FakeTerminalSession + FakePtyTransport (feature "test-support")
 │   │
 │   ├── highlight/                  # `oneterm-highlight` — semantic syntax highlighting engine
@@ -182,15 +182,24 @@ OneTerm/
 │   │
 │   └── vt/                         # `oneterm-vt` (IN-0029) — OneTerm's own VT engine, the only one
 │       ├── src/
-│       │   ├── lib.rs              # module declarations + public re-exports only
+│       │   ├── lib.rs              # module declarations + public re-exports only; `grid`, `intern`
+│       │   │                       #   and `parser` are the only modules another crate names by path
 │       │   ├── cell.rs             # 8-byte packed Cell, CellWidth, Semantic, Style, Attrs, Color
 │       │   ├── intern.rs           # per-terminal style / extras / grapheme / hyperlink tables
-│       │   └── width.rs            # scalar_width + cluster_width (mode 2027 storage, not the mode)
+│       │   ├── width.rs            # scalar_width + cluster_width (mode 2027 storage, not the mode)
+│       │   ├── parser/             # the VT state machine: CSI / OSC / DCS, params, memory limits
+│       │   ├── terminal/           # Terminal (the one public object) + dispatch, modes, colors, OSC claims
+│       │   ├── grid/               # Screen, TerminalGrid, Row, anchors — absolute RowId space (DEC-0015)
+│       │   ├── render/             # damage watermark, RenderState / RenderUpdate, palette, sync (?2026)
+│       │   ├── events/             # EventBatch + VtEvent: values in a caller-owned batch, never callbacks
+│       │   ├── reflow/             # resize policies (BottomAnchor / KeepViewportTop)
+│       │   ├── selection/          # the four selection kinds, anchored so they survive a repaint
+│       │   └── graphics/           # Sixel decode, placements, the virtual cell
 │       └── tests/corpus/           # the parity corpus: NOTICE + alacritty-ref/<name>/
 │                                   #   {recording, size.json, config.json, grid.expect, state.expect}
 │
 ├── docs/                           # Development documentation
-│   ├── refactor/ui-crate-restructure.md   # This restructure's authoritative plan
+│   ├── architecture.md             # the crate map — the current-state index
 │   ├── terminal-backend.md / ssh-client-connect.md / sftp-browser-design.md …
 │   └── agents/{code-style.md, dependencies.md, structure.md (this file)}
 │

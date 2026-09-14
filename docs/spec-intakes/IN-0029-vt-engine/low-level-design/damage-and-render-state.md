@@ -218,7 +218,7 @@ and "renderer acquires the lock" takes the only signal that frame had, every lat
 against 11-17 ms for a frame that keeps its signal. The rule:
 
 ```rust
-// crates/vt/src/render/demand.rs — still one atomic, now a count
+// crates/terminal/src/handle.rs (crates/vt/src/render/demand.rs until US-0090)
 pub struct Demand(Arc<AtomicUsize>);
 pub fn raise(&self);             // fetch_add          — the renderer, BEFORE it blocks
 pub fn release(&self);           // saturating sub     — the renderer, ONCE it holds the lock
@@ -228,10 +228,11 @@ pub fn is_raised(&self) -> bool; // load > 0           — the pump; it takes no
 - **`lock_for_render()` is raise, lock, release.** Between the raise and the acquisition the frame
   is both waiting and visible, so there is no window left: a pump that asks anywhere inside it
   yields, and yields again at the next boundary if the frame still has not got in.
-- **`take_render_demand()` reads without clearing.** The name is kept because both pump loops read
-  exactly as they were written — "someone is waiting, yield" — and the only visible change for them
-  is that a standing demand survives more than one ask, so a pump may yield at several consecutive
-  boundaries while a frame is queued. That is intended.
+- **`render_demand_raised()` reads without clearing.** (It was `take_render_demand()` until
+  `US-0090` renamed it onto what it does: the `take_` was residue from the one-shot flag this
+  section replaced, and the identically-bodied twin went with the rename.) The only visible change
+  for the two pump loops is that a standing demand survives more than one ask, so a pump may yield
+  at several consecutive boundaries while a frame is queued. That is intended.
 - `Demand::take`, the clearing swap, is **deleted**; it has no caller.
 - **A count, not a level flag cleared on acquisition.** A flag is one line shorter and fixes the
   reported case, but the first waiter's acquisition then clears the second waiter's signal and it
@@ -245,14 +246,14 @@ requires the frame to arrive and the demand to be gone. Against the one-shot cod
 ask 1.
 
 **As shipped, the flag lives on `TerminalHandle` beside the lock** (`crates/terminal/src/handle.rs`):
-`lock_for_render()` raises then locks, `take_render_demand()` is the pump's yield check and clears by
-asking, `render_demand_raised()` reads without clearing. Measured: a pump that honours it hands the
+`lock_for_render()` raises then releases once it holds the lock, and `render_demand_raised()` is the
+pump's yield check, which takes nothing away. Measured: a pump that honours it hands the
 lock over in **one batch / 157 us**; the same pump ignoring it makes the renderer wait **3 800
 batches / 354 ms** ([`migration.md`](migration.md) § "The adapter contract"). Calling it from the
 two backend loops is `US-0083` and `US-0084`'s.
 
 ```rust
-// crates/vt/src/render/demand.rs — ONE atomic, and the only one in the engine
+// the original one-shot shape, replaced by the count above
 pub struct Demand(Arc<AtomicBool>);
 impl Demand {
     pub fn raise(&self);          // store(Release)      — the render thread
@@ -260,19 +261,19 @@ impl Demand {
 }
 ```
 
-**Placement: the engine crate, as shipped, and it is a stated exception.** The HLD says
-"`oneterm-vt` itself contains no lock, no atomic and no interior mutability". `Demand` is the one
-exception, and it is written down here rather than quietly tolerated:
+**Placement: the adapter crate, `crates/terminal/src/handle.rs`.** This section originally
+recorded the opposite — the primitive shipped in `crates/vt/src/render/demand.rs` as a stated
+exception to the HLD's "`oneterm-vt` contains no lock, no atomic and no interior mutability",
+"until `US-0081` moves the pump loop over". `US-0081`, `US-0083` and `US-0084` shipped, and
+`US-0090` moved it, so the exception is gone and the HLD's sentence is now true as written.
 
 - It is **not engine state**. It holds no terminal data, `Terminal` does not own one, and no
-  engine method reads it. It is a two-thread handshake primitive that happens to live next to the
-  render state it serves, so that the contract and the primitive are reviewed together.
-- `Terminal` therefore stays `Send + !Sync` and still contains no atomic; the rule the HLD is
-  really protecting — that engine state is reached only through `&mut self` under the caller's
-  lock — is untouched.
-- The alternative, defining it in `crates/terminal`, would put the primitive in one crate and its
-  protocol in another, and the adapter would still be the only caller of both. One atomic is not
-  worth that split.
+  engine method reads it. Every caller — the raise, the release and the pump's ask — is in
+  `crates/terminal`, so the primitive now sits beside the policy that owns it, in the same file as
+  [`TerminalHandle`].
+- `Terminal` stays `Send + !Sync` and contains no atomic; the rule the HLD is really protecting —
+  that engine state is reached only through `&mut self` under the caller's lock — is untouched,
+  and `grep -rn "Atomic" crates/vt/src` now returns nothing outside test files.
 
 The adapter owns the **policy**: who raises it, when the pump tests it, and how long it parks.
 Nothing in the engine parks or yields.
