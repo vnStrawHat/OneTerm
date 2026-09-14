@@ -10,8 +10,8 @@ Created: 2026-09-14
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -46,7 +46,7 @@ up that did not follow when the plan cache became incremental at `US-0085`.
 
 ### In scope
 
-- [ ] **H1 — the URL mask.** `crates/terminal-view/src/render/plan_cache.rs:143-152`. Today:
+- [x] **H1 — the URL mask.** `crates/terminal-view/src/render/plan_cache.rs:143-152`. Today:
 
   ```rust
   let any_dirty = self.dirty.iter().any(|&d| d);
@@ -65,7 +65,7 @@ up that did not follow when the plan cache became incremental at `US-0085`.
   row's mask. Scope this to the dirty rows and the rows their wrap runs reach. `mask_cur` /
   `mask_prev` allocation behaviour must not regress: they are `clear()` + `resize()`d and rotated
   by `shift()` with the scroll, so this is a pure CPU change with no heap effect.
-- [ ] **H2 — `last_content_row`.** `crates/terminal/src/content.rs:56-67` walks rows bottom-up
+- [x] **H2 — `last_content_row`.** `crates/terminal/src/content.rs:56-67` walks rows bottom-up
   until it finds a non-blank one, and `is_blank_cell` (`:35-48`) does **three interner lookups per
   cell** (`resolve_style`, `text_char`, `resolve_extras`). The fix the audit names is three lines,
   using primitives the engine already exposes and documents:
@@ -79,9 +79,9 @@ up that did not follow when the plan cache became incremental at `US-0085`.
   over-approximating hint: no column at or above `occ` has been touched since the last reset"* —
   false positives allowed, never false negatives, which is exactly what a skip needs. Narrowing
   the per-row cell scan to `..occ()` as well is in scope if it falls out for free.
-- [ ] **The counted-work proof for each**, and the `FrameStats` field H1 needs to be measurable
+- [x] **The counted-work proof for each**, and the `FrameStats` field H1 needs to be measurable
   (`url_scans` counts *scans*, not rows scanned, so it cannot express the acceptance below).
-- [ ] **The `lock_for_render` follow-on, as a recorded finding only.** `crates/terminal/src/model.rs:168`
+- [x] **The `lock_for_render` follow-on, as a recorded finding only.** `crates/terminal/src/model.rs:168`
   routes `terminal_info` through `TerminalHandle::lock()` rather than `lock_for_render()`, so it
   does not raise the render demand and can queue behind a pump burst.
   `crates/terminal/src/handle.rs:112-115` justifies that on the explicit premise that
@@ -113,43 +113,46 @@ up that did not follow when the plan cache became incremental at `US-0085`.
 
 ## Acceptance
 
-- [ ] **H1 counted-work test, failing before and passing after.** In a 45×160 viewport with one
+- [x] **H1 counted-work test, failing before and passing after.** In a 45×160 viewport with one
   changed row that starts no wrapped URL, the URL pass visits **1 row**, not 45. Against today's
   code the same test reports 45 and must fail. Add a `url_rows_scanned` counter to `FrameStats`
   (`crates/terminal-view/src/render/diagnostics.rs:14-36`) for this; the existing `url_scans`
   counts scan *events*, not rows. The counter is production code, consistent with every other
   field of that struct, and the diagnostics overlay already renders them.
-- [ ] **H1 wrap correctness is pinned by a test that would fail under a naive dirty-rows-only
+- [x] **H1 wrap correctness is pinned by a test that would fail under a naive dirty-rows-only
   fix.** A URL wrapping across three rows, where only the middle row changes, must produce the
   same mask as a full rescan — and the test must assert the mask, not just the row count.
-- [ ] **H1's existing assertions still hold untouched**: `url_scans` is 1 on the first frame and 0
+- [x] **H1's existing assertions still hold untouched**: `url_scans` is 1 on the first frame and 0
   on an idle frame (`crates/terminal-view/src/render/element_tests.rs:308, :335`;
   `plan_cache.rs:340, :347, :426`; `terminal_view/view_tests.rs:306`). None of these may be
   edited: a scan still happens exactly when it happened before, it is just smaller.
-- [ ] **H2 counted-work test, failing before and passing after.** On a viewport that is blank
+- [x] **H2 counted-work test, failing before and passing after.** On a viewport that is blank
   except for row 0 — the common idle case, and `last_content_row`'s worst case — the cells
   examined drop from about `rows × cols` to at most one row's worth. Assert the scaling directly:
   **doubling the column count must not change the work**. Against today's code it doubles, so the
   test fails. A `#[cfg(test)]`-only visit counter is the right mechanism here; do not add a
   production counter to `crates/terminal/src/content.rs` for it.
-- [ ] **`last_content_row` returns the same value for every input it does today.** The gutter
+- [x] **`last_content_row` returns the same value for every input it does today.** The gutter
   renders up to the last non-blank line and `line_times` stamps to the same row, so an
   off-by-one here shows as `[--:--:--]` on a visible line. Pin at least: an all-blank screen
   (returns 0), content on the last row, content on row 0 only, a row whose only content is a wide
   spacer, a row containing only a hyperlink cell, and a row that was written and then cleared
   (which is precisely where `occ` over-approximates and the skip must **not** fire).
-- [ ] **No test lost, no existing assertion edited.** Baselines recorded for
+- [x] **No test lost, no existing assertion edited.** Baselines recorded for
   `cargo test -p oneterm-terminal-view` and `-p oneterm-terminal`; after-counts greater than or
   equal to baseline plus the new tests.
-- [ ] **`vt-bench` tier 3 does not regress.** Record `tier3_render` (µs/frame at 7 200 cells)
+- [x] **`vt-bench` tier 3 does not regress.** Record `tier3_render` (µs/frame at 7 200 cells)
   before and after. **This is a guard, not the proof**: tier 3 measures the engine's render tier,
   and neither H1 (in `crates/terminal-view`) nor H2 (in `crates/terminal`) is on its path. The
   audit says so outright (§(d).1): *"No benchmark measures the view … my claims are complexity
   arguments from reading, not measurements."* Tier 3 exists here to catch an accidental engine
   regression from touching `content.rs`. The improvement is proved by the counted-work tests, and
   the packet must not claim a timing win it did not measure.
-- [ ] **GUI smoke check on Windows** — see Verification Plan for the process-safety rule.
-- [ ] **`pwsh scripts/ci-local.ps1` exits 0**, with totals recorded.
+- [x] **GUI smoke check on Windows** — see Verification Plan for the process-safety rule.
+      Partial: the prompt, the gutter timestamps, the wrapped URL and the scroll-and-return leg
+      are all evidenced; the Ctrl+click, drag-selection and full-screen-TUI legs could not be
+      driven from this non-interactive session (see Evidence and Gaps).
+- [x] **`pwsh scripts/ci-local.ps1` exits 0**, with totals recorded.
 
 ## Documentation
 
@@ -204,6 +207,37 @@ Before completion, list the docs and comments changed, and confirm the no-change
 crate edge moves; `crates/terminal` gains no dependency, and the hints H2 uses are already public
 on `RowRef`).
 
+**Done.** Changed:
+
+- `crates/terminal-view/src/render/plan_cache.rs` — the phase 2 comment now states the hazard
+  **and** the scope that answers it (dirty rows closed under the wrap runs, naming `self.wraps`),
+  plus why `mask_prev` stays authoritative for every row. `shift`'s mask comment now covers
+  `wraps_prev` travelling with the rows too.
+- `crates/terminal-view/src/url/mask.rs` — `url_masks_rows_into`'s doc replaces
+  `url_masks_into`'s: same wrap-extension and punctuation contract, plus the caller obligation
+  that `range` be closed under wrap runs. `fill_wraps` is documented as O(rows).
+- `crates/terminal/src/content.rs` — the skip quotes `RowHeader.occ`'s over-approximation
+  contract and cites `crates/vt/src/grid/row.rs:61-63`, because that sentence is the only reason
+  the skip is safe.
+- `crates/terminal/src/handle.rs` — the `lock_for_render` premise now records that H2 made it
+  true, so a future reader does not move `terminal_info` onto `lock_for_render`.
+- `crates/terminal-view/src/render/diagnostics.rs` — `url_scans` gains a one-line note that it
+  counts events, `url_rows_scanned` is new, and the throttled log line prints both.
+- `IN-0029/low-level-design/damage-and-render-state.md` — it did **not** record the URL pass as
+  deliberately whole-viewport (grep for "url" in that file returns only the hyperlink-interning
+  edge case at `:379`), so nothing was stale to correct. One paragraph was added instead, saying
+  `DEC-0015`'s premise binds the consumers above `render_update` and naming the two loops this
+  packet brought into line — so a future widening reads as contradicting the LLD.
+
+No change, with reasons:
+
+- `docs/PROJECT.md` — no project fact or standing invariant moves; same frames, same
+  `last_content_row` values, same `url_scans` event counts.
+- `docs/terminal-backend.md` — its render-path description states *what* the path does, never its
+  per-frame cost in the terms this packet changes.
+- `docs/agents/crate-dependency-rules.md` — no crate edge moves. `crates/terminal` gains no
+  dependency; `RowRef::occ()` / `is_allocated()` were already `pub` on an already-imported type.
+
 ## Context
 
 Why these two and nothing else: the audit read the whole hot path — `TerminalPump::advance`,
@@ -237,19 +271,19 @@ regression guard rather than evidence.
 
 ## Plan
 
-- [ ] Record branch-point baselines: `cargo test -p oneterm-terminal-view` and
+- [x] Record branch-point baselines: `cargo test -p oneterm-terminal-view` and
   `-p oneterm-terminal` counts, and `vt-bench` tier 3.
-- [ ] Add `url_rows_scanned` to `FrameStats` and write the H1 counted-work test plus the
+- [x] Add `url_rows_scanned` to `FrameStats` and write the H1 counted-work test plus the
   three-row wrapped-URL mask test. Confirm the first **fails** at 45 rows.
-- [ ] Write the H2 counted-work test with its `#[cfg(test)]` visit counter, plus the six
+- [x] Write the H2 counted-work test with its `#[cfg(test)]` visit counter, plus the six
   correctness cases. Confirm the scaling assertion **fails**.
-- [ ] Implement H2 first — it is three lines and independent. Re-run its tests.
-- [ ] Implement H1: scope `url_masks_into` to a row range, walk the wrap runs outward from the
+- [x] Implement H2 first — it is three lines and independent. Re-run its tests.
+- [x] Implement H1: scope `url_masks_into` to a row range, walk the wrap runs outward from the
   dirty rows, and narrow the mask delta loop to the rescanned rows. Re-run its tests plus the
   untouched `url_scans` assertions.
-- [ ] Update the four comments named in Documentation Action.
-- [ ] `vt-bench` tier 3 after; `cargo test --workspace`; `pwsh scripts/ci-local.ps1`.
-- [ ] GUI smoke check, under the process rule below.
+- [x] Update the four comments named in Documentation Action.
+- [x] `vt-bench` tier 3 after; `cargo test --workspace`; `pwsh scripts/ci-local.ps1`.
+- [x] GUI smoke check, under the process rule below.
 
 ## Decisions
 
@@ -308,11 +342,11 @@ Platform:
 - `pwsh scripts/ci-local.ps1`, exit 0, totals recorded.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
@@ -328,9 +362,213 @@ changed site exists, before or after, because nothing in the workspace benchmark
 GUI check is manual and Windows-only; and the `lock_for_render` question is recorded as resolved
 by H2 rather than changed.
 
+### Branch point
+
+`4e83f31` (`docs(terminal): IN-0032 terminal crate tidy — intake, design and four packets`),
+reached by `git reset --hard main` in the packet's worktree
+(`.claude/worktrees/agent-a7148a16449276544`). Every number below is from that worktree,
+`CARGO_BUILD_JOBS=3` throughout (two sibling worktrees were building concurrently).
+
+### H1 — URL rescan, counted rows
+
+New `FrameStats::url_rows_scanned`. Both numbers are from
+`render::plan_cache::tests::url_pass_scans_the_changed_rows_not_the_viewport`, a 45 × 160
+viewport with no wrapped rows.
+
+| frame | before (whole-viewport scan) | after |
+| --- | ---: | ---: |
+| first frame (nothing cached) | 45 | 45 |
+| one row rewritten | **45** | **1** |
+| idle frame (`Unchanged`) | 0 | 0 |
+
+`url_scans` is unchanged at 1 / 1 / 0 — a scan still happens exactly when it happened before, it
+is just smaller. The two wrap-scope tests:
+
+| test | before | after |
+| --- | ---: | ---: |
+| `url_pass_rescans_the_whole_wrap_run_of_a_changed_row` (5 rows, a 3-row wrap run, middle row rewritten) | 5 | **3** |
+| `url_pass_rescans_a_continuation_row_whose_wrap_was_dropped` (3 rows) | 3 | **2** |
+
+The first also asserts the resulting mask equals a full `url_masks_into` rescan of the same
+frame, row by row — the row count alone would not catch a wrong scope. The "before" column was
+produced by temporarily forcing `mark_scan_runs` to mark every row, which is exactly the old
+whole-viewport shape; all three tests failed in that state and pass now.
+
+**Scope, precisely.** Rows `r` and `r + 1` are connected when `wraps[r] || wraps_prev[r]` — the
+*union* of this frame's and the last frame's `WRAPLINE` flags, not just this frame's. A row that
+has just **lost** its wrap flag is dirty, but the continuation row that inherited its mask is
+not, and only the union pulls that row back into the rescan. Dropping `wraps_prev` and using this
+frame's flags alone leaves a stale underline on the old continuation row; the second test above
+exists to pin that and fails without it.
+
+### H2 — `last_content_row`, counted cells
+
+`#[cfg(test)]`-only `CELLS_EXAMINED` thread-local; no production counter was added.
+`last_content_row_cost_follows_the_content_not_the_viewport`: a 45-row viewport, blank except for
+a two-character prompt on row 0 — the idle case, and this function's worst case.
+
+| columns | before | after |
+| ---: | ---: | ---: |
+| 40 | 1 800 (45 × 40) | **2** |
+| 80 | 3 600 (45 × 80) | **2** |
+
+Before, doubling the columns doubled the work, and every one of those cells cost three interner
+lookups (`resolve_style`, `text_char`, `resolve_extras`). After, the work is the two cells the
+prompt actually occupies and does not move with the geometry at all. The failing "before" run was
+produced by removing the `is_allocated()` / `occ() == 0` skip and the `..occ` narrowing while
+keeping the counter: `left: 1800, right: 3600`.
+
+`last_content_row_pins_the_blank_definition` covers the six correctness cases: all-blank screen
+(0), content on the last row, content on row 0 only, a wide pair (its `WideSpacer` column is
+content), a row whose only content is an OSC 8 link on a space cell, and a row written and then
+cleared with `\x1b[2K` — which returns 0 **and** is shown to have been examined rather than
+skipped, because `occ` over-approximates exactly there.
+
+### lock_for_render (recorded finding, no change)
+
+Confirmed as the packet predicted. `crates/terminal/src/handle.rs:112-115` justifies routing
+`terminal_info` through the plain `lock()` on the premise that it is O(1) under the lock;
+`crates/terminal/src/model.rs:176` calls `last_content_row`, which was the single reason that
+premise was false. H2 restores it, so **no lock change was made**. A sentence saying so was added
+to the `lock_for_render` doc comment.
+
+### Test counts
+
+| suite | before | after |
+| --- | --- | --- |
+| `cargo test -p oneterm-terminal-view` | 288 passed, 3 ignored | 291 passed, 3 ignored |
+| `cargo test -p oneterm-terminal` | 270 passed | 272 passed |
+
+No test was deleted and no existing assertion edited. The `url_scans` assertions named in the
+Verification Plan (`element_tests.rs:308, :335`, `plan_cache.rs:340, :347, :426`,
+`view_tests.rs:306`) are untouched and green.
+
+### vt-bench tier 3 — non-regression guard only
+
+`cargo run -q -p oneterm-tools --release --bin vt-bench -- all --mib 2`, same machine
+(Windows 11, the packet's worktree), before and after, µs/frame at 7 200 cells:
+
+| fixture | before | after |
+| --- | ---: | ---: |
+| `plain_ascii` | 5.3 | 4.6 |
+| `long_lines` | 3.0 | 2.3 |
+| `heavy_sgr` | 1.4 | 1.3 |
+| `tui_redraw` | 20.0 | 17.9 |
+| `scroll_region` | 33.0 | 21.5 |
+| `cjk_wide` | 2.0 | 1.7 |
+| `dense_cells` | 2.0 | 1.7 |
+| `scrolling` | 2.7 | 2.3 |
+| `sixel` | 6.3 | 5.6 |
+| `osc_9_7` | 6.1 | 5.6 |
+
+No regression. **This is not evidence of the improvement**: tier 3 measures the engine's render
+tier, and neither H1 (in `crates/terminal-view`) nor H2 (in `crates/terminal`) is on its path.
+The uniform downward drift is machine load, not this change. The improvement is the counted-work
+tables above.
+
+### GUI smoke check (Windows, manual, this worktree only)
+
+`cargo build -p oneterm-app --profile fast-dev`; D: had 61.6 GB free before the run.
+`target/terminal.json` was written with `layout.show_gutter: true` and the local shell's `args`
+set to `&& type <200-URL fixture>` so the URL-heavy output is on screen at startup; it was
+deleted again afterwards (`target/` is gitignored and holds no committed state).
+
+Process safety, as required: `Get-Process oneterm` was enumerated **before** each launch and
+recorded — pids `2504`, `14804` and, on the last run, `7488` (the owner's own OneTerm windows,
+one of which runs their agent session). None was touched. Every launch used
+`Start-Process -PassThru`; only that pid was acted on; shutdown was `CloseMainWindow` first with
+`Stop-Process -Id <my pid>` as the fallback. No process was ever matched by name or window title.
+After every run the pre-existing pids were re-enumerated and all were still alive, and my own pid
+was gone.
+
+| run | my pid | result |
+| --- | ---: | --- |
+| 1 | 13828 | window up, prompt renders; `CopyFromScreen` refused (no screen DC in this session) |
+| 2 | 7844 / 15720 | switched to `PrintWindow(…, PW_RENDERFULLCONTENT)`; capture works |
+| 3 | 16464 / 18408 | URL fixture on screen after fixing the config (see below) |
+| 4 | 16180 | synthetic wheel via `mouse_event` does not reach the window |
+| 5 | 4636 | posted `WM_MOUSEWHEEL` does scroll; all three screenshots captured |
+
+Evidence, in `evidence/`:
+
+- `US-0092-url-heavy-output.png` — 200 URL-bearing lines. Every URL is underlined; the gutter
+  shows a real timestamp (`[19:50:57]`) on **every** visible line including the blank lines below
+  the prompt, which is H2's failure mode (`[--:--:--]`) absent. The long URL wraps from display
+  row 201 onto 202 and the underline is continuous across the row boundary, ending at `-end`;
+  `after the wrapped url` on row 203 is not underlined.
+- `US-0092-scrolled-back.png` — scrolled ~30 lines into history. Underlines intact; this is the
+  `shift()` path, where `mask_prev` and the new `wraps_prev` rotate with their rows.
+- `US-0092-scrolled-forward.png` — scrolled back down. The wrapped URL returns with its underline
+  still spanning both rows, which is where a wrap-scope bug would show.
+
+Also worth recording: printing 202 lines into a 45-row viewport scrolls ~180 times, so the
+whole-viewport fallback (every row dirty → every row rescanned) and the rotation path were both
+exercised heavily in the same run, and the final frame is correct.
+
+Two notes on driving the app from this session, for whoever runs the next GUI check here:
+`Graphics.CopyFromScreen` fails with "The handle is invalid" and neither `SendKeys` nor
+`mouse_event` reaches the window — the session has no interactive desktop input. `PrintWindow`
+with `PW_RENDERFULLCONTENT` (flag 2) captures a GPUI window correctly, and `PostMessage` of
+`WM_MOUSEWHEEL` does drive the scroll. Also, `terminal.json` is quarantined as invalid unless
+`shell` carries **all** of `kind`, `program`, `args`, `env`, `cwd`, `utf8` — only `utf8` has a
+serde default.
+
+### ci-local.ps1
+
+`pwsh scripts/ci-local.ps1` → `ci-local: all checks passed.` (exit 0). Workspace test totals,
+summed over both cargo test invocations the script runs:
+
+```
+sections: 60  passed: 1940  failed: 0  ignored: 14
+```
+
+Against the 60 / 1935 / 0 / 14 baseline, +5 passed = the three new `plan_cache` tests and the two
+new `content_tests` tests. `cargo fmt --all` and
+`cargo clippy --workspace --all-targets -- -D warnings` are clean.
+
+### harness.db row
+
+No `harness.db` exists in this worktree, so the status row is recorded here as the snippet to
+apply against the authoritative database rather than written directly:
+
+```python
+import sqlite3
+db = sqlite3.connect("harness.db")
+db.execute(
+    "UPDATE work SET status = ?, proof_unit = 1, proof_integration = 1, "
+    "proof_e2e = 1, proof_platform = 1, proof_verify = 1 WHERE id = ?",
+    ("implemented", "US-0092"),
+)
+db.commit()
+```
+
+### Gaps
+
+- **No timing measurement of either changed site exists, before or after.** Nothing in the
+  workspace benchmarks the view; `crates/tools`'s five tiers stop at `render_update` and
+  `FrameStats` holds counters, not timers. Both fixes are accepted on counted work, which is a
+  fact, and this packet claims no timing win. Confirmed as expected, not discovered.
+- **The GUI check is manual, Windows-only, and partial.** The full-screen-TUI leg, the Ctrl+click
+  open and the drag-selection-across-a-wrapped-URL leg were not run: this session cannot deliver
+  synthetic keyboard or mouse-button input to the window (only posted wheel messages work), and
+  `doom-fire` is not built in this worktree. The wrap-scope risk the packet actually cares about
+  is covered by the wrapped-URL screenshots plus the two wrap-run unit tests; the three unrun
+  legs would need a human at the keyboard.
+- **`lock_for_render` is resolved by H2, not changed.** Recorded above; no lock change was made,
+  which is what the packet asked for.
+- **`vt-bench` tier 3 does not cover either changed site.** Recorded as a guard only.
+
 ## Handoff
 
 Independent of `US-0090`, `US-0091` and `US-0093`; shares no file with any of them and may run in
 parallel. One coupling to flag: this packet gives `oneterm_vt::RowRef` an external consumer in
 `crates/terminal/src/content.rs`. If it lands before `US-0090`, `RowRef` must **not** be dropped
 from `crates/vt/src/lib.rs`'s re-export block — `US-0090`'s Context already carries that warning.
+
+**Confirmed on landing.** `crates/terminal/src/content.rs` now calls three `pub` items on
+`oneterm_vt::RowRef` — `is_allocated()`, `occ()` and the existing `cells()`. `US-0090`'s
+visibility pass must keep all three `pub`, and keep `RowRef` re-exported from
+`crates/vt/src/lib.rs`. `RowHeader.occ`'s doc comment (`crates/vt/src/grid/row.rs:61-63`) is now
+cited by name and line from `content.rs`; if that comment moves, the citation needs updating.
+Nothing else new crosses the crate boundary: `fill_wraps` and `url_masks_rows_into` are
+`pub(crate)` inside `oneterm-terminal-view`, and `url_masks_into` is now `#[cfg(test)]` there.

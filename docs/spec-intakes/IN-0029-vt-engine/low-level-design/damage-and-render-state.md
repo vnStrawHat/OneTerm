@@ -24,6 +24,14 @@ The current per-frame copy costs 29.9 us at 200x50, 0.18 % of a 60 Hz budget
 shape, not of speed: it scales with change rather than with viewport area, and it removes the
 reason `query_line_range_cells` had to exist instead of a general snapshot.
 
+The premise binds the consumers too, not just `render_update`. `US-0092` (`IN-0032`) brought the
+last two viewport-area loops above this layer into line: the view's URL mask rescans the changed
+rows closed under their wrap runs rather than the whole viewport
+(`crates/terminal-view/src/render/plan_cache.rs`), and `last_content_row` skips a row the engine's
+`RowHeader.occ` hint says was never written (`crates/terminal/src/content.rs`). The URL pass is
+therefore **not** documented as deliberately whole-viewport anywhere; a future change that widens
+either scan back to the viewport contradicts `DEC-0015`.
+
 ## Design
 
 ### Sequence numbers
