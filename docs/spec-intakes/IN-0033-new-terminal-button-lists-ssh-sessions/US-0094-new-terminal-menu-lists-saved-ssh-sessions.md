@@ -1,0 +1,485 @@
+# Work: The "+" menu lists the saved SSH sessions and opens one
+
+ID: US-0094
+Intake: IN-0033
+Created: 2026-09-14
+
+> Pre-code gate: complete Outcome, Scope, Acceptance, Documentation, and Verification Plan before editing implementation files. Harness synchronizes only the marked status/proof blocks; keep authored checklists current.
+
+## Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [ ] Planned
+- [ ] In progress
+- [x] Implemented
+- [ ] Changed
+- [ ] Reopened (acceptance rework)
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Classification
+
+- Change type: new capability
+- Risk lane: normal
+- Spec Intake, when required: `IN-0033`
+
+## Outcome
+
+The "+" (New Terminal) dropdown in the center tab bar lists every session saved in
+`ssh_session.json` under an "SSH Sessions" section, by name, in storage order. Clicking one
+opens the same connect dialog the SSH Sessions panel opens for that session, and a
+successful connect lands in a new center terminal tab exactly as it does from the panel.
+When nothing is saved, the section shows a disabled "No saved sessions" hint and every
+other entry in the menu behaves exactly as it does today.
+
+## Scope
+
+- [x] In scope:
+  - `WorkspaceCommands` gains `saved_ssh_sessions` (read the saved list) and
+    `open_saved_ssh_session` (open the connect dialog by stable id).
+  - `crates/session-ui` implements both and exposes the pure mapping from stored entries to
+    menu rows.
+  - `TerminalPanel::title_suffix` renders the new section.
+  - `crates/app/src/init.rs` wires the two new fn pointers.
+  - Unit tests for the mapping; owning docs updated.
+- [x] Out of scope:
+  - Grouping the menu by the session `group` field (intake open decision: flat).
+  - Opening the session into the active Space instead of a new tab — that is what the SSH
+    Sessions panel does today and matching it verbatim is the point of this packet.
+  - Any change to the connect dialog, credentials, jump chains, host-key policy or logging.
+  - Search or filtering inside the menu.
+
+## Acceptance
+
+- [x] With two sessions saved, opening the "+" menu shows an "SSH Sessions" section listing
+      both names, in the order they appear in `ssh_session.json`, below the unchanged local
+      shell entries and "New SSH Session".
+      *Evidence:* `evidence/US-0094-menu-with-two-saved-sessions.png` —
+      `prod-web — root@10.77.0.11:22` then `db-01 — admin@10.77.0.12:2222`, file order,
+      flat, while the right dock's tree shows `db-01` nested under its `infra` group in the
+      same frame.
+- [x] A long list stays reachable: the section is capped and scrolls rather than running off
+      the window, and a row reached only by scrolling still opens its own session.
+      *Evidence:* `evidence/US-0094-menu-50-sessions-scrollable.png` (50 saved sessions, the
+      popup ends inside the window with a scrollbar),
+      `evidence/US-0094-menu-50-sessions-scrolled-to-end.png` (`host-50` reached by wheel),
+      `evidence/US-0094-dialog-from-scrolled-row.png` (clicking it opens "Connect to host-50
+      (ops@10.9.1.50:22)"). Added after independent verification found `D1`.
+- [x] Two saved sessions that share a label are still distinguishable in the menu.
+      *Evidence:* the same 50-session screenshot shows `alpha — root@10.9.0.1:22` and
+      `alpha — root@10.9.0.2:22` as separate rows, plus
+      `verify_duplicate_unicode_and_fifty_entries`. Added after `D2`.
+- [x] Clicking a listed session opens the connect dialog for **that** session (title and
+      server banner name its host), and Connect starts a real connection attempt — reaching
+      the host is not required.
+      *Evidence:* `evidence/US-0094-connect-dialog-for-clicked-session.png` (titled
+      "Connect to prod-web (root@10.77.0.11:22)", banner `ssh://root@10.77.0.11:22`) and
+      `evidence/US-0094-connect-failed-notification.png`, plus the app log line
+      `oneterm_ssh::session] SshSession::connect: host=10.77.0.11, port=22, user=root`.
+- [x] With no sessions saved, the section shows a disabled "No saved sessions" hint and the
+      rest of the menu is unchanged from today.
+      *Evidence:* `evidence/US-0094-menu-empty-state.png`.
+- [x] The row mapping maps N stored entries to N rows in storage order, an empty store to no
+      rows, and a blank label to `host:port`, proven by unit tests.
+      *Evidence:* the four `menu_entries_*` tests in `crates/session-ui/src/tree_builder.rs`,
+      with the tamper results recorded below.
+- [x] No new crate edge: `crates/terminal-view` still does not depend on
+      `crates/session-ui`, and `crates/terminal-view/Cargo.toml` is unchanged.
+      *Evidence:* `python scripts/verify-dependency-graph.py` — "Dependency graph policy
+      passed for 21 workspace packages and 21 explicit members"; `git status` never lists
+      `crates/terminal-view/Cargo.toml`.
+- [x] `pwsh scripts/ci-local.ps1` is green. *Evidence:* "ci-local: all checks passed."
+
+## Documentation
+
+### Owning Docs Reviewed
+
+- `docs/gui-layout.md` §Panel registration and presentation — states that `TerminalPanel`
+  keeps the final empty tab so the tab bar and its `+` creation entry point survive. It
+  names the entry point but never said what the entry point offers; that is what changes.
+- `docs/ssh-client-connect.md` §1.1 and §1.3 — the connect flow, and design decision 8
+  ("left-click = Open") which describes the SessionPanel as the only way in. The flow below
+  the dialog is unchanged; only the set of surfaces that reach the dialog grows.
+- `docs/agents/crate-dependency-rules.md` R1/R4/R5/R10 — fixes the mechanism: the saved list
+  must reach `crates/terminal-view` through `oneterm_state::commands::WorkspaceCommands`,
+  not through a crate edge. No change needed; the rules already allow exactly this.
+- `docs/terminal-split.md` §9 — the empty-Space "New Terminal Here" menu. Reviewed and left
+  alone: that menu spawns a local shell in place and is a different surface from the tab
+  bar's "+". No change.
+- `docs/agents/persistence.md` — reviewed because the menu reads `ssh_session.json`. The
+  store is read-only here: no schema, no write path, no new document. No change.
+
+### Documentation Action
+
+Update required:
+
+- `docs/gui-layout.md` §Panel registration and presentation — one sentence naming what the
+  `+` menu offers, including the saved-session section, and pointing at its source file.
+- `docs/ssh-client-connect.md` §1.1 — one sentence adding the "+" menu as a second entry
+  point to the same connect dialog, and §1.3 decision 8 amended so it no longer reads as
+  "the SessionPanel is the only way in".
+
+Reason: both docs describe a user-visible contract that this work widens. Neither needs
+redefining — the connect flow itself is untouched — but leaving them as they are would make
+them describe a surface that no longer has a single entry point.
+
+### Reconciliation
+
+Docs changed:
+
+- `docs/gui-layout.md` — §Panel registration and presentation now describes the `+` menu's
+  three sections, the storage-order flat list, the empty-state hint, and why the list
+  crosses at `WorkspaceCommands`; §Source map gained two lines for the menu and for the
+  saved-session rows.
+- `docs/ssh-client-connect.md` — §1.1 records the `+` menu as a second entry to the same
+  flow with the same `SshSessionId`; §1.3 decision 8 no longer reads as if the SessionPanel
+  is the only way in, and states that the menu reuses `open_connect_dialog` so the two
+  surfaces cannot drift.
+
+No-change reasons confirmed still valid for `docs/agents/crate-dependency-rules.md` (the
+rules already describe the seam used, and no rule text needed to move),
+`docs/terminal-split.md` (the empty-Space menu is a different surface and is untouched), and
+`docs/agents/persistence.md` (`ssh_session.json` is read-only here; no schema, write path,
+or new document).
+
+Re-checked after the verification rework: the `docs/gui-layout.md` sentence says the menu
+lists the sessions "flat by name in storage order", which is still true of the fixed build —
+the row text gained the subtitle and the popup gained scrolling, neither of which changes the
+contract that sentence states. `docs/ssh-client-connect.md` is likewise unaffected: the
+connect flow below the dialog did not move. No further doc change is required by `D1`-`D3`.
+
+## Context
+
+- The "+" button is `TerminalPanel::title_suffix` in
+  `crates/terminal-view/src/panel/terminal_panel.rs`. It is already a `Button` with
+  `.dropdown_menu(...)`, so the popup and its anchor exist; only the closure body grows.
+- `Button::dropdown_menu` takes an `Fn`, not an `FnOnce`, and the kit runs it on every open.
+  Reading the store inside the closure therefore needs no observer: add or delete a session
+  and the next open shows it.
+- `oneterm-session-ui` depends on `oneterm-terminal-view` (R5's single allowed same-layer
+  edge). The reverse edge is both a cycle and a rule break, which is why the two new fields
+  go on `WorkspaceCommands` in `crates/state`. `crates/terminal-view/src/panel/duplicate.rs`
+  already reaches `crates/session-ui` the same way.
+- The command must carry the session's stable `SshSessionId`, not its index. Schema v2
+  assigns those ids specifically so that deleting or reordering another session cannot
+  retarget a pending action; an index would silently connect to the wrong host.
+- `SshSessionId` is a newtype over `u64` whose field is private, and `crates/state` cannot
+  name the type, so the fn pointers carry the raw `u64`.
+
+## Plan
+
+- [x] Add `saved_ssh_sessions` and `open_saved_ssh_session` to `WorkspaceCommands`, and to
+      its test doubles (`crates/state/src/services.rs`,
+      `crates/terminal-view/src/panel/tests.rs`).
+- [x] Give `SshSessionId` a raw-`u64` round trip for the seam.
+- [x] Add the entries mapping plus its unit tests in `crates/session-ui`.
+- [x] Export `saved_ssh_sessions` / `open_saved_ssh_session` from `crates/session-ui`.
+- [x] Render the section in `TerminalPanel::title_suffix`.
+- [x] Wire both at the composition root in `crates/app/src/init.rs`.
+- [x] Update the two owning docs.
+- [x] `cargo fmt --all`, then `pwsh scripts/ci-local.ps1`.
+- [x] GUI walk on the Windows desktop: empty state, two seeded sessions, click one.
+
+## Decisions
+
+No new decision record. The two choices this work makes (plain button rather than split
+button; flat list in storage order) are local to this surface, reversible, and recorded in
+`high-level-design.md` and the intake's Open Decisions. The rule that forces the
+`WorkspaceCommands` seam is already `docs/agents/crate-dependency-rules.md` R1/R5/R10.
+
+## Verification Plan
+
+- Focused: the row-mapping unit tests — N entries in order, empty store, blank-label
+  fallback, padded label.
+- Unit: `cargo test -p oneterm-session-ui`, `-p oneterm-terminal-view`, `-p oneterm-state`.
+- Integration: `cargo test --workspace` — every `WorkspaceCommands` literal must still
+  compile with the two new fields.
+- Static: `python scripts/verify-dependency-graph.py` — no new crate edge.
+- E2E: Windows interactive desktop, `cargo build -p oneterm-app --profile fast-dev` from
+  this worktree, `target/ssh_session.json` seeded in the worktree only. Open the menu with
+  an empty store (hint), then with two saved sessions (both names), then click one and
+  confirm the connect dialog names that session. No reachable host is required: a failed
+  connect proves the dialog reached the connect path.
+- Platform: `pwsh scripts/ci-local.ps1`.
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->
+
+## Evidence and Gaps
+
+### Code
+
+| File | Change |
+| --- | --- |
+| `crates/state/src/commands.rs` | two fn-pointer fields on `WorkspaceCommands` |
+| `crates/state/src/services.rs` | the bundle test double gained both fields |
+| `crates/session-ui/src/session_state.rs` | `SshSessionId::raw` / `from_raw` |
+| `crates/session-ui/src/tree_builder.rs` | `menu_entries` (label + `session_subtitle`) + 5 unit tests |
+| `crates/session-ui/src/lib.rs` | `saved_ssh_sessions`, `open_saved_ssh_session`, and the store-ordering invariant |
+| `crates/terminal-view/src/panel/terminal_panel.rs` | the menu section, `scrollable(true)` |
+| `crates/terminal-view/src/panel/tests.rs` | the duplicate-flow test double gained both fields |
+| `crates/app/src/init.rs` | composition-root wiring + the feature-init-before-install ordering note |
+| `docs/gui-layout.md`, `docs/ssh-client-connect.md` | owning-doc updates |
+
+`crates/terminal-view/Cargo.toml` is untouched: no new dependency, no new crate edge. The
+connect path is not duplicated anywhere — `open_saved_ssh_session` is a store lookup plus the
+existing `open_connect_dialog` call, which is the same two lines `SessionPanel::on_open_session`
+runs.
+
+### Focused proof
+
+`cargo test -p oneterm-session-ui` — **57 passed, 0 failed, 0 ignored** (plus 0 doc-tests);
+`cargo test -p oneterm-terminal-view` — **288 passed, 0 failed, 3 ignored**. The six new
+tests:
+
+| Test | Asserts |
+| --- | --- |
+| `menu_entries_keeps_storage_order_and_ids` | three entries (ids 7, 2, 5; one of them grouped) come back in file order with their own ids, not sorted and not grouped |
+| `menu_entries_of_an_empty_store_is_empty` | the empty state at the model level |
+| `menu_entries_falls_back_to_the_subtitle_for_a_blank_label` | a hand-edited whitespace label renders `10.0.0.9:2222`, not an invisible row |
+| `menu_entries_trims_a_padded_label` | `"  staging  "` renders `staging — …` |
+| `verify_duplicate_unicode_and_fifty_entries` | two rows sharing the label `alpha` stay distinguishable by their subtitle; a non-ASCII label survives; a 50-entry store maps 1:1 with first and last ids intact |
+| `verify_menu_row_id_survives_a_delete_of_an_earlier_session` | the clicked row's id still resolves through `SshSessionStore::get` to its own host after an *earlier* session is deleted, and the deleted id resolves to `None` |
+
+The last two were specified by the independent verification and are adopted here (see
+Reconciliation for why they were re-written rather than applied as a patch).
+
+Tamper check, each reverted afterwards:
+
+- iterating the store with `.rev()` → `menu_entries_keeps_storage_order_and_ids` FAILED with
+  `left: [(5, "db"), (2, "alpha"), (7, "prod")]` against
+  `right: [(7, "prod"), (2, "alpha"), (5, "db")]`.
+- disabling the blank-label fallback →
+  `menu_entries_falls_back_to_the_subtitle_for_a_blank_label` FAILED with
+  `left: [(3, "")]` against `right: [(3, "10.0.0.9:2222")]`.
+- handing the seam the **position** instead of the id (`.enumerate()`) → **5 failures**,
+  including `verify_menu_row_id_survives_a_delete_of_an_earlier_session` and
+  `verify_duplicate_unicode_and_fifty_entries`. The positional design this packet argues
+  against is now caught by the suite rather than only by argument.
+
+### Gate
+
+`pwsh scripts/ci-local.ps1` from this worktree — exit 0, all ten steps, ending
+`ci-local: all checks passed.` `verify-dependency-graph.py` passed for 21 workspace packages
+and 21 explicit members; `check-doc-paths.py` passed for 120 paths in 10 documents;
+`check-english.py` passed for 777 files.
+
+Summed over **every** `test result:` line of that run — the whole gate, not just its
+`cargo test --workspace` step:
+
+| | sections | passed | failed | ignored |
+| --- | --- | --- | --- | --- |
+| **measured** | **60** | **1941** | **0** | **14** |
+
+(The first submission of this packet quoted 56/1568/0/11, which was the `cargo test
+--workspace` step alone and understated the gate — `N5` from the independent verification.
+The verifier measured 60/1939/0/14 at `39c9971`; the two extra passes here are the two
+adopted verification tests.)
+
+### E2E (Windows interactive desktop)
+
+`cargo build -p oneterm-app --profile fast-dev` in this worktree. `fast-dev` inherits `dev`,
+so `debug_assertions` is on and `oneterm_core::config_dir()` is the relative path `target`
+— the app was therefore launched with its working directory set to **this worktree**, so it
+read and wrote only `<worktree>/target/*.json`. The owner's real config in the main checkout
+was never read or modified. The driver used is a worktree variant of the earlier session's
+`gui.ps1` that takes the working directory as a parameter (posted window messages +
+`PrintWindow`, every command addressed to the pid in a pid-file).
+
+Safety, because the owner runs Claude Code inside their own `oneterm.exe`: `Get-Process
+oneterm` was recorded before every launch (owner pids `2504, 14804` both times), the app was
+started with `Start-Process -PassThru` and identified as the pid that was not there before
+(`13816`, then `13200`), and only that pid's window was driven, screenshotted and stopped.
+Nothing was ever matched by process name or window title for input or for closing; after both
+walks `2504, 14804` were still running.
+
+| Screenshot | Shows |
+| --- | --- |
+| `evidence/US-0094-menu-empty-state.png` | no `ssh_session.json` at all: Command Prompt / PowerShell / PowerShell 7, separator, New SSH Session, separator, the "SSH Sessions" label and the greyed "No saved sessions" hint. Everything above the new separator is what it was before this change. |
+| `evidence/US-0094-menu-with-two-saved-sessions.png` | `target/ssh_session.json` seeded with `prod-web` (id 1, ungrouped) and `db-01` (id 2, group `infra`): the menu lists both, flat, in file order, each with its `user@host:port`, while the right dock's tree in the same frame nests `db-01` under `infra` — the flat-vs-grouped decision, visible side by side. |
+| `evidence/US-0094-connect-dialog-for-clicked-session.png` | clicking the `prod-web` row opens "Connect to prod-web (root@10.77.0.11:22)" with banner `ssh://root@10.77.0.11:22` — the clicked session, not another one. |
+| `evidence/US-0094-connect-failed-notification.png` | Connect reaches the real connect path: the error notification "SSH connect failed: SSH connect failed: timed out after 20 s". |
+| `evidence/US-0094-menu-50-sessions-scrollable.png` | 50 saved sessions (two sharing the label `alpha`, one label-less, the rest `host-04`..`host-50`): the popup is capped inside the window with a scrollbar, and the two `alpha` rows are told apart by `root@10.9.0.1:22` vs `root@10.9.0.2:22`. The label-less entry renders `10.9.0.3:2222`. |
+| `evidence/US-0094-menu-50-sessions-scrolled-to-end.png` | the same menu wheel-scrolled to the end: `host-50 — ops@10.9.1.50:22` is on screen with the scrollbar thumb at the bottom. |
+| `evidence/US-0094-dialog-from-scrolled-row.png` | clicking that last row opens "Connect to host-50 (ops@10.9.1.50:22)" — a row reachable only after scrolling still routes to its own session. |
+
+The first four were re-taken on the fixed build so that no screenshot in this packet shows
+the pre-`D1`/`D2` rendering. The three 50-session shots are new.
+
+The app log for that run confirms the backend was actually entered:
+
+```text
+[2026-09-14T12:28:27Z INFO  oneterm_ssh::session] SshSession::connect: host=10.77.0.11, port=22, user=root, rows=24, cols=80
+[2026-09-14T12:28:27Z INFO  oneterm_ssh::session] SshSession: connecting to 10.77.0.11:22
+[2026-09-14T12:28:47Z ERROR oneterm_ssh::session] SshSession: connect failed: SSH connect failed: timed out after 20 s
+```
+
+### Independent verification and the rework it caused
+
+`US-0094` was independently verified at `39c9971` and came back **PASS-WITH-NOTES** with one
+medium defect. All four items are addressed in the follow-up commit:
+
+| Item | Verdict | What changed |
+| --- | --- | --- |
+| **D1** Medium — the section had no cap and no scrolling, so 50 saved sessions ran ~19 rows off the bottom of a maximized window, unreachable by mouse *and* by keyboard (the kit applies its height cap only when `scrollable` is set, and `scroll_to_item` is a no-op outside a scrolling container) | valid, reproduced | `menu.scrollable(true)` in the builder. The kit's default cap is `min(half the window, 450px)`, so no magic number is introduced. Re-proved with 50 sessions: scrollbar present, `host-50` reachable, and a scrolled row still opens its own session. |
+| **D2** Low — rows carried the label only, so two saved sessions sharing a label were indistinguishable | valid | `menu_entries` now renders `label — user@host:port` using `session_subtitle`, the helper the session tree already uses four lines above it. A blank label shows the subtitle alone, which subsumes the old `host:port` fallback. |
+| **D3** Low — `saved_ssh_sessions` reaches `SshSessionStore::global`, which panics rather than degrading if the session feature's `init` has not run | valid but unreachable | Documented at both ends rather than given a fallback: the doc comment on `saved_ssh_sessions` states the invariant, and `crates/app/src/init.rs` now says why the feature `init`s must precede `AppServices::install`. A silent empty list would hide a wiring bug, and the panic matches the documented startup invariant `AppServices::global` already uses. No runtime code added. |
+| **N4/N5** Notes — the section *order* is pinned by nothing automated, and the Gate section quoted one step as if it were the whole gate | valid | Both now disclosed: N4 in Gaps below, N5 in the Gate table above. |
+
+Two tests the verification specified are adopted here. Its worktree
+(`agent-a5df640ad16fb7826`) had already been cleaned up when I went to `git apply` its diff,
+so they were re-written from the report's specification rather than applied verbatim; both
+assert the properties it named, and the positional-id tamper it used fails them here too.
+
+### Gaps
+
+- **Nothing automated pins the menu's section order.** That local shells come first, then
+  "New SSH Session", then the "SSH Sessions" heading and the rows, is proven only by the
+  screenshots above: `PopupMenu` exposes no accessor for its built items (only `is_empty()`),
+  so a test cannot read the menu back, and swapping the two sections in the builder would
+  fail nothing. What *is* pinned by tests is the row mapping, and it bites (see the tamper
+  results). Raised as `N4` by the independent verification.
+- **The connect-success path was not observed.** No reachable SSH host is available here, so
+  the walk stops at a timed-out attempt. That proves the menu reaches the connect path with
+  the right session, and everything past the dialog is the SSH Sessions panel's own
+  already-shipped code (the same `open_connect_dialog` call), but a tab actually opening from
+  the menu was not seen end to end.
+- **Windows only.** The new section is platform-independent — only the local shell entries
+  above it are `#[cfg]`-split — but macOS and Linux were not run.
+- **The disabled hint has no unit test.** Rendering it needs gpui and the branch is three
+  lines; it is covered by `menu_entries_of_an_empty_store_is_empty` on the model side and by
+  the empty-state screenshot. The same applies to `scrollable(true)`: the cap and the
+  scrollbar are the kit's, and the proof is the two 50-session screenshots, not a test.
+- **A row's text can outgrow the popup's width.** `label — user@host:port` is longer than the
+  label alone, and the kit clamps `max_w`; a very long label plus a long user and host will
+  be clipped. Not observed at 50 realistic entries, and the id still routes the click, so
+  this is a legibility ceiling rather than a correctness one.
+- **`menu_entries` has one caller.** It is `pub(crate)` in `crates/session-ui` and is used
+  only by `saved_ssh_sessions`. It lives in `tree_builder.rs` rather than a new module
+  because that file already owns "turn store entries into list rows" and already had the
+  `host:port` helper next to it.
+- The deleted-between-open-and-click case (`get` returns `None`, nothing happens) is
+  reasoned from the store API, not exercised: provoking it needs a delete between the menu
+  render and the click.
+
+### harness.db rows
+
+Not written from this worktree — `harness.db` is gitignored and worktree-local, so a row
+written here would be lost. To mirror in the main checkout after merge:
+
+```python
+import sqlite3
+
+conn = sqlite3.connect("harness.db")
+cur = conn.cursor()
+
+cur.execute(
+    """
+    INSERT INTO intake (input_type, summary, risk_lane, affected_docs, story_id,
+                        doc_path, document_number, design_doc, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+    (
+        "new_spec",
+        'The "+" (New Terminal) button must also list the sessions saved under SSH Sessions, '
+        "so a saved SSH session opens from the same place a local shell does.",
+        "normal",
+        "docs/gui-layout.md,docs/ssh-client-connect.md",
+        "US-0094",
+        "docs/spec-intakes/IN-0033-new-terminal-button-lists-ssh-sessions/IN-0033.md",
+        33,
+        "docs/spec-intakes/IN-0033-new-terminal-button-lists-ssh-sessions/high-level-design.md",
+        "Owner request 2026-09-14, made in Vietnamese and recorded in English because "
+        "scripts/check-english.py bans Vietnamese in docs. terminal-view cannot depend on "
+        "session-ui (R1 cycle + R5), so the saved list crosses at "
+        "oneterm_state::commands::WorkspaceCommands.",
+    ),
+)
+intake_id = cur.lastrowid
+
+cur.execute(
+    """
+    INSERT INTO story (id, title, risk_lane, packet_doc, status,
+                       unit_proof, integration_proof, e2e_proof, platform_proof,
+                       evidence, verify_command, last_verified_at, last_verified_result,
+                       notes, intake_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+    (
+        "US-0094",
+        'The "+" menu lists the saved SSH sessions and opens one',
+        "normal",
+        "docs/spec-intakes/IN-0033-new-terminal-button-lists-ssh-sessions/"
+        "US-0094-new-terminal-menu-lists-saved-ssh-sessions.md",
+        "implemented",
+        1,
+        1,
+        1,
+        1,
+        "docs/spec-intakes/IN-0033-new-terminal-button-lists-ssh-sessions/"
+        "US-0094-new-terminal-menu-lists-saved-ssh-sessions.md section 'Evidence and Gaps'. "
+        "Two fn pointers on WorkspaceCommands (saved_ssh_sessions, open_saved_ssh_session) carry "
+        "the saved list and the open-by-id call from crates/session-ui to the menu built in "
+        "crates/terminal-view, so no crate edge is added and R1/R5 hold; the connect path is "
+        "reused, not duplicated. Stable ids, not indexes, cross the seam so a concurrent delete "
+        "cannot retarget the click. FOCUSED: 6 tests (5 menu_entries in "
+        "crates/session-ui/src/tree_builder.rs, 1 id-survives-delete in session_state.rs); "
+        "iterating .rev() fails the ordering test, disabling the blank-label fallback fails the "
+        "fallback test, and handing the seam the position instead of the id fails 5 (all "
+        "reverted). cargo test -p oneterm-session-ui 57 passed / 0 failed; "
+        "-p oneterm-terminal-view 288 passed / 0 failed / 3 ignored. "
+        "GATE pwsh scripts/ci-local.ps1 exit 0, all ten steps, 'ci-local: all checks passed', "
+        "summed over every test-result line: 60 sections / 1941 passed / 0 failed / 14 ignored. "
+        "E2E Windows desktop, fast-dev build, app launched with its working directory set to the "
+        "worktree so config_dir() ('target') resolved inside the worktree and the owner's real "
+        "config was never touched: empty-state hint with no ssh_session.json, then both seeded "
+        "names flat in file order with their user@host:port while the right dock tree nested "
+        "db-01 under its group, then clicking prod-web opened 'Connect to prod-web "
+        "(root@10.77.0.11:22)' and Connect reached the backend (oneterm_ssh::session "
+        "SshSession::connect host=10.77.0.11 ... timed out after 20 s); then 50 seeded sessions "
+        "showing the scrollbar, host-50 reachable by wheel, and clicking it opening 'Connect to "
+        "host-50 (ops@10.9.1.50:22)'. 7 screenshots under evidence/US-0094-*.png. "
+        "INDEPENDENT VERIFICATION at 39c9971: PASS-WITH-NOTES, one medium defect, all closed in "
+        "the follow-up commit -- D1 (no cap/scroll: 50 sessions ran ~19 rows off the window, "
+        "unreachable by mouse and keyboard) fixed by menu.scrollable(true), which is what makes "
+        "the kit apply its min(half-window, 450px) cap; D2 (duplicate labels indistinguishable) "
+        "fixed by rendering 'label - user@host:port' via the existing session_subtitle helper; "
+        "D3 (SshSessionStore::global panics if the feature init has not run) documented at both "
+        "ends rather than given a fallback, since a silent empty list would hide a wiring bug and "
+        "the panic matches the AppServices::global startup invariant; N4/N5 disclosed in the "
+        "packet. The verifier's 2 tests are adopted, re-written from its report because its "
+        "worktree was cleaned up before its diff could be applied. "
+        "GAPS: nothing automated pins the menu SECTION ORDER (PopupMenu has no item accessor, so "
+        "the screenshots are the only proof); no reachable host, so the connect-success path is "
+        "unobserved; Windows only; the disabled hint and scrollable(true) have no unit test "
+        "(both need gpui); a very long label plus user@host can be clipped by the popup's max_w.",
+        "pwsh scripts/ci-local.ps1",
+        "2026-09-14T20:05:00",
+        "pass",
+        "Implemented on worktree agent-a85e44f034eb1c863 off main @4dd57e7 in three commits: "
+        "aff3919 records (before any code), 39c9971 implementation, and the verification-rework "
+        "commit on top. NOT merged, NOT pushed. Docs changed: docs/gui-layout.md (Panel "
+        "registration and presentation + Source map) and docs/ssh-client-connect.md (1.1 and "
+        "decision 8). Safety: the owner runs Claude Code inside their own oneterm.exe, so "
+        "Get-Process oneterm was recorded before every launch (owner pids 2504, 14804 each time), "
+        "the app was started with Start-Process -PassThru, and only the launched pid (13816, "
+        "13200, 14180, 15896, 17068) was driven, screenshotted and stopped; nothing was matched "
+        "by process name or window title, and both owner pids were alive after every walk.",
+        intake_id,
+    ),
+)
+
+conn.commit()
+```
+
+## Handoff
+
+Implemented, independently verified (PASS-WITH-NOTES), and reworked on worktree
+`agent-a85e44f034eb1c863` off `main` @ `4dd57e7`. Not merged, not pushed. All four
+verification items (`D1`-`D3`, `N4`/`N5`) are closed. Next owner: merge, then mirror the two
+`harness.db` rows above in the main checkout.

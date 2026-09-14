@@ -53,12 +53,20 @@ pub(crate) fn init(cx: &mut App) {
     // Seal all cross-feature services into one composition-root bundle. Each
     // hook (active-terminal metrics, agent focuser) and command callback belongs
     // to its feature, while the shell consumes only this state API.
+    //
+    // ORDER MATTERS: every feature `init` above must run first. A command
+    // callback may read its feature's global the moment the bundle exists, and
+    // those globals panic when absent by the same documented startup invariant
+    // `AppServices::global` uses — `saved_ssh_sessions` reads
+    // `SshSessionStore::global`, installed by `oneterm_session_ui::init`.
     AppServices::install(
         cx,
         crate::session_factory::build(),
         WorkspaceCommands {
             new_terminal_with_shell: oneterm_terminal_view::new_terminal_with_shell_cmd,
             open_new_session_dialog: oneterm_session_ui::open_quick_connect_dialog,
+            saved_ssh_sessions: oneterm_session_ui::saved_ssh_sessions,
+            open_saved_ssh_session: oneterm_session_ui::open_saved_ssh_session,
             open_duplicate_ssh_dialog: oneterm_session_ui::open_duplicate_ssh_dialog,
             open_settings: oneterm_settings_ui::open_settings,
             open_about: oneterm_settings_ui::open_about_dialog,

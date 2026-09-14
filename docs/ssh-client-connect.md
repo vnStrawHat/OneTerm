@@ -62,6 +62,12 @@ the app opens an SSH session to the target server using the info in `SshSession`
 username). Before connecting, if credentials are missing (username or password), the app shows
 a dialog for the user to enter them.
 
+Since `IN-0033` the same saved sessions are also listed in the centre tab bar's `+` (New
+Terminal) dropdown, and picking one there enters this flow at exactly the same point with the
+same `SshSessionId`. Everything below the dialog — credential branching, jump chain, host-key
+approval, and where the connected tab lands — is shared, so the rest of this document describes
+both surfaces.
+
 ### 1.2. Flow diagram
 
 ```
@@ -130,7 +136,7 @@ a dialog for the user to enter them.
 | 5 | **Password field uses `InputState::masked(true)` + `.mask_toggle()`** | Shows `•••••`, with an eye-icon button to reveal/hide. API already available in gpui-component. |
 | 6 | **Footer: Cancel (left) + Connect (right), right-aligned** | `DialogFooter` defaults to `justify_end` → buttons auto-align right. Matches the requirement. |
 | 7 | **Connect runs async** — the dialog closes immediately, the connection runs in the background | Avoids blocking the UI. If connect fails → `window.push_notification` reports the error. |
-| 8 | **Left-click = Open**, right-click keeps the context menu (Open/Delete/Property) | Keeps the current context-menu behavior, adds a left-click shortcut. |
+| 8 | **Left-click = Open**, right-click keeps the context menu (Open/Delete/Property). Since `IN-0033` the centre tab bar's `+` menu is a second surface that opens the same dialog by session id | Keeps the current context-menu behavior, adds a left-click shortcut. The `+` menu reuses `open_connect_dialog` rather than duplicating the connect path, so the two surfaces cannot drift. |
 | 9 | **Saved-session logging is tri-state** (`inherit` / `on` / `off`) | A saved session can use the global SSH policy or explicitly force either outcome; see [`DEC-0003`](decisions/DEC-0003-define-terminal-logging-capture-and-override-semantics.md). |
 
 ---

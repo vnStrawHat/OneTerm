@@ -62,7 +62,7 @@ Panels implement both layers introduced by GPUI Kit 0.6:
 - `gpui_base::dock::Panel` supplies base identity and layout behavior such as `panel_name`, `zoomable`, and `set_active`.
 - `gpui_component::dock::Panel` supplies presentation behavior such as `tab_name`, `zoom_control`, toolbar/menu content, and `on_added_to(WeakEntity<TabGroup>)`.
 
-`TerminalPanel` retains the final empty tab instead of removing it, preserving the tab bar and `+` creation entry point. When sibling tabs exist, terminal close routes remove the panel through `DockArea::remove_panel`. Adding a terminal to a normalized empty center recreates the center `DockLayout`; otherwise it uses `DockArea::add_panel_view`.
+`TerminalPanel` retains the final empty tab instead of removing it, preserving the tab bar and `+` creation entry point. That `+` is the panel's `title_suffix`: a dropdown whose menu has three sections — the platform's local shells (`AddPanelWithShell`), "New SSH Session" (`NewSession`), and, since `IN-0033`, every session saved in `ssh_session.json`, listed flat by name in storage order with a disabled "No saved sessions" hint when there are none. Clicking a saved session opens the same connect dialog the `SessionPanel` opens for it. The list and the open call reach the terminal feature through `WorkspaceCommands` rather than a crate edge, because `oneterm-session-ui` already depends on `oneterm-terminal-view` (R5) and the reverse edge would be a cycle. The menu builder closure re-reads the store on every open, so the list is never stale. When sibling tabs exist, terminal close routes remove the panel through `DockArea::remove_panel`. Adding a terminal to a normalized empty center recreates the center `DockLayout`; otherwise it uses `DockArea::add_panel_view`.
 
 ## Zoom
 
@@ -118,6 +118,8 @@ The status bar contains the clock, breadcrumb, git status of the active local te
 - Persisted document owner: `crates/state/src/dock_persistence.rs`
 - Registered names: `crates/state/src/panel_names.rs`
 - Input channel membership: `crates/state/src/input_channel_registry.rs`
+- The tab bar's `+` menu (shells, New SSH Session, saved sessions): `crates/terminal-view/src/panel/terminal_panel.rs`
+- Saved-session menu rows and the commands behind them: `crates/session-ui/src/tree_builder.rs`, `crates/session-ui/src/lib.rs`
 - Channel submenu, chips, and Space badge: `crates/terminal-view/src/input/menu.rs`,
   `crates/terminal-view/src/panel/tab_title.rs`, `crates/terminal-view/src/space/render.rs`
 - Focused layout regressions: `crates/workspace/src/layout/workspace/layout_tests.rs`
