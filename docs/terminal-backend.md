@@ -96,8 +96,8 @@
 |---|---|
 | `core` | `ShellKind` + `LocalShellConfig` + `SshConfig` (config), `SftpBackend`, `AppError` (leaf, no GPUI). |
 | `terminal` | `TerminalSession` trait + `SessionEvent`, the `TerminalContent` frame, `TerminalPalette`, printable-output logging controller/parser, `key_encode`/`mouse_encode`/`osc`/`url`, the shared terminal handle (`TerminalHandle`: the `parking_lot::FairMutex` around `oneterm_vt::Terminal` plus the render-demand flag), and the **backend pump layer** (`backend` module: `SharedState`, `SessionEventSink`, `OscRouter`, `TerminalPump`, `PtyTransport`) shared by both backends. |
-| `local-shell` | `LocalSession` implementing `TerminalSession`. Spawns a shell via `oneterm_pty::PseudoConsole::spawn` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
-| `ssh` | `SshSession` implementing `TerminalSession`. russh client on the shared tokio runtime; `ssh_main_task` feeds `TerminalPump`. pty-req + shell + `window_change` + exit-status. `SshTransport: PtyTransport` (bounded `Cmd` channel). SFTP task lifetime tied to the connection. Only `SshSession` + `connect` are public. |
+| `local-shell` | `LocalSession` implementing `PtyOwner`; `spawn` returns the `PtySession` the UI drives (`US-0091`). Spawns a shell via `oneterm_pty::PseudoConsole::spawn` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
+| `ssh` | `SshSession` implementing `PtyOwner`; `connect` returns the `PtySession` the UI drives (`US-0091`). russh client on the shared tokio runtime; `ssh_main_task` feeds `TerminalPump`. pty-req + shell + `window_change` + exit-status. `SshTransport: PtyTransport` (bounded `Cmd` channel). SFTP task lifetime tied to the connection. Only `SshSession` + `connect` are public. |
 | `terminal-view` | `TerminalElement` (custom `gpui::Element`), `TerminalView` (`Render`; one view type hosts any `TerminalSession`, local or SSH), `TerminalPanel`/`PanelSpec` (dock tab), IME (`EntityInputHandler`), mouse/wheel, font measure, theme → `TerminalPalette`. |
 | `app` | Installs the `SessionFactory` (`AppSessionFactory`) + `WorkspaceCommands` through `AppServices`; only crate that links `ssh`/`local-shell`. |
 
@@ -265,9 +265,9 @@ the new size before any output for it arrives, then `TerminalModel::resize_grid`
 takes anything convertible into `oneterm_vt::ResizePolicy` and `resize_grid` passes it
 straight to `Terminal::resize`.
 
-`ResizePolicy::BottomAnchor` (this crate's `ResizePolicy::Default`) anchors the bottom
-row: on a row grow it pulls `min(history, lines_added)` rows out of scrollback into the
-top of the viewport and moves the cursor down by that amount; on a column change it joins
+`ResizePolicy::BottomAnchor` anchors the bottom row: on a row grow it pulls
+`min(history, lines_added)` rows out of scrollback into the top of the viewport and moves
+the cursor down by that amount; on a column change it joins
 rows flagged wrapped and lets history fill the rows that vanished, or splits rows and
 pushes the top ones into history. That matches a Unix PTY or a remote shell, which reflow
 on their side and repaint, so SSH keeps it. conhost behind ConPTY does neither
@@ -281,8 +281,11 @@ row 12 while the grid cursor sat on row 33 (21 joined rows); a pure widen to 132
 gave row 14 (19 joined); a grow to 49x34 gave row 38 (5 split rows). With the default
 policy typed input therefore lands inside the listing and an exiting alt-screen TUI leaves
 stale rows (IN-0019). Local sessions on Windows select `ResizePolicy::KeepViewportTop`
-(`crates/local-shell/src/session_terminal.rs`; the policy is a macro argument of
-`impl_pty_terminal_session!`, so it stays with the backend).
+(`local_resize_policy()` in `crates/local-shell/src/session_terminal.rs`); SSH passes
+`SSH_RESIZE_POLICY` (`crates/ssh/src/session.rs`). Since `US-0091` both name the engine's
+own `oneterm_vt::ResizePolicy` and hand it to `PtySession::new`, so the policy stays with
+the backend that owns the PTY. The adapter enum `oneterm_terminal::model::ResizePolicy`
+that used to stand between them is deleted.
 
 `KeepViewportTop` is implemented **inside the engine** (`crates/vt/src/reflow/`): it
 measures conhost's cursor row by reflowing the viewport-top-to-cursor range through the
@@ -398,7 +401,9 @@ The local listener already parses forwarded OSC 7 payloads into `SessionEvent::C
 
 > Original design sketch (the forked engine's `EventLoop` + an `ArcSwap` cache). The shipped code
 > described below the sketch differs: a custom `ShellEventLoop`, no `last_content`
-> cache, and `LocalTransport`/`OscRouter` from §5.3.
+> cache, `LocalTransport`/`OscRouter` from §5.3, and — since `US-0091` — no `TerminalSession`
+> on `LocalSession` at all: `spawn` returns `PtySession<LocalSession>` and the struct keeps
+> only the listener and the owner-thread join handle (the shell config is not retained).
 
 ```rust
 use the_forked_engine::{event_loop::EventLoop, sync::FairMutex, term::{Config, Term}, tty::{self, Options, Shell, WindowSize}};  // historical sketch; the fork is gone
@@ -786,9 +791,13 @@ pub trait TerminalSession: TerminalRender + TerminalInput + TerminalIme + Termin
 ```
 
 > This is only a **render/input/lifecycle interface** — it does not force a shared pump/transport.
-> `LocalSession` and `SshSession` differ only in `capabilities()`, `kind()` and how the channel is
-> torn down; the four trait impls are generated once by `impl_pty_terminal_session!` (`session.rs`),
-> so the two backends cannot drift. Neither backend knows the other.
+> `LocalSession` and `SshSession` differ only in `capabilities()`, `kind()`, their grow-resize
+> `ResizePolicy` and how the channel is torn down, so that is all each one still implements —
+> the `PtyOwner` trait (`session.rs`). The four trait impls live once, on the concrete
+> `PtySession<O: PtyOwner>` in the same file, which owns the engine handle, the state cache, the
+> IME compose buffer and the single event receiver; `LocalSession::spawn` and `ssh::connect`
+> return one. Until `US-0091` this was a 286-line `impl_pty_terminal_session!` macro expanded
+> into both backend crates. The two backends cannot drift, and neither knows the other.
 
 Presentation is not part of the trait: the status-bar breadcrumb is formatted by
 `terminal-view` from `cwd()`. Pixel cell metrics (`set_cell_size`/`cursor_bounds`) were
@@ -863,7 +872,7 @@ crates/
 │   └── config/shell.rs       # ShellKind, LocalShellConfig, resolve_shell
 │
 ├── terminal/src/             # the engine adapter (no GPUI)
-│   ├── session.rs            # TerminalRender/Input/Ime/Lifecycle + TerminalSession façade, SessionEvent, TerminalCapabilities
+│   ├── session.rs            # the four traits + PtyOwner + PtySession + TerminalSession façade, SessionEvent, TerminalCapabilities
 │   ├── handle.rs             # TerminalHandle: the FairMutex + the render-demand flag
 │   ├── model.rs              # TerminalModel: snapshot / snapshot_into / query_state / input
 │   ├── content.rs            # TerminalContent: the RenderState it owns, in the engine's own vocabulary
@@ -881,15 +890,15 @@ crates/
 │
 ├── local-shell/src/
 │   ├── lib.rs                # pub: LocalSession
-│   ├── session.rs            # LocalSession: tty + ShellEventLoop
-│   ├── session_terminal.rs   # impl TerminalSession
+│   ├── session.rs            # LocalSession: tty + ShellEventLoop; spawn() -> PtySession
+│   ├── session_terminal.rs   # impl PtyOwner (teardown + capabilities)
 │   ├── event_loop.rs         # ShellEventLoop<P>, ShellNotifier (+ event_loop_tests.rs)
 │   └── transport.rs          # LocalTransport: PtyTransport; LocalListener alias
 │
 ├── ssh/src/
 │   ├── lib.rs                # pub: SshSession, connect
-│   ├── session.rs            # connect(): russh + shared tokio runtime
-│   ├── session_terminal.rs   # impl TerminalSession
+│   ├── session.rs            # connect(): russh + shared tokio runtime -> PtySession
+│   ├── session_terminal.rs   # impl PtyOwner (teardown + capabilities)
 │   ├── task.rs               # ssh_main_task: channel ↔ TerminalPump
 │   ├── transport.rs          # SshTransport: PtyTransport; SshListener alias
 │   ├── handler.rs            # host-key policy (known_hosts)

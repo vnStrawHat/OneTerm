@@ -876,7 +876,7 @@ mod tests {
         for cols in [18u16, 12, 40] {
             fixture.terminal().resize(
                 oneterm_terminal::Size { rows: 6, cols },
-                oneterm_terminal::ResizePolicy::Default.into(),
+                oneterm_terminal::ResizePolicy::BottomAnchor,
             );
             resnapshot(&mut frame, &mut fixture);
             h.update(cx, &frame, style_key(13.0));
@@ -986,7 +986,7 @@ mod tests {
                     let cols = [16u16, 22, 28, 34][(next() % 4) as usize];
                     fixture.terminal().resize(
                         oneterm_terminal::Size { rows: 8, cols },
-                        oneterm_terminal::ResizePolicy::Default.into(),
+                        oneterm_terminal::ResizePolicy::BottomAnchor,
                     );
                 }
             }
@@ -1098,7 +1098,7 @@ mod tests {
         for cols in [18u16, 40, 24] {
             fixture.terminal().resize(
                 oneterm_terminal::Size { rows: 6, cols },
-                oneterm_terminal::ResizePolicy::Default.into(),
+                oneterm_terminal::ResizePolicy::BottomAnchor,
             );
             resnapshot(&mut frame, &mut fixture);
             h.update(cx, &frame, style_key(13.0));

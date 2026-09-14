@@ -11,7 +11,7 @@ use oneterm_terminal::{
 
 use crate::session::{LocalSession, quote_windows_argument};
 use oneterm_core::AppError;
-use oneterm_terminal::PtySize;
+use oneterm_terminal::{PtySession, PtySize};
 
 #[test]
 fn program_path_with_spaces_is_quoted_for_conpty() {
@@ -52,7 +52,7 @@ pub(super) fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool)
     predicate()
 }
 
-fn snapshot_contains(session: &LocalSession, needle: &str) -> bool {
+fn snapshot_contains(session: &PtySession<LocalSession>, needle: &str) -> bool {
     session.snapshot().text().contains(needle)
 }
 
@@ -73,7 +73,9 @@ pub(super) fn lock_spawns() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Spawn `cfg` while holding [`SPAWN_GUARD`].
-fn spawn_guarded(cfg: oneterm_core::LocalShellConfig) -> Result<LocalSession, AppError> {
+fn spawn_guarded(
+    cfg: oneterm_core::LocalShellConfig,
+) -> Result<PtySession<LocalSession>, AppError> {
     let _guard = lock_spawns();
     spawn_unguarded(cfg)
 }
@@ -81,7 +83,7 @@ fn spawn_guarded(cfg: oneterm_core::LocalShellConfig) -> Result<LocalSession, Ap
 /// Spawn `cfg`. The caller must already hold [`SPAWN_GUARD`].
 pub(super) fn spawn_unguarded(
     cfg: oneterm_core::LocalShellConfig,
-) -> Result<LocalSession, AppError> {
+) -> Result<PtySession<LocalSession>, AppError> {
     LocalSession::spawn(
         cfg,
         PtySize { rows: 24, cols: 80 },
@@ -91,7 +93,7 @@ pub(super) fn spawn_unguarded(
     )
 }
 
-pub(super) fn spawn_default() -> LocalSession {
+pub(super) fn spawn_default() -> PtySession<LocalSession> {
     spawn_guarded(oneterm_core::LocalShellConfig::default()).expect("spawn")
 }
 
@@ -139,7 +141,7 @@ fn local_session_grow_policy_matches_conpty() {
     let expected = if cfg!(windows) {
         oneterm_terminal::ResizePolicy::KeepViewportTop
     } else {
-        oneterm_terminal::ResizePolicy::Default
+        oneterm_terminal::ResizePolicy::BottomAnchor
     };
     assert_eq!(session.resize_policy(), expected);
 }
@@ -171,7 +173,7 @@ fn trait_alive_is_local_close() {
 fn close_returns_without_joining_the_owner_thread() {
     let s = spawn_default();
     let _ = s.write(b"echo hold\r");
-    let guard = s.term.lock();
+    let guard = s.term().lock();
     let started = Instant::now();
     s.close().expect("close must succeed");
     let elapsed = started.elapsed();
@@ -181,7 +183,7 @@ fn close_returns_without_joining_the_owner_thread() {
         "close() blocked for {elapsed:?} — it must hand the owner thread to the reaper"
     );
     assert!(
-        s.owner_join.lock().unwrap().is_none(),
+        s.owner().owner_join.lock().unwrap().is_none(),
         "the join handle must have been handed off"
     );
     assert!(wait_until(Duration::from_secs(2), || !s.alive()));

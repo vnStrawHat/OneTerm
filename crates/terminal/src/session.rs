@@ -10,15 +10,17 @@
 //! See `docs/terminal-backend.md` §9.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_channel::Receiver;
 use oneterm_core::sftp::SftpBackend;
-use oneterm_vt::{CursorShape, ModeSnapshot, Rgb, RowId, SelectionKind};
+use oneterm_vt::{CursorShape, ModeSnapshot, ResizePolicy, Rgb, RowId, SelectionKind};
 
-use crate::backend::SharedState;
+use crate::backend::{DefaultColors, SharedState};
 use crate::content::{LineRangeCells, TerminalContent};
+use crate::handle::SharedTerminal;
 use crate::logging::TerminalLogController;
+use crate::model::TerminalModel;
 use crate::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use crate::osc::{Osc133Kind, TerminalProgress};
 use crate::osc_agent::AgentStatusEvent;
@@ -440,296 +442,449 @@ pub trait TerminalSession:
     }
 }
 
-/// Implement [`TerminalRender`], [`TerminalInput`], [`TerminalIme`] and
-/// [`TerminalLifecycle`] for a backend session that owns the standard fields
-/// (`term`, `listener`, `state`, `marked_text`, `event_rx`).
+/// The half of a session its backend keeps: the bytes-out side of its channel,
+/// how that channel is torn down, and the optional features it offers.
 ///
-/// The local shell and SSH sessions differ only in their
-/// [`TerminalCapabilities`], their [`SessionKind`], their grow-resize
-/// [`ResizePolicy`](crate::model::ResizePolicy) and how the channel is torn
-/// down, so those stay with the backend (`$kind`, `$resize_policy` and
-/// `$close`, an inherent method returning `Result<(), TerminalError>`) and
-/// everything else lives here once. See `docs/terminal-backend.md` §9.
+/// `LocalSession` and `SshSession` implement this and nothing else; everything a
+/// [`TerminalSession`] does beyond it is [`PtySession`]'s. See
+/// `docs/terminal-backend.md` §9.
+pub trait PtyOwner: Send + Sync + 'static {
+    /// Queue `bytes` for the child/remote (keystrokes, paste, OSC replies).
+    fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError>;
+    /// Request a new PTY/window size (latest value wins).
+    fn pty_resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError>;
+    /// Tear the channel down: PTY shutdown for the local shell, channel close
+    /// (plus the SFTP channel that shares the connection) for SSH. Called once
+    /// from [`TerminalLifecycle::close`], which flips liveness afterwards.
+    fn close(&self) -> Result<(), TerminalError>;
+    /// The optional features this backend offers; none by default.
+    fn capabilities(&self) -> TerminalCapabilities {
+        TerminalCapabilities::default()
+    }
+}
+
+/// The session body both PTY backends share, with [`TerminalRender`],
+/// [`TerminalInput`], [`TerminalIme`], [`TerminalLifecycle`] and
+/// [`TerminalSession`] implemented on it once. Dropping it drops the [`PtyOwner`],
+/// which is where each backend's own teardown lives.
 ///
-/// The listener type the two backends used to pass is gone: the engine is not
-/// generic over it any more, because events are values rather than callbacks.
-#[macro_export]
-macro_rules! impl_pty_terminal_session {
-    ($ty:ty, $label:literal, $kind:expr, $resize_policy:expr, $close:ident) => {
-        impl $ty {
-            /// A `TerminalModel` adapter for the shared terminal-model
-            /// operations. Cheap — just clones the `Arc` around the engine.
-            fn model(&self) -> $crate::model::TerminalModel {
-                $crate::model::TerminalModel::new(self.term.clone(), self.resize_policy())
-            }
+/// See `docs/terminal-backend.md` §9.
+pub struct PtySession<O: PtyOwner> {
+    term: SharedTerminal,
+    state: SharedState,
+    kind: SessionKind,
+    resize_policy: ResizePolicy,
+    /// IME marked text (compose buffer).
+    marked_text: Mutex<Option<String>>,
+    /// Handed out once by [`TerminalLifecycle::take_events`].
+    event_rx: Mutex<Option<Receiver<SessionEvent>>>,
+    owner: O,
+}
 
-            /// How this backend grows the grid (DEC-0008).
-            ///
-            /// The macro argument may be either this crate's `ResizePolicy` or
-            /// the engine's `oneterm_vt::ResizePolicy`: both convert, so a
-            /// backend can move to the engine's name without an edit here.
-            /// The value read back is this crate's, because the backends reach
-            /// the engine through this crate and not directly (HLD crate
-            /// layout: `local-shell` depends on `core`, `terminal`, `pty`).
-            pub(crate) fn resize_policy(&self) -> $crate::ResizePolicy {
-                ::core::convert::Into::into($resize_policy)
-            }
-
-            /// Write bytes to the PTY / SSH channel while the session is alive.
-            fn pty_write(&self, bytes: &[u8]) -> Result<(), $crate::TerminalError> {
-                if !self.state.alive() {
-                    return Err($crate::TerminalError::Closed);
-                }
-                $crate::backend::PtyTransport::pty_write(self.listener.transport(), bytes)
-            }
+impl<O: PtyOwner> PtySession<O> {
+    /// Assemble a session from the pieces its backend spawned.
+    ///
+    /// `resize_policy` is how this backend grows the grid (DEC-0008); `owner`
+    /// carries the transport, the teardown and the capabilities.
+    pub fn new(
+        term: SharedTerminal,
+        state: SharedState,
+        event_rx: Receiver<SessionEvent>,
+        kind: SessionKind,
+        resize_policy: ResizePolicy,
+        owner: O,
+    ) -> Self {
+        Self {
+            term,
+            state,
+            kind,
+            resize_policy,
+            marked_text: Mutex::new(None),
+            event_rx: Mutex::new(Some(event_rx)),
+            owner,
         }
+    }
 
-        impl $crate::TerminalRender for $ty {
-            fn snapshot(&self) -> $crate::TerminalContent {
-                self.model().snapshot()
-            }
+    /// The backend half this session was built on. Reached only by the backend
+    /// crates' own tests; production code goes through [`TerminalSession`].
+    #[doc(hidden)]
+    pub fn owner(&self) -> &O {
+        &self.owner
+    }
 
-            fn snapshot_into(&self, out: &mut $crate::TerminalContent) {
-                self.model().snapshot_into(out)
-            }
+    /// The engine handle this session renders from. Test-only, as [`owner`](Self::owner).
+    #[doc(hidden)]
+    pub fn term(&self) -> &SharedTerminal {
+        &self.term
+    }
 
-            fn query_state(&self) -> $crate::TerminalQueryState {
-                self.model()
-                    .query_state($crate::TerminalLifecycle::alive(self))
-            }
+    /// How this backend grows the grid (DEC-0008). Test-only, as [`owner`](Self::owner).
+    #[doc(hidden)]
+    pub fn resize_policy(&self) -> ResizePolicy {
+        self.resize_policy
+    }
 
-            fn query_line_range_cells(
-                &self,
-                start_line: usize,
-                count: usize,
-            ) -> $crate::LineRangeCells {
-                self.model().query_line_range_cells(start_line, count)
-            }
+    /// A `TerminalModel` adapter — cheap, just clones the `Arc` around the engine.
+    fn model(&self) -> TerminalModel {
+        TerminalModel::new(self.term.clone(), self.resize_policy)
+    }
 
-            fn dynamic_colors(&self) -> $crate::DynamicColors {
-                self.model().dynamic_colors()
-            }
-
-            fn set_default_colors(
-                &self,
-                foreground: $crate::Rgb,
-                background: $crate::Rgb,
-                cursor: $crate::Rgb,
-                ansi: [$crate::Rgb; 16],
-            ) {
-                self.state.set_default_colors($crate::DefaultColors::new(
-                    foreground, background, cursor, ansi,
-                ));
-            }
-
-            fn terminal_info(&self) -> $crate::TerminalInfo {
-                self.model()
-                    .terminal_info(self.state.absolute_line_count(), self.state.clear_epoch())
-            }
-
-            fn is_alt_screen(&self) -> bool {
-                self.model().is_alt_screen()
-            }
-
-            fn is_mouse_mode(&self) -> bool {
-                self.model().is_mouse_mode()
-            }
-
-            fn search(
-                &self,
-                query: &str,
-                options: $crate::SearchOptions,
-            ) -> Vec<$crate::SearchMatch> {
-                self.model().search(query, options)
-            }
-
-            fn selection_text(&self) -> Option<String> {
-                self.model().selection_text()
-            }
-
-            fn has_selection(&self) -> bool {
-                self.model().has_selection()
-            }
+    /// The session type as it appears in this backend's log lines.
+    const fn label(&self) -> &'static str {
+        match self.kind {
+            SessionKind::Local => "LocalSession",
+            SessionKind::Ssh => "SshSession",
         }
+    }
 
-        impl $crate::TerminalInput for $ty {
-            fn write(&self, bytes: &[u8]) -> Result<(), $crate::TerminalError> {
-                self.pty_write(bytes)
-            }
-
-            /// Send a DSR (Device Status Report) query so the terminal answers
-            /// with the cursor position. Windows ConPTY buffers output and only
-            /// flushes on interaction; SSH simply ignores the round trip.
-            fn flush_pty(&self) {
-                if let Err(error) = self.pty_write(b"\x1b[6n") {
-                    log::warn!(concat!($label, ": PTY flush query failed: {}"), error);
-                }
-            }
-
-            /// Write ETX (`\x03`); the shell's line discipline (or ConPTY, with
-            /// OpenConsole.exe next to the exe) turns it into the interrupt so
-            /// only the child process sees it.
-            fn send_ctrl_c(&self) {
-                if let Err(error) = self.pty_write(b"\x03") {
-                    log::warn!(concat!($label, ": Ctrl+C delivery failed: {}"), error);
-                }
-            }
-
-            fn resize(&self, rows: u16, cols: u16) -> Result<(), $crate::TerminalError> {
-                if self.model().needs_resize(rows, cols) {
-                    $crate::backend::PtyTransport::pty_resize(
-                        self.listener.transport(),
-                        rows,
-                        cols,
-                    )?;
-                    self.model().resize_grid(rows, cols);
-                }
-                Ok(())
-            }
-
-            fn scroll(&self, delta: i32) {
-                self.model().scroll(delta);
-            }
-
-            fn scroll_to_bottom(&self) {
-                self.model().scroll_to_bottom();
-            }
-
-            fn scroll_to_top(&self) {
-                self.model().scroll_to_top();
-            }
-
-            fn mouse_down(
-                &self,
-                row: f32,
-                col: f32,
-                button: $crate::TerminalMouseButton,
-                kind: $crate::SelectionKind,
-                mods: $crate::MouseModifiers,
-            ) {
-                if let Some(bytes) = self.model().mouse_down(row, col, button, kind, mods) {
-                    $crate::report_generated_input(
-                        concat!($label, " mouse input"),
-                        self.pty_write(&bytes),
-                    );
-                }
-            }
-
-            fn mouse_move(&self, row: f32, col: f32, mods: $crate::MouseModifiers) {
-                if let Some(bytes) = self.model().mouse_move(row, col, mods) {
-                    $crate::report_generated_input(
-                        concat!($label, " mouse input"),
-                        self.pty_write(&bytes),
-                    );
-                }
-            }
-
-            fn mouse_drag(&self, row: f32, col: f32, mods: $crate::MouseModifiers) {
-                if let Some(bytes) = self.model().mouse_drag(row, col, mods) {
-                    $crate::report_generated_input(
-                        concat!($label, " mouse input"),
-                        self.pty_write(&bytes),
-                    );
-                }
-            }
-
-            fn mouse_up(
-                &self,
-                row: f32,
-                col: f32,
-                button: $crate::TerminalMouseButton,
-                mods: $crate::MouseModifiers,
-            ) {
-                if let Some(bytes) = self.model().mouse_up(row, col, button, mods) {
-                    $crate::report_generated_input(
-                        concat!($label, " mouse input"),
-                        self.pty_write(&bytes),
-                    );
-                }
-            }
-
-            fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: $crate::MouseModifiers) {
-                if let Some(bytes) = self.model().wheel(delta_y, row, col, mods) {
-                    $crate::report_generated_input(
-                        concat!($label, " mouse input"),
-                        self.pty_write(&bytes),
-                    );
-                }
-            }
-
-            fn clear_selection(&self) {
-                self.model().clear_selection();
-            }
-
-            fn select_all(&self) {
-                self.model().select_all();
-            }
-
-            fn clear(&self) {
-                // Send the `clear` command to the shell, exactly as if the user typed it.
-                $crate::report_generated_input(
-                    concat!($label, " clear command"),
-                    self.pty_write(b"clear\r"),
-                );
-                $crate::TerminalInput::clear_selection(self);
-            }
+    /// [`report_generated_input`] prefixed with [`label`](Self::label), so the
+    /// mouse path reports without composing a string per event.
+    fn report(&self, operation: &str, result: Result<(), TerminalError>) {
+        if let Err(error) = result {
+            log::warn!("{} {operation} delivery failed: {error}", self.label());
         }
+    }
 
-        impl $crate::TerminalIme for $ty {
-            fn set_marked_text(&self, text: String) {
-                *self.marked_text.lock().unwrap() = Some(text);
-            }
-
-            fn clear_marked_text(&self) {
-                *self.marked_text.lock().unwrap() = None;
-            }
-
-            fn commit_text(&self, text: &str) {
-                $crate::TerminalIme::clear_marked_text(self);
-                $crate::report_generated_input(
-                    concat!($label, " committed text"),
-                    self.pty_write(text.as_bytes()),
-                );
-            }
-
-            fn marked_text(&self) -> Option<String> {
-                self.marked_text.lock().unwrap().clone()
-            }
+    /// Write bytes to the PTY / SSH channel while the session is alive.
+    fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+        if !self.state.alive() {
+            return Err(TerminalError::Closed);
         }
+        self.owner.pty_write(bytes)
+    }
+}
 
-        impl $crate::TerminalLifecycle for $ty {
-            fn take_events(&self) -> Option<::async_channel::Receiver<$crate::SessionEvent>> {
-                self.event_rx.lock().unwrap().take()
-            }
+impl<O: PtyOwner> TerminalRender for PtySession<O> {
+    fn snapshot(&self) -> TerminalContent {
+        self.model().snapshot()
+    }
 
-            fn alive(&self) -> bool {
-                self.state.alive()
-            }
+    fn snapshot_into(&self, out: &mut TerminalContent) {
+        self.model().snapshot_into(out)
+    }
 
-            fn close(&self) -> Result<(), $crate::TerminalError> {
-                let result = self.$close();
-                self.state.set_alive(false);
-                result
-            }
+    fn query_state(&self) -> TerminalQueryState {
+        self.model().query_state(self.state.alive())
+    }
 
-            fn kind(&self) -> $crate::SessionKind {
-                $kind
-            }
+    fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells {
+        self.model().query_line_range_cells(start_line, count)
+    }
 
-            fn title(&self) -> Option<String> {
-                self.state.title()
-            }
+    fn dynamic_colors(&self) -> DynamicColors {
+        self.model().dynamic_colors()
+    }
 
-            fn cwd(&self) -> Option<::std::path::PathBuf> {
-                self.state.cwd()
-            }
+    fn set_default_colors(&self, foreground: Rgb, background: Rgb, cursor: Rgb, ansi: [Rgb; 16]) {
+        self.state
+            .set_default_colors(DefaultColors::new(foreground, background, cursor, ansi));
+    }
+
+    fn terminal_info(&self) -> TerminalInfo {
+        self.model()
+            .terminal_info(self.state.absolute_line_count(), self.state.clear_epoch())
+    }
+
+    fn is_alt_screen(&self) -> bool {
+        self.model().is_alt_screen()
+    }
+
+    fn is_mouse_mode(&self) -> bool {
+        self.model().is_mouse_mode()
+    }
+
+    fn search(&self, query: &str, options: SearchOptions) -> Vec<SearchMatch> {
+        self.model().search(query, options)
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        self.model().selection_text()
+    }
+
+    fn has_selection(&self) -> bool {
+        self.model().has_selection()
+    }
+}
+
+impl<O: PtyOwner> TerminalInput for PtySession<O> {
+    fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+        self.pty_write(bytes)
+    }
+
+    /// Send a DSR (Device Status Report) query so the terminal answers with the
+    /// cursor position. Windows ConPTY buffers output and only flushes on
+    /// interaction; SSH simply ignores the round trip.
+    fn flush_pty(&self) {
+        if let Err(error) = self.pty_write(b"\x1b[6n") {
+            log::warn!("{}: PTY flush query failed: {error}", self.label());
         }
-    };
+    }
+
+    /// Write ETX (`\x03`); the shell's line discipline (or ConPTY, with
+    /// OpenConsole.exe next to the exe) turns it into the interrupt so only the
+    /// child process sees it.
+    fn send_ctrl_c(&self) {
+        if let Err(error) = self.pty_write(b"\x03") {
+            log::warn!("{}: Ctrl+C delivery failed: {error}", self.label());
+        }
+    }
+
+    fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
+        if self.model().needs_resize(rows, cols) {
+            self.owner.pty_resize(rows, cols)?;
+            self.model().resize_grid(rows, cols);
+        }
+        Ok(())
+    }
+
+    fn scroll(&self, delta: i32) {
+        self.model().scroll(delta);
+    }
+
+    fn scroll_to_bottom(&self) {
+        self.model().scroll_to_bottom();
+    }
+
+    fn scroll_to_top(&self) {
+        self.model().scroll_to_top();
+    }
+
+    fn mouse_down(
+        &self,
+        row: f32,
+        col: f32,
+        button: TerminalMouseButton,
+        kind: SelectionKind,
+        mods: MouseModifiers,
+    ) {
+        if let Some(bytes) = self.model().mouse_down(row, col, button, kind, mods) {
+            self.report("mouse input", self.pty_write(&bytes));
+        }
+    }
+
+    fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers) {
+        if let Some(bytes) = self.model().mouse_move(row, col, mods) {
+            self.report("mouse input", self.pty_write(&bytes));
+        }
+    }
+
+    fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers) {
+        if let Some(bytes) = self.model().mouse_drag(row, col, mods) {
+            self.report("mouse input", self.pty_write(&bytes));
+        }
+    }
+
+    fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton, mods: MouseModifiers) {
+        if let Some(bytes) = self.model().mouse_up(row, col, button, mods) {
+            self.report("mouse input", self.pty_write(&bytes));
+        }
+    }
+
+    fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: MouseModifiers) {
+        if let Some(bytes) = self.model().wheel(delta_y, row, col, mods) {
+            self.report("mouse input", self.pty_write(&bytes));
+        }
+    }
+
+    fn clear_selection(&self) {
+        self.model().clear_selection();
+    }
+
+    fn select_all(&self) {
+        self.model().select_all();
+    }
+
+    fn clear(&self) {
+        // Send the `clear` command to the shell, exactly as if the user typed it.
+        self.report("clear command", self.pty_write(b"clear\r"));
+        self.clear_selection();
+    }
+}
+
+impl<O: PtyOwner> TerminalIme for PtySession<O> {
+    fn set_marked_text(&self, text: String) {
+        *self.marked_text.lock().unwrap() = Some(text);
+    }
+
+    fn clear_marked_text(&self) {
+        *self.marked_text.lock().unwrap() = None;
+    }
+
+    fn commit_text(&self, text: &str) {
+        self.clear_marked_text();
+        self.report("committed text", self.pty_write(text.as_bytes()));
+    }
+
+    fn marked_text(&self) -> Option<String> {
+        self.marked_text.lock().unwrap().clone()
+    }
+}
+
+impl<O: PtyOwner> TerminalLifecycle for PtySession<O> {
+    fn take_events(&self) -> Option<Receiver<SessionEvent>> {
+        self.event_rx.lock().unwrap().take()
+    }
+
+    fn alive(&self) -> bool {
+        self.state.alive()
+    }
+
+    fn close(&self) -> Result<(), TerminalError> {
+        let result = self.owner.close();
+        self.state.set_alive(false);
+        result
+    }
+
+    fn kind(&self) -> SessionKind {
+        self.kind
+    }
+
+    fn title(&self) -> Option<String> {
+        self.state.title()
+    }
+
+    fn cwd(&self) -> Option<PathBuf> {
+        self.state.cwd()
+    }
+}
+
+impl<O: PtyOwner> TerminalSession for PtySession<O> {
+    fn capabilities(&self) -> TerminalCapabilities {
+        self.owner.capabilities()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A [`PtyOwner`] that records what the session forwards to it.
+    ///
+    /// `US-0091` made this possible: while the shared body was a macro, the only
+    /// way to exercise it was to spawn a real backend, so `crates/terminal` had
+    /// no test of the forwarding it now owns — and the PTY-resize hop had none
+    /// anywhere (deleting `pty_resize` from `resize` left all 372 tests green).
+    struct FakeOwner {
+        state: SharedState,
+        writes: Mutex<Vec<Vec<u8>>>,
+        resizes: Mutex<Vec<(u16, u16)>>,
+        /// `state.alive()` as `close()` saw it: the teardown must run first.
+        alive_at_close: Mutex<Option<bool>>,
+    }
+
+    impl PtyOwner for FakeOwner {
+        fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+            self.writes.lock().unwrap().push(bytes.to_vec());
+            Ok(())
+        }
+
+        fn pty_resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
+            self.resizes.lock().unwrap().push((rows, cols));
+            Ok(())
+        }
+
+        fn close(&self) -> Result<(), TerminalError> {
+            *self.alive_at_close.lock().unwrap() = Some(self.state.alive());
+            Ok(())
+        }
+    }
+
+    fn fake_session() -> PtySession<FakeOwner> {
+        let state = crate::backend::SharedSessionState::new_alive();
+        let term = crate::handle::new_shared_terminal(
+            crate::backend::GridSize {
+                cols: 80,
+                lines: 24,
+            },
+            crate::handle::DEFAULT_SCROLLBACK_LINES,
+        );
+        let (_events_tx, events_rx) = async_channel::bounded(4);
+        PtySession::new(
+            term,
+            state.clone(),
+            events_rx,
+            SessionKind::Local,
+            ResizePolicy::KeepViewportTop,
+            FakeOwner {
+                state,
+                writes: Mutex::default(),
+                resizes: Mutex::default(),
+                alive_at_close: Mutex::default(),
+            },
+        )
+    }
+
+    /// The PTY must learn the new size before the grid is grown, or the child
+    /// keeps rendering for the old `WINSIZE`.
+    #[test]
+    fn resize_tells_the_owner_and_then_grows_the_grid() {
+        let session = fake_session();
+        assert_eq!(session.query_state().rows, 24);
+
+        session.resize(30, 80).expect("a grow must be accepted");
+
+        assert_eq!(*session.owner().resizes.lock().unwrap(), [(30, 80)]);
+        assert_eq!(session.query_state().rows, 30);
+
+        // A resize to the size already in effect asks the owner nothing.
+        session.resize(30, 80).expect("a no-op resize is still Ok");
+        assert_eq!(session.owner().resizes.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn write_reaches_the_owner_while_alive_and_is_refused_once_closed() {
+        let session = fake_session();
+        session.write(b"ls\r").expect("write while alive");
+        assert_eq!(session.owner().writes.lock().unwrap()[0], b"ls\r".to_vec());
+
+        session.close().expect("close");
+
+        assert_eq!(session.write(b"after"), Err(TerminalError::Closed));
+        assert_eq!(session.owner().writes.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn close_runs_the_owner_teardown_before_liveness_flips() {
+        let session = fake_session();
+        assert!(session.alive());
+
+        session.close().expect("close");
+
+        assert_eq!(*session.owner().alive_at_close.lock().unwrap(), Some(true));
+        assert!(!session.alive());
+    }
+
+    #[test]
+    fn a_session_reports_its_owner_capabilities_its_kind_and_its_policy() {
+        let session = fake_session();
+        let capabilities = session.capabilities();
+
+        assert!(capabilities.logging.is_none());
+        assert!(capabilities.network_stats.is_none());
+        assert_eq!(session.kind(), SessionKind::Local);
+        assert_eq!(session.resize_policy(), ResizePolicy::KeepViewportTop);
+    }
+
+    #[test]
+    fn marked_text_round_trips_and_commit_writes_it_to_the_owner() {
+        let session = fake_session();
+        assert!(session.marked_text().is_none());
+
+        session.set_marked_text("compose".into());
+        assert_eq!(session.marked_text().as_deref(), Some("compose"));
+
+        session.commit_text("done");
+
+        assert!(session.marked_text().is_none());
+        assert_eq!(session.owner().writes.lock().unwrap()[0], b"done".to_vec());
+    }
+
+    #[test]
+    fn a_pty_session_hands_out_its_event_receiver_once() {
+        let session = fake_session();
+        assert!(session.take_events().is_some());
+        assert!(session.take_events().is_none());
+    }
 
     #[test]
     fn optional_capabilities_default_without_fake_implementations() {

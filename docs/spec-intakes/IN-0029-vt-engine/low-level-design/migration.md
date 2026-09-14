@@ -324,6 +324,12 @@ in `crates/terminal`, at `US-0085`. Only then are `crate::model::ResizePolicy` a
 deleted. Until then each backend keeps its adapter-enum token, and its *behaviour* is pinned by a
 mutation-checked test rather than by the token's name.
 
+> **Closed by `US-0091` (`IN-0032`), not by `US-0085`.** The macro was not given a new return
+> type — it was deleted, along with `crate::model::ResizePolicy` and both `From` impls. Both
+> backends now name `oneterm_vt::ResizePolicy` and hand it to `PtySession::new`. The same
+> applies to the fork-era manifest lines recorded further down this document: they were gone
+> before `US-0091` started. Nothing here is an open plan.
+
 **`OscRouter::drain(&batch, &mut Vec<SessionEvent>)`.** The deferred/reliable sink is gone.
 `TerminalPump::advance` feeds and drains under the lock; `finish_batch[_blocking](repaint)` sends
 afterwards. There is nothing left to move out from under the lock, so the backend loops keep their

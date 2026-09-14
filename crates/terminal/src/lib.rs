@@ -36,8 +36,8 @@ pub mod test_support;
 pub mod url_policy;
 
 pub use backend::{
-    DefaultColors, GridSize, OscRouter, PtyTransport, SessionEventSink, SharedSessionState,
-    SharedState, TerminalPump,
+    GridSize, OscRouter, PtyTransport, SessionEventSink, SharedSessionState, SharedState,
+    TerminalPump,
 };
 pub use color_classification::is_decorative_character;
 pub use content::{LineRangeCells, SnapshotCell, TerminalContent, last_content_row};
@@ -47,7 +47,6 @@ pub use key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 pub use logging::{
     TerminalLogController, TerminalLogError, TerminalLogState, local_log_identity, ssh_log_identity,
 };
-pub use model::ResizePolicy;
 pub use mouse_encode::{MouseModifiers, TerminalMouseButton};
 /// The engine vocabulary this crate's own API speaks, re-exported so a consumer
 /// can name what [`TerminalContent`]'s native accessors return without taking a
@@ -55,8 +54,8 @@ pub use mouse_encode::{MouseModifiers, TerminalMouseButton};
 pub use oneterm_vt::{
     Attrs, CellWidth, Color, CursorShape, GraphicData, GraphicId, HyperlinkId, ModeSnapshot,
     MouseEncoding, MouseProtocol, MouseReporting, NamedColor, RenderCell, RenderContent,
-    RenderCursor, RenderPlacement, RenderRow, RenderUpdate, Rgb, RowId, SelectionKind,
-    SelectionRange, Semantic, SeqNo, Size, Style, StyleRun, Terminal,
+    RenderCursor, RenderPlacement, RenderRow, RenderUpdate, ResizePolicy, Rgb, RowId,
+    SelectionKind, SelectionRange, Semantic, SeqNo, Size, Style, StyleRun, Terminal,
     VIRTUAL_CELL as SIXEL_VIRTUAL_CELL,
 };
 pub use osc::{TerminalProgress, encode_osc52};
@@ -70,8 +69,8 @@ pub use palette::{TerminalPalette, resolve_color};
 pub use search::{SearchMatch, SearchOptions};
 pub use security_policy::{ClipboardOrigin, TerminalSecurityPolicy};
 pub use session::{
-    NetStats, SessionEvent, SessionKind, TerminalCapabilities, TerminalError, TerminalIme,
-    TerminalInfo, TerminalInput, TerminalLifecycle, TerminalQueryState, TerminalRender,
-    TerminalSession, report_generated_input,
+    NetStats, PtyOwner, PtySession, SessionEvent, SessionKind, TerminalCapabilities, TerminalError,
+    TerminalIme, TerminalInfo, TerminalInput, TerminalLifecycle, TerminalQueryState,
+    TerminalRender, TerminalSession, report_generated_input,
 };
 pub use url_policy::TargetDecision;

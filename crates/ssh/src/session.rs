@@ -22,7 +22,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
-use async_channel::Receiver;
 use russh::Pty;
 use russh::client;
 use russh::client::{AuthResult, KeyboardInteractiveAuthResponse};
@@ -35,9 +34,9 @@ use oneterm_core::{
     TerminalLogConfig,
 };
 use oneterm_terminal::{
-    ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
-    SharedSessionState, SharedState, SharedTerminal, TerminalSecurityPolicy, new_shared_terminal,
-    ssh_log_identity,
+    ClipboardOrigin, GridSize, OscRouter, PtySession, PtySize, PtyTransport, ResizePolicy,
+    SessionEvent, SessionEventSink, SessionKind, SharedSessionState, SharedState,
+    TerminalSecurityPolicy, new_shared_terminal, ssh_log_identity,
 };
 
 use crate::agent::{local_agent_connector, request_agent_forwarding};
@@ -50,13 +49,18 @@ use crate::task::ssh_main_task;
 use crate::transport::{Cmd, SSH_COMMAND_QUEUE_CAPACITY, SshListener, SshTransport};
 use crate::tunnel::{ForwardContext, ForwardTable, HANDLE_REQUEST_CAPACITY, start_forwards};
 
-/// An SSH session whose asynchronous tasks run on the shared SSH runtime.
+/// DEC-0008: the grow-resize policy an SSH session hands the engine. The remote
+/// PTY reflows and repaints on its side, so a row grow pulls scrollback into the
+/// viewport top and the cursor follows it down — `KeepViewportTop` would leave
+/// the cursor where it is and add blank rows at the bottom.
+const SSH_RESIZE_POLICY: ResizePolicy = ResizePolicy::BottomAnchor;
+
+/// The channel half of an SSH session, whose asynchronous tasks run on the
+/// shared SSH runtime. `PtySession` owns one of these and everything else a
+/// terminal session does (`session_terminal.rs`).
 pub struct SshSession {
-    pub(crate) term: SharedTerminal,
     pub(crate) listener: SshListener,
-    pub(crate) event_rx: Mutex<Option<Receiver<SessionEvent>>>,
     pub(crate) state: SharedState,
-    pub(crate) marked_text: Mutex<Option<String>>,
     /// SFTP session (None = server does not support SFTP).
     pub(crate) sftp: Mutex<Option<Arc<SftpSession>>>,
 }
@@ -465,14 +469,18 @@ pub fn connect(
     match connect_result {
         Ok(sftp_session) => {
             log::info!("SshSession: connect successful");
-            let session = SshSession {
+            let session = PtySession::new(
                 term,
-                listener,
-                event_rx: Mutex::new(Some(event_rx)),
-                state,
-                marked_text: Mutex::new(None),
-                sftp: Mutex::new(sftp_session),
-            };
+                state.clone(),
+                event_rx,
+                SessionKind::Ssh,
+                SSH_RESIZE_POLICY,
+                SshSession {
+                    listener,
+                    state,
+                    sftp: Mutex::new(sftp_session),
+                },
+            );
             Ok(Box::new(session) as Box<dyn oneterm_terminal::TerminalSession>)
         }
         Err(e) => {
@@ -775,7 +783,11 @@ mod tests {
 
     use crate::test_support::{connect_trusting_loopback, spawn_server};
 
-    fn detached_session() -> (SshSession, async_channel::Receiver<Cmd>) {
+    fn detached_session() -> (
+        PtySession<SshSession>,
+        SshListener,
+        async_channel::Receiver<Cmd>,
+    ) {
         let (cmd_tx, cmd_rx) = async_channel::bounded::<Cmd>(4);
         let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4);
         let state = SharedSessionState::new_alive();
@@ -792,15 +804,30 @@ mod tests {
             },
             oneterm_terminal::DEFAULT_SCROLLBACK_LINES,
         );
-        let session = SshSession {
+        let session = PtySession::new(
             term,
-            listener,
-            event_rx: Mutex::new(Some(event_rx)),
-            state,
-            marked_text: Mutex::new(None),
-            sftp: Mutex::new(None),
-        };
-        (session, cmd_rx)
+            state.clone(),
+            event_rx,
+            SessionKind::Ssh,
+            SSH_RESIZE_POLICY,
+            SshSession {
+                listener: listener.clone(),
+                state,
+                sftp: Mutex::new(None),
+            },
+        );
+        (session, listener, cmd_rx)
+    }
+
+    /// DEC-0008: the constant every SSH session is built with. The macro that
+    /// used to carry it made it unnameable here (`US-0084` gap 2); `US-0091`
+    /// replaced the macro with `PtySession`, so the engine's own enum is the
+    /// one both the session and this assertion name.
+    #[test]
+    fn ssh_session_grow_policy_is_bottom_anchored() {
+        let (session, _listener, _cmd_rx) = detached_session();
+        assert_eq!(SSH_RESIZE_POLICY, ResizePolicy::BottomAnchor);
+        assert_eq!(session.resize_policy(), ResizePolicy::BottomAnchor);
     }
 
     /// DEC-0008: the policy an SSH session hands the engine is
@@ -808,16 +835,16 @@ mod tests {
     /// and repaints on its side. Asserted by its behaviour — a row grow pulls
     /// rows out of scrollback into the top of the viewport and the cursor
     /// follows them down, where `KeepViewportTop` would leave the cursor where
-    /// it is and add blank rows at the bottom. The engine enum cannot be named
-    /// here (US-0084 gap 2), and its name is not the contract anyway.
+    /// it is and add blank rows at the bottom. The constant itself is checked
+    /// by `ssh_session_grow_policy_is_bottom_anchored`.
     #[test]
     fn ssh_grow_resize_pulls_scrollback_into_the_viewport_top() {
         use oneterm_terminal::{TerminalInput, TerminalPump, TerminalRender};
 
-        let (session, _cmd_rx) = detached_session();
-        let mut pump = TerminalPump::new(session.listener.clone());
+        let (session, listener, _cmd_rx) = detached_session();
+        let mut pump = TerminalPump::new(listener);
         let output: String = (0..40).map(|index| format!("line {index}\r\n")).collect();
-        pump.process_chunk(&session.term, output.as_bytes());
+        pump.process_chunk(session.term(), output.as_bytes());
 
         let before = session.query_state();
         assert_eq!(before.rows, 24);
@@ -840,8 +867,8 @@ mod tests {
     fn dead_session_rejects_input_without_touching_the_transport() {
         use oneterm_terminal::{TerminalError, TerminalInput};
 
-        let (session, cmd_rx) = detached_session();
-        session.state.set_alive(false);
+        let (session, _listener, cmd_rx) = detached_session();
+        session.owner().state.set_alive(false);
 
         assert_eq!(session.write(b"ignored"), Err(TerminalError::Closed));
         assert!(cmd_rx.try_recv().is_err());
@@ -851,8 +878,8 @@ mod tests {
     /// to shut down (closing flag + `Cmd::Close`).
     #[test]
     fn dropping_an_unclosed_session_requests_close() {
-        let (session, cmd_rx) = detached_session();
-        let transport = session.transport().clone();
+        let (session, listener, cmd_rx) = detached_session();
+        let transport = listener.transport().clone();
         assert!(!transport.is_closing());
 
         drop(session);
@@ -866,7 +893,7 @@ mod tests {
     fn dropping_a_closed_session_is_idempotent() {
         use oneterm_terminal::TerminalLifecycle;
 
-        let (session, cmd_rx) = detached_session();
+        let (session, _listener, cmd_rx) = detached_session();
         session.close().unwrap();
         assert!(matches!(cmd_rx.try_recv(), Ok(Cmd::Close)));
 
