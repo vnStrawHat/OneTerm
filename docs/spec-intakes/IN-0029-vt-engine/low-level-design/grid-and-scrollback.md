@@ -577,7 +577,11 @@ over-approximation by definition.
 - [ ] **Trap 1 — pending wrap then `BS`.** `BS` decrements the column and clears the pending
   wrap. `BS` at column 0 is a no-op **while `Mode::ReverseWrap` (`? 45`) is reset, which is the
   default** (R-08); with it set, `BS` at column 0 moves to the previous row's last column when
-  that row is `WRAPPED`. `? 45` is an additive feature and lands in `US-0086`.
+  that row is `WRAPPED`. `? 45` is an additive feature and landed in `US-0086`; `US-0087` added
+  the region guard, so the crossing happens only while the cursor is **inside the scroll region**
+  (and the origin-mode region under `DECOM`), and a cursor at or above the region top cannot
+  reverse-wrap at all — intended, with the reasoning and the revisit condition in
+  [`migration.md`](migration.md) § "Cleanup before decommission".
 - [ ] **Trap 2 / 3 — pending wrap then `EL 0` / `HT`**, reference behaviour in both, including
   while `DECAWM` is off (G3 withdrawn).
 - [ ] **Trap 9 / 10 / 11 — `ED 2` / `ED 3` / `ED 1`**, each stated against the offset table.
@@ -662,7 +666,8 @@ Scrolling, erase and tabs (trap-mapped):
 
 In `US-0076` with the other corrections: `grid::tests::alt_screen_47_and_1047_and_1048` (C8) and
 `grid::tests::csi_5_w_restores_default_tab_stops` (C10). Shipped at `US-0086` as an additive
-feature rather than a correction: `grid::tests::reverse_wrap_crosses_a_wrapped_row` (`? 45`).
+feature rather than a correction: `grid::tests::reverse_wrap_crosses_a_wrapped_row` (`? 45`),
+joined at `US-0087` by `grid::tests::verify_reverse_wrap_above_the_region_is_also_blocked`.
 
 Property test: `grid::props::scroll_and_erase_preserve_integrity` — a random sequence of scrolls,
 erases, inserts and deletes with anchors registered throughout, then `assert_integrity()`.

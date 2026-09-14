@@ -330,8 +330,13 @@ log.
 
 ### The differential oracle (R-41)
 
+> **Historical.** The oracle did its job through `US-0073`-`US-0086` and was **deleted with the
+> fork at `US-0087`**: there is no vendored `vte` left to compare against, `crates/vt/tests/differential.rs`
+> is gone, and the `vte` dev-dependency with it. The reasoning is kept because it is the argument
+> for how a future oracle, against any reference, must be constructed.
+
 The earlier design said "`vte 0.15` as a dev-dependency — the unmodified crates.io release, not
-the fork", which is unobtainable: `Cargo.toml:243-244` patches `vte` workspace-wide, and `[patch]`
+the fork", which was unobtainable: `Cargo.toml:243-244` patches `vte` workspace-wide, and `[patch]`
 applies to every dependency kind including dev-dependencies, for exactly the window
 `US-0073`-`US-0087` in which the oracle is the primary proof.
 
@@ -348,9 +353,9 @@ No second vendored copy, no separate workspace, no `vte-oracle` package. The dev
 simply `vte = "0.15"`, resolving through the patch, and the test asserts at the `Perform` level.
 A `US-0073` check re-runs the patch-scope verification (`grep '^+++' vendor/patches/vte/*.patch`)
 so a future patch that reaches into `lib.rs` fails the oracle's own precondition instead of
-silently weakening it. The oracle and the dev-dependency retire with the fork at `US-0087`.
+silently weakening it. The oracle and the dev-dependency retired with the fork at `US-0087`.
 
-`crates/vt/tests/differential.rs`:
+`crates/vt/tests/differential.rs`, while it existed:
 
 - [ ] `differential::action_traces_agree_on_ref_corpus` — all 45 vendored recordings through both
   state machines, normalising `print_str` runs to per-character `print` and applying the deviation table's

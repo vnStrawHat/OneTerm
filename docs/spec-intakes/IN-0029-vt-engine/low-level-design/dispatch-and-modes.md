@@ -163,7 +163,7 @@ accessor, `Terminal::mouse_reporting() -> Option<MouseProtocol>`, replacing the
 | `LineWrap` (DECAWM) | `? 7` | **set** | real | gates `wrapline()` and the wide-char-at-last-column path |
 | `CursorBlink` | `? 12` | reset | real | |
 | `ShowCursor` (DECTCEM) | `? 25` | **set** | real | clearing it makes the reported cursor shape `Hidden` |
-| `ReverseWrap` | `? 45` | reset | **real** | **shipped** (`US-0086`). `BS` at column 0 crosses into the previous row's last column when that row is `WRAPPED` and the mode is set (R-08 / trap 1), so DECRQM is real because the mode has a reader. The rule it used to illustrate stands and now has one home, `Mode::inert_state` (below): while reset (the default) `BS` at column 0 is a no-op, which is trap 1; while set it crosses into a `WRAPPED` row ([`grid-and-scrollback.md`](grid-and-scrollback.md), R-08) |
+| `ReverseWrap` | `? 45` | reset | **real** | **shipped** (`US-0086`, region guard `US-0087`). `BS` at column 0 crosses into the previous row's last column when that row is `WRAPPED` and the mode is set (R-08 / trap 1), so DECRQM is real because the mode has a reader. The rule it used to illustrate stands and now has one home, `Mode::inert_state` (below): while reset (the default) `BS` at column 0 is a no-op, which is trap 1; while set it crosses into a `WRAPPED` row ([`grid-and-scrollback.md`](grid-and-scrollback.md), R-08) |
 | `MouseClick` | `? 1000` | reset | real | setting any mouse mode clears the other mouse modes first; unsetting clears only that one (the reference's asymmetry, reproduced) |
 | `MouseDrag` | `? 1002` | reset | real | |
 | `MouseMotion` | `? 1003` | reset | real | |
@@ -298,6 +298,19 @@ numbers are dropped and counted, exactly as the reference drops them (R-35).
 `OSC_LARGE` ([`parser.md`](parser.md), R-55). It is a **memory ceiling only**; who may write or
 read the clipboard, and under what limits, stays in `crates/terminal/src/security_policy.rs`.
 
+**A published payload cap above `OSC_INLINE` requires `claim_large`.** `claim` alone bounds the
+*whole* payload — prefix included — at 2 KiB, so a protocol documenting an 8 KiB limit while
+claiming plainly cuts anything past about 2040 base64 bytes and then drops it as malformed, with no
+signal. `crates/terminal` therefore uses `claim_large` for **both** agent spellings, `20308` and
+the deprecated `9` alias: "parsed identically for one release" includes the ceiling. The spill is
+transient — the parser grows into it and shrinks back after each OSC — so the steady-state cost is
+zero and the exposure is the class `claim_large(52)` already accepts. The protocol's own 8 KiB cap
+stays in `crates/terminal/src/osc_agent/`, not in the claim.
+
+**A truncated payload is dropped, not parsed.** The parser's `truncated` flag must reach the
+handler: cut base64 can decode to a shorter well-formed event the agent never sent, so a truncated
+agent OSC is discarded before parsing and counted separately from the silent malformed path.
+
 `crates/terminal` claims 7, 9, 133, 633 and **20308**, plus 52 and 8 as large.
 
 **The agent channel is `OSC 20308 ; 1` (`docs/osc-agent-status.md`), and it is a claim, not an
@@ -402,7 +415,7 @@ touches; the "Affected recordings" columns below carry that measurement
 | D9 | LNM tracked but inert | `US-0076` | matches the reference; recorded so it is not read as an oversight | none |
 | D10 | `modifyOtherKeys` level stored and reportable | `US-0076` (implemented) | the reference parses both and implements neither | none |
 | D11 | *superseded* — now correction C11 (blink and overline stored) | `US-0076` | correctness first (owner ruling, 2026-09-12); the `US-0072` measurement shows no recording sends SGR 5 / 6 / 53 / 55, so it needs no declared diff at all | see the corrections table |
-| D12 | Reverse wrap (`? 45`) implemented | `US-0086` (**done**) | gated on the mode, default off, so trap 1 is unaffected while it is | **measured: none** — six recordings only ever reset `? 45`, none sets it; re-confirmed by the grep and the gate at `US-0086` |
+| D12 | Reverse wrap (`? 45`) implemented | `US-0086` (**done**; region guard `US-0087`) | gated on the mode, default off, so trap 1 is unaffected while it is. **Confined to the scroll region** (and the origin-mode region under `DECOM`): `BS` at column 0 crosses into the previous row only when the cursor is inside the region. The guard also refuses a cursor parked **at or above** the region top — wider than the rule literally asked for, kept deliberately, reasons and revisit condition in [`migration.md`](migration.md) § "Cleanup before decommission" | **measured: none** — six recordings only ever reset `? 45`, none sets it; re-confirmed by the grep and the gate at `US-0086` |
 | D13 | DA1 answers `CSI ? 62 ; 4 ; 22 c` | `US-0076` | adds the ANSI-colour claim to today's answer | none — DA answers are discarded by the harness |
 | D14 | Title stack capped at 16, oldest dropped | `US-0076` | 4096 is a memory sink no program needs | none |
 | D15 | Kitty stack overflow pops the right stack (trap 42) | `US-0076` | fixes a reference bug | none |

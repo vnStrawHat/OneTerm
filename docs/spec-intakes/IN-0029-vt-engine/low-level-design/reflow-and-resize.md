@@ -101,8 +101,10 @@ taken from `avt`'s `Reflow` iterator (Apache-2.0, proptest-covered). **No `avt` 
 and the file header credits it by name, licence and URL. `docs/license-analysis.md` § 3 requires a
 `NOTICE` / `THIRD-PARTY-NOTICES.md` entry for reused *source*, so the header is arguably enough;
 the two lines are added anyway, and because `THIRD-PARTY-NOTICES.md` is generated and CI-checked
-against `Cargo.lock`, a hand-written section needs the generator's owner: **`US-0087` owns the
-`NOTICE` and `THIRD-PARTY-NOTICES.md` lines**, alongside the removal rows it already carries.
+against `Cargo.lock`, a hand-written section needed the generator's owner: `US-0087` carried the
+`NOTICE` and `THIRD-PARTY-NOTICES.md` lines alongside its removal rows, and **both are now written**
+(`THIRD-PARTY-NOTICES.md` § 2.1 "Derived algorithms (no source copied)", the `avt` bullet in
+`NOTICE`, and the rationale in `docs/license-analysis.md`).
 
 1. Walk the old rows from `oldest` to `newest`, grouping them into **logical lines**: a run of
    rows where each but the last carries `RowFlags::WRAPPED`.

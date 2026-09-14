@@ -199,7 +199,7 @@ reader today, and each names the packet that may remove it.
 | --- | --- | --- | --- |
 | S1 | `TermMode::LINE_WRAP` and `URGENCY_HINTS` are never set (all 81 streams) | `ModeSnapshot` does not carry them, and `research/api-surface.md` § 3.5 lists both under the unused mode bits OneTerm never queries. The only reader is the corpus dumper in `crates/tools` | `US-0085`, when the view stops reading `TermMode` at all |
 | S2 | `TermMode::ORIGIN` is never set (15 streams) | Same list, same absence of a reader. `DECOM` is honoured inside the engine; only the snapshot bit is missing | `US-0085` |
-| S3 | A hyperlink with no `id=` gets `1`, `2`, … where the reference gave `0_alacritty` | The implicit-id counter is per terminal by design ([`cell-and-style.md`](cell-and-style.md)), not the reference's process-global atomic. The view hashes `id + " " + uri`, so only distinctness matters, and an explicit `id=` passes through verbatim | `US-0085`, when the view keys on `HyperlinkId` |
+| S3 | A hyperlink with no `id=` gets `1`, `2`, … where the reference gave `0_alacritty` | The implicit-id counter is per terminal by design ([`cell-and-style.md`](cell-and-style.md)), not the reference's process-global atomic. The view hashes `id + "\x00" + uri`, so only distinctness matters, and an explicit `id=` passes through verbatim | `US-0085`, when the view keys on `HyperlinkId` |
 | S4 | `total_lines` is one smaller after a Sixel (`sixel_basic`: 10 versus 9) | Engine-level, not the shim: the image's history depth. It reaches the user as a scrollbar one row short in a session that printed an image | `US-0080` follow-up |
 | S5 | Damage is **narrower** | The reference damages a row on any write, the engine on an actual change. `us0081_parity::damage_soundness_detail` proves the property that matters — every row whose rendered content changed, plus a visible cursor's row, is always in the new `Partial` list — with **zero violations over all 81 streams**. Nothing is under-damaged, so no stale row survives a frame | never; this one is an improvement |
 
@@ -393,6 +393,9 @@ Deleted outright (code), each in the packet named:
 | The locally redeclared `PTY_CHILD_EVENT_TOKEN` and the two cfg'd child-pid helpers | `crates/local-shell/src/event_loop.rs:58-64`, `:168-179` | `US-0071` |
 | `vt-diff` and every `--engine old` path | `crates/tools` | `US-0087` |
 
+**Executed at `US-0087` (`c8d84ff`).** Everything below is gone; the list is kept as the record of
+what the decommission covered.
+
 Deleted outright (the fork and its scaffolding), all at `US-0087`:
 
 | What | Where |
@@ -415,6 +418,7 @@ view stops consuming them.
 | The two fork rows in the notices header | `scripts/third-party-notices.py:85-86` |
 | The `--full` step running `vendor/refresh.sh --check` | `scripts/ci-local.sh`, `scripts/ci-local.ps1` |
 | The `vte` dev-dependency and the differential oracle | `crates/vt/Cargo.toml`, `crates/vt/tests/differential.rs` |
+| **`vt-corpus bless` and the `US-0072` cross-check** — a scope extension, **ratified** | `crates/tools`. Not in the original list, and correctly taken: under R-58 only the **old** engine may bless, so with the fork gone there is no engine that may write an expectation. Keeping the subcommand would have meant shipping a writer with nothing behind it, and a `--engine new` bless is precisely the self-referential gate R-58 forbids. The rule is therefore no longer "`bless` refuses without `--deviation`" but the stronger **"nothing blesses"**: the 46 frozen expectations are read-only artefacts, and a genuine future change to them is a reviewed, hand-authored diff with its reason, not a tool run |
 
 Rewritten, not deleted: `crates/terminal/src/test_support.rs` (662 lines) and
 `crates/terminal-view/src/render/frame.rs`'s `FrameBuilder` (`frame.rs:586-757`).
@@ -434,19 +438,33 @@ Rewritten, not deleted: `crates/terminal/src/test_support.rs` (662 lines) and
 
 Every rewritten or deleted test names, in its packet, what it used to pin and what pins it now.
 
-### Cleanup before decommission (`US-0087`)
+### Cleanup before decommission (`US-0087`) — done
 
-Two small code items the `US-0086` verification surfaced. Neither is a defect in shipped behaviour
-and neither justifies its own packet; both are one-liners with a test, and `US-0087` is the last
-packet that touches this code, so they ride with it:
+Two small code items the `US-0086` verification surfaced. Neither was a defect in shipped behaviour
+and neither justified its own packet; both were one-liners with a test, and `US-0087` was the last
+packet to touch this code, so they rode with it. **Both shipped**, pinned by
+`crates/vt/tests/us0087_cleanup_rows.rs`:
 
 | Item | Rule |
 | --- | --- |
-| **Reverse wrap must stay inside the region** | `BS` at column 0 with `? 45` set currently crosses into the previous row wherever the cursor is. xterm confines it to the **scroll region**, and to the origin-mode region when `DECOM` is set: a one-line guard at the crossing site (`crates/vt/src/grid/screen.rs:662`) plus a test that a `DECSTBM` top row does not let `BS` escape upwards |
-| **LNM answers through `inert_state`** | `? 20` is tracked and inert (deviation D9), so it belongs in the same table as `? 9001` rather than answering from the live bit. The `Mode::PRIVATE`-walk test then covers it like every other mode without a reader |
+| **Reverse wrap stays inside the region** — done | `BS` at column 0 with `? 45` set crosses into the previous row only when the cursor is **inside** the scroll region (and the origin-mode region when `DECOM` is set). Guard at `crates/vt/src/grid/screen.rs:~667`. Pinned by `verify_reverse_wrap_blocked_at_a_non_zero_region_top` and `verify_reverse_wrap_crosses_once_the_region_is_dropped`. **The guard also refuses a cursor parked *above* the region** — see the note below; that is intended |
+| **LNM answers through `inert_state`** — done | `? 20` is tracked and inert (deviation D9), so it sits in the same table as `? 9001` and `DECRQM` answers `Reset` whatever a program sets. Pinned by `verify_decrqm_lnm_is_consistent_and_never_claims_set`, and by the `Mode::ANSI` walk that proves nothing was lost when LNM joined the table |
 
 Recorded parity, **not** a cleanup item: `CUB` (`CSI D`) does not reverse-wrap even with `? 45`
 set. The reference applies the mode to `BS` only, and so does this engine.
+
+**A cursor at or above the region top cannot reverse-wrap at all — intended, recorded here
+(`US-0087` verifier note 8).** The guard refuses the crossing not only when the cursor sits *on*
+the region's top row but also when it is parked *above* the region entirely, which is wider than
+the cleanup row literally asked for. It is kept, for three reasons. The row an out-of-region cursor
+would wrap into is not the region's to write, so refusing is the conservative direction and its
+failure mode is the mode's own default: `BS` does nothing. Reverse wrap is an xterm extension that
+is **off by default** and that no recording exercises — `grep-deviations` finds `? 45` in six
+recordings and every occurrence is a *reset* — so the wider refusal is unmeasurable and cannot move
+the gate. And narrowing it would mean editing shipped engine code in the last packet before the
+merge, with no evidence that any program wants the wider behaviour. Pinned deliberately by
+`verify_reverse_wrap_above_the_region_is_also_blocked`, and stated in the deviation table's D12 row.
+Revisit only if a real program is observed relying on reverse wrap outside the margins.
 
 ### Deleted tests, and what pins them now
 
@@ -531,17 +549,28 @@ no line is transcribed, and commit messages keep that separation explicit.
 
 ## Verification
 
-- [ ] `US-0071`: `grep -rn "alacritty_terminal::tty" crates/` empty; `cargo test -p oneterm-pty`
+- [x] `US-0071`: **met** (`2095c87`, rework `2bd247c`) — `grep -rn "alacritty_terminal::tty" crates/` empty; `cargo test -p oneterm-pty`
   green; a local shell opens, resizes and exits on Windows.
-- [ ] `US-0081`: `cargo test --workspace` green with the new engine behind the shim; `vt-diff`
+- [x] `US-0081`: **met** (`f9af66c`) — `cargo test --workspace` green with the new engine behind the shim; `vt-diff`
   reports no divergence over the 45 recordings and a captured session; the three GUI walks **plus
   IN-0028's Sixel walk** reproduced with fresh screenshots (N-02); no file outside
   `crates/terminal` changed except the bounded backend lines listed in the scope table above, and
   no backend test changed (N-04).
-- [ ] `US-0082`: `grep -rn "resize_keeping_viewport_top\|conhost_cursor_row\|LineAccounting" crates/`
+- [x] `US-0082`: **met** (`d3c537b`, rework `b0c82e1`) — `grep -rn "resize_keeping_viewport_top\|conhost_cursor_row\|LineAccounting" crates/`
   empty; the old `model.rs` resize suite and the new `reflow::tests` suite both green in the same
   commit, then the old one deleted (R-44).
-- [ ] `US-0085`: `engine_shim.rs` deleted; `plan_cache` keyed on `(RowId, SeqNo)`.
-- [ ] `US-0087`: the two cleanup rows above are done, each with its test; `test -d vendor` fails; `grep -rn "alacritty_terminal\|vendor/" Cargo.toml .github/workflows/ci.yml scripts/`
+- [x] `US-0085`: **met** (`ee9057a`) — `engine_shim.rs` deleted; `plan_cache` keyed on `(RowId, SeqNo)`.
+- [x] `US-0087`: **met** (`c8d84ff`) — the two cleanup rows above are done, each with its test; `test -d vendor` fails; `grep -rn "alacritty_terminal\|vendor/" Cargo.toml .github/workflows/ci.yml scripts/`
   empty; `python scripts/third-party-notices.py --check`, `python scripts/check-doc-paths.py` and
   `pwsh scripts/ci-local.ps1` all green.
+
+### Status of the migration at the merge candidate
+
+`feat/vt-engine` @ `88de99e`. Every packet in the order above is merged and independently
+verified; the seam, the shim and the fork are all gone, so nothing in this file is still pending
+as *migration* work. What is left before the branch reaches `main` is listed once, in
+[`../IN-0029.md`](../IN-0029.md) § "What remains before the merge to main": the tab-title FAIL
+from the acceptance walk (root-caused elsewhere, outside the engine on the evidence so far), a
+green `pwsh scripts/ci-local.ps1` on the merge candidate, and owner sign-off. The rollback plan
+above expires with the fork: from `US-0087` on, the only way back is `git revert` of the merge
+commits, which is why the branch is not squashed.

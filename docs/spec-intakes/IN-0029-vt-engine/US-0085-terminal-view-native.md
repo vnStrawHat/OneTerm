@@ -313,5 +313,6 @@ seam now gives you what you asked for:
 also carries the legacy-snapshot conversion this packet deleted from the product —
 and the `[dev-dependencies] alacritty_terminal` line that builds it. Deleting the
 test deletes the line and the last mention of the fork in these two crates.
+**Done at `c8d84ff`:** the test, the dev-dependency and the fork are gone.
 
 **Still owed:** the four GUI walks, on an Active desktop. See Gaps.

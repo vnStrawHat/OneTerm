@@ -157,9 +157,16 @@ Contract, and every clause is a test:
    (`../high-level-design.md`, "Threading and locking").
 
 As shipped, the drain signature is `OscRouter::drain(&batch, &mut Vec<SessionEvent>)` and
-`TerminalPump::advance` performs it under the lock, with `finish_batch[_blocking](repaint)` sending
-afterwards — so the backend loops keep the shape they already have
-([`migration.md`](migration.md) § "The adapter contract"). The deferred/reliable sink is gone.
+`TerminalPump::advance` performs it **with the guard held** — it holds no lock the drain needs and
+nothing in the drain blocks — with `finish_batch[_blocking](repaint)` sending afterwards, so the
+backend loops keep the shape they already have ([`migration.md`](migration.md) § "The adapter
+contract"). The deferred/reliable sink is gone.
+
+**The drain is one pass in byte order.** A `Reply` reaches the transport in the position the input
+asked for, whichever side produced it — the engine's `DA1`/`DSR` and an embedder-produced reply
+interleave exactly as the bytes did. R-37's "replies promptly" must not be implemented as "replies
+first": a two-pass drain lets an engine reply overtake an embedder reply and breaks any published
+query-then-`CSI c` detection idiom, which is how `US-0088` found it.
 
 The adapter's loop becomes:
 

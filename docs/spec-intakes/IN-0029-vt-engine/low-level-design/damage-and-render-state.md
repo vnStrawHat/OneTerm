@@ -282,16 +282,24 @@ The pump's loop, in this order, and the order is the contract (R-37):
 ```
 1. take a chunk (<= 64 KiB)
 2. lock, feed(chunk, &mut batch, now), unlock
-3. drain the batch:  VtEvent::Reply bytes are written to the transport FIRST,
-                     before anything else in the batch and before any yield
+3. drain the batch:  ONE PASS, IN BYTE ORDER — a Reply leaves the transport in the
+                     position the input asked for, ahead of any yield
 4. answer any deferred colour queries (one batch of deferral, as today)
 5. if demand.take() { yield before the next lock }
 ```
 
 Replies must not wait behind a yield: conhost's `VtIo::StartIfNeeded` blocks for up to one second
 waiting for the DA1 answer at session start, and that is precisely the moment a burst of output is
-arriving ([`dispatch-and-modes.md`](dispatch-and-modes.md) § "Answers"). The adapter tests assert
-a startup-latency bound.
+arriving ([`dispatch-and-modes.md`](dispatch-and-modes.md) § "Answers"). The adapter tests assert a
+startup-latency bound.
+
+**R-37 is "replies promptly", not "replies first" (`US-0088`).** An earlier drain ran two passes —
+every `Reply`, then everything else — which reorders a reply against the sequence that asked for
+it: a support query answered by the *embedder* in the second pass lost its place to a DA1 answered
+by the *engine* in the first, so an agent using the documented "query then `CSI c`" idiom concluded
+the terminal did not implement the protocol. The drain is **one pass in byte order**, whichever
+side produced the reply, and the latency rule still holds because after `US-0082` the only thing a
+reply can queue behind is a push onto a vector that never leaves the function.
 
 `parking_lot::FairMutex` hands the lock over on unlock, but a thread that unlocks and immediately
 relocks still beats a sleeping waiter, which is why the explicit demand flag exists. The 64 KiB

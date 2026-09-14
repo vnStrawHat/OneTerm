@@ -68,7 +68,7 @@ packet, and the test that proves it.
 | P28 | **`OSC 4` rejects an even parameter count wholesale** | `vendor/vte/src/ansi.rs:1372-1408` (trap 26) | Complete pairs are applied, a trailing odd parameter ignored; deviation C7 | `US-0076` | `dispatch::tests::osc_4_applies_complete_pairs` |
 | P29 | **`? 47` / `? 1047` / `? 1048` are silently ignored** and **`DECSTR` is unimplemented** | `ansi.rs:895-916` (trap 13); `research/prior-art.md` § 6.3 | Both implemented; deviations C8 and C9 | `US-0076` | `grid::tests::alt_screen_47_and_1047_and_1048`, `dispatch::tests::decstr_soft_reset_scope` |
 | P30 | **Kitty keyboard stack overflow pops the title stack** | `term/mod.rs:1305-1311` (trap 42) | Fixed-size flag stack that wraps; `pop(n >= len)` resets | `US-0076` | `dispatch::tests::kitty_pop_beyond_len_resets_the_stack` |
-| P31 | **Every capability costs a fork patch**: 823 patch lines across five patches, a `refresh.sh --check` CI job, and a rebase on every upstream move | `vendor/patches/`, `.github/workflows/ci.yml:65-68` | A first-party crate under normal review; extension points are API — `DEC-0014`, [`migration.md`](low-level-design/migration.md) § "Deletion list" | `US-0087` | `python scripts/third-party-notices.py --check`; `test -d vendor` fails |
+| P31 | **Every capability costs a fork patch**: 823 patch lines across five patches, a `refresh.sh --check` CI job, and a rebase on every upstream move — **resolved: the fork is gone (`US-0087`), `test -d vendor` fails** | `vendor/patches/`, `.github/workflows/ci.yml:65-68` | A first-party crate under normal review; extension points are API — `DEC-0014`, [`migration.md`](low-level-design/migration.md) § "Deletion list" | `US-0087` | `python scripts/third-party-notices.py --check`; `test -d vendor` fails |
 | P32 | **The engine and the PTY ship in one crate**, so `crates/ssh` links a PTY it never uses and `crates/tools` links a grid it never uses | `crates/ssh/Cargo.toml:20`, `crates/tools/Cargo.toml:35` | Two leaf crates split by consumer — [`pty.md`](low-level-design/pty.md) | `US-0071` | `cargo test -p oneterm-pty`; `grep -rn "alacritty_terminal::tty" crates/` empty |
 | P33 | **Dead configuration and unused machinery carried forever**: vi mode, regex search, the engine's own event loop, `setup_env`, three `Config` knobs OneTerm never sets | `research/api-surface.md` § 4.1, § 9.9 | Not built; `Config` has five fields and each has a consumer — [`events-and-api.md`](low-level-design/events-and-api.md) § "The `Config`" | `US-0073` | review against the single public-surface block in `events-and-api.md` |
 
@@ -120,7 +120,7 @@ the graph does not grow; `deny.toml:88` sets `multiple-versions = "warn"`, and `
 | `libc` | 0.2 | `oneterm-pty` | `openpty` |
 | `parking_lot` | 0.12 | `crates/terminal` (the **adapter**, not the engine) | `FairMutex` |
 | `proptest` | 1.x, dev-only | `oneterm-vt` | reflow and grid properties |
-| `vte` | 0.15, dev-only | `oneterm-vt` | the differential oracle, retired at `US-0087` |
+| ~~`vte`~~ | — | — | was the dev-only differential oracle; **retired and removed with the fork at `US-0087`** |
 
 `cargo-fuzz` (`libfuzzer-sys`, `arbitrary`, a nightly toolchain) is **not** a workspace
 dependency: it lives in a nested `crates/vt/fuzz/` crate, runs on Linux only, and is never a
@@ -190,7 +190,7 @@ also why it is extracted first, before any engine work.
    │    ┌──────────────────────────── under the lock ───────────────────────────────────┐  │
    │    │  events = term.feed(chunk, &mut batch)                                         │  │
    │    └───────────────────────────────────────────────────────────────────────────────┘  │
-   │    drain batch  ─▶ OscRouter (OSC 7/9/9;4/9;7/133, clipboard policy, PtyWrite)         │
+   │    drain batch  ─▶ OscRouter (OSC 7/9/9;4/133/20308, clipboard policy, Reply)          │
    │                 ─▶ SessionEvent::{Output, Title, Cwd, Bell, AgentStatus, …}            │
    └──────────────────────────────────────────┬────────────────────────────────────────────┘
                                               │
@@ -406,10 +406,14 @@ This is a design property, not a claim; the RSS tier of the benchmark measures i
    sequence number and its dirty bit. Control sequences go through the dispatch tables.
    Unregistered OSC numbers and unhandled sequences are dropped and counted in `FeedStats`, as
    the engine being replaced drops them.
-4. **Unlock and drain.** The pump drops the guard, then walks `batch`: OSC 7 / 9 / 9;4 / 9;7 /
-   133 through the existing `OscRouter`, clipboard through the existing security policy,
-   `Reply` bytes into the transport, `Repaint` into one coalescible `SessionEvent::Output`.
-   Exactly as today, except that nothing runs under the lock.
+4. **Drain.** `TerminalPump::advance` walks `batch` **with the guard still held** (it holds no
+   lock the drain needs, and nothing in the drain blocks): OSC 7 / 9 / 9;4 / 133 / 20308 through
+   the existing `OscRouter`, clipboard through the existing security policy, `Reply` bytes into
+   the transport, `Repaint` into one coalescible `SessionEvent::Output` that `finish_batch` posts
+   after the guard drops. The drain is **one pass in byte order**, not replies-then-everything-else
+   ([`events-and-api.md`](low-level-design/events-and-api.md)): R-37 is a latency rule, "replies
+   promptly", and reading it as "replies first" reorders a reply against the sequence that asked
+   for it.
 5. **Render, phase 1 (locked).** GPUI prepaint takes the lock and calls `render_update`. Rows
    whose sequence number exceeds the render state's watermark are copied into the render
    state's arena; a pure scroll reports a delta instead of N changed rows; an unchanged frame
@@ -508,7 +512,7 @@ judgements, and **no exit criterion is a performance number** (R-29).
 | 13 | `US-0085` | `crates/terminal-view` goes native | `frame.rs`, `plan_cache`, `input/mouse.rs`, `theme/palette.rs` on `RenderRow` / `SelectionKind` / `ModeSnapshot`; both display-offset fallbacks and `engine_shim.rs` deleted; GUI walks re-run |
 | 14 | `US-0086` | Additive features | The four capabilities the reference never had and no recording exercises: DECXCPR (D7), XTVERSION (D8), `modifyOtherKeys` reporting (D10) and reverse wrap `? 45` (D12). **Behaviour corrections are no longer deferred here** — the owner's correctness-first ruling put them in `US-0075` and `US-0076` with declared expected differences |
 | 15 | `US-0088` | Agent protocol off OSC 9;7 | A free OSC code chosen from a survey of the xterm / iTerm2 / ConEmu / WezTerm / kitty assignments; `9;7` kept as a deprecated alias for one release; `docs/osc-agent-status.md`, the registration in `crates/terminal` and the completion catalogs updated; the agent panel unchanged in behaviour |
-| 16 | `US-0087` | Decommission | `vendor/` absent; no `refresh.sh` CI job; no `[patch]`; the `vte` dev-oracle and `vt-diff` deleted; `python scripts/third-party-notices.py --check`, `check-doc-paths.py` and `pwsh scripts/ci-local.ps1` green; every owning doc reconciled |
+| 16 | `US-0087` | Decommission | **Done** (`c8d84ff`): `vendor/` absent and `test -d vendor` fails; no `refresh.sh` CI job; no `[patch]` block; the `vte` dev-oracle, `tests/differential.rs`, `vt-diff`, `vt-corpus bless` and the `US-0072` cross-check all deleted with the last engine that could drive them; `third-party-notices.py --check`, `check-doc-paths.py` and `ci-local` green; every owning doc reconciled |
 
 ## Detail Design
 

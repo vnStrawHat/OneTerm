@@ -466,7 +466,8 @@ probes of its own (wide pairs, ZWJ clusters, pending wrap, `DECSC`, marks, the a
   ("Decommission the fork … delete `vendor/`, the `[patch]` block, the `vte` dev-oracle **and the
   notices rows**; reconcile every remaining owning doc"), which is the packet that already opens
   both files — adding the `avt` line while removing the `alacritty_terminal` ones is one edit
-  rather than two. The file header carries the credit until then.
+  rather than two. The file header carries the credit until then. **Closed: `US-0087` (`c8d84ff`)
+  wrote both lines** — `THIRD-PARTY-NOTICES.md` § 2.1 and the `avt` bullet in `NOTICE`.
 - **The `measure_rows` fixtures are synthetic, not replayed captures (R-39).** BUG-0051's raw
   PTY and grid dumps came from instrumentation the document itself records as "both temporary
   and removed", so there is nothing to replay. `measure_rows_matches_the_recorded_conhost_rows`

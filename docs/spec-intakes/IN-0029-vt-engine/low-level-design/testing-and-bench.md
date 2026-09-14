@@ -149,18 +149,22 @@ Harness rules, and they are what keep the gate a gate:
   packet that implements the correction otherwise; either way the diff and the reason land in the
   commit that changes the behaviour.
 
-**Who blesses (R-58).** `US-0072` generates both files **with the old engine**, they are reviewed
-once, committed, and **frozen**. The new engine never blesses. `vt-corpus bless` refuses to write
-under `corpus/alacritty-ref/` unless given `--deviation <row-id>` naming a row in a deviation
-table, and that argument is what makes a blessed change reviewable as a diff with a stated reason.
-If the new engine blessed, the gate would prove self-consistency and nothing else.
+**Who blesses (R-58): nothing does, any more.** `US-0072` generated both files **with the old
+engine**; they were reviewed once, committed and **frozen**. The new engine never blesses — a gate
+whose expectations its own subject may rewrite proves self-consistency and nothing else. While the
+fork existed the rule was enforced by `vt-corpus bless` refusing to write without a
+`--deviation <row-id>` naming a deviation row. **`US-0087` deleted the subcommand along with the
+fork**, and that is the stronger form of the same rule: with no old engine there is no engine that
+*may* bless, so keeping a writer would have meant shipping one with nothing behind it. The 46
+frozen expectations are now read-only artefacts; a genuine future change to one is a reviewed,
+hand-authored diff carrying its reason, never a tool run.
 
-**The cross-check (R-61).** `US-0072` also runs `vt-corpus cross-check --grid-json <dir>` once,
-reading upstream's `grid.json` set, converting it to `grid.expect` form and diffing against the
-old engine's output. That proves the expectation format loses nothing. The directory is **not** a
-machine-specific path: `US-0072` copies the `grid.json` set out of the cargo checkout into a
-scratch directory, records its SHA-256 in the packet, and the tool takes `--grid-json` explicitly.
-After `US-0072` the cross-check is never run again.
+**The cross-check (R-61) ran once and is gone.** `US-0072` ran
+`vt-corpus cross-check --grid-json <dir>` against upstream's `grid.json` set — copied out of the
+cargo checkout into a scratch directory with its SHA-256 recorded in the packet — converted it to
+`grid.expect` form and diffed it against the old engine's output, proving the expectation format
+loses nothing. That was its whole purpose; `US-0087` removed the subcommand with the rest of the
+old-engine paths.
 
 **Our own recordings** under `crates/vt/tests/corpus/oneterm/`, covering the surfaces with zero
 upstream coverage and the most new code (R-59):
@@ -192,7 +196,8 @@ and the patch-scope verification are in [`parser.md`](parser.md) § "The differe
 two vendored `vte` patches touch only `src/ansi.rs`, so `vte::Parser` + `vte::Perform` are
 pristine even under `[patch]`, and the oracle needs no second copy of the crate.
 
-**Old engine versus new** (`crates/tools/src/bin/vt-diff.rs`, alive from `US-0072` to `US-0087`).
+**Old engine versus new** (`crates/tools/src/bin/vt-diff.rs`, alive from `US-0072` to `US-0087`,
+where it was deleted with the engine it compared against).
 Feeds the same bytes to the vendored `Term` and to `oneterm-vt` and compares in the **`grid.expect`
 form**, not in a trimmed text form (R-43). That matters: the trimmed form could not see BCE
 backgrounds on erased trailing cells, per-cell attributes, wrap flags, or the viewport position —
@@ -399,5 +404,6 @@ All 48 items from [`../research/engine-semantics.md`](../research/engine-semanti
   re-measured.
 - [ ] `US-0081`-`US-0085`: `vt-diff` green over all recordings plus the captured session at the
   shim flip and at each consumer-group swap.
-- [ ] `US-0087`: the fork and the old-engine paths are deleted, and with them `vt-diff`, the
-  `vte` dev-dependency and the cross-check tool.
+- [x] `US-0087`: **met** (`c8d84ff`) — the fork and the old-engine paths are deleted, and with them
+  `vt-diff`, the `vte` dev-dependency and `tests/differential.rs`, `vt-corpus bless` and the
+  cross-check. What remains of `vt-corpus` is the read-only `check` that runs the gate.
