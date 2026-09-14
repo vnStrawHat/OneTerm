@@ -2,8 +2,8 @@
 //!
 //! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md`.
 //!
-//! Replaces `vendor/vte/src/ansi.rs` — the file every OneTerm patch has lived in
-//! — and the control half of `vendor/alacritty_terminal/src/term/mod.rs`.
+//! Replaces `vte`'s `src/ansi.rs` — the file every OneTerm fork patch lived in —
+//! and the control half of Alacritty's `alacritty_terminal/src/term/mod.rs`.
 //!
 //! The governing rule is **correctness first**: where the engine being replaced
 //! is wrong, this one is right from the start, and every such row is a `C`
@@ -1108,7 +1108,12 @@ impl Dispatch for Handler<'_> {
             (b'p', [b'$']) => {
                 let code = args.next_or(0);
                 let state = match Mode::from_ansi(code) {
-                    Some(mode) => self.state.modes.contains(mode).into(),
+                    // Same rule as the private space, from the same table: a
+                    // mode the engine recognises but nothing reads never
+                    // answers `Set` (`US-0087`). LNM is the only one.
+                    Some(mode) => mode
+                        .inert_state()
+                        .unwrap_or_else(|| self.state.modes.contains(mode).into()),
                     None => ModeState::NotSupported,
                 } as u8;
                 self.reply(&format!("\x1b[{code};{state}$y"));

@@ -6,10 +6,9 @@
 //! the event-delivery policy ([`backend`]).
 //!
 //! Since `US-0085` the compatibility surface is gone with it: nothing this
-//! crate publishes names an `alacritty_terminal` type any more, and the fork
-//! survives only as a `[dev-dependencies]` line for `tests/us0081_parity.rs`,
-//! the old-versus-new differential that retires at `US-0087`. No GPUI here
-//! either way.
+//! crate publishes names a forked-engine type any more, and `US-0087` deleted
+//! the fork itself along with the old-versus-new differential that was its
+//! last consumer. No GPUI here either way.
 
 pub mod backend;
 pub mod color_classification;

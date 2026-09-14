@@ -1,7 +1,7 @@
 //! ConPTY: which host serves the pseudo-console, and how the child is started.
 //!
 //! Portions of the environment-block builder below are adapted from
-//! `alacritty_terminal` (<https://github.com/alacritty/alacritty>), Copyright
+//! Alacritty (<https://github.com/alacritty/alacritty>), Copyright
 //! the Alacritty contributors, licensed under the Apache License 2.0, and
 //! modified for this crate.
 

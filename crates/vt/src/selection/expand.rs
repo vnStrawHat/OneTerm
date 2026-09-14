@@ -2,7 +2,7 @@
 //!
 //! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/selection.md`
 //! section "Semantic expansion"; reference
-//! `vendor/alacritty_terminal/src/term/search.rs:465-620`.
+//! Alacritty's `alacritty_terminal/src/term/search.rs:465-620`.
 //!
 //! Every rule the reference phrases as "the cell at the last column carries
 //! `WRAPLINE`" is `RowRef::wrapped()` here: `WRAPPED` is a **row** flag

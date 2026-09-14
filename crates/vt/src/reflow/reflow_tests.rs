@@ -836,7 +836,7 @@ fn an_anchor_on_trimmed_whitespace_lands_at_the_end_of_its_line() {
 /// when the cursor sits above that tail, and leaves the wrap flag dangling on
 /// the bottom row; this engine keeps the text and the flags consistent.
 ///
-/// `vendor/alacritty_terminal/src/grid/resize.rs:101-242` (`grow_columns`)
+/// Alacritty's `alacritty_terminal/src/grid/resize.rs:101-242` (`grow_columns`)
 /// decides where rows land from `cursor_line_delta`, and its final
 /// `reversed.truncate(reversed.len() + overflow - cursor_line_delta)`
 /// (`:216-222`) drops rows off the **newest** end when the cursor did not move
@@ -881,7 +881,7 @@ fn a_widen_keeps_the_tail_below_the_cursor_where_the_reference_drops_it() {
 /// this engine keeps every styled blank, because `Cell::is_blank` asks for the
 /// default style and nothing else.
 ///
-/// `vendor/alacritty_terminal/src/term/cell.rs`'s `GridCell::is_empty` tests
+/// Alacritty's `alacritty_terminal/src/term/cell.rs` `GridCell::is_empty` tests
 /// `fg`, `bg`, `INVERSE`, the underlines and `STRIKEOUT` — an attribute that
 /// paints nothing on a space is invisible to it. Keeping more is the safe
 /// direction: a background or an attribute a program set deliberately survives

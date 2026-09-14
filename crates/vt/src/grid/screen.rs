@@ -655,11 +655,18 @@ impl Screen {
     /// With reverse wrap on, `BS` at column 0 crosses into the previous row's
     /// last column, and **only** when that row is `WRAPPED` (R-08): the glyph
     /// before the cursor is then genuinely there, so the cursor lands on real
-    /// content rather than on an unrelated line. It never crosses above
-    /// [`Screen::screen_top`], because rows in history are not addressable.
+    /// content rather than on an unrelated line.
+    ///
+    /// It never crosses the **top of the scroll region**, which is also the top
+    /// of the origin-mode region when `DECOM` is set — the reference confines
+    /// reverse wrap to the region, and a full-screen region makes that
+    /// [`Screen::screen_top`], so history stays unaddressable either way. A
+    /// cursor parked above the region cannot reverse-wrap at all, for the same
+    /// reason: the row above it is not the region's to write.
     pub fn backspace(&mut self, reverse_wrap: bool) {
         if self.cursor.pos.col == 0 {
-            if !reverse_wrap || self.cursor.pos.row <= self.screen_top() {
+            let floor = self.row_of_index(self.region.top);
+            if !reverse_wrap || self.cursor.pos.row <= floor {
                 return;
             }
             let previous = self.cursor.pos.row - 1;

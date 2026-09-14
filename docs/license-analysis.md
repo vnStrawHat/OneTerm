@@ -151,16 +151,26 @@ licence position clean are:
   independently.
 - **MIT/Apache-2.0 source may be reused** if the copyright notice is retained in `NOTICE` /
   `THIRD-PARTY-NOTICES.md`. This covers the crates the project already depends on
-  (`windows`, `windows-sys`, `winapi`, `uds_windows`, `alacritty_terminal`, `vte`, gpui,
-  gpui-component).
+  (`windows`, `windows-sys`, `winapi`, `uds_windows`, gpui, gpui-component). It also covers
+  the fragments `crates/pty` adapted from Alacritty's Windows backend, each with the notice
+  in its own source header.
 - **Vendored test data follows the same rule as vendored source.** The VT parity corpus at
   `crates/vt/tests/corpus/alacritty-ref/` is 45 reference captures reused from Alacritty
   (Apache-2.0, revision `fcf32feacb367b75ec84dd40f041e4fd411d3cc1`). Only `alacritty.recording`
   (carried as `recording`), `size.json` and `config.json` are taken — 936 KiB; upstream's 44 MiB
   of `grid.json` is deliberately **not** carried, having been used once as a cross-check oracle at
   `US-0072`. Attribution lives in `crates/vt/tests/corpus/NOTICE` and in
-  `THIRD-PARTY-NOTICES.md` § 2.1. The expectation files next to each recording (`grid.expect`,
-  `state.expect`, `expected-diffs.json`) are OneTerm's own work, Apache-2.0.
+  `THIRD-PARTY-NOTICES.md` § 2. The expectation files next to each recording (`grid.expect`,
+  `state.expect`, `expected-diffs.json`) are OneTerm's own work, Apache-2.0. Since `US-0087`
+  this corpus is the **only** Alacritty-derived material in the repository: the vendored
+  `alacritty_terminal` / `vte` fork that OneTerm shipped until then was deleted with the
+  engine that replaced it (`IN-0029`), so no forked third-party source is linked into any
+  binary any more.
+- **An algorithm is not source.** `crates/vt/src/reflow/columns.rs` follows the approach of
+  `avt`'s `Reflow` iterator (Apache-2.0, <https://github.com/asciinema/avt>) — group on the
+  wrap flag, trim, redistribute — written against OneTerm's own cell, row and anchor types
+  with no `avt` source copied. The credit is deliberate and appears in the file header, in
+  `NOTICE` and in `THIRD-PARTY-NOTICES.md` § 2.1 anyway.
 - **The terminal render engine is written from scratch** (see
   [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md)
   and [`docs/decisions/DEC-0007-terminal-render-engine-cell-glyph-cache-and-quad-shapes.md`](decisions/DEC-0007-terminal-render-engine-cell-glyph-cache-and-quad-shapes.md)),
@@ -238,7 +248,6 @@ The initial analysis (in the previous version of this file) concluded GPL-3.0 co
 | `ztracing` | `crates/ztracing/` | ✅ | ✅ | `GPL-3.0-or-later` | **Apache-2.0 OR GPL** (dual) |
 | `ztracing_macro` | `crates/ztracing_macro/` | ✅ | ✅ | `GPL-3.0-or-later` | **Apache-2.0 OR GPL** (dual, proc-macro) |
 | `zlog` | `crates/zlog/` | ❌ | ✅ | `GPL-3.0-or-later` | **GPL-3.0-only** (but dead-stripped) |
-| `alacritty_terminal` | (fork `zed-industries/alacritty`) | ✅ | ❌ | `Apache-2.0` | Apache-2.0 |
 
 > **All Zed crates in the dependency tree are effectively Apache-2.0** (either directly, or dual-licensed with the option to choose Apache, or GPL-only but dead-stripped).
 

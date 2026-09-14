@@ -7,8 +7,9 @@
 //! through the same `poll.wait` it uses for output.
 //!
 //! The shape — a wait callback feeding an `mpsc` channel plus an IOCP completion
-//! packet, with the poll interest behind a mutex — follows `alacritty_terminal`'s
-//! `tty/windows/child.rs` (<https://github.com/alacritty/alacritty>), Copyright
+//! packet, with the poll interest behind a mutex — follows Alacritty's
+//! `alacritty_terminal/src/tty/windows/child.rs`
+//! (<https://github.com/alacritty/alacritty>), Copyright
 //! the Alacritty contributors, licensed under the Apache License 2.0, and is
 //! modified here: the callback borrows an `Arc` the watcher owns and
 //! `UnregisterWaitEx` fences it, instead of the original's `Box::into_raw` /

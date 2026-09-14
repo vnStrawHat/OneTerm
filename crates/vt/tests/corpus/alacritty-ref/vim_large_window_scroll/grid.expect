@@ -1,7 +1,7 @@
 # OneTerm VT parity expectation: the grid, cell-exact, nothing trimmed.
 # Blessed by the vendored alacritty_terminal engine at US-0072 and FROZEN.
 # Rows are newest first. Each run is `<count>*<content>;<attrs>;<fg>;<bg>;<underline>;<hyperlink>`.
-# Do not hand-edit: regenerate with `vt-corpus bless --engine old --deviation <id>`.
+# Do not hand-edit: the engine that blessed these files was deleted at US-0087.
 version 1
 columns 172
 lines 47

@@ -6,8 +6,8 @@
 //! (`docs/spec-intakes/IN-0029-vt-engine/high-level-design.md`, "Threading and
 //! locking"). That embedder is this crate, and the choice is
 //! `parking_lot::FairMutex` — already in `Cargo.lock`, and the one primitive
-//! `alacritty_terminal::sync::FairMutex` offered on top of it (`lease()`) never
-//! had a call site in OneTerm (`research/api-surface.md` § 3.9).
+//! the fork's own `FairMutex` offered on top of it (`lease()`) never had a
+//! call site in OneTerm (`research/api-surface.md` § 3.9).
 //!
 //! Fairness alone is not enough under sustained output: a pump thread that
 //! unlocks and immediately relocks still beats a sleeping waiter. So the render

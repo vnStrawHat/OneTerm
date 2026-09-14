@@ -6,13 +6,14 @@
 > signatures live in `crates/terminal/src/session.rs`, `crates/terminal/src/backend/`,
 > `crates/local-shell/src/` and `crates/ssh/src/`.
 >
-> Design document for the terminal part: **local shell** + **SSH session**, sharing a
-> renderer based on `alacritty_terminal`. Windows-first priority. Local shell can be
-> `cmd` / `powershell` / `pwsh` / custom.
+> Design document for the terminal part: **local shell** + **SSH session**, sharing one VT
+> engine. Windows-first priority. Local shell can be `cmd` / `powershell` / `pwsh` / custom.
 >
-> **Primary reference**: Zed (`zed-industries/zed`) uses exactly `alacritty_terminal`
-> (tty + `EventLoop` + `FairMutex`) and renders via a custom GPUI Element. This design
-> maps 1:1 to Zed, replacing the chrome layer with `gpui-component`.
+> **The engine is `oneterm-vt` (`crates/vt`), OneTerm's own** (`IN-0029`, `DEC-0014`). The
+> shape below was derived from Zed's use of a patched `alacritty` fork — tty + event loop
+> + `FairMutex` + snapshot — which OneTerm vendored and shipped until `US-0087` deleted it.
+> The architecture survived the swap; the dependency did not, and §4 below records what
+> replaced it.
 >
 > Zed source files referenced (same rev lock `1d217ee39…`):
 > - `crates/terminal/src/terminal.rs` — model + EventLoop + PTY.
@@ -24,14 +25,14 @@
 >    (`PtyTransport`: write / resize / close) and its own read loop; parsing, OSC routing,
 >    event delivery and the state cache come from the shared pump layer in
 >    `oneterm-terminal::backend` (§5.3).
-> 2. **Rendering shares `alacritty_terminal`** via a custom GPUI `Element`.
+> 2. **Both sessions share one engine and one custom GPUI `Element`.**
 > 3. **Local uses `oneterm-pty` + OneTerm's own poll loop** (not `portable-pty`, and not
->    alacritty's `EventLoop`). `oneterm-pty` owns the ConPTY / `openpty` transport and nothing
->    else; see `docs/spec-intakes/IN-0029-vt-engine/low-level-design/pty.md`.
-> 4. **`alacritty_terminal` is taken from the `zed-industries/alacritty` fork** @ rev `fcf32feacb367b75ec84dd40f041e4fd411d3cc1`
->    (patched version with `TerminalContent`/`display_iter`/`content()`). This is the rev Zed
->    uses for `gpui` rev `1d217ee39…`, but it is a separate repo — not the zed monorepo.
-> 5. **alacritty concurrency model**: `Arc<FairMutex<Term<EP>>>` + snapshot.
+>    an engine-supplied event loop). `oneterm-pty` owns the ConPTY / `openpty` transport and
+>    nothing else; see `docs/spec-intakes/IN-0029-vt-engine/low-level-design/pty.md`.
+> 4. **The VT engine is first-party** (`crates/vt`): no forked dependency, no `[patch]`, and a
+>    new capability is added under ordinary review (`DEC-0014`).
+> 5. **Concurrency model**: `Arc<FairMutex<Terminal>>` + snapshot. The engine owns no lock;
+>    the adapter in `crates/terminal` does.
 > 6. **The pure kit** (`core`) does not depend on GPUI.
 
 ---
@@ -45,7 +46,7 @@
 | 3 | Shared rendering | A single `TerminalElement` paints the grid for both local and ssh — only needs `&TerminalContent`. |
 | 4 | Snapshot, no lock-while-paint | The pump updates the snapshot; render reads the snapshot, does not hold `FairMutex` while painting. |
 | 5 | Windows-first | Local prefers ConPTY; `cmd`/`pwsh`/`powershell` shells are configurable. |
-| 6 | Strict rev lock | `gpui` + `gpui_platform` at the same zed monorepo rev; `alacritty_terminal` fork `zed-industries/alacritty` rev `fcf32fe…`. |
+| 6 | Strict version lock | `gpui` + `gpui_platform` move together as one release family. The VT engine is first-party, so it has no rev to lock. |
 
 ---
 
@@ -105,29 +106,26 @@
 
 ---
 
-## 4. Dependencies & rev lock
+## 4. Dependencies
 
 ```toml
 # root Cargo.toml [workspace.dependencies] (authoritative list: docs/agents/dependencies.md §1/§3)
-alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }  # redirected to vendor/alacritty_terminal by [patch]
+oneterm-vt = { path = "crates/vt" }   # the VT engine: parser, grid, reflow, selection, damage, graphics
+oneterm-pty = { path = "crates/pty" } # the pseudo-console transport (ConPTY / openpty)
 async-channel = "2"      # event sub (no tokio leaked out)
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }  # keys API is russh::keys (russh-keys was merged in)
 russh-sftp = "2.3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "macros", "fs"] }
 ```
 
-> The fork is **vendored**: `vendor/alacritty_terminal` = pristine `fcf32fe` + the
-> patches in `vendor/patches/alacritty_terminal/` (single-pass OSC/clear hook), see
-> [`vendor/README.md`](../vendor/README.md).
-
-> ⚠️ **Mandatory**: `alacritty_terminal` must be taken from the `zed-industries/alacritty` fork @
-> rev `fcf32fe…` (the rev Zed uses for `gpui` rev `1d217ee39…`). NOT the zed monorepo.
-> Using crates.io `0.26` will be **missing** `TerminalContent`/`display_iter`/`content()`/`Block`
-> that rendering needs → won't compile. When changing the `gpui` rev → check the Zed workspace deps
-> to get the matching `alacritty_terminal` rev (the two revs can differ).
+> **There is no third-party terminal engine and no `[patch]` section.** OneTerm shipped a
+> vendored, patched `alacritty_terminal` / `vte` fork until `IN-0029` replaced it with
+> `crates/vt`; `US-0087` deleted the fork, its five patches, its refresh/check CI job and
+> both `[patch]` blocks. A capability the engine lacks is added to `crates/vt` under ordinary
+> review (`DEC-0014`), not to a fork.
 >
-> `portable-pty` is **no longer used** for local (brainstorm decision). `ssh` doesn't need a
-> local PTY — only needs `alacritty_terminal` for the Term grid.
+> `portable-pty` is **no longer used** for local (brainstorm decision), and `deny.toml` bans
+> it. `ssh` needs no local PTY — only the grid, which it gets through `crates/terminal`.
 
 ---
 
@@ -211,15 +209,10 @@ watermark belongs to the buffer the consumer keeps — the one `RenderCache` reu
 damage. Native reads go through `TerminalContent::{update, rows, changed, size,
 render_cursor, modes, selection_range, placements, row_id, display_row}`.
 
-Everything else on `TerminalContent` — the dense `Vec<IndexedCell>`, `cursor`, `mode`,
-`selection`, `damage` and their `alacritty_terminal` value types — is a **compatibility
-surface** that `crates/terminal-view` still reads and `US-0085` deletes with
-`crates/terminal/src/engine_shim.rs`. It is refreshed from the tri-state rather than
-rebuilt: nothing on `Unchanged`, only the `changed()` rows on a `Partial` that did not
-scroll, everything on `Full`; each row's resolved `StyleRun`s are converted once per run,
-and the stored grid positions are rewritten only when the geometry or the scroll offset
-moves. A scroll is still reported to the view as `Full` damage, because that is what the
-view does with it today; consuming the delta as a cache shift is `US-0085`.
+**There is nothing else on it** since `US-0085`. The dense `Vec<IndexedCell>`, the forked
+engine's value types around it and the per-frame rebuild that produced them are gone; the
+view reads `TerminalContent::rows` and resolves the engine's own `RenderRow` / `RenderCell`
+itself, so a frame that changed nothing copies nothing.
 
 The frame also carries `graphics`: the Sixel images decoded since the previous one (each
 handed out once, drained by the adapter through `Terminal::take_graphics`). Cells
@@ -396,12 +389,12 @@ The local listener already parses forwarded OSC 7 payloads into `SessionEvent::C
 
 ### 6.2. Spawn via `oneterm-pty`
 
-> Original design sketch (alacritty `EventLoop` + `ArcSwap` cache). The shipped code
+> Original design sketch (the forked engine's `EventLoop` + an `ArcSwap` cache). The shipped code
 > described below the sketch differs: a custom `ShellEventLoop`, no `last_content`
 > cache, and `LocalTransport`/`OscRouter` from §5.3.
 
 ```rust
-use alacritty_terminal::{event_loop::EventLoop, sync::FairMutex, term::{Config, Term}, tty::{self, Options, Shell, WindowSize}};
+use the_forked_engine::{event_loop::EventLoop, sync::FairMutex, term::{Config, Term}, tty::{self, Options, Shell, WindowSize}};  // historical sketch; the fork is gone
 
 pub struct LocalSession {
     term: Arc<FairMutex<Term<LocalListener>>>,
@@ -443,9 +436,8 @@ impl LocalSession {
 }
 ```
 
-> For the exact `Notifier` API: GPUI Kit does not provide it; read directly from the
-> vendored `alacritty_terminal` source: `event_loop.rs` (`Notifier`, `Msg`),
-> `tty/{mod,unix,windows}.rs`. When implementing, open that crate's source to match signatures.
+> The `Notifier` sketch above described the vendored fork's event loop, which OneTerm never
+> shipped and which no longer exists. The implementation below is the one to read.
 
 **Current implementation** (`crates/local-shell/src/event_loop.rs`): the loop is a
 custom `ShellEventLoop<P: EventedPty + OnResize>` on a dedicated "PTY owner"
@@ -587,9 +579,8 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
   that batch under the lock — replies out first (R-37) — then, the lock released,
   `finish_batch(true).await` sends the batch's events before the `Output` hint (§5.3), and
   the loop asks `SharedTerminal::take_render_demand()` and yields the task when a frame is
-  waiting (§5.1). No `crates/ssh` **source file** names the engine or the fork — the shared
-  pump is the whole of the terminal side; the `alacritty_terminal` manifest line survives
-  only because `impl_pty_terminal_session!` expands the name into this crate (`US-0085`).
+  waiting (§5.1). No `crates/ssh` **source file** names the engine — the shared pump is the
+  whole of the terminal side, and the fork's last manifest line left with `US-0085`.
 - RSA keys authenticate with `rsa-sha2-*` chosen from the server's `server-sig-algs`
   (fallback SHA-512); legacy SHA-1 `ssh-rsa` is never used.
 - Auth: `SshAuthMethod::{None, Password, PrivateKey}` (`crates/core/src/ssh_config.rs`)
@@ -911,7 +902,6 @@ crates/
 
 | Risk | Mitigation |
 |---|---|
-| `alacritty_terminal` Zed-internal API changes between revs | Pin rev; open the crate source at the rev when implementing to match signatures. |
 | Holding `FairMutex` in paint → jitter | Snapshot pattern (§5.2): short lock to copy, paint from the copy. |
 | Tokio (ssh) vs smol (gpui) runtime conflict | Hidden shared tokio runtime inside `ssh` (2 workers), sync API, bridge via `async_channel`. |
 | Windows cmd codepage not UTF-8 | `chcp 65001` (cmd), env `LANG` (pwsh). Document requires Win10 1903+ for good ConPTY. |
@@ -929,5 +919,4 @@ crates/
 | Render engine + input (current design) | [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md) |
 | `Element`/`paint_quad`/`shape_line` | `reference/gpui-kit` (tag `v0.6.0`) |
 | `EntityInputHandler` | `gpui::EntityInputHandler` trait (docs.rs matching rev) |
-| `alacritty_terminal` API | source at rev `fcf32fe…` (`event_loop.rs`, `tty/`, `term.rs`, `sync.rs`) |
-| Vendored fork deltas | [`vendor/README.md`](../vendor/README.md) |
+| VT engine API | `crates/vt/src/` (`terminal/`, `grid/`, `render/`) + the IN-0029 low-level designs |

@@ -25,10 +25,3 @@ chrono.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-
-[dev-dependencies]
-# The engine being replaced, for `tests/us0081_parity.rs` only: the
-# old-versus-new differential feeds both engines the same bytes and compares the
-# snapshots field by field. Nothing in `src/` names it since US-0085; US-0087
-# deletes the test and this line together (`migration.md` § "Deletion list").
-alacritty_terminal.workspace = true

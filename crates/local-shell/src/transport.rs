@@ -13,7 +13,7 @@ use oneterm_terminal::{OscRouter, PtyTransport, TerminalError};
 
 use crate::event_loop::{ShellMsg, ShellNotifier};
 
-/// Alacritty `EventListener` for the local shell (shared router + PTY transport).
+/// The local shell's event sink: the shared OSC router over its PTY transport.
 pub(crate) type LocalListener = OscRouter<LocalTransport>;
 
 /// PTY transport handle: routes writes/resize/shutdown to the owner thread.

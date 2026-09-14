@@ -3,7 +3,7 @@
 //! outcome list in `US-0078-selection.md`.
 //!
 //! The reference's own cases are in
-//! `vendor/alacritty_terminal/src/selection.rs:400-668`; they are reproduced
+//! Alacritty's `alacritty_terminal/src/selection.rs:400-668`; they are reproduced
 //! here against OneTerm's types rather than copied, because the coordinates
 //! differ (absolute [`RowId`] rather than a viewport `Line`).
 
@@ -610,7 +610,7 @@ fn delete_lines_inside_a_region_moves_the_selection_and_kills_a_deleted_one() {
 /// A region scroll discards the rows at the region top. The reference keeps the
 /// selection alive and clamps the endpoint that was discarded to
 /// `(range_top, column 0, Side::Left)`
-/// (`vendor/alacritty_terminal/src/selection.rs:160-166`, pinned by its own
+/// (Alacritty's `alacritty_terminal/src/selection.rs:160-166`, pinned by its own
 /// `rotate_in_region_up`). Here the anchor dies with its content and the whole
 /// selection resolves to `None`.
 ///

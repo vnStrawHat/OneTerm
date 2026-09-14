@@ -410,6 +410,54 @@ fn reverse_wrap_crosses_a_wrapped_row() {
 }
 
 #[test]
+fn reverse_wrap_stays_inside_the_scroll_region() {
+    // `US-0087`, the cleanup row `migration.md` queued: the reference confines
+    // reverse wrap to the scroll region — and so to the origin-mode region when
+    // `DECOM` is set, which is the same region. Without the guard the cursor
+    // escapes upwards into a row `DECSTBM` just told the program is not part of
+    // the scrolling area.
+    let mut f = fixture(4, 4);
+    // Row 0 wraps into row 1, so the WRAPPED precondition (R-08) is met and the
+    // only thing that can stop the crossing is the region.
+    f.print("abcde");
+    assert!(f.screen().row(f.screen().row_of_index(0)).wrapped());
+
+    // Region rows 1..3: row 1 is its top, so `BS` there must not reach row 0.
+    f.grid.screen_mut().set_region(1, 3, CursorOrigin::Screen);
+    f.goto(1, 0);
+    f.grid.screen_mut().backspace(true);
+    assert_eq!(
+        (f.screen().cursor_row_index(), f.screen().cursor().pos.col),
+        (1, 0),
+        "BS at the region's top row must not cross above it"
+    );
+    f.integrity();
+
+    // Inside the region it still crosses: the guard is the region's top, not a
+    // blanket refusal. Row 1 wraps into row 2 here.
+    f.goto(1, 0);
+    f.print("wxyz1");
+    assert!(f.screen().row(f.screen().row_of_index(1)).wrapped());
+    f.goto(2, 0);
+    f.grid.screen_mut().backspace(true);
+    assert_eq!(
+        (f.screen().cursor_row_index(), f.screen().cursor().pos.col),
+        (1, 3)
+    );
+
+    // Dropping the region back to the whole screen restores the screen-top
+    // guard and nothing else, so row 1 reaches row 0 again.
+    f.grid.screen_mut().set_region(0, 4, CursorOrigin::Screen);
+    f.goto(1, 0);
+    f.grid.screen_mut().backspace(true);
+    assert_eq!(
+        (f.screen().cursor_row_index(), f.screen().cursor().pos.col),
+        (0, 3)
+    );
+    f.integrity();
+}
+
+#[test]
 fn pending_wrap_then_el0_erases_nothing() {
     let mut f = fixture(2, 4);
     f.print("abcd");

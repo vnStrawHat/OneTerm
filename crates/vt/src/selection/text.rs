@@ -2,7 +2,7 @@
 //!
 //! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/selection.md`
 //! section "`selection_text`"; reference
-//! `vendor/alacritty_terminal/src/term/mod.rs:544-645`.
+//! Alacritty's `alacritty_terminal/src/term/mod.rs:544-645`.
 //!
 //! One function, shared by copy, the clipboard policy path and
 //! `Terminal::selection_text`.

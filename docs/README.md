@@ -16,7 +16,6 @@ navigation set free of dead paths).
 | [`HARNESS.md`](HARNESS.md) | Documentation-first workflow (Spec Intake → work packet → change → verify → reconcile). Templates in [`templates/`](templates/). |
 | [`../README.md`](../README.md) | User-facing README: features, build & run, release packaging. |
 | [`../scripts/README.md`](../scripts/README.md) | Every script under `scripts/`, and which ones CI runs. |
-| [`../vendor/README.md`](../vendor/README.md) | Vendored terminal-engine forks (`vte`, `alacritty_terminal`): provenance, patch model, refresh/check. |
 | [`../THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md), [`../NOTICE`](../NOTICE) | Third-party components and licences (generated). |
 
 ## Agent guides — `agents/` (current, mandatory reading before code changes)
@@ -26,7 +25,7 @@ navigation set free of dead paths).
 | [`agents/structure.md`](agents/structure.md) | Directory tree, crate responsibility table, structure conventions. |
 | [`agents/crate-dependency-rules.md`](agents/crate-dependency-rules.md) | Hard crate & dependency rules R1–R12 and their verification commands. |
 | [`agents/code-style.md`](agents/code-style.md) | Rust conventions (mandatory). |
-| [`agents/dependencies.md`](agents/dependencies.md) | Dependency version policy, vendored terminal forks, allowed auxiliary crates, reference-first research. |
+| [`agents/dependencies.md`](agents/dependencies.md) | Dependency version policy, allowed auxiliary crates, reference-first research. |
 | [`agents/error-policy.md`](agents/error-policy.md) | Runtime error handling and recovery rules. |
 | [`agents/persistence.md`](agents/persistence.md) | Persisted files (`terminal.json`, `ui_config.json`, `docks.json`, `ssh_session.json`, …): schema owners and storage mechanics. |
 

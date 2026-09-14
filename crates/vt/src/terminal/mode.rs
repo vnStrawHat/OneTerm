@@ -77,7 +77,8 @@ pub enum Mode {
     Win32Input,
     /// `4`, IRM.
     Insert,
-    /// `20`, LNM. Tracked, inert (deviation D9).
+    /// `20`, LNM. Tracked, inert (deviation D9), and answered through
+    /// [`Mode::inert_state`] for that reason.
     LineFeedNewLine,
 }
 
@@ -210,9 +211,20 @@ impl Mode {
             // R-36: conhost sends `? 9001 h` unprompted, so it is accepted
             // silently — but the encoding is not implemented.
             Mode::Win32Input => ModeState::Reset,
+            // Deviation D9: LNM is tracked and read by nothing — `LF` never
+            // implies `CR` here. It is an ANSI mode, not a private one, but the
+            // rule is about readers, not about which space the number lives in,
+            // so it answers through this table like every other inert mode
+            // (`US-0087`, the cleanup row `migration.md` queued).
+            Mode::LineFeedNewLine => ModeState::Reset,
             _ => return None,
         })
     }
+
+    /// Every mode with an ANSI number, and that number, for the `DECRQM` table
+    /// test. The counterpart of [`Mode::PRIVATE`]; both walks exist so a mode
+    /// added without a reader fails a test instead of lying on the wire.
+    pub const ANSI: [(Mode, u16); 2] = [(Mode::Insert, 4), (Mode::LineFeedNewLine, 20)];
 
     /// Every mode with a private number, for the DECRQM table test.
     pub const PRIVATE: [Mode; 23] = [
