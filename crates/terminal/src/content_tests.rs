@@ -165,6 +165,90 @@ fn last_content_row_finds_the_last_written_row() {
     assert_eq!(last_content_row(&term), 1);
 }
 
+/// The answer plus the cells the scan examined (`US-0092`).
+fn last_content_row_cost(term: &Terminal) -> (usize, usize) {
+    CELLS_EXAMINED.with(|n| n.set(0));
+    let row = last_content_row(term);
+    (row, CELLS_EXAMINED.with(|n| n.get()))
+}
+
+/// `US-0092` counted work: on the idle screen — a prompt on row 0 and blanks
+/// below, which is `last_content_row`'s worst case and the common case —
+/// doubling the column count must not change the work. Before the `occ` skip it
+/// doubled, because every blank cell of every blank row cost three interner
+/// lookups.
+#[test]
+fn last_content_row_cost_follows_the_content_not_the_viewport() {
+    let mut narrow = terminal(GridSize {
+        cols: 40,
+        lines: 45,
+    });
+    feed(&mut narrow, b"$ ");
+    let mut wide = terminal(GridSize {
+        cols: 80,
+        lines: 45,
+    });
+    feed(&mut wide, b"$ ");
+
+    let (row, narrow_cells) = last_content_row_cost(&narrow);
+    assert_eq!(row, 0);
+    let (row, wide_cells) = last_content_row_cost(&wide);
+    assert_eq!(row, 0);
+    assert_eq!(
+        narrow_cells, wide_cells,
+        "doubling the columns must not change the work"
+    );
+    assert_eq!(
+        wide_cells, 2,
+        "the two cells the prompt actually occupies, not 45 x 80"
+    );
+}
+
+/// The six cases the skip must not get wrong. `occ` over-approximates, so a row
+/// that was written and then cleared is still examined — and must still be
+/// reported as blank.
+#[test]
+fn last_content_row_pins_the_blank_definition() {
+    let mut blank = terminal(GridSize { cols: 8, lines: 5 });
+    feed(&mut blank, b"");
+    assert_eq!(last_content_row(&blank), 0, "an all-blank screen");
+
+    let mut last = terminal(GridSize { cols: 8, lines: 3 });
+    feed(&mut last, b"a\r\nb\r\nc");
+    assert_eq!(last_content_row(&last), 2, "content on the last row");
+
+    let mut first = terminal(GridSize { cols: 8, lines: 5 });
+    feed(&mut first, b"a");
+    assert_eq!(last_content_row(&first), 0, "content on row 0 only");
+
+    // A wide glyph: its second column is a `WideSpacer`, which is not blank.
+    let mut wide = terminal(GridSize { cols: 8, lines: 4 });
+    feed(&mut wide, "a\r\n\r\n日".as_bytes());
+    assert_eq!(last_content_row(&wide), 2, "a wide pair is content");
+
+    // A row whose only content is an OSC 8 link on a space cell.
+    let mut link = terminal(GridSize { cols: 8, lines: 4 });
+    feed(
+        &mut link,
+        b"a\r\n\r\n\x1b]8;;https://a.test\x07 \x1b]8;;\x07",
+    );
+    assert_eq!(last_content_row(&link), 2, "a hyperlink cell is content");
+
+    // Written then cleared: `occ` still says the row was touched, so the skip
+    // must not fire and the row must read as blank again.
+    let mut cleared = terminal(GridSize { cols: 8, lines: 4 });
+    feed(&mut cleared, b"a\r\n\r\ngone\x1b[2K");
+    assert_eq!(
+        last_content_row(&cleared),
+        0,
+        "a cleared row is blank again"
+    );
+    assert!(
+        last_content_row_cost(&cleared).1 > 0,
+        "and it was actually examined, not skipped"
+    );
+}
+
 /// Colours and attributes arrive as runs of resolved values; the run boundaries
 /// must land on the right columns or a whole run paints in the wrong colour.
 #[test]

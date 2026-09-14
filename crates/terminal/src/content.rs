@@ -47,6 +47,12 @@ fn is_blank_cell(cell: oneterm_vt::Cell, term: &Terminal) -> bool {
             .is_none()
 }
 
+// Cells `last_content_row` examined, for the counted-work test (`US-0092`).
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CELLS_EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Index (0-based from the top of the active screen) of the last row **with
 /// content**. Returns `0` when the whole screen is blank.
 ///
@@ -59,7 +65,20 @@ pub fn last_content_row(term: &Terminal) -> usize {
     let top = screen.screen_top();
     for index in (0..rows).rev() {
         let row = screen.row(top + u64::from(index));
-        if row.cells().iter().any(|cell| !is_blank_cell(*cell, term)) {
+        // `RowHeader.occ` is "the reference's over-approximating hint: no column
+        // at or above `occ` has been touched since the last reset"
+        // (`crates/vt/src/grid/row.rs:61-63`). False positives are allowed,
+        // never false negatives — exactly what a skip needs, and what keeps
+        // this O(content) rather than O(viewport) on an idle screen where every
+        // row below the prompt is blank (`US-0092`).
+        let occ = usize::from(row.occ());
+        if !row.is_allocated() || occ == 0 {
+            continue;
+        }
+        let cells = &row.cells()[..occ.min(row.cells().len())];
+        #[cfg(test)]
+        CELLS_EXAMINED.with(|n| n.set(n.get() + cells.len()));
+        if cells.iter().any(|cell| !is_blank_cell(*cell, term)) {
             return usize::from(index);
         }
     }
