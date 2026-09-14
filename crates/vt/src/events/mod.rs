@@ -10,7 +10,7 @@
 mod batch;
 mod vt_event;
 
-pub use batch::{ByteSpan, EVENT_ARENA_SOFT, EventBatch, ParamSpans, StrSpan};
+pub use batch::EventBatch;
 pub use vt_event::{ClipboardKind, FeedStats, StringTerm, VtEvent};
 
 #[cfg(test)]

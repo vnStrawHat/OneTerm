@@ -46,7 +46,7 @@ impl TerminalGrid {
 
     // ── Access ──────────────────────────────────────────────────────────────
 
-    pub fn screen(&self) -> &Screen {
+    pub(crate) fn screen(&self) -> &Screen {
         if self.alt_active {
             &self.alt
         } else {
@@ -81,17 +81,17 @@ impl TerminalGrid {
         self.alt_active
     }
 
-    pub fn anchors(&self) -> &Anchors {
+    pub(crate) fn anchors(&self) -> &Anchors {
         &self.anchors
     }
 
-    pub fn anchors_mut(&mut self) -> &mut Anchors {
+    pub(crate) fn anchors_mut(&mut self) -> &mut Anchors {
         &mut self.anchors
     }
 
     /// Which screen a row id belongs to. The two runs never overlap, so this is
     /// unambiguous.
-    pub fn screen_of(&self, id: RowId) -> &Screen {
+    pub(crate) fn screen_of(&self, id: RowId) -> &Screen {
         if id >= RowId::ALT_ORIGIN {
             &self.alt
         } else {
@@ -99,7 +99,7 @@ impl TerminalGrid {
         }
     }
 
-    pub fn lines_produced(&self) -> u64 {
+    pub(crate) fn lines_produced(&self) -> u64 {
         self.lines_produced
     }
 
@@ -111,7 +111,7 @@ impl TerminalGrid {
         self.seq
     }
 
-    pub fn seq(&self) -> SeqNo {
+    pub(crate) fn seq(&self) -> SeqNo {
         self.seq
     }
 
@@ -119,21 +119,21 @@ impl TerminalGrid {
 
     /// `LF`, `IND`, `NEL`: one output line each, whether or not the screen
     /// scrolled. An implicit wrap produces none.
-    pub fn linefeed(&mut self) -> Option<ScrollReport> {
+    pub(crate) fn linefeed(&mut self) -> Option<ScrollReport> {
         let (screen, anchors) = self.active();
         let report = screen.linefeed(anchors);
         self.lines_produced = self.lines_produced.saturating_add(1);
         report
     }
 
-    pub fn reverse_index(&mut self) -> Option<ScrollReport> {
+    pub(crate) fn reverse_index(&mut self) -> Option<ScrollReport> {
         let (screen, anchors) = self.active();
         screen.reverse_index(anchors)
     }
 
     /// `SU`. Rows that enter scrollback are output lines; rows that only move
     /// inside a region are not.
-    pub fn scroll_up(&mut self, region: ScrollRegion, n: u16) -> ScrollReport {
+    pub(crate) fn scroll_up(&mut self, region: ScrollRegion, n: u16) -> ScrollReport {
         let (screen, anchors) = self.active();
         let report = screen.scroll_up(region, n, anchors);
         self.count_history_rows(&report);
@@ -141,17 +141,17 @@ impl TerminalGrid {
     }
 
     /// `SD`. Never touches history, so it never counts (trap 18).
-    pub fn scroll_down(&mut self, region: ScrollRegion, n: u16) -> ScrollReport {
+    pub(crate) fn scroll_down(&mut self, region: ScrollRegion, n: u16) -> ScrollReport {
         let (screen, anchors) = self.active();
         screen.scroll_down(region, n, anchors)
     }
 
-    pub fn insert_lines(&mut self, n: u16) -> Option<ScrollReport> {
+    pub(crate) fn insert_lines(&mut self, n: u16) -> Option<ScrollReport> {
         let (screen, anchors) = self.active();
         screen.insert_lines(n, anchors)
     }
 
-    pub fn delete_lines(&mut self, n: u16) -> Option<ScrollReport> {
+    pub(crate) fn delete_lines(&mut self, n: u16) -> Option<ScrollReport> {
         let (screen, anchors) = self.active();
         let report = screen.delete_lines(n, anchors);
         if let Some(report) = &report {
@@ -172,19 +172,19 @@ impl TerminalGrid {
         screen.wrapline(anchors);
     }
 
-    pub fn print(&mut self, c: char, mode: PrintMode, interner: &mut Interner) {
+    pub(crate) fn print(&mut self, c: char, mode: PrintMode, interner: &mut Interner) {
         let (screen, anchors) = self.active();
         screen.print(c, mode, interner, anchors);
     }
 
     /// `HT`. `autowrap` is `DECAWM`, which decides whether a pending wrap turns
     /// into a line break or is merely consumed (trap 3).
-    pub fn put_tab(&mut self, count: u16, autowrap: bool) {
+    pub(crate) fn put_tab(&mut self, count: u16, autowrap: bool) {
         let (screen, anchors) = self.active();
         screen.put_tab(count, autowrap, anchors);
     }
 
-    pub fn erase_display(
+    pub(crate) fn erase_display(
         &mut self,
         mode: DisplayClear,
         interner: &Interner,
@@ -208,7 +208,7 @@ impl TerminalGrid {
     /// The primary screen reflows; the alternate screen never does (trap 29).
     /// `KeepViewportTop` always corrects the **primary** screen, including while
     /// a TUI holds the alternate one, which is what `DEC-0008` requires.
-    pub fn resize(&mut self, size: Size, policy: ResizePolicy) -> ResizeOutcome {
+    pub(crate) fn resize(&mut self, size: Size, policy: ResizePolicy) -> ResizeOutcome {
         let outcome = crate::reflow::resize(
             &mut self.primary,
             &mut self.alt,
@@ -222,7 +222,7 @@ impl TerminalGrid {
 
     /// The user edited the configured scrollback depth. Only the primary screen
     /// has history, so only it is rehomed.
-    pub fn set_scrollback_limit(&mut self, limit: u32) {
+    pub(crate) fn set_scrollback_limit(&mut self, limit: u32) {
         self.primary.set_scrollback_limit(limit, &mut self.anchors);
         self.sync_anchors();
         self.assert_integrity(None);
@@ -235,7 +235,7 @@ impl TerminalGrid {
     /// Trap 14: entering takes the primary `DECSC` slot, which is exactly what
     /// `? 1049` means; leaving takes none of that branch, so the primary returns
     /// with the cursor and saved cursor it had on entry.
-    pub fn swap_alt(&mut self) {
+    pub(crate) fn swap_alt(&mut self) {
         if !self.alt_active {
             let index = self.primary.cursor_row_index();
             let cursor = *self.primary.cursor();
@@ -275,7 +275,7 @@ impl TerminalGrid {
     /// The full two-screen walk (R-28): once per `feed`, `resize` and
     /// `render_update`, plus after every step of the property tests. The O(1)
     /// tier runs at the end of every mutating method.
-    pub fn assert_integrity(&self, interner: Option<&Interner>) {
+    pub(crate) fn assert_integrity(&self, interner: Option<&Interner>) {
         if !cfg!(debug_assertions) {
             return;
         }

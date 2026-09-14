@@ -14,15 +14,19 @@
 //! path raises a demand and the read loop tests it at a chunk boundary
 //! — **after** that batch's reply bytes have left, never before
 //! (`damage-and-render-state.md` § "Fairness and reply latency", R-37). The
-//! engine owns the flag type and nothing else about it: the policy below is the
-//! adapter's, and the policy is that **the waiter clears its own demand, on
-//! acquisition** — see [`TerminalHandle::lock_for_render`].
+//! adapter owns the flag as well as the lock: `Demand` is below, next to the
+//! policy that uses it, and the policy is that **the waiter clears its own
+//! demand, on acquisition** — see [`TerminalHandle::lock_for_render`].
+//!
+//! `Demand` itself is `pub(crate)`: raise, release and ask are one protocol, and
+//! publishing a piece of it invites the unpaired raise that pins a pump into
+//! yielding forever. [`TerminalHandle`] is the whole public door.
 
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use oneterm_vt::grid::{DEFAULT_SCROLLBACK, SCROLLBACK_MAX, Size};
-use oneterm_vt::{Config, Demand, OscClaims, Terminal};
+use oneterm_vt::grid::{DEFAULT_SCROLLBACK, SCROLLBACK_MAX};
+use oneterm_vt::{Config, OscClaims, Size, Terminal};
 use parking_lot::{FairMutex, FairMutexGuard};
 
 use crate::backend::GridSize;
@@ -31,50 +35,59 @@ use crate::osc_agent::{AGENT_OSC, LEGACY_AGENT_OSC};
 /// The terminal both backends and the UI share.
 pub type SharedTerminal = Arc<TerminalHandle>;
 
-/// The engine, and the one thing the adapter still adds to it.
+/// The renderer's "let me in" flag: how many renderers are waiting for the
+/// engine, as a hand-off between the render thread and the pump thread.
 ///
-/// `US-0081` needed this wrapper to carry the render state as well; that moved
-/// into `TerminalContent`, where the watermark belongs, and what is left is a
-/// single no-op the local read loop calls. It is `US-0083`'s to delete, and this
-/// type goes with it.
-#[derive(Debug)]
-pub struct Engine(Terminal);
+/// Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`
+/// section "Fairness and reply latency" (R-37).
+///
+/// **It is a count of waiters, not a one-shot flag, and the asking does not
+/// clear it** (`US-0082` rework, `US-0083` gap 6). A flag cleared by the pump's
+/// ask can be consumed in the window between "the renderer raised" and "the
+/// renderer is queued on the mutex": the pump then sees nothing waiting, keeps
+/// the engine until the transport runs dry, and the frame starves for the whole
+/// flood (measured 3/3 at > 5 s). Only the waiter itself knows when it no
+/// longer needs the yield, so only the waiter clears — by [`Demand::release`],
+/// once it holds the lock.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Demand(Arc<AtomicUsize>);
 
-impl Engine {
-    /// A terminal at `size` with `scrollback` history rows.
-    pub fn new(size: GridSize, scrollback: usize) -> Engine {
-        Engine(Terminal::new(size.into(), adapter_config(scrollback)))
+impl Demand {
+    pub(crate) fn new() -> Demand {
+        Demand::default()
     }
 
-    /// The child is gone.
+    /// The renderer wants the lock. Call it **before** blocking on the lock,
+    /// and pair it with [`Demand::release`] once the lock is held.
+    pub(crate) fn raise(&self) {
+        self.0.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// The renderer is in (or has given up): it no longer needs the pump to
+    /// yield for it.
+    pub(crate) fn release(&self) {
+        // Saturating: an unpaired release must not wrap the count into "the
+        // whole world is waiting".
+        let _ = self
+            .0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |waiting| {
+                waiting.checked_sub(1)
+            });
+    }
+
+    /// Is anyone waiting? The pump asks at a chunk boundary and yields if so.
     ///
-    /// The reference's `Term::exit()` cleared an `is_alive` flag and emitted
-    /// `Event::Exit`, which the router has always ignored; liveness is
-    /// `SharedSessionState::alive` and the pump publishes the exit itself.
-    // ponytail: a no-op that exists only so `crates/local-shell`'s read loop —
-    // `US-0083`'s — is not edited by this packet. Upgrade path: delete the call
-    // site and this type with it.
-    pub fn exit(&mut self) {}
-}
-
-impl Deref for Engine {
-    type Target = Terminal;
-
-    fn deref(&self) -> &Terminal {
-        &self.0
-    }
-}
-
-impl DerefMut for Engine {
-    fn deref_mut(&mut self) -> &mut Terminal {
-        &mut self.0
+    /// Reading does **not** clear: the demand stands until the waiter that
+    /// raised it holds the lock.
+    pub(crate) fn is_raised(&self) -> bool {
+        self.0.load(Ordering::Acquire) > 0
     }
 }
 
 /// The engine behind its lock, plus the render-demand handshake.
 #[derive(Debug)]
 pub struct TerminalHandle {
-    engine: FairMutex<Engine>,
+    engine: FairMutex<Terminal>,
     demand: Demand,
 }
 
@@ -82,18 +95,18 @@ impl TerminalHandle {
     /// A terminal at `size` with `scrollback` history rows.
     pub fn new(size: GridSize, scrollback: usize) -> TerminalHandle {
         TerminalHandle {
-            engine: FairMutex::new(Engine::new(size, scrollback)),
+            engine: FairMutex::new(Terminal::new(size.into(), adapter_config(scrollback))),
             demand: Demand::new(),
         }
     }
 
     /// Acquire for a short read or for a parse batch.
-    pub fn lock(&self) -> FairMutexGuard<'_, Engine> {
+    pub fn lock(&self) -> FairMutexGuard<'_, Terminal> {
         self.engine.lock()
     }
 
     /// `None` when someone else holds it.
-    pub fn try_lock(&self) -> Option<FairMutexGuard<'_, Engine>> {
+    pub fn try_lock(&self) -> Option<FairMutexGuard<'_, Terminal>> {
         self.engine.try_lock()
     }
 
@@ -103,11 +116,10 @@ impl TerminalHandle {
     ///
     /// **The demand is released here, by the waiter, never by the pump's ask**
     /// (`US-0082` rework, `US-0083` gap 6): raising a one-shot flag and *then*
-    /// blocking leaves a window in which a pump's `take_render_demand()`
-    /// consumes the only signal this frame had, after which the pump sees an
-    /// idle engine and keeps it until the transport runs dry. Holding the
-    /// demand across the acquire closes the window — the frame is either
-    /// waiting and visible, or in.
+    /// blocking leaves a window in which a pump's ask consumes the only signal
+    /// this frame had, after which the pump sees an idle engine and keeps it
+    /// until the transport runs dry. Holding the demand across the acquire
+    /// closes the window — the frame is either waiting and visible, or in.
     ///
     /// Only the snapshot path calls this. `query_state` and `terminal_info` run
     /// on the same thread and are O(1) under the lock, so making them raise the
@@ -118,7 +130,7 @@ impl TerminalHandle {
     /// which scanned the whole viewport on an idle screen; `US-0092` made it
     /// cost the content instead. So the premise is true again, and nothing here
     /// needs to move onto `lock_for_render`.
-    pub fn lock_for_render(&self) -> FairMutexGuard<'_, Engine> {
+    pub fn lock_for_render(&self) -> FairMutexGuard<'_, Terminal> {
         self.demand.raise();
         let engine = self.engine.lock();
         self.demand.release();
@@ -129,40 +141,19 @@ impl TerminalHandle {
     /// loop calls it at a chunk boundary, after the batch's replies have been
     /// written, and drops its guard when it answers `true`.
     ///
-    /// The name is the pump's verb, kept so the two backend loops read the way
-    /// `US-0083` / `US-0084` wrote them; the asking takes nothing away. A
-    /// standing `true` means a frame is still outside the lock, so a pump that
-    /// yields again is right to.
-    pub fn take_render_demand(&self) -> bool {
-        self.demand.is_raised()
-    }
-
-    /// The same read, spelled for diagnostics and tests.
+    /// The asking takes nothing away, which is why the name says `raised` and
+    /// not `take_` (`US-0090`): a standing `true` means a frame is still
+    /// outside the lock, so a pump that yields again is right to.
     pub fn render_demand_raised(&self) -> bool {
         self.demand.is_raised()
     }
 
-    /// The flag itself, for a loop that wants to hold it across iterations.
-    pub fn demand(&self) -> &Demand {
-        &self.demand
-    }
-
-    // ── Kept for the backends' current read loops ────────────────────────
-    //
-    // `parking_lot`'s fairness lives in `unlock`, so there is no unfair acquire
-    // to call and both of these are the plain ones. The call sites are
-    // `crates/local-shell/src/event_loop.rs` and `crates/ssh/src/task.rs`, which
-    // `US-0083` / `US-0084` rewrite onto `take_render_demand`; the upgrade path
-    // is to delete these two methods with those call sites.
-
-    /// See [`TerminalHandle::lock`].
-    pub fn lock_unfair(&self) -> FairMutexGuard<'_, Engine> {
-        self.engine.lock()
-    }
-
-    /// See [`TerminalHandle::try_lock`].
-    pub fn try_lock_unfair(&self) -> Option<FairMutexGuard<'_, Engine>> {
-        self.engine.try_lock()
+    /// Raise the demand without taking the lock, for a caller that wants one
+    /// **standing** across iterations. Nothing releases it but an acquisition
+    /// through [`TerminalHandle::lock_for_render`], so the pump yields at every
+    /// chunk boundary until then: use `lock_for_render` unless you mean that.
+    pub fn raise_render_demand(&self) {
+        self.demand.raise();
     }
 }
 
@@ -245,7 +236,7 @@ mod tests {
 
         drop(handle.lock_for_render());
         assert!(
-            !handle.take_render_demand(),
+            !handle.render_demand_raised(),
             "the frame was never blocked, so nothing is waiting for the pump"
         );
     }
@@ -284,7 +275,7 @@ mod tests {
         }
         for ask in 0..100 {
             assert!(
-                handle.take_render_demand(),
+                handle.render_demand_raised(),
                 "ask {ask} lost a frame that is still waiting for the engine"
             );
         }
@@ -301,7 +292,82 @@ mod tests {
             "the frame waited {waited:?} for one batch boundary"
         );
         assert!(
-            !handle.take_render_demand(),
+            !handle.render_demand_raised(),
+            "the demand outlived the frame that raised it"
+        );
+    }
+
+    /// The `Demand` contract on its own, against an **unfair** mutex — moved
+    /// here with the type at `US-0090` (it was
+    /// `oneterm_vt::render::tests::pump_yields_to_the_render_demand_…`).
+    ///
+    /// `TerminalHandle`'s own tests above prove the handshake over
+    /// `parking_lot::FairMutex`, where the unlock alone hands the lock to a
+    /// waiter. This one removes that help: `std::sync::Mutex` is unfair, so the
+    /// only reason the renderer gets in within a bounded number of chunks is
+    /// that the pump asks the flag and parks. The payload is deliberately not a
+    /// terminal — the subject is the flag, not the engine.
+    #[test]
+    fn a_pump_yields_to_the_demand_within_a_bounded_number_of_chunks() {
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicBool, AtomicU64};
+
+        let engine = Arc::new(Mutex::new(0u64));
+        let demand = Demand::new();
+        let stop = Arc::new(AtomicBool::new(false));
+        let chunks = Arc::new(AtomicU64::new(0));
+
+        let pump = {
+            let engine = Arc::clone(&engine);
+            let demand = demand.clone();
+            let stop = Arc::clone(&stop);
+            let chunks = Arc::clone(&chunks);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    {
+                        let mut engine = engine.lock().expect("the engine lock was poisoned");
+                        *engine += 1;
+                    }
+                    chunks.fetch_add(1, Ordering::Relaxed);
+                    // The contract: replies first, then the demand check, then
+                    // the next lock. The ask takes nothing away — the demand
+                    // stands until the renderer holds the lock and releases it
+                    // itself.
+                    if demand.is_raised() {
+                        std::thread::sleep(std::time::Duration::from_micros(250));
+                    }
+                }
+            })
+        };
+
+        // Let the pump reach its steady state before asking for the lock.
+        while chunks.load(Ordering::Relaxed) < 4 {
+            std::thread::yield_now();
+        }
+        let at_raise = chunks.load(Ordering::Relaxed);
+        demand.raise();
+        let waiting = std::time::Instant::now();
+        {
+            let _engine = engine.lock().expect("the engine lock was poisoned");
+            // In, so the pump need not yield for this frame any more.
+            demand.release();
+        }
+        let waited = waiting.elapsed();
+        let chunks_waited = chunks.load(Ordering::Relaxed) - at_raise;
+
+        stop.store(true, Ordering::Relaxed);
+        pump.join().expect("the pump thread panicked");
+
+        assert!(
+            waited < std::time::Duration::from_secs(2),
+            "the renderer waited {waited:?} for a pump under sustained output"
+        );
+        assert!(
+            chunks_waited <= 8,
+            "the renderer waited {chunks_waited} chunks, not one"
+        );
+        assert!(
+            !demand.is_raised(),
             "the demand outlived the frame that raised it"
         );
     }
@@ -311,8 +377,8 @@ mod tests {
     fn a_pump_lock_does_not_raise_the_demand() {
         let handle = handle();
         drop(handle.lock());
-        drop(handle.lock_unfair());
-        assert!(!handle.take_render_demand());
+        drop(handle.lock());
+        assert!(!handle.render_demand_raised());
     }
 
     /// The demand is a hand-off between threads, so it has to survive one: the
@@ -325,7 +391,7 @@ mod tests {
             let handle = Arc::clone(&handle);
             std::thread::spawn(move || drop(handle.lock_for_render()))
         };
-        while !handle.take_render_demand() {
+        while !handle.render_demand_raised() {
             std::thread::yield_now();
         }
         drop(pump);
@@ -337,9 +403,9 @@ mod tests {
     fn try_lock_reports_a_held_lock() {
         let handle = handle();
         let guard = handle.lock();
-        assert!(handle.try_lock_unfair().is_none());
+        assert!(handle.try_lock().is_none());
         drop(guard);
-        assert!(handle.try_lock_unfair().is_some());
+        assert!(handle.try_lock().is_some());
     }
 
     /// The adapter claims every OSC number it interprets itself; without them

@@ -451,10 +451,16 @@ fn duplicate_test_commands() -> WorkspaceCommands {
     }
     fn app(_: &mut gpui::App) {}
     fn dock(_: &gpui::Entity<DockArea>, _: &mut gpui::Window, _: &mut gpui::App) {}
+    fn saved_sessions(_: &gpui::App) -> Vec<(u64, String)> {
+        Vec::new()
+    }
+    fn open_saved_session(_: u64, _: &mut gpui::Window, _: &mut gpui::App) {}
 
     WorkspaceCommands {
         new_terminal_with_shell: terminal,
         open_new_session_dialog: window,
+        saved_ssh_sessions: saved_sessions,
+        open_saved_ssh_session: open_saved_session,
         open_duplicate_ssh_dialog: duplicate_ssh,
         open_settings: app,
         open_about: window,

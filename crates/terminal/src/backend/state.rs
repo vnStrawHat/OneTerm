@@ -91,7 +91,7 @@ impl SharedSessionState {
 
     /// Lock the mutex-guarded fields. Keep the guard short; never hold it while
     /// taking the `Term` lock (the pump takes them in the opposite order).
-    pub fn lock(&self) -> MutexGuard<'_, SessionState> {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, SessionState> {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -100,7 +100,7 @@ impl SharedSessionState {
     /// Count one `OSC 20308` sub-code the receiver does not implement, and
     /// return the new total (`docs/osc-agent-status.md` §3: `2` and above are
     /// reserved, so an unknown sub-code is ignored — but not invisibly).
-    pub fn count_unknown_agent_subcode(&self) -> u64 {
+    pub(crate) fn count_unknown_agent_subcode(&self) -> u64 {
         self.agent_osc_unknown_subcodes
             .fetch_add(1, Ordering::Relaxed)
             + 1
@@ -116,7 +116,7 @@ impl SharedSessionState {
     /// "parsed identically, counted, and logged once per session"
     /// (`docs/osc-agent-status.md` §3.1), and one counter serves both: the
     /// caller logs when this returns `1`.
-    pub fn count_legacy_agent_osc(&self) -> u64 {
+    pub(crate) fn count_legacy_agent_osc(&self) -> u64 {
         self.legacy_agent_osc_events.fetch_add(1, Ordering::Relaxed) + 1
     }
 
@@ -130,7 +130,7 @@ impl SharedSessionState {
     /// which is silent by `docs/osc-agent-status.md` §3.5: a payload the
     /// *terminal* dropped is the terminal's business to report, not the
     /// agent's mistake.
-    pub fn count_truncated_agent_osc(&self) -> u64 {
+    pub(crate) fn count_truncated_agent_osc(&self) -> u64 {
         self.truncated_agent_osc.fetch_add(1, Ordering::Relaxed) + 1
     }
 
@@ -150,7 +150,7 @@ impl SharedSessionState {
     }
 
     /// Record process exit: exit code first, then `alive = false`.
-    pub fn record_exit(&self, code: Option<i32>) {
+    pub(crate) fn record_exit(&self, code: Option<i32>) {
         self.lock().exit_code = code;
         self.set_alive(false);
     }
@@ -186,7 +186,7 @@ impl SharedSessionState {
     }
 
     /// Theme defaults used for colour-query replies.
-    pub fn default_colors(&self) -> DefaultColors {
+    pub(crate) fn default_colors(&self) -> DefaultColors {
         self.lock().default_colors
     }
 
@@ -214,7 +214,7 @@ impl SharedSessionState {
     }
 
     /// Publish the absolute line count after a parse batch.
-    pub fn set_absolute_line_count(&self, count: usize) {
+    pub(crate) fn set_absolute_line_count(&self, count: usize) {
         self.absolute_line_count.store(count, Ordering::Relaxed);
     }
 
@@ -224,7 +224,7 @@ impl SharedSessionState {
     }
 
     /// Record one screen clear.
-    pub fn bump_clear_epoch(&self) {
+    pub(crate) fn bump_clear_epoch(&self) {
         self.clear_epoch.fetch_add(1, Ordering::Relaxed);
     }
 }

@@ -11,11 +11,11 @@
 
 /// Default maximum paste size (1 MiB). Larger pastes are rejected to prevent
 /// unbounded allocation from terminal-controlled content.
-pub const DEFAULT_MAX_PASTE_BYTES: usize = 1024 * 1024;
+pub(crate) const DEFAULT_MAX_PASTE_BYTES: usize = 1024 * 1024;
 
 /// Policy governing paste behavior.
 #[derive(Clone, Debug)]
-pub struct PastePolicy {
+pub(crate) struct PastePolicy {
     /// Maximum number of bytes allowed in a single paste. Zero = unlimited.
     pub max_bytes: usize,
 }
@@ -33,7 +33,7 @@ impl Default for PastePolicy {
 /// Selected from the terminal's `TermMode::BRACKETED_PASTE` state at the call
 /// site (see [`crate::TerminalSession::paste`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PasteMode {
+pub(crate) enum PasteMode {
     /// Wrap the payload in `ESC[200~…ESC[201~` and strip embedded markers.
     Bracketed,
     /// No delimiters; line breaks are rewritten to `\r` (see [`encode_paste`]).
@@ -42,7 +42,7 @@ pub enum PasteMode {
 
 /// Outcome of [`encode_paste`].
 #[derive(Debug, PartialEq, Eq)]
-pub enum PasteResult {
+pub(crate) enum PasteResult {
     /// Encoded bytes ready to write to the PTY.
     Ok(Vec<u8>),
     /// The paste exceeded `max_bytes`; the payload size is included.
@@ -61,7 +61,7 @@ pub enum PasteResult {
 /// Stripping ESC (not just the marker sequences) guarantees the payload cannot
 /// contain `ESC[201~` in any form, so pasted content cannot terminate
 /// bracketed-paste mode early or re-enter it spuriously.
-pub fn encode_paste(text: &str, mode: PasteMode, policy: &PastePolicy) -> PasteResult {
+pub(crate) fn encode_paste(text: &str, mode: PasteMode, policy: &PastePolicy) -> PasteResult {
     // Enforce size cap.
     if policy.max_bytes > 0 && text.len() > policy.max_bytes {
         return PasteResult::TooLarge(text.len());

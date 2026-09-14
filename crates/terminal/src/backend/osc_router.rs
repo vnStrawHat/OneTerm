@@ -396,9 +396,10 @@ fn is_agent_osc(code: u32, params: &[&[u8]]) -> bool {
 
 /// The reply the reference formatted inside the engine.
 ///
-/// Byte-for-byte the fork's `dynamic_color_sequence`
-/// (`vendor/alacritty_terminal/src/term/mod.rs:1692-1705`): the OSC prefix the
-/// question used, each channel doubled to 16-bit precision, and the same
+/// Byte-for-byte what the fork's `dynamic_color_sequence` emitted (the vendored
+/// tree went with `US-0087`; the shape is pinned by this module's own tests):
+/// the OSC prefix the question used, each channel doubled to 16-bit precision,
+/// and the same
 /// terminator the question carried. The engine reports the request and leaves
 /// the formatting here because only the embedder owns the theme fallback.
 fn color_formatter(key: ColorKey, terminator: StringTerm) -> ColorFormatter {

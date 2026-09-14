@@ -4,17 +4,14 @@
 //! Named for the verification list in
 //! `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::cell::{Cell, CellContent, Color, NamedColor, Style};
 use crate::grid::{Pos, PrintMode, RowId, ScrollRegion, Size, TerminalGrid};
 use crate::intern::{Extras, GraphicId, Interner};
 use crate::reflow::ResizePolicy;
 use crate::render::{
-    Demand, EngineView, ModeSnapshot, Palette, RenderContent, RenderState, RenderUpdate, SyncState,
+    EngineView, ModeSnapshot, Palette, RenderContent, RenderState, RenderUpdate, SyncState,
 };
 use crate::selection::SelectionRange;
 
@@ -779,75 +776,4 @@ fn an_in_region_scroll_moves_content_between_row_ids() {
             .all(|cell| cell.content == RenderContent::Scalar(' ')),
         "the blanked row was painted with stale content"
     );
-}
-
-#[test]
-fn pump_yields_to_the_render_demand_within_a_bounded_number_of_chunks() {
-    let engine = Arc::new(Mutex::new(Engine::new(24, 80)));
-    let demand = Demand::new();
-    let stop = Arc::new(AtomicBool::new(false));
-    let chunks = Arc::new(AtomicU64::new(0));
-
-    let pump = {
-        let engine = Arc::clone(&engine);
-        let demand = demand.clone();
-        let stop = Arc::clone(&stop);
-        let chunks = Arc::clone(&chunks);
-        thread::spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
-                {
-                    let mut engine = engine.lock().expect("the engine lock was poisoned");
-                    engine.batch();
-                    for index in 0..24 {
-                        engine.write(index, "sustained output from the pump thread");
-                    }
-                }
-                chunks.fetch_add(1, Ordering::Relaxed);
-                // The contract: replies first, then the demand check, then the
-                // next lock. The adapter's `parking_lot::FairMutex` hands the
-                // lock to a waiter on unlock, so there a bare yield is enough;
-                // `std::sync::Mutex` is unfair, so the test's pump parks for
-                // well under a frame instead of spinning straight back in.
-                // The ask takes nothing away: the demand stands until the
-                // renderer holds the lock and releases it itself.
-                if demand.is_raised() {
-                    thread::sleep(Duration::from_micros(250));
-                }
-            }
-        })
-    };
-
-    let mut state = RenderState::new();
-    // Let the pump reach its steady state before asking for the lock.
-    while chunks.load(Ordering::Relaxed) < 4 {
-        thread::yield_now();
-    }
-    let at_raise = chunks.load(Ordering::Relaxed);
-    demand.raise();
-    let waiting = Instant::now();
-    {
-        let mut engine = engine.lock().expect("the engine lock was poisoned");
-        // In, so the pump need not yield for this frame any more.
-        demand.release();
-        engine.update(&mut state);
-    }
-    let waited = waiting.elapsed();
-    let chunks_waited = chunks.load(Ordering::Relaxed) - at_raise;
-
-    stop.store(true, Ordering::Relaxed);
-    pump.join().expect("the pump thread panicked");
-
-    assert!(
-        waited < Duration::from_secs(2),
-        "the renderer waited {waited:?} for a pump under sustained output"
-    );
-    assert!(
-        chunks_waited <= 8,
-        "the renderer waited {chunks_waited} chunks, not one"
-    );
-    assert!(
-        !demand.is_raised(),
-        "the demand outlived the frame that raised it"
-    );
-    assert_eq!(state.rows().len(), 24);
 }

@@ -26,6 +26,15 @@ pub struct WorkspaceCommands {
     pub new_terminal_with_shell: fn(ShellKind, &mut Window, &mut App) -> Arc<dyn PanelView>,
     /// Open the "New SSH session" quick-connect dialog.
     pub open_new_session_dialog: fn(&mut Window, &mut App),
+    /// The saved SSH sessions as `(stable id, display name)`, in storage order.
+    ///
+    /// Read fresh every time a menu listing them opens, so an added or deleted
+    /// session needs no observer wiring. The id is the session store's stable
+    /// v2 id, not a position: a concurrent delete must not retarget a click.
+    pub saved_ssh_sessions: fn(&App) -> Vec<(u64, String)>,
+    /// Open the connect dialog for the saved SSH session with that stable id.
+    /// A session deleted since the list was read is a no-op.
+    pub open_saved_ssh_session: fn(u64, &mut Window, &mut App),
     /// Prompt for authentication and duplicate an SSH session at the requested cwd.
     pub open_duplicate_ssh_dialog:
         fn(SshDuplicateConfig, Option<PathBuf>, SshDuplicateCompletion, &mut Window, &mut App),

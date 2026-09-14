@@ -14,6 +14,7 @@ use crate::event::VtEvent;
 use crate::grid::{RowFlags, Size};
 use crate::intern::HYPERLINK_TABLE_LIMIT;
 use crate::render::{MouseEncoding, MouseReporting};
+use crate::terminal::mode::{KEYBOARD_STACK_MAX, ModeState, TITLE_STACK_MAX};
 
 // ── Harness ─────────────────────────────────────────────────────────────────
 

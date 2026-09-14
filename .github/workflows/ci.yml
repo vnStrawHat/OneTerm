@@ -117,6 +117,12 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # `terminal-diagnostics` guards ~200 lines of incident diagnostics that no
+      # other step compiles — 18 bare `#[cfg(feature = …)]` sites inside
+      # `crates/local-shell`'s read loop alone. Without this step they rot until
+      # the incident that wants them (`IN-0032` § 2.4, `US-0090`).
+      - name: Lint workspace with terminal diagnostics
+        run: cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings
       # No separate `cargo build --workspace`: clippy --all-targets already
       # type-checks every target and `cargo test` links them (BUILD-28).
       - name: Test workspace
@@ -152,6 +158,8 @@ jobs:
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Lint workspace with terminal diagnostics
+        run: cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings
       - name: Test workspace
         run: cargo test --workspace
       # The VT engine's whole-history integrity walk (IN-0029 R-28). It is

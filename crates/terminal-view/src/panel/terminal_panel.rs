@@ -16,7 +16,7 @@ use gpui_component::dock::{ClosePanel, Panel, PanelControl, PanelEvent, TabGroup
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
-    menu::DropdownMenu as _,
+    menu::{DropdownMenu as _, PopupMenuItem},
 };
 
 use oneterm_actions::{
@@ -579,7 +579,8 @@ impl Panel for TerminalPanel {
     }
 
     /// "+" button next to the zoom button — dropdown to spawn a new terminal tab
-    /// with a specific shell, or open the New SSH Session dialog.
+    /// with a specific shell, open the New SSH Session dialog, or open one of
+    /// the saved SSH sessions (`IN-0033`).
     fn title_suffix(
         &mut self,
         _window: &mut Window,
@@ -591,8 +592,16 @@ impl Panel for TerminalPanel {
             .ghost()
             .tab_stop(false)
             .tooltip("New Terminal")
-            .dropdown_menu(|menu, _, _| {
-                let mut menu = menu;
+            .dropdown_menu(|menu, _, cx| {
+                // The saved-session section is as long as the user's
+                // `ssh_session.json`, so the popup must be able to scroll: the
+                // kit applies its height cap (half the window, at most 450px)
+                // only when `scrollable` is set, and without it a long list
+                // runs off the bottom of the window unreachable by mouse *and*
+                // by keyboard (`scroll_to_item` is a no-op outside a scrolling
+                // container). This menu has no submenus, which is the only
+                // thing `scrollable` gives up.
+                let mut menu = menu.scrollable(true);
                 // Platform-specific shells.
                 #[cfg(windows)]
                 {
@@ -614,8 +623,26 @@ impl Panel for TerminalPanel {
                         .menu("Sh", Box::new(AddPanelWithShell(ShellKind::Sh)))
                         .menu("Zsh", Box::new(AddPanelWithShell(ShellKind::Zsh)));
                 }
-                menu.separator()
-                    .menu("New SSH Session", Box::new(NewSession))
+                menu = menu
+                    .separator()
+                    .menu("New SSH Session", Box::new(NewSession));
+
+                // The sessions saved in `ssh_session.json`, so a saved host
+                // opens from the same place a local shell does. This closure
+                // runs on every open, so the list is never stale.
+                let commands = oneterm_state::commands::commands(cx);
+                menu = menu.separator().label("SSH Sessions");
+                let saved = (commands.saved_ssh_sessions)(cx);
+                if saved.is_empty() {
+                    return menu.item(PopupMenuItem::new("No saved sessions").disabled(true));
+                }
+                saved.into_iter().fold(menu, |menu, (id, name)| {
+                    let open = commands.open_saved_ssh_session;
+                    menu.item(
+                        PopupMenuItem::new(name)
+                            .on_click(move |_, window, cx| open(id, window, cx)),
+                    )
+                })
             })
             .anchor(Anchor::TopRight);
         Some(btn)

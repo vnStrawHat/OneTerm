@@ -105,6 +105,7 @@ The script runs, in order:
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings   # also type-checks every target (no separate build step)
+cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings
 cargo test --workspace
 cargo test -p oneterm-vt --features vt-paranoid # the VT engine's whole-history integrity walk
 python scripts/verify-dependency-graph.py     # crate graph policy + workspace version inheritance

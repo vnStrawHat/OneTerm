@@ -109,6 +109,18 @@ impl SshSessionId {
     pub fn parse(text: &str) -> Option<Self> {
         text.parse::<u64>().ok().map(Self)
     }
+
+    /// The raw id, for a boundary that cannot name this type — the
+    /// `WorkspaceCommands` fn pointers in `oneterm-state` sit below this crate.
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+
+    /// Rebuild an id that crossed such a boundary. Like [`Self::parse`], this
+    /// does not assert the id exists; the store lookup does.
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
 }
 
 impl fmt::Display for SshSessionId {
@@ -919,6 +931,58 @@ mod tests {
     fn empty_array_parses() {
         let list: Vec<SshSession> = serde_json::from_str("[]").unwrap();
         assert!(list.is_empty());
+    }
+
+    /// Adopted from the independent verification of `US-0094`: the "+" menu
+    /// routes a click by the row's stable id, so deleting an *earlier* session
+    /// between the menu opening and the click must still open the session the
+    /// user pointed at — the guarantee a positional row id would not give.
+    ///
+    /// This resolves the id through [`SshSessionStore::get`], which is the call
+    /// `oneterm_session_ui::open_saved_ssh_session` makes.
+    #[test]
+    fn verify_menu_row_id_survives_a_delete_of_an_earlier_session() {
+        let host = |id: u64, host: &str| SshSessionEntry {
+            id: SshSessionId(id),
+            session: SshSession {
+                label: "alpha".into(),
+                host: host.into(),
+                port: SshSession::DEFAULT_PORT,
+                username: None,
+                auth_method: SshAuthPreference::Password,
+                key_path: None,
+                color: None,
+                group: None,
+                logging: SshLoggingOverride::Inherit,
+                jump_host: None,
+                port_forwards: Vec::new(),
+                agent_forwarding: false,
+            },
+        };
+        let before = SshSessionStore::with_document(SessionDocument {
+            entries: vec![host(1, "10.9.0.1"), host(2, "10.9.0.2")],
+            next_id: 3,
+        });
+        let rows = crate::tree_builder::menu_entries(before.sessions());
+        assert_eq!(rows.len(), 2);
+        // The row the user is about to click: the second one, id 2.
+        let clicked = SshSessionId::from_raw(rows[1].0);
+        assert_eq!(clicked, SshSessionId(2));
+
+        // The first session is deleted while the menu is open.
+        let after = SshSessionStore::with_document(SessionDocument {
+            entries: vec![host(2, "10.9.0.2")],
+            next_id: 3,
+        });
+        assert_eq!(
+            after.get(clicked).map(|s| s.host.as_str()),
+            Some("10.9.0.2"),
+            "the clicked row must still resolve to the session it named"
+        );
+        assert!(
+            after.get(SshSessionId(1)).is_none(),
+            "the deleted session resolves to nothing, the documented no-op"
+        );
     }
 }
 

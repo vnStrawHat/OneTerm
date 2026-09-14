@@ -7,7 +7,7 @@
 //! and the ring index *is* the id (`slot = id & mask`). Content therefore moves
 //! between fixed ids whenever a TUI repaints, which is why a consumer never
 //! stores a `RowId` and assumes the content stayed: it registers an
-//! [`Anchor`](anchor::Anchor) and reads it back.
+//! `Anchor` and reads it back.
 //!
 //! The viewport is a distance from the newest row rather than an absolute top,
 //! so "follow the output" is expressible as `offset == 0` and there are no
@@ -32,9 +32,9 @@ pub use terminal_grid::TerminalGrid;
 
 /// Hard cap on the viewport height (N-11). The ring is sized once from
 /// `scrollback_limit + MAX_ROWS`, so a resize can never invalidate the mask.
-pub const MAX_ROWS: u16 = 1024;
+pub(crate) const MAX_ROWS: u16 = 1024;
 /// Hard cap on the viewport width (N-11).
-pub const MAX_COLS: u16 = 2048;
+pub(crate) const MAX_COLS: u16 = 2048;
 /// Hard cap on the configured scrollback depth.
 pub const SCROLLBACK_MAX: u32 = 1_000_000;
 /// The shipped default, unchanged from the engine being replaced.

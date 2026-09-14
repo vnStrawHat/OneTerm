@@ -1,0 +1,136 @@
+# High-Level Design: New Terminal button lists SSH sessions
+
+Intake: IN-0033
+Lane: normal
+Date: 2026-09-14
+
+## Idea
+
+The "+" button in the center tab bar is already a dropdown: clicking it opens a popup menu
+offering the platform's local shells and "New SSH Session". This intake appends one section
+to that menu listing the sessions saved in `ssh_session.json`, so a saved host is reachable
+from the place the user already goes to open a terminal, instead of only from the SSH
+Sessions panel in the right dock.
+
+Nothing about how a session connects changes. The menu entry calls the same
+`open_connect_dialog` the SSH Sessions panel calls, with the same saved-session id, and the
+connected shell lands where that path already puts it — a new center terminal tab.
+
+## Diagram
+
+```text
+crates/terminal-view (L3 feature)            crates/state (L2)            crates/session-ui (L3 feature)
++-------------------------------+     +---------------------------+     +-----------------------------+
+| TerminalPanel::title_suffix   |     | WorkspaceCommands         |     | SshSessionStore (global)    |
+|   Button "+" .dropdown_menu   |     |  saved_ssh_sessions  ---- | --> |   menu_entries(&entries)    |
+|                               | --> |  open_saved_ssh_session - | --> |   get(id) + connect dialog  |
+|   for (id, name) in entries   |     |  (fn pointers, installed  |     +--------------+--------------+
+|     item(name).on_click(...)  |     |   by crates/app at start) |                    |
++-------------------------------+     +---------------------------+                    v
+                                                                        open_connect_dialog(session, id)
+                                                                                       |
+                                                                            (existing, unchanged)
+                                                                                       v
+                                                                        TerminalPanel::open(PanelSpec::Session)
+                                                                        + add_ssh_terminal_to_dock -> new center tab
+```
+
+Why the indirection: `oneterm-session-ui` already depends on `oneterm-terminal-view` (the
+one same-layer edge `docs/agents/crate-dependency-rules.md` R5 permits, because opening an
+SSH session builds a `TerminalPanel`). A direct `terminal-view -> session-ui` edge would be
+a dependency cycle (R1) as well as a second cross-feature edge (R5). `WorkspaceCommands` in
+`crates/state` is the registry that already exists for exactly this — `crates/terminal-view`
+reads it today in `panel/duplicate.rs` to reach the SSH duplicate dialog — so this adds two
+fn-pointer fields rather than a new mechanism (R10).
+
+## UI Wireframe
+
+The "+" button lives in the center tab bar's trailing control group, next to the zoom
+control (`Panel::title_suffix`). The button itself does not change: it stays a plain
+`Button` with an icon and no split half.
+
+```text
++--------------------------------------------------------------------------+
+| [ prod-web x ] [ local x ]                                    [ + ] [ ^ ] |
++--------------------------------------------------------------------------+
+                                                                  |
+                                    +-----------------------------+
+                                    v
+                            +------------------------------+
+                            | Command Prompt               |   <- local shells, platform
+                            | PowerShell                   |      specific, unchanged.
+                            | PowerShell 7                 |      (Bash / Sh / Zsh on unix)
+                            |------------------------------|
+                            | New SSH Session              |   <- unchanged
+                            |------------------------------|
+                            | SSH Sessions                 |   <- new section label
+                            | prod-web                     |   <- saved sessions, store order
+                            | db-01                        |
+                            | staging                      |
+                            +------------------------------+
+```
+
+Empty state — nothing saved in `ssh_session.json` yet:
+
+```text
+                            +------------------------------+
+                            | Command Prompt               |
+                            | PowerShell                   |
+                            | PowerShell 7                 |
+                            |------------------------------|
+                            | New SSH Session              |
+                            |------------------------------|
+                            | SSH Sessions                 |
+                            | No saved sessions            |   <- disabled hint, not clickable
+                            +------------------------------+
+```
+
+Decisions this wireframe fixes:
+
+- **Local shells stay first, and the menu above the new separator is byte-for-byte what it
+  is today.** A user with no saved sessions sees one extra label and one disabled hint and
+  nothing else changes, so the "open a local shell" path keeps its position and its
+  muscle memory.
+- **Button, not split button.** `Button::dropdown_menu` already opens the popup on a plain
+  click, which is the simplest thing the kit supports and what the button does today. A
+  split button would need a default action on the primary half; the menu's first entry
+  already is that default, and halving the hit target of an `xsmall` icon button to save one
+  click is a bad trade. Keyboard reach is unchanged: `Ctrl-T` (`AddPanel`) still opens a
+  local terminal without touching the menu, and the popup itself is arrow-key navigable
+  because it is the kit's standard `PopupMenu`.
+- **Flat list, storage order, session labels as names.** The same order
+  `ssh_session.json` holds and the SSH Sessions panel's store order. Groups stay a tree-panel
+  concern (see the intake's open decisions). A hand-edited entry with a blank label falls
+  back to `host:port` so no row is ever invisible.
+- **Section label "SSH Sessions"** matches the panel the owner named, so the two surfaces
+  read as the same list.
+- **No colour or icon literals.** The section is plain `PopupMenu::label` and
+  `PopupMenuItem` rows, which take their colours from `cx.theme()` through the kit.
+
+## Data Flow
+
+1. The user clicks "+". `Button::dropdown_menu`'s builder closure runs — it is an `Fn`, so
+   it runs on **every** open and never caches a stale list.
+2. The closure reads `oneterm_state::commands::commands(cx)` and calls
+   `saved_ssh_sessions(cx)`.
+3. That fn pointer resolves to `oneterm_session_ui::saved_ssh_sessions`, which reads the
+   `SshSessionStore` global and maps its entries through `menu_entries` to
+   `Vec<(u64, String)>` — the stable session id and the display name, in storage order.
+4. The closure appends a separator, the "SSH Sessions" label, and either one
+   `PopupMenuItem` per entry or the disabled "No saved sessions" hint.
+5. Clicking a row calls `open_saved_ssh_session(id, window, cx)` with the **id**, not an
+   index: the store's schema v2 gives every session a stable id precisely so a concurrent
+   add or delete cannot retarget a pending UI action.
+6. `oneterm_session_ui::open_saved_ssh_session` looks the id up in the store (a session
+   deleted since the menu opened is simply a no-op) and calls the existing
+   `open_connect_dialog(session, id, window, cx)`.
+7. From there the flow is the one `docs/ssh-client-connect.md` already documents:
+   credentials, jump chain, `SessionFactory::connect_ssh`, then `TerminalPanel::open` with
+   `PanelSpec::Session` added to the center dock as a new tab.
+
+## Detail Design
+
+- [x] Detail design: not needed
+- Reason: normal lane, one menu section, two fn-pointer fields, and no new state, schema or
+  connect path. The wireframe and the data flow above fully determine the change; the
+  connect half is already specified in `docs/ssh-client-connect.md`.

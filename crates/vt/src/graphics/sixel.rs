@@ -5,9 +5,9 @@
 //!
 //! Ported from OneTerm's own patch 0003 against the vendored fork, which is
 //! first-party code, so no licence question arises. The grammar and every
-//! rounding rule are unchanged from `IN-0028`: the behaviour
-//! `crates/terminal/src/sixel_tests.rs` pins is what this file must reproduce,
-//! including the two places it deliberately departs from a strict VT340 —
+//! rounding rule are unchanged from `IN-0028`; the behaviour is pinned by this
+//! module's own tests and by the `oneterm/` parity recording, and it includes
+//! two places it deliberately departs from a strict VT340 —
 //! **`P2` background-select is ignored and untouched pixels stay fully
 //! transparent**, and an out-of-range colour register only selects.
 //!

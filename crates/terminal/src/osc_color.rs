@@ -27,7 +27,7 @@ use crate::backend::DefaultColors;
 /// Closure that formats an OSC colour reply for a resolved colour. Built by the
 /// router from the query's own OSC prefix and string terminator, e.g.
 /// `\x1b]11;rgb:rrrr/gggg/bbbb\x07`.
-pub type ColorFormatter = Arc<dyn Fn(Rgb) -> String + Send + Sync + 'static>;
+pub(crate) type ColorFormatter = Arc<dyn Fn(Rgb) -> String + Send + Sync + 'static>;
 
 /// A pending OSC 4/10/11/12 colour *query* (the program asked with `?`) awaiting
 /// a reply. Enqueued by the router during a parse batch, answered by the pump
@@ -77,7 +77,7 @@ impl Default for DynamicColors {
 /// Returns `None` when the corresponding default is unset (the caller then skips
 /// the reply, which is what the engine being replaced did for an unset cursor
 /// colour).
-pub fn default_color_for_key(key: ColorKey, defaults: &DefaultColors) -> Option<Rgb> {
+pub(crate) fn default_color_for_key(key: ColorKey, defaults: &DefaultColors) -> Option<Rgb> {
     match key {
         ColorKey::Palette(index @ 0..=15) => defaults.ansi.map(|ansi| ansi[usize::from(index)]),
         ColorKey::Palette(index) => Some(crate::palette::extended_indexed_color(index)),

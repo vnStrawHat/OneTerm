@@ -35,6 +35,34 @@ pub(crate) fn session_subtitle(s: &SshSession) -> String {
     }
 }
 
+/// Rows for a flat menu listing the saved sessions — `(stable id, display
+/// name)` in storage order, which is what the "+" (New Terminal) menu shows
+/// (`IN-0033`).
+///
+/// Unlike [`build_tree_items`] this neither sorts nor groups: the menu is a
+/// flat list and storage order is the order `ssh_session.json` holds.
+///
+/// The name carries the [`session_subtitle`] as well as the label, because
+/// nothing stops two saved sessions sharing a label and a menu row has no
+/// second line to disambiguate them the way the session tree's subtitle does.
+/// An entry whose label is blank (only a hand-edited file can produce one)
+/// shows the subtitle alone rather than an unidentifiable empty row.
+pub(crate) fn menu_entries(sessions: &[SshSessionEntry]) -> Vec<(u64, String)> {
+    sessions
+        .iter()
+        .map(|entry| {
+            let label = entry.session.label.trim();
+            let subtitle = session_subtitle(&entry.session);
+            let name = if label.is_empty() {
+                subtitle
+            } else {
+                format!("{label} — {subtitle}")
+            };
+            (entry.id.raw(), name)
+        })
+        .collect()
+}
+
 /// Check whether a session matches the search query (case-insensitive).
 ///
 /// Matches on: label, host, username, group name.
@@ -236,5 +264,89 @@ mod tests {
         assert_eq!(session_subtitle(&session), "10.0.0.1:2222");
         session.username = Some("root".into());
         assert_eq!(session_subtitle(&session), "root@10.0.0.1:2222");
+    }
+
+    // ── menu_entries: the "+" (New Terminal) menu rows (IN-0033) ──
+
+    #[test]
+    fn menu_entries_keeps_storage_order_and_ids() {
+        // Deliberately not alphabetical, and grouped entries mixed in: the menu
+        // is flat and follows the file, unlike the tree.
+        let sessions = vec![
+            entry(7, "prod", None),
+            entry(2, "alpha", Some("infra")),
+            entry(5, "db", None),
+        ];
+        assert_eq!(
+            menu_entries(&sessions),
+            vec![
+                (7, "prod — prod.example.test:22".to_string()),
+                (2, "alpha — even@alpha.example.test:22".to_string()),
+                (5, "db — db.example.test:22".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn menu_entries_of_an_empty_store_is_empty() {
+        assert!(menu_entries(&[]).is_empty());
+    }
+
+    #[test]
+    fn menu_entries_falls_back_to_the_subtitle_for_a_blank_label() {
+        // Only a hand-edited ssh_session.json can get here: the session dialog
+        // rejects an empty label.
+        let mut session = entry(3, "placeholder", None);
+        session.session.label = "   ".into();
+        session.session.host = "10.0.0.9".into();
+        session.session.port = 2222;
+        assert_eq!(menu_entries(&[session]), vec![(3, "10.0.0.9:2222".into())]);
+    }
+
+    #[test]
+    fn menu_entries_trims_a_padded_label() {
+        let mut session = entry(4, "padded", None);
+        session.session.label = "  staging  ".into();
+        assert_eq!(
+            menu_entries(&[session]),
+            vec![(4, "staging — even@padded.example.test:22".into())]
+        );
+    }
+
+    /// Adopted from the independent verification of `US-0094` (`D2`): two saved
+    /// sessions may share a label, so the row text must still tell them apart,
+    /// and neither a non-ASCII label nor a long store may distort the mapping.
+    #[test]
+    fn verify_duplicate_unicode_and_fifty_entries() {
+        let mut first = entry(1, "alpha", None);
+        first.session.host = "10.9.0.1".into();
+        let mut second = entry(2, "alpha", None);
+        second.session.host = "10.9.0.2".into();
+        second.session.username = None;
+        let rows = menu_entries(&[first, second]);
+        assert_eq!(
+            rows,
+            vec![
+                (1, "alpha — 10.9.0.1:22".to_string()),
+                (2, "alpha — 10.9.0.2:22".to_string()),
+            ],
+            "duplicate labels must stay distinguishable by their subtitle"
+        );
+
+        let unicode = entry(9, "日本-🚀", None);
+        assert_eq!(
+            menu_entries(&[unicode]),
+            vec![(9, "日本-🚀 — 日本-🚀.example.test:22".to_string())]
+        );
+
+        let many: Vec<SshSessionEntry> = (1..=50)
+            .map(|id| entry(id, &format!("host-{id:02}"), None))
+            .collect();
+        let rows = menu_entries(&many);
+        assert_eq!(rows.len(), 50, "every stored session gets exactly one row");
+        assert_eq!(rows[0].0, 1);
+        assert_eq!(rows[49].0, 50);
+        assert!(rows[0].1.starts_with("host-01 — "));
+        assert!(rows[49].1.starts_with("host-50 — "));
     }
 }

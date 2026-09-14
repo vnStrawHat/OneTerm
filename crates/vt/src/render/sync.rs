@@ -15,10 +15,10 @@ use std::time::{Duration, Instant};
 
 /// How long one `CSI ? 2026 h` holds frames back before the renderer refreshes
 /// anyway. A well-behaved program refreshes it every frame.
-pub const SYNC_REFRESH: Duration = Duration::from_millis(150);
+pub(crate) const SYNC_REFRESH: Duration = Duration::from_millis(150);
 
 /// How long the mode may stay set at all before the engine forces it off.
-pub const SYNC_WATCHDOG: Duration = Duration::from_secs(1);
+pub(crate) const SYNC_WATCHDOG: Duration = Duration::from_secs(1);
 
 /// The open synchronized update, if any.
 ///

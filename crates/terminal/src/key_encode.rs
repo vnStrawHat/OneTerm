@@ -112,7 +112,7 @@ fn ctrl_bytes(text: &str) -> Option<Vec<u8>> {
 /// `ESC O{ch}` form instead of `ESC [{ch}` so the program recognizes them.
 ///
 /// Conventions:
-/// - `Character` + `ctrl` → xterm control table (see [`ctrl_bytes`]).
+/// - `Character` + `ctrl` → xterm control table (see `ctrl_bytes`).
 /// - `Character` + `alt` → `ESC` prefix; combined with `ctrl` the prefix is
 ///   applied to the control byte (`Ctrl+Alt+a` → `ESC 0x01`).
 /// - `Enter` shift/ctrl → CSI u; plain → `\r`.

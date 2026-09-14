@@ -31,9 +31,9 @@ mod text;
 /// The reference's default escape set, preserved because word selection is
 /// user-visible behaviour and OneTerm never overrode it.
 ///
-/// `Config` is `US-0076`'s, so the set is a parameter until then; this is what
-/// the terminal will default it to.
-pub const SEMANTIC_ESCAPE_CHARS: &str = ",│`|:\"' ()[]{}<>\t";
+/// It is a `Config` parameter since `US-0076`; this is what
+/// [`crate::Config::default`] sets it to.
+pub(crate) const SEMANTIC_ESCAPE_CHARS: &str = ",│`|:\"' ()[]{}<>\t";
 
 /// How a drag expands into a range.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -295,7 +295,7 @@ impl SelectionRange {
 /// This is `crates/terminal/src/model.rs::point_and_side` moved into the
 /// engine, so the view stops doing `line + display_offset` arithmetic. Out of
 /// range clamps rather than producing a position outside the live rows.
-pub fn hit_test(grid: &TerminalGrid, viewport_row: f32, col: f32) -> (Pos, Side) {
+pub(crate) fn hit_test(grid: &TerminalGrid, viewport_row: f32, col: f32) -> (Pos, Side) {
     let viewport = grid.screen().viewport();
     let index = (viewport_row.max(0.0) as u32).min(u32::from(viewport.rows.saturating_sub(1)));
     let col = col.max(0.0);
