@@ -4,7 +4,7 @@ Date: 2026-09-14
 
 ## Status
 
-Proposed
+Accepted (owner ruling, 2026-09-14: terminate after the 2 s grace, own child only, logged)
 
 ## Context
 
