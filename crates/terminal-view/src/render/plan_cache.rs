@@ -158,13 +158,25 @@ impl PlanCache {
         // closed under the wrap runs `self.wraps` already tracks — never the
         // whole viewport (`US-0092`). Rows outside those runs keep the masks
         // they had, which is why `mask_prev` stays authoritative for all rows.
+        //
+        // One dependency is **not** a row's content: where the viewport's top
+        // edge cuts a wrap run. Display row 0's mask is extended into it from
+        // the row above only while that row is on screen, and a scroll moves the
+        // edge without changing any row's `(RowId, SeqNo)` — so a URL whose head
+        // scrolls above the top leaves a stale underline behind
+        // (`US-0092` verification, defect 2). The seam is therefore rescanned on
+        // every scrolled frame: one extra row, closed under its run like any
+        // other, and it lands in `self.scan` rather than `self.dirty` so the
+        // mask-delta compare still decides whether a plan is rebuilt.
+        let scrolled_seam =
+            matches!(frame.update(), RenderUpdate::Partial { scrolled } if scrolled != 0);
         let any_dirty = self.dirty.iter().any(|&d| d);
         if any_dirty {
             fill_wraps(frame, &mut self.wraps);
             self.wraps_prev.resize(rows, false);
             self.mask_prev.resize_with(rows, Vec::new);
             self.mask_cur.resize_with(rows, Vec::new);
-            self.mark_scan_runs(rows);
+            self.mark_scan_runs(rows, scrolled_seam);
             stats.url_scans += 1;
 
             let mut r = 0;
@@ -214,14 +226,20 @@ impl PlanCache {
         self.cell = Some(cell);
     }
 
-    /// Fill `self.scan` with the dirty rows closed under wrap runs — the exact
-    /// scope a URL rescan needs (`US-0092`).
+    /// Fill `self.scan` with the rows a URL rescan must cover: the dirty rows,
+    /// plus display row 0 when the viewport scrolled, all closed under wrap runs
+    /// (`US-0092`).
     ///
     /// Rows `r` and `r + 1` count as connected when **either** frame's flags say
     /// so: a row that has just lost its `WRAPLINE` is dirty, and its old
     /// continuation row — untouched, so not dirty — still carries a mask that
     /// was extended from it and must be recomputed.
-    fn mark_scan_runs(&mut self, rows: usize) {
+    ///
+    /// `scrolled_seam` covers the one dependency the run closure cannot express:
+    /// row 0's mask also depends on whether its wrap-connected predecessor is
+    /// still on screen, and a scroll changes that with no row key changing.
+    /// There is no `connected(-1)` to walk, so the seam is seeded directly.
+    fn mark_scan_runs(&mut self, rows: usize, scrolled_seam: bool) {
         let Self {
             dirty,
             wraps,
@@ -232,9 +250,10 @@ impl PlanCache {
         scan.clear();
         scan.resize(rows, false);
         let connected = |i: usize| wraps[i] || wraps_prev[i];
+        let seed = |r: usize| dirty[r] || (scrolled_seam && r == 0);
         let mut r = 0;
         while r < rows {
-            if !dirty[r] {
+            if !seed(r) {
                 r += 1;
                 continue;
             }
@@ -687,6 +706,245 @@ mod tests {
             "the stale underline is gone: {:?}",
             h.cache.url_mask(1)
         );
+    }
+
+    // ───────────────── US-0092 independent verification ─────────────────
+
+    /// The oracle: what a whole-viewport rescan of this very frame produces.
+    /// Every incremental scan must agree with it, row for row.
+    #[track_caller]
+    fn assert_masks_match_a_full_rescan(cache: &PlanCache, frame: &Frame, what: &str) {
+        let rows = usize::from(frame.size().rows);
+        let mut want = Vec::new();
+        let mut wraps = Vec::new();
+        crate::url::url_masks_into(frame, &mut want, &mut wraps);
+        let got: Vec<Vec<bool>> = (0..rows).map(|r| cache.url_mask(r).to_vec()).collect();
+        for r in 0..rows {
+            assert_eq!(
+                got[r], want[r],
+                "{what}: row {r} mask differs from a full rescan\n got {:?}\nwant {:?}",
+                got[r], want[r]
+            );
+        }
+    }
+
+    /// A three-row wrapped URL where only the FIRST row is rewritten.
+    #[gpui::test]
+    fn url_v2_first_row_of_a_three_row_url_changes(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(5, 10)
+            .text(0, 0, "https://a.")
+            .flags(0, 9, CellFlags::WRAPLINE)
+            .text(1, 0, "test/bbbbb")
+            .flags(1, 9, CellFlags::WRAPLINE)
+            .text(2, 0, "ccc rest")
+            .build_with_fixture();
+        h.update(cx, &frame, style_key(13.0));
+
+        fixture.begin_batch();
+        for (col, ch) in "https://z.".chars().enumerate() {
+            fixture.write(
+                0,
+                col,
+                &FixtureCell {
+                    ch,
+                    ..FixtureCell::default()
+                },
+            );
+        }
+        fixture.set_wrapped(0, true);
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "first row rewritten");
+    }
+
+    /// ...and where only the LAST row is rewritten, so the URL's tail stops
+    /// being part of it.
+    #[gpui::test]
+    fn url_v2_last_row_of_a_three_row_url_changes(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(5, 10)
+            .text(0, 0, "https://a.")
+            .flags(0, 9, CellFlags::WRAPLINE)
+            .text(1, 0, "test/bbbbb")
+            .flags(1, 9, CellFlags::WRAPLINE)
+            .text(2, 0, "ccc rest")
+            .build_with_fixture();
+        h.update(cx, &frame, style_key(13.0));
+
+        rewrite_row(&mut frame, &mut fixture, 2, " plain    ");
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "last row rewritten");
+    }
+
+    /// The viewport scrolled a row at a time and back. An index-keyed URL cache
+    /// would keep the mask of whatever row used to sit at that index.
+    #[gpui::test]
+    fn url_v2_scrolling_the_viewport_keeps_the_masks_exact(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(5, 24).build_with_fixture();
+        fixture.feed(
+            b"top line\r\nhttps://wrapped.test/aaaaaaaaaaaaaaaaaaaaaa\r\nplain\r\nmore\r\nlast\r\ntail\r\ntail2",
+        );
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "before scrolling");
+
+        for back in 1..=3 {
+            fixture.scroll_back(1);
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, style_key(13.0));
+            assert_masks_match_a_full_rescan(&h.cache, &frame, &format!("scrolled back {back}"));
+        }
+        for fwd in 1..=3 {
+            fixture.scroll_forward(1);
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, style_key(13.0));
+            assert_masks_match_a_full_rescan(&h.cache, &frame, &format!("scrolled forward {fwd}"));
+        }
+    }
+
+    /// `DL` deletes the middle row of a wrapped URL; `IL` pushes a continuation
+    /// row down. Both change wrap connectivity.
+    #[gpui::test]
+    fn url_v2_delete_and_insert_line_inside_a_wrapped_url(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(6, 16).build_with_fixture();
+        fixture.feed(b"https://wrapped.test/aaaaaaaaaaaa\r\ntail");
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "wrapped url laid out");
+
+        fixture.feed(b"\x1b[2;1H\x1b[M");
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "after DL");
+
+        fixture.feed(b"\x1b[2;1H\x1b[L");
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "after IL");
+    }
+
+    /// `CSI 2 J`, the alternate screen and back.
+    #[gpui::test]
+    fn url_v2_clear_screen_and_alt_screen_swap(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(5, 20).build_with_fixture();
+        fixture.feed(b"see https://a.test/x\r\nand https://b.test/y");
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "urls on screen");
+
+        fixture.feed(b"\x1b[?1049h");
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "alt screen entered");
+
+        fixture.feed(b"alt https://c.test/z");
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "alt screen url");
+
+        fixture.feed(b"\x1b[2J");
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "after CSI 2 J");
+
+        fixture.feed(b"\x1b[?1049l");
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "back on the primary screen");
+    }
+
+    /// A resize re-wraps the URL over a different number of rows.
+    #[gpui::test]
+    fn url_v2_resize_rewraps_the_url(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(6, 30).build_with_fixture();
+        fixture.feed(b"go https://wrapped.test/aaaaaaaaaaaaaaaaaaaaaaaaaaaa end");
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "at 30 columns");
+
+        for cols in [18u16, 12, 40] {
+            fixture.terminal().resize(
+                oneterm_terminal::Size { rows: 6, cols },
+                oneterm_terminal::ResizePolicy::Default.into(),
+            );
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, style_key(13.0));
+            assert_masks_match_a_full_rescan(&h.cache, &frame, &format!("at {cols} columns"));
+        }
+    }
+
+    /// Scrollback churn: many lines pushed through, URLs among them, and the
+    /// masks checked on every frame.
+    #[gpui::test]
+    fn url_v2_streaming_output_keeps_the_masks_exact(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(6, 24).build_with_fixture();
+        for i in 0..40 {
+            if i % 7 == 0 {
+                fixture.feed(b"https://stream.test/aaaaaaaaaaaaaaaaaaaaaaaaa\r\n");
+            } else {
+                fixture.feed(format!("line {i}\r\n").as_bytes());
+            }
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, style_key(13.0));
+            assert_masks_match_a_full_rescan(&h.cache, &frame, &format!("after line {i}"));
+        }
+    }
+
+    /// Two feeds with no render between them (a skipped frame), the first of
+    /// which drops a wrap flag. `wraps_prev` is rotated per *update*, not per
+    /// feed, so the union still has to reach the old continuation row.
+    #[gpui::test]
+    fn url_v2_wrap_dropped_in_a_frame_that_was_never_rendered(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(4, 10)
+            .text(0, 0, "https://a.")
+            .flags(0, 9, CellFlags::WRAPLINE)
+            .text(1, 0, "test/bbbbb")
+            .build_with_fixture();
+        h.update(cx, &frame, style_key(13.0));
+        assert!(h.cache.url_mask(1)[0], "row 1 starts as a continuation");
+
+        // Feed 1: row 0 stops being a URL and stops wrapping. No render.
+        fixture.begin_batch();
+        for (col, ch) in "plain text".chars().enumerate() {
+            fixture.write(
+                0,
+                col,
+                &FixtureCell {
+                    ch,
+                    ..FixtureCell::default()
+                },
+            );
+        }
+        // Feed 2: an unrelated row changes. Only now is a frame rendered.
+        fixture.begin_batch();
+        for (col, ch) in "zzz".chars().enumerate() {
+            fixture.write(
+                3,
+                col,
+                &FixtureCell {
+                    ch,
+                    ..FixtureCell::default()
+                },
+            );
+        }
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, style_key(13.0));
+        assert_masks_match_a_full_rescan(&h.cache, &frame, "wrap dropped in a skipped frame");
     }
 
     #[gpui::test]
