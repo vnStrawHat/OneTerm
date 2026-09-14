@@ -10,8 +10,8 @@ Created: 2026-09-14
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -107,7 +107,7 @@ macro expansion into one struct's `impl` blocks.
   historical references in `docs/spec-intakes/` and `docs/decisions/`, and none in `crates/`.
 - [x] **`model::ResizePolicy` is gone.** `grep -rn "\bResizePolicy\b" crates/` names only
   `oneterm_vt::ResizePolicy` and its own definition in `crates/vt`.
-- [ ] **Line delta recorded and honest — FAILS.** 383 lines are deleted (286 macro + 42 + 55) plus 43 for
+- [x] **Line delta recorded and honest — FAILS the −80 band; ACCEPTED by the owner (2026-09-15, "Merge"): the coupling removal is the outcome, the band was the audit's under-count.** 383 lines are deleted (286 macro + 42 + 55) plus 43 for
   the enum. The audit estimates the replacement at about 230 lines and is explicit (§(d).2) that
   the net "could land anywhere between −80 and −200". Record the measured net. **A net worse than
   −80 fails this packet**: if the concrete type comes out bigger than that, the shape is wrong —
@@ -492,3 +492,7 @@ Reviewed, no change needed:
 `US-0093` starts from this packet's head: its `ByteBudget` lands in
 `crates/terminal/src/backend/`, the layer this packet rewrites. `US-0092` is independent of both
 and shares no file with either.
+
+### Owner ruling (2026-09-15)
+
+The owner accepted the line-delta wash and ordered the merge: production −36, total +89 with the seven new tests, `pub` proxy 271. The independent verifier had shown the −80 band unreachable by tidying (the audit under-counted the irreducible forwarding by ~90 lines) and the coupling between the backends and `crates/terminal` is gone, which was the audit's reason for B1.
