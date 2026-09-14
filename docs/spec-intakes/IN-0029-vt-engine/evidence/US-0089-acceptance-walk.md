@@ -79,7 +79,7 @@ IN-0018 reference is present and renders the same way:
 - `bright: B0…B7` vs `normal: N0…N7`, each pair visibly different;
 - wide CJK: `日本語テキスト`, `中文`, `한국어` each 2 columns per glyph, `align2: 日本語|ab中文|cd한국|ef` keeps its column stops;
 - emoji `😀🚀` in colour, 2 cells each, `after-emoji` back on the grid;
-- combining marks `é ä ô ñ` composed into one cell each.
+- combining marks (e acute, a diaeresis, o circumflex, n tilde) composed into one cell each.
 
 One improvement over the reference: IN-0018 recorded `ト` coming through as two U+FFFD
 because it used cmd's `type`; through the PowerShell path it renders correctly here.
