@@ -14,9 +14,13 @@
 //! path raises a demand and the read loop tests it at a chunk boundary
 //! — **after** that batch's reply bytes have left, never before
 //! (`damage-and-render-state.md` § "Fairness and reply latency", R-37). The
-//! adapter owns the flag as well as the lock: [`Demand`] is below, next to the
+//! adapter owns the flag as well as the lock: `Demand` is below, next to the
 //! policy that uses it, and the policy is that **the waiter clears its own
 //! demand, on acquisition** — see [`TerminalHandle::lock_for_render`].
+//!
+//! `Demand` itself is `pub(crate)`: raise, release and ask are one protocol, and
+//! publishing a piece of it invites the unpaired raise that pins a pump into
+//! yielding forever. [`TerminalHandle`] is the whole public door.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -43,10 +47,10 @@ pub type SharedTerminal = Arc<TerminalHandle>;
 /// renderer is queued on the mutex": the pump then sees nothing waiting, keeps
 /// the engine until the transport runs dry, and the frame starves for the whole
 /// flood (measured 3/3 at > 5 s). Only the waiter itself knows when it no
-/// longer needs the yield, so only the waiter clears — by `Demand::release`,
+/// longer needs the yield, so only the waiter clears — by [`Demand::release`],
 /// once it holds the lock.
 #[derive(Clone, Debug, Default)]
-pub struct Demand(Arc<AtomicUsize>);
+pub(crate) struct Demand(Arc<AtomicUsize>);
 
 impl Demand {
     pub(crate) fn new() -> Demand {
@@ -54,8 +58,8 @@ impl Demand {
     }
 
     /// The renderer wants the lock. Call it **before** blocking on the lock,
-    /// and pair it with `Demand::release` once the lock is held.
-    pub fn raise(&self) {
+    /// and pair it with [`Demand::release`] once the lock is held.
+    pub(crate) fn raise(&self) {
         self.0.fetch_add(1, Ordering::AcqRel);
     }
 
@@ -139,9 +143,12 @@ impl TerminalHandle {
         self.demand.is_raised()
     }
 
-    /// The flag itself, for a loop that wants to hold it across iterations.
-    pub fn demand(&self) -> &Demand {
-        &self.demand
+    /// Raise the demand without taking the lock, for a caller that wants one
+    /// **standing** across iterations. Nothing releases it but an acquisition
+    /// through [`TerminalHandle::lock_for_render`], so the pump yields at every
+    /// chunk boundary until then: use `lock_for_render` unless you mean that.
+    pub fn raise_render_demand(&self) {
+        self.demand.raise();
     }
 }
 

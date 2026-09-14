@@ -450,11 +450,11 @@ impl LocalSession {
 custom `ShellEventLoop<P: EventedPty + OnResize>` on a dedicated "PTY owner"
 thread — the PTY is created, polled and dropped there. It reads with a
 heap-allocated 1 MiB buffer into `TerminalPump::advance` under a
-`try_lock_unfair` guard (falling back to `lock_unfair` only when the buffer is
+`TerminalHandle::try_lock()` guard (blocking on `lock()` only when the buffer is
 full), answers colour queries with the same guard, then calls
 `finish_batch_blocking`. Each read takes at most `MAX_LOCKED_READ` (64 KiB), so
 one lock hold is bounded in bytes. At each chunk boundary it asks
-`take_render_demand()` and, when a frame is waiting, answers that batch's colour
+`render_demand_raised()` and, when a frame is waiting, answers that batch's colour
 queries, drops the guard and finishes the batch there (§ 5.1) instead of holding
 it until the pipe runs dry. The poller waits **without a timeout**: every
 `ShellNotifier::send` and the child watcher call `poller.notify()`, so an idle
@@ -612,7 +612,7 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
 - Per data chunk (`US-0084`): `TerminalPump::process_chunk` feeds the engine and drains
   that batch under the lock — replies out first (R-37) — then, the lock released,
   `finish_batch(true).await` sends the batch's events before the `Output` hint (§5.3), and
-  the loop asks `SharedTerminal::take_render_demand()` and yields the task when a frame is
+  the loop asks `SharedTerminal::render_demand_raised()` and yields the task when a frame is
   waiting (§5.1). No `crates/ssh` **source file** names the engine — the shared pump is the
   whole of the terminal side, and the fork's last manifest line left with `US-0085`.
 - RSA keys authenticate with `rsa-sha2-*` chosen from the server's `server-sig-algs`

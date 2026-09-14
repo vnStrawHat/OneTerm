@@ -86,6 +86,20 @@ a byte-identical twin; every visibility change is a narrowing that the compiler 
   drop the back-tick requirement from `PATH_PATTERN`, so a path inside an ASCII tree diagram is
   checked too. This is what would have caught `D1` and `D6` on the commit that created them.
 - [x] **Settle `terminal-diagnostics`** — see Decisions.
+- [x] **Two deletions the visibility pass forced, added to Scope during implementation**
+  (verifier defect `D-4`). Narrowing an item the whole workspace ignores turns it into `dead_code`,
+  which `-D warnings` rejects, so the pass had to delete rather than narrow:
+  `FlagStack::len` and `FlagStack::is_empty` (`crates/vt/src/terminal/mode.rs:400-407` at the
+  branch point). Zero-user grep in Evidence, below.
+- [x] **`Demand`'s own visibility** (verifier defect `D-5`, settled in the rework commit). The first
+  pass left `raise` public while `release` and `is_raised` were `pub(crate)`, so `raise`'s doc
+  instruction — "pair it with `Demand::release`" — was unfollowable from outside the crate, and the
+  only external caller could do nothing *but* leave a demand standing. `Demand` is now
+  `pub(crate)` whole, with `TerminalHandle` as the one public door: `lock_for_render()`
+  (raise-lock-release), the new `raise_render_demand()` (the standing raise, documented as such)
+  and `render_demand_raised()` (the pump's ask). `TerminalHandle::demand()` is deleted with it —
+  its single caller was `crates/local-shell/src/event_loop_tests.rs:570`, rewritten onto
+  `raise_render_demand()`.
 
 ### Out of scope
 
@@ -93,7 +107,10 @@ a byte-identical twin; every visibility change is a narrowing that the compiler 
   backends are forced to name it by `impl_pty_terminal_session!`'s signature. It dies with the
   macro in `US-0091` and must not be touched here.
 - [ ] `impl_pty_terminal_session!` itself, and anything in `crates/local-shell` or `crates/ssh`
-  beyond the four call-site rewrites named above — `US-0091`.
+  beyond the call-site rewrites named above — `US-0091`. (Five rewrites in the end, not four: the
+  `Demand` visibility fix moved `crates/local-shell/src/event_loop_tests.rs:570` from
+  `term.demand().raise()` to `term.raise_render_demand()`. Same class as the other four — a call
+  site that must change because the item it names does — and no assertion was touched.)
 - [ ] The two per-frame viewport scans — `US-0092`.
 - [ ] The corpus move and the byte budget — `US-0093`.
 - [ ] Any crate merge, split, creation or removal. The owner rejected Option C; see the
@@ -119,8 +136,8 @@ a byte-identical twin; every visibility change is a narrowing that the compiler 
 - [x] **`crates/vt` holds no atomic.** `grep -rn "Atomic\|atomic::" crates/vt/src` returns nothing
   outside test files, and `crates/vt/src/lib.rs:4`'s "holds no lock and no interior mutability"
   needs no qualifying sentence.
-- [ ] **NOT MET, explained below (Evidence, "Line delta").** Net **at least −80 production lines**
-  across `crates/terminal/src` and
+- [x] **Line delta** (**−92** at `18d7b4c`, **−85** after the verification rework; see Evidence).
+  Net **at least −80 production lines** across `crates/terminal/src` and
   `crates/vt/src` (the audit's estimate for Option A's code portion is −90, excluding the
   ~46 doc lines and the visibility pass). The packet records the measured figure per crate; if it
   comes in under −80, the packet explains what the audit over-counted rather than padding the
@@ -202,6 +219,14 @@ Update required:
   engine.
 - `docs/agents/structure.md` — `D5`, `D6`, `D7`.
 - `IN-0029/low-level-design/damage-and-render-state.md` — only if it names `Demand`'s crate.
+- `IN-0029/low-level-design/migration.md` — **added during verification rework** (verifier defect
+  `D-3`). It is the third living LLD in the same directory and it owns the same surface: its
+  § "The adapter contract, as `US-0082` shipped it" states `FairMutex<Engine>`, makes
+  `take_render_demand()` the pump's check with `render_demand_raised()` as "the same read, for
+  diagnostics", and asserts `lock_unfair()` / `try_lock_unfair()` "still compile at today's call
+  sites". All four are false after this packet. The original Documentation Action named the other
+  two LLDs and missed this one; `docs/HARNESS.md`'s rule is to locate and review the owning docs,
+  and one was not located.
 - `crates/vt/src/lib.rs` and `crates/terminal/src/handle.rs` doc comments — they must describe what
   is left, not what was deleted.
 
@@ -364,6 +389,18 @@ packets, before any code"). Worktree branch `worktree-agent-a85e44f034eb1c863`, 
 | `try_lock_unfair` | same command | included above — `event_loop.rs:436` plus `handle.rs:335, :337` |
 | `render_demand_raised` | `grep -rn 'render_demand_raised' crates/ docs/` | one non-test caller: **none**; callers: `ssh/src/task_tests.rs:152` and four in `handle.rs`'s tests. `take_render_demand` had `event_loop.rs:477` and `ssh/src/task.rs:87` |
 
+Two further deletions the visibility pass forced, with the same proof (verifier defect `D-4` —
+they were deleted in the first pass without being declared):
+
+| Target | Command | Result |
+| --- | --- | --- |
+| `FlagStack::len`, `FlagStack::is_empty` | `git grep -n -E 'FlagStack' 4e83f31 -- crates/` | four hits, all in `crates/vt/src/terminal/mode.rs`: the `struct` at `:391`, its `impl` at `:399`, and the `active` / `inactive` fields of `Modes` at `:456-457`. **No call site anywhere.** `git grep -n -E '\.(len\|is_empty)\(\)' 4e83f31 -- crates/vt/src/terminal/` returns 31 hits, every one of them a `Vec`, `str`, slice, `EventBatch` or `HyperlinkTable` — none a `FlagStack` |
+
+They are deletions rather than narrowings for a mechanical reason: `pub(crate)` on an item nothing
+in the workspace calls is `dead_code`, and `-D warnings` rejects it. `TerminalHandle::demand` was
+deleted the same way in the rework commit (`D-5`); its one caller moved to
+`TerminalHandle::raise_render_demand`.
+
 Discrepancy against the audit: **none for the five targets.** The audit's `E3` says `lock_unfair`'s
 remaining call sites are `event_loop.rs:438, :523`; that is right, and `:436` is `try_lock_unfair`
 (`E4`), as the audit also says.
@@ -381,6 +418,7 @@ one, plus the module docs at `event_loop.rs:11` and `task.rs:26` and
 | --- | --- | --- |
 | `DefaultColors` (audit §5, "drop from the `pub use` block") | `grep -rnw DefaultColors crates/terminal/` → `crates/terminal/src/session.rs:520`, inside `impl_pty_terminal_session!` as `$crate::DefaultColors::new(...)`. The macro expands into `crates/local-shell` and `crates/ssh`, so the root re-export is load-bearing; a plain identifier grep cannot see a `$crate::` path | **Kept.** It dies with the macro in `US-0091` |
 | `EventQueueDiagnostics` (same) | It is the return type of the public `SessionEventSink::diagnostics()`; dropping the re-export leaves a public method returning an unnameable type | **Kept**, re-exported from `backend/mod.rs` as before |
+| `TerminalLogError` (same Scope line) | It is the error type of the public `TerminalLogController::start` / `stop` (`crates/terminal/src/logging.rs:157, :179`); dropping the re-export leaves two public methods returning an unnameable type | **Kept**, exported from `crates/terminal/src/lib.rs` as before. (Its disposition was missing from this table in the first pass — verifier note `N-7`) |
 | `FeedStats` (one of the 22 dead `vt` root re-exports) | It is what the public `Terminal::feed` returns | **Kept** at the `vt` root |
 | `cluster_width` (same list) | No user, by design — `crates/vt/src/width.rs:12` states it is "the answer mode 2027 will need … implemented and tested now so that landing the mode is a print-path change" | **Kept** published, with a comment at the re-export saying why |
 | `RowRef` (same list) | No user today; `US-0092` runs in parallel and reads `RowRef::is_allocated()` / `occ()` from `crates/terminal/src/content.rs` | **Kept** published, and both methods held at `pub` through the narrowing pass |
@@ -408,7 +446,7 @@ paragraph that contradicted line 4, and needs no qualifying sentence.
 | Crate | Branch point | After | Target | Audit measure (inherent `impl` methods included) |
 | --- | ---: | ---: | ---: | --- |
 | `oneterm-vt` | **535** | **392** | ≤ 400 | audit's own target ≈ 320 from 507; this pass narrowed 143 line-start items, so the audit-measure estimate is ≈ **360** |
-| `oneterm-terminal` | **301** | **269** | ≤ 270 | audit's target ≈ 250 from 325; ≈ **290** on that measure |
+| `oneterm-terminal` | **301** | **267** | ≤ 270 | audit's target ≈ 250 from 325; ≈ **290** on that measure |
 
 Both gates met. The `vt` figure lands above the audit's ≈ 320 for one structural reason recorded
 here rather than pursued: closing `grid` and `intern` as `pub(crate) mod` (the audit's "or
@@ -428,37 +466,44 @@ named every item that must stay `pub` (E0364/E0365 at the re-export, E0624 at th
 unreachable). Nothing was narrowed by judgement; every `pub(crate)` here is one the compiler
 proved safe across `crates/tools`, every test target and every bench.
 
-### Line delta — the one acceptance clause not met, and why
+### Line delta — met, by counting production lines rather than adjusting a numstat
+
+**The measure.** Every line of every `*.rs` under `crates/vt/src` and `crates/terminal/src` above
+that file's first top-level `#[cfg(test)]`, skipping `*_tests.rs` / `*_props.rs` / `*_bench.rs` /
+`test_support.rs` entirely, applied identically to both sides. This is the only measure that sees
+an **inline** `#[cfg(test)] mod tests`, which is where this packet's test growth landed.
 
 ```text
-$ git diff --numstat main..HEAD -- crates/vt/src crates/terminal/src   # excluding *_tests.rs etc.
-+397 / -401     net -4
+production lines, crates/vt/src + crates/terminal/src
+  base  4e83f31   vt 11113 + terminal 5671 = 16784
+  head  18d7b4c   vt 11045 + terminal 5647 = 16692   net -92     # gate: at least -80
+  after the verification rework       + terminal 5654 = 16699   net -85
 ```
 
-Adjusted for the one `#[cfg(test)]` block that the filename filter cannot see — the 75-line
-`Demand` contract test ported into `crates/terminal/src/handle.rs`'s inline `mod tests`
-(`handle.rs:288-362`) — the production figure is **+322 / −401, net −79**, one line short of the
-−80 gate.
+Per crate at `18d7b4c`: `crates/vt/src` **−68**, `crates/terminal/src` **−24**. The rework commit
+adds 7 net lines to `crates/terminal/src` (the `Demand` visibility decision and its doc, minus the
+deleted `TerminalHandle::demand`), so the gate is met on both.
 
-What the audit over-counted, rather than padding the deletion:
+**The earlier figure of −79 in this packet was wrong**, and the independent verifier
+(`evidence/US-0090-verify.md` N-9) caught it. It came from `git diff --numstat` (+397 / −401, net
+−4) minus a hand adjustment of 75 lines for the ported test: a filename filter cannot see an inline
+`mod tests`, and the hand adjustment under-counted how much of `handle.rs`'s test module grew
+around the ported test. Both numbers are recorded here because the wrong one was published once:
+the numstat is reproducible and consistent, it just does not measure production lines.
 
-- **`Demand` is counted twice.** The audit books its 62 lines as a deletion (§2.1 `E7`). The
-  acceptance sums **both** crates, and the type *moves*: `crates/vt/src/render/demand.rs` is −62
-  and `crates/terminal/src/handle.rs` is +48 for the same type, so the pair nets −14, not −62.
-- **`Engine`'s 39 lines come back as `Demand`'s 48.** The audit's −48 for `Engine` + `exit()` is
-  real, but the file that loses them is the file that gains the moved type, so `handle.rs`'s
-  production half is roughly flat.
+What the audit's own −90 estimate double-counted, which is why the two figures are not comparable
+line for line:
+
+- **`Demand` is counted twice by the audit.** It books the type's 62 lines as a deletion (§2.1
+  `E7`). This acceptance sums **both** crates, and the type *moves*: `crates/vt` is −62 and
+  `crates/terminal` is +48 for the same type.
 - **The visibility pass is line-neutral by construction** — `pub ` becomes `pub(crate) ` in place —
   and the audit says so ("~260 `pub` → `pub(crate)`", listed separately from the −90).
-- **Six prose rewrites are net-positive lines.** `R1`–`R7` replace a stale sentence with an
-  accurate one; `R6` (the `vte` paragraph) and `R7` grew by a line each because the accurate
-  history needs one more clause than the wrong one did.
+- **The prose rewrites are net-positive.** `R1`–`R7` replace a stale sentence with an accurate one,
+  and an accurate history needs a clause the wrong one did not.
 
-Per crate, production only, after the same `#[cfg(test)]` adjustment: `crates/vt/src`
-**+195 / −264 (net −69)**, `crates/terminal/src` **+127 / −137 (net −10)**. The split is the move
-made visible: `vt` carries `demand.rs`'s whole −62, and `terminal` pays +48 of it back.
-
-Whole diff, all files including docs: `56 files changed, 551 insertions(+), 558 deletions(-)`.
+Whole diff, all files including docs: `58 files changed, 881 insertions(+), 589 deletions(-)` at
+`18d7b4c`; the +292 is almost entirely this Evidence section.
 
 ### Test counts
 
@@ -583,31 +628,59 @@ db.execute(
         "ci-local.ps1 exit 0: 60 sections / 1934 passed / 0 failed / 14 ignored "
         "(baseline 1935; the -1 is the vt test that moved to oneterm-terminal, "
         "double-counted at baseline by the vt-paranoid step). "
-        "pub-item proxy: vt 535 -> 392 (<=400), terminal 301 -> 269 (<=270). "
+        "pub-item proxy: vt 535 -> 392 (<=400), terminal 301 -> 267 (<=270). "
         "crates/vt holds no atomic. check-doc-paths 120/10 -> 188/11. "
         "cargo doc clean for both crates under -D warnings. "
         "terminal-diagnostics: kept + CI-gated; the new step caught two dead items "
         "in crates/ssh/src/transport.rs. "
-        "Line delta -79 production lines, short of the -80 gate; see the packet.",
+        "Production lines 16784 -> 16692 at 18d7b4c (-92) and -85 after the "
+        "verification rework, against the -80 gate. Independently verified "
+        "PASS-WITH-NOTES (evidence/US-0090-verify.md); its five documentation "
+        "defects are fixed in the rework commit.",
         "US-0090",
     ),
 )
 db.commit()
 ```
 
+### Independent verification
+
+`evidence/US-0090-verify.md`, by a different agent against `18d7b4c`: **PASS-WITH-NOTES**. Every
+hard gate reproduced on an independent run. Five defects, all in documentation accuracy, all fixed
+in the rework commit and folded into the records above:
+
+| | Defect | Fix |
+| --- | --- | --- |
+| `D-1` | `docs/terminal-backend.md:453` still described the deleted `try_lock_unfair` / `lock_unfair`, and this packet's Reconciliation claimed that sentence had been fixed | Sentence rewritten to `try_lock()` / `lock()`; the false Reconciliation claim corrected |
+| `D-2` | `docs/terminal-backend.md:457, :615` still cited `take_render_demand()` as what the two pump loops call | Both now `render_demand_raised()`; same Reconciliation correction |
+| `D-3` | `IN-0029/low-level-design/migration.md:236-249` false four ways, and the file was never named in the Documentation Action | Section updated; the file added to Documentation Action and Reconciliation |
+| `D-4` | `FlagStack::len` / `is_empty` deleted without being in Scope or having a recorded grep | Added to Scope with the grep |
+| `D-5` | `Demand::raise` public while `release` / `is_raised` were not, making `raise`'s own doc unfollowable from outside | `Demand` is `pub(crate)` whole; `TerminalHandle::raise_render_demand()` is the public door |
+
+Two notes were folded in rather than actioned: `N-7` (`TerminalLogError`'s disposition was
+unrecorded — now in the table above) and `N-9` (the line-delta clause was met, not missed — the
+clause is now ticked and both measures recorded). `N-6` and `N-8` are bounds on the method, recorded
+in Gaps below.
+
 ### Gaps
 
-1. **The line-delta gate is missed by one line** (−79 against −80), with the arithmetic above. No
-   deletion was padded to close it.
-2. **`oneterm-vt`'s surface is 392, not the audit's ≈ 320 ambition.** The structural reason —
+1. **`unreachable_pub` proves reachability, not use.** The verifier (`N-6`) re-ran it and found nine
+   remaining, all methods of the test harness `Engine` in `crates/vt/src/render/render_tests.rs`;
+   production is clean in both crates. The lint therefore says nothing about `RowRef`,
+   `cluster_width`, `FeedStats`, `DefaultColors`, `EventQueueDiagnostics` or `TerminalLogError` —
+   every one is reachable and deliberately kept, and each was proved by grep instead, above.
+2. **`check-doc-paths.py` does not cover `docs/spec-intakes/**`** (verifier `N-8`), and could not
+   have caught `D-3` in any case: it validates paths, not method names. Widening it to the intake
+   tree is a separate change and was not claimed.
+3. **`oneterm-vt`'s surface is 392, not the audit's ≈ 320 ambition.** The structural reason —
    closing `grid` and `intern` turns about fifteen test-only engine methods into dead code — is
    recorded above. A future packet that wants the smaller number has to decide whether those
    methods are kept as `#[cfg(test)]` helpers or deleted; that is a question about the engine's
    test harness, not about visibility.
-3. **No E2E, by design** (Verification Plan). Nothing here is observable from a GUI.
-4. **`vt-bench` is a single machine, single run pair.** It is recorded, never gated, and it is
+4. **No E2E, by design** (Verification Plan). Nothing here is observable from a GUI.
+5. **`vt-bench` is a single machine, single run pair.** It is recorded, never gated, and it is
    evidence of "nothing exploded", not a measurement.
-5. **`harness.db` was not written** — it is gitignored and this work ran in a worktree; the rows
+6. **`harness.db` was not written** — it is gitignored and this work ran in a worktree; the rows
    are the snippet above, for the main checkout to apply after the merge.
 
 ## Reconciliation
@@ -616,10 +689,11 @@ Docs changed by this packet:
 
 | Doc | Change |
 | --- | --- |
-| `docs/terminal-backend.md` | `D1` (the `engine_shim.rs` tree entry, deleted at `US-0085`) and `D2` (`content.rs` "+ the legacy shape"); the `TerminalHandle` description in §5.1 — it stops naming `Engine`, names `Demand` as the adapter's own type in `handle.rs`, and names `render_demand_raised()` with the correct "the asking takes nothing away" contract; the `lock_unfair` / `try_lock_unfair` sentence deleted; §5.2's and §6's `take_render_demand()` citations; and the three Zed reference paths at `:19-21` relabelled `zed/crates/…`, which is what the widened checker demanded |
+| `docs/terminal-backend.md` | `D1` (the `engine_shim.rs` tree entry, deleted at `US-0085`) and `D2` (`content.rs` "+ the legacy shape"); the `TerminalHandle` description in §5.1 — it stops naming `Engine`, names `Demand` as the adapter's own type in `handle.rs`, and names `render_demand_raised()` with the correct "the asking takes nothing away" contract; and the three Zed reference paths at `:19-21` relabelled `zed/crates/…`, which is what the widened checker demanded. **Corrected during verification rework** (verifier defects `D-1`, `D-2`): this row previously claimed the `lock_unfair` / `try_lock_unfair` sentence and §6's `take_render_demand()` citations had been fixed. They had not — the first pass over this file reached §5.1 and the file-layout tree only. §6.2 (`:452-457`) still described the local read loop as taking a `try_lock_unfair` guard "falling back to `lock_unfair`", and §6.2 and §7 (`:457`, `:615`) still named `take_render_demand()` as what the two pump loops call. Now `TerminalHandle::try_lock()` / `lock()` and `render_demand_raised()`, which is what the code does. `grep -n 'lock_unfair\|take_render_demand\|\bEngine\b' docs/terminal-backend.md` now returns one line, the historical note at `:170` |
 | `docs/architecture.md` | `D3` — `oneterm-terminal` relabelled "Terminal adapter" and described as the lock plus the shared pump; `D4` — added the missing `oneterm-vt` row (as "Terminal engine"), plus `oneterm-actions`, `oneterm-theme`, `oneterm-highlight` and `oneterm-tools` |
 | `docs/agents/structure.md` | `D5` — the `vt/` subtree now lists all nine subdirectories with what each owns, instead of 4 files out of 54; `D6` — the `docs/refactor/ui-crate-restructure.md` line (a directory that does not exist) replaced with `docs/architecture.md`; `D7` — `url.rs / url_policy.rs` corrected to `url_policy.rs` |
 | `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md` | It **did** name `Demand`'s crate — a whole "Placement: the engine crate, as shipped, and it is a stated exception" block. Rewritten: the exception is gone, the primitive is the adapter's, and the HLD sentence it excepted is now true. Also the `take_render_demand()` bullet and the "clears by asking" sentence, both of which described the pre-`US-0082` one-shot flag |
+| `docs/spec-intakes/IN-0029-vt-engine/low-level-design/migration.md` | **Added during verification rework** (`D-3`). § "The adapter contract, as `US-0082` shipped it" now describes the contract as it is — `FairMutex<oneterm_vt::Terminal>`, `render_demand_raised()` as the pump's only check, `lock()` / `try_lock()` as the two acquires — with a paragraph naming each of the four things `US-0090` removed, so the section reads as an updated contract rather than a silently wrong one. Two further present-tense citations of `take_render_demand()` at `:115` and `:304` are inside records of what `US-0083` and `US-0084` did, and are now annotated with the current name rather than rewritten |
 | `docs/spec-intakes/IN-0029-vt-engine/low-level-design/events-and-api.md` | Added an "As shipped (`US-0090`)" note under the Interfaces block. The block is a design-time sketch that reality diverged from in three ways (it names `anchor`, `damage`, `strip` and `testing` modules that never existed, publishes twenty names that have no consumer, and says `parser` is `pub(crate)` when the session logger needs it public). The note records the divergence and points at `crates/vt/src/lib.rs` as the authority, and names `RowRef` and `cluster_width` as the two deliberate no-consumer exports |
 | `AGENTS.md` | §4's quality-gate command list gains the `terminal-diagnostics` clippy step, so the list still matches what `ci-local` runs |
 | `scripts/check-doc-paths.py` | Module doc rewritten for the widened pattern, including the recorded blind spot |

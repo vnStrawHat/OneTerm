@@ -42,9 +42,7 @@ pub use backend::{
 pub use color_classification::is_decorative_character;
 pub use content::{LineRangeCells, SnapshotCell, TerminalContent, last_content_row};
 pub use factory::{PtySize, SessionFactory};
-pub use handle::{
-    DEFAULT_SCROLLBACK_LINES, Demand, SharedTerminal, TerminalHandle, new_shared_terminal,
-};
+pub use handle::{DEFAULT_SCROLLBACK_LINES, SharedTerminal, TerminalHandle, new_shared_terminal};
 pub use key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 pub use logging::{
     TerminalLogController, TerminalLogError, TerminalLogState, local_log_identity, ssh_log_identity,
