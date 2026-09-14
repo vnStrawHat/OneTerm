@@ -282,6 +282,8 @@ pass against the defect.
 
 **Test counts.** `cargo test -p oneterm-local-shell`: 33 passed, 2 ignored (baseline 31 passed
 + 1 ignored; the packet's "30 tests" does not shrink). `cargo test -p oneterm-pty`: 24 passed.
+`pwsh scripts/ci-local.ps1`: exit 0, all ten sections, 60 suites, **1933 passed, 0 failed,
+14 ignored**.
 
 **Processes.** Every process this packet started was a child of its own test process, opened by
 handle before the drop. Across the two sweeps and the pre-fix proof run, **14** orphan pairs had
