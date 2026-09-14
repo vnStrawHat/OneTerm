@@ -5419,6 +5419,7 @@ dependencies = [
  "oneterm-pty",
  "oneterm-terminal",
  "polling",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

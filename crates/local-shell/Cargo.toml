@@ -24,3 +24,8 @@ log.workspace = true
 
 [dev-dependencies]
 oneterm-terminal = { workspace = true, features = ["test-support"] }
+
+# Test-only: the BUG-0055 orphan probe watches the processes a spawn added as
+# children of the test process (ToolHelp snapshot + process handle liveness).
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys.workspace = true

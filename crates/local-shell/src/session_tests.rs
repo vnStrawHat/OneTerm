@@ -40,7 +40,7 @@ fn cmd_utf8_command_line_stays_verbatim_under_escaping() {
     }
 }
 
-fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
+pub(super) fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if predicate() {
@@ -55,7 +55,7 @@ fn snapshot_contains(session: &LocalSession, needle: &str) -> bool {
     session.snapshot().text().contains(needle)
 }
 
-fn spawn_default() -> LocalSession {
+pub(super) fn spawn_default() -> LocalSession {
     let cfg = oneterm_core::LocalShellConfig::default();
     LocalSession::spawn(
         cfg,
