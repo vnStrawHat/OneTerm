@@ -20,7 +20,7 @@ use super::frame::{Frame, GridSize, RowKey};
 use super::glyphs::GlyphCache;
 use super::row_plan::{PlanContext, RowPlan, Scratch, build_row_plan};
 use super::shapes::CellSizeDevicePx;
-use crate::url::url_masks_into;
+use crate::url::{fill_wraps, url_masks_rows_into};
 
 /// Everything besides cell content that changes how a row is planned. A
 /// change drops every key so rows rebuild without comparing.
@@ -44,9 +44,20 @@ pub(crate) struct PlanCache {
     dirty: Vec<bool>,
     style: Option<StyleKey>,
     grid: Option<GridSize>,
+    /// The masks as of the last update — authoritative for every row, whether
+    /// or not this frame rescanned it.
     mask_prev: Vec<Vec<bool>>,
+    /// Scratch for the rows this frame rescans; swapped row by row into
+    /// `mask_prev` so both keep their inner allocations.
     mask_cur: Vec<Vec<bool>>,
+    /// This frame's per-row `WRAPLINE` flags.
     wraps: Vec<bool>,
+    /// The previous frame's, aligned with `mask_prev` (so `shift` rotates it
+    /// too). A row whose wrap flag was *dropped* still has to pull its old
+    /// continuation row into the rescan, so the run walk uses the union.
+    wraps_prev: Vec<bool>,
+    /// The rows this frame rescans: the dirty rows closed under wrap runs.
+    scan: Vec<bool>,
     /// Cell geometry the plans were built with: the device cell size and the
     /// logical cell width (as bits). Shape quads are stored in device pixels
     /// and text runs are shaped with `force_width`, so a scale-factor change —
@@ -73,6 +84,8 @@ impl PlanCache {
             mask_prev: Vec::new(),
             mask_cur: Vec::new(),
             wraps: Vec::new(),
+            wraps_prev: Vec::new(),
+            scan: Vec::new(),
             cell: None,
         }
     }
@@ -139,17 +152,41 @@ impl PlanCache {
         stats.rows_candidate = self.dirty.iter().filter(|&&d| d).count() as u32;
 
         // Phase 2: a changed row may start or end a wrapped URL, which changes
-        // the class of untouched continuation rows (deviation 10).
+        // the class of untouched continuation rows (deviation 10). That hazard
+        // is bounded, and the bound is the scope of the rescan: a URL can only
+        // reach a row it is wrap-connected to, so the answer is the dirty rows
+        // closed under the wrap runs `self.wraps` already tracks — never the
+        // whole viewport (`US-0092`). Rows outside those runs keep the masks
+        // they had, which is why `mask_prev` stays authoritative for all rows.
         let any_dirty = self.dirty.iter().any(|&d| d);
         if any_dirty {
-            url_masks_into(frame, &mut self.mask_cur, &mut self.wraps);
-            stats.url_scans += 1;
+            fill_wraps(frame, &mut self.wraps);
+            self.wraps_prev.resize(rows, false);
             self.mask_prev.resize_with(rows, Vec::new);
-            for (r, d) in self.dirty.iter_mut().enumerate() {
-                if self.mask_cur[r] != self.mask_prev[r] {
-                    *d = true;
+            self.mask_cur.resize_with(rows, Vec::new);
+            self.mark_scan_runs(rows);
+            stats.url_scans += 1;
+
+            let mut r = 0;
+            while r < rows {
+                if !self.scan[r] {
+                    r += 1;
+                    continue;
+                }
+                let start = r;
+                while r < rows && self.scan[r] {
+                    r += 1;
+                }
+                stats.url_rows_scanned += (r - start) as u32;
+                url_masks_rows_into(frame, &mut self.mask_cur, &self.wraps, start..r);
+                for row in start..r {
+                    if self.mask_cur[row] != self.mask_prev[row] {
+                        self.dirty[row] = true;
+                    }
+                    std::mem::swap(&mut self.mask_prev[row], &mut self.mask_cur[row]);
                 }
             }
+            self.wraps_prev.copy_from_slice(&self.wraps);
         }
 
         // Phase 3: rebuild.
@@ -157,15 +194,10 @@ impl PlanCache {
             if !self.dirty[r] {
                 continue;
             }
-            let mask: &[bool] = if any_dirty {
-                &self.mask_cur[r]
-            } else {
-                &self.mask_prev[r]
-            };
             build_row_plan(
                 frame.row(r),
                 ctx,
-                mask,
+                &self.mask_prev[r],
                 scratch,
                 glyphs,
                 stats,
@@ -174,15 +206,49 @@ impl PlanCache {
             stats.rows_planned += 1;
         }
 
-        if any_dirty {
-            std::mem::swap(&mut self.mask_prev, &mut self.mask_cur);
-        }
         for r in 0..rows {
             self.keys[r] = frame.row_key(r);
         }
         self.grid = Some(size);
         self.style = Some(style_key);
         self.cell = Some(cell);
+    }
+
+    /// Fill `self.scan` with the dirty rows closed under wrap runs — the exact
+    /// scope a URL rescan needs (`US-0092`).
+    ///
+    /// Rows `r` and `r + 1` count as connected when **either** frame's flags say
+    /// so: a row that has just lost its `WRAPLINE` is dirty, and its old
+    /// continuation row — untouched, so not dirty — still carries a mask that
+    /// was extended from it and must be recomputed.
+    fn mark_scan_runs(&mut self, rows: usize) {
+        let Self {
+            dirty,
+            wraps,
+            wraps_prev,
+            scan,
+            ..
+        } = self;
+        scan.clear();
+        scan.resize(rows, false);
+        let connected = |i: usize| wraps[i] || wraps_prev[i];
+        let mut r = 0;
+        while r < rows {
+            if !dirty[r] {
+                r += 1;
+                continue;
+            }
+            let mut start = r;
+            while start > 0 && connected(start - 1) {
+                start -= 1;
+            }
+            let mut end = r;
+            while end + 1 < rows && connected(end) {
+                end += 1;
+            }
+            scan[start..=end].fill(true);
+            r = end + 1;
+        }
     }
 
     /// Scrolling moves plans with their rows, exactly as the render state moves
@@ -205,13 +271,21 @@ impl PlanCache {
             self.rows.rotate_right(distance);
             self.keys.rotate_right(distance);
         }
-        // Masks are recomputed whenever any row is dirty, which a scroll
-        // guarantees; rotating them keeps the delta check meaningful.
+        // The masks and the wrap flags they were computed from travel with
+        // their rows too, so the delta check and the wrap-run walk stay
+        // meaningful and only the scrolled-in rows are rescanned.
         if self.mask_prev.len() == len {
             if scrolled > 0 {
                 self.mask_prev.rotate_left(distance);
             } else {
                 self.mask_prev.rotate_right(distance);
+            }
+        }
+        if self.wraps_prev.len() == len {
+            if scrolled > 0 {
+                self.wraps_prev.rotate_left(distance);
+            } else {
+                self.wraps_prev.rotate_right(distance);
             }
         }
     }
@@ -220,6 +294,8 @@ impl PlanCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oneterm_terminal::test_support::FixtureCell;
+
     use crate::render::frame::CellFlags;
     use crate::render::frame::test_support::{FrameBuilder, resnapshot, rewrite_row};
     use crate::render::glyphs::FontSet;
@@ -504,6 +580,112 @@ mod tests {
         assert_eq!(
             h.cache.rows[0].shapes[0].rect.w, 32,
             "quads follow the cell size"
+        );
+    }
+
+    /// `US-0092`: the URL pass costs the rows that changed, not the viewport.
+    /// One rewritten row in a 45x160 viewport with no wraps scans one row.
+    #[gpui::test]
+    fn url_pass_scans_the_changed_rows_not_the_viewport(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let texts = lines(45);
+        let (mut frame, mut fixture) = frame_with(&texts, 160).build_with_fixture();
+        let s = h.update(cx, &frame, style_key(13.0));
+        assert_eq!(s.url_scans, 1);
+        assert_eq!(
+            s.url_rows_scanned, 45,
+            "nothing is cached on the first frame"
+        );
+
+        rewrite_row(&mut frame, &mut fixture, 20, "echoed input");
+        let s = h.update(cx, &frame, style_key(13.0));
+        assert_eq!(s.url_scans, 1, "a scan still happens exactly when it did");
+        assert_eq!(s.url_rows_scanned, 1, "and it walks one row, not 45");
+
+        resnapshot(&mut frame, &mut fixture);
+        let s = h.update(cx, &frame, style_key(13.0));
+        assert_eq!(s.url_scans, 0, "an idle frame still scans nothing");
+        assert_eq!(s.url_rows_scanned, 0);
+    }
+
+    /// `US-0092`: a dirty-rows-only scope would mis-underline this. A URL
+    /// wrapping over three rows where only the middle row is rewritten must
+    /// produce the mask a whole-viewport rescan produces.
+    #[gpui::test]
+    fn url_pass_rescans_the_whole_wrap_run_of_a_changed_row(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(5, 10)
+            .text(0, 0, "https://a.")
+            .flags(0, 9, CellFlags::WRAPLINE)
+            .text(1, 0, "test/bbbbb")
+            .flags(1, 9, CellFlags::WRAPLINE)
+            .text(2, 0, "ccc rest")
+            .build_with_fixture();
+        h.update(cx, &frame, style_key(13.0));
+
+        // Rewrite the middle row, keeping its wrap: `write` clears the flag, so
+        // the fixture re-sets it exactly as the engine's print path does.
+        fixture.begin_batch();
+        for (col, ch) in "test/ddddd".chars().enumerate() {
+            fixture.write(
+                1,
+                col,
+                &FixtureCell {
+                    ch,
+                    ..FixtureCell::default()
+                },
+            );
+        }
+        fixture.set_wrapped(1, true);
+        resnapshot(&mut frame, &mut fixture);
+        let s = h.update(cx, &frame, style_key(13.0));
+        assert_eq!(
+            s.url_rows_scanned, 3,
+            "the changed row pulls in the rest of its wrap run, and nothing else"
+        );
+
+        let mut want = Vec::new();
+        let mut wraps = Vec::new();
+        crate::url::url_masks_into(&frame, &mut want, &mut wraps);
+        let got: Vec<Vec<bool>> = (0..5).map(|r| h.cache.url_mask(r).to_vec()).collect();
+        assert_eq!(got, want, "same mask as a full rescan");
+        assert!(
+            got[0].iter().all(|&m| m) && got[1].iter().all(|&m| m),
+            "the URL still covers both wrapped rows: {got:?}"
+        );
+        assert_eq!(&got[2][..4], &[true, true, true, false], "{:?}", got[2]);
+    }
+
+    /// A row that loses its `WRAPLINE` is dirty, but the continuation row that
+    /// inherited its mask is not — so the run walk has to use the union of both
+    /// frames' wrap flags, or the stale underline survives (`US-0092`).
+    #[gpui::test]
+    fn url_pass_rescans_a_continuation_row_whose_wrap_was_dropped(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let (mut frame, mut fixture) = FrameBuilder::new(3, 10)
+            .text(0, 0, "https://a.")
+            .flags(0, 9, CellFlags::WRAPLINE)
+            .text(1, 0, "test/bbbbb")
+            .build_with_fixture();
+        h.update(cx, &frame, style_key(13.0));
+        assert!(h.cache.url_mask(1)[0], "row 1 starts as a continuation");
+
+        // Row 0 stops being a URL and stops wrapping (a write clears the flag);
+        // row 1 is untouched, so only the union of both frames' wrap flags
+        // brings it back into the rescan.
+        rewrite_row(&mut frame, &mut fixture, 0, "plain text");
+        let s = h.update(cx, &frame, style_key(13.0));
+        assert_eq!(
+            s.url_rows_scanned, 2,
+            "the old continuation row is rescanned"
+        );
+        assert!(
+            h.cache.url_mask(1).iter().all(|&m| !m),
+            "the stale underline is gone: {:?}",
+            h.cache.url_mask(1)
         );
     }
 
