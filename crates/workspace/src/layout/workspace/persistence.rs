@@ -9,8 +9,10 @@
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
-use gpui::{App, Entity, PromptLevel, Window};
-use gpui_component::dock::{DockArea, DockAreaState, DockPlacement, DockState, PanelInfo};
+use gpui::{App, Axis, Entity, PromptLevel, Window};
+use gpui_component::dock::{
+    DockArea, DockAreaState, DockPlacement, DockState, PanelInfo, PanelState,
+};
 use oneterm_core::AppError;
 use oneterm_state::dock_persistence::{DockDocument, DockUpdateOutcome, update_dock_document_at};
 use oneterm_state::panel_names;
@@ -27,15 +29,31 @@ pub(crate) fn read_dock_document() -> Result<Option<DockDocument>, AppError> {
 /// keep right dock + settings. Fails when the document holds no valid dock
 /// layout. A layout saved by an older `MAIN_DOCK_VERSION` is still loaded, and
 /// the user is offered a reset to the default layout.
+///
+/// The persisted **center is dropped** before `DockArea::load` sees the state:
+/// the only caller resets the center immediately afterwards (see
+/// [`OneTermWorkspace::new`](super::OneTermWorkspace::new)), and `load` builds
+/// every panel it is given — building a `terminal` panel spawns a local shell.
+/// Building the saved center would therefore start a shell only to drop it
+/// milliseconds later, whose `ClosePseudoConsole` can kill a `cmd.exe` that is
+/// still initialising (`BUG-0054`). Side docks, sizes and open state load as
+/// before.
 pub(crate) fn load_layout(
     dock_area: &Entity<DockArea>,
     document: &DockDocument,
     window: &mut Window,
     cx: &mut App,
 ) -> Result<()> {
-    let state = document
+    let mut state = document
         .dock_state::<DockAreaState>()
         .map_err(|error| anyhow::anyhow!("parse dock layout: {error}"))?;
+    state.center = PanelState {
+        // Carried over for shape only. `build_node` dispatches on `info`, and
+        // the next `dump` writes "StackPanel" whatever this string held.
+        panel_name: state.center.panel_name.clone(),
+        children: Vec::new(),
+        info: PanelInfo::stack(Vec::new(), Axis::Vertical),
+    };
 
     if state.version != Some(MAIN_DOCK_VERSION) {
         let answer = window.prompt(
