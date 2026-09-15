@@ -639,3 +639,200 @@ Written to the session scratchpad, not to the repository:
   `IN-0038` rows from a **copy**; the live database was never opened for writing.
 - `<scratchpad>\consumer\` -- the outsider walk-through crate. Deleted.
 - `<scratchpad>\ci-local-full.log` -- the full gate log.
+
+---
+
+# Final re-check at 20d5b205
+
+Branch `docs/vt-embedder-guide` at `20d5b205`, base `main` at `5d6c63f3` (the merge of
+`US-0102`), confirmed by `git merge-base`. Same host, same rules, `CARGO_BUILD_JOBS=3`.
+Nothing pushed, nothing committed, nothing outside the repository and the scratchpad.
+
+## Verdict: PASS-WITH-NOTES (two new findings; every earlier substantive finding closed)
+
+All four false prose claims are fixed, the two outsider blockers are fixed, the `ignore`
+blocks are gone in every feature state, chapter 11 is folded against `5d6c63f3`, and the
+record edits landed. What is left is one more prose-vs-code mismatch in chapter 11
+(finding 14, the inert-mode paragraph) and a set of stale counts in the packet's own
+Evidence (finding 15). Neither blocks a merge; finding 14 is a two-sentence edit.
+
+### All four false prose claims are fixed, and fixed properly
+
+| Was | Now | How I checked |
+| --- | --- | --- |
+| chapter 13's poll loop did not compile | a ```rust,no_run``` block using `polling::Events` and `events.iter()`, compiled on every build that has `pty`; `guide.rs:79-81` gates `ch13_pty` on the feature and `:83-95` supplies a stub arm so the chapter keeps its sidebar slot under `--no-default-features` | it is one of the 35 doctests that pass under `--all-features` |
+| "All are joined on drop" | "**None of them is joined, and drop does not wait for them**", with the Windows-parked-in-a-blocking-read reason, the Unix reaper's deliberate outliving, and the grace period correctly attributed to the *child* rather than the threads | zero `.join()` in `crates/vt/src/pty/` outside tests; `windows/pipe.rs:367`, `unix.rs:217`, `windows/child.rs:53` |
+| "not `Sync` because `feed` takes `&mut self`" | "`Terminal` is both `Send` and `Sync`, and both are automatic ... no interior mutability anywhere in it, so the compiler grants both", followed by what each one actually buys | `target/doc/oneterm_vt/struct.Terminal.html` auto-trait list |
+| a seven-item list mixing a struct in with the enums | "Eight public types are marked": **seven enums** (`VtEvent`, `OscRoute`, `Progress`, `ShellMark`, `input::KeySpec`, `input::NamedKey`, `search::SearchPattern`) and **one struct** (`search::SearchOptions`, with start-from-the-default guidance) | exact set-for-set match against `grep -A3 '#[non_exhaustive]' crates/vt/src` |
+
+### Everything else on the list, confirmed
+
+- **"You bring `polling`"** is a section of its own (`13-pty.md:49-68`) with the
+  `polling = "3"` manifest block, the same-major reason, and an explicit note that
+  `pub use polling;` is deliberately not offered. Zero `pub use polling` in
+  `crates/vt/src`, so the text is accurate. My finding 2 is closed.
+- **Chapter 2 fragment 8** ("Printing the screen", `02-embedding.md:174`) exists and is a
+  live doctest. Finding 5 closed.
+- **Chapter 7's regex tail** is `07-search-regex.md`, spliced by
+  `#[cfg_attr(feature = "regex", doc = include_str!(...))]` with a prose stub on the other
+  arm. Its block is live and defines its own `term`, which the old `ignore`d one did not.
+- **Zero `ignore` blocks** in any chapter: the fence census is 28 ```rust```, 1
+  ```rust,no_run```, 5 ```text```, 2 ```toml```. Doctests **34 / 35 / 35 / 32** for
+  default / `--all-features` / `--features regex` / `--no-default-features`, **0 failed and
+  0 ignored in all four**. 28 of the 34 are the guide, every chapter contributing at least
+  one; chapter 7's two are attributed to `guide.rs` rather than to a `.md` path because
+  they arrive through the `cfg_attr` splice, so the packet's
+  `--list | grep -c 'docs/guide/'` criterion now reads 26 rather than 28. Still far past
+  its threshold of 13, but the packet's wording will undercount from here on.
+- **Chapter 11 folded against `5d6c63f3`**, pending paragraph gone. `? 5` with the
+  screen-flag-never-a-cell-attribute text, `? 9`, `? 1015`, `? 2027` with the cross-feed
+  carry, the 32-scalar bound, the once-per-cluster counter and the `VS16`-needs-a-base
+  rule, the `GlyphWidth::WcsWidth` caveat, `DA3`, `LS2`/`LS3`/`SS2`/`SS3` with the
+  "consumed by the next printed character and by nothing else" rule, and twenty built-in
+  OSC numbers. The gaps table is `DECRQCRA`, `DECRQSS`, `XTGETTCAP` and the missing
+  `? 2027` refusal flag, and the `esctest` section now explains mechanically why there is
+  no score rather than declining to give one. Its doctest (DA1, DA2 and DA3 all answered;
+  `DECRQCRA` counted unhandled and never answered) passes.
+- **Chapter 6** carries both mouse tables -- mode to `MouseReporting` to what it sends, and
+  mode to `MouseEncoding` to the report shape -- and the empty-`Vec` rule at `:114-121`,
+  including the distinction that an empty answer is not the same as `None`.
+  `MouseReporting::X10` and `MouseEncoding::Urxvt` exist at `snapshot/modes.rs:16,37`.
+- **Chapter 10** documents `dropped_cluster_carries` twice, as a ceiling row (`:26`) and as
+  a counter (`:103`); the field is real at `events/vt_event.rs:233`.
+- **The coverage grep is no longer vacuous.** `guide` now matches `oneterm_vt::guide` at
+  `01-overview.md:100` and `intern` has real content at `10-limits.md:47-61`
+  (`oneterm_vt::intern`, the three tables it owns, `Terminal::interner`). Re-ran the
+  packet's grep independently: 7 modules, 20 variants, nothing missing. Finding 8 closed.
+- **`packaging.md`**: the checks table gains a row for the gate this packet actually adds
+  (`:347`, "a second self-containment grep, over `crates/vt/docs/guide`", naming both CI
+  homes and the `guide.rs` header it caught), and point 9 (`:167-172`) is rewritten in the
+  past tense to describe the README that now exists. Findings 6 and 7 closed at the
+  document level.
+
+### Gates
+
+Link check on the re-rendered guide: 14 pages, **432 links, 0 missing file targets**, 249
+fragments checked, and `guide/index.html` links exactly 13 chapter modules in ascending
+order. The same 14 unresolved fragments as the first pass, all of them rustdoc's own
+`guide.rs.html#NN` source anchors, which rustdoc 1.96 materialises in JavaScript.
+Citation greps: **0** over the chapters with the `ci.yml` pattern (`crates/` and `docs/`
+included) and **0** over every `///` / `//!` line in `crates/vt/src`.
+`vt-public-api.py --check` reports the surface unchanged; `--diff-platforms` is 6 lines,
+all inside `oneterm_vt::pty`. `check-english.py` passes 873 files; `check-doc-paths.py`
+passes 197 paths in 11 documents. The guide is now 2 024 lines over 14 files (13 chapters
+plus the regex splice) and `guide.rs` is 95 lines, so the packet's LOC table needs a
+refresh.
+
+### Outsider walk, chapter 13 only
+
+Consumer crate in the scratchpad, depending on `oneterm-vt` by git at
+`branch = "docs/vt-embedder-guide"` plus `polling = "3"` exactly as the new section
+instructs. **The chapter's loop compiled unmodified this time.** The only edits were ones
+the chapter tells a reader to make: their own `Shell`, a bounded `wait` so the walk
+terminates, and the real `feed` call the chapter leaves as a comment. Output:
+
+```
+child exited: Some(ExitStatus(ExitStatus(0)))
+screen = ["hi"]
+dropped
+```
+
+Exit 0. Pid-tracked: the runner pid was dead afterwards and no `cmd.exe` or
+`OpenConsole.exe` with an `echo hi` command line survived. Consumer deleted.
+
+### Ten factual sentences spot-checked, chapters 11 and 13
+
+1. `? 5` reaches the embedder as `ModeSnapshot::reverse_video` -- `snapshot/modes.rs:70`. OK
+2. `? 9` X10 mouse is recognised -- `terminal/mode.rs:186`, `9 => Mode::MouseX10`. OK
+3. `? 1015` urxvt encoding is recognised -- `terminal/mode.rs:195`, `1015 => Mode::UrxvtMouse`. OK
+4. the cluster carry is bounded at 32 scalars and counted once per cluster --
+   `dispatch.rs:42` `CLUSTER_CARRY_MAX = 32`, and `:373-374`. OK
+5. `DA3` is answered -- `dispatch.rs:1012`, "`DA3` (`CSI = c`) answers
+   `DCS ! | <8 hex digits> ST`". OK
+6. `LS2` is `ESC n`, `LS3` is `ESC o`, `SS2` is `ESC N`, `SS3` is `ESC O` --
+   `dispatch.rs:1205-1209`. OK
+7. twenty built-in OSC numbers including `17` and `19` -- `terminal/osc.rs:81-83`,
+   `BUILTIN: [u32; 20]`, exactly the list the chapter prints. OK
+8. `DECRQCRA` is absent -- zero matches anywhere in `crates/vt/src`, and the chapter's own
+   doctest asserts it is counted unhandled. OK
+9. `pty::GlyphWidth::WcsWidth` exists and is public -- `pty/mod.rs:83,86`. OK
+10. chapter 13's console-host paragraph -- `windows/conpty.rs:106` prefers a `conpty.dll`
+    beside the running executable and falls back to the system host, `:57-58` names
+    `x64\OpenConsole.exe`, and `:88` states the inbox host loses Sixel. OK
+
+### New finding -- 14. Chapter 11's "Recognised but inert" is wrong in both directions -- LOW/MEDIUM
+
+`11-conformance.md:120-125` says:
+
+> **One mode** is accepted so that a stream setting it is not noise, and does nothing:
+> `? 9001`, win32 input mode ... and `DECRQM` answers "not supported".
+
+`Mode::inert_state` (`crates/vt/src/terminal/mode.rs:225-241`) has **three** arms:
+
+- `Mode::DecCoLm` (`? 3`) returns `ModeState::NotSupported`, with the comment "both `h` and
+  `l` act, and the honest answer is still 'not supported', because the width never
+  changes";
+- `Mode::Win32Input` (`? 9001`) returns **`ModeState::Reset`**, not `NotSupported`
+  (`ModeState` is `NotSupported = 0`, `Set = 1`, `Reset = 2`, at `mode.rs:282-289`), and
+  the table's own rule at `:221-223` says why: an inert mode answers `NotSupported` only
+  when it is not even stored, and `Reset` when it is stored and simply unread;
+- `Mode::LineFeedNewLine` (ANSI `20`) returns `ModeState::Reset`, commented "LNM is tracked
+  and read by nothing -- `LF` never implies `CR` here".
+
+So the chapter undercounts the inert set by two, gives the wrong `DECRQM` answer for the
+one mode it does name, and lists both of the modes it misses -- "`3` column mode" at `:59`
+and "`20` newline mode" at `:65` -- in the **Supported** section. That last part is the one
+thing the chapter's own opening paragraph promises never to do: "never claim a capability
+that does not exist."
+
+Not a gate failure and not a behaviour bug. It is the same class as findings 11 and 12 from
+the first pass -- a prose claim about the API that no doctest can reach -- and it is the
+only one I found this round. `? 3` is arguably defensible as "supported" because both `h`
+and `l` are dispatched; `? 20` is not, and the inert count and the `? 9001` answer are
+simply wrong against a table two files away.
+
+### New finding -- 15. The packet's own Evidence numbers do not match the tree -- NIT (record accuracy)
+
+Same class as first-pass finding 9, and none of it touches the guide itself:
+
+- **Doctest attribution.** Packet Evidence (`US-0103-embedder-guide.md:370`): "Of the 34 in
+  the default run, **30** come from the guide". Measured from
+  `cargo test -p oneterm-vt --doc -- --list`: **28** -- 26 attributed to a
+  `docs/guide/*.md` path and 2 to `guide.rs` (chapter 7's, which arrive through the
+  `cfg_attr` splice rather than an `include_str!`).
+- **Chapter 7's count.** The same sentence's per-chapter tally says `07 x3`. In the
+  **default** run chapter 7 has **2**; the third is the regex block, which exists only
+  under `--features regex` (35 - 34 = 1). The tally as printed also sums to 29, matching
+  neither the 30 it claims nor the 28 measured.
+- **LOC table, chapters.** `:318` says "actual 1 956"; `cat crates/vt/docs/guide/*.md |
+  wc -l` is **2 024** across the 14 files.
+- **LOC table, `guide.rs`.** `:319` says "actual 95", which is right, but the
+  verification-response table at `:526` says "corrected again for the `cfg` split: **71**".
+  The packet contradicts itself; `wc -l` is 95.
+
+Nothing here is a claim a reader of the guide can trip over -- it is the packet's own
+bookkeeping -- but the numbers are what a later reviewer will trust.
+
+### Carried forward, unchanged
+
+Findings 4, 9 and 10 of the first pass were nits and this round did not revisit them:
+chapter 4's "four questions" arithmetic, the `guide.rs` line count in the packet's LOC
+table (now 95 lines, so that table is stale regardless), and chapter 1's dropped "not
+measured" hedge on rio-vt's dependency count. Finding 13, the implementer's own
+`harness.db` write, still stands as a process note for the coordinator.
+
+### `pwsh scripts/ci-local.ps1 -Full`
+
+Exit 0, twenty-five steps, every one green; log kept privately at
+`<scratchpad>\r2-ci-full.log`. Final line:
+
+```
+ci-local: all checks passed.
+```
+
+Both self-containment greps ran and were silent, including
+`==> rustdoc self-containment (crates/vt/docs/guide)`, the gate this packet adds.
+`cargo package -p oneterm-vt --list` piped into `verify-dependency-graph.py --package-list -`
+passed, so the fourteen chapter files still travel inside the package and
+`include_str!` will build for a consumer. `cargo deny check licenses bans advisories`:
+"advisories ok, bans ok, licenses ok".
