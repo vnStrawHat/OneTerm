@@ -77,7 +77,8 @@ pub enum Mode {
     /// `? 2026`. The bit is not stored: the real state lives in
     /// `crate::snapshot::SyncState`, which also holds its timeout.
     SyncUpdate,
-    /// `? 2027`, grapheme clustering. Recognised and inert.
+    /// `? 2027`, grapheme clustering: while set, the print path measures whole
+    /// grapheme clusters instead of single scalars.
     GraphemeClusters,
     /// `? 9001`, win32 input mode. Recognised and inert.
     Win32Input,
@@ -220,8 +221,6 @@ impl Mode {
             // Trap 40: both `h` and `l` act, and the honest answer is still
             // "not supported", because the width never changes.
             Mode::DecCoLm => ModeState::NotSupported,
-            // R-56: recognised and inert, and `NotSupported` says so.
-            Mode::GraphemeClusters => ModeState::NotSupported,
             // R-36: conhost sends `? 9001 h` unprompted, so it is accepted
             // silently — but the encoding is not implemented.
             Mode::Win32Input => ModeState::Reset,

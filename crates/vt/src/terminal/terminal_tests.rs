@@ -453,7 +453,7 @@ fn decrqm_answers_match_the_mode_table() {
     // A table test over every mode with a private number, in its power-on state.
     let expected = |mode: Mode| -> ModeState {
         match mode {
-            Mode::DecCoLm | Mode::GraphemeClusters => ModeState::NotSupported,
+            Mode::DecCoLm => ModeState::NotSupported,
             Mode::LineWrap | Mode::ShowCursor | Mode::AlternateScroll | Mode::UrgencyHints => {
                 ModeState::Set
             }
@@ -492,8 +492,8 @@ fn decrqm_answers_match_the_mode_table() {
         );
     }
     assert_eq!(
-        inert, 3,
-        "? 3, ? 2027 and ? 9001 — and `? 45` left the table"
+        inert, 2,
+        "? 3 and ? 9001 — `? 45` and `? 2027` both left the table when they got readers"
     );
 
     // The same walk over the ANSI space (`US-0087`). The rule is about readers,
@@ -795,19 +795,39 @@ fn win32_input_mode_is_accepted_silently() {
 }
 
 #[test]
-fn mode_2027_is_recognised_and_inert() {
-    // R-56: `cluster_width` ships, the print path does not.
-    let mut session = Session::new(10, 3);
+fn mode_2027_measures_grapheme_clusters() {
+    // A ZWJ family: four people joined, each two columns wide on its own.
+    const FAMILY: &str = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+
+    // Reset -- the power-on state, and what the parity corpus pins -- width is
+    // per scalar, so the cursor advances by the sum: four wide glyphs.
+    let mut session = Session::new(20, 3);
+    session.feed(FAMILY.as_bytes());
+    assert_eq!(session.cursor().1, 8);
+
+    // Set, the whole cluster is one cell, two columns wide.
+    let mut session = Session::new(20, 3);
     let stats = session.feed(b"\x1b[?2027h");
     assert_eq!(stats.unhandled_sequences, 0);
+    session.feed(FAMILY.as_bytes());
+    assert_eq!(session.cursor().1, 2);
+    assert_eq!(session.row(0), format!("{FAMILY}{}", " ".repeat(18)));
 
-    session.feed("e\u{301}".as_bytes());
-    // Still one scalar per cell, exactly as with the mode reset: the combining
-    // mark joins the cell to its left rather than taking a column.
-    assert_eq!(session.row(0), "e\u{301}         ");
-
+    // The mode is real now, so `DECRQM` reports it rather than answering
+    // `NotSupported`.
     session.feed(b"\x1b[?2027$p");
-    assert_eq!(session.replies(), "\x1b[?2027;0$y");
+    assert_eq!(session.replies(), "\x1b[?2027;1$y");
+    session.feed(b"\x1b[?2027l\x1b[?2027$p");
+    assert_eq!(session.replies(), "\x1b[?2027;2$y");
+
+    // A flag is one wide cell under the mode, and the combining-mark case is
+    // unchanged from the per-scalar path, so nothing that already worked moves.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b[?2027h");
+    session.feed("\u{1f1fb}\u{1f1f3}e\u{301}".as_bytes());
+    assert_eq!(session.cursor().1, 3);
+    // `row_text` skips the wide spacer, so the flag is one visible cluster.
+    assert_eq!(session.row(0), "\u{1f1fb}\u{1f1f3}e\u{301}       ");
 }
 
 #[test]

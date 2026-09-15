@@ -32,6 +32,8 @@ use crate::terminal::color::{ColorKey, parse_color};
 use crate::terminal::mode::{CursorShape, CursorStyle, FlagApply, KeyboardFlags, Mode, ModeState};
 use crate::terminal::osc::OscRoute;
 use crate::terminal::{MARK_MAX, State};
+use crate::width::cluster_width;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// The dispatch sink, built by `Terminal::feed` over its own fields.
 pub(crate) struct Handler<'a> {
@@ -179,6 +181,36 @@ impl Handler<'_> {
         let mode = self.print_mode();
         let State { grid, interner, .. } = self.state;
         grid.print(map_charset(charset, c), mode, interner);
+    }
+
+    /// The `? 2027` print path: one grapheme cluster, one cell.
+    ///
+    /// The charset map is applied to the leading scalar only, exactly as the
+    /// per-scalar path applies it to every scalar: a cluster whose base is a
+    /// line-drawing letter is the single-scalar case, and one that is not
+    /// cannot be in the DEC special set anyway.
+    fn input_cluster(&mut self, cluster: &[char]) {
+        let Some((&first, rest)) = cluster.split_first() else {
+            return;
+        };
+        let width = cluster_width(cluster);
+        let charset = {
+            let cursor = self.state.grid.screen().cursor();
+            cursor.charsets[self
+                .state
+                .single_shift
+                .take()
+                .unwrap_or(self.state.active_charset)]
+        };
+        let mode = self.print_mode();
+        let State { grid, interner, .. } = self.state;
+        grid.print_with_width(map_charset(charset, first), width, mode, interner);
+        // Width 0 is what puts the rest of the cluster in the cell the leading
+        // scalar just took, however wide `unicode-width` thinks each one is on
+        // its own.
+        for &c in rest {
+            grid.print_with_width(c, 0, mode, interner);
+        }
     }
 
     // ── Erase and scroll ────────────────────────────────────────────────────
@@ -913,6 +945,19 @@ fn map_charset(charset: Charset, c: char) -> char {
 impl Dispatch for Handler<'_> {
     fn print_str(&mut self, text: &str) {
         self.state.dispatched = true;
+        if self.state.modes.contains(Mode::GraphemeClusters) {
+            // One `Vec` for the whole run, cleared per cluster: `cluster_width`
+            // reads scalars, and the mode is rare enough that a reusable buffer
+            // is not worth a field on `State`.
+            let mut scalars: Vec<char> = Vec::new();
+            for cluster in UnicodeSegmentation::graphemes(text, true) {
+                scalars.clear();
+                scalars.extend(cluster.chars());
+                self.input_cluster(&scalars);
+                self.state.preceding_char = scalars.last().copied();
+            }
+            return;
+        }
         for c in text.chars() {
             self.input(c);
             // Trap 43: `preceding_char` is the raw scalar, before the charset

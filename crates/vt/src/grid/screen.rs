@@ -1076,6 +1076,24 @@ impl Screen {
         let Some(width) = scalar_width(c) else {
             return;
         };
+        self.print_with_width(c, width, mode, interner, anchors);
+    }
+
+    /// Place one scalar at a width the caller decided.
+    ///
+    /// Mode `? 2027` is the only caller that does not use [`Screen::print`]:
+    /// it measures a whole grapheme cluster with
+    /// [`crate::width::cluster_width`], prints the cluster's leading scalar at
+    /// that width, and then attaches every following scalar at width 0 — which
+    /// is how a ZWJ sequence lands in one cell instead of several.
+    pub(crate) fn print_with_width(
+        &mut self,
+        c: char,
+        width: u8,
+        mode: PrintMode,
+        interner: &mut Interner,
+        anchors: &mut Anchors,
+    ) {
         if width == 0 {
             self.attach_zero_width(c, interner);
             self.debug_assert_integrity();
