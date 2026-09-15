@@ -4,7 +4,7 @@ Date: 2026-09-15
 
 ## Status
 
-Proposed
+Accepted (owner ruling, 2026-09-15: routing table with Builtin / BuiltinAndForward / Forward / Drop per OSC number, no embedder code inside `feed`; custom spellings such as OneTerm's OSC 9;7 and 20308 stay outside the engine)
 
 ## Context
 
