@@ -157,6 +157,8 @@ pub(crate) struct PlanContext<'a> {
     pub device: CellSizeDevicePx,
     /// `None` when semantic highlighting is disabled.
     pub semantic: Option<&'a SemanticOverlay>,
+    /// `DECSCNM` (`? 5`): draw the whole screen with the two defaults swapped.
+    pub reverse_video: bool,
     pub window: &'a Window,
 }
 
@@ -172,12 +174,27 @@ struct CellStyle {
     class: ClassStyle,
 }
 
-fn resolve_style(cell: &Cell<'_>, class: u8, theme: &TerminalTheme) -> CellStyle {
+fn resolve_style(
+    cell: &Cell<'_>,
+    class: u8,
+    theme: &TerminalTheme,
+    reverse_video: bool,
+) -> CellStyle {
     let inverse = cell.flags.contains(CellFlags::INVERSE);
     let (fg_color, bg_color) = if inverse {
         (cell.bg, cell.fg)
     } else {
         (cell.fg, cell.bg)
+    };
+    // `DECSCNM`: the whole screen is drawn with the two **defaults** swapped,
+    // and no cell's own style changes — the engine never touches a cell for it.
+    // So the swap belongs here, where a default becomes a pixel, and nowhere
+    // else: a cell that named a colour still gets the colour it named, and
+    // clearing the mode restores the screen exactly.
+    let (fg_color, bg_color) = if reverse_video {
+        (swap_default(fg_color), swap_default(bg_color))
+    } else {
+        (fg_color, bg_color)
     };
     let class = theme.class_styles.style(class);
     let mut fg = theme.color(fg_color);
@@ -200,6 +217,16 @@ fn resolve_style(cell: &Cell<'_>, class: u8, theme: &TerminalTheme) -> CellStyle
         bold: cell.flags.contains(CellFlags::BOLD) || class.font.bold,
         italic: cell.flags.contains(CellFlags::ITALIC) || class.font.italic,
         class,
+    }
+}
+
+/// `Color::Foreground` and `Color::Background` trade places; every other colour
+/// is what the program asked for and is left alone.
+fn swap_default(color: Color) -> Color {
+    match color {
+        Color::Foreground => Color::Background,
+        Color::Background => Color::Foreground,
+        other => other,
     }
 }
 
@@ -484,7 +511,7 @@ pub(crate) fn build_row_plan(
     for (col, cell) in row.cells().enumerate() {
         let col16 = col as u16;
         let class = builder.scratch.class[col];
-        let style = resolve_style(&cell, class, theme);
+        let style = resolve_style(&cell, class, theme, ctx.reverse_video);
         if style.paint_bg {
             push_bg(builder.plan, col16, style.bg);
         }
@@ -538,6 +565,7 @@ mod tests {
         fonts: FontSet,
         semantic: Option<SemanticOverlay>,
         font_weight: f32,
+        reverse_video: bool,
     }
 
     impl Fixture {
@@ -547,7 +575,13 @@ mod tests {
                 fonts: FontSet::new(&font(), px(13.0)),
                 semantic: semantic.then(|| SemanticOverlay::new(ShellProfile::Unix, true)),
                 font_weight: FontWeight::NORMAL.0,
+                reverse_video: false,
             }
+        }
+
+        fn reversed(mut self) -> Self {
+            self.reverse_video = true;
+            self
         }
 
         fn with_weight(mut self, font_weight: f32) -> Self {
@@ -573,6 +607,7 @@ mod tests {
                     cell_width: px(8.0),
                     device: CellSizeDevicePx { w: 8, h: 16 },
                     semantic: self.semantic.as_ref(),
+                    reverse_video: self.reverse_video,
                     window,
                 };
                 let mut scratch = Scratch::new();
@@ -773,6 +808,51 @@ mod tests {
             plan.decorations[1].cols, 13,
             "the class underline covers the rest"
         );
+    }
+
+    #[gpui::test]
+    fn decscnm_swaps_the_two_defaults_and_nothing_else(cx: &mut TestAppContext) {
+        // `? 5` is a screen-level flag: the engine changes no cell for it, so
+        // the renderer is what has to honour it, and it does so by swapping
+        // what the two **defaults** resolve to.
+        let frame = FrameBuilder::new(1, 8)
+            .text(0, 0, "ab")
+            .styled(0, 2, 'c', Color::Ansi(1), Color::Ansi(4), CellFlags::NONE)
+            .build();
+        let mask = vec![false; 8];
+        let fx = Fixture::new(false);
+        let plain = fx.plan(cx, &frame, 0, &mask);
+        let reversed = Fixture::new(false).reversed().plan(cx, &frame, 0, &mask);
+
+        let fg = fx.theme.color(Color::Foreground);
+        let bg = fx.theme.color(Color::Background);
+
+        // Default-coloured text comes out background-on-foreground, and the
+        // default background now has to be painted, where before it was the
+        // one colour the renderer could skip.
+        let at = |plan: &RowPlan, col: u16| {
+            plan.bg
+                .iter()
+                .find(|span| span.col <= col && col < span.col + span.cols)
+                .map(|span| span.color)
+        };
+        assert_eq!(at(&plain, 0), None, "a default background paints nothing");
+        assert_eq!(at(&reversed, 0), Some(fg), "and now it takes the old fg");
+        // Both go through the same contrast enforcement they always did, with
+        // the pair the other way round.
+        assert_eq!(
+            reversed.colors_of(&reversed.text[0])[0].color,
+            fx.theme.ensure_contrast(bg, fg)
+        );
+        assert_eq!(
+            plain.colors_of(&plain.text[0])[0].color,
+            fx.theme.ensure_contrast(fg, bg)
+        );
+
+        // A cell that named its own colours is untouched: `? 5` swaps the
+        // defaults, not every colour on the screen.
+        assert_eq!(at(&plain, 2), at(&reversed, 2));
+        assert_eq!(at(&plain, 2), Some(fx.theme.color(Color::Ansi(4))));
     }
 
     #[gpui::test]

@@ -111,6 +111,9 @@ impl RenderInputs {
             semantic_enabled: self.semantic.is_enabled(),
             shell_profile: self.semantic.profile() as u8,
             show_gutter: self.show_gutter,
+            // The frame owns this one, not the settings; `update_plans` fills
+            // it in from the engine's mode snapshot.
+            reverse_video: false,
         }
     }
 }
@@ -239,7 +242,14 @@ impl RenderState {
     /// Rebuild the plans of the rows that changed in the snapshotted frame.
     pub(crate) fn update_plans(&mut self, metrics: &CellMetrics, window: &Window) {
         self.ensure_fonts();
-        let style_key = self.inputs.style_key();
+        // `DECSCNM` is a screen-level flag the engine reports and the renderer
+        // honours by swapping what the two defaults resolve to; it belongs to
+        // the frame rather than to the settings, so it is stamped in here.
+        let reverse_video = self.frame.modes().reverse_video;
+        let style_key = StyleKey {
+            reverse_video,
+            ..self.inputs.style_key()
+        };
         let Self {
             frame,
             plans,
@@ -258,6 +268,7 @@ impl RenderState {
             cell_width: metrics.cell_width,
             device: metrics.device,
             semantic: inputs.semantic.is_enabled().then_some(&inputs.semantic),
+            reverse_video,
             window,
         };
         plans.update(frame, style_key, &ctx, scratch, glyphs, stats);
