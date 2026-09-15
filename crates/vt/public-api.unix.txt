@@ -96,6 +96,9 @@ enum oneterm_vt::CursorShape
     variant Hidden
     variant HollowBlock
     variant Underline
+struct oneterm_vt::CursorStyle
+    structfield blinking
+    structfield shape
 struct oneterm_vt::EventBatch
     method arena_capacity
     method bytes
@@ -273,12 +276,21 @@ struct oneterm_vt::Palette
     structfield dim_foreground
     structfield foreground
     structfield indexed
+struct oneterm_vt::Placement
+    structfield anchor
+    structfield cols
+    structfield id
+    structfield pixel_size
+    structfield rows
 enum oneterm_vt::Progress
     variant Error
     variant Indeterminate
     variant Paused
     variant Remove
     variant Set
+struct oneterm_vt::ResizeOutcome
+    structfield reflowed
+    structfield rows_trimmed
 enum oneterm_vt::ResizePolicy
     variant BottomAnchor
     variant KeepViewportTop
@@ -384,6 +396,12 @@ struct oneterm_vt::Style
 struct oneterm_vt::StyleRun
     structfield cols
     structfield style
+struct oneterm_vt::SyncState
+    method begin
+    method end
+    method is_set
+    method new
+    method suppresses_frame
 struct oneterm_vt::Terminal
     method active_charset
     method color

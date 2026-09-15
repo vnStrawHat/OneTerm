@@ -22,7 +22,7 @@ pub use palette::Palette;
 pub use row::{SnapshotCell, SnapshotContent, SnapshotRow, StyleRun};
 pub(crate) use state::EngineView;
 pub use state::{SnapshotCursor, SnapshotPlacement, SnapshotState, SnapshotUpdate};
-pub(crate) use sync::SyncState;
+pub use sync::SyncState;
 
 #[cfg(test)]
 #[path = "snapshot_tests.rs"]
