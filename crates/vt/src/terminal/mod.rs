@@ -274,14 +274,18 @@ impl Terminal {
         &self.state.graphics.placements
     }
 
-    // ── Render hand-off ─────────────────────────────────────────────────────
+    // ── Snapshot hand-off ───────────────────────────────────────────────────
 
     /// Take everything that changed since this [`SnapshotState`] last asked.
     ///
     /// Phase 1 of the hand-off, cheap enough to run under the caller's lock;
     /// the returned [`SnapshotUpdate`] borrows the engine, so drawing happens
     /// after it is dropped.
-    pub fn snapshot_update(&mut self, render: &mut SnapshotState, now: Instant) -> SnapshotUpdate {
+    pub fn snapshot_update(
+        &mut self,
+        snapshot: &mut SnapshotState,
+        now: Instant,
+    ) -> SnapshotUpdate {
         let modes = self.mode_snapshot();
         let selection = self.selection_range();
         let view = EngineView {
@@ -294,7 +298,7 @@ impl Terminal {
             generation: self.state.generation,
             palette_epoch: self.state.palette_epoch,
         };
-        render.begin_update(view, now)
+        snapshot.begin_update(view, now)
     }
 
     // ── Selection ───────────────────────────────────────────────────────────
