@@ -169,16 +169,210 @@ Verify command: `pwsh scripts/ci-local.ps1 --full`.
 ### PROOF
 
 ```text
-PLACEHOLDER
+# 1. The report, BEFORE (cargo deny check advisories -> "advisories ok", 2 warnings)
+warning[yanked]: detected yanked crate (try `cargo update -p chacha20`)
+   Cargo.lock:93   chacha20 0.10.1  yanked version
+warning[yanked]: detected yanked crate (try `cargo update -p der`)
+   Cargo.lock:146  der 0.8.0        yanked version
+
+# 2. cargo tree -i chacha20  (BEFORE)
+chacha20 v0.10.1
+|-- rand v0.10.1
+|   |-- internal-russh-num-bigint v0.5.0
+|   |   `-- russh v0.61.2
+|   |       |-- oneterm-ssh v0.5.2 -> oneterm-app v0.5.2
+|   |       `-- oneterm-tools v0.5.2
+|   |-- oneterm-app v0.5.2
+|   |-- oneterm-tools v0.5.2
+|   |-- pageant v0.2.1 -> russh v0.61.2 (*)
+|   `-- russh v0.61.2 (*)
+|   [dev-dependencies]
+|   `-- oneterm-ssh v0.5.2 (*)
+`-- ssh-cipher v0.3.0-rc.9 -> ssh-key v0.7.0-rc.10 -> russh v0.61.2 (*)
+
+#    cargo tree -i der@0.8.0  (BEFORE)
+der v0.8.0
+|-- ecdsa v0.17.0-rc.18 -> p256/p384/p521 v0.14.0-rc.10, ssh-key v0.7.0-rc.10, russh v0.61.2
+|-- pkcs1 v0.8.0-rc.4   -> rsa v0.10.0-rc.18, russh v0.61.2
+|-- pkcs5 v0.8.0        -> pkcs8 v0.11.0 -> ed25519 v3.0.0 -> ed25519-dalek v3.0.0-rc.0,
+|                          elliptic-curve v0.14.0-rc.33, rsa v0.10.0-rc.18, russh v0.61.2
+|-- pkcs8 v0.11.0 (*)
+|-- russh v0.61.2 (*)
+|-- sec1 v0.8.1         -> elliptic-curve, russh, ssh-key
+`-- spki v0.8.0         -> ecdsa, pkcs1, pkcs5, pkcs8, rsa, russh
+   (every root path ends at russh v0.61.2 -> oneterm-ssh / oneterm-tools)
+
+# 3. Smallest-bump probe
+$ cargo info chacha20   -> version: 0.10.1 (latest 0.10.2)
+$ cargo info der        -> version: 0.8.0  (latest 0.8.2)
+$ cargo update -p russh --dry-run          -> Locking 0 packages   (0.61.2 IS the newest 0.61.x)
+$ cargo update -p russh-sftp --dry-run     -> Locking 0 packages
+$ cargo update -p russh-cryptovec --dry-run-> Locking 0 packages
+$ cargo update -p chacha20 --precise 0.10.2 --dry-run -> chacha20 v0.10.1 -> v0.10.2 (only move)
+$ cargo update -p der@0.8.0 --precise 0.8.2 --dry-run -> der v0.8.0 -> v0.8.2       (only move)
+
+# 4. The change
+$ cargo update -p chacha20 --precise 0.10.2
+    Updating chacha20 v0.10.1 -> v0.10.2
+$ cargo update -p der@0.8.0 --precise 0.8.2
+    Updating der v0.8.0 -> v0.8.2
+  (Cargo.lock only: 5 +/- 5 lines -- 2 versions, 2 checksums, and one incidental
+   edge, tempfile 3.27.0's "getrandom 0.4.3" -> "getrandom 0.3.4", the copy already
+   in the graph via ahash. Both getrandom entries remain in the lock.
+   Cargo.toml untouched, deny.toml untouched, no source file touched.)
+
+# 5. cargo tree -i  (AFTER) -- identical dependant paths, new versions
+chacha20 v0.10.2   ... same 2 roots (rand 0.10.1 / ssh-cipher 0.3.0-rc.9), same leaves
+der      v0.8.2    ... same 7 roots (ecdsa, pkcs1, pkcs5, pkcs8, russh, sec1, spki)
+
+# 6. Gates (2026-09-15)
+$ cargo deny check licenses bans advisories
+advisories ok, bans ok, licenses ok                         (exit 0)
+  warning[yanked]                          x 0   <-- the acceptance criterion
+  warning[duplicate]                       x 77  (pre-existing, bans = "warn")
+  warning[license-exception-not-encountered] x 3 (pre-existing: zlog / ztracing /
+                                                  ztracing_macro are not in the graph)
+
+$ cargo tree -i chacha20 ; cargo tree -i der@0.8.2       -> see 5 above
+$ python scripts/verify-dependency-graph.py
+Dependency graph policy passed for 21 workspace packages and 21 explicit members.
+
+$ python scripts/third-party-notices.py && python scripts/third-party-notices.py --check
+wrote THIRD-PARTY-NOTICES.md
+THIRD-PARTY-NOTICES.md is up to date.
+
+$ cargo test -p oneterm-ssh -p oneterm-sftp-ui
+oneterm-ssh     : 68 passed; 0 failed; 0 ignored   (== baseline)
+oneterm-sftp-ui : 49 passed; 0 failed; 0 ignored
+
+$ pwsh scripts/ci-local.ps1 --full
+ci-local: all checks passed.                                (exit 0)
+  12 steps: fmt, clippy, clippy(terminal-diagnostics), test --workspace,
+  test -p oneterm-vt --features vt-paranoid, verify-dependency-graph,
+  check-doc-paths, test_check_english, check-english, completion-catalog,
+  third-party-notices --check, cargo deny check licenses bans advisories
+  totals: 60 sections / 1976 passed / 0 failed / 14 ignored  (== main baseline)
 ```
 
 ### Evidence
 
-PLACEHOLDER
+- **Why the yanks happened.** `der 0.8.0` was yanked "to fix a `minimal-versions` check in CI"
+  (RustCrypto/formats `der/CHANGELOG.md`) — not a security yank. `chacha20 0.10.1`'s successor
+  `0.10.2` fixes "use of SSE4.1 intrinsic in SSE2 backend of RNG and legacy (64-bit counter)
+  variants" (RustCrypto/stream-ciphers #580), which is the reason for that yank; the changelog
+  does not state it explicitly. Neither version matches a RustSec advisory — `cargo deny check
+  advisories` reported `advisories ok` both before and after.
+- **Behaviour crossed on the auth / host-key / SFTP path.** No russh release is crossed, so
+  none of OneTerm's russh APIs moved. The two patch releases do change behaviour on paths the
+  SSH stack sits on, and this is the part the owner should see:
+  - `der 0.8.1` — `SET OF` duplicates are permitted again (they were wrongly rejected),
+    `SetOfRef` added, `SetOf*` sorting made faster, and ASN.1 nesting capped at 64 levels.
+  - `der 0.8.2` — nested trailing data now returns an error, plus `AsIntRef` / `AsUintRef`.
+    Net effect under `pkcs1`/`pkcs8`/`sec1`/`spki`/`ssh-key`: a *malformed* key or host key is
+    rejected slightly more strictly and a previously mis-rejected `SET OF` now decodes;
+    well-formed OpenSSH keys are unaffected. The `crates/ssh` loopback suites decode Ed25519,
+    ECDSA (NIST P-256) and RSA keys for real and stay at 68/68.
+  - `chacha20 0.10.2` — the SSE2-backend intrinsic fix reaches the
+    `chacha20-poly1305@openssh.com` transport cipher (via `ssh-cipher`) and the ChaCha RNG that
+    `rand` gives `internal-russh-num-bigint` and `pageant`. It removes an illegal-instruction
+    hazard on CPUs without SSE4.1; no wire-format or API change.
+- **Fix ladder step taken:** (a), the same step `BUG-0056` used. No dependant bump (step b) and
+  no `deny.toml` entry (step c). **Nothing here is deferred**, and `BUG-0056`'s note that these
+  warnings "need a russh dependency-family bump" is now superseded by this packet.
+- **Rejected alternatives** (full reasoning in `high-level-design.md`): the russh 0.61 -> 0.63.3
+  plus russh-sftp 2.3 -> 3.0.0 manifest bump the owner asked about (two semver-major API
+  surfaces, unnecessary); `cargo update -p russh` inside `^0.61` (a no-op, `Locking 0 packages`);
+  a `deny.toml` suppression (defers a resolvable fix); and an unpinned whole-graph
+  `cargo update` (unreviewable blast radius for a warning-only fix).
+- **Blast radius:** `Cargo.lock` 5 lines, `THIRD-PARTY-NOTICES.md` 2 lines. No manifest, no
+  `deny.toml`, no source file, no test file.
+- **Licence rows changed:** exactly two, and only the version column —
+  `chacha20 0.10.1 -> 0.10.2` (`MIT OR Apache-2.0`, unchanged) and `der 0.8.0 -> 0.8.2`
+  (`Apache-2.0 OR MIT`, unchanged). No crate entered or left the graph, so
+  `docs/license-analysis.md` and the `deny.toml` allow-list need no edit.
+- Harness DB mirror — this packet's row for `harness.db` (table `story`) and the matching
+  `intake` row. Recorded here for the DB owner to apply; **not applied by this change**:
+
+  ```python
+  import sqlite3
+  con = sqlite3.connect("harness.db")
+  con.execute(
+      """INSERT INTO intake
+         (created_at, input_type, summary, risk_lane, risk_flags, affected_docs,
+          story_id, doc_path, notes, document_number, design_doc)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+      (
+          "2026-09-15",
+          "maintenance",
+          "cargo deny warns on the yanked chacha20 0.10.1 and der 0.8.0, both reached "
+          "only through the russh 0.61.2 release-candidate crypto stack.",
+          "normal",
+          "",  # risk_flags: none; no russh release crossed, so no auth/host-key API moves
+          "docs/agents/dependencies.md;docs/license-analysis.md;deny.toml;"
+          "docs/ssh-client-connect.md;docs/agents/crate-dependency-rules.md",
+          "BUG-0057",
+          "docs/spec-intakes/IN-0035-yanked-russh-crypto-crates/IN-0035.md",
+          "Supersedes BUG-0056's note that a russh family bump was required: "
+          "chacha20 0.10.2 and der 0.8.2 fit the existing ^0.10 / ^0.8 requirements.",
+          35,
+          "docs/spec-intakes/IN-0035-yanked-russh-crypto-crates/high-level-design.md",
+      ),
+  )
+  con.execute(
+      """INSERT INTO story
+         (id, title, created_at, risk_lane, contract_doc, packet_doc, status,
+          unit_proof, integration_proof, e2e_proof, platform_proof, evidence,
+          verify_command, last_verified_at, last_verified_result, notes, intake_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (
+          "BUG-0057",
+          "Move off the yanked chacha20 0.10.1 and der 0.8.0",
+          "2026-09-15",
+          "normal",
+          "docs/agents/dependencies.md",
+          "docs/spec-intakes/IN-0035-yanked-russh-crypto-crates/"
+          "BUG-0057-chacha20-der-yanked.md",
+          "implemented",
+          1,  # unit_proof: oneterm-ssh 68 + oneterm-sftp-ui 49; workspace 1976 passed
+          1,  # integration_proof: in-process loopback SSH server / agent / route / tunnel
+          0,  # e2e_proof: n/a, no real-host SSH run and no GUI
+          1,  # platform_proof: pwsh scripts/ci-local.ps1 --full on Windows
+          "cargo deny check licenses bans advisories -> advisories ok, bans ok, "
+          "licenses ok with ZERO warning[yanked]; cargo tree -i chacha20 / der "
+          "unchanged paths at 0.10.2 / 0.8.2; third-party-notices --check up to "
+          "date (2 version-only rows); verify-dependency-graph 21/21; ci-local "
+          "--full: 60 sections / 1976 passed / 0 failed / 14 ignored",
+          "pwsh scripts/ci-local.ps1 --full",
+          "2026-09-15",
+          "passed",
+          "Lockfile-only fix. No russh version moves, so no auth, host-key, channel "
+          "or SFTP API is crossed. der 0.8.1/0.8.2 do tighten ASN.1 nesting and "
+          "trailing-data handling under key decoding; chacha20 0.10.2 fixes an "
+          "SSE4.1 intrinsic in the SSE2 backend. No deny.toml deferral.",
+          "IN-0035",
+      ),
+  )
+  con.commit()
+  ```
 
 ### Gaps
 
-PLACEHOLDER
+- **No real-host SSH or SFTP run.** The `der` and `chacha20` changes are proven by the
+  in-process loopback suites in `crates/ssh/src` (`test_support.rs` spawns a `russh` server on a
+  loopback port with a temporary `known_hosts`) and by the workspace suite, not by a connection
+  to a real OpenSSH server. The `chacha20-poly1305@openssh.com` cipher in particular is only
+  negotiated against a server that offers it, which the in-process tests do not force.
+  `crates/tools/src/bin/sftp-dev-server.rs` is a manual binary with no automated test, so it was
+  not exercised.
+- **One incidental lock edge not requested by this change:** `cargo update` re-unified
+  `tempfile 3.27.0` onto the `getrandom 0.3.4` already present via `ahash` instead of
+  `getrandom 0.4.3`. Both `getrandom` entries remain in the lock, `cargo deny` is green, and the
+  full suite is at baseline, so it was kept rather than hand-reverted in the lock.
+- **The russh family stays on release-candidate crypto.** `ssh-key 0.7.0-rc.10`,
+  `ecdsa 0.17.0-rc.18`, `rsa 0.10.0-rc.18`, `ed25519-dalek 3.0.0-rc.0` and friends are still
+  `-rc` pins under `russh 0.61.2`, so a future yank in that stack can recur. Moving off them
+  needs the russh 0.63 / russh-sftp 3.0 manifest bump rejected here — a separate packet with its
+  own API review, not a prerequisite for clearing these two warnings.
 
 ## Handoff
 
