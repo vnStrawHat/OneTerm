@@ -141,7 +141,9 @@ would fail that.
 ## Test inventory
 
 Baseline: `cargo test -p oneterm-ssh -p oneterm-sftp-ui -p oneterm-tools`
-= **86 / 49 / 16**. After: **91 / 49 / 16**.
+= **86 / 49 / 16**. After: **100 / 49 / 16** (91 when this document was first written, then +8
+adopted from the independent verification and +1 for its N5 -- see
+[`US-0096-verify.md`](US-0096-verify.md)).
 
 ### Removed (5, all `crates/ssh/src/sftp_task/transfer/pipeline.rs`)
 
@@ -172,6 +174,26 @@ Baseline: `cargo test -p oneterm-ssh -p oneterm-sftp-ui -p oneterm-tools`
 Each budget test drives the exact composition `download_file_contents` uses —
 `sftp.open()`, `.take(announced)`, `copy_sequential` — so the assertions are about
 the shipped download path, not about a stand-in.
+
+### Added after the independent verification (9)
+
+`an_upload_reports_the_same_progress_samples_it_did_before_in0037`
+(`pipeline_budget_tests`) closes verification finding N5. `copy_sequential`'s
+cadence changed and uploads share it, so "uploads are unchanged" had been argued
+from the unchanged bytes and packets rather than measured on the samples. The
+test uploads a real local file into a real `SftpSession` — the exact composition
+`upload::upload_file_contents` uses — and pins the full sample sequence to the
+one the old per-read cadence produced. It passes, so the claim is now measured.
+
+The verification's own eight tests were adopted verbatim as
+`crates/ssh/src/sftp_task/transfer/in0037_verify_tests.rs`: `v1` (in-flight READ
+depth measured **on the wire**, 16 and 1), `v2` (the 50 MiB row), `v3` (cancel at
+half of 50 MiB), `v4` (a dead transport errors rather than hangs and is not
+mistaken for a cancellation), `v5` (a failing destination errors promptly and
+leaves the session reusable), `v6` (the real `sftp_download` leaves no `.part`
+and no target after a cancel), `v7` and `v8` (shrank and grew, through the real
+entry point). `v4`, `v5`, `v6` and `v8` cover paths this packet's own suite did
+not reach. None duplicated an existing test, so none was dropped.
 
 ## Gaps
 

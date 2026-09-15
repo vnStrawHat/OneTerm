@@ -94,10 +94,12 @@ untouched; `crates/sftp-ui` gains no code change. What reaches the UI is the sam
 2. `download_file_contents` opens **one** handle (`sftp.open`), where it previously opened
    `read_handles_for(total)` of them — up to four `SSH_FXP_OPEN` round trips saved on every file.
 3. It creates the `.part` temporary sibling. Unchanged.
-4. It calls `copy_sequential(&mut reader.take(total), &mut local_file, cancel, on_bytes)` for a
-   file with a known size, and `copy_sequential(&mut reader, ...)` for a size-less one. The
-   `total` cap is `tokio::io::AsyncReadExt::take` — the "read only the announced length"
-   invariant `copy_striped` enforced by arithmetic, now enforced by the stdlib adapter.
+4. It calls `copy_sequential(&mut reader, &mut local_file, cancel, on_bytes)` over
+   `reader.take(announced)`, where `announced = if total > 0 { total } else { u64::MAX }`. There
+   is **one** call site, not a sized/size-less branch: `take(u64::MAX)` never fires, so the
+   size-less case costs nothing and needs no second path. The cap is
+   `tokio::io::AsyncReadExt::take` — the "read only the announced length" invariant
+   `copy_striped` enforced by arithmetic, now enforced by the stdlib adapter.
 5. Inside `copy_sequential`, each iteration polls `reader.read(&mut buffer[..CHUNK_LEN])`. The
    library serves it from its queued responses and tops the queue back up to
    `max_concurrent_reads`, so the wire stays full without OneTerm scheduling anything.
@@ -183,12 +185,14 @@ Three cases, all handled by the same two lines:
 | Remote file | `copy_sequential(reader.take(total))` |
 |---|---|
 | exactly `total` | `take` hits its limit; the loop ends |
+| size-less (`total == 0`) | `announced` is `u64::MAX`; the loop ends at EOF |
 | **shrank** below `total` | the library returns `Ok(0)` at EOF; the loop ends early, `on_bytes` has reported the real byte count, and `sftp_download` still sends `Progress(1.0)` — identical to `copy_striped`'s `chunk_count.min(index + 1)` clamp |
 | **grew** past `total` | `take` stops at `total`; the extra bytes are never requested — identical to the old `remaining = total - index * CHUNK_LEN` arithmetic |
 
-A zero-length file has `total == 0`; `download_file_contents` takes the size-less branch and
-`copy_sequential` reads to EOF, which is immediate. `sftp_download`'s `on_bytes` already maps
-`total == 0` to fraction `1.0`.
+A zero-length file has `total == 0`, so `announced` is `u64::MAX` and `copy_sequential` reads to
+EOF, which is immediate. `sftp_download`'s `on_bytes` already maps `total == 0` to fraction
+`1.0`, and it appends `Progress(1.0)` unconditionally afterwards, so the UI never depends on a
+pipeline sample for an empty file (`copy_sequential` correctly emits none).
 
 ### The settings
 
