@@ -183,8 +183,21 @@ breaking change here and gets a `CHANGELOG.md` entry naming both versions.
 - The API reference: `cargo doc -p oneterm-vt --no-deps --open`. Every public item is documented,
   and the crate builds with `#![warn(missing_docs)]` so it stays that way. There is no docs.rs
   page, because the crate is not published.
-- An embedder's guide is planned, and will render beside the API reference rather than living
-  somewhere else. It does not exist yet; this line will say where it is when it does.
+- **The embedder's guide**, thirteen chapters on how to build a terminal on top of this crate:
+  what it is and is not, embedding it, the threading model, every event, OSC routing and
+  extension, input encoding, search, images, resize, the ceilings a hostile stream runs into,
+  conformance, versioning, and the transport. It renders beside the API reference as the
+  `oneterm_vt::guide` module, so `cargo doc --open` reaches it offline at the version you depend
+  on, and every code block in it is a doctest. The chapters are also readable as Markdown in
+  [`docs/guide/`](docs/guide/). There is no hosted copy; a GitHub Pages deployment over
+  `target/doc` is a future option, not something that exists today.
+
+  ```console
+  $ cargo doc -p oneterm-vt --no-deps --all-features --open
+  ```
+
+  In this repository, `scripts/vt-docs.ps1` and `scripts/vt-docs.sh` are the same command with
+  denied rustdoc warnings, and they print the guide's index path when they finish.
 - The full design, including why the grid, damage and reflow work the way they do:
   <https://github.com/vnStrawHat/OneTerm/tree/main/docs/spec-intakes/IN-0029-vt-engine>.
 
