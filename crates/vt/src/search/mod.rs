@@ -46,9 +46,10 @@ mod regex;
 /// search). `whole_word` requires word boundaries on both sides of the match.
 ///
 /// Both apply to [`SearchPattern::Literal`] only. A regular expression owns its
-/// own flags — `(?i)` and `\b` — so both fields are ignored for
-/// [`SearchPattern::Regex`], and [`search_grid_text`] debug-asserts that they
-/// are still at their defaults rather than letting them silently do nothing.
+/// own flags — `(?i)` and `\b` — so for [`SearchPattern::Regex`] both fields
+/// are **ignored**, in every build. A debug assertion fires when either is
+/// non-default, so the mistake is loud while you are testing; a release build
+/// carries no such check and silently ignores them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct SearchOptions {
@@ -94,6 +95,11 @@ pub enum SearchPattern<'a> {
     /// somebody typed, and the blank cells to the right of the last glyph are
     /// spaces. Wide-character spacer cells read as `'\0'`.
     ///
+    /// A pattern that can match the empty string yields one zero-width match
+    /// per position, the position past the last cell included, so a
+    /// [`SearchMatch`] from this variant can be empty and can start one column
+    /// past the end of the row.
+    ///
     /// Compilation, and therefore any `RegexBuilder::size_limit`, is the
     /// caller's: this crate takes a reference to a finished `Regex`.
     #[cfg(feature = "regex")]
@@ -103,7 +109,9 @@ pub enum SearchPattern<'a> {
 
 /// One search match, on the row that holds it.
 ///
-/// `start_col`/`end_col` are column indices, 0-based, `end_col` exclusive.
+/// `start_col`/`end_col` are column indices, 0-based, `end_col` exclusive. The
+/// range can be **empty**, and `start_col` can then be one past the last column
+/// -- see [`search_grid_text`] for when.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchMatch {
     /// The row the match sits on. Stable across scrolling and scrollback
@@ -211,7 +219,11 @@ impl GridText {
 ///
 /// An empty [`SearchPattern::Literal`] finds nothing. A regular expression that
 /// can match the empty string finds one empty match per position, and
-/// terminates.
+/// terminates -- including the position **past** the last cell, so such a match
+/// can report `start_col == end_col ==` the grid's column count, one past the
+/// last valid column. Every match is a half-open `start_col..end_col` range and
+/// is safe to use as one; a caller that instead indexes the row at `start_col`
+/// to paint a highlight must skip the empty ones.
 pub fn search_grid_text(
     text: &GridText,
     pattern: SearchPattern<'_>,

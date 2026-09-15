@@ -190,7 +190,7 @@ OneTerm/
 │       ├── public-api.txt          # the public surface; `scripts/vt-public-api.py` gates it
 │       ├── examples/headless.rs    # feed bytes, read events, print the screen — no dependencies
 │       ├── src/
-│       │   ├── lib.rs              # module declarations + public re-exports only; `grid`, `intern`
+│       │   ├── lib.rs              # module declarations + public re-exports only; `grid`, `intern`,
 │       │   │                       #   `parser` and `search` are the only modules named by path
 │       │   ├── cell.rs             # 8-byte packed Cell, CellWidth, Semantic, Style, Attrs, Color
 │       │   ├── intern.rs           # per-terminal style / extras / grapheme / hyperlink tables

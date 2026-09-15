@@ -55,8 +55,11 @@ carry no API change at all. Such a release says so below rather than being omitt
 - The `regex` feature, **off by default**: it adds `SearchPattern::Regex(&regex::Regex)` and makes
   `regex` an optional dependency. With the feature off the crate still has no dependency beyond the
   six it always had. `SearchOptions` is ignored for a regex — the pattern owns its own `(?i)` and
-  `\b` — and `search_grid_text` debug-asserts that both fields are still at their defaults.
-  `SearchPattern` is `#[non_exhaustive]` so the same `match` compiles either way.
+  `\b` — in every build; a debug assertion fires when either field is non-default, but a
+  release build carries no such check and silently ignores them. `SearchPattern` is
+  `#[non_exhaustive]` so the same `match` compiles either way. A regular expression that can
+  match the empty string reports one zero-width `SearchMatch` per position, the position past
+  the last cell included, so `start_col` can be one past the last column.
 - `SearchOptions` is `#[non_exhaustive]`: a future option must not be a breaking change.
   `SearchOptions::default()` plus field assignment is the construction form.
 

@@ -225,8 +225,9 @@ mod regex_pattern {
         assert_eq!(m[0].end_col, 3);
     }
 
-    /// An empty-matching pattern must terminate, and must not report two
-    /// matches at one column.
+    /// An empty-matching pattern must terminate, must not report two matches at
+    /// one column, and -- the documented sharp edge -- reports its last match at
+    /// the position past the last cell, so `start_col` equals the column count.
     #[test]
     fn empty_matching_pattern_terminates_and_advances() {
         let term = mock_term("ab");
@@ -235,6 +236,11 @@ mod regex_pattern {
         let cols: Vec<usize> = m.iter().map(|hit| hit.start_col).collect();
         assert_eq!(cols, vec![0, 1, 2]);
         assert!(m.iter().all(|hit| hit.end_col == hit.start_col));
+        assert_eq!(
+            cols[2],
+            usize::from(term.screen().cols()),
+            "the last empty match sits one past the last column"
+        );
     }
 
     /// The row is the whole grid row, so a match can land on the blank cells
