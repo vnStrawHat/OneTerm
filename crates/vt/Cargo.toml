@@ -22,12 +22,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [features]
-# The whole-history integrity walk, for the property tests, the fuzz targets and
-# CI (IN-0029 R-28, `testing-and-bench.md` M12). The always-on tier stays O(1);
-# the debug walk at `feed` / `resize` / `render_update` is bounded to the rows
-# the operation touched. This feature widens both back to O(history), which is
-# milliseconds per call at a 100 000-row scrollback — correct to gate on, far
-# too slow to leave on by default. CI passes `--features vt-paranoid`.
+# The whole-history integrity walk, for property tests, fuzzing and CI.
+# By default the always-on checks stay O(1) and the debug walk at `feed`,
+# `resize` and `render_update` is bounded to the rows that operation touched.
+# This feature widens both to the whole scrollback, which costs milliseconds per
+# call at a 100 000-row history: correct to gate on, far too slow for a release
+# build.
 vt-paranoid = []
 
 [dependencies]

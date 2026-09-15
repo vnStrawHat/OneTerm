@@ -211,11 +211,19 @@ embedder's caches are keyed by it.
 
 ## Verification
 
-- [ ] **The surface is enumerated, not asserted by eye.** `cargo public-api` is not a dependency
-  this repository has; instead `US-0097` adds `scripts/vt-public-api.py` (about 40 lines) that runs
-  `cargo doc -p oneterm-vt --no-deps --output-format json` and prints every public path, sorted. The
-  output is committed as `crates/vt/public-api.txt` and a CI step diffs it, so any change to the
-  public surface has to be an intentional line in a diff.
+- [x] **The surface is enumerated, not asserted by eye.** `cargo public-api` is not a dependency
+  this repository has; instead `US-0097` adds `scripts/vt-public-api.py` (about 140 lines). It reads
+  the **HTML** rustdoc emits, not `cargo doc --output-format json` as this document first proposed:
+  the JSON format is nightly-only and `rust-toolchain.toml` pins stable `1.96.0`. It prints every
+  public item, sorted, with its fields, variants, associated constants and inherent methods under
+  it, and it keeps only items reachable through the crate's public module paths, so renaming a
+  private module is not a public-API change. The output is committed as `crates/vt/public-api.txt`
+  and a CI step diffs it, so any change to the public surface has to be an intentional line in a
+  diff.
+
+  What that costs: an item, field, variant or method that is **added, removed or renamed** is
+  caught; a **signature change is not**. Rustdoc JSON is the upgrade, and the script switches to it
+  the day the pinned toolchain can produce it.
 - [ ] `cargo doc -p oneterm-vt --no-deps` is warning-free with `#![warn(missing_docs)]` and the
   workspace lint table (which denies warnings in CI).
 - [ ] `cargo build -p oneterm-vt --no-default-features` and `--all-features` both clean.

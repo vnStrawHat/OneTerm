@@ -64,7 +64,10 @@ pub struct RowHeader {
     /// The row's damage bit and content hints.
     pub flags: RowFlags,
     /// An over-approximating hint: no column at or above `occ` has been touched
-    /// since the last reset. Not exact, and not part of any equality.
+    /// since the last reset. Not exact, not part of any equality, and
+    /// deliberately **not** checked by the integrity assertions: a hint that
+    /// over-approximates is correct by construction, and pinning it exactly
+    /// would turn every scan optimisation into a compatibility problem.
     pub occ: u16,
 }
 
@@ -121,7 +124,7 @@ impl Row {
 
     /// Hand a row that already fits the new width straight through.
     ///
-    /// The reference's own rule: a row is a reflow target only when it is short
+    /// The rule Alacritty follows: a row is a reflow target only when it is short
     /// **and** carries the wrap flag; everything else it merely grows in place
     /// (Alacritty's `alacritty_terminal/src/grid/resize.rs:103-107, 231-238`). The
     /// caller has checked that this row is a whole logical line and that nothing
@@ -216,8 +219,8 @@ pub(crate) fn flags_for(cell: Cell) -> RowFlags {
 /// a width change split one.
 ///
 /// A `Wide` whose spacer is gone, and a `WideSpacer` whose glyph is gone, both
-/// degrade to a default-width blank that keeps the cell's style — the
-/// reference's `clear_wide`. A `LeadingWideSpacer` is left alone: it is a
+/// degrade to a default-width blank that keeps the cell's style, the operation
+/// other terminals call `clear_wide`. A `LeadingWideSpacer` is left alone: it is a
 /// legitimate lone spacer marking a glyph that wrapped to the next row.
 pub(crate) fn repair_wide_pairs(cells: &mut [Cell]) {
     for col in 0..cells.len() {
@@ -411,9 +414,9 @@ impl<'a> RowMut<'a> {
 
     /// Fill `range` with `template`, repairing any wide pair the fill splits.
     ///
-    /// The reference leaves an orphaned spacer here; the integrity assertion
-    /// this design mandates ("no `Wide` without its `WideSpacer`") makes the
-    /// repair compulsory.
+    /// Other implementations leave an orphaned spacer here; the invariant this
+    /// engine asserts ("no `Wide` without its `WideSpacer`") makes the repair
+    /// compulsory.
     pub(crate) fn fill(&mut self, range: std::ops::Range<u16>, template: Cell) {
         let end = (range.end as usize).min(self.row.cells.len());
         let start = (range.start as usize).min(end);
@@ -425,7 +428,6 @@ impl<'a> RowMut<'a> {
     }
 
     /// `DCH`: a plain shift left by `n`, not an `end`-clamped swap.
-    /// `end`-clamped swap.
     pub(crate) fn delete_cells(&mut self, col: u16, n: u16, template: Cell) {
         let cols = self.row.cells.len();
         let col = (col as usize).min(cols);

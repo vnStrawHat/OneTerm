@@ -118,9 +118,11 @@ No feature adds a dependency today, and no feature changes behaviour -- only ava
 
 ## Documentation
 
-- The API reference: <https://docs.rs/oneterm-vt>.
-- The embedder's guide, rendered beside it: <https://docs.rs/oneterm-vt/latest/oneterm_vt/guide/>.
-- Locally, both at once: `cargo doc -p oneterm-vt --no-deps --all-features --open`.
+- The API reference: <https://docs.rs/oneterm-vt>. Every public item is documented, and the crate
+  builds with `#![warn(missing_docs)]` so it stays that way.
+- Locally: `cargo doc -p oneterm-vt --no-deps --all-features --open`.
+- An embedder's guide is planned, and will render beside the API reference rather than living
+  somewhere else. It does not exist yet; this line will carry its link when it does.
 - The full design, including why the grid, damage and reflow work the way they do:
   <https://github.com/vnStrawHat/OneTerm/tree/main/docs/spec-intakes/IN-0029-vt-engine>.
 

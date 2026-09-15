@@ -128,9 +128,17 @@ Changed:
 - `scripts/README.md` -- a `vt-public-api.py` row, the publish assertion added to the
   `verify-dependency-graph.py` row, and the `vt-package` CI job named in the header.
 - `.github/workflows/ci.yml`, `scripts/ci-local.sh`, `scripts/ci-local.ps1` -- the new gate.
+- `AGENTS.md` section 4 -- the same steps, because that list is what an agent runs before reporting
+  a task done and it is supposed to match `ci.yml`.
+- `IN-0038.md` -- Open Decisions 2, 3, 5 and 6 ticked with their ruling text and provenance.
+- `low-level-design/packaging.md` and `low-level-design/api-surface.md` -- reconciled with what was
+  built: the manifest as it is, the README's whole-file doctest route, and the HTML-reading
+  public-API script.
 
 New crate-level files: `crates/vt/README.md`, `crates/vt/CHANGELOG.md`,
-`crates/vt/examples/headless.rs`, `crates/vt/public-api.txt`, `scripts/vt-public-api.py`.
+`crates/vt/examples/headless.rs`, `crates/vt/public-api.txt`, `crates/vt/LICENSE`,
+`crates/vt/NOTICE`, `crates/vt/tests/product_name.rs`, `scripts/vt-public-api.py`, and
+`evidence/US-0097-verify.md`.
 
 Reviewed, no change needed:
 
@@ -165,27 +173,29 @@ The full design is in [`low-level-design/packaging.md`](low-level-design/packagi
 ## Plan
 
 - [x] Manifest: `publish = true`, `readme`, `keywords`, `categories`, a rewritten `description`,
-  `[package.metadata.docs.rs]`. The `regex` / `serde` optional declarations are **not** here: the
-  owner ruled out `serde`, and `regex` belongs to `US-0100`, the packet that gives the feature an
-  item to gate.
+  `[package.metadata.docs.rs]`, and copies of `LICENSE` and `NOTICE` inside the crate directory so
+  the tarball carries them. The `regex` / `serde` optional declarations are **not** here: Open
+  Decision 3 ruled out `serde`, and `regex` belongs to `US-0100`, the packet that gives the feature
+  an item to gate.
 - [x] `Config::product_name: Option<Cow<'static, str>>` plus the two reply sites; `adapter_config`
   in `crates/terminal/src/handle.rs` sets it so OneTerm's bytes do not change.
 - [x] `#![warn(missing_docs)]` and the documentation it demands: 263 items, the bulk in `cell`,
   `grid`, the event types and `Terminal`'s own accessors.
 - [x] The self-containment pass, by the three rules in the HLD: 106 lines over 44 files.
 - [x] `README.md`, `CHANGELOG.md` (with the semver promise), `examples/headless.rs`. The README's
-  **Documentation** section links the embedder's guide at
-  `https://docs.rs/oneterm-vt/latest/oneterm_vt/guide/` as planned. It names `cargo doc -p
-  oneterm-vt --no-deps --all-features --open` as the local render rather than
-  `scripts/vt-docs.{sh,ps1}`: those scripts are `US-0103`'s and do not exist yet, and a published
-  README that points at a missing script is exactly the drift the section is meant to prevent.
-  `US-0103` may replace the line when it writes them.
+  **Documentation** section names the embedder's guide as **planned**, with no URL: there is no
+  `guide` module yet, so a docs.rs link would be a 404 on the crate's own front page. The local
+  render is `cargo doc -p oneterm-vt --no-deps --all-features --open` rather than
+  `scripts/vt-docs.{sh,ps1}`, which are `US-0103`'s and do not exist. `US-0103` writes the link and
+  the scripts together.
 - [x] `scripts/vt-public-api.py` and the committed `public-api.txt`. It reads the rustdoc **HTML**,
   not `--output-format json`: the JSON format is nightly-only and `rust-toolchain.toml` pins stable
   1.96.0. The cost is signature-level detail, stated in the script's own docstring.
-- [x] CI: `cargo publish --dry-run`, the two feature-matrix builds with `--examples`, the doc build
-  under `-D warnings`, the public-api diff and the self-containment grep, in both `ci-local` scripts
-  and in a new `vt-package` job in the workflow.
+- [x] CI: the two feature-matrix builds with `--examples`, the example actually run, the doc build
+  under `-D warnings`, the public-api diff, the packaged-file-set check and the self-containment
+  grep, in both `ci-local` scripts and in a new `vt-package` job in the workflow. The strict
+  `cargo publish -p oneterm-vt --dry-run` runs in the workflow only: it refuses a dirty tree and
+  reaches the network, and the local gate is what an agent runs **with** uncommitted work.
 - [x] Update the five documents listed above.
 
 ## Decisions
@@ -216,20 +226,26 @@ The full design is in [`low-level-design/packaging.md`](low-level-design/packagi
 
 ## Evidence and Gaps
 
-**Package.** `cargo publish -p oneterm-vt --dry-run`: `Packaged 64 files, 857.7KiB (219.0KiB
+**Package.** `cargo publish -p oneterm-vt --dry-run`: `Packaged 67 files, 875.6KiB (226.1KiB
 compressed)`, verified build clean, `warning: aborting upload due to dry run`. The list contains
-`README.md`, `CHANGELOG.md` and `examples/headless.rs`; `fuzz/` is excluded on its own (it is a
-package of its own), and no directory approaches 1 MB, so no `exclude` key was added. The one
-internal record id that would have shipped was a **file name**, `tests/us0087_cleanup_rows.rs`;
-renamed to `tests/cleanup_rows.rs`, and both `tests/*.rs` headers were rewritten too.
+`README.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE` and `examples/headless.rs`, and
+`scripts/verify-dependency-graph.py --package-list -` now asserts exactly that from
+`cargo package --list`. `fuzz/` is excluded on its own (it declares its own `[workspace]`), and no
+directory approaches 1 MB, so no `exclude` key was added; `public-api.txt` ships at 19 KiB, which is
+fine -- it describes the crate the reader is holding. Two file names carried internal record ids and
+would have shipped: `tests/us0087_cleanup_rows.rs` and `src/terminal/verify_bug0058_tests.rs`,
+renamed to `tests/cleanup_rows.rs` and `src/terminal/dcs_routing_tests.rs`; every `tests/*.rs` header
+was rewritten too.
 
-**Citations.** 106 rustdoc lines in 44 files before, 0 after. Six module headers keep their design
-document as an absolute `https://github.com/vnStrawHat/OneTerm/...` link, which is the form the HLD
-allows; everything else became a plain `//` comment or plain English. The CI grep also covers
-`BUG-NNNN`, which the criterion's pattern omits: it caught four more lines, all of them `BUG-0058`.
-Internal vocabulary with no id at all (`trap 40`, `correction C8`, `deviation D4`, `R-56`) was found
-by grepping the **generated HTML** rather than the source, because that is what the rule is actually
-about; `Mode`'s variants were the only rendered offenders left.
+**Citations.** 106 rustdoc lines in 44 files before, 0 after. **23** module headers keep their
+design document as an absolute `https://github.com/vnStrawHat/OneTerm/...` link -- one per file,
+which is the form the HLD allows; everything else became a plain `//` comment or plain English. (An
+earlier draft of this section said "six", counting the forks' reports rather than the files.) The CI
+grep also covers `BUG-NNNN`, which the criterion's pattern omits: it caught four more rustdoc lines,
+all `BUG-0058`. Two `BUG-0051` mentions survive in `reflow/reflow_tests.rs` as plain `//` comments,
+which is what the rule asks for. Internal vocabulary with no id at all (`trap 40`, `correction C8`,
+`deviation D4`, `R-56`) was found by grepping the **generated HTML** rather than the source, because
+that is what the rule is actually about; `Mode`'s variants were the last rendered offenders.
 
 **Documentation.** 263 `missing documentation` warnings before, 0 after.
 `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` is clean; it found one
@@ -238,6 +254,13 @@ pre-existing defect on the way, a public `parser` doc linking to the private `st
 **Identity.** `XTVERSION` before: `\x1bP>|OneTerm(0.5.2)\x1b\\` unconditionally. After:
 `\x1bP>|oneterm-vt(0.5.2)\x1b\\` with `Config::default()`, and `\x1bP>|OneTerm(0.5.2)\x1b\\` for
 OneTerm, whose adapter now sets `product_name`. `DA2` is `\x1b[>0;502;1c` in both cases.
+
+The name is **sanitised once**, where the reply is built, so `XTVERSION` and `DA2` can never
+disagree: C0, `DEL` and C1 controls are dropped, the result is cut to 64 bytes on a character
+boundary, and a name that sanitises to nothing falls back to the engine's own. `DA2`'s number
+saturates each version component at 99, so no name an embedder builds from a string it did not
+control can overflow the arithmetic. `crates/vt/tests/product_name.rs` (8 tests, adopted from the
+verification) pins all of it.
 
 **The example.**
 
@@ -256,31 +279,69 @@ Repaint
 |                                |
 ```
 
-**Surface.** `crates/vt/public-api.txt`, 764 lines, regenerated with no diff by
-`python scripts/vt-public-api.py --check`.
+**Surface.** `crates/vt/public-api.txt`, **688** lines over 100 public items, regenerated with no
+diff by `python scripts/vt-public-api.py --check`. It lists only paths an embedder can write: the
+crate root and the three `pub mod`s, read from `lib.rs` rather than hard-coded. Two break tests,
+both run: renaming the private `parser::params` module leaves the file unchanged (exit 0,
+"public API surface unchanged"), and renaming the public `cluster_width` fails it with the expected
+two-line diff (exit 1).
 
-**Gate.** `cargo test -p oneterm-vt` 374 + 6 + 3 doctests; `pwsh scripts/ci-local.ps1 -Full` green.
+**Gate.** `cargo test -p oneterm-vt` 374 + 8 + 6 + 3 doctests; `pwsh scripts/ci-local.ps1 -Full`
+green, run once with an untracked file under `crates/vt/` present to prove the local gate no longer
+needs a clean tree.
 
 Known gaps to carry forward:
 
 - CI does not build at the MSRV, so `rust-version = 1.96.0` is a claim rather than a proof. The
   README says so in as many words rather than implying a check that does not exist.
-- The crate is not published. Whether this packet should end with a real `cargo publish` is intake
-  Open Decision 2; the owner's ruling for this packet was `--dry-run` only.
-- `product_name`'s default string is intake Open Decision 5. The owner ruled
-  `oneterm-vt(<crate version>)`; a different default is a one-line change plus two test literals.
+- The crate is not published. Intake Open Decision 2 is now recorded: `--dry-run` only, no
+  `cargo publish` in this intake. The first real publish is the owner's, on a tag.
+- `product_name`'s default string is intake Open Decision 5, now recorded as
+  `oneterm-vt(<version>)`. All four rulings this packet leans on (2, 3, 5, 6) are coordinator
+  defaults presented to the owner with no objection recorded, not owner rulings; they are written in
+  `IN-0038.md` in those words.
 - **No E2E walk.** The manual Windows walk (start a local shell, probe `XTVERSION`, confirm the
   string is unchanged) was not run: the owner runs this session inside OneTerm, so driving the GUI
   here is unsafe. The reply is pinned by two unit tests against the exact byte strings, and OneTerm's
   half of it is one `concat!` in `adapter_config`, but nobody has watched a real `tmux -V` see it.
 - `scripts/vt-public-api.py` reads rustdoc HTML, so it detects an item, field, variant or method
   that is added, removed or renamed, but **not** a signature change. Rustdoc JSON would, and is
-  nightly-only; revisit if the pinned toolchain ever moves.
+  nightly-only; revisit if the pinned toolchain ever moves. `--no-doc` also trusts whatever is in
+  `target/doc`, so run out of order it can validate stale HTML; every caller in CI builds the docs
+  in the step before.
+- The MSRV rule (a raise is a minor bump) is published in `CHANGELOG.md` and the README, but intake
+  Open Decision 4 is still open and no CI job builds at 1.96.0.
 - `StrSpan`, `ByteSpan` and `ParamSpans` are public-in-private: they appear in `VtEvent`'s variants
   but are not re-exported, so an embedder can destructure them and can never name them or read their
   docs. Found during the doc pass, out of scope here, and it belongs on `US-0098`'s api-surface list.
 - `FeedStats::grapheme_truncated` and `FeedStats::style_table_exhausted` are never written. They are
   documented as reserved rather than as working counters; wiring them is a separate change.
+
+## Verification notes closed
+
+Independent verification: [`evidence/US-0097-verify.md`](evidence/US-0097-verify.md),
+**PASS-WITH-NOTES** at `2e1495c`. Seven medium findings, seven low and one informational. All are
+closed; the rulings on the seven mediums are the coordinator's.
+
+| Finding | Closed by |
+| --- | --- |
+| F1 dead guide link | The README's **Documentation** section names the guide as planned and carries no URL. `US-0103` adds the link with the guide. |
+| F2 no licence in the tarball | `LICENSE` and `NOTICE` copied into `crates/vt/`, so `cargo package` ships them. `scripts/verify-dependency-graph.py --package-list -` asserts both, plus `README.md`, `CHANGELOG.md` and `examples/headless.rs`, from a `cargo package --list` on stdin; CI and both `ci-local` scripts pipe it. A doctored list missing one fails with exit 1. |
+| F3 unvalidated `product_name` spliced into a DCS | Sanitised once at the reply site: every C0, `DEL` and C1 control dropped, cut to 64 bytes on a character boundary, empty result falls back to `oneterm-vt(<version>)`. Documented on the field, which is what an embedder reads. Pinned by five tests, including the verifier's `ESC \`, `0x9c`, `BEL` and 64 KiB cases. |
+| F4 `DA2` overflow and collision | Each version component saturates at 99 before packing, so the answer is at most `999999` and no name can overflow it. The collision it buys (`1.0.100` reports what `1.0.99` reports) is documented on the field and on `version_number`, and pinned by a test. `P(429497.0.0)` now answers `999999`-shaped bytes instead of panicking in a debug build. |
+| F5 `public-api.txt` is not the public API | The script keeps only paths whose module is the crate root or one of the crate's `pub mod`s, read from `lib.rs` so a future `pub mod` needs no edit. 764 lines to 688; 164 item lines to 100. Both break tests run: a private-module rename passes, a public-item rename fails. |
+| F6 rulings claimed but not recorded | `IN-0038.md` Open Decisions 2, 3, 5 and 6 are ticked with their ruling text and the provenance "Coordinator default 2026-09-15, presented to the owner, no objection recorded". The packet no longer calls them owner rulings. |
+| F7 `ci-local` unrunnable with uncommitted work | The local scripts run `cargo package -p oneterm-vt --allow-dirty --list` into the publish-set check: offline, and it works with a dirty tree, which is the state `AGENTS.md` tells every agent to run the gate in. `ci.yml` keeps the strict `cargo publish --dry-run` on its clean checkout. Proven by a green `-Full` run with an untracked file under `crates/vt/`. |
+| F8 evidence over-claims | Every number in Evidence re-measured: 23 repository links in 23 files (not six), 67 files and 875.6 KiB (not 63/64 and 857.7 KiB), the `BUG-0051` lines identified as plain `//` comments, `tests/parser_limits.rs` cleaned, `src/terminal/verify_bug0058_tests.rs` renamed, and the harness snippet's file count corrected. |
+| F9 dangling doc fragment | `grid/row.rs` fixed, and the whole file re-read for the same accident. |
+| F10 three CI lists differ | `cargo run -p oneterm-vt --example headless` added to both `ci-local` scripts and to `AGENTS.md` section 4, which now also names the packaged-file-set step. |
+| F11 rustdoc inaccuracies | All five: `scrollback_limit` says the grid clamps and the field reports what you asked for; `Terminal::colors` names `OSC 12` and the bright and dim keys; `Terminal::new` says it clamps the size; `VtEvent::Repaint` names `Terminal::render_update` and `RenderState` with resolving intra-doc links and no invented "snapshot"; `RowHeader::occ` has its "not checked by the integrity assertions" statement back. |
+| F12 record ids in `Cargo.toml` | The `[features]` comment is rewritten with no record ids and no internal document names; `Cargo.toml.orig` ships, so it is the same reader. |
+| F13 contract documents not reconciled | `packaging.md` and `api-surface.md` now describe what was built: the manifest as it is, the README's whole-file doctest route, and the HTML-reading public-API script. |
+| F14 `AGENTS.md` missing from Reconciliation | Listed below. |
+
+Two findings the verification recorded as correct-but-unproven stay open and are in Gaps: the E2E
+walk, and the MSRV.
 
 ## Harness row
 
@@ -309,20 +370,23 @@ ROW = dict(
     e2e_proof=0,
     platform_proof=1,
     evidence=(
-        "cargo publish --dry-run packages 63 files incl. README, CHANGELOG and "
-        "examples/headless.rs; 263 missing_docs warnings closed and 106 record "
-        "citations removed from rustdoc across 44 files; Config::product_name with "
-        "two asserted reply byte strings; public-api.txt (764 lines) gated by "
+        "cargo publish --dry-run packages 67 files incl. README, CHANGELOG, "
+        "LICENSE, NOTICE and examples/headless.rs; 263 missing_docs warnings "
+        "closed and 106 record citations removed across 44 files; sanitised "
+        "Config::product_name with 8 tests; public-api.txt (688 lines) gated by "
         "scripts/vt-public-api.py; new vt-package CI job."
     ),
     verify_command="pwsh scripts/ci-local.ps1 -Full",
     last_verified_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     last_verified_result="pass",
     notes=(
-        "No serde feature and no regex optional dep (owner ruling; regex is US-0100's). "
-        "public-api.txt is read from rustdoc HTML because --output-format json is "
-        "nightly-only, so signature changes are not detected. e2e_proof=0: the manual "
-        "XTVERSION walk was not run because the owner runs this session inside OneTerm."
+        "Independently verified PASS-WITH-NOTES at 2e1495c "
+        "(evidence/US-0097-verify.md); all 14 findings closed in the rework. "
+        "No serde feature and no regex optional dep (IN-0038 Open Decision 3; "
+        "regex is US-0100's). public-api.txt is read from rustdoc HTML because "
+        "--output-format json is nightly-only, so signature changes are not "
+        "detected. e2e_proof=0: the manual XTVERSION walk was not run because the "
+        "owner runs this session inside OneTerm."
     ),
     intake_id=43,
 )

@@ -21,8 +21,8 @@ mod osc;
 mod tests;
 
 #[cfg(test)]
-#[path = "verify_bug0058_tests.rs"]
-mod verify_bug0058_tests;
+#[path = "dcs_routing_tests.rs"]
+mod dcs_routing_tests;
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -67,8 +67,9 @@ const MARK_MAX: usize = 1024;
 // policy.
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Rows of scrollback kept above the screen, clamped to
-    /// [`SCROLLBACK_MAX`](crate::grid::SCROLLBACK_MAX).
+    /// Rows of scrollback to keep above the screen. The grid clamps what it
+    /// actually keeps to [`SCROLLBACK_MAX`](crate::grid::SCROLLBACK_MAX); this
+    /// field reports the number you asked for.
     pub scrollback_limit: u32,
     /// Which OSC numbers reach the embedder, and which may spill.
     pub osc_claims: OscClaims,
@@ -86,6 +87,15 @@ pub struct Config {
     ///
     /// A trailing `(<major>.<minor>.<patch>)` is also the version `DA2`
     /// reports; with no parsable version there, `DA2` reports the engine's own.
+    /// `DA2` answers one number, `major * 10000 + minor * 100 + patch`, so each
+    /// component saturates at 99: `1.0.100` reports what `1.0.99` reports.
+    ///
+    /// **The value is sanitised before it is used.** `XTVERSION` replies inside
+    /// a DCS string, so every C0 control, `DEL` and every C1 control
+    /// (`0x00..=0x1f`, `0x7f`, `0x80..=0x9f`) is dropped rather than allowed to
+    /// end that string early, and what is left is cut to **64 bytes** on a
+    /// character boundary. A name that is empty, or that sanitises to nothing,
+    /// is treated as `None`.
     pub product_name: Option<Cow<'static, str>>,
     // `accept_c1` (the `S8C1T` hook) is deliberately **absent**. The LLD
     // publishes it, but the parser hard-codes trap 48 — an 8-bit C1 byte is
@@ -153,7 +163,8 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    /// A terminal at `size`, in its power-on state.
+    /// A terminal at `size`, in its power-on state. The size is clamped for
+    /// you by [`Size::clamped`], so an absurd one is not an error.
     pub fn new(size: Size, config: Config) -> Terminal {
         let size = size.clamped();
         Terminal {
@@ -504,7 +515,9 @@ impl Terminal {
         self.state.colors.get(key)
     }
 
-    /// Every colour the stream overrode with `OSC 4`, `OSC 10` or `OSC 11`.
+    /// Every colour the stream overrode, keyed by [`ColorKey`]: the 256 indexed
+    /// colours (`OSC 4`), the defaults (`OSC 10`, `OSC 11`), the cursor
+    /// (`OSC 12`), and the bright and dim variants the engine derives.
     pub fn colors(&self) -> &ColorOverrides {
         &self.state.colors
     }

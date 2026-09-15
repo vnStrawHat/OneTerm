@@ -40,8 +40,11 @@ pub enum StringTerm {
 pub enum VtEvent {
     /// Something changed, so a consumer that draws should ask for an update.
     ///
-    /// At most one per batch, appended last. It is a hint, not damage: what
-    /// actually changed is the per-row sequence number a snapshot reports.
+    /// At most one per batch, appended last. It is a hint, not damage: to learn
+    /// what actually changed, call
+    /// [`Terminal::render_update`](crate::Terminal::render_update) with your own
+    /// [`RenderState`](crate::RenderState), which returns only the rows whose
+    /// sequence number moved since that state last asked.
     Repaint,
     /// `OSC 0` / `OSC 2`: the window title the program asks for. Read the text
     /// with [`EventBatch::str`](super::EventBatch::str); sanitising it before
