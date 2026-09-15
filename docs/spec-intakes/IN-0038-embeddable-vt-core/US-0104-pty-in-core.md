@@ -10,11 +10,11 @@ Created: 2026-09-15
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
-- [ ] Changed
-- [ ] Reopened (acceptance rework)
-- [ ] Retired
+- [x] In progress
+- [x] Implemented
+- [x] Changed
+- [x] Reopened (acceptance rework)
+- [x] Retired
 <!-- HARNESS:STATUS:END -->
 
 ## Classification
@@ -41,7 +41,7 @@ only**. Clipboard backends, `TerminalSecurityPolicy`, URL policy and GPUI stay o
 
 ## Scope
 
-- [ ] In scope: the file move `crates/pty/src/**` -> `crates/vt/src/pty/**`; the `pty` feature and
+- [x] In scope: the file move `crates/pty/src/**` -> `crates/vt/src/pty/**`; the `pty` feature and
   the three optional dependencies in `crates/vt/Cargo.toml`; `pub mod pty` in `crates/vt/src/lib.rs`;
   the `use` lines in `crates/local-shell` (4 files) and `crates/tools` (1 file) and their manifests;
   root `Cargo.toml` (`members`, `[workspace.dependencies]`, `[profile.fast-dev.package]`);
@@ -50,27 +50,27 @@ only**. Clipboard backends, `TerminalSecurityPolicy`, URL policy and GPUI stay o
   verification block), `docs/agents/structure.md` (tree + three table rows),
   `docs/agents/dependencies.md`, `docs/architecture.md`, `docs/PROJECT.md`,
   `docs/terminal-backend.md`; the path reference inside `DEC-0016`.
-- [ ] Out of scope: any change to what the transport **does**. Not one function body changes. A
+- [x] Out of scope: any change to what the transport **does**. Not one function body changes. A
   behaviour change discovered mid-move is a new packet, not a fold-in.
-- [ ] Out of scope: the `EventedReadWrite` signature redesign that would remove `polling` from the
+- [x] Out of scope: the `EventedReadWrite` signature redesign that would remove `polling` from the
   public API. Decided against with a named trigger in
   [`low-level-design/pty.md`](low-level-design/pty.md), "Considered and rejected".
-- [ ] Out of scope: shipping the bundled ConPTY pair inside the packaged crate. Decided against in
+- [x] Out of scope: shipping the bundled ConPTY pair inside the packaged crate. Decided against in
   [`low-level-design/pty.md`](low-level-design/pty.md), "Packaging decision", and in
   [`low-level-design/packaging.md`](low-level-design/packaging.md).
-- [ ] Out of scope: guide chapter 13 itself. It is `US-0103`'s file; this packet only adds it to
+- [x] Out of scope: guide chapter 13 itself. It is `US-0103`'s file; this packet only adds it to
   that packet's outline and gate list.
-- [ ] **In** scope, consequently, three things `US-0097` turned into gates before this packet
+- [x] **In** scope, consequently, three things `US-0097` turned into gates before this packet
   existed. All are mechanical and all fail CI if skipped:
-  - `#![warn(missing_docs)]` coverage for the moved module -- about 30 doc lines (`Shell::new`,
+  - [x] `#![warn(missing_docs)]` coverage for the moved module -- about 30 doc lines (`Shell::new`,
     several `Options` and `WindowSize` fields).
-  - The **rustdoc self-containment grep**. `crates/pty/src` carries **13** `///` / `//!` lines
+  - [x] The **rustdoc self-containment grep**. `crates/pty/src` carries **13** `///` / `//!` lines
     citing `DEC-0013`, `DEC-0016`, `BUG-0055`, `CORR-10` or
     `docs/spec-intakes/IN-0029-vt-engine/low-level-design/pty.md`, in `lib.rs`, `windows/child.rs`,
     `windows/conpty.rs` and `windows/pipe_tests.rs`. Inside `crates/vt/src` they fail the grep
     `US-0097` added to `ci-local`. They go by the HLD's three rules: most drop from `///` to plain
     `//`, and the two module-level "Design:" lines become absolute links to this repository.
-  - `crates/vt/public-api.txt` and `python scripts/vt-public-api.py --check --no-doc`. `pub mod pty`
+  - [x] `crates/vt/public-api.txt` and `python scripts/vt-public-api.py --check --no-doc`. `pub mod pty`
     adds roughly 13 public paths; the committed surface file is regenerated in the same commit so
     the diff is the reviewable record of what the module exposes.
 
@@ -78,21 +78,21 @@ only**. Clipboard backends, `TerminalSecurityPolicy`, URL policy and GPUI stay o
 
 Every criterion is a command a verifier who distrusts this packet can run from the repository root.
 
-- [ ] `cargo build -p oneterm-vt` (default, `pty` on) exits 0.
-- [ ] `cargo build -p oneterm-vt --no-default-features` exits 0.
-- [ ] `cargo build -p oneterm-vt --all-features` exits 0.
-- [ ] `cargo tree -p oneterm-vt -e normal --no-default-features` prints exactly 7 lines: the crate
+- [x] `cargo build -p oneterm-vt` (default, `pty` on) exits 0.
+- [x] `cargo build -p oneterm-vt --no-default-features` exits 0.
+- [x] `cargo build -p oneterm-vt --all-features` exits 0.
+- [x] `cargo tree -p oneterm-vt -e normal --no-default-features` prints exactly 7 lines: the crate
   plus `bitflags`, `log`, `memchr`, `rustc-hash`, `unicode-segmentation`, `unicode-width`. Pasted
   into Evidence verbatim.
-- [ ] `cargo tree -p oneterm-vt -e normal` on `x86_64-pc-windows-msvc` shows 8 direct dependencies
+- [x] `cargo tree -p oneterm-vt -e normal` on `x86_64-pc-windows-msvc` shows 8 direct dependencies
   and 16 distinct crates; on `x86_64-unknown-linux-gnu` (`--target`) 8 direct and 11 distinct. Both
   pasted into Evidence. No `gpui*` and no `oneterm-*` in either.
-- [ ] `cargo test -p oneterm-vt --features pty` runs the loopback tests moved from
+- [x] `cargo test -p oneterm-vt --features pty` runs the loopback tests moved from
   `crates/pty/src/loopback_tests.rs`, and
   `cargo test -p oneterm-vt --features pty -- --list | grep -c 'pty::loopback_tests'` is the same
   count as `cargo test -p oneterm-pty -- --list | grep -c 'loopback_tests'` on `main` @ `92ae9a6`.
   Same for `pty::windows::pipe_tests` and `pty::windows::pseudo_console_tests` on Windows.
-- [ ] `cargo test -p oneterm-vt --no-default-features` is green: the whole engine suite passes with
+- [x] `cargo test -p oneterm-vt --no-default-features` is green: the whole engine suite passes with
   no transport compiled. **This replaces the "bring your own transport test with the feature off"
   the brief asked for** -- see Gaps for why that criterion cannot be written as stated.
 - [ ] The workspace has no `oneterm-pty`. All three print nothing:
@@ -106,10 +106,10 @@ Every criterion is a command a verifier who distrusts this packet can run from t
   ```
   The two `grep -v` exclusions are the historical record: `IN-0029`'s evidence files and this
   intake's own documents name the crate as history and must not be rewritten.
-- [ ] `cargo package -p oneterm-vt --list | grep -i -e conpty -e openconsole` prints nothing
+- [x] `cargo package -p oneterm-vt --list | grep -i -e conpty -e openconsole` prints nothing
   **except** the source file `src/pty/windows/conpty.rs`, and the same list contains
   `src/pty/mod.rs`, `src/pty/unix.rs` and `src/pty/loopback_tests.rs`. No Microsoft binary appears.
-- [ ] The packaging gate `US-0097` shipped still passes, **with the `pty` module in the list and
+- [x] The packaging gate `US-0097` shipped still passes, **with the `pty` module in the list and
   nothing excluded to make it pass**:
   ```bash
   cargo package -p oneterm-vt --list | python scripts/verify-dependency-graph.py --package-list -
@@ -120,31 +120,31 @@ Every criterion is a command a verifier who distrusts this packet can run from t
   "reaches nothing outside `crates/vt`" rule is satisfied because every added path is under
   `crates/vt/src/pty/`, and the 150-character path bound is not close: the longest added path,
   `crates/vt/src/pty/windows/pseudo_console_tests.rs`, is 48.
-- [ ] `cargo package -p oneterm-vt` (the build form, not `--list`) still exits 0 -- it compiles the
+- [x] `cargo package -p oneterm-vt` (the build form, not `--list`) still exits 0 -- it compiles the
   packaged crate out of tree, which is where a missing `#[cfg(feature = "pty")]` would surface.
-- [ ] `python scripts/verify-dependency-graph.py` passes against the edited
+- [x] `python scripts/verify-dependency-graph.py` passes against the edited
   `scripts/dependency-graph-policy.json`, and that file contains no `oneterm-pty`.
-- [ ] `python scripts/third-party-notices.py --check` passes **with no regeneration**: the bundle and
+- [x] `python scripts/third-party-notices.py --check` passes **with no regeneration**: the bundle and
   its manifest did not move, and `polling` / `windows-sys` / `libc` were already in the app graph.
-- [ ] OneTerm's local shell is unchanged: `cargo test -p oneterm-local-shell` green, including
+- [x] OneTerm's local shell is unchanged: `cargo test -p oneterm-local-shell` green, including
   `session_orphan_tests` (the `DEC-0016` escalation probe) and `event_loop_tests`.
 - [ ] Ten-launch probe from `IN-0031`: open and close ten local shells in the running app and confirm
   no orphan `cmd.exe` and no orphan `OpenConsole.exe` remain, and that the log line
   `conpty: bundled` still appears -- i.e. the bundled host still resolves from the executable's
   directory after the source moved crate. Cheap, and it is the only check that proves the loader's
   runtime path resolution survived.
-- [ ] `docs/terminal-backend.md` and `docs/agents/structure.md` name `oneterm_vt::pty`, not
+- [x] `docs/terminal-backend.md` and `docs/agents/structure.md` name `oneterm_vt::pty`, not
   `oneterm-pty`, and `python scripts/check-doc-paths.py` passes (it checks both files).
-- [ ] LOC: `git diff --stat main` shows the move as a rename. Production delta is net zero plus the
+- [x] LOC: `git diff --stat main` shows the move as a rename. Production delta is net zero plus the
   manifest, module header and `missing_docs` lines; the number is pasted into Evidence with the
   dependency-count table.
-- [ ] The self-containment grep returns **0** lines over `crates/vt/src` (baseline for the moved
+- [x] The self-containment grep returns **0** lines over `crates/vt/src` (baseline for the moved
   files on `main` @ `92ae9a6` is **13**, in `lib.rs`, `windows/child.rs`, `windows/conpty.rs` and
   `windows/pipe_tests.rs`), and `python scripts/vt-public-api.py --check --no-doc` passes against a
   regenerated `crates/vt/public-api.txt` whose diff is only the `pty` paths.
-- [ ] `RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features` exits 0 with
+- [x] `RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features` exits 0 with
   `missing_docs` in force.
-- [ ] `pwsh scripts/ci-local.ps1` green.
+- [x] `pwsh scripts/ci-local.ps1` green.
 
 ## Documentation
 
@@ -235,25 +235,25 @@ shape, which this copies, is `default = ["pty"]` with `pty = ["dep:corcovado",
 
 ## Plan
 
-- [ ] Commit 1, pure rename: `git mv crates/pty/src crates/vt/src/pty`, `crates/pty/src/lib.rs` ->
+- [x] Commit 1, pure rename: `git mv crates/pty/src crates/vt/src/pty`, `crates/pty/src/lib.rs` ->
   `crates/vt/src/pty/mod.rs`, add `pub mod pty;` to `crates/vt/src/lib.rs`. No content edits, so
   `git diff -M` shows renames and a reviewer reads nothing.
-- [ ] Commit 2, the feature: `crates/vt/Cargo.toml` gains `default = ["pty"]`,
+- [x] Commit 2, the feature: `crates/vt/Cargo.toml` gains `default = ["pty"]`,
   `pty = ["dep:polling", "dep:windows-sys", "dep:libc"]` and the three optional declarations; the
   `pub mod pty;` line gains `#[cfg(feature = "pty")]`; `crates/pty/Cargo.toml` is deleted.
-- [ ] Commit 3, the consumers: `crates/local-shell` (manifest + 4 `use` lines),
+- [x] Commit 3, the consumers: `crates/local-shell` (manifest + 4 `use` lines),
   `crates/tools` (manifest + 1 `use` line + one comment), root `Cargo.toml`,
   `scripts/dependency-graph-policy.json`, `deny.toml`.
-- [ ] Commit 4, CI: add the `cargo tree -e normal --no-default-features` assertion beside the
+- [x] Commit 4, CI: add the `cargo tree -e normal --no-default-features` assertion beside the
   `--no-default-features` build step `US-0097` already put in `scripts/ci-local.sh`,
   `scripts/ci-local.ps1` and `.github/workflows/ci.yml`. One step, not a second build.
-- [ ] Commit 5, the crate's own docs: the self-containment pass over the 13 citation lines, the
+- [x] Commit 5, the crate's own docs: the self-containment pass over the 13 citation lines, the
   ~30 `missing_docs` lines, and a regenerated `crates/vt/public-api.txt`. Its own commit so the
   review is a diff of comment prefixes plus one generated file.
-- [ ] Commit 6, repository docs: the six policy documents, the two decision path references, the
+- [x] Commit 6, repository docs: the six policy documents, the two decision path references, the
   four intake documents, `US-0103`'s outline, and the `crates/vt/CHANGELOG.md` entry -- the feature
   is an embedder-visible change and `US-0097` seeded the `Unreleased` section for exactly this.
-- [ ] Run the acceptance commands; paste the two `cargo tree` outputs and the ten-launch probe result
+- [x] Run the acceptance commands; paste the two `cargo tree` outputs and the ten-launch probe result
   into Evidence.
 
 ## Dependency count table
@@ -314,11 +314,11 @@ Revised intake dependency order: `BUG-0058` -> `US-0097` -> { `US-0098`, `US-009
   that proves the bundled-host loader still resolves after the move.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
@@ -359,6 +359,171 @@ Known gaps to carry forward:
 - **Unix `openpty` has no process-spawning test.** Only Windows has `pseudo_console_tests.rs`. That
   gap exists on `main` and is not made worse or better here; it is recorded because a published crate
   invites the question.
+
+
+## Evidence (2026-09-15, `feat/vt-pty`)
+
+Six commits became three, for one reason: the packet's commit 1 wired `pub mod pty` without the
+feature or the manifest, which does not compile, and commits 4 to 6 are the same review unit. What
+the split preserves is the one thing that mattered -- **commit 1 is still a pure rename**, nine
+files with a zero-byte content delta, so `git diff -M` reads as renames and a reviewer reads
+nothing.
+
+| Commit | What |
+| --- | --- |
+| 1 | `git mv` only: `crates/pty/src/**` -> `crates/vt/src/pty/**`, `lib.rs` -> `mod.rs`, and `oneterm-pty` out of `members`, `[workspace.dependencies]` and `[profile.fast-dev.package]`. |
+| 2 | The feature, the wiring, the consumers, the policy JSON, `deny.toml`, `missing_docs`, the self-containment pass, `public-api.txt`. Green on its own. |
+| 3 | The `cargo tree` assertion in the three CI entry points, the README and CHANGELOG, and the repository policy documents. |
+
+### `cargo tree -p oneterm-vt -e normal --no-default-features`
+
+```text
+oneterm-vt v0.5.2 (.../crates/vt)
+|-- bitflags v2.13.2
+|-- log v0.4.34
+|-- memchr v2.8.2
+|-- rustc-hash v2.1.2
+|-- unicode-segmentation v1.13.3
+`-- unicode-width v0.2.2
+```
+
+Seven lines, six leaf crates, identical to `main` today. Asserted in CI now, not read by eye.
+
+### `cargo tree -p oneterm-vt -e normal`, both targets
+
+`--target x86_64-pc-windows-msvc`:
+
+```text
+oneterm-vt v0.5.2 (.../crates/vt)
+|-- bitflags v2.13.2
+|-- log v0.4.34
+|-- memchr v2.8.2
+|-- polling v3.11.0
+|   |-- cfg-if v1.0.4
+|   |-- concurrent-queue v2.5.0
+|   |   `-- crossbeam-utils v0.8.21
+|   |-- pin-project-lite v0.2.17
+|   `-- windows-sys v0.61.2
+|       `-- windows-link v0.2.1
+|-- rustc-hash v2.1.2
+|-- unicode-segmentation v1.13.3
+|-- unicode-width v0.2.2
+`-- windows-sys v0.59.0
+    `-- windows-targets v0.52.6
+        `-- windows_x86_64_msvc v0.52.6
+```
+
+`--target x86_64-unknown-linux-gnu`:
+
+```text
+oneterm-vt v0.5.2 (.../crates/vt)
+|-- bitflags v2.13.2
+|-- libc v0.2.186
+|-- log v0.4.34
+|-- memchr v2.8.2
+|-- polling v3.11.0
+|   |-- cfg-if v1.0.4
+|   `-- rustix v1.1.4
+|       |-- bitflags v2.13.2
+|       `-- linux-raw-sys v0.12.1
+|-- rustc-hash v2.1.2
+|-- unicode-segmentation v1.13.3
+`-- unicode-width v0.2.2
+```
+
+No `gpui*` and no `oneterm-*` in either.
+
+### Dependency count table, measured
+
+| Build | Direct | Distinct | Predicted | Matches |
+| --- | --- | --- | --- | --- |
+| `--no-default-features` | 6 | 6 | 6 / 6 | yes |
+| default, `x86_64-pc-windows-msvc` | 8 | 16 | 8 / 16 | yes |
+| default, `x86_64-unknown-linux-gnu` | 8 | 11 | 8 / 11 | yes |
+| OneTerm's app graph | -- | 0 delta | 0 delta | yes -- `python scripts/third-party-notices.py --check` passes with no regeneration |
+
+### Tests
+
+- `cargo test -p oneterm-vt`: 398 passed, 0 failed, 2 ignored (lib), plus 24 in the integration
+  targets. 24 of the lib tests are `pty::*`.
+- `cargo test -p oneterm-vt --no-default-features`: 374 passed, 0 failed, 2 ignored. 398 - 374 = 24,
+  the whole transport suite, and the engine suite passes with no transport compiled.
+- `cargo test -p oneterm-vt --features vt-paranoid`: 398 passed, 0 failed.
+- `cargo test -p oneterm-local-shell`: 33 passed, 0 failed, 2 ignored, including `event_loop_tests`
+  and `session_orphan_tests`.
+- `cargo test --workspace`: 0 failures.
+- Moved-test count: `#[test]` attributes across the nine files, `92ae9a6:crates/pty/src` **30**, and
+  `crates/vt/src/pty` **30**. Not one test was added, removed or renamed. By suite:
+  `pty::loopback_tests` 2, `pty::windows::pipe::pipe_tests` 2,
+  `pty::windows::pseudo_console_tests` 6, `pty::windows::child::tests` 4,
+  `pty::windows::conpty::tests` 8, `pty::windows::tests` 3.
+
+### Package
+
+```text
+$ cargo package -p oneterm-vt --list | grep -i -e conpty -e openconsole
+src/pty/windows/conpty.rs
+```
+
+One hit, and it is the loader's source. The list also carries `src/pty/mod.rs`, `src/pty/unix.rs`,
+`src/pty/windows.rs`, `src/pty/loopback_tests.rs` and the four files under `src/pty/windows/`.
+`cargo package -p oneterm-vt --list | python scripts/verify-dependency-graph.py --package-list -`
+passes with nothing excluded, and `cargo package -p oneterm-vt` (the build form) exits 0.
+
+### Rustdoc
+
+The self-containment grep over `crates/vt/src` returns **0** lines (baseline for the moved files
+was 13). Eleven `missing_docs` items were documented: `Shell::new`, four `WindowSize` fields, two
+`EventedReadWrite` associated types and four of its methods. One latent broken intra-doc link
+surfaced with the move -- `[`PipeReader::read`]` in `windows/pipe.rs`, a trait method rustdoc cannot
+resolve as an inherent -- and became a code span; the doc gate had never run over this code.
+`RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features` exits 0, and
+`python scripts/vt-public-api.py --check --no-doc` passes against a regenerated
+`crates/vt/public-api.txt` whose diff is 28 added lines, all under `oneterm_vt::pty`.
+
+### LOC
+
+`git diff --stat -M main` shows the nine files as renames. Inside them the delta is **+110 / -97**,
+net **+37**: the module header (both platforms in prose, the absolute design link, the threading
+model), the eleven `missing_docs` lines and the citation rewrites. No function body changed except
+paths (`crate::` -> `crate::pty::`), log prefixes and thread names that spelled a crate that no
+longer exists, and three test-only string markers. `crates/pty/Cargo.toml` is -24;
+`crates/vt/Cargo.toml` is +18.
+
+### Gaps found while doing it
+
+1. **`crates/vt/public-api.txt` is platform-dependent from this packet on, and CI checks it on
+   Linux.** `pty` publishes `PipeReader` / `PipeWriter` and `Options::escape_args` on Windows, and
+   `SignalMask` / `Options::child_signal_mask` on Unix, so `scripts/vt-public-api.py` produces a
+   different file on each host. The committed file was generated on Windows; the
+   `Packaged crate (oneterm-vt)` job in `.github/workflows/ci.yml` runs on `ubuntu-latest` and will
+   disagree. `low-level-design/packaging.md` assumed the opposite ("CI runs `cargo doc` on Windows")
+   and that premise is wrong. **Not fixed here**: choosing between pinning the surface to one
+   `--target` in all three call sites (a new toolchain prerequisite for every developer) and
+   splitting the file per platform is a contract decision, not an implementation detail. It is the
+   one thing on this branch that fails GitHub CI.
+2. **The acceptance grep cannot pass as written.** It excludes only
+   `docs/spec-intakes/IN-0029` and `IN-0038`, but `IN-0031` and `IN-0032` also name `crates/pty` and
+   `oneterm-pty` throughout their evidence, for the same reason `IN-0029` is excluded: rewriting
+   them would falsify the record. The check that does pass, and is the one the Reconciliation
+   section actually states, is that nothing outside `docs/spec-intakes/` names the crate -- with one
+   deliberate exception, the sentence this packet was told to write verbatim in
+   `crate-dependency-rules.md`: "there is no separate `oneterm-pty` crate."
+3. **The ten-launch probe was not run.** It drives the GPUI application, and the owner runs Claude
+   inside a running `oneterm.exe`; opening and closing ten shells in a second instance from a
+   worktree build is not the cheap check the packet assumed. What was run instead, from
+   `target/debug/` where `crates/app/build.rs` had already staged `conpty.dll` and
+   `x64/OpenConsole.exe`: `pty-throughput.exe cmd /c "echo vt-pty-probe"`, which spawned a real
+   ConPTY child through the moved loader, read from it and exited 0, leaving no new `cmd.exe` and no
+   new `OpenConsole.exe` (the one new pid was this session's own shell wrapper, checked by command
+   line). The bundled-versus-system resolution itself is covered by
+   `pty::windows::conpty::tests::conpty_api_prefers_the_bundled_host` and
+   `..._falls_back_to_the_system_host`, both green, which stage a real `conpty.dll` in a scratch
+   directory. **Unverified**: the `conpty: bundled` log line in the running application, and the
+   ten-launch orphan count. `pty-throughput` initialises no logger, so the line has no way to
+   appear.
+4. The `pty` module rustdoc had to stop linking `[`windows::conpty`]` -- `windows` is a private
+   module, and `-D warnings` makes a public-to-private intra-doc link an error. It is prose now.
 
 ## Handoff
 
