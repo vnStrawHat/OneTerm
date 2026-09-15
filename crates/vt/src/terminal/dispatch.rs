@@ -1305,12 +1305,16 @@ impl Dispatch for Handler<'_> {
         self.state.config.osc_claims.allows_large(code)
     }
 
-    /// Only Sixel (`DCS q`) is decoded (`US-0080`). Any other final byte clears
-    /// an in-flight decoder, so a non-Sixel DCS arriving mid-Sixel aborts the
-    /// prior unterminated one — parity with the engine being replaced.
-    fn dcs_hook(&mut self, _params: &Params, _intermediates: &[u8], byte: u8) {
+    /// Only Sixel — final byte `q` with **no** intermediate — is decoded
+    /// (`US-0080`). The intermediates are part of the routing key: `DCS $ q`
+    /// (DECRQSS) and `DCS + q` (XTGETTCAP, which tmux, neovim and kitty send at
+    /// startup) share the final byte and are not images (`BUG-0058`). Any other
+    /// DCS clears an in-flight decoder, so a non-Sixel DCS arriving mid-Sixel
+    /// aborts the prior unterminated one — parity with the engine being
+    /// replaced.
+    fn dcs_hook(&mut self, _params: &Params, intermediates: &[u8], byte: u8) {
         self.state.dispatched = true;
-        if byte == b'q' {
+        if byte == b'q' && intermediates.is_empty() {
             self.state.graphics.parser = Some(SixelParser::new());
         } else {
             self.state.graphics.parser = None;

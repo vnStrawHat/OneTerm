@@ -137,9 +137,15 @@ live placement.
 ### Sixel decoder
 
 `crates/vt/src/graphics/sixel.rs`, ported from OneTerm's own patch — it is first-party code, so
-no licence question arises. The DCS sink is wired to `dcs_hook` with final byte `q`
-([`parser.md`](parser.md)); any other final byte clears an in-flight parser, so a non-Sixel DCS
-aborts a prior unterminated Sixel.
+no licence question arises. The DCS sink is wired to `dcs_hook` with final byte `q` **and no
+intermediate** ([`parser.md`](parser.md)); any other DCS clears an in-flight parser, so a non-Sixel
+DCS aborts a prior unterminated Sixel.
+
+The intermediates are part of the routing key, not decoration: `DCS $ q` (DECRQSS) and `DCS + q`
+(XTGETTCAP, which tmux, neovim and kitty send at startup) share the final byte `q` with Sixel and
+are not images. Routing on the final byte alone fed their payloads to the image decoder up to
+`DCS_MAX_BYTES` -- `BUG-0058`. Both are unhandled and counted; answering them is conformance work
+tracked in `US-0102`.
 
 Grammar (DEC STD 070 subset, unchanged from IN-0028):
 
