@@ -490,13 +490,49 @@ pub fn connect(
     }
 }
 
+/// The russh-sftp client configuration, pinned to the transfer budget
+/// russh-sftp 2.3.0 gave OneTerm (`IN-0036`, `US-0095` Changes F and G).
+///
+/// 3.0's defaults are not a drop-in: they cut the in-flight write budget 4x and
+/// add a read-ahead that OneTerm's own striped download throws away. Every field
+/// below restores measured 2.3.0 behaviour; none of them raises a limit past
+/// what the server allows.
+pub(crate) fn sftp_config() -> russh_sftp::client::Config {
+    russh_sftp::client::Config {
+        // 3.0 added `max_write_packet_len` (32 KiB) as a *third* cap on every
+        // SSH_FXP_WRITE, on top of `max_packet_len` and the server's own
+        // `limits@openssh.com` reply. With OneTerm's 255 KiB chunks it is always
+        // the binding one, so a 5 MiB upload went from 21 packets of 261 120 B
+        // to 161 of 32 742 B: 2 088 960 bytes in flight down to 523 872, and
+        // SFTP throughput is in-flight bytes / RTT. Raising it to
+        // `max_packet_len` removes russh-sftp's extra cap only — the server's
+        // advertised write limit still clamps the packet (`fs/file.rs`
+        // `server_write_len`), as does a smaller server `packet_len`.
+        max_write_packet_len: 262_144,
+        // 2.3.0's value. With 255 KiB packets that is ~2 MiB in flight. 3.0's 16
+        // would double what OneTerm had; doubling it is a throughput change to
+        // decide on its own evidence, not something to inherit from a bump.
+        max_concurrent_writes: 8,
+        // OneTerm stripes its own downloads: `transfer::pipeline::read_chunk`
+        // seeks before every chunk. 3.0 answers a read by putting
+        // `max_concurrent_reads` READ packets on the wire immediately, and a
+        // seek clears only the *local* queue — the server has already served
+        // them. Running both pipelines made the server send 3.6x the file size.
+        // One request in flight per handle; `copy_striped`'s handles supply the
+        // concurrency.
+        max_concurrent_reads: 1,
+        ..Default::default()
+    }
+}
+
 /// Open an SFTP channel on the same `handle` + spawn `sftp_task`.
 ///
 /// Flow:
 /// 1. `handle.channel_open_session()` → new channel (same TCP connection)
 /// 2. `channel.request_subsystem("sftp")` → request the SFTP subsystem
 /// 3. `channel.into_stream()` → convert into `AsyncRead + AsyncWrite`
-/// 4. `russh_sftp::client::SftpSession::new(stream)` → SFTP handshake
+/// 4. `russh_sftp::client::SftpSession::new_with_config(stream, sftp_config())`
+///    → SFTP handshake
 /// 5. Create the command channel `(cmd_tx, cmd_rx)`
 /// 6. `tokio::spawn(sftp_task(...))` — runs in the background
 /// 7. Return `Arc<SftpSession>` — bridge for the UI to call synchronously
@@ -526,7 +562,7 @@ async fn open_sftp(
     let stream = CountingStream::new(channel.into_stream(), state.clone());
 
     // 4. SFTP handshake — create the SftpChannel.
-    let sftp_channel = russh_sftp::client::SftpSession::new(stream)
+    let sftp_channel = russh_sftp::client::SftpSession::new_with_config(stream, sftp_config())
         .await
         .map_err(|e| sftp_error("handshake", &e))?;
 
@@ -994,9 +1030,11 @@ mod tests {
         async fn channel_open_session(
             &mut self,
             _channel: russh::Channel<russh::server::Msg>,
+            reply: russh::server::ChannelOpenHandle,
             _session: &mut russh::server::Session,
-        ) -> Result<bool, Self::Error> {
-            Ok(true)
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
         }
 
         async fn auth_password(
@@ -1162,3 +1200,8 @@ mod tests {
         assert_eq!(phases.current(), ConnectPhase::ShellRequest);
     }
 }
+
+// Key-file parsing lives in a sibling `keyfile_tests.rs` (see code-style.md).
+#[cfg(test)]
+#[path = "keyfile_tests.rs"]
+mod keyfile_tests;

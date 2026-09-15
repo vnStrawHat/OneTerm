@@ -67,10 +67,12 @@ impl russh::server::Handler for ClientHandler {
     async fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
+        reply: russh::server::ChannelOpenHandle,
         _session: &mut Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
+        reply.accept().await;
         self.channels.insert(channel.id(), channel);
-        Ok(true)
+        Ok(())
     }
 
     async fn pty_request(
@@ -317,7 +319,9 @@ impl russh_sftp::server::Handler for SftpHandler {
             let name = entry.file_name().to_string_lossy().into_owned();
             let attrs = match std::fs::metadata(entry.path()) {
                 Ok(meta) => Self::attrs_of(&meta),
-                Err(_) => FileAttributes::default(),
+                // russh-sftp 3.0 flipped `default()` from the dummy attributes
+                // to `empty()`; keep the placeholder this fallback always sent.
+                Err(_) => FileAttributes::dummy(),
             };
             files.push(File::new(name, attrs));
         }

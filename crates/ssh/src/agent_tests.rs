@@ -223,9 +223,11 @@ impl russh::server::Handler for AgentForwardServer {
     async fn channel_open_session(
         &mut self,
         _channel: russh::Channel<russh::server::Msg>,
+        reply: russh::server::ChannelOpenHandle,
         _session: &mut russh::server::Session,
-    ) -> Result<bool, Self::Error> {
-        Ok(true)
+    ) -> Result<(), Self::Error> {
+        reply.accept().await;
+        Ok(())
     }
 
     async fn agent_request(
@@ -394,28 +396,18 @@ async fn without_the_switch_a_server_opened_agent_channel_is_closed_unanswered()
         .clone()
         .expect("server handle");
 
-    let mut agent_channel = server_handle
-        .channel_open_agent()
-        .await
-        .expect("the open itself succeeds");
-    let mut closed = false;
-    while let Some(message) =
-        tokio::time::timeout(std::time::Duration::from_secs(5), agent_channel.wait())
-            .await
-            .expect("agent channel message")
-    {
-        match message {
-            ChannelMsg::Eof | ChannelMsg::Close => {
-                closed = true;
-                break;
-            }
-            ChannelMsg::Data { .. } => panic!("no data may flow without the switch"),
-            _ => {}
-        }
-    }
+    // russh 0.63 lets the handler answer the open itself, so OneTerm refuses
+    // the channel outright. Before the bump russh confirmed it before calling
+    // the handler and the only signal available was the close that followed.
+    let refused = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        server_handle.channel_open_agent(),
+    )
+    .await
+    .expect("the server learns the outcome within 5 s");
     assert!(
-        closed,
-        "the client must close the unrequested agent channel"
+        refused.is_err(),
+        "an agent channel must be refused when forwarding is off for the session"
     );
     assert_eq!(connections.load(Ordering::SeqCst), 0);
 

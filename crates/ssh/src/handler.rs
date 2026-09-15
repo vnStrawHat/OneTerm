@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use oneterm_core::{AppError, ConnectPhase, HostKeyPolicy, report_best_effort};
+use oneterm_core::{AppError, ConnectPhase, HostKeyPolicy};
 use russh::client;
 use russh::keys::{Algorithm, HashAlg, PublicKey};
 use tokio_util::sync::CancellationToken;
@@ -37,6 +37,19 @@ pub(crate) enum SshHandlerError {
         port: u16,
         algorithm: String,
         known_algorithms: Vec<String>,
+        fingerprint: String,
+    },
+    /// The server proved its identity with an OpenSSH host *certificate*.
+    ///
+    /// Separate from [`Self::UnknownHostKey`] on purpose: a certificate can
+    /// never become trusted by approving it, because known_hosts records bare
+    /// keys and OneTerm has no certificate-authority trust store. Routing it
+    /// through the unknown-key path would show the user a first-use "trust this
+    /// host key?" dialog whose Accept can only fail again.
+    HostCertificate {
+        host: String,
+        port: u16,
+        algorithm: String,
         fingerprint: String,
     },
     /// The known_hosts file could not be read or updated.
@@ -75,6 +88,18 @@ impl fmt::Display for SshHandlerError {
                 f,
                 "SSH host key changed for {host}:{port}: server presented a {algorithm} key but known_hosts only records {}; refusing connection (SHA-256 fingerprint: {fingerprint})",
                 known_algorithms.join(", ")
+            ),
+            Self::HostCertificate {
+                host,
+                port,
+                algorithm,
+                fingerprint,
+            } => write!(
+                f,
+                "{host}:{port} proved its identity with an OpenSSH host certificate ({algorithm}), \
+                 which OneTerm does not support; refusing connection. known_hosts records bare \
+                 host keys and there is no certificate authority to check this against \
+                 (certified key SHA-256 fingerprint: {fingerprint})"
             ),
             Self::KeyStore(error) => write!(f, "SSH known-hosts error: {error}"),
             Self::Russh(error) => error.fmt(f),
@@ -122,6 +147,13 @@ impl SshHandlerError {
                 port: *port,
                 fingerprint: fingerprint.clone(),
             },
+            // A plain connect error, deliberately *not* `HostKeyUnknown`: the
+            // connect dialog answers that with a first-use approval prompt, and
+            // approving a certificate can never succeed.
+            Self::HostCertificate { .. } => AppError::Connect {
+                phase: ConnectPhase::Transport,
+                message: self.to_string(),
+            },
             Self::KeyStore(error) => AppError::Connect {
                 phase: ConnectPhase::Transport,
                 message: format!("known-hosts error: {error}"),
@@ -145,7 +177,10 @@ pub(crate) struct SshClientHandler {
     /// relays die with; `None` for jump hops and connections without forwards.
     forwards: Option<(ForwardTable, CancellationToken)>,
     /// Set only when the session forwards the local agent; without it every
-    /// agent channel the server opens is closed unanswered (DEC-0011).
+    /// agent channel the server opens is refused with
+    /// `AdministrativelyProhibited` (DEC-0011). Before russh 0.63 the channel
+    /// was already confirmed by the time the handler ran, so the best OneTerm
+    /// could do was close it immediately (`IN-0036`).
     agent_bridge: Option<(AgentConnector, CancellationToken)>,
 }
 
@@ -314,12 +349,32 @@ impl client::Handler for SshClientHandler {
 
     /// known_hosts is read (and possibly appended) on the blocking pool so
     /// the two shared SSH runtime workers never stall on disk I/O (CORR-17).
+    ///
+    /// russh 0.63 can present an OpenSSH host *certificate* here instead of a
+    /// bare key. OneTerm refuses one: it advertises no `*-cert-v01@openssh.com`
+    /// host-key algorithm (`Preferred::host_key_certificates` is empty in
+    /// `Preferred::DEFAULT`, and OneTerm builds no custom `Preferred`), so a
+    /// conforming server never sends one — and there is no certificate-authority
+    /// trust store to check one against, because known_hosts records bare keys.
     async fn check_server_key(
         &mut self,
-        server_key: &russh::keys::PublicKey,
+        server_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        let server_key = match server_key {
+            russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
+            russh::keys::PublicKeyOrCertificate::Certificate(certificate) => {
+                return Err(SshHandlerError::HostCertificate {
+                    host: self.host.clone(),
+                    port: self.port,
+                    algorithm: certificate.algorithm().to_string(),
+                    fingerprint: format!(
+                        "cert:{}",
+                        certificate.public_key().fingerprint(HashAlg::Sha256)
+                    ),
+                });
+            }
+        };
         let handler = self.clone();
-        let server_key = server_key.clone();
         tokio::task::spawn_blocking(move || handler.verify_server_key(&server_key))
             .await
             .unwrap_or_else(|join_error| {
@@ -330,28 +385,33 @@ impl client::Handler for SshClientHandler {
     }
 
     /// The server wants the local agent. Bridged only when this session turned
-    /// forwarding on; otherwise the channel is dropped, never answered.
+    /// forwarding on; otherwise `reply` is dropped, which refuses the channel
+    /// with `AdministrativelyProhibited` (russh 0.63 no longer confirms a
+    /// server-initiated channel before calling the handler).
     async fn server_channel_open_agent_forward(
         &mut self,
         channel: russh::Channel<client::Msg>,
+        reply: russh::client::ChannelOpenHandle,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
         match &self.agent_bridge {
             Some((connector, shutdown)) => {
+                // Confirm before the bridge writes anything to the channel.
+                reply.accept().await;
                 spawn_agent_bridge(channel, connector.clone(), shutdown.clone());
             }
             None => {
                 log::warn!(
                     "SshClientHandler: the server opened an agent channel but forwarding is off for this session"
                 );
-                report_best_effort("close unrequested agent channel", channel.close().await);
             }
         }
         Ok(())
     }
 
     /// A connection to one of this session's remote forwards. Channels for
-    /// listeners OneTerm never asked for are dropped, never bridged.
+    /// listeners OneTerm never asked for are refused, never bridged: dropping
+    /// `reply` sends `AdministrativelyProhibited` (`DEC-0011`).
     async fn server_channel_open_forwarded_tcpip(
         &mut self,
         channel: russh::Channel<client::Msg>,
@@ -359,6 +419,7 @@ impl client::Handler for SshClientHandler {
         connected_port: u32,
         originator_address: &str,
         originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
         let target = self
@@ -372,13 +433,14 @@ impl client::Handler for SshClientHandler {
                     target.0,
                     target.1
                 );
+                // Confirm before the bridge writes anything to the channel.
+                reply.accept().await;
                 spawn_forwarded_tcpip(channel, target, shutdown.clone());
             }
             _ => {
                 log::warn!(
-                    "SshClientHandler: closing a forwarded-tcpip channel for {connected_address}:{connected_port} that was never requested"
+                    "SshClientHandler: refusing a forwarded-tcpip channel for {connected_address}:{connected_port} that was never requested"
                 );
-                report_best_effort("close unrequested forwarded channel", channel.close().await);
             }
         }
         Ok(())

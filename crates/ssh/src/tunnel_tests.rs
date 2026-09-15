@@ -52,14 +52,16 @@ impl russh::server::Handler for EchoServer {
         _port_to_connect: u32,
         _originator_address: &str,
         _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
         _session: &mut russh::server::Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
+        reply.accept().await;
         tokio::spawn(async move {
             let stream = channel.into_stream();
             let (mut reader, mut writer) = tokio::io::split(stream);
             let _ = tokio::io::copy(&mut reader, &mut writer).await;
         });
-        Ok(true)
+        Ok(())
     }
 
     async fn tcpip_forward(
@@ -303,17 +305,24 @@ async fn a_remote_forward_reaches_the_local_target_and_unknown_ports_are_dropped
     }
     assert!(got_reply);
 
-    // A port OneTerm never asked for is dropped: the target sees nothing.
-    let stray = server_handle
-        .channel_open_forwarded_tcpip("127.0.0.1", 9001, "10.0.0.9", 40002)
-        .await
-        .expect("stray channel");
+    // A port OneTerm never asked for is refused outright (DEC-0011): russh 0.63
+    // lets the handler answer the open, so the server sees the rejection rather
+    // than a confirmation followed by a close.
+    let stray = tokio::time::timeout(
+        Duration::from_secs(5),
+        server_handle.channel_open_forwarded_tcpip("127.0.0.1", 9001, "10.0.0.9", 40002),
+    )
+    .await
+    .expect("the server learns the outcome within 5 s");
+    assert!(
+        stray.is_err(),
+        "a forwarded-tcpip channel for an unrequested port must be refused"
+    );
     let nothing = tokio::time::timeout(Duration::from_millis(500), target.accept()).await;
     assert!(
         nothing.is_err(),
         "no local connection for an unknown forward"
     );
-    drop(stray);
 
     fixture.finish().await;
 }
