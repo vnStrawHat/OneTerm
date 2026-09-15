@@ -18,7 +18,11 @@ Created: 2026-09-15
 ## Classification
 
 - Change type: existing-contract change (a crate boundary moves; no behaviour changes)
-- Risk lane: normal
+- Risk lane: high_risk -- corrected from `normal` at verification (F8). No byte on the wire moves,
+  which is what the original label was reading, but the packet adds ten items and sixty lines to a
+  public API the intake declares an external contract, and `AGENTS.md` files public contracts as
+  high risk. The lane's actual requirement -- a Low-Level Design before the packet -- was already
+  met by `encoding-and-search.md` and `api-surface.md`, so nothing was skipped; the label was wrong.
 - Spec Intake: `IN-0038`
 
 ## Outcome
@@ -53,10 +57,14 @@ Not one byte that reaches a PTY changes.
   `git show main:crates/terminal/src/key_encode.rs > /tmp/before.rs` and diffs the test module
   against the new one; the only permitted differences are `use` paths and the `app_cursor` argument
   form.
-  Result: all 51 bodies are byte-identical apart from a four-space dedent (the `mod tests { }`
-  wrapper became a sibling `key_tests.rs` / `mouse_tests.rs` file, the convention `code-style.md`
-  § Testing asks for when a test module is substantial) and one `use` path in `mouse_tests.rs`
-  (`oneterm_vt::{MouseProtocol, MouseReporting}` -> `crate::render::{..}`). Diff with `-w` to see it.
+  Result: all 51 bodies are byte-identical apart from three things. One: a four-space dedent (the
+  `mod tests { }` wrapper became a sibling `key_tests.rs` / `mouse_tests.rs` file, the convention
+  `code-style.md` § Testing asks for when a test module is substantial). Two: one `use` path in
+  `mouse_tests.rs` (`oneterm_vt::{MouseProtocol, MouseReporting}` -> `crate::render::{..}`). Three
+  (F5): in `ctrl_punctuation_and_digits_follow_xterm_table`, `key_tests.rs:126`, the dedent left the
+  call short enough for rustfmt to rejoin `let s =` and its argument list into one line. That is a
+  line join, not whitespace, so `diff -w` does not hide it; it is the only such case in 617 moved
+  test lines and it changes no token. Diff with `-w` for the other two.
   The 51 names were listed from `cargo test -- --list` before the move and after; `Compare-Object`
   reports no difference.
 - [x] An equivalence test asserts that for every `NamedKey` and every `KeyMods` combination,
@@ -81,12 +89,17 @@ Not one byte that reaches a PTY changes.
   narrowing the Plan asks for. No behaviour in the view moved.)
 - [ ] `crates/terminal` production lines drop by about 620; `crates/vt` rises by the same. Net
   workspace delta within +-20 lines.
-  **Missed, by about +70 production lines.** Measured: 425 production lines left `crates/terminal`,
-  about 495 arrived in `crates/vt`. The difference is rustdoc that `#![warn(missing_docs)]` demands
-  of a public module and did not exist while these types were `pub` inside a private adapter module:
-  one line each for 36 `NamedKey` variants, 6 modifier fields and 3 mouse buttons, plus `input/mod.rs`
-  (21 lines, mostly its module doc). No logic was added. The estimate in this packet was written
-  before `US-0097` turned `missing_docs` on.
+  **Missed, by +74 production lines** (the verifier's count, which is the exact one; this packet
+  first said "+70, all rustdoc", which was rounded and slightly wrong). Counting everything before
+  `#[cfg(test)]`: 426 lines left `crates/terminal`, 500 arrived in `crates/vt/src/input/`. Of the
+  +74: **+62 rustdoc** that `#![warn(missing_docs)]` demands of a public module and that did not
+  exist while these types were `pub` inside a private adapter module (one line each for 36
+  `NamedKey` variants, 6 modifier fields and 3 mouse buttons, plus `input/mod.rs`'s module doc),
+  **+4 blank**, and **+8 code**: `input/mod.rs`'s two `mod` and two `pub use` lines plus their
+  wrapping, `use crate::render::ModeSnapshot;` and `let app_cursor = modes.app_cursor;` in `key.rs`,
+  less one line folded away in `mouse.rs`. No logic was added -- which the verifier's 19 200 000
+  byte comparisons prove independently. The estimate in this packet was written before `US-0097`
+  turned `missing_docs` on.
 - [ ] Manual Windows walk: in `vim` over SSH, arrows, Home/End, PageUp/PageDown, F1 to F12, Ctrl and
   Alt combinations, and application-cursor mode entered and left. In `htop`, mouse click, drag,
   release and wheel, with `? 1006` on and off.
@@ -104,7 +117,9 @@ Not one byte that reaches a PTY changes.
 - `docs/agents/structure.md` -- the crate responsibility table; both the `vt` and `terminal` rows
   change.
 - `docs/terminal-backend.md` -- reviewed; its input section describes the view layer, which does not
-  move. No change expected, to be confirmed.
+  move. No change expected, to be confirmed. (It was not confirmed -- see Reconciliation.)
+- `crates/vt/README.md` -- **missed in this list and added after verification.** It is contract text
+  and rustdoc, not a normal doc; see Reconciliation.
 - `docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/` -- the owning design for
   `crates/terminal-view`, including its input layer. Reviewed to confirm the view keeps its side
   effects.
@@ -127,10 +142,19 @@ encoders across.
 
 `docs/terminal-backend.md` -- the no-change reason **did not hold**. Four current-state lines named
 the encoders by their old path and are now wrong rather than merely imprecise, so they were fixed:
-the § "Data flow" input line and § 10 step 1 (both said `core::key_encode`, a path that had already
-been stale by one crate rename), the crate-responsibility row in § 5, and the directory tree at
-§ 12. One further mention, in the § 14 migration checklist, is left alone: it is a historical record
-of a finished migration, written in the crate names of its day.
+the § 2 "Data flow" input line and § 10 "Input: keystroke → byte + IME" step 1 (both said
+`core::key_encode`, a path that had already been stale by one crate rename), the
+crate-responsibility row in **§ 3** "Responsibilities per crate", and the directory tree at **§ 11**
+"File layout (current)". One further mention is left alone: step 1 of **§ 12** "Implementation order
+(roadmap)", a historical record of a finished migration written in the crate names of its day
+(it says "`core`", a crate that no longer exists). The three section numbers in bold were wrong in
+the first draft of this paragraph and are corrected here (F2).
+
+`crates/vt/README.md` -- **not** reviewed before the change, and it should have been: `US-0097` made
+it external contract text and `crates/vt/src/lib.rs` pulls it into rustdoc through
+`#[doc = include_str!("../README.md")]`. Its "What it is not" list said "no input handling", which
+stopped being true the moment the crate published `input::encode_key`. Now reads "no platform event
+handling", with a sentence saying what `input` does and does not do (F7).
 
 `docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/` -- reviewed, no change. The view keeps
 every side effect; only the argument `send_key` takes changed.
@@ -194,11 +218,17 @@ choice future work must inherit.
 
 ## Evidence and Gaps
 
-Branch `feat/vt-input-encoding`, three commits on `main` @ `0558fa2`.
+Branch `feat/vt-input-encoding`. Written on `main` @ `0558fa2`, rebased onto `a13002a` and then
+onto `491dff8` (US-0100's search move) as the rework landed. Four commits.
 
 ### The move
 
-`git diff --stat main..HEAD -- crates/`: 19 files, 1239 insertions, 1078 deletions.
+`git diff --stat 0558fa2..c135d40 -- crates/` at the point the verifier measured it: **21 files,
+1308 insertions, 1078 deletions**. The first draft of this section said 19 files and 1239
+insertions (F3): it was taken before `crates/vt/CHANGELOG.md` (+9) and `crates/vt/public-api.txt`
+(+60) were regenerated, and both are under `crates/` and both belong to this packet's own
+Reconciliation. Deletions were right.
+
 `crates/terminal/src/key_encode.rs` (572) and `mouse_encode.rs` (475) deleted;
 `crates/vt/src/input/` gains `key.rs` 287, `key_tests.rs` 385, `mouse.rs` 195, `mouse_tests.rs` 285,
 `mod.rs` 21. Everything else is a `use` path, six lines in `keys.rs`, thirteen in `frame.rs`.
@@ -228,6 +258,16 @@ commit apart, of the same 51 assertions:
 So every case ran against both signatures with identical expectations, which is what the criterion
 was after. `only_app_cursor_is_read` closes the remaining hole by flipping all seven other
 `ModeSnapshot` fields and asserting the bytes do not move.
+
+**And then the independent verifier built the comparison this reasoning said could not be built
+honestly -- by script rather than by hand.** `crates/vt/tests/verify_us0099_equiv.rs` carries the
+production half of both pre-move files, pasted in from `0558fa2` by a generator and frozen, and
+compares them against `oneterm_vt::input` across the whole cross-product: every `NamedKey`, every
+`KeyMods`, every mouse button, encoding and modifier set. **19 200 000 byte comparisons, 0
+mismatches.** The insight the original reasoning missed is that a *mechanically pasted* copy is not
+the same thing as a retyped one: it cannot drift, so it is a real oracle. Both verifier files are
+adopted here so the comparison keeps running; their headers say where the frozen code came from and
+that it must never be "fixed" to match the engine.
 
 ### Dependencies
 
@@ -261,14 +301,54 @@ Seven lines, six leaves, byte-identical to `main`. `key_encode.rs` had zero impo
 3. **`KeyboardFlags` still does not affect `encode_key`**, so the Kitty keyboard protocol is
    recognised by the engine and ignored by the encoder. Pre-existing, unchanged, and now more
    visible because both live in the same crate.
-4. **`#[non_exhaustive]`** appears on `NamedKey`, `KeySpec` and `TerminalMouseButton` in the
-   Interfaces block of `low-level-design/encoding-and-search.md`, and is **not** in this
-   implementation. That block also spells `KeySpec` with variants the code does not have
-   (`Char(char)`, `Text(String)` vs the real `Character(String)`), and the same document's binding
-   sentence is "the move must not change them". No `#[non_exhaustive]` exists anywhere in
-   `crates/vt` today, so adding it to three enums here would be a new convention smuggled in under a
-   move. Left for whoever decides it crate-wide; the CHANGELOG's semver promise already prices both
-   cases.
+4. **`#[non_exhaustive]`: closed, applied after verification (F1).** The first implementation
+   declined it, arguing that no `#[non_exhaustive]` existed anywhere in `crates/vt`, so adding it
+   would be a new convention smuggled in under a move. That premise was false while it was being
+   written: the sibling `US-0100` applies it to `SearchPattern` and `SearchOptions` on its own
+   branch, from the same table in the same intake. It is the intake's convention, and this was the
+   only packet refusing it. `api-surface.md` § "Becomes `#[non_exhaustive]`" names `KeySpec` and
+   `NamedKey` and prices the delay exactly -- free now, a minor bump after the first tag -- and no
+   later packet in this intake would have owned the decision. Both are now `#[non_exhaustive]`.
+
+   What the old text got right and what stands: `KeyMods` and `MouseModifiers` stay exhaustive
+   (`api-surface.md` lists them under "Deliberately exhaustive"), `TerminalMouseButton` stays
+   exhaustive (it appears only in `encoding-and-search.md`'s Interfaces sketch, never in
+   `api-surface.md`'s table, so it is discretionary), and that sketch is demonstrably not normative
+   on shape -- it spells `KeySpec` with `Char(char)` / `Text(String)` against the real
+   `Character(String)`.
+
+   Cost, as predicted: nothing outside `crates/vt` matched on either type. The only two `_` arms
+   the change needed are in the adopted equivalence test, which is an integration test and so an
+   out-of-crate consumer; it used exhaustiveness as its "a variant was added" alarm, and
+   `named_key_variant_sets_are_identical` now carries that by counting instead.
+5. **The module's public surface carries two `ModeSnapshot` conventions** (F9, informational).
+   `encode_key` takes `&ModeSnapshot` last and returns `Option<Vec<u8>>`; the four mouse encoders
+   take `ModeSnapshot` by value, fourth, and return `Vec<u8>`. Both are correct per
+   `encoding-and-search.md` -- the mouse parameter lists are frozen verbatim by that document's
+   binding sentence, which overrides its own Interfaces sketch -- and `ModeSnapshot` is `Copy`, so
+   nothing is wrong. Recorded here so `US-0103`'s embedder guide does not have to rediscover it, and
+   so that whoever would rather harmonise the two knows it is a deliberate freeze, not an oversight.
+
+## Verification Notes Closed
+
+Independent verification: **PASS-WITH-NOTES**, report at
+[`evidence/US-0099-verify.md`](evidence/US-0099-verify.md). Nine findings, all addressed.
+
+| # | Finding | Closed by |
+| --- | --- | --- |
+| F1 | `#[non_exhaustive]` missing from `KeySpec` and `NamedKey`; the "no precedent" reason was already false | Applied to both. `KeyMods`, `MouseModifiers`, `TerminalMouseButton` stay exhaustive. Gaps 4 rewritten. |
+| F2 | Three wrong section numbers citing `terminal-backend.md` | Corrected to § 3, § 11, § 12 in Reconciliation. |
+| F3 | Evidence diffstat two files and 69 lines short | Corrected to 21 files / 1308 insertions, with the reason. |
+| F4 | "+70, all rustdoc" is +74, of which 62 are rustdoc | Corrected with the verifier's full breakdown. |
+| F5 | One moved test body also took a rustfmt line join | Named in Acceptance, with the file and line. |
+| F6 | Re-export block narrower than the LLD's, and framed as permanent | The four `encode_mouse_*` / `encode_wheel_event` names re-exported; the comment now says "for one release". |
+| F7 | `crates/vt/README.md` unreviewed and now wrong ("no input handling") | Fixed and added to Owning Docs Reviewed and Reconciliation. |
+| F8 | Risk lane `normal` for a public-surface addition | Corrected to `high_risk` in Classification. |
+| F9 | Two `ModeSnapshot` conventions on one module's surface | Recorded as Gaps 5 for `US-0103`. |
+
+The verifier's two test files are adopted as `crates/vt/tests/verify_us0099_equiv.rs` and
+`verify_us0099_terminal.rs`. The one acceptance criterion still open is the manual Windows walk,
+which the verifier could not run either.
 
 ## Harness Row
 
@@ -290,7 +370,7 @@ ROW = dict(
     id="US-0099",
     title="key and mouse encoding are the engine's",
     created_at="2026-09-15T00:00:00",
-    risk_lane="normal",
+    risk_lane="high_risk",
     contract_doc=(
         "docs/spec-intakes/IN-0038-embeddable-vt-core/"
         "low-level-design/encoding-and-search.md"
@@ -305,22 +385,24 @@ ROW = dict(
     e2e_proof=0,
     platform_proof=1,
     evidence=(
-        "51 encoder tests moved with identical names and expectations (listed "
-        "before and after, Compare-Object reports no difference); they ran green "
-        "against the boolean signature in f704c4b and against the &ModeSnapshot "
-        "signature in eec7607, which is the equivalence proof. Plus "
-        "only_app_cursor_is_read and encode_key_reads_the_terminals_own_decckm. "
-        "cargo tree -p oneterm-vt -e normal still 7 lines / 6 leaves."
+        "51 encoder tests moved with identical names and expectations; they ran "
+        "green against the boolean signature and then against the &ModeSnapshot "
+        "signature one commit later. Independent verification PASS-WITH-NOTES "
+        "(evidence/US-0099-verify.md): 19,200,000 byte comparisons against the "
+        "frozen pre-move functions, 0 mismatches; its two test files adopted as "
+        "crates/vt/tests/verify_us0099_{equiv,terminal}.rs. cargo tree "
+        "-p oneterm-vt -e normal still 7 lines / 6 leaves."
     ),
     verify_command="pwsh scripts/ci-local.ps1 -Full",
     last_verified_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     last_verified_result="pass",
     notes=(
-        "e2e_proof=0: the manual vim/htop walk over SSH was not run. "
-        "platform_proof=1 because ci-local -Full passed on Windows, the only "
-        "platform exercised. Production LOC +70 rather than the packet's +-20, "
-        "all of it missing_docs rustdoc. #[non_exhaustive] from the LLD's "
-        "Interfaces block deliberately not applied; see Gaps."
+        "e2e_proof=0: the manual vim/htop walk over SSH was not run, by either "
+        "the implementer or the verifier. platform_proof=1 because ci-local "
+        "-Full passed on Windows, the only platform exercised. All nine "
+        "verification findings closed, F1 by applying #[non_exhaustive] to "
+        "KeySpec and NamedKey. Production LOC +74 rather than the packet's "
+        "+-20: 62 rustdoc, 4 blank, 8 code, no logic."
     ),
     intake_id=43,
 )

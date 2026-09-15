@@ -69,6 +69,9 @@ carry no API change at all. Such a release says so below rather than being omitt
   control table. The types are framework-neutral and the functions have no side effects, so
   scrolling, selection and shift-tracking stay with the embedder's input handling. Not one byte
   changed in the move: the encoders and their whole test suite came across unaltered.
+  `KeySpec` and `NamedKey` are `#[non_exhaustive]`: new named keys arrive with new keyboard
+  protocols, so keep a `_` arm. `KeyMods`, `MouseModifiers` and `TerminalMouseButton` are
+  deliberately exhaustive — a terminal has three mouse buttons and three modifiers that matter.
 - `Terminal::encode_key`: `input::encode_key` with this terminal's own modes, so encoding one key
   does not need a `ModeSnapshot` fetched first.
 
