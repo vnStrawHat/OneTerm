@@ -210,6 +210,36 @@ Changed at acceptance rework (2026-09-15):
 - New: `docs/spec-intakes/IN-0036-russh-0-63/evidence/US-0095-verify.md`, the independent
   verification this rework answers.
 
+Changed after re-verification of `41f7539` (2026-09-15):
+
+- `docs/spec-intakes/IN-0036-russh-0-63/evidence/US-0095-verify.md` — refreshed to the verifier's
+  current copy, which **appends** a "Re-verification of 41f7539" section (529 -> 788 lines;
+  nothing above line 529 changed). Verdict **PASS**: all eight defects addressed, each fix
+  checked against the upstream source and by measurement rather than against this packet's prose,
+  and every gate reproduced. Two residual nits, both cosmetic and both inside tables that
+  *understated* the result, are fixed below.
+- `low-level-design/upgrade.md` Change G (**R1**) — the candidate table is headed "5 MiB" but its
+  control row still carried the verification's original 2 MiB figures (3.6x, 29 READs). Replaced
+  with the 5 MiB measurement actually behind the choice: 48 700 595 B (**9.29x**), 201 READs,
+  61.1 ms, with all three rows now carrying their measured bytes, READ counts and wall times.
+  The amplification grows with file size, which is why the two numbers differ.
+- `low-level-design/upgrade.md` Change F (**R2**) — the after-row said 261 095 B / 2 088 760,
+  which was *predicted* from the overhead formula rather than measured, and so understated the
+  result. The measured values are 261 120 B / 2 088 960: an **exact** restoration of 2.3.0's
+  budget, not an approximate one.
+- `low-level-design/upgrade.md` Change F — records one pre-existing edge the re-verification
+  surfaced: a server that does not advertise `limits@openssh.com` leaves `server_write_len` at
+  `u32::MAX`, so `max_packet_len` is the only cap. russh-sftp 2.3.0 behaved identically; noted so
+  it is not mistaken for something this bump introduced.
+
+Not changed, deliberately (**R3**, the re-verification's note-only item): the two adopted tests
+`us0095_verify_tests::a_five_mib_round_trip_…` and `…seek_per_chunk_reads_…` build
+`russh_sftp::client::Config::default()` directly, so the numbers they print (161 WRITE packets,
+3.6x) are the **pre-fix library defaults** — they are the "before" half of the measurement, with
+`pipeline_budget_tests` asserting the "after". The verifier judged the `US-0095 F` / `US-0095 G`
+labels sufficient to tell them apart and recommended leaving it; this packet agrees rather than
+editing an adopted suite for cosmetics.
+
 ## Context
 
 Established by compiling the bumped workspace, not by guessing: **10 compile errors across 6

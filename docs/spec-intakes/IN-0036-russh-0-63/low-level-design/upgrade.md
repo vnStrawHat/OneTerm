@@ -238,7 +238,7 @@ always the binding one, and SFTP throughput — `in-flight bytes / RTT` — coll
 |---|---|---:|---:|
 | russh-sftp 2.3.0 | 261 120 B (one per chunk) | 8 | **2 088 960** |
 | russh-sftp 3.0.0 defaults | 32 742 B (8 per chunk) | 16 | **523 872** (4.0x less) |
-| after this change | 261 095 B | 8 | **2 088 760** (2.3.0 restored) |
+| after this change | **261 120 B measured** | 8 | **2 088 960** (2.3.0 restored exactly) |
 
 `crates/ssh/src/session.rs`, `open_sftp`:
 
@@ -281,6 +281,11 @@ already clamps `max_packet_len` to the server's `packet_len`
 (`russh-sftp-3.0.0/src/client/session.rs:74`). Raising `max_write_packet_len` only removes
 russh-sftp's *own* extra cap; it can never exceed what the server allows.
 
+One pre-existing edge, neither caused nor changed by this: a server that does **not** advertise
+`limits@openssh.com` leaves `server_write_len` at `u32::MAX`, so the only cap is
+`max_packet_len - 25 - handle.len()` ~ 262 KiB. russh-sftp 2.3.0 behaved identically, so this is
+the behaviour OneTerm has shipped all along, not something the bump introduces.
+
 ### Change G — stop paying for read-ahead OneTerm throws away (same site)
 
 `transfer::pipeline::read_chunk` seeks before **every** chunk. russh-sftp 3.0 answers a read by
@@ -293,9 +298,16 @@ Two candidate fixes, both measured on the same 5 MiB loopback download (see the 
 
 | | bytes on the wire | READ requests | wall time |
 |---|---:|---:|---:|
-| striping + `max_concurrent_reads: 16` (shipped a33a994) | 3.6x the file | 29 per 8 useful | baseline |
-| striping + `max_concurrent_reads: 1` | 1.0x | one per chunk | see PROOF |
-| no striping + `max_concurrent_reads: 16` | 1.0x | one per chunk | see PROOF |
+| striping + `max_concurrent_reads: 16` (shipped a33a994) | 48 700 595 B (**9.29x**) | 201 | 61.1 ms |
+| striping + `max_concurrent_reads: 1` (**chosen**) | 5 263 100 B (1.00x) | 21 | 8.4 ms |
+| no striping + `max_concurrent_reads: 16` | 5 242 880 B (1.00x) | 21 | 8.1 ms |
+
+All three rows are the same 5 MiB file, so the control is **9.29x**, not the 3.6x the
+independent verification measured — that run used a 2 MiB file, and the amplification grows with
+file size. The chosen row's 20 220 B over the file is arithmetic, not read-ahead: russh-sftp asks
+for `max_packet_len - READ_OVERHEAD_LENGTH` = 262 131 B per request while OneTerm consumes
+`CHUNK_LEN` = 261 120 B, so each seek drops 1 011 B and 20 x 1 011 = 20 220 exactly. russh-sftp
+2.3.0 read the same way.
 
 Both candidates remove the amplification; the measured winner is recorded in the packet and the
 choice is `max_concurrent_reads: 1`. Dropping the striping instead would delete `copy_striped`,

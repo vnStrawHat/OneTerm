@@ -527,3 +527,262 @@ On a local network nobody will notice either effect, and nothing is broken: the 
 back byte-for-byte identical in both directions. Both are one-line configuration changes to tune.
 But the packet currently tells the owner transfers got *faster*, and that is the wrong way round —
 that sentence is what the owner should be asked to accept, corrected.
+
+---
+
+# Re-verification of 41f7539
+
+Rework under review: `a33a994..41f7539`, four commits (`9501bab`, `c9d1cb3`, `2204235`,
+`41f7539`). Same worktree, reset to `41f7539`. Date: 2026-09-15.
+
+## Verdict: **PASS**
+
+All eight defects are addressed, each fix is verified against the upstream source and by
+measurement rather than against the implementer's description, and every gate reproduces. Two
+residual nits (R1, R2) are cosmetic inaccuracies *inside* tables that now understate how good the
+result is; neither blocks completion.
+
+The verifier's 11 tests were adopted with one intentional change (the certificate test now expects
+`SshHandlerError::HostCertificate` and additionally asserts the `to_app_error()` mapping). That
+change is correct and strengthens the test: the adversarial setup — pre-recording the
+certificate's inner key in `known_hosts` — is preserved intact.
+
+---
+
+## 1. D1 — the write budget (verified, and the "strict server" question answered)
+
+`crates/ssh/src/session.rs sftp_config()` sets `max_write_packet_len: 262_144`,
+`max_concurrent_writes: 8`, `max_concurrent_reads: 1`, and `open_sftp` now calls
+`SftpSession::new_with_config(stream, sftp_config())`.
+
+Re-measured, 5 MiB loopback upload in 255 KiB chunks:
+
+```
+US-0095 F: 5 MiB upload in 21 WRITE packets (largest 261120 B);
+           in-flight budget 2088960 B vs russh-sftp 2.3.0's 2088960 B
+```
+
+**21 packets, largest 261 120 B, 2 088 960 B in flight — the 2.3.0 baseline exactly**, against
+161 / 32 742 / 523 872 at `a33a994`. D1 fixed.
+
+### Can our cap ever exceed what a strict server allows? **No.**
+
+Read in russh-sftp 3.0.0; four independent clamps exist and the change relaxes only the one that
+russh-sftp added for itself:
+
+```
+client/session.rs:74-76   (new_with_config)
+    if let Some(plen) = limits.packet_len {
+        features.max_packet_len = (plen as u32).min(max_packet_len);
+    }
+      -> the SERVER's advertised packet length clamps ours. Our 262 144 is a ceiling, not a floor.
+
+client/fs/file.rs:374-395 (poll_write)
+    packet_write_len    = features.max_packet_len       - (25 + handle.len())
+    server_write_len    = features.limits.write_len     (the server's limits@openssh.com reply)
+    preferred_write_len = features.max_write_packet_len - (25 + handle.len())
+    len = buf.len().min(packet_write_len).min(server_write_len).min(preferred_write_len)
+      -> `min` of all four. Raising max_write_packet_len to max_packet_len makes
+         preferred_write_len == packet_write_len, i.e. NON-BINDING. It cannot lift the others.
+
+client/rawsession.rs:431-437 (write_nowait_from_slice)
+    if limits.write_len.is_some_and(|limit| data.len() as u64 > limit) {
+        return Err(Error::Limited("write limit reached"))
+    }
+      -> a second, independent refusal below poll_write.
+```
+
+Against OpenSSH (`limits@openssh.com` `max-write-length = 261 120`) the binding term is
+`server_write_len`, and `buf.len()` = `CHUNK_LEN` = 261 120 sits exactly on it — which is why the
+measurement shows 261 120 and not the packet ceiling. This is byte-for-byte russh-sftp 2.3.0's
+arithmetic (2.3.0 had only the first two terms), so OneTerm is back to what it shipped for the
+product's entire life.
+
+One residual edge, **unchanged by this fix and not caused by it**: a server that does *not*
+advertise `limits@openssh.com` leaves `server_write_len = u32::MAX`, so the only cap is
+`max_packet_len - 25 - handle` ≈ 262 KiB. russh-sftp 2.3.0 behaved identically. Worth knowing it
+is pre-existing, not new.
+
+## 2. D2 — the read budget, the residual, and the regression test
+
+Re-measured, 5 MiB loopback download, all three configurations in one test:
+
+```
+US-0095 G: 5 MiB download, 5242880 bytes wanted
+  control (striping + read-ahead 16): 201 READs, 48700595 B (9.29x), 60.8839ms
+  A (striping + read-ahead 1)       :  21 READs,  5263100 B (1.00x),  8.119ms
+  B (no striping + read-ahead 16)   :  21 READs,  5242880 B (1.00x),  7.7462ms
+```
+
+**A is what ships: 21 READs, 1.00x.** Note the control is **9.29x**, worse than the 3.6x this
+verification first measured — confirming the earlier caveat that 3.6x was a floor set by the
+duplex buffer, not a ceiling.
+
+### The residual +20 220 B checks out exactly
+
+`5 263 100 - 5 242 880 = 20 220 = 20 x 1 011`, and `1 011 = 262 131 - 261 120` where
+`262 131 = max_packet_len(262 144) - READ_OVERHEAD_LENGTH(13)`
+(`client/fs/file.rs ReadState::request`). russh-sftp asks for a full packet's worth; OneTerm's
+`read_exact` consumes `CHUNK_LEN`; the seek to the next stripe drops the 1 011-byte tail. Twenty
+mid-file seeks, not twenty-one — the last chunk is the tail and has nothing after it to discard.
+**0.39 % overhead, arithmetic rather than read-ahead, and russh-sftp 2.3.0 read the same way.**
+The explanation in the packet and in `pipeline_budget_tests.rs` is sound.
+
+### The regression test bites in both directions
+
+`crates/ssh/src/sftp_task/transfer/pipeline_budget_tests.rs`:
+
+```rust
+assert_eq!(a_reads, SIZE.div_ceil(CHUNK_LEN), "... russh-sftp's read-ahead is back on ...")
+assert!(a_served <= SIZE + slack * SIZE.div_ceil(CHUNK_LEN))          // slack = 262_131 - CHUNK_LEN
+assert!(control_served > SIZE, "expected 3.0's defaults to over-read under seek-per-chunk")
+assert!(in_flight >= BASELINE_IN_FLIGHT_WRITE_BYTES)                  // 8 * 261_120
+assert_eq!(packets, SIZE.div_ceil(CHUNK_LEN))                         // one packet per chunk
+```
+
+It asserts **one READ per chunk** *and* keeps a live control proving the default still amplifies —
+so if someone restores `max_concurrent_reads: 16` the first assertion fails, and if a future
+russh-sftp removes the read-ahead the control assertion fails and the test stops claiming
+something it no longer measures. Both halves are load-bearing. The tests import
+`session::sftp_config` and `super::CHUNK_LEN` directly, so the production path and the assertion
+cannot drift apart.
+
+### Is deferring option B to a follow-up sound? **Yes, and the packet's reasoning is right.**
+
+B is genuinely better on a latent link and the packet says so (16 reads of ~256 KiB ≈ 4.2 MB in
+flight against the striping's 4 x 261 120 ≈ 1.04 MB — reads have no 32 KiB cap, only writes do).
+It must nonetheless **not** ship here: `copy_striped` is not only a pipelining device, it also
+owns three behaviours a single `read_to_end` does not re-establish —
+
+- per-chunk cancellation (`pipeline.rs:138-145`, `tokio::select! { biased; _ = cancel.cancelled()
+  => { in_flight.abort_all(); return Err(AppError::Cancelled) } }`) — a `read_to_end` inside
+  russh-sftp cannot be interrupted at the same granularity;
+- progress cadence: `on_bytes(copied)` fires once per 255 KiB chunk in write order
+  (`pipeline.rs:169-177`), which is what the transfer progress bar is calibrated against;
+- the shrinking-remote-file clamp (`pipeline.rs:161-166`, `chunk_count.min(index + 1)`).
+
+Folding those into a dependency bump would make the bump a transfer-engine rewrite in the
+high-risk lane. Deferring with the measurement already recorded is the correct call, and the
+follow-up starts with numbers instead of a hypothesis.
+
+## 3. D8 — no trust prompt is reachable for a certificate
+
+Traced exhaustively, not sampled:
+
+```
+$ grep -rn "open_host_key_confirmation" crates/ --include=*.rs
+crates/session-ui/src/common.rs:401      <- the one and only call
+crates/session-ui/src/common.rs:431      <- its definition
+```
+
+`common.rs:401` sits inside `Err(AppError::HostKeyUnknown { .. })` at `common.rs:393`. After the
+fix `AppError::HostKeyUnknown` is produced at exactly one place — `handler.rs:127`, the
+`UnknownHostKey` arm fed only by `verify_server_key`'s bare-key path. The certificate arm
+(`handler.rs:366`) now returns the new `SshHandlerError::HostCertificate`, which
+`to_app_error` maps at `handler.rs:153` to `AppError::Connect { phase: Transport, .. }`; that
+falls to the generic `Err(error)` arm and becomes an error notification. Both connect paths map
+through `to_app_error` (`route.rs:74` direct, `route.rs:89` jump hop), so a jump hop behaves the
+same.
+
+The adopted test asserts both halves — the variant *and* the `AppError` mapping — while keeping
+the adversarial setup that makes it meaningful:
+
+```
+test us0095_verify_tests::a_host_certificate_is_refused_even_when_its_inner_key_is_trusted ... ok
+```
+
+`docs/ssh-client-connect.md` §9.3's rewritten row now matches the code exactly and cites this
+test. D8 fixed.
+
+## 4. D3-D7 and the informational items — all accurate
+
+| | check | result |
+|---|---|---|
+| D3 | `pipeline.rs:9-23` module doc | Correct: names `sftp_config` as the owner of both numbers, says reads are one-at-a-time per handle, quotes the **9.3x** figure (the 5 MiB measurement, not the stale 3.6x), and warns to raise `max_concurrent_reads` if `copy_striped` is ever retired. |
+| D4 | DEC-0011 | Correct ADR hygiene: the **Decision block is untouched**; a dated mechanism update is appended under **Consequences** saying the decision is unchanged and now enforced more strictly, read "closes" as "refuses". `handler.rs:180-183` field doc updated to match. |
+| D5 | LLD fingerprint line | Fixed to `certificate.public_key().fingerprint(HashAlg::Sha256)`, matching `handler.rs:370`. The added note that "`Certificate` has no `fingerprint()` of its own" is **true** — verified in `ssh-key-0.7.0-rc.11`: `fingerprint()` exists on `PrivateKey` (`private.rs:573`), `PublicKey` (`public.rs:382`) and `KeyData` (`public/key_data.rs:116`), and on no certificate type. |
+| D6 | keyfile coverage wording | Fixed and now matches the shipped file exactly: generated Ed25519 + P-256/384/521, RSA as a fixed `ssh-keygen` fixture with the reason, encrypted **Ed25519 only**, and encrypted RSA credited to the adopted suite. |
+| D7 | the `=` pin reason | Fixed in `dependencies.md` and the packet; the false "no stable release exists at all" is gone. Verified against `russh-0.63.3/Cargo.toml:281` (`pkcs1 = "=0.8.0-rc.4"`), `:309` (`rsa = "=0.10.0-rc.18"`), `:351` (`ssh-key = "=0.7.0-rc.11"`). |
+| panics | HLD:120-123 | All four file:line references match the upstream diffs: `kex/mod.rs:486` all-zero mpint, `cipher/mod.rs:317` packet-length underflow, `keys/format/pkcs8_legacy.rs:220` IV `clone_from_slice`, `keys/agent/server.rs:251` `==` -> `subtle::ct_eq`. |
+| 2-of-7 hooks | LLD Change B addendum | Accurate, including the asymmetry: client defaults **accept** (`client/mod.rs` ~2477-2600), server defaults **reject** (`server/mod.rs:362,377,395,417` are `async { Ok(()) }`), so Change C's original sentence was right about the server trait and wrong only if read as a client claim. Correctly framed as out of scope rather than silently fixed. |
+
+## 5. Gates
+
+```
+$ cargo test -p oneterm-ssh -p oneterm-sftp-ui -p oneterm-tools
+oneterm-ssh     : 86 passed; 0 failed; 0 ignored     (73 + 11 adopted + 2 budget)
+oneterm-sftp-ui : 49 passed; 0 failed; 0 ignored
+oneterm-tools   : 14 + 2 passed; 0 failed            = 86 / 49 / 16, as claimed.
+
+$ pwsh scripts/ci-local.ps1 --full
+advisories ok, bans ok, licenses ok
+ci-local: all checks passed.                                          [exit 0]
+
+$ cargo test --workspace                          -> 56 sections, 1624 passed, 0 failed, 11 ignored
+$ cargo test -p oneterm-vt --features vt-paranoid ->  4 sections,  370 passed, 0 failed,  3 ignored
+                                                  =  60 / 1994 / 0 / 14, as claimed (+13 on 1981).
+
+$ git log a33a994..41f7539  -- trailers on all four commits:
+9501bab test(ssh): adopt the US-0095 independent verification suite
+c9d1cb3 fix(ssh): keep russh-sftp 2.3.0 transfer budget instead of 3.0 defaults
+2204235 fix(ssh): refuse a host certificate as a connect error, not a trust prompt
+41f7539 docs(ssh): correct US-0095 records against the independent verification
+  each: Refs: IN-0036, US-0095
+        Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+        Claude-Session: https://claude.ai/code/session_01Q6xr5jX29B2b6L4MGsoNdW
+```
+
+## Residual nits (not blocking)
+
+**R1.** `low-level-design/upgrade.md`, Change G's table says "measured on the same 5 MiB loopback
+download", but the control row carries the earlier **2 MiB** figures ("3.6x the file", "29 per 8
+useful"). The 5 MiB control is **9.29x / 201 READs**, which the packet's PROOF has correctly. The
+table therefore *understates* the defect that was fixed; align it with PROOF.
+
+**R2.** Same file, Change F's table gives the after row as "261 095 B / 2 088 760". The measured
+values are **261 120 B / 2 088 960** — `buf.len()` (`CHUNK_LEN`), not the packet ceiling, is the
+binding term — which is the 2.3.0 baseline *exactly*, not 200 bytes under it. The table is
+conservative; the real result is an exact restoration.
+
+**R3 (note only).** The adopted `us0095_verify_tests::a_five_mib_round_trip_…` and
+`…seek_per_chunk_reads_…` construct `russh_sftp::client::Config::default()` directly, so their
+printed numbers (161 WRITE packets, 3.6x) describe the **pre-fix** library defaults, not OneTerm's
+shipped behaviour. That is deliberate and correct — they are the "before" half of the measurement,
+and `pipeline_budget_tests` asserts the "after" — but a reader who greps for "161 WRITE packets"
+could misread them as current. The `US-0095 F`/`US-0095 G` labels on the budget tests make the
+distinction clear enough to leave alone.
+
+---
+
+## What changes for a user — updated for the shipped budget
+
+Nothing a user does changes, and nothing they trust gets weaker.
+
+Connecting to a server works exactly as before: the same host-key prompt the first time, the same
+flat refusal if a known host's key changes, the same key files and passphrases, the same agent and
+jump-host behaviour. The client negotiates the identical algorithms it negotiated before — the
+post-quantum key exchange was already the default on the old version — so no server behaves
+differently.
+
+**File transfers keep the speed they had.** The new library would have quietly made uploads about
+four times slower on a distant server and made downloads ask for roughly nine times more data than
+OneTerm actually keeps. Both are now pinned back to the behaviour OneTerm has always shipped, and
+measured to prove it: a 5 MB upload goes out in 21 large packets exactly as before, and a 5 MB
+download costs the server 21 reads and 5 263 100 bytes for a 5 242 880-byte file — a 0.4 % overhead
+that the old version paid too. A test now fails if a future library update takes either budget
+away again.
+
+Two things are genuinely better. A server that opens a channel OneTerm never asked for — an agent
+channel when agent forwarding is off, or a forwarded connection for a port that was never
+requested — is now **told no** instead of being let in and immediately hung up on. And the new
+library fixes three ways a malicious or broken server could crash OneTerm's connection outright.
+
+One new refusal: if a server ever proves its identity with an OpenSSH *host certificate* instead of
+a plain key, OneTerm refuses it and says so as an ordinary connection error — no "trust this host
+key?" prompt, because there would be nothing to trust it against and approving could never work. It
+cannot happen with a well-behaved server, since OneTerm never asks for certificates, and a test
+proves that even when the certificate wraps a key OneTerm already trusts, the connection is still
+refused.
+
+There is nothing left here for a user to notice, and nothing left for the owner to accept beyond
+the two items the packet already lists.
