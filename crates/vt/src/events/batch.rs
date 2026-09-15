@@ -128,6 +128,35 @@ impl EventBatch {
         true
     }
 
+    /// Intern one string payload and push the event that names it, or drop
+    /// both when the bytes are not UTF-8. Keeping the validation here is what
+    /// keeps [`EventBatch::str`] infallible.
+    pub(crate) fn push_text(
+        &mut self,
+        text: &[u8],
+        event: impl FnOnce(StrSpan) -> VtEvent,
+    ) -> bool {
+        let Some(span) = self.push_str(text) else {
+            return false;
+        };
+        self.events.push(event(span));
+        true
+    }
+
+    /// The same for an event with two string payloads.
+    pub(crate) fn push_text_pair(
+        &mut self,
+        first: &[u8],
+        second: &[u8],
+        event: impl FnOnce(StrSpan, StrSpan) -> VtEvent,
+    ) -> bool {
+        let (Some(first), Some(second)) = (self.push_str(first), self.push_str(second)) else {
+            return false;
+        };
+        self.events.push(event(first, second));
+        true
+    }
+
     /// Push bytes the terminal owes the program, to be written to its input.
     pub fn push_reply(&mut self, bytes: &[u8]) {
         let span = self.push_bytes(bytes);

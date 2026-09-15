@@ -11,7 +11,7 @@
 use std::time::Instant;
 
 use crate::cell::{Cell, CellContent, Color, NamedColor, Rgb, Semantic, Style};
-use crate::event::{ClipboardKind, VtEvent};
+use crate::event::{ClipboardKind, Progress, ShellMark, VtEvent};
 use crate::graphics::{self, SixelParser};
 use crate::grid::{
     AnchorKind, Charset, DisplayClear, LineClear, Pos, PrintMode, ScrollRegion, ScrollReport,
@@ -29,6 +29,7 @@ fn event_term(term: StringTerm) -> crate::event::StringTerm {
 }
 use crate::terminal::color::{ColorKey, parse_color};
 use crate::terminal::mode::{CursorShape, CursorStyle, FlagApply, KeyboardFlags, Mode, ModeState};
+use crate::terminal::osc::OscRoute;
 use crate::terminal::{MARK_MAX, State};
 
 /// The dispatch sink, built by `Terminal::feed` over its own fields.
@@ -582,20 +583,16 @@ impl Handler<'_> {
     /// `OSC 133`: the semantic goes on the template, and a prompt or output mark
     /// registers a tracked anchor so it survives a reflow. Bounded, because a
     /// mark per prompt from a hostile stream is otherwise unbounded growth.
-    fn shell_mark(&mut self, kind: u8) {
-        let semantic = match kind {
-            b'A' => Semantic::Prompt,
-            b'B' => Semantic::Input,
-            b'C' => Semantic::Output,
-            b'D' => Semantic::None,
-            _ => {
-                self.unhandled();
-                return;
-            }
+    fn shell_mark(&mut self, mark: ShellMark) {
+        let semantic = match mark {
+            ShellMark::PromptStart => Semantic::Prompt,
+            ShellMark::PromptEnd => Semantic::Input,
+            ShellMark::OutputStart => Semantic::Output,
+            _ => Semantic::None,
         };
         let template = self.template().with_semantic(semantic);
         self.set_template(template);
-        if !matches!(kind, b'A' | b'C') {
+        if !matches!(mark, ShellMark::PromptStart | ShellMark::OutputStart) {
             return;
         }
         let pos = Pos {
@@ -1280,89 +1277,25 @@ impl Dispatch for Handler<'_> {
             self.unhandled();
             return;
         };
-        match code {
-            0 | 2 => {
-                if params.len() < 2 {
-                    self.unhandled();
-                    return;
-                }
-                let title = (1..params.len())
-                    .filter_map(|index| params.get(index))
-                    .filter_map(|part| str::from_utf8(part).ok())
-                    .collect::<Vec<&str>>()
-                    .join(";")
-                    .trim()
-                    .to_owned();
-                self.set_title(Some(title));
-            }
-            4 => self.osc_palette(params, term),
-            8 => {
-                if params.len() <= 2 {
-                    self.unhandled();
-                    return;
-                }
-                let link_params = params.get(1).unwrap_or_default();
-                let uri = (2..params.len())
-                    .filter_map(|index| params.get(index))
-                    .map(|part| String::from_utf8_lossy(part).into_owned())
-                    .collect::<Vec<String>>()
-                    .join(";");
-                if uri.is_empty() {
-                    self.set_hyperlink(None, None);
-                    return;
-                }
-                let id = link_params
-                    .split(|&byte| byte == b':')
-                    .find_map(|pair| pair.strip_prefix(b"id="))
-                    .and_then(|value| str::from_utf8(value).ok())
-                    .map(str::to_owned);
-                self.set_hyperlink(id.as_deref(), Some(&uri));
-            }
-            10..=12 => self.osc_dynamic_color(code, params, term),
-            // Mouse cursor icon: parsed and ignored, but counted.
-            22 => self.unhandled(),
-            50 => {
-                let shape = params
-                    .get(1)
-                    .and_then(|value| value.strip_prefix(b"CursorShape="))
-                    .and_then(|value| value.first().copied());
-                let shape = match shape {
-                    Some(b'0') => CursorShape::Block,
-                    Some(b'1') => CursorShape::Beam,
-                    Some(b'2') => CursorShape::Underline,
-                    _ => {
-                        self.unhandled();
-                        return;
-                    }
-                };
-                let default = self.state.config.default_cursor_style;
-                self.state.cursor_style.get_or_insert(default).shape = shape;
-            }
-            52 => self.osc_clipboard(params),
-            104 => self.osc_reset_palette(params),
-            110 => self.reset_color(ColorKey::Foreground),
-            111 => self.reset_color(ColorKey::Background),
-            112 => self.reset_color(ColorKey::Cursor),
-            other => {
-                // `OSC 133` marks are engine state as well as an embedder
-                // signal: the semantic goes on the template here, and the
-                // claim still forwards the whole sequence.
-                if other == 133
-                    && let Some(kind) = params.get(1).and_then(|value| value.first().copied())
-                {
-                    self.shell_mark(kind);
-                }
-                if self.state.config.osc_claims.is_claimed(other) {
-                    self.forward_osc(other, params, term, truncated);
-                } else {
-                    self.unhandled();
-                }
-            }
+        // Routing is decided before handling, so an embedder can replace a
+        // built-in, watch one, or add a number the engine never heard of,
+        // without any of its code running inside `feed`. Order inside
+        // `BuiltinAndForward` is a contract: the typed event first, the raw
+        // bytes second.
+        let route = self.state.config.osc_routes.get(code);
+        if matches!(route, OscRoute::Builtin | OscRoute::BuiltinAndForward) {
+            self.osc_builtin(code, params, term, truncated);
+        }
+        if matches!(route, OscRoute::Forward | OscRoute::BuiltinAndForward) {
+            self.forward_osc(code, params, term, truncated);
+        }
+        if route == OscRoute::Drop {
+            self.unhandled();
         }
     }
 
     fn osc_allows_large(&self, code: u32) -> bool {
-        self.state.config.osc_claims.allows_large(code)
+        self.state.config.osc_routes.allows_large(code)
     }
 
     /// Only Sixel — final byte `q` with **no** intermediate — is decoded
@@ -1418,6 +1351,221 @@ impl Dispatch for Handler<'_> {
 }
 
 impl Handler<'_> {
+    /// The numbers the engine implements itself, reached only when the route
+    /// says so. Every arm obeys the same rules: no `Result`, no panic, and
+    /// every rejection moves `unhandled_sequences`.
+    ///
+    /// `truncated` reaches the arms that would otherwise read a cut payload as
+    /// a complete one. A cut title is still a title; a cut path or a cut number
+    /// is a lie, so `OSC 7` and `OSC 9;4` refuse one.
+    fn osc_builtin(
+        &mut self,
+        code: u32,
+        params: &OscParams<'_>,
+        term: StringTerm,
+        truncated: bool,
+    ) {
+        match code {
+            0 | 2 => {
+                let Some(title) = self.osc_text(params) else {
+                    return;
+                };
+                self.set_title(Some(title));
+            }
+            1 => {
+                let Some(name) = self.osc_text(params) else {
+                    return;
+                };
+                self.out.push_text(name.as_bytes(), VtEvent::IconName);
+            }
+            4 => self.osc_palette(params, term),
+            7 => self.osc_cwd(params, truncated),
+            8 => {
+                if params.len() <= 2 {
+                    self.unhandled();
+                    return;
+                }
+                let link_params = params.get(1).unwrap_or_default();
+                let uri = (2..params.len())
+                    .filter_map(|index| params.get(index))
+                    .map(|part| String::from_utf8_lossy(part).into_owned())
+                    .collect::<Vec<String>>()
+                    .join(";");
+                if uri.is_empty() {
+                    self.set_hyperlink(None, None);
+                    return;
+                }
+                let id = link_params
+                    .split(|&byte| byte == b':')
+                    .find_map(|pair| pair.strip_prefix(b"id="))
+                    .and_then(|value| str::from_utf8(value).ok())
+                    .map(str::to_owned);
+                self.set_hyperlink(id.as_deref(), Some(&uri));
+            }
+            9 => self.osc_progress_or_notification(params, truncated),
+            10..=12 => self.osc_dynamic_color(code, params, term),
+            22 => {
+                // The engine has no pointer, so the name is reported verbatim
+                // and the embedder decides what a "text" or "wait" cursor is.
+                let Some(name) = params.get(1).filter(|name| !name.is_empty()) else {
+                    self.unhandled();
+                    return;
+                };
+                if !self.out.push_text(name, VtEvent::Pointer) {
+                    self.unhandled();
+                }
+            }
+            50 => {
+                let shape = params
+                    .get(1)
+                    .and_then(|value| value.strip_prefix(b"CursorShape="))
+                    .and_then(|value| value.first().copied());
+                let shape = match shape {
+                    Some(b'0') => CursorShape::Block,
+                    Some(b'1') => CursorShape::Beam,
+                    Some(b'2') => CursorShape::Underline,
+                    _ => {
+                        self.unhandled();
+                        return;
+                    }
+                };
+                let default = self.state.config.default_cursor_style;
+                self.state.cursor_style.get_or_insert(default).shape = shape;
+                self.out.push(VtEvent::CursorStyleChanged);
+            }
+            52 => self.osc_clipboard(params),
+            104 => self.osc_reset_palette(params),
+            110 => self.reset_color(ColorKey::Foreground),
+            111 => self.reset_color(ColorKey::Background),
+            112 => self.reset_color(ColorKey::Cursor),
+            133 => self.osc_shell_mark(params),
+            // Unreachable while `OscRoutes::BUILTIN` and this match agree, and
+            // counted rather than trusted if they ever stop agreeing.
+            _ => self.unhandled(),
+        }
+    }
+
+    /// `OSC 0 / 1 / 2`: every parameter after the number, rejoined on `;` and
+    /// trimmed. `None` when there is nothing to report, which is counted.
+    fn osc_text(&mut self, params: &OscParams<'_>) -> Option<String> {
+        if params.len() < 2 {
+            self.unhandled();
+            return None;
+        }
+        Some(
+            (1..params.len())
+                .filter_map(|index| params.get(index))
+                .filter_map(|part| str::from_utf8(part).ok())
+                .collect::<Vec<&str>>()
+                .join(";")
+                .trim()
+                .to_owned(),
+        )
+    }
+
+    /// `OSC 7`: `file://host/path`, or a bare path. The host and the path are
+    /// reported **separately and unresolved** — the engine percent-decodes and
+    /// strips a Windows drive URL's leading slash, and stops there, because
+    /// deciding whether to trust a remote shell's directory is policy.
+    fn osc_cwd(&mut self, params: &OscParams<'_>, truncated: bool) {
+        // A cut path is a different path, not a shorter one.
+        let url = match params.get(1) {
+            Some(url) if !truncated => String::from_utf8_lossy(url).into_owned(),
+            _ => {
+                self.unhandled();
+                return;
+            }
+        };
+        let (host, path) = match url.strip_prefix("file://") {
+            Some(rest) => match rest.split_once('/') {
+                Some((host, path)) => (host.to_owned(), format!("/{path}")),
+                None => (String::new(), rest.to_owned()),
+            },
+            None => (String::new(), url),
+        };
+        let decoded = percent_decode(&path);
+        let path = strip_windows_drive_slash(&decoded);
+        self.out
+            .push_text_pair(host.as_bytes(), path.as_bytes(), |host, path| {
+                VtEvent::Cwd { host, path }
+            });
+    }
+
+    /// `OSC 9`: ConEmu taskbar progress under sub-code `4`, a desktop
+    /// notification otherwise. They share a number and nothing else.
+    fn osc_progress_or_notification(&mut self, params: &OscParams<'_>, truncated: bool) {
+        if params.len() < 2 {
+            self.unhandled();
+            return;
+        }
+        if params.get(1) == Some(b"4".as_slice()) {
+            // A cut number is a wrong number.
+            if truncated {
+                self.unhandled();
+                return;
+            }
+            let field = |index: usize| {
+                params
+                    .get(index)
+                    .and_then(|value| str::from_utf8(value).ok())
+                    .and_then(|value| value.parse::<u8>().ok())
+            };
+            let percent = field(3).unwrap_or(0).min(100);
+            let progress = match field(2).unwrap_or(0) {
+                0 => Progress::Remove,
+                1 => Progress::Set(percent),
+                2 => Progress::Error(percent),
+                3 => Progress::Indeterminate,
+                4 => Progress::Paused(percent),
+                _ => {
+                    self.unhandled();
+                    return;
+                }
+            };
+            self.out.push(VtEvent::Progress(progress));
+            return;
+        }
+        // The message may itself contain `;`, which the parser has already
+        // split, so rejoin it.
+        let body = (1..params.len())
+            .filter_map(|index| params.get(index))
+            .map(String::from_utf8_lossy)
+            .collect::<Vec<_>>()
+            .join(";");
+        if body.is_empty() {
+            self.unhandled();
+            return;
+        }
+        self.out
+            .push_text_pair(b"", body.as_bytes(), |title, body| VtEvent::Notification {
+                title,
+                body,
+            });
+    }
+
+    /// `OSC 133`: the semantic goes on the cell template and the mark is also
+    /// reported, because a consumer tracking prompts and exit codes cannot read
+    /// the template.
+    fn osc_shell_mark(&mut self, params: &OscParams<'_>) {
+        let mark = match params.get(1) {
+            Some(b"A") => ShellMark::PromptStart,
+            Some(b"B") => ShellMark::PromptEnd,
+            Some(b"C") => ShellMark::OutputStart,
+            Some(b"D") => ShellMark::OutputEnd {
+                exit_code: params
+                    .get(2)
+                    .and_then(|value| str::from_utf8(value).ok())
+                    .and_then(|value| value.parse::<i32>().ok()),
+            },
+            _ => {
+                self.unhandled();
+                return;
+            }
+        };
+        self.shell_mark(mark);
+        self.out.push(VtEvent::ShellMark(mark));
+    }
+
     /// Parameters, with the sixteenth re-split on `;` (P9): the parser joins
     /// everything past [`MAX_OSC_PARAMS`] into the last slot instead of
     /// discarding it the way the reference does, and `OSC 4` is the sequence
@@ -1560,6 +1708,47 @@ impl Handler<'_> {
     ) {
         let args = self.osc_args(params);
         self.out.push_osc(code, &args, event_term(term), truncated);
+    }
+}
+
+/// Decode `%XX` escapes, as a shell emits them in an `OSC 7` URL. A malformed
+/// escape is kept verbatim and the result is read as UTF-8 leniently, because a
+/// directory name is not required to be valid UTF-8 and reporting a lossy name
+/// beats reporting none.
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = (bytes[index + 1] as char).to_digit(16);
+            let low = (bytes[index + 2] as char).to_digit(16);
+            if let (Some(high), Some(low)) = (high, low) {
+                out.push((high * 16 + low) as u8);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `/C:/Users` becomes `C:/Users`. A `file:///C:/...` URL is a Windows drive
+/// path with a URL's leading slash on it, and that slash is not part of the
+/// name.
+fn strip_windows_drive_slash(path: &str) -> &str {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0] == b'/'
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+        && (bytes.len() == 3 || bytes[3] == b'/' || bytes[3] == b'\\')
+    {
+        &path[1..]
+    } else {
+        path
     }
 }
 

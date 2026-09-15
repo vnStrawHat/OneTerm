@@ -106,26 +106,38 @@ $ cargo run --example headless
 
 ## Extending it: OSC
 
-The engine answers a fixed set of OSC numbers itself (title, colours, clipboard, and the rest of
-`OscClaims::NATIVE`). Every other number is delivered to you as `VtEvent::Osc`, but only if you
-claim it, so a hostile stream cannot buy an 8 MiB payload under a number nobody reads:
+The engine answers a fixed set of OSC numbers itself (title, colours, the working directory, the
+clipboard, and the rest of `OscRoutes::BUILTIN`), each as a typed event. `OscRoutes` says what
+happens to every other number, and lets you override or observe a built-in:
+
+| Route | What the engine does |
+| --- | --- |
+| `Builtin` | its own handler runs and emits its typed event; the default for a number it implements |
+| `BuiltinAndForward` | the handler runs **and** the raw parameters follow as `VtEvent::Osc` |
+| `Forward` | the handler is skipped; only `VtEvent::Osc` is delivered |
+| `Drop` | parsed, counted, discarded; the default for everything else |
 
 ```rust
-use oneterm_vt::{Config, OscClaims, Size, Terminal};
+use oneterm_vt::{Config, OscRoute, OscRoutes, Size, Terminal};
 
-let mut claims = OscClaims::new();
-claims.claim(7);              // OSC 7: the shell's working directory.
-claims.claim_large(20308);    // An application protocol of your own, allowed to spill.
+let mut routes = OscRoutes::new();
+// An application protocol of your own, delivered raw and allowed to spill
+// past the 2 KiB inline cap to 8 MiB.
+routes.route(20308, OscRoute::Forward).large(20308, true);
+// Keep the engine's OSC 9 handling and see the bytes as well.
+routes.route(9, OscRoute::BuiltinAndForward);
 
 let term = Terminal::new(
     Size { rows: 24, cols: 80 },
-    Config { osc_claims: claims, ..Config::default() },
+    Config { osc_routes: routes, ..Config::default() },
 );
-assert!(term.config().osc_claims.is_claimed(7));
+assert_eq!(term.config().osc_routes.get(20308), OscRoute::Forward);
 ```
 
 Supporting a new OSC number is that one call plus a `match` arm on the event. This crate needs no
-change, and neither does anything else in your program.
+change, and neither does anything else in your program. The payload ceiling is bought per number
+and is independent of the route, so a hostile stream cannot spend 8 MiB under a number nobody
+reads.
 
 ## Identity
 

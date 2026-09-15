@@ -54,7 +54,7 @@ pub(crate) mod width;
 pub use cell::{Attrs, Cell, CellContent, CellWidth, Color, NamedColor, Rgb, Semantic, Style};
 // `FeedStats` has no external namer either, but it is what `Terminal::feed`
 // returns, so it stays published.
-pub use event::{ClipboardKind, EventBatch, FeedStats, StringTerm, VtEvent};
+pub use event::{ClipboardKind, EventBatch, FeedStats, Progress, ShellMark, StringTerm, VtEvent};
 pub use graphics::{GraphicData, VIRTUAL_CELL};
 pub use grid::{Pos, RowId, RowRef, SeqNo, Size, Viewport};
 pub use intern::{Extras, ExtrasId, GraphicId, Hyperlink, HyperlinkId, Interner};
@@ -64,7 +64,9 @@ pub use render::{
     RenderCursor, RenderPlacement, RenderRow, RenderState, RenderUpdate, StyleRun,
 };
 pub use selection::{Selection, SelectionKind, SelectionRange, Side};
-pub use terminal::{ColorKey, Config, CursorShape, KeyboardFlags, Mode, OscClaims, Terminal};
+pub use terminal::{
+    ColorKey, Config, CursorShape, KeyboardFlags, Mode, OscRoute, OscRoutes, Terminal,
+};
 // `cluster_width` has no caller yet by design: it is the answer mode 2027 needs,
 // implemented and tested ahead of the mode so landing it is a print-path change
 // (see the module doc). It stays published for that reason.

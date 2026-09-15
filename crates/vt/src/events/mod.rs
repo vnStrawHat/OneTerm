@@ -14,7 +14,7 @@ mod batch;
 mod vt_event;
 
 pub use batch::EventBatch;
-pub use vt_event::{ClipboardKind, FeedStats, StringTerm, VtEvent};
+pub use vt_event::{ClipboardKind, FeedStats, Progress, ShellMark, StringTerm, VtEvent};
 
 #[cfg(test)]
 #[path = "event_tests.rs"]

@@ -33,7 +33,7 @@ pub use color::ColorKey;
 pub(crate) use color::ColorOverrides;
 pub use mode::{CursorShape, KeyboardFlags, Mode};
 pub(crate) use mode::{CursorStyle, KeyboardStacks, Modes, TitleState};
-pub use osc::OscClaims;
+pub use osc::{OscRoute, OscRoutes};
 
 use crate::cell::{Cell, Style};
 use crate::event::{EventBatch, FeedStats};
@@ -72,8 +72,9 @@ pub struct Config {
     /// actually keeps to [`SCROLLBACK_MAX`](crate::grid::SCROLLBACK_MAX); this
     /// field reports the number you asked for.
     pub scrollback_limit: u32,
-    /// Which OSC numbers reach the embedder, and which may spill.
-    pub osc_claims: OscClaims,
+    /// Which OSC numbers the engine handles, forwards, or ignores, and which
+    /// may spill past [`crate::parser::OSC_INLINE`].
+    pub osc_routes: OscRoutes,
     /// The cursor shape and blink a fresh terminal starts with, before the
     /// stream picks one with `CSI Ps SP q`.
     pub default_cursor_style: CursorStyle,
@@ -111,7 +112,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             scrollback_limit: DEFAULT_SCROLLBACK,
-            osc_claims: OscClaims::new(),
+            osc_routes: OscRoutes::new(),
             default_cursor_style: CursorStyle::default(),
             semantic_escape_chars: crate::selection::SEMANTIC_ESCAPE_CHARS.to_owned(),
             product_name: None,

@@ -1,13 +1,27 @@
-//! The OSC registration table: the extension point.
+//! The OSC routing table: the extension point.
 //!
-//! The engine handles a fixed set of OSC numbers natively; everything else is
-//! delivered to the embedder as [`crate::VtEvent::Osc`] **only if the embedder
-//! claimed it**. Supporting a new OSC number in an application is therefore one
-//! `claim` call plus a match on the event, with no change to this crate, and
-//! moving an application protocol from one OSC number to another is one number
-//! in one call.
+//! The engine decides only **what to do with an OSC number**, never who handles
+//! it. The decision is data — two bits per number — so an embedder can extend
+//! the engine with a number it has never heard of, override a built-in, or keep
+//! a built-in and watch the raw bytes go past, all without this crate changing
+//! and without any embedder code running inside `feed`.
 //!
-//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md>.
+//! ```
+//! use oneterm_vt::{Config, OscRoute, OscRoutes};
+//!
+//! let mut routes = OscRoutes::new();
+//! // A number the engine has never heard of, delivered raw.
+//! routes.route(20308, OscRoute::Forward).large(20308, true);
+//! // A built-in the embedder wants to watch as well as keep.
+//! routes.route(9, OscRoute::BuiltinAndForward);
+//! let config = Config {
+//!     osc_routes: routes,
+//!     ..Config::default()
+//! };
+//! # let _ = config;
+//! ```
+//!
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0038-embeddable-vt-core/low-level-design/osc-extension.md>.
 
 /// The bitmap covers `0..2048`, which is every OSC number in common use; larger
 /// numbers fall back to a sorted list, because a bitmap over `u32` would be half
@@ -15,95 +29,188 @@
 const BITMAP_BITS: u32 = 2048;
 const BITMAP_WORDS: usize = (BITMAP_BITS / 64) as usize;
 
-/// Which OSC numbers reach the embedder, and which may spill past
-/// [`crate::parser::OSC_INLINE`].
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct OscClaims {
-    low: [u64; BITMAP_WORDS],
-    high: Vec<u32>,
-    large_low: [u64; BITMAP_WORDS],
-    large_high: Vec<u32>,
+/// What the engine does with one OSC number.
+///
+/// The default for a number the engine implements is [`OscRoute::Builtin`]; the
+/// default for every other number is [`OscRoute::Drop`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum OscRoute {
+    /// The engine's own handler runs and emits its typed event. The raw
+    /// sequence is not delivered.
+    Builtin,
+    /// The engine's own handler runs *and* the raw parameters are delivered as
+    /// [`crate::VtEvent::Osc`], after the typed event. Use this to observe a
+    /// number without changing what the terminal does with it.
+    BuiltinAndForward,
+    /// The engine's own handler is skipped; only [`crate::VtEvent::Osc`] is
+    /// delivered. Use this to replace a built-in, or to handle a number the
+    /// engine does not implement.
+    Forward,
+    /// Nothing happens. The sequence is parsed, counted in
+    /// [`FeedStats::unhandled_sequences`](crate::FeedStats::unhandled_sequences),
+    /// and discarded.
+    Drop,
 }
 
-impl OscClaims {
-    /// The OSC numbers the engine answers itself.
-    ///
-    /// A native arm runs **before** the claim lookup, so a [`OscClaims::claim`]
-    /// on one of these could never be delivered. Publishing the set is what
-    /// stops a registration being shadowed silently: an embedder can ask, and
-    /// `claim` asserts. `133` is deliberately **not** here — the engine reads
-    /// the shell mark *and* forwards the whole sequence to whoever claimed it.
-    pub const NATIVE: [u32; 14] = [0, 2, 4, 8, 10, 11, 12, 22, 50, 52, 104, 110, 111, 112];
+/// Which OSC numbers the engine handles, forwards, or ignores.
+///
+/// Cheap to clone and compare; holds no allocation for any number below 2048.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct OscRoutes {
+    forward: CodeSet,
+    suppress: CodeSet,
+    large: CodeSet,
+}
 
-    /// An empty table: nothing is claimed and nothing may spill.
-    pub fn new() -> OscClaims {
-        OscClaims::default()
+impl OscRoutes {
+    /// The OSC numbers the engine implements itself.
+    ///
+    /// Publishing the set is what stops a route being dead on arrival: an
+    /// embedder can ask before it routes, and [`OscRoutes::route`] asserts.
+    pub const BUILTIN: [u32; 18] = [
+        0, 1, 2, 4, 7, 8, 9, 10, 11, 12, 22, 50, 52, 104, 110, 111, 112, 133,
+    ];
+
+    /// A table in which every built-in runs and nothing is forwarded.
+    pub fn new() -> OscRoutes {
+        OscRoutes::default()
     }
 
-    /// Whether the engine handles this OSC number itself, so a claim on it can
-    /// never reach the embedder.
-    pub fn is_native(code: u32) -> bool {
-        OscClaims::NATIVE.contains(&code)
+    /// Whether the engine implements this number itself.
+    pub fn has_builtin(code: u32) -> bool {
+        OscRoutes::BUILTIN.contains(&code)
     }
 
-    /// Deliver this OSC number to the embedder.
+    /// Set the route for one number. Idempotent; later calls win.
     ///
-    /// Claiming the same number twice is idempotent — the claim set is a
-    /// bitmap, so there is no handler to shadow and no order to depend on.
-    /// Claiming a [`OscClaims::NATIVE`] number is a **debug assertion**: the
-    /// engine's own arm wins, so the claim is dead and the embedder would
-    /// otherwise never find out. It is a debug assertion rather than a panic:
-    /// a release build of an embedder never dies over a registration mistake.
-    pub fn claim(&mut self, code: u32) -> &mut Self {
+    /// Asking for [`OscRoute::Builtin`] on a number the engine does not
+    /// implement is a **debug assertion**: there is no handler to run, so the
+    /// route would silently mean [`OscRoute::Drop`] and the caller would never
+    /// find out. It is an assertion rather than a panic because a table can be
+    /// built from data, and a release build of an embedder should not die over
+    /// one.
+    pub fn route(&mut self, code: u32, route: OscRoute) -> &mut Self {
         debug_assert!(
-            !OscClaims::is_native(code),
-            "OSC {code} is handled by the engine itself, so this claim can never be \
-             delivered; see dispatch-and-modes.md section OSC"
+            route != OscRoute::Builtin || OscRoutes::has_builtin(code),
+            "OSC {code} has no built-in handler, so routing it to `Builtin` can never run \
+             anything; ask `OscRoutes::has_builtin` first"
         );
-        set(&mut self.low, &mut self.high, code);
+        let (forward, suppress) = match route {
+            OscRoute::Builtin => (false, false),
+            OscRoute::BuiltinAndForward => (true, false),
+            OscRoute::Forward => (true, true),
+            OscRoute::Drop => (false, true),
+        };
+        self.forward.set(code, forward);
+        self.suppress.set(code, suppress);
         self
     }
 
-    /// Deliver it, and allow its payload to spill to
-    /// [`crate::parser::OSC_LARGE`].
+    /// Set the route for several numbers at once.
+    pub fn route_all(&mut self, codes: &[u32], route: OscRoute) -> &mut Self {
+        for &code in codes {
+            self.route(code, route);
+        }
+        self
+    }
+
+    /// Allow this number's payload to grow from [`crate::parser::OSC_INLINE`]
+    /// to [`crate::parser::OSC_LARGE`].
     ///
-    /// A **memory ceiling only**: who may write or read the clipboard, and
-    /// under what limits, is the embedder's policy, not the engine's. Unlike
-    /// [`OscClaims::claim`] this accepts a [`OscClaims::NATIVE`] number without
-    /// complaint, because the ceiling is the point there — `claim_large(52)`
-    /// buys a large clipboard write, and the delivery half is simply inert
-    /// while the engine answers OSC 52 itself. Ask [`OscClaims::is_native`] if
-    /// the distinction matters to you.
-    pub fn claim_large(&mut self, code: u32) -> &mut Self {
-        set(&mut self.low, &mut self.high, code);
-        set(&mut self.large_low, &mut self.large_high, code);
+    /// A **memory ceiling only**, orthogonal to the route: who may write the
+    /// clipboard, and under what limits, is the embedder's policy and not the
+    /// engine's. `large(52, true)` buys a large clipboard write while OSC 52
+    /// stays a built-in.
+    ///
+    /// Buying a ceiling for a number whose route is [`OscRoute::Drop`] is a
+    /// **debug assertion**: the payload is accumulated and then thrown away,
+    /// which is a memory hazard with no benefit.
+    pub fn large(&mut self, code: u32, allow: bool) -> &mut Self {
+        debug_assert!(
+            !allow || self.get(code) != OscRoute::Drop,
+            "OSC {code} is dropped, so a large payload would be accumulated and discarded; \
+             route it before raising its ceiling"
+        );
+        self.large.set(code, allow);
         self
     }
 
-    /// Whether this OSC number was claimed, and so reaches the embedder.
-    pub fn is_claimed(&self, code: u32) -> bool {
-        contains(&self.low, &self.high, code)
+    /// What the engine does with this number.
+    pub fn get(&self, code: u32) -> OscRoute {
+        match (self.forward.contains(code), self.suppress.contains(code)) {
+            (false, false) if OscRoutes::has_builtin(code) => OscRoute::Builtin,
+            (true, false) if OscRoutes::has_builtin(code) => OscRoute::BuiltinAndForward,
+            (true, _) => OscRoute::Forward,
+            (false, _) => OscRoute::Drop,
+        }
     }
 
-    /// Whether this OSC number's payload may spill past
+    /// Whether this number's payload may spill past
     /// [`crate::parser::OSC_INLINE`].
     pub fn allows_large(&self, code: u32) -> bool {
-        contains(&self.large_low, &self.large_high, code)
+        self.large.contains(code)
+    }
+
+    /// Every number whose route differs from the default, for diagnostics.
+    pub fn overrides(&self) -> impl Iterator<Item = (u32, OscRoute)> + '_ {
+        let mut spill: Vec<u32> = self
+            .forward
+            .high
+            .iter()
+            .chain(self.suppress.high.iter())
+            .copied()
+            .collect();
+        spill.sort_unstable();
+        spill.dedup();
+        (0..BITMAP_BITS)
+            .chain(spill)
+            .map(|code| (code, self.get(code)))
+            .filter(|&(code, route)| route != default_route(code))
     }
 }
 
-fn set(low: &mut [u64; BITMAP_WORDS], high: &mut Vec<u32>, code: u32) {
-    if code < BITMAP_BITS {
-        low[(code / 64) as usize] |= 1 << (code % 64);
-    } else if let Err(index) = high.binary_search(&code) {
-        high.insert(index, code);
-    }
-}
-
-fn contains(low: &[u64; BITMAP_WORDS], high: &[u32], code: u32) -> bool {
-    if code < BITMAP_BITS {
-        low[(code / 64) as usize] & (1 << (code % 64)) != 0
+/// The route a number has when nothing has been said about it.
+fn default_route(code: u32) -> OscRoute {
+    if OscRoutes::has_builtin(code) {
+        OscRoute::Builtin
     } else {
-        high.binary_search(&code).is_ok()
+        OscRoute::Drop
+    }
+}
+
+/// A set of OSC numbers: a bitmap over the common range plus a sorted spill.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+struct CodeSet {
+    low: [u64; BITMAP_WORDS],
+    high: Vec<u32>,
+}
+
+impl CodeSet {
+    fn set(&mut self, code: u32, member: bool) {
+        if code < BITMAP_BITS {
+            let (word, bit) = ((code / 64) as usize, 1 << (code % 64));
+            if member {
+                self.low[word] |= bit;
+            } else {
+                self.low[word] &= !bit;
+            }
+            return;
+        }
+        match (self.high.binary_search(&code), member) {
+            (Err(index), true) => self.high.insert(index, code),
+            (Ok(index), false) => {
+                self.high.remove(index);
+            }
+            _ => {}
+        }
+    }
+
+    fn contains(&self, code: u32) -> bool {
+        if code < BITMAP_BITS {
+            self.low[(code / 64) as usize] & (1 << (code % 64)) != 0
+        } else {
+            self.high.binary_search(&code).is_ok()
+        }
     }
 }
