@@ -22,5 +22,7 @@ mod task;
 mod test_support;
 mod transport;
 mod tunnel;
+#[cfg(test)]
+mod us0095_verify_tests;
 
 pub use session::{SshSession, connect};
