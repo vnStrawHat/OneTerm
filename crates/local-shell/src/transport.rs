@@ -8,8 +8,8 @@
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 
-use oneterm_pty::WindowSize;
 use oneterm_terminal::{OscRouter, PtyTransport, TerminalError};
+use oneterm_vt::pty::WindowSize;
 
 use crate::event_loop::{ShellMsg, ShellNotifier};
 

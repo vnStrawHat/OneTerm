@@ -1,6 +1,6 @@
 [package]
 name = "oneterm-local-shell"
-description = "Local shell via PTY for OneTerm (oneterm-pty)."
+description = "Local shell via PTY for OneTerm (oneterm_vt::pty)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,7 +17,8 @@ workspace = true
 [dependencies]
 oneterm-core.workspace = true
 oneterm-terminal.workspace = true
-oneterm-pty.workspace = true
+# The pseudo-console transport, `oneterm-vt`'s default-on `pty` feature.
+oneterm-vt.workspace = true
 async-channel.workspace = true
 polling.workspace = true
 log.workspace = true

@@ -2,7 +2,7 @@
 //! not announced once.
 //!
 //! Both tests fail against a ring that only posts from `push`/`pull`, which is
-//! the stall `US-0083`'s verification found: a caller that stops reading with
+//! the stall this contract exists to prevent: a caller that stops reading with
 //! bytes buffered is never woken again and the session hangs with output in
 //! hand.
 

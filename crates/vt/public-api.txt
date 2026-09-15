@@ -745,6 +745,34 @@ struct oneterm_vt::parser::Parser
 enum oneterm_vt::parser::StringTerm
     variant Bel
     variant St
+enum oneterm_vt::pty::ChildEvent
+    variant Exited
+trait oneterm_vt::pty::EventedPty
+trait oneterm_vt::pty::EventedReadWrite
+enum oneterm_vt::pty::GlyphWidth
+    variant Graphemes
+    variant WcsWidth
+trait oneterm_vt::pty::OnResize
+struct oneterm_vt::pty::Options
+    structfield env
+    structfield escape_args
+    structfield glyph_width
+    structfield shell
+    structfield working_directory
+constant oneterm_vt::pty::PTY_CHILD_EVENT_TOKEN
+constant oneterm_vt::pty::PTY_READ_WRITE_TOKEN
+struct oneterm_vt::pty::PipeReader
+struct oneterm_vt::pty::PipeWriter
+struct oneterm_vt::pty::PseudoConsole
+    method child_pid
+    method spawn
+struct oneterm_vt::pty::Shell
+    method new
+struct oneterm_vt::pty::WindowSize
+    structfield cell_height
+    structfield cell_width
+    structfield cols
+    structfield rows
 fn oneterm_vt::scalar_width
 struct oneterm_vt::search::GridText
     method from_terminal

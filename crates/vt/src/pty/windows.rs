@@ -21,7 +21,7 @@ use child::ChildExitWatcher;
 use conpty::Conpty;
 pub use pipe::{PipeReader, PipeWriter};
 
-use crate::{
+use crate::pty::{
     ChildEvent, EventedPty, EventedReadWrite, OnResize, Options, PTY_CHILD_EVENT_TOKEN,
     PTY_READ_WRITE_TOKEN, Shell, WindowSize,
 };

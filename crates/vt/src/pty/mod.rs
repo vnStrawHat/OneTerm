@@ -1,29 +1,51 @@
-//! `oneterm-pty` — the pseudo-console transport.
+//! The pseudo-console transport: a child process behind a ConPTY on Windows or
+//! an `openpty` on Unix, exposed as a **passive pollable object**.
 //!
-//! A child process behind a pseudo-console, exposed as a **passive pollable
-//! object**: this crate never runs a read loop, owns no grid and knows nothing
-//! about VT parsing. The caller drives its own `polling::Poller`
-//! (`crates/local-shell/src/event_loop.rs`) and reads the PTY when the poller
-//! says it is readable.
+//! Gated by the `pty` cargo feature, which is **on by default**. Turn it off and
+//! this module, its three traits and every platform dependency disappear, while
+//! the engine is unaffected: [`Terminal::feed`](crate::Terminal::feed) takes
+//! bytes, and bytes from a socket, a file or a test vector are indistinguishable
+//! to it. That, not this module, is the seam for an embedder who already owns a
+//! process model.
+//!
+//! Nothing here runs a read loop, owns a grid or knows anything about VT
+//! parsing. The embedder owns a `polling::Poller`, registers the console through
+//! [`EventedReadWrite`], and reads it when the poller says it is readable; child
+//! exit arrives separately through [`EventedPty::next_child_event`], because it
+//! must be observable without reading.
 //!
 //! Passive while it lives — **dropping** a pseudo-console is an action with an
-//! external side effect. On Windows it closes the console, waits a bounded
-//! grace period for the child to exit, and terminates that child if it never
-//! does ([`DEC-0016`](../../../docs/decisions/DEC-0016-terminate-a-shell-that-outlives-its-pseudo-console.md)).
-//! The drop therefore blocks, and belongs on the caller's owner thread rather
-//! than on a UI thread.
+//! external side effect. It closes the console, waits a bounded grace period for
+//! the child to exit, and terminates that child if it never does. The drop
+//! therefore blocks, and belongs on an owner thread rather than on a UI thread.
 //!
-//! Platforms:
+//! # Platforms
 //!
-//! - **Windows** — ConPTY. The bundled `conpty.dll` sitting next to the
-//!   executable is preferred and `kernel32!CreatePseudoConsole` is the fallback;
-//!   that order is [`DEC-0013`](../../../docs/decisions/DEC-0013-bundled-conpty-host-and-bump-script.md)
-//!   and it is load-bearing, because the inbox `conhost.exe` swallows Sixel DCS
-//!   payloads. See [`windows::conpty`].
-//! - **Unix** — `openpty` plus a reaper thread that turns child exit into a
-//!   pollable event.
+//! Both halves are described here in prose on purpose: `PseudoConsole` is a
+//! different type on each platform, the two share the trait set rather than an
+//! inherent API, and `cargo doc` renders only the half that matches the host.
+//! Portable code goes through [`EventedPty`] and [`OnResize`]; anything else is
+//! platform code.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/pty.md`.
+//! - **Windows** — ConPTY. A `conpty.dll` next to the *running executable* is
+//!   preferred and `kernel32!CreatePseudoConsole` is the fallback. That order is
+//!   load-bearing and this crate ships no console host: an embedder who does not
+//!   place a matched `conpty.dll` and `x64\OpenConsole.exe` pair beside their own
+//!   executable gets the inbox `conhost.exe`, which swallows Sixel DCS payloads.
+//!   The loader resolves the path at run time, so only the embedder's own build
+//!   can put the pair there. Windows-only items: `PipeReader` and `PipeWriter`.
+//! - **Unix** — `openpty` plus one reaper thread that turns child exit into a
+//!   pollable event. Unix-only items: `SignalMask` and the
+//!   `Options::child_signal_mask` field.
+//!
+//! Two threads exist inside the transport on Windows (a pipe reader and a pipe
+//! writer) and one on Unix (the reaper). All are internal, all are joined on
+//! drop, and none calls into embedder code. They are the only threads this crate
+//! spawns, which is why `--no-default-features` leaves the engine's "no threads,
+//! no locks, no interior mutability" guarantee literally true.
+//!
+//! Design:
+//! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/pty.md>.
 
 use std::collections::HashMap;
 use std::io;
@@ -36,12 +58,12 @@ use polling::{Event, PollMode, Poller};
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
-pub use crate::unix::{PseudoConsole, SignalMask};
+pub use crate::pty::unix::{PseudoConsole, SignalMask};
 
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use crate::windows::{PipeReader, PipeWriter, PseudoConsole};
+pub use crate::pty::windows::{PipeReader, PipeWriter, PseudoConsole};
 
 /// Poll key for child-process events (exit).
 ///
@@ -74,6 +96,10 @@ pub struct Shell {
 }
 
 impl Shell {
+    /// The program and the arguments it is started with, verbatim.
+    ///
+    /// Nothing is quoted or split here: on Windows the arguments are joined
+    /// into one command line at spawn, under the Windows-only `Options::escape_args`.
     pub fn new(program: String, args: Vec<String>) -> Self {
         Self { program, args }
     }
@@ -115,9 +141,13 @@ pub struct Options {
 /// `TIOCSWINSZ` pixel fields on Unix and are unused by ConPTY.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WindowSize {
+    /// Visible rows.
     pub rows: u16,
+    /// Visible columns.
     pub cols: u16,
+    /// Width of one cell in pixels, or 0 when the embedder does not measure.
     pub cell_width: u16,
+    /// Height of one cell in pixels, or 0 when the embedder does not measure.
     pub cell_height: u16,
 }
 
@@ -134,7 +164,10 @@ pub enum ChildEvent {
 /// Associated types rather than `impl Trait`: the trait stays object-safe and
 /// the reader type is nameable by the caller.
 pub trait EventedReadWrite {
+    /// Where the child's output arrives. Reads are non-blocking only in the
+    /// sense that the poller says when there is something to read.
     type Reader: io::Read;
+    /// Where input for the child goes.
     type Writer: io::Write;
 
     /// # Safety
@@ -147,6 +180,7 @@ pub trait EventedReadWrite {
         mode: PollMode,
     ) -> io::Result<()>;
 
+    /// Change the interest an already-registered source is polled with.
     fn reregister(
         &mut self,
         poller: &Arc<Poller>,
@@ -154,9 +188,14 @@ pub trait EventedReadWrite {
         mode: PollMode,
     ) -> io::Result<()>;
 
+    /// Take the sources back out of the poller. Call it before dropping the
+    /// poller, not after.
     fn deregister(&mut self, poller: &Arc<Poller>) -> io::Result<()>;
 
+    /// The read half, for when the poller reports [`PTY_READ_WRITE_TOKEN`]
+    /// readable.
     fn reader(&mut self) -> &mut Self::Reader;
+    /// The write half.
     fn writer(&mut self) -> &mut Self::Writer;
 }
 

@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use oneterm_pty::{Options, Shell, WindowSize};
+use oneterm_vt::pty::{Options, Shell, WindowSize};
 
 use oneterm_core::config::resolve_shell;
 use oneterm_core::{AppError, LocalShellConfig, TerminalLogConfig, home_dir};
@@ -54,7 +54,7 @@ impl LocalSession {
             env: resolved.env,
             // The engine measures cluster widths with `wcswidth`, so the console
             // host is asked for the same rule.
-            glyph_width: oneterm_pty::GlyphWidth::WcsWidth,
+            glyph_width: oneterm_vt::pty::GlyphWidth::WcsWidth,
             #[cfg(unix)]
             child_signal_mask: None,
             // Escape every argument with the C-runtime rules so user-supplied

@@ -1,6 +1,6 @@
 [package]
 name = "oneterm-vt"
-description = "An embeddable terminal core: VT parser, grid with scrollback, reflow, selection, damage-tracked snapshots and Sixel. No rendering, no PTY, no policy."
+description = "An embeddable terminal core: VT parser, grid with scrollback, reflow, selection, damage-tracked snapshots, Sixel and an optional pseudo-console transport. No rendering, no policy."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,6 +17,12 @@ publish = false
 workspace = true
 
 [features]
+# The pseudo-console transport (ConPTY on Windows, openpty on Unix). On by
+# default: a terminal core that cannot open a terminal is a surprise. VT-only
+# embedders that already own their transport turn it off, and
+# `--no-default-features` is then the only build with no platform code in it.
+default = ["pty"]
+pty = ["dep:polling", "dep:windows-sys", "dep:libc"]
 # The whole-history integrity walk, for property tests, fuzzing and CI.
 # By default the always-on checks stay O(1) and the debug walk at `feed`,
 # `resize` and `render_update` is bounded to the rows that operation touched.
@@ -42,6 +48,16 @@ regex = { workspace = true, optional = true }
 rustc-hash.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
+# PUBLIC dependency, and only under `pty`: Poller, Event and PollMode appear in
+# the `EventedReadWrite` signatures, so a `polling` major bump is a breaking
+# change to this crate's API.
+polling = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true

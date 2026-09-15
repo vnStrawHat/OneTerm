@@ -49,8 +49,7 @@ path = "src/bin/vt-bench.rs"
 # ---------------------------------------------------------------------------
 
 [dependencies]
-# pty-throughput: the same PTY path OneTerm uses (oneterm-pty + polling).
-oneterm-pty.workspace = true
+# pty-throughput: the same PTY path OneTerm uses (`oneterm_vt::pty` + polling).
 polling.workspace = true
 # sftp-dev-server: the same SSH/SFTP crates OneTerm's client uses, server side.
 russh.workspace = true

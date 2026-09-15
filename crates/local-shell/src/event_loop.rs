@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
 use log::error;
-use oneterm_pty::{
+use oneterm_vt::pty::{
     ChildEvent, EventedPty, OnResize, Options, PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN,
     PseudoConsole, WindowSize,
 };

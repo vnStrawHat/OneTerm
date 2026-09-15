@@ -21,7 +21,7 @@ use std::sync::{Arc, mpsc};
 
 use polling::{Event, PollMode, Poller};
 
-use crate::{
+use crate::pty::{
     ChildEvent, EventedPty, EventedReadWrite, OnResize, Options, PTY_CHILD_EVENT_TOKEN,
     PTY_READ_WRITE_TOKEN, WindowSize,
 };
@@ -205,7 +205,7 @@ fn reap_in_background(
     mut waker: UnixStream,
 ) -> io::Result<()> {
     std::thread::Builder::new()
-        .name("oneterm-pty-reaper".to_owned())
+        .name("oneterm-vt-pty-reaper".to_owned())
         .spawn(move || {
             let status = child.wait().ok();
             // Both sends are best effort: a torn-down session has already
@@ -285,7 +285,7 @@ impl EventedPty for PseudoConsole {
         if let Err(error) = self.exit_signal.read(&mut byte)
             && error.kind() != io::ErrorKind::WouldBlock
         {
-            log::error!("oneterm-pty: cannot read the child-exit signal: {error}");
+            log::error!("oneterm-vt-pty: cannot read the child-exit signal: {error}");
         }
         self.exit_events.try_recv().ok()
     }
@@ -403,7 +403,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::Shell;
+    use crate::pty::Shell;
 
     fn size(rows: u16, cols: u16) -> WindowSize {
         WindowSize {
