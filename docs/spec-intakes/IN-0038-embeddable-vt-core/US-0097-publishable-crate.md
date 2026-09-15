@@ -54,7 +54,7 @@ decides otherwise.
 ## Acceptance
 
 - [x] `cargo package -p oneterm-vt` exits 0, and the file list it prints contains `README.md`,
-  `CHANGELOG.md`, `LICENSE`, `NOTICE` and `examples/headless.rs`. 68 files, 876.4 KiB (226.5 KiB
+  `CHANGELOG.md`, `LICENSE`, `NOTICE` and `examples/headless.rs`. 67 files, 876.3 KiB (226.4 KiB
   compressed); `fuzz/` is excluded on its own (it declares its own `[workspace]`), so no `exclude`
   key was needed. `public-api.txt` ships too, at 20 KiB: it describes the crate a reader is holding,
   and an `exclude` key is one more thing to keep in step for no gain. **The criterion said
@@ -238,18 +238,20 @@ The full design is in [`low-level-design/packaging.md`](low-level-design/packagi
 
 ## Evidence and Gaps
 
-**Package.** `cargo package -p oneterm-vt --allow-dirty`: `Packaged 68 files, 876.4KiB (226.5KiB
+**Package.** `cargo package -p oneterm-vt` on a clean tree: `Packaged 67 files, 876.3KiB (226.4KiB
 compressed)`, verified build clean, exit 0. The exact command the gate runs is
 
 ```console
-$ cargo package -p oneterm-vt --allow-dirty --list |
+$ cargo package -p oneterm-vt --list |
     python scripts/verify-dependency-graph.py --package-list -
 Dependency graph policy passed for 21 workspace packages and 21 explicit members.
 Package set passed: the oneterm-vt package carries CHANGELOG.md, LICENSE, NOTICE, README.md,
 examples/headless.rs, and reaches nothing outside crates/vt.
 ```
 
-(the workflow runs it without `--allow-dirty`). A doctored list missing `LICENSE` fails with exit 1. `fuzz/` is excluded on its own (it declares its own `[workspace]`), and no
+The local scripts add `--allow-dirty` so the gate runs with uncommitted work; a doctored list
+missing `LICENSE` fails with exit 1. `fuzz/` is excluded on its own (it declares its own
+`[workspace]`), and no
 directory approaches 1 MB, so no `exclude` key was added; `public-api.txt` ships at 19 KiB, which is
 fine -- it describes the crate the reader is holding. Two file names carried internal record ids and
 would have shipped: `tests/us0087_cleanup_rows.rs` and `src/terminal/verify_bug0058_tests.rs`,
@@ -390,7 +392,7 @@ ROW = dict(
     e2e_proof=0,
     platform_proof=1,
     evidence=(
-        "cargo package packages 68 files incl. README, CHANGELOG, "
+        "cargo package packages 67 files incl. README, CHANGELOG, "
         "LICENSE, NOTICE and examples/headless.rs; 263 missing_docs warnings "
         "closed and 106 record citations removed across 44 files; sanitised "
         "Config::product_name with 8 tests; public-api.txt (688 lines) gated by "
