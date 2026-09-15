@@ -92,27 +92,38 @@ fn decckm_survives_the_alt_screen_round_trip() {
 }
 
 /// The kitty keyboard stack swaps with the screen (pre-existing behaviour).
-/// This pins that it does, and that `encode_key` ignores it either way.
+///
+/// `US-0105` inverted the second half of this test: `encode_key` used to ignore
+/// the flags, and now honours them. The stack mechanics are unchanged, so the
+/// probe is the one key the disambiguate flag moves -- `Escape`, `0x1b` in the
+/// legacy encoding and `CSI 27 u` once any flag is pushed.
 #[test]
-fn kitty_flags_swap_with_alt_screen_and_never_reach_the_bytes() {
+fn kitty_flags_swap_with_alt_screen_and_reach_the_bytes() {
     let (mut t, mut b) = term();
     let none = KeyMods::default();
-    let up = KeySpec::Named(NamedKey::ArrowUp);
-    let baseline = t.encode_key(&up, none).unwrap();
+    let escape = KeySpec::Named(NamedKey::Escape);
+    assert_eq!(t.encode_key(&escape, none).unwrap(), b"\x1b");
 
     // every kitty flag combination, pushed with CSI > Ps u
     for flags in 0u8..32 {
         feed(&mut t, &mut b, format!("\x1b[>{flags}u").as_bytes());
         assert_eq!(t.keyboard_flags().bits(), flags, "flags {flags} not stored");
+        // Bit 0b1 disambiguates and bit 0b1000 reports every key; either one
+        // puts `Escape` in its `CSI u` form, and nothing else does.
+        let want: &[u8] = if flags & 0b1001 != 0 {
+            b"\x1b[27u"
+        } else {
+            b"\x1b"
+        };
         assert_eq!(
-            t.encode_key(&up, none).unwrap(),
-            baseline,
-            "kitty flags {flags} changed the bytes"
+            t.encode_key(&escape, none).unwrap(),
+            want,
+            "kitty flags {flags}"
         );
     }
     // push / pop through CSI = Ps ; Pm u and CSI < Ps u
     feed(&mut t, &mut b, b"\x1b[=5;1u");
-    assert_eq!(t.encode_key(&up, none).unwrap(), baseline);
+    assert_eq!(t.encode_key(&escape, none).unwrap(), b"\x1b[27u");
     feed(&mut t, &mut b, b"\x1b[>3u");
     let before_alt = t.keyboard_flags().bits();
     feed(&mut t, &mut b, b"\x1b[?1049h");
@@ -125,30 +136,77 @@ fn kitty_flags_swap_with_alt_screen_and_never_reach_the_bytes() {
         "the keyboard stack did not come back with the primary screen \
          (entered alt with {in_alt})"
     );
-    assert_eq!(t.encode_key(&up, none).unwrap(), baseline);
+    assert_eq!(t.encode_key(&escape, none).unwrap(), b"\x1b[27u");
+    // A pop uncovers whatever was pushed before it; the encoding follows the
+    // live flags rather than a cached decision either way.
     feed(&mut t, &mut b, b"\x1b[<1u");
-    assert_eq!(t.encode_key(&up, none).unwrap(), baseline);
+    let live = t.keyboard_flags().bits();
+    let want: &[u8] = if live & 0b1001 != 0 {
+        b"\x1b[27u"
+    } else {
+        b"\x1b"
+    };
+    assert_eq!(t.encode_key(&escape, none).unwrap(), want, "live {live}");
+    // Popping past the bottom resets every flag, and the legacy byte is back.
+    feed(&mut t, &mut b, b"\x1b[<99u");
+    assert!(t.keyboard_flags().is_empty());
+    assert_eq!(t.encode_key(&escape, none).unwrap(), b"\x1b");
 }
 
-/// modifyOtherKeys (`CSI > 4 ; Ps m`) likewise never reaches the bytes.
+/// modifyOtherKeys (`CSI > 4 ; Ps m`) now reaches the bytes too.
+///
+/// `US-0105` inverted this test as well, keeping its four chords as the table.
+/// Level `1` is the chords with no unambiguous legacy encoding, level `2` every
+/// modified "other" key.
 #[test]
-fn modify_other_keys_never_reaches_the_bytes() {
+fn modify_other_keys_reaches_the_bytes() {
     let (mut t, mut b) = term();
     let mods = KeyMods {
         ctrl: true,
         ..KeyMods::default()
     };
-    let probes = [
-        KeySpec::Character("a".into()),
-        KeySpec::Character("2".into()),
-        KeySpec::Named(NamedKey::Enter),
-        KeySpec::Named(NamedKey::Tab),
+    // (key, level 0, level 1, level 2)
+    let probes: [(KeySpec, &[u8], &[u8], &[u8]); 4] = [
+        (
+            KeySpec::Character("a".into()),
+            b"\x01",
+            b"\x01",
+            b"\x1b[27;5;97~",
+        ),
+        (
+            KeySpec::Character("2".into()),
+            b"\x00",
+            b"\x1b[27;5;50~",
+            b"\x1b[27;5;50~",
+        ),
+        (
+            KeySpec::Named(NamedKey::Enter),
+            b"\x1b[13;5u",
+            b"\x1b[27;5;13~",
+            b"\x1b[27;5;13~",
+        ),
+        (
+            KeySpec::Named(NamedKey::Tab),
+            b"\t",
+            b"\x1b[27;5;9~",
+            b"\x1b[27;5;9~",
+        ),
     ];
-    let before: Vec<_> = probes.iter().map(|p| t.encode_key(p, mods)).collect();
     for level in [0u8, 1, 2] {
         feed(&mut t, &mut b, format!("\x1b[>4;{level}m").as_bytes());
-        let after: Vec<_> = probes.iter().map(|p| t.encode_key(p, mods)).collect();
-        assert_eq!(after, before, "modifyOtherKeys {level} changed the bytes");
+        assert_eq!(t.modify_other_keys(), level);
+        for (key, at0, at1, at2) in &probes {
+            let want: &[u8] = match level {
+                0 => at0,
+                1 => at1,
+                _ => at2,
+            };
+            assert_eq!(
+                t.encode_key(key, mods).unwrap(),
+                want,
+                "{key:?} at modifyOtherKeys {level}"
+            );
+        }
     }
 }
 

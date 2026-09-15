@@ -448,8 +448,9 @@ pub fn encode_wheel_event(
 }
 
 use oneterm_vt::input::{
-    KeyMods, KeySpec, MouseModifiers, NamedKey, TerminalMouseButton, encode_key, encode_mouse_move,
-    encode_mouse_press, encode_mouse_release, encode_wheel_event,
+    KeyEvent, KeyMods, KeySpec, MouseModifiers, NamedKey, TerminalMouseButton, encode_key,
+    encode_key_event, encode_mouse_move, encode_mouse_press, encode_mouse_release,
+    encode_wheel_event,
 };
 use oneterm_vt::{ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting};
 
@@ -674,21 +675,27 @@ fn mouse_states() -> Vec<Option<MouseProtocol>> {
 }
 
 /// The full snapshot space: 2^8 boolean combinations x 10 mouse states = 2560.
+///
+/// `ModeSnapshot` became `#[non_exhaustive]` in `US-0105`, so an out-of-crate
+/// caller assigns rather than writing a literal. The two keyboard-protocol
+/// fields stay at their defaults here on purpose: this file is the proof that
+/// **nothing changes when nothing is negotiated**.
 fn all_snapshots() -> Vec<ModeSnapshot> {
     let mut out = Vec::new();
     for bits in 0u32..256 {
         for mouse in mouse_states() {
-            out.push(ModeSnapshot {
-                app_cursor: bits & 1 != 0,
-                alt_screen: bits & 2 != 0,
-                app_keypad: bits & 4 != 0,
-                bracketed_paste: bits & 8 != 0,
-                show_cursor: bits & 16 != 0,
-                insert: bits & 32 != 0,
-                alternate_scroll: bits & 64 != 0,
-                reverse_video: bits & 128 != 0,
-                mouse,
-            });
+            let mut snap = ModeSnapshot::default();
+            snap.app_cursor = bits & 1 != 0;
+            snap.alt_screen = bits & 2 != 0;
+            snap.app_keypad = bits & 4 != 0;
+            snap.bracketed_paste = bits & 8 != 0;
+            snap.show_cursor = bits & 16 != 0;
+            snap.insert = bits & 32 != 0;
+            snap.alternate_scroll = bits & 64 != 0;
+            snap.reverse_video = bits & 128 != 0;
+            snap.mouse = mouse;
+            assert!(snap.keyboard_flags.is_empty() && snap.modify_other_keys == 0);
+            out.push(snap);
         }
     }
     out
@@ -779,6 +786,14 @@ fn encode_key_is_byte_identical_to_main() {
                             "MISMATCH spec={spec:?} mods={mods:?} snap={snap:?} new={got:?} old={want:?}"
                         );
                     }
+                }
+                n += 1;
+                // `US-0105`: the richer entry point is the same encoder, so it
+                // owes the same answer on a plain press with nothing
+                // negotiated. Counted as its own comparison.
+                let event = KeyEvent::new(spec.clone(), mods);
+                if encode_key_event(&event, snap) != want {
+                    bad += 1;
                 }
                 n += 1;
             }
@@ -994,13 +1009,11 @@ fn hostile_inputs_do_not_panic() {
             );
         }
     }
-    let m = ModeSnapshot {
-        mouse: Some(MouseProtocol {
-            reporting: MouseReporting::AnyEvent,
-            encoding: MouseEncoding::Utf8,
-        }),
-        ..ModeSnapshot::default()
-    };
+    let mut m = ModeSnapshot::default();
+    m.mouse = Some(MouseProtocol {
+        reporting: MouseReporting::AnyEvent,
+        encoding: MouseEncoding::Utf8,
+    });
     let _ = encode_mouse_press(
         usize::MAX,
         usize::MAX,
