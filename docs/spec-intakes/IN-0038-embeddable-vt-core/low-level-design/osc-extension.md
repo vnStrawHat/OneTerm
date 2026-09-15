@@ -392,7 +392,9 @@ notification arm would parse it as a desktop notification with body `7;<base64>`
 
 1. **Drop the alias.** `osc_router.rs:264` and `docs/osc-agent-status.md` section 3.1 already say it
    "is dropped in the next release". `OSC 9` stays a clean built-in and the adapter keeps only
-   `route(20308, Forward)`. **Recommended**; it is the intake's Open Decision 1.
+   `route(20308, Forward)`. Was the author's recommendation; **overruled by the owner**
+   (2026-09-15): the alias is OneTerm's custom spelling and is handled outside the engine, so
+   option 2 below is what `US-0098` implements.
 2. **Keep it**, with `routes.route(9, OscRoute::BuiltinAndForward).large(9, true)`. The adapter then
    sees both `VtEvent::Notification` and `VtEvent::Osc { code: 9, .. }` for the same sequence, and
    drops the notification whose forwarded first parameter is `7`. One line in the adapter, and the

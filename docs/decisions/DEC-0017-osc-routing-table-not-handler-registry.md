@@ -95,8 +95,8 @@ Future work must inherit three consequences:
   deliberate and is the boundary that keeps the built-in set equal to the standard set.
 - [ ] **Tradeoff:** routing is per number, so a built-in whose sub-codes an embedder wants to split
   (OneTerm's deprecated `OSC 9;7` is the only live instance) needs `BuiltinAndForward` plus a
-  discriminating line in the embedder. `IN-0038` Open Decision 1 proposes removing that instance
-  instead.
+  discriminating line in the embedder. The owner ruled (2026-09-15) that this custom spelling is
+  handled outside the engine, so that instance stays and exercises the wrap route.
 - [ ] **Follow-up:** `OscRoute` and `VtEvent` are `#[non_exhaustive]` so a fifth route or a new
   built-in event stays a patch-level change under the semver promise in
   `docs/spec-intakes/IN-0038-embeddable-vt-core/low-level-design/api-surface.md`.

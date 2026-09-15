@@ -69,9 +69,8 @@ What stays outside, and why (each row is R6/R7's boundary, not taste):
 ## UI Wireframe
 
 `N/A -- no UI surface.` This intake changes a Rust library boundary. No OneTerm screen, dialog,
-menu, keybinding or setting changes. The one candidate user-visible change is the deprecated
-`OSC 9;7` alias (intake Open Decision 1), which removes an accepted-as-deprecated wire spelling; it
-draws nothing.
+menu, keybinding or setting changes. The deprecated `OSC 9;7` alias stays (intake Open Decision 1,
+ruled by the owner: custom spellings are handled outside the engine), so no wire spelling changes.
 
 ## Data Flow
 

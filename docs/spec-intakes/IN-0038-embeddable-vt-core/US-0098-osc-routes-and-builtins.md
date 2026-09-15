@@ -119,8 +119,8 @@ Every criterion below is a test a hostile verifier can run and read.
 **Update required**: `dispatch-and-modes.md` (the OSC registration section becomes a pointer to
 `osc-extension.md`), `docs/osc-sequences-checklist.md` (rewritten: which OSC the **engine** handles,
 which the adapter routes, and the new `OscRoute` column), `docs/terminal-backend.md` (the
-`OscRouter` paragraph). `docs/osc-agent-status.md` changes **only** if Open Decision 1 removes the
-`9;7` alias, in which case section 3.1 loses its deprecation clause and gains a removal note.
+`OscRouter` paragraph). `docs/osc-agent-status.md` does not change: Open Decision 1 keeps the
+`9;7` alias, handled in the adapter through the engine's `BuiltinAndForward` route.
 
 Reason: three current documents name adapter files as the place OSC is parsed, and after this packet
 that is false in all three.
@@ -159,7 +159,10 @@ Sites this packet touches, with line numbers on `main` @ `36977ca`:
 - [ ] Move the OSC 133 parser, keeping the existing template-marking behaviour, with its tests.
 - [ ] Emit `VtEvent::Pointer` from the OSC 22 arm and `VtEvent::CursorStyleChanged` from OSC 50.
 - [ ] Rewrite `OscRouter::handle`'s arms; delete `OscPayload` and `parse_osc`.
-- [ ] Rewrite `adapter_config`; resolve Open Decision 1 either way and record which.
+- [ ] Rewrite `adapter_config`: `route(20308, Forward).large(20308, true)` and
+  `route(9, BuiltinAndForward).large(9, true)`; the adapter discards the `Notification` whose
+  forwarded first parameter is `7` and routes that payload to `osc_agent` (Open Decision 1 ruled:
+  the alias stays, handled outside the engine).
 - [ ] Extend the proptest and the fuzz target with a route table.
 - [ ] Rewrite `docs/osc-sequences-checklist.md`; update the two design documents.
 - [ ] CHANGELOG lines under `Unreleased`.
