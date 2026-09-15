@@ -83,8 +83,10 @@ try {
 }
 # Two snapshots, one per platform family (`US-0104`): `--check` compares the
 # host's, `--diff-platforms` asserts the other one differs only inside
-# `oneterm_vt::pty` and needs no rustdoc.
+# `oneterm_vt::pty` and needs no rustdoc, `--check-nameable` fails on a public
+# signature naming a type an embedder cannot write (`BUG-0059`).
 Invoke-Step @("python", "scripts/vt-public-api.py", "--check", "--no-doc")
+Invoke-Step @("python", "scripts/vt-public-api.py", "--check-nameable", "--no-doc")
 Invoke-Step @("python", "scripts/vt-public-api.py", "--diff-platforms")
 
 # What the package carries, and that it reaches nothing outside `crates/vt`.

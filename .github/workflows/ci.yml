@@ -207,10 +207,13 @@ jobs:
           cargo doc -p oneterm-vt --no-deps --all-features
       # This job runs on Linux, so `--check` compares `public-api.unix.txt`; the
       # Windows job's surface lives in `public-api.windows.txt` (`US-0104`).
-      # `--diff-platforms` asserts the two differ only inside `oneterm_vt::pty`.
+      # `--diff-platforms` asserts the two differ only inside `oneterm_vt::pty`,
+      # and `--check-nameable` fails on a public signature naming a type an
+      # embedder cannot write (`BUG-0059`).
       - name: Check the public API surface
         run: |
           python scripts/vt-public-api.py --check --no-doc
+          python scripts/vt-public-api.py --check-nameable --no-doc
           python scripts/vt-public-api.py --diff-platforms
       # The crate packages cleanly and carries what a consumer needs. Apache-2.0
       # 4(a) and 4(d) are why `LICENSE` and `NOTICE` are in the required set: a
