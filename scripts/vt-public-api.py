@@ -32,10 +32,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DOC_ROOT = ROOT / "target" / "doc" / "oneterm_vt"
 SURFACE = ROOT / "crates" / "vt" / "public-api.txt"
-LIB_RS = ROOT / "crates" / "vt" / "src" / "lib.rs"
-# The crate root's `pub mod` lines. Everything else an embedder can name is a
-# re-export and is listed at the crate root, where rustdoc also inlines it.
-PUB_MOD = re.compile(r"^pub mod ([a-z_][a-z0-9_]*);", re.MULTILINE)
+# A module's own index page links the modules **it** makes public, and only
+# those, so walking the links from the crate root reaches every module path an
+# embedder can write and no private one, however deeply nested.
+MOD_LINK = re.compile(r'<a class="mod" href="([A-Za-z0-9_]+)/index\.html"')
 
 # One page per public item: `struct.Terminal.html`, `enum.VtEvent.html`, ...
 ITEM = re.compile(r"^(struct|enum|trait|fn|constant|type|union|macro)\.(.+)\.html$")
@@ -57,8 +57,20 @@ def members(page: Path) -> list[str]:
 
 
 def public_modules() -> set[str]:
-    """The module paths an embedder can write: the crate root and its `pub mod`s."""
-    return {"."} | set(PUB_MOD.findall(LIB_RS.read_text(encoding="utf-8")))
+    """Every module path an embedder can write, walked from the crate root."""
+    modules = {"."}
+    queue = [""]
+    while queue:
+        prefix = queue.pop()
+        index = (DOC_ROOT / prefix / "index.html") if prefix else (DOC_ROOT / "index.html")
+        if not index.is_file():
+            continue
+        for name in MOD_LINK.findall(index.read_text(encoding="utf-8", errors="replace")):
+            path = f"{prefix}/{name}" if prefix else name
+            if path not in modules:
+                modules.add(path)
+                queue.append(path)
+    return modules
 
 
 def surface() -> list[str]:
