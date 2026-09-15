@@ -35,6 +35,10 @@ pub(crate) struct StyleKey {
     pub semantic_enabled: bool,
     pub shell_profile: u8,
     pub show_gutter: bool,
+    /// `DECSCNM` (`? 5`). Part of the key because it changes what the two
+    /// default colours resolve to for every cell, so a plan built under it is
+    /// not reusable once it clears.
+    pub reverse_video: bool,
 }
 
 pub(crate) struct PlanCache {
@@ -343,6 +347,7 @@ mod tests {
             semantic_enabled: false,
             shell_profile: 0,
             show_gutter: false,
+            reverse_video: false,
         }
     }
 
@@ -399,6 +404,7 @@ mod tests {
                     cell_width: px(cell_width),
                     device,
                     semantic: None,
+                    reverse_video: false,
                     window,
                 };
                 glyphs.begin_frame();

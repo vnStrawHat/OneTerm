@@ -182,6 +182,18 @@ impl TerminalGrid {
         screen.print(c, mode, interner, anchors);
     }
 
+    /// The `? 2027` print path: the caller has already measured the cluster.
+    pub(crate) fn print_with_width(
+        &mut self,
+        c: char,
+        width: u8,
+        mode: PrintMode,
+        interner: &mut Interner,
+    ) {
+        let (screen, anchors) = self.active();
+        screen.print_with_width(c, width, mode, interner, anchors);
+    }
+
     /// `HT`. `autowrap` is `DECAWM`, which decides whether a pending wrap turns
     /// into a line break or is merely consumed.
     pub(crate) fn put_tab(&mut self, count: u16, autowrap: bool) {

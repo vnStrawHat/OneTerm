@@ -453,7 +453,7 @@ fn decrqm_answers_match_the_mode_table() {
     // A table test over every mode with a private number, in its power-on state.
     let expected = |mode: Mode| -> ModeState {
         match mode {
-            Mode::DecCoLm | Mode::GraphemeClusters => ModeState::NotSupported,
+            Mode::DecCoLm => ModeState::NotSupported,
             Mode::LineWrap | Mode::ShowCursor | Mode::AlternateScroll | Mode::UrgencyHints => {
                 ModeState::Set
             }
@@ -492,8 +492,8 @@ fn decrqm_answers_match_the_mode_table() {
         );
     }
     assert_eq!(
-        inert, 3,
-        "? 3, ? 2027 and ? 9001 — and `? 45` left the table"
+        inert, 2,
+        "? 3 and ? 9001 — `? 45` and `? 2027` both left the table when they got readers"
     );
 
     // The same walk over the ANSI space (`US-0087`). The rule is about readers,
@@ -639,6 +639,169 @@ fn deccolm_does_not_change_the_width() {
 }
 
 #[test]
+fn locking_and_single_shifts_reach_g2_and_g3() {
+    // `SI` and `SO` only ever select `G0` and `G1`, so before the shifts a
+    // designation into `G2` or `G3` could never be printed from.
+    let mut session = Session::new(10, 3);
+    let stats = session.feed(b"\x1b*0\x1bnqq");
+    assert_eq!(stats.unhandled_sequences, 0);
+    assert_eq!(session.row(0), "──        ", "LS2 locks G2 in");
+
+    // `ESC o` (LS3) does the same for `G3`, and `ESC n` back to `G2`.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b+0\x1boq\x1b*B\x1bnq");
+    assert_eq!(session.row(0), "─q        ");
+
+    // `SS3` shifts exactly one character; the next comes from the locking set.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b+0\x1bOqq");
+    assert_eq!(session.row(0), "─q        ");
+
+    // `SS2` likewise, and the shift survives an intervening escape sequence —
+    // only a printed character consumes it, which is `preceding_char`'s rule
+    // (trap 43).
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1bN\x1b[1mq\x1b[0mq");
+    assert_eq!(session.row(0), "─q        ");
+
+    // Correction C12: `DECSC` saves the locking-set invocation and a pending
+    // single shift as well as the designations, which is what VT510 specifies
+    // and what xterm does; the engine being replaced saves neither.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1b7\x1bn\x1b8q");
+    assert_eq!(
+        session.row(0),
+        "q         ",
+        "DECRC puts the locking set back"
+    );
+
+    // The other direction: a set invoked before the save survives the restore.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1bn\x1b7\x1bO\x1b8q");
+    assert_eq!(session.row(0), "─         ");
+
+    // A pending single shift is saved and restored too.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1bN\x1b7\x1b8qq");
+    assert_eq!(session.row(0), "─q        ");
+
+    // `CSI s` / `CSI u` are the same pair and behave the same way.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1b[s\x1bn\x1b[uq");
+    assert_eq!(session.row(0), "q         ");
+
+    // `RIS` puts the locking set and any pending single shift back to `G0`.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1bn\x1bN\x1bcq");
+    assert_eq!(session.row(0), "q         ");
+}
+
+#[test]
+fn mouse_modes_9_and_1015_reach_the_snapshot() {
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b[?9h");
+    let modes = session.term.mode_snapshot();
+    assert_eq!(
+        modes.mouse.map(|mouse| mouse.reporting),
+        Some(MouseReporting::X10)
+    );
+    assert_eq!(
+        modes.mouse.map(|mouse| mouse.encoding),
+        Some(MouseEncoding::Default)
+    );
+    session.feed(b"\x1b[?9$p");
+    assert_eq!(session.replies(), "\x1b[?9;1$y");
+
+    // The four reporting modes are one choice: `? 1000` replaces `? 9`.
+    session.feed(b"\x1b[?1000h");
+    assert_eq!(
+        session
+            .term
+            .mode_snapshot()
+            .mouse
+            .map(|mouse| mouse.reporting),
+        Some(MouseReporting::Normal)
+    );
+    session.feed(b"\x1b[?9$p");
+    assert_eq!(session.replies(), "\x1b[?9;2$y");
+
+    session.feed(b"\x1b[?1000l");
+    assert_eq!(session.term.mode_snapshot().mouse, None);
+
+    // `? 1015` is an encoding, and the three encodings replace each other.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b[?1000h\x1b[?1015h");
+    assert_eq!(
+        session
+            .term
+            .mode_snapshot()
+            .mouse
+            .map(|mouse| mouse.encoding),
+        Some(MouseEncoding::Urxvt)
+    );
+    session.feed(b"\x1b[?1015$p");
+    assert_eq!(session.replies(), "\x1b[?1015;1$y");
+
+    session.feed(b"\x1b[?1006h");
+    assert_eq!(
+        session
+            .term
+            .mode_snapshot()
+            .mouse
+            .map(|mouse| mouse.encoding),
+        Some(MouseEncoding::Sgr)
+    );
+    session.feed(b"\x1b[?1015$p");
+    assert_eq!(session.replies(), "\x1b[?1015;2$y");
+
+    session.feed(b"\x1b[?1005h");
+    assert_eq!(
+        session
+            .term
+            .mode_snapshot()
+            .mouse
+            .map(|mouse| mouse.encoding),
+        Some(MouseEncoding::Utf8)
+    );
+}
+
+#[test]
+fn decscnm_is_a_screen_flag_and_touches_no_cell() {
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b[31mred\x1b[0m plain");
+    let before: Vec<crate::cell::Cell> = (0..10).map(|col| session.cell(0, col)).collect();
+    let styles: Vec<crate::cell::Style> = (0..10).map(|col| session.style_at(0, col)).collect();
+    assert!(!session.term.mode_snapshot().reverse_video);
+
+    let stats = session.feed(b"\x1b[?5h");
+    assert_eq!(stats.unhandled_sequences, 0);
+    assert!(session.term.mode_snapshot().reverse_video);
+    // Not one cell moved: reverse video is the embedder's palette swap, and a
+    // per-cell inversion would survive `? 5 l` and corrupt a copied selection.
+    for col in 0..10 {
+        assert_eq!(session.cell(0, col), before[col as usize], "cell {col}");
+        assert_eq!(
+            session.style_at(0, col),
+            styles[col as usize],
+            "style {col}"
+        );
+    }
+
+    session.feed(b"\x1b[?5$p");
+    assert_eq!(session.replies(), "\x1b[?5;1$y");
+
+    session.feed(b"\x1b[?5l");
+    assert!(!session.term.mode_snapshot().reverse_video);
+    session.feed(b"\x1b[?5$p");
+    assert_eq!(session.replies(), "\x1b[?5;2$y");
+
+    // `CSI ? 5 W` is DECST8C and shares only the number: it must not toggle
+    // the mode.
+    session.feed(b"\x1b[?5h\x1b[?5W");
+    assert!(session.term.mode_snapshot().reverse_video);
+}
+
+#[test]
 fn win32_input_mode_is_accepted_silently() {
     // R-36: conhost sends this unprompted at session start and re-injects it
     // after any DECRST, so it must never be counted as unhandled.
@@ -652,19 +815,36 @@ fn win32_input_mode_is_accepted_silently() {
 }
 
 #[test]
-fn mode_2027_is_recognised_and_inert() {
-    // R-56: `cluster_width` ships, the print path does not.
-    let mut session = Session::new(10, 3);
+fn mode_2027_measures_grapheme_clusters() {
+    // Reset -- the power-on state, and what the parity corpus pins -- width is
+    // per scalar, so the cursor advances by the sum: four wide glyphs.
+    let mut session = Session::new(20, 3);
+    session.feed(FAMILY.as_bytes());
+    assert_eq!(session.cursor().1, 8);
+
+    // Set, the whole cluster is one cell, two columns wide.
+    let mut session = Session::new(20, 3);
     let stats = session.feed(b"\x1b[?2027h");
     assert_eq!(stats.unhandled_sequences, 0);
+    session.feed(FAMILY.as_bytes());
+    assert_eq!(session.cursor().1, 2);
+    assert_eq!(session.row(0), format!("{FAMILY}{}", " ".repeat(18)));
 
-    session.feed("e\u{301}".as_bytes());
-    // Still one scalar per cell, exactly as with the mode reset: the combining
-    // mark joins the cell to its left rather than taking a column.
-    assert_eq!(session.row(0), "e\u{301}         ");
-
+    // The mode is real now, so `DECRQM` reports it rather than answering
+    // `NotSupported`.
     session.feed(b"\x1b[?2027$p");
-    assert_eq!(session.replies(), "\x1b[?2027;0$y");
+    assert_eq!(session.replies(), "\x1b[?2027;1$y");
+    session.feed(b"\x1b[?2027l\x1b[?2027$p");
+    assert_eq!(session.replies(), "\x1b[?2027;2$y");
+
+    // A flag is one wide cell under the mode, and the combining-mark case is
+    // unchanged from the per-scalar path, so nothing that already worked moves.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b[?2027h");
+    session.feed("\u{1f1fb}\u{1f1f3}e\u{301}".as_bytes());
+    assert_eq!(session.cursor().1, 3);
+    // `row_text` skips the wide spacer, so the flag is one visible cluster.
+    assert_eq!(session.row(0), "\u{1f1fb}\u{1f1f3}e\u{301}       ");
 }
 
 #[test]
@@ -825,6 +1005,25 @@ fn da1_da2_dsr_xtversion_answers() {
     session.feed(b"\x1b[>4;2m\x1b[?4m");
     assert_eq!(session.replies(), "\x1b[>4;2m");
     assert_eq!(session.term.modify_other_keys(), 2);
+}
+
+#[test]
+fn da3_answers_a_decrptui_unit_id() {
+    let mut session = Session::new(80, 24);
+    session.feed(b"\x1b[=c");
+    assert_eq!(session.replies(), "\x1bP!|00000000\x1b\\");
+
+    // Only `Ps == 0` answers, exactly as DA1 and DA2 do.
+    let stats = session.feed(b"\x1b[=1c");
+    assert_eq!(session.replies(), "");
+    assert!(stats.unhandled_sequences > 0);
+
+    // Regression: the other two attribute replies are untouched.
+    session.feed(b"\x1b[c");
+    assert_eq!(session.replies(), "\x1b[?62;4;22c");
+    let version = super::dispatch_version_for_tests();
+    session.feed(b"\x1b[>c");
+    assert_eq!(session.replies(), format!("\x1b[>0;{version};1c"));
 }
 
 #[test]
@@ -1199,6 +1398,194 @@ fn osc_10_11_12_set_query_and_advance() {
             terminator: crate::event::StringTerm::St,
         }
     )));
+}
+
+/// A ZWJ family: four people joined, each two columns wide on its own.
+const FAMILY: &str = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+
+/// Feed `text` under `? 2027` as two `feed` calls split at `at` bytes, and
+/// report the cursor column the whole thing left behind.
+fn columns_split_at(text: &str, at: usize) -> u16 {
+    let mut session = Session::new(20, 3);
+    session.feed(b"\x1b[?2027h");
+    session.feed(&text.as_bytes()[..at]);
+    session.feed(&text.as_bytes()[at..]);
+    session.cursor().1
+}
+
+#[test]
+fn a_cluster_split_across_two_feeds_is_measured_whole() {
+    // A pty read ends where it ends. Every interior split of each of these has
+    // to measure what the unsplit sequence measures, or an emoji at a chunk
+    // boundary takes cells it should have joined.
+    for (what, text, want) in [
+        ("ZWJ family", FAMILY, 2u16),
+        ("skin tone", "\u{1f44d}\u{1f3fd}", 2),
+        ("keycap", "1\u{fe0f}\u{20e3}", 2),
+        ("flag", "\u{1f1e9}\u{1f1ea}", 2),
+        ("combining mark", "e\u{301}", 1),
+    ] {
+        for at in 1..text.len() {
+            if !text.is_char_boundary(at) {
+                continue;
+            }
+            assert_eq!(
+                columns_split_at(text, at),
+                want,
+                "{what} split at byte {at}"
+            );
+        }
+        // And the unsplit form still measures the same.
+        assert_eq!(columns_split_at(text, text.len()), want, "{what} unsplit");
+    }
+}
+
+#[test]
+fn a_split_cluster_lands_in_one_cell() {
+    // Not just the column count: the whole cluster has to end up in the cell the
+    // head took, so the row reads back as one grapheme.
+    let split = FAMILY.char_indices().nth(2).expect("a ZWJ family has 7").0;
+    let mut session = Session::new(20, 3);
+    session.feed(b"\x1b[?2027h");
+    session.feed(&FAMILY.as_bytes()[..split]);
+    session.feed(&FAMILY.as_bytes()[split..]);
+    session.feed(b"X");
+    assert_eq!(session.row(0), format!("{FAMILY}X{}", " ".repeat(17)));
+}
+
+#[test]
+fn a_control_between_the_halves_breaks_the_cluster() {
+    // A control is not a graphic character, so what follows it starts a cluster
+    // of its own — which is what the segmentation algorithm says too.
+    let split = FAMILY.char_indices().nth(2).expect("a ZWJ family has 7").0;
+    let broken = |breaker: &[u8]| -> Session {
+        let mut session = Session::new(20, 4);
+        session.feed(b"\x1b[?2027h");
+        session.feed(&FAMILY.as_bytes()[..split]);
+        session.feed(breaker);
+        session.feed(&FAMILY.as_bytes()[split..]);
+        session
+    };
+
+    // A breaker that leaves the cursor alone: the head keeps its two columns
+    // and the tail takes two of its own, where a joined cluster would have
+    // taken two in total.
+    for breaker in [&b"\x1b[m"[..], b"\x1b[?2027h", b"\x07"] {
+        assert_eq!(broken(breaker).cursor(), (0, 4), "{breaker:?}");
+    }
+    // `LF` moves the tail to the next row, which the head's cell cannot reach.
+    // The column is unchanged, because `LNM` is inert here and `LF` is not a
+    // carriage return.
+    assert_eq!(broken(b"\n").cursor(), (1, 4));
+    // `CR` sends the tail back over the head rather than joining it, so the row
+    // holds the tail alone.
+    assert_eq!(
+        broken(b"\r").row(0),
+        format!("{}{}", &FAMILY[split..], " ".repeat(18))
+    );
+}
+
+#[test]
+fn a_carried_cluster_is_bounded() {
+    // A hostile stream can feed one unbounded cluster a scalar at a time. Past
+    // the cap the carry is dropped and counted, so re-placing a growing cluster
+    // can never become quadratic.
+    let mut session = Session::new(20, 3);
+    session.feed(b"\x1b[?2027h");
+    session.feed("e".as_bytes());
+    let mut dropped = 0;
+    for _ in 0..80 {
+        // `FeedStats` is per call, so the drop has to be caught as it happens.
+        dropped += session.feed("\u{301}".as_bytes()).dropped_cluster_carries;
+    }
+    assert_eq!(
+        dropped, 1,
+        "the carry stops growing once, at the cap, and is not re-taken"
+    );
+    // And the cell is still one column wide: the marks attach either way.
+    assert_eq!(session.cursor().1, 1);
+}
+
+#[test]
+fn a_bare_presentation_selector_is_zero_width() {
+    // A presentation selector decides the width of the base it follows; with no
+    // base there is nothing to decide, and the scalar joins the cell on its
+    // left exactly as it does with the mode reset. Splitting a keycap in front
+    // of its selector is what manufactures one.
+    for scalar in ["\u{fe0f}", "\u{fe0e}", "\u{20e3}", "\u{200d}", "\u{301}"] {
+        let mut set = Session::new(10, 3);
+        set.feed(b"\x1b[?2027h");
+        set.feed(scalar.as_bytes());
+        set.feed(b"a");
+
+        let mut reset = Session::new(10, 3);
+        reset.feed(scalar.as_bytes());
+        reset.feed(b"a");
+
+        assert_eq!(
+            set.cursor(),
+            reset.cursor(),
+            "a leading {scalar:?} must cost the same with the mode set and reset"
+        );
+    }
+}
+
+#[test]
+fn osc_17_and_19_set_and_query_the_selection_colours() {
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b]17;rgb:ff/00/00\x07");
+    assert_eq!(
+        session.term.color(ColorKey::SelectionBackground),
+        Some(Rgb {
+            r: 0xff,
+            g: 0,
+            b: 0
+        })
+    );
+
+    session.feed(b"\x1b]19;#0000ff\x07");
+    assert_eq!(
+        session.term.color(ColorKey::SelectionForeground),
+        Some(Rgb {
+            r: 0,
+            g: 0,
+            b: 0xff
+        })
+    );
+
+    // A query is the embedder's to answer, terminated the way it was asked.
+    session.feed(b"\x1b]17;?\x07");
+    assert!(session.batch.iter().any(|event| matches!(
+        event,
+        VtEvent::ColorQuery {
+            key: ColorKey::SelectionBackground,
+            terminator: crate::event::StringTerm::Bel,
+        }
+    )));
+    session.feed(b"\x1b]19;?\x1b\\");
+    assert!(session.batch.iter().any(|event| matches!(
+        event,
+        VtEvent::ColorQuery {
+            key: ColorKey::SelectionForeground,
+            terminator: crate::event::StringTerm::St,
+        }
+    )));
+    assert_eq!(
+        ColorKey::SelectionBackground.query_prefix(),
+        "17",
+        "the query echoes its own number back"
+    );
+    assert_eq!(ColorKey::SelectionForeground.query_prefix(), "19");
+
+    // No advancing multi-parameter form: `OSC 18` is not implemented, so a
+    // second parameter is counted rather than silently misfiled.
+    let mut session = Session::new(10, 3);
+    let stats = session.feed(b"\x1b]17;#010101;#020202\x07");
+    assert_eq!(
+        session.term.color(ColorKey::SelectionBackground),
+        Some(Rgb { r: 1, g: 1, b: 1 })
+    );
+    assert!(stats.unhandled_sequences > 0);
 }
 
 #[test]

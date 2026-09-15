@@ -673,10 +673,10 @@ fn mouse_states() -> Vec<Option<MouseProtocol>> {
     v
 }
 
-/// The full snapshot space: 2^7 boolean combinations x 10 mouse states = 1280.
+/// The full snapshot space: 2^8 boolean combinations x 10 mouse states = 2560.
 fn all_snapshots() -> Vec<ModeSnapshot> {
     let mut out = Vec::new();
-    for bits in 0u32..128 {
+    for bits in 0u32..256 {
         for mouse in mouse_states() {
             out.push(ModeSnapshot {
                 app_cursor: bits & 1 != 0,
@@ -686,6 +686,7 @@ fn all_snapshots() -> Vec<ModeSnapshot> {
                 show_cursor: bits & 16 != 0,
                 insert: bits & 32 != 0,
                 alternate_scroll: bits & 64 != 0,
+                reverse_video: bits & 128 != 0,
                 mouse,
             });
         }
@@ -889,6 +890,19 @@ fn encode_mouse_is_byte_identical_to_main() {
     let mut n = 0u64;
     let mut bad = 0u64;
     for snap in &snaps {
+        // `US-0102` deliberately changed one case the `US-0099` move had frozen:
+        // with no mouse protocol on, the encoders now return an empty `Vec`
+        // instead of the legacy report, so that a caller which forgets to check
+        // its own modes cannot write mouse bytes into a program that never asked
+        // for them. Pinned here rather than skipped, so the exception is exactly
+        // one case wide.
+        if snap.mouse.is_none() {
+            assert!(
+                encode_mouse_press(0, 0, MBUTTONS[0], *snap, MMODS[0]).is_empty(),
+                "US-0102: no protocol means no report"
+            );
+            continue;
+        }
         for mods in MMODS {
             let om = orig_mmods(mods);
             for row in coords {

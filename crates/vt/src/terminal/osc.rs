@@ -78,8 +78,8 @@ impl OscRoutes {
     ///
     /// Publishing the set is what stops a route being dead on arrival: an
     /// embedder can ask before it routes, and [`OscRoutes::route`] asserts.
-    pub const BUILTIN: [u32; 18] = [
-        0, 1, 2, 4, 7, 8, 9, 10, 11, 12, 22, 50, 52, 104, 110, 111, 112, 133,
+    pub const BUILTIN: [u32; 20] = [
+        0, 1, 2, 4, 7, 8, 9, 10, 11, 12, 17, 19, 22, 50, 52, 104, 110, 111, 112, 133,
     ];
 
     /// A table in which every built-in runs and nothing is forwarded.

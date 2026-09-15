@@ -201,10 +201,17 @@ it is recorded in `docs/agents/dependencies.md` § 3 at `US-0071` so a `polling`
 as a breaking change to this crate.
 
 **Glyph width (R-38).** `Options::glyph_width` is fixed to `GlyphWidth::WcsWidth`, matching the
-engine, because mode 2027 is deferred whole ([`cell-and-style.md`](cell-and-style.md), R-56). The
-field exists so the later 2027 packet can set it at spawn; the engine will refuse `CSI ? 2027 h`
-on a session whose transport was spawned with `WcsWidth`, so the engine and conhost can never
-disagree about how to measure a cluster.
+engine's default width mode. The field exists so a spawn can ask conhost for `Graphemes` instead.
+
+**Open gap, carried by `US-0102`.** That packet landed the mode 2027 print path but **not** the
+refusal this section used to promise: the engine does not know what its transport was spawned
+with — it compiles with `--no-default-features` and no transport at all — so it accepts
+`CSI ? 2027 h` on any session. On a Windows local shell spawned with `WcsWidth`, a program that
+sets the mode mid-session therefore gets the engine measuring clusters while conhost measures
+scalars, and columns drift on a ZWJ sequence. Nothing OneTerm ships sets the mode, and no
+recording in the parity corpus does. Closing it needs either a spawn-time `Config` flag the
+embedder sets from its transport, or a `Terminal` accessor the spawn reads; both are a later
+packet's choice, and neither belongs in a print-path change.
 
 ### Unix
 

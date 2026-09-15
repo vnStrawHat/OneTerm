@@ -68,7 +68,7 @@ pub use snapshot::{
 pub use terminal::{
     ColorKey, Config, CursorShape, KeyboardFlags, Mode, OscRoute, OscRoutes, Terminal,
 };
-// `cluster_width` has no caller yet by design: it is the answer mode 2027 needs,
-// implemented and tested ahead of the mode so landing it is a print-path change
-// (see the module doc). It stays published for that reason.
+// Both halves of the width decision are published: `scalar_width` is what the
+// print path uses by default, `cluster_width` what it uses under mode `? 2027`,
+// and an embedder measuring its own text has to make the same choice.
 pub use width::{cluster_width, scalar_width};

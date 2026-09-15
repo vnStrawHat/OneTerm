@@ -267,7 +267,7 @@ impl TerminalModel {
         let modes = self.modes();
         if modes.mouse.is_some() {
             let bytes = encode_mouse_press(row as usize, col as usize, button, modes, mods);
-            Some(bytes)
+            reportable(bytes)
         } else if matches!(button, TerminalMouseButton::Left) {
             self.start_selection(row, col, kind);
             None
@@ -281,7 +281,7 @@ impl TerminalModel {
         let modes = self.modes();
         if reports_motion(modes) {
             let bytes = encode_mouse_move(row as usize, col as usize, None, modes, mods);
-            Some(bytes)
+            reportable(bytes)
         } else {
             None
         }
@@ -299,7 +299,7 @@ impl TerminalModel {
                 modes,
                 mods,
             );
-            Some(bytes)
+            reportable(bytes)
         } else {
             self.update_selection(row, col);
             None
@@ -317,7 +317,7 @@ impl TerminalModel {
         let modes = self.modes();
         if modes.mouse.is_some() {
             let bytes = encode_mouse_release(row as usize, col as usize, button, modes, mods);
-            Some(bytes)
+            reportable(bytes)
         } else {
             None
         }
@@ -343,7 +343,7 @@ impl TerminalModel {
             None
         } else if modes.mouse.is_some() {
             let bytes = encode_wheel_event(row as usize, col as usize, delta_y, modes, mods);
-            Some(bytes)
+            reportable(bytes)
         } else if modes.alt_screen {
             let key = match (delta_y > 0.0, modes.app_cursor) {
                 (true, true) => "\x1bOA",
@@ -420,6 +420,16 @@ pub(crate) fn line_range_cells(term: &Terminal, start_line: usize, count: usize)
         num_cols,
         links,
     }
+}
+
+/// Drop an encoding the current mode does not report at all.
+///
+/// The engine's encoders answer with an empty `Vec` rather than an `Option`,
+/// because "nothing to send" is a property of the mode and not an error. `? 9`
+/// is the one mode that uses it: it reports a press and suppresses the release,
+/// the motion and the wheel.
+fn reportable(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    (!bytes.is_empty()).then_some(bytes)
 }
 
 /// `? 1002` and `? 1003` report motion; `? 1000` reports presses only.

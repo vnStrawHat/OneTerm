@@ -134,6 +134,7 @@ fn only_app_cursor_is_read() {
         show_cursor: false,
         insert: true,
         alternate_scroll: true,
+        reverse_video: true,
         mouse: Some(crate::snapshot::MouseProtocol {
             reporting: crate::snapshot::MouseReporting::AnyEvent,
             encoding: crate::snapshot::MouseEncoding::Sgr,

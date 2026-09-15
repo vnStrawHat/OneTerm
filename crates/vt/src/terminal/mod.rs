@@ -31,6 +31,7 @@ use std::time::Instant;
 
 pub use color::ColorKey;
 pub(crate) use color::ColorOverrides;
+pub(crate) use dispatch::ClusterCarry;
 pub use mode::{CursorShape, KeyboardFlags, Mode};
 pub(crate) use mode::{CursorStyle, KeyboardStacks, Modes, TitleState};
 pub use osc::{OscRoute, OscRoutes};
@@ -138,9 +139,24 @@ pub(crate) struct State {
     pub(crate) config: Config,
     pub(crate) theme: ThemeColors,
     pub(crate) cursor_style: Option<CursorStyle>,
-    /// Which of `G0..G3` `SI` / `SO` selected. Lives on the terminal, not the
-    /// cursor, so `DECSC` / `DECRC` do not save it — reference behaviour.
+    /// Which of `G0..G3` `SI` / `SO` and the locking shifts selected. Lives on
+    /// the terminal, not the cursor, so `DECSC` / `DECRC` do not save it —
+    /// reference behaviour.
     pub(crate) active_charset: usize,
+    /// `SS2` / `SS3`: the set the **next printed character** comes from, and
+    /// only that one. Like `preceding_char` it survives an intervening escape
+    /// sequence, because only printing consumes it.
+    pub(crate) single_shift: Option<usize>,
+    /// What `DECSC` saved of the two above, one slot per screen because the
+    /// saved cursor is per screen. Correction C12: VT510's `DECSC` saves the
+    /// sets in GL and GR and any pending single shift, and the engine being
+    /// replaced saves neither.
+    pub(crate) saved_shifts: [(usize, Option<usize>); 2],
+    /// Mode `? 2027` only: the grapheme cluster the last printed run ended on,
+    /// so a cluster split across two `feed` calls is measured whole. `None`
+    /// whenever the mode is reset, and cleared by any dispatch that is not a
+    /// print.
+    pub(crate) cluster_carry: Option<ClusterCarry>,
     /// `REP`'s source, which survives intervening escape sequences (trap 43).
     pub(crate) preceding_char: Option<char>,
     pub(crate) modify_other_keys: u8,
@@ -197,6 +213,9 @@ impl Terminal {
                 theme: ThemeColors::new(),
                 cursor_style: None,
                 active_charset: 0,
+                single_shift: None,
+                saved_shifts: [(0, None); 2],
+                cluster_carry: None,
                 preceding_char: None,
                 modify_other_keys: 0,
                 cell_pixels: (0, 0),
@@ -384,6 +403,7 @@ impl Terminal {
             show_cursor: self.state.modes.contains(Mode::ShowCursor),
             insert: self.state.modes.contains(Mode::Insert),
             alternate_scroll: self.state.modes.contains(Mode::AlternateScroll),
+            reverse_video: self.state.modes.contains(Mode::ReverseVideo),
             mouse: self.state.modes.mouse_reporting(),
         }
     }
@@ -394,6 +414,9 @@ impl Terminal {
     pub fn resize(&mut self, size: Size, policy: ResizePolicy) -> ResizeOutcome {
         let outcome = self.state.grid.resize(size, policy);
         self.state.generation = self.state.generation.wrapping_add(1);
+        // A reflow moves cells between rows, so a half-printed cluster's cell
+        // is no longer where it was; the continuation starts a new one.
+        self.state.cluster_carry = None;
         self.prune_selection();
         // A reflow can destroy the rows a placement was anchored to; the
         // releases queue until the next `feed` delivers them.

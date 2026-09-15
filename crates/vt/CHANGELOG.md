@@ -95,7 +95,7 @@ carry no API change at all. Such a release says so below rather than being omitt
   handler runs), `BuiltinAndForward` (the handler runs **and** the raw parameters follow as
   `VtEvent::Osc`, typed event first), `Forward` (the handler is skipped) and `Drop`. An embedder can
   now add a number the engine has never heard of, override a built-in, or watch one, without a fork
-  and without any of its code running inside `feed`. `OscRoutes::BUILTIN` publishes the eighteen
+  and without any of its code running inside `feed`. `OscRoutes::BUILTIN` publishes the twenty
   numbers the engine implements; `route`, `route_all`, `large`, `get`, `allows_large`,
   `has_builtin` and `overrides` are the whole surface.
 - Six OSC numbers are now built in, each with a typed event: `OSC 1` icon name
@@ -107,6 +107,42 @@ carry no API change at all. Such a release says so below rather than being omitt
   `OSC 133` (`VtEvent::ShellMark(ShellMark)`, alongside the cell semantics and anchors it already
   recorded).
 - `Progress` and `ShellMark`, both `#[non_exhaustive]`.
+- Eight conformance gaps closed, each against a published specification.
+  - `? 5` (DECSCNM, reverse video), as `ModeSnapshot::reverse_video`. A screen-level flag and never
+    a cell attribute: the embedder swaps the two defaults when it resolves the palette, and no
+    cell's own style changes, so `? 5 l` restores exactly what was there.
+  - `? 9` (X10 mouse), as `MouseReporting::X10`. A button **press** only, with no modifier bits, no
+    release and no motion — the encoders return an **empty** `Vec` for an event the mode does not
+    report, so a caller writes nothing.
+  - `? 1015` (urxvt mouse), as `MouseEncoding::Urxvt`: `CSI Cb ; Cx ; Cy M`, the legacy values as
+    decimal parameters, which is what lifts the 223-column ceiling. `Cb` keeps the `+ 32` offset
+    and a release is still the fixed button 3; 1015 changes the transport, not the semantics.
+  - `? 2027` (grapheme clustering) now **works** rather than being recognised and inert: while set,
+    the print path segments its run into grapheme clusters and measures each with `cluster_width`,
+    so a ZWJ family lands in one cell. While reset nothing changes.
+
+    A cluster split by a `feed` boundary is measured whole: the engine carries the last cluster of
+    a printed run and re-places it when the next run extends it. Any dispatch that is not a print
+    breaks the carry, and so does a resize. A cluster past 32 scalars is not carried and the drop
+    is counted, so a stream that feeds one unbounded cluster a scalar at a time cannot make the
+    re-placing quadratic.
+
+    `cluster_width` needs a **base** before a presentation selector decides anything: a cluster of
+    combining scalars alone — a stray `VS16`, a leading combining mark, the tail of a keycap split
+    in front of its selector — is zero-width and joins the cell on its left, as it does with the
+    mode reset. A bare `VS16` used to measure two columns.
+  - `LS2` (`ESC n`), `LS3` (`ESC o`), `SS2` (`ESC N`) and `SS3` (`ESC O`), which are what make a
+    `G2` or `G3` designation printable at all. A single shift is consumed by the next printed
+    character and by nothing else, so an intervening escape sequence does not eat it.
+  - `OSC 17` and `OSC 19` (the selection background and foreground), set and queried as `OSC 10`
+    and `OSC 11` are, through the new `ColorKey::SelectionBackground` and
+    `ColorKey::SelectionForeground`. One parameter each, not xterm's advancing multi-parameter
+    form. There is no `OSC 117` / `119` reset; `RIS` clears them.
+  - `DA3` (`CSI = c`) answers `DCS ! | 00000000 ST`, xterm's DECRPTUI reply for a terminal with no
+    manufacturing site and no serial number. Only `Ps == 0` answers, as for `DA1` and `DA2`.
+- `FeedStats::dropped_cluster_carries`: grapheme clusters that grew past the cross-chunk carry
+  limit under `? 2027`, so a continuation arriving in a later `feed` starts a cluster of its own.
+  Zero for every well-formed stream.
 
 ### Changed
 
@@ -144,6 +180,24 @@ carry no API change at all. Such a release says so below rather than being omitt
   its state and percentage as `u32` and **clamps** the percentage, where reading them as `u8` turned
   `9;4;1;1000` into `Set(0)` and a state above 255 into `Remove`.
 - `OSC 22` and `OSC 1` are no longer counted in `FeedStats::unhandled_sequences`; they are handled.
+- **Breaking.** `Mode`, `ColorKey`, `MouseReporting` and `MouseEncoding` each gain variants and all
+  four are exhaustive: `Mode::{ReverseVideo, MouseX10, UrxvtMouse}`,
+  `ColorKey::{SelectionBackground, SelectionForeground}`, `MouseReporting::X10` and
+  `MouseEncoding::Urxvt`. `ModeSnapshot` gains the `reverse_video` field, so a struct literal over
+  it needs the new field.
+- **Reply contract.** `DECRQM` on `? 2027` answered `NotSupported` and now answers the mode's real
+  state, because the mode has a reader. `? 5`, `? 9` and `? 1015` answered `NotSupported` as
+  unrecognised numbers and now answer their real state too.
+- **Behaviour.** `DECSC` / `DECRC` (and `CSI s` / `CSI u`, and `? 1048`) now save and restore the
+  set invoked into GL and any pending single shift, as well as the `G0`-`G3` designations. VT510's
+  `DECSC` saves "character sets currently in GL and GR" and "any single shift 2 or 3 sent", and
+  xterm's `CursorSave` stores `curgl`, `curgr` and `gsets[]`; the engine used to save neither.
+- **Behaviour, and a correction to this file.** An earlier line here said the mouse encoders
+  "return an empty `Vec` for an event the mode does not report". That was true of `? 9`'s
+  suppressed event kinds and **false** with no protocol on at all, where a press still encoded the
+  legacy report. It is true now: `ModeSnapshot::mouse == None` encodes nothing, for every event.
+  An embedder that called an encoder without checking its own modes used to send mouse reports to
+  a program that never asked for them.
 - With no `product_name` set, `XTVERSION` now answers `oneterm-vt(<version>)` instead of naming
   the application this engine was extracted from.
 - Every public item is documented; `#![warn(missing_docs)]` keeps it that way.
