@@ -114,6 +114,7 @@ struct oneterm_vt::EventBatch
 struct oneterm_vt::FeedStats
     structfield aborted_dcs
     structfield bytes
+    structfield dropped_cluster_carries
     structfield grapheme_truncated
     structfield hyperlink_table_exhausted
     structfield malformed_sequences

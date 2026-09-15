@@ -45,6 +45,12 @@ pub enum Mode {
     ReverseWrap,
     /// `? 9`, X10 compatibility mouse. Button presses only, with no
     /// modifiers and no release or motion report.
+    ///
+    /// **It outranks the extended encodings.** With `? 9` and `? 1006` both
+    /// set the report is the legacy six-byte form and the SGR encoding is
+    /// ignored, because the X10 protocol has no SGR form to use: it predates
+    /// both `? 1005` and `? 1006`, and its report is the only shape defined
+    /// for it. A program wanting SGR asks for `? 1000` and up.
     MouseX10,
     /// `? 1000`.
     MouseClick,

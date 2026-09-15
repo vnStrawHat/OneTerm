@@ -120,6 +120,17 @@ carry no API change at all. Such a release says so below rather than being omitt
   - `? 2027` (grapheme clustering) now **works** rather than being recognised and inert: while set,
     the print path segments its run into grapheme clusters and measures each with `cluster_width`,
     so a ZWJ family lands in one cell. While reset nothing changes.
+
+    A cluster split by a `feed` boundary is measured whole: the engine carries the last cluster of
+    a printed run and re-places it when the next run extends it. Any dispatch that is not a print
+    breaks the carry, and so does a resize. A cluster past 32 scalars is not carried and the drop
+    is counted, so a stream that feeds one unbounded cluster a scalar at a time cannot make the
+    re-placing quadratic.
+
+    `cluster_width` needs a **base** before a presentation selector decides anything: a cluster of
+    combining scalars alone — a stray `VS16`, a leading combining mark, the tail of a keycap split
+    in front of its selector — is zero-width and joins the cell on its left, as it does with the
+    mode reset. A bare `VS16` used to measure two columns.
   - `LS2` (`ESC n`), `LS3` (`ESC o`), `SS2` (`ESC N`) and `SS3` (`ESC O`), which are what make a
     `G2` or `G3` designation printable at all. A single shift is consumed by the next printed
     character and by nothing else, so an intervening escape sequence does not eat it.
@@ -129,6 +140,9 @@ carry no API change at all. Such a release says so below rather than being omitt
     form. There is no `OSC 117` / `119` reset; `RIS` clears them.
   - `DA3` (`CSI = c`) answers `DCS ! | 00000000 ST`, xterm's DECRPTUI reply for a terminal with no
     manufacturing site and no serial number. Only `Ps == 0` answers, as for `DA1` and `DA2`.
+- `FeedStats::dropped_cluster_carries`: grapheme clusters that grew past the cross-chunk carry
+  limit under `? 2027`, so a continuation arriving in a later `feed` starts a cluster of its own.
+  Zero for every well-formed stream.
 
 ### Changed
 
@@ -174,6 +188,16 @@ carry no API change at all. Such a release says so below rather than being omitt
 - **Reply contract.** `DECRQM` on `? 2027` answered `NotSupported` and now answers the mode's real
   state, because the mode has a reader. `? 5`, `? 9` and `? 1015` answered `NotSupported` as
   unrecognised numbers and now answer their real state too.
+- **Behaviour.** `DECSC` / `DECRC` (and `CSI s` / `CSI u`, and `? 1048`) now save and restore the
+  set invoked into GL and any pending single shift, as well as the `G0`-`G3` designations. VT510's
+  `DECSC` saves "character sets currently in GL and GR" and "any single shift 2 or 3 sent", and
+  xterm's `CursorSave` stores `curgl`, `curgr` and `gsets[]`; the engine used to save neither.
+- **Behaviour, and a correction to this file.** An earlier line here said the mouse encoders
+  "return an empty `Vec` for an event the mode does not report". That was true of `? 9`'s
+  suppressed event kinds and **false** with no protocol on at all, where a press still encoded the
+  legacy report. It is true now: `ModeSnapshot::mouse == None` encodes nothing, for every event.
+  An embedder that called an encoder without checking its own modes used to send mouse reports to
+  a program that never asked for them.
 - With no `product_name` set, `XTVERSION` now answers `oneterm-vt(<version>)` instead of naming
   the application this engine was extracted from.
 - Every public item is documented; `#![warn(missing_docs)]` keeps it that way.

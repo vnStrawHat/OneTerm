@@ -75,8 +75,11 @@ Each item is accepted only with a test that feeds the bytes and asserts the obse
   (asserted by comparing every cell before and after). `CSI ? 5 l` clears it. `DECRQM` on `? 5`
   reports the right state.
 - [x] **4.** `ESC * B` then `ESC n` prints from `G2`; `ESC + 0` then `ESC O` prints exactly one
-  line-drawing character and the next character comes from the locking set. `DECSC` / `DECRC` do not
-  save the locking set (existing reference behaviour, asserted as a regression).
+  line-drawing character and the next character comes from the locking set. **Corrected by the
+  verification**: this line asserted that `DECSC` / `DECRC` do *not* save the locking set, "existing
+  reference behaviour". That is alacritty's behaviour and not DEC's or xterm's, and the pending
+  single shift this packet added was a **new** deviation of the same kind. Both are now saved and
+  restored, as correction C12.
 - [x] **5.** `OSC 1;icon ST` emits exactly one `VtEvent::IconName("icon")` and does **not** change
   the title. `OSC 0;both ST` still sets both title and icon name, as xterm does. **Landed in
   `US-0098`**, not here: the OSC routing table shipped with `1` in `OscRoutes::BUILTIN` and an arm
@@ -85,14 +88,19 @@ Each item is accepted only with a test that feeds the bytes and asserts the obse
 - [x] **6.** With `? 2027` set, feeding a family emoji ZWJ sequence advances the cursor by the
   cluster width, not by the sum of scalar widths; with it clear, today's behaviour is unchanged.
   `width::cluster_width` gains its first caller and the "no caller yet by design" comment in
-  `crates/vt/src/lib.rs` is deleted.
+  `crates/vt/src/lib.rs` is deleted. **Extended by the verification**: the same has to hold when a
+  `feed` boundary falls inside the cluster, which `cell-and-style.md` had asked for as "a
+  cross-chunk pending-cluster buffer" and the first pass did not build. Every interior split point
+  of a ZWJ family, a skin-tone pair, a keycap and a flag now measures what the unsplit sequence
+  measures.
 - [x] **7.** `OSC 17;rgb:ff/00/00 ST` sets the selection background; `OSC 17;? ST` emits a
   `VtEvent::ColorQuery` with the matching `ColorKey`, terminated the way the question was. `OSC 19`
   likewise for the foreground.
 - [x] **8.** `CSI = c` replies `DCS ! | 00000000 ST` (or the chosen unit ID), and `CSI = 1 c` is
   unhandled and counted. `CSI c` (DA1) and `CSI > c` (DA2) reply exactly as before (regression).
-- [x] The 46 frozen parity corpus recordings replay byte-identically. **None** of these eight
-  sequences appears in the corpus, so any diff means an item changed behaviour it should not have.
+- [x] The 46 frozen parity corpus recordings replay byte-identically. Seven of the eight sequences
+  are absent from the corpus, so any diff means an item changed behaviour it should not have;
+  `CSI ? 5` is **not** absent, and what that does and does not prove is in Evidence.
 - [x] `cargo test --workspace` and `cargo test -p oneterm-vt --features vt-paranoid` green.
 - [ ] An `esctest` run on Linux is attached to Evidence as a pass/fail count per test group, with the
   count **before** this packet and after. No threshold is enforced. **Not met, and not by the
@@ -100,8 +108,9 @@ Each item is accepted only with a test that feeds the bytes and asserts the obse
   not implement, so every rectangle assertion would fail on a timeout and both counts would be
   approximately zero. Full reasoning, and what it would take, in
   [`evidence/US-0102-esctest.md`](evidence/US-0102-esctest.md).
-- [x] `docs/osc-sequences-checklist.md` lists OSC 1, 17 and 19 with their new status and the file
-  that implements them.
+- [x] `docs/osc-sequences-checklist.md` lists OSC 17 and 19 with their new status and the file
+  that implements them. **Corrected**: this line also said OSC 1, and this packet did not touch
+  that row — `US-0098` landed OSC 1 and wrote the row, which already names the typed event.
 
 ## Documentation
 
@@ -243,8 +252,20 @@ program that asks does anything with the digits beyond checking that an answer a
 `cargo test -p oneterm-tools --test corpus_check` green: both
 `the_engine_matches_the_frozen_oneterm_expectations` and
 `the_engine_matches_the_frozen_alacritty_expectations` pass, so all 46 recordings replay
-byte-identically. None of the eight sequences appears in the corpus, which is what makes that a
-real signal rather than a tautology.
+byte-identically.
+
+**Corrected by the verification**: this section used to say that none of the eight sequences
+appears in the corpus. Seven do not — `? 9`, `? 1015`, `? 2027`, the four shifts, `OSC 17`,
+`OSC 19` and `CSI = c` — but `CSI ? 5 h` / `l` (item 3, DECSCNM) appears **nine times across six
+recordings**: `vttest_origin_mode_1`, `vttest_origin_mode_2`, `vttest_scroll`,
+`vttest_cursor_movement_1`, `vttest_insert` and `vttest_tab_clear_set`. The `.expect` format is
+grid-only ("the grid, cell-exact"), so it records no `ModeSnapshot` and no `FeedStats`; before this
+packet `? 5` was an unrecognised private mode and after it sets a flag, and the corpus could not
+have seen that change in either direction. For item 3 the corpus is therefore a **no-cell-changed**
+signal, and a strong one — six recordings set and clear the mode while the frozen grids stay
+byte-identical. What pins the flag itself is
+`terminal::tests::decscnm_is_a_screen_flag_and_touches_no_cell` and the renderer's
+`decscnm_swaps_the_two_defaults_and_nothing_else`.
 
 ### Print bench
 
@@ -293,9 +314,74 @@ rectangle assertion and report approximately zero both before and after.
   them. They are not in this packet's scope and no program was found to need them.
 - `DECRQSS` and `XTGETTCAP` are still unanswered (from `BUG-0058`); OSC 777, OSC 1337, the Kitty
   graphics protocol and the Kitty keyboard encoder are unimplemented; `esctest` is not in CI.
+- **`REP` and `? 2027` disagree about "the preceding character".** Trap 43 says `preceding_char` is
+  the raw scalar; under the mode the print path sets it to the **last scalar of the cluster**, so
+  `CSI b` after a ZWJ family repeats the trailing emoji rather than the cluster, and `REP` itself
+  replays through the per-scalar `input()` even while the mode is set. Neither answer is obviously
+  right and no reference settles it, so today's is recorded rather than chosen;
+  `verify_us0102::v6_rep_after_a_cluster` pins it without asserting a reference.
+- **`VS16` still widens any base.** `cluster_width` now requires a base before a presentation
+  selector decides anything, which is what the stray-selector defect needed, but the standard
+  widens only a base that carries the Emoji property. Telling those apart needs a property table
+  this crate does not carry and would be a new dependency; the case (`a` followed by `VS16`) does
+  not occur in well-formed output. Recorded in the function's own rustdoc.
 - **E2E not done.** The manual Windows walk in the Verification Plan (`htop` under `? 9` and
   `? 1015`, a `DECSCNM` program, a `G2` line-drawing TUI, an emoji file under `? 2027`) was not
-  performed; every claim above rests on byte-feed tests and the corpus.
+  performed; every claim above rests on byte-feed tests and the corpus. `? 5` now has a renderer
+  test as well, which is the half the walk would most likely have caught.
+
+## Verification notes closed
+
+Independent verification: [`evidence/US-0102-verify.md`](evidence/US-0102-verify.md),
+PASS-WITH-NOTES, eleven findings. What happened to each:
+
+| # | Finding | Outcome |
+| --- | --- | --- |
+| F1 | HIGH — a cluster split across two `feed` calls was miscounted; `cell-and-style.md` had asked for a cross-chunk buffer and this packet deleted the sentence | **Fixed.** `State::cluster_carry`, the design sentence restored and R-56 marked truthfully |
+| F2 | The encoders returned a full report with no protocol on, against their own published contract | **Fixed** in the encoder, which is where the knowledge is; the `US-0099` equivalence suite pins the one case it changes |
+| F3 | `cell-and-style.md` was half-corrected and contradicted `pty.md` | **Fixed**: both statements corrected, and the mode table's milder form with them |
+| F4 | `DECSC` / `DECRC` saved neither the locking set nor the pending single shift, against VT510 and xterm | **Implemented** as correction C12, registered in the corrections table |
+| F5 | "None of these eight sequences appears in the corpus" was false for `? 5` | **Fixed**: nine occurrences in six recordings named, with what the grid-only `.expect` format can and cannot prove |
+| F6 | `ModeSnapshot::reverse_video` had no reader, while three documents said the embedder swaps the defaults | **Implemented** in `terminal-view`'s `resolve_style`, with a test at that layer |
+| F7 | No `## Harness Row` section | **Added** below |
+| F8 | The checklist acceptance box claimed an OSC 1 row this packet never touched | **Unticked and explained** |
+| F9 | `? 9` outranking `? 1006` was undocumented | **Documented** in `Mode::MouseX10`'s rustdoc, with the reason: X10 has no SGR form |
+| F10 | `REP` and `? 2027` disagree about the preceding character | **Recorded** as a carried gap above |
+| F11 | A bare `U+FE0F` took two columns under `? 2027` | **Fixed**: a presentation selector needs a base; the residual Emoji-property limitation is a carried gap |
+
+The verifier's 57 tests are adopted as `crates/vt/tests/verify_us0102.rs`; the five that asserted
+the defects now assert the fixes and say so in their doc comments. The probe file
+(`verify_us0102_probe.rs`) is **not** adopted: it is scratch diagnostics whose output is already in
+the verification document's tables, and every behaviour it probed is covered by a test that
+asserts.
+
+## Harness Row
+
+```sql
+INSERT INTO story (
+  id, title, created_at, risk_lane, contract_doc, packet_doc, status,
+  unit_proof, integration_proof, e2e_proof, platform_proof,
+  evidence, verify_command, last_verified_at, last_verified_result, notes, intake_id
+) VALUES (
+  'US-0102',
+  'close the known conformance gaps, and get an esctest report',
+  '2026-09-15T00:00:00',
+  'normal',
+  'docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md',
+  'docs/spec-intakes/IN-0038-embeddable-vt-core/US-0102-conformance-gaps.md',
+  'implemented',
+  1, 1, 0, 1,
+  '...see Evidence...',
+  'pwsh scripts/ci-local.ps1 -Full',
+  '...set on the verified run...',
+  'pass',
+  '...see Gaps carried forward...',
+  43
+);
+```
+
+`e2e_proof` is `0` and stays `0`: the manual Windows walk was not performed. `intake_id = 43` is
+`IN-0038`.
 
 ## Handoff
 

@@ -198,16 +198,24 @@ made early, and it is, above. What was deferred here, and what has since landed:
   `US-0102` the mode is live — while set, `Dispatch::print_str` segments its run with
   `unicode-segmentation` and prints each cluster through `Screen::print_with_width` at
   `cluster_width`'s answer — and `DECRQM` reports its real state.
-- `cluster_width(&[char]) -> u8` is implemented and unit-tested now, so the later packet is a
-  print-path change, not a design change.
-- `oneterm-pty` spawns with `PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH`, matching the engine
-  unconditionally. The column-drift failure mode that would have followed from a mid-session mode
-  change cannot occur, because there is no mode change ([`pty.md`](pty.md)).
+- `cluster_width(&[char]) -> u8` was implemented and unit-tested ahead of the mode, which is what
+  made landing it a print-path change rather than a design change.
+- The **cross-chunk pending-cluster buffer** landed with the mode, as `State::cluster_carry`: a pty
+  read can end inside a cluster, and without it the tail measured as a cluster of its own. Any
+  dispatch that is not a print breaks the carry, a cluster past 32 scalars is not carried at all,
+  and the drop is counted in `FeedStats::dropped_cluster_carries`.
+- `oneterm-pty` spawns with `PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH`. **There is now a mode change, so
+  the column-drift failure mode is real and is a carried gap**: a program that sets `? 2027` on a
+  Windows local shell gets the engine measuring clusters while conhost measures scalars. The engine
+  cannot refuse, because it compiles with no transport at all and cannot see the spawn flag; the
+  gap is recorded where the flag is chosen ([`pty.md`](pty.md)).
 
-Width today is therefore per scalar: `UnicodeWidthChar::width(c)`; `None` (control, unassigned)
-means the character is dropped; width 0 attaches to the previous cell's grapheme. A ZWJ family
-emoji lands as base plus a ZWJ tail and the next emoji starts a new cell — visibly wrong, and
-exactly what the engine does today.
+Width is therefore per scalar **with the mode reset**, which is the power-on state and what the
+parity recordings pin: `UnicodeWidthChar::width(c)`; `None` (control, unassigned) means the
+character is dropped; width 0 attaches to the previous cell's grapheme. A ZWJ family emoji lands as
+base plus a ZWJ tail and the next emoji starts a new cell — visibly wrong, and exactly what every
+other terminal does without the mode. With `? 2027` set the print path segments on grapheme
+clusters instead and the family lands in one cell.
 
 ### Zero-width characters
 
