@@ -1,10 +1,15 @@
 //! Encode mouse events → CSI escape sequences (X10 / X11 / 1005 UTF-8 / SGR-1006).
 //!
 //! Mouse-event encoding with modifier support. `ModeSnapshot::mouse` decides
-//! whether the caller sends at all (`? 1000` / `? 1002` / `? 1003`); this module
-//! reads only the **encoding** half of it (`? 1005` / `? 1006`).
+//! whether the caller sends at all (`? 9` / `? 1000` / `? 1002` / `? 1003`);
+//! this module reads the **encoding** half of it (`? 1005` / `? 1006` /
+//! `? 1015`), and the reporting half only for `? 9`, which is the one mode that
+//! suppresses whole events rather than changing how they look.
+//!
+//! An encoder returns an **empty** `Vec` for an event the current mode does not
+//! report, so the caller writes nothing.
 
-use crate::snapshot::{ModeSnapshot, MouseEncoding};
+use crate::snapshot::{ModeSnapshot, MouseEncoding, MouseReporting};
 
 /// Mouse button for terminal encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +90,20 @@ fn encode(
     // row/col are 0-indexed from the caller → terminal is 1-indexed.
     let row = row.saturating_add(1);
     let col = col.saturating_add(1);
+    // `? 9` is the X10 protocol, which predates both the modifier bits and the
+    // release report: a button press is sent bare, in the legacy encoding, and
+    // nothing else is sent at all. A release arrives with the release
+    // terminator; motion and wheel arrive with the motion bit (32) already in
+    // the code, which is what separates them from the three press codes.
+    if modes.mouse.map(|mouse| mouse.reporting) == Some(MouseReporting::X10) {
+        if terminator == SgrTerminator::Release || x11_code >= 32 {
+            return Vec::new();
+        }
+        let mut bytes = vec![0x1b, b'[', b'M', x11_code + 32];
+        push_x11_coordinate(&mut bytes, col, false);
+        push_x11_coordinate(&mut bytes, row, false);
+        return bytes;
+    }
     let mod_mask = mods.mask();
     let encoding = modes.mouse.map(|mouse| mouse.encoding).unwrap_or_default();
     if encoding == MouseEncoding::Sgr {
@@ -93,6 +112,15 @@ fn encode(
             SgrTerminator::Press => 'M',
         };
         return format!("[<{};{};{}{}", sgr_code + mod_mask, col, row, action).into_bytes();
+    }
+
+    // `? 1015`: the same values as the legacy encoding, written as decimal
+    // parameters instead of raw bytes, which is what lifts the 223-column
+    // ceiling. It changes the transport and not the semantics, so a release is
+    // still the fixed button 3 and no byte can exceed 127.
+    if encoding == MouseEncoding::Urxvt {
+        let button = u16::from(x11_code) + 32 + u16::from(mod_mask);
+        return format!("\x1b[{button};{col};{row}M").into_bytes();
     }
 
     // X10/X11: `CSI M` followed by button+32, col+32, row+32. The legacy

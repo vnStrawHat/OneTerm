@@ -33,12 +33,19 @@ pub enum Mode {
     Origin,
     /// `? 7`, DECAWM.
     LineWrap,
+    /// `? 5`, DECSCNM. Reverse video: a screen-level flag, never a cell
+    /// attribute, so the embedder swaps the two defaults when it resolves the
+    /// palette.
+    ReverseVideo,
     /// `? 12`.
     CursorBlink,
     /// `? 25`, DECTCEM.
     ShowCursor,
     /// `? 45`.
     ReverseWrap,
+    /// `? 9`, X10 compatibility mouse. Button presses only, with no
+    /// modifiers and no release or motion report.
+    MouseX10,
     /// `? 1000`.
     MouseClick,
     /// `? 1002`.
@@ -51,6 +58,8 @@ pub enum Mode {
     Utf8Mouse,
     /// `? 1006`.
     SgrMouse,
+    /// `? 1015`, the urxvt encoding.
+    UrxvtMouse,
     /// `? 1007`.
     AlternateScroll,
     /// `? 1042`.
@@ -104,6 +113,9 @@ impl Mode {
             Mode::Win32Input => 18,
             Mode::Insert => 19,
             Mode::LineFeedNewLine => 20,
+            Mode::ReverseVideo => 21,
+            Mode::MouseX10 => 22,
+            Mode::UrxvtMouse => 23,
             // These five own no bit. The alternate screen's state is the grid's
             // (`TerminalGrid::alt_active`), `? 1048` is a cursor operation with
             // no state of its own, `DECCOLM` acts and stores nothing (trap 40),
@@ -125,12 +137,14 @@ impl Mode {
         Some(match self {
             Mode::AppCursor => 1,
             Mode::DecCoLm => 3,
+            Mode::ReverseVideo => 5,
             Mode::Origin => 6,
             Mode::LineWrap => 7,
             Mode::CursorBlink => 12,
             Mode::ShowCursor => 25,
             Mode::ReverseWrap => 45,
             Mode::AltScreen47 => 47,
+            Mode::MouseX10 => 9,
             Mode::MouseClick => 1000,
             Mode::MouseDrag => 1002,
             Mode::MouseMotion => 1003,
@@ -138,6 +152,7 @@ impl Mode {
             Mode::Utf8Mouse => 1005,
             Mode::SgrMouse => 1006,
             Mode::AlternateScroll => 1007,
+            Mode::UrxvtMouse => 1015,
             Mode::UrgencyHints => 1042,
             Mode::AltScreen1047 => 1047,
             Mode::SaveCursor1048 => 1048,
@@ -155,11 +170,13 @@ impl Mode {
         Some(match code {
             1 => Mode::AppCursor,
             3 => Mode::DecCoLm,
+            5 => Mode::ReverseVideo,
             6 => Mode::Origin,
             7 => Mode::LineWrap,
             12 => Mode::CursorBlink,
             25 => Mode::ShowCursor,
             45 => Mode::ReverseWrap,
+            9 => Mode::MouseX10,
             47 => Mode::AltScreen47,
             1000 => Mode::MouseClick,
             1002 => Mode::MouseDrag,
@@ -168,6 +185,7 @@ impl Mode {
             1005 => Mode::Utf8Mouse,
             1006 => Mode::SgrMouse,
             1007 => Mode::AlternateScroll,
+            1015 => Mode::UrxvtMouse,
             1042 => Mode::UrgencyHints,
             1047 => Mode::AltScreen1047,
             1048 => Mode::SaveCursor1048,
@@ -223,21 +241,24 @@ impl Mode {
     pub const ANSI: [(Mode, u16); 2] = [(Mode::Insert, 4), (Mode::LineFeedNewLine, 20)];
 
     /// Every mode with a private number, for the DECRQM table test.
-    pub const PRIVATE: [Mode; 23] = [
+    pub const PRIVATE: [Mode; 26] = [
         Mode::AppCursor,
         Mode::DecCoLm,
+        Mode::ReverseVideo,
         Mode::Origin,
         Mode::LineWrap,
         Mode::CursorBlink,
         Mode::ShowCursor,
         Mode::ReverseWrap,
         Mode::AltScreen47,
+        Mode::MouseX10,
         Mode::MouseClick,
         Mode::MouseDrag,
         Mode::MouseMotion,
         Mode::FocusInOut,
         Mode::Utf8Mouse,
         Mode::SgrMouse,
+        Mode::UrxvtMouse,
         Mode::AlternateScroll,
         Mode::UrgencyHints,
         Mode::AltScreen1047,
@@ -305,12 +326,22 @@ impl Modes {
         }
     }
 
-    /// Setting any mouse reporting mode clears the other two first; unsetting
-    /// clears only that one. The reference's asymmetry, reproduced.
+    /// Setting any mouse reporting mode clears the other three first;
+    /// unsetting clears only that one. The reference's asymmetry, reproduced.
     pub(crate) fn set_mouse_reporting(&mut self, mode: Mode) {
+        self.set(Mode::MouseX10, false);
         self.set(Mode::MouseClick, false);
         self.set(Mode::MouseDrag, false);
         self.set(Mode::MouseMotion, false);
+        self.set(mode, true);
+    }
+
+    /// The same asymmetry for the three encodings of one report: `? 1005`,
+    /// `? 1006` and `? 1015` cannot be on together.
+    pub(crate) fn set_mouse_encoding(&mut self, mode: Mode) {
+        self.set(Mode::Utf8Mouse, false);
+        self.set(Mode::SgrMouse, false);
+        self.set(Mode::UrxvtMouse, false);
         self.set(mode, true);
     }
 
@@ -322,11 +353,15 @@ impl Modes {
             MouseReporting::ButtonEvent
         } else if self.contains(Mode::MouseClick) {
             MouseReporting::Normal
+        } else if self.contains(Mode::MouseX10) {
+            MouseReporting::X10
         } else {
             return None;
         };
         let encoding = if self.contains(Mode::SgrMouse) {
             MouseEncoding::Sgr
+        } else if self.contains(Mode::UrxvtMouse) {
+            MouseEncoding::Urxvt
         } else if self.contains(Mode::Utf8Mouse) {
             MouseEncoding::Utf8
         } else {

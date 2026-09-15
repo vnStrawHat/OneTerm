@@ -27,6 +27,110 @@ fn utf8_mode() -> ModeSnapshot {
     reporting(MouseEncoding::Utf8)
 }
 
+fn urxvt_mode() -> ModeSnapshot {
+    reporting(MouseEncoding::Urxvt)
+}
+
+/// `? 9`: X10 reporting, in the legacy encoding it was born with.
+fn x10_mode() -> ModeSnapshot {
+    ModeSnapshot {
+        mouse: Some(MouseProtocol {
+            reporting: MouseReporting::X10,
+            encoding: MouseEncoding::Default,
+        }),
+        ..ModeSnapshot::default()
+    }
+}
+
+#[test]
+fn x10_reports_a_press_and_nothing_else() {
+    let none = MouseModifiers::default();
+    // One report, the legacy three bytes: button 0+32, col 1+32, row 1+32.
+    assert_eq!(
+        encode_mouse_press(0, 0, TerminalMouseButton::Left, x10_mode(), none),
+        b"\x1b[M\x20\x21\x21"
+    );
+
+    // X10 predates the release report, the motion report and the wheel: each
+    // encodes to nothing at all, so the caller writes nothing.
+    assert!(encode_mouse_release(0, 0, TerminalMouseButton::Left, x10_mode(), none).is_empty());
+    assert!(encode_mouse_move(0, 0, None, x10_mode(), none).is_empty());
+    assert!(encode_mouse_move(0, 0, Some(TerminalMouseButton::Left), x10_mode(), none).is_empty());
+    assert!(encode_wheel_event(0, 0, 1.0, x10_mode(), none).is_empty());
+
+    // It predates the modifier bits too, so a control-click is a plain click.
+    let ctrl = MouseModifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        encode_mouse_press(0, 0, TerminalMouseButton::Left, x10_mode(), ctrl),
+        b"\x1b[M\x20\x21\x21"
+    );
+
+    // And with no mode at all nothing is suppressed: the default snapshot is
+    // still the X11 encoding.
+    assert_eq!(
+        encode_mouse_press(
+            0,
+            0,
+            TerminalMouseButton::Left,
+            ModeSnapshot::default(),
+            none
+        ),
+        b"\x1b[M\x20\x21\x21"
+    );
+}
+
+#[test]
+fn urxvt_is_decimal_and_has_no_column_ceiling() {
+    let none = MouseModifiers::default();
+    // A press past the 223-column ceiling the legacy byte form imposes. The
+    // button is the legacy value, 0 + 32, written as a decimal parameter.
+    let report = encode_mouse_press(299, 299, TerminalMouseButton::Left, urxvt_mode(), none);
+    assert_eq!(report, b"\x1b[32;300;300M");
+    assert!(
+        report.iter().all(|byte| *byte < 0x80),
+        "1015 exists so that a large coordinate needs no byte above 127"
+    );
+
+    // Release is still the fixed button 3: 1015 changes the transport, not the
+    // semantics, so there is no `m` terminator here.
+    assert_eq!(
+        encode_mouse_release(2, 3, TerminalMouseButton::Left, urxvt_mode(), none),
+        b"\x1b[35;4;3M"
+    );
+    // Modifiers ride in the button value, as they do in the legacy form.
+    assert_eq!(
+        encode_mouse_press(
+            0,
+            0,
+            TerminalMouseButton::Right,
+            urxvt_mode(),
+            MouseModifiers {
+                shift: true,
+                ..Default::default()
+            }
+        ),
+        b"\x1b[38;1;1M"
+    );
+    // Motion keeps the 32 motion bit on top of the 32 offset.
+    assert_eq!(
+        encode_mouse_move(2, 3, None, urxvt_mode(), none),
+        b"\x1b[67;4;3M"
+    );
+
+    // Regression: the same press under `? 1005` and `? 1006` is untouched.
+    assert_eq!(
+        encode_mouse_press(299, 299, TerminalMouseButton::Left, sgr_mode(), none),
+        b"\x1b[<0;300;300M"
+    );
+    assert_eq!(
+        encode_mouse_press(299, 299, TerminalMouseButton::Left, utf8_mode(), none),
+        "\x1b[M\u{20}\u{14c}\u{14c}".as_bytes()
+    );
+}
+
 #[test]
 fn sgr_press_left() {
     let s = encode_mouse_press(

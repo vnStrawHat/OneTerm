@@ -9,9 +9,11 @@
 // section "Mode snapshot" (R-17). The mode table itself lives in
 // `terminal::mode`; this is only what leaves it.
 
-/// `? 1000` / `? 1002` / `? 1003`: how much motion the host asked for.
+/// `? 9` / `? 1000` / `? 1002` / `? 1003`: how much motion the host asked for.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum MouseReporting {
+    /// `? 9`: button press only, and never a modifier.
+    X10,
     /// `? 1000`: press and release.
     Normal,
     /// `? 1002`: press, release and motion while a button is down.
@@ -20,7 +22,7 @@ pub enum MouseReporting {
     AnyEvent,
 }
 
-/// `? 1005` / `? 1006`: how a report is encoded.
+/// `? 1005` / `? 1006` / `? 1015`: how a report is encoded.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum MouseEncoding {
     /// X10 coordinates, the power-on encoding.
@@ -30,6 +32,9 @@ pub enum MouseEncoding {
     Utf8,
     /// `? 1006`.
     Sgr,
+    /// `? 1015`: the legacy values as decimal parameters, so a coordinate past
+    /// 223 survives.
+    Urxvt,
 }
 
 /// One composite instead of five booleans the embedder has to recombine.
@@ -58,6 +63,11 @@ pub struct ModeSnapshot {
     pub insert: bool,
     /// `? 1007`.
     pub alternate_scroll: bool,
+    /// `? 5`, DECSCNM: the whole screen is drawn with the default foreground
+    /// and background swapped. A screen-level flag, never a cell attribute, so
+    /// the embedder swaps the two defaults when it resolves the palette and no
+    /// cell's own style changes.
+    pub reverse_video: bool,
     /// `None` when the host asked for no mouse reporting at all.
     pub mouse: Option<MouseProtocol>,
 }
@@ -74,6 +84,7 @@ impl Default for ModeSnapshot {
             show_cursor: true,
             insert: false,
             alternate_scroll: true,
+            reverse_video: false,
             mouse: None,
         }
     }

@@ -304,10 +304,11 @@ impl FakeSessionProbe {
         self.state.engine.lock().unwrap().feed(bytes);
     }
 
-    /// Turn mouse reporting on (`? 1000` / `? 1002` / `? 1003`) or off.
+    /// Turn mouse reporting on (`? 9` / `? 1000` / `? 1002` / `? 1003`) or off.
     pub fn set_mouse_reporting(&self, reporting: Option<MouseReporting>) {
         let bytes: &[u8] = match reporting {
-            None => b"\x1b[?1000l\x1b[?1002l\x1b[?1003l",
+            None => b"\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l",
+            Some(MouseReporting::X10) => b"\x1b[?9h",
             Some(MouseReporting::Normal) => b"\x1b[?1000h",
             Some(MouseReporting::ButtonEvent) => b"\x1b[?1002h",
             Some(MouseReporting::AnyEvent) => b"\x1b[?1003h",

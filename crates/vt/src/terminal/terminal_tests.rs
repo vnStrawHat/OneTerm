@@ -639,6 +639,111 @@ fn deccolm_does_not_change_the_width() {
 }
 
 #[test]
+fn mouse_modes_9_and_1015_reach_the_snapshot() {
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b[?9h");
+    let modes = session.term.mode_snapshot();
+    assert_eq!(
+        modes.mouse.map(|mouse| mouse.reporting),
+        Some(MouseReporting::X10)
+    );
+    assert_eq!(
+        modes.mouse.map(|mouse| mouse.encoding),
+        Some(MouseEncoding::Default)
+    );
+    session.feed(b"\x1b[?9$p");
+    assert_eq!(session.replies(), "\x1b[?9;1$y");
+
+    // The four reporting modes are one choice: `? 1000` replaces `? 9`.
+    session.feed(b"\x1b[?1000h");
+    assert_eq!(
+        session
+            .term
+            .mode_snapshot()
+            .mouse
+            .map(|mouse| mouse.reporting),
+        Some(MouseReporting::Normal)
+    );
+    session.feed(b"\x1b[?9$p");
+    assert_eq!(session.replies(), "\x1b[?9;2$y");
+
+    session.feed(b"\x1b[?1000l");
+    assert_eq!(session.term.mode_snapshot().mouse, None);
+
+    // `? 1015` is an encoding, and the three encodings replace each other.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b[?1000h\x1b[?1015h");
+    assert_eq!(
+        session
+            .term
+            .mode_snapshot()
+            .mouse
+            .map(|mouse| mouse.encoding),
+        Some(MouseEncoding::Urxvt)
+    );
+    session.feed(b"\x1b[?1015$p");
+    assert_eq!(session.replies(), "\x1b[?1015;1$y");
+
+    session.feed(b"\x1b[?1006h");
+    assert_eq!(
+        session
+            .term
+            .mode_snapshot()
+            .mouse
+            .map(|mouse| mouse.encoding),
+        Some(MouseEncoding::Sgr)
+    );
+    session.feed(b"\x1b[?1015$p");
+    assert_eq!(session.replies(), "\x1b[?1015;2$y");
+
+    session.feed(b"\x1b[?1005h");
+    assert_eq!(
+        session
+            .term
+            .mode_snapshot()
+            .mouse
+            .map(|mouse| mouse.encoding),
+        Some(MouseEncoding::Utf8)
+    );
+}
+
+#[test]
+fn decscnm_is_a_screen_flag_and_touches_no_cell() {
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b[31mred\x1b[0m plain");
+    let before: Vec<crate::cell::Cell> = (0..10).map(|col| session.cell(0, col)).collect();
+    let styles: Vec<crate::cell::Style> = (0..10).map(|col| session.style_at(0, col)).collect();
+    assert!(!session.term.mode_snapshot().reverse_video);
+
+    let stats = session.feed(b"\x1b[?5h");
+    assert_eq!(stats.unhandled_sequences, 0);
+    assert!(session.term.mode_snapshot().reverse_video);
+    // Not one cell moved: reverse video is the embedder's palette swap, and a
+    // per-cell inversion would survive `? 5 l` and corrupt a copied selection.
+    for col in 0..10 {
+        assert_eq!(session.cell(0, col), before[col as usize], "cell {col}");
+        assert_eq!(
+            session.style_at(0, col),
+            styles[col as usize],
+            "style {col}"
+        );
+    }
+
+    session.feed(b"\x1b[?5$p");
+    assert_eq!(session.replies(), "\x1b[?5;1$y");
+
+    session.feed(b"\x1b[?5l");
+    assert!(!session.term.mode_snapshot().reverse_video);
+    session.feed(b"\x1b[?5$p");
+    assert_eq!(session.replies(), "\x1b[?5;2$y");
+
+    // `CSI ? 5 W` is DECST8C and shares only the number: it must not toggle
+    // the mode.
+    session.feed(b"\x1b[?5h\x1b[?5W");
+    assert!(session.term.mode_snapshot().reverse_video);
+}
+
+#[test]
 fn win32_input_mode_is_accepted_silently() {
     // R-36: conhost sends this unprompted at session start and re-injects it
     // after any DECRST, so it must never be counted as unhandled.

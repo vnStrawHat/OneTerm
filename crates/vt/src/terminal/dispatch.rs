@@ -291,6 +291,16 @@ impl Handler<'_> {
                 }
             }
             Mode::DecCoLm => self.deccolm(),
+            // DECSCNM swaps the two defaults for every painted cell and
+            // changes no cell, so the repaint has to come from the mode: the
+            // generation bump is the only thing that tells a renderer its
+            // cached rows are stale.
+            Mode::ReverseVideo => {
+                if self.state.modes.contains(Mode::ReverseVideo) != on {
+                    self.state.modes.set(Mode::ReverseVideo, on);
+                    self.state.generation = self.state.generation.wrapping_add(1);
+                }
+            }
             Mode::CursorBlink => {
                 let default = self.state.config.default_cursor_style;
                 self.state.cursor_style.get_or_insert(default).blinking = on;
@@ -304,24 +314,22 @@ impl Handler<'_> {
                     self.state.sync.end();
                 }
             }
-            Mode::MouseClick | Mode::MouseDrag | Mode::MouseMotion => {
+            Mode::MouseX10 | Mode::MouseClick | Mode::MouseDrag | Mode::MouseMotion => {
                 if on {
                     self.state.modes.set_mouse_reporting(mode);
                 } else {
                     self.state.modes.set(mode, false);
                 }
             }
-            Mode::SgrMouse => {
+            // `? 1005`, `? 1006` and `? 1015` are three encodings of the same
+            // report, so they carry the same asymmetry: setting one clears the
+            // other two, unsetting clears only itself.
+            Mode::SgrMouse | Mode::Utf8Mouse | Mode::UrxvtMouse => {
                 if on {
-                    self.state.modes.set(Mode::Utf8Mouse, false);
+                    self.state.modes.set_mouse_encoding(mode);
+                } else {
+                    self.state.modes.set(mode, false);
                 }
-                self.state.modes.set(Mode::SgrMouse, on);
-            }
-            Mode::Utf8Mouse => {
-                if on {
-                    self.state.modes.set(Mode::SgrMouse, false);
-                }
-                self.state.modes.set(Mode::Utf8Mouse, on);
             }
             // R-36 and R-56: recognised, inert, and never counted as unhandled.
             // conhost sends `? 9001 h` unprompted at session start and re-injects

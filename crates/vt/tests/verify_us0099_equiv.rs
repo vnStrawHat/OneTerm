@@ -673,10 +673,10 @@ fn mouse_states() -> Vec<Option<MouseProtocol>> {
     v
 }
 
-/// The full snapshot space: 2^7 boolean combinations x 10 mouse states = 1280.
+/// The full snapshot space: 2^8 boolean combinations x 10 mouse states = 2560.
 fn all_snapshots() -> Vec<ModeSnapshot> {
     let mut out = Vec::new();
-    for bits in 0u32..128 {
+    for bits in 0u32..256 {
         for mouse in mouse_states() {
             out.push(ModeSnapshot {
                 app_cursor: bits & 1 != 0,
@@ -686,6 +686,7 @@ fn all_snapshots() -> Vec<ModeSnapshot> {
                 show_cursor: bits & 16 != 0,
                 insert: bits & 32 != 0,
                 alternate_scroll: bits & 64 != 0,
+                reverse_video: bits & 128 != 0,
                 mouse,
             });
         }

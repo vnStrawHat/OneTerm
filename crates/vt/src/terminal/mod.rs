@@ -384,6 +384,7 @@ impl Terminal {
             show_cursor: self.state.modes.contains(Mode::ShowCursor),
             insert: self.state.modes.contains(Mode::Insert),
             alternate_scroll: self.state.modes.contains(Mode::AlternateScroll),
+            reverse_video: self.state.modes.contains(Mode::ReverseVideo),
             mouse: self.state.modes.mouse_reporting(),
         }
     }
