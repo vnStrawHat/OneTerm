@@ -60,13 +60,13 @@ control (`Panel::title_suffix`). The button itself does not change: it stays a p
                             | Command Prompt               |   <- local shells, platform
                             | PowerShell                   |      specific, unchanged.
                             | PowerShell 7                 |      (Bash / Sh / Zsh on unix)
-                            | SSH Sessions ----------------|   <- labelled separator
+                            |------ SSH Sessions ---------|   <- labelled separator
                             | prod-web                     |   <- ungrouped sessions,
                             | staging                      |      store order, title only
-                            | infra - - - - - - - - - - - -|   <- dashed separator, group name
+                            |- - - - - infra - - - - - - -|   <- dashed separator, group name
                             | db-01                        |   <- that group's sessions
                             | db-02                        |
-                            | lab - - - - - - - - - - - - -|   <- next group, store order
+                            |- - - - - - lab - - - - - - -|   <- next group, store order
                             | sandbox                      |
                             |------------------------------|
                             | New SSH Session              |   <- moved to the end
@@ -80,7 +80,7 @@ Empty state — nothing saved in `ssh_session.json` yet:
                             | Command Prompt               |
                             | PowerShell                   |
                             | PowerShell 7                 |
-                            | SSH Sessions ----------------|
+                            |------ SSH Sessions ---------|
                             | No saved sessions            |   <- disabled hint, not clickable
                             |------------------------------|
                             | New SSH Session              |
@@ -107,10 +107,15 @@ Decisions this wireframe fixes:
   sessions sharing a label are indistinguishable here; the owner accepted that, and the
   right dock's tree still shows `user@host:port`. A hand-edited entry with a blank label
   still falls back to `host:port` so no row is ever invisible.
-- **The headings are separators that carry a label.** The kit's `PopupMenu` offers a plain
-  `Separator` and a plain `Label` but nothing that is both, so the heading row is composed
-  from `PopupMenuItem::element(...).disabled(true)`: the label text plus a rule filling the
-  rest of the row, `border_dashed()` for a group heading and solid for "SSH Sessions".
+- **The headings are separators that carry a centred label.** The kit's `PopupMenu` offers
+  a plain `Separator` and a plain `Label` but nothing that is both, so the heading row is
+  composed from `PopupMenuItem::element(...).disabled(true)`: a rule, the label text,
+  another rule, with `border_dashed()` for a group heading and solid for "SSH Sessions".
+- **No scrollbar until the menu needs one.** The kit caps the popup's height only when the
+  menu is `scrollable`, and a scrollable menu always shows a scrollbar under this app's
+  `ScrollbarMode::Always` theme. `scrollable` is therefore set only when the estimated row
+  height exceeds that cap (`min(half the window, 450px)`), so the everyday menu carries no
+  bar while a long saved list still gets the cap and the scrolling.
 - **"New SSH Session" is last**, behind a plain separator, so the saved list sits directly
   under the shells where the owner looks for it.
 - **Section label "SSH Sessions"** matches the panel the owner named, so the two surfaces
