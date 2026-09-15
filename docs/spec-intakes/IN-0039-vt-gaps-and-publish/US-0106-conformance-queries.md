@@ -170,6 +170,28 @@ document an evaluator reads to decide whether to trust the crate.
 Before completion: list the docs changed, and confirm by grep that no file under `crates/vt/`
 still says `DECRQCRA`, `DECRQSS` or `XTGETTCAP` is unimplemented.
 
+**Done.** Docs changed: `crates/vt/docs/guide/11-conformance.md` (the readback gate, the pinned
+checksum variant with its doctest, the `DECRQSS` / `XTGETTCAP` answers, the rewritten gaps table,
+the fourth conformance layer); `crates/vt/docs/guide/12-versioning.md` (clause 6, and why `Config`
+is not marked); `crates/vt/CHANGELOG.md` (clause 6 and the `Added` entries);
+`crates/vt/src/terminal/dispatch.rs` (`dcs_hook`'s header comment, which described the behaviour
+this packet replaced); both API snapshots;
+[`IN-0038/evidence/US-0102-esctest.md`](../IN-0038-embeddable-vt-core/evidence/US-0102-esctest.md)
+(the closing pointer); and inline corrections in this intake's two low-level designs
+([api-surface](low-level-design/api-surface.md), [conformance-queries](low-level-design/conformance-queries.md)).
+
+`docs/osc-sequences-checklist.md` reviewed and **not changed**, as planned: it is about OSC, and
+nothing here is OSC.
+
+The grep is clean -- no file under `crates/vt/` still describes any of the three as unimplemented,
+unanswered or uncountable:
+
+```text
+grep -rniE "(DECRQCRA|DECRQSS|XTGETTCAP)[^.]{0,80}(unimplemented|not implemented|\
+counted unhandled|does not implement|never answered|cannot run)" crates/vt/
+-> no matches
+```
+
 ## Context
 
 - `BUG-0058` already made `dcs_hook` route on (intermediates, final byte), so `DCS $ q` and

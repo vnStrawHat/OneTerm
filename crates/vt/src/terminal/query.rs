@@ -9,7 +9,7 @@
 //! checking the engine against a specification has one place to look.
 //!
 //! Design:
-//! `docs/spec-intakes/IN-0039-vt-gaps-and-publish/low-level-design/conformance-queries.md`.
+//! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0039-vt-gaps-and-publish/low-level-design/conformance-queries.md>.
 
 use crate::cell::{Attrs, Color, NamedColor, Style};
 

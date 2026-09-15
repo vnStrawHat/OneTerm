@@ -1,4 +1,4 @@
-//! `US-0106`: the exact reply bytes for `DECRQCRA`, `DECRQSS` and `XTGETTCAP`.
+//! The exact reply bytes for `DECRQCRA`, `DECRQSS` and `XTGETTCAP`.
 //!
 //! Every test here feeds the request a real program would send and asserts the
 //! answer byte for byte. The reply bytes are a published contract (guide

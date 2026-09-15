@@ -39,10 +39,11 @@ impl Vs {
 /// `DCS $ q m ST` (DECRQSS) and `DCS + q 544e ST` (XTGETTCAP) must not open the
 /// Sixel decoder and must place nothing.
 ///
-/// `US-0106` changed the second half of this test: both are now *answered*, so
-/// the unhandled count is zero where `BUG-0058` pinned one. The routing
-/// property these tests exist for -- an intermediate DCS is never an image --
-/// is unchanged, and the exact reply bytes are pinned in `query_tests.rs`.
+/// The conformance-query packet changed the second half of this test: both are
+/// now *answered*, so the unhandled count is zero where the routing fix pinned
+/// one. The property these tests exist for -- an intermediate DCS is never an
+/// image -- is unchanged, and the exact reply bytes are pinned in
+/// `query_tests.rs`.
 #[test]
 fn verify_intermediate_dcs_q_never_reaches_the_decoder() {
     for bytes in [&b"\x1bP$qm\x1b\\"[..], &b"\x1bP+q544e\x1b\\"[..]] {
@@ -163,10 +164,10 @@ fn verify_intermediate_dcs_after_a_nonempty_unterminated_sixel() {
 /// not panic. The decoder is checked mid-stream, so a buffer that filled and
 /// was later dropped would still be caught.
 ///
-/// `US-0106` gave the intermediate branch a payload buffer, and this test is
-/// what keeps it bounded: 1 MiB is far past `query::QUERY_MAX_BYTES`, so the
-/// request is over-long, answers nothing, and is still counted exactly once --
-/// the same numbers `BUG-0058` asserted, for a different reason.
+/// The intermediate branch later gained a payload buffer, and this test is what
+/// keeps it bounded: 1 MiB is far past `query::QUERY_MAX_BYTES`, so the request
+/// is over-long, answers nothing, and is still counted exactly once -- the same
+/// numbers this test asserted originally, for a different reason.
 #[test]
 fn verify_one_mib_intermediate_payload_buffers_nothing() {
     let mut vs = Vs::new();
