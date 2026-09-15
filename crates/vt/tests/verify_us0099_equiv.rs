@@ -496,8 +496,13 @@ const NEW_NAMED: [NamedKey; 38] = [
 
 /// Every variant of the new enum mapped onto the frozen one. `NamedKey` is
 /// `#[non_exhaustive]`, so from out here the `_` arm is mandatory and the
-/// compiler can no longer catch a new variant; `named_key_variant_sets_are_identical`
-/// holds that line instead, by counting.
+/// compiler cannot catch a new variant -- and neither can anything else in
+/// this file: `NEW_NAMED` is a hand-written array, so a variant missing from
+/// it never reaches the `_` arm and the length assertion just compares two
+/// constants. The guard that does work is
+/// `input::key::tests::every_named_key_is_known_here`, inside the crate, where
+/// `#[non_exhaustive]` does not apply and an exhaustive `match` turns a new
+/// variant into a compile error. That test's doc comment points back here.
 fn to_orig_named(k: NamedKey) -> orig_key::NamedKey {
     use orig_key::NamedKey as O;
     match k {
@@ -539,6 +544,9 @@ fn to_orig_named(k: NamedKey) -> orig_key::NamedKey {
         NamedKey::F22 => O::F22,
         NamedKey::F23 => O::F23,
         NamedKey::F24 => O::F24,
+        // Reachable only if a caller passes a variant NEW_NAMED omits, which
+        // nothing in this file does; the real alarm is the in-crate test named
+        // above. Kept so the arm is not silently wrong if that ever changes.
         other => panic!(
             "{other:?} was added to NamedKey after the move. The frozen oracle \
              predates it and has nothing to compare against: extend NEW_NAMED \
@@ -742,6 +750,8 @@ fn orig_spec(k: &KeySpec) -> orig_key::KeySpec {
 
 #[test]
 fn named_key_variant_sets_are_identical() {
+    // Round-trip only. This does not prove `NEW_NAMED` is complete -- nothing
+    // out here can; see `to_orig_named`.
     assert_eq!(NEW_NAMED.len(), 38);
     for k in NEW_NAMED {
         assert_eq!(from_orig_named(to_orig_named(k)), k);

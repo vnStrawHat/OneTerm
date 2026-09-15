@@ -319,8 +319,9 @@ Seven lines, six leaves, byte-identical to `main`. `key_encode.rs` had zero impo
 
    Cost, as predicted: nothing outside `crates/vt` matched on either type. The only two `_` arms
    the change needed are in the adopted equivalence test, which is an integration test and so an
-   out-of-crate consumer; it used exhaustiveness as its "a variant was added" alarm, and
-   `named_key_variant_sets_are_identical` now carries that by counting instead.
+   out-of-crate consumer; it used exhaustiveness as its "a variant was added" alarm, and that alarm
+   moved in-crate to `every_named_key_is_known_here` (see F10 -- the first attempt to replace it,
+   by counting, did not work).
 5. **The module's public surface carries two `ModeSnapshot` conventions** (F9, informational).
    `encode_key` takes `&ModeSnapshot` last and returns `Option<Vec<u8>>`; the four mouse encoders
    take `ModeSnapshot` by value, fourth, and return `Vec<u8>`. Both are correct per
@@ -331,8 +332,9 @@ Seven lines, six leaves, byte-identical to `main`. `key_encode.rs` had zero impo
 
 ## Verification Notes Closed
 
-Independent verification: **PASS-WITH-NOTES**, report at
-[`evidence/US-0099-verify.md`](evidence/US-0099-verify.md). Nine findings, all addressed.
+Independent verification: **PASS-WITH-NOTES**, then **PASS** on the final re-check at `a9c8fb1`
+with one new low note. Report at [`evidence/US-0099-verify.md`](evidence/US-0099-verify.md). Ten
+findings, all addressed.
 
 | # | Finding | Closed by |
 | --- | --- | --- |
@@ -345,6 +347,21 @@ Independent verification: **PASS-WITH-NOTES**, report at
 | F7 | `crates/vt/README.md` unreviewed and now wrong ("no input handling") | Fixed and added to Owning Docs Reviewed and Reconciliation. |
 | F8 | Risk lane `normal` for a public-surface addition | Corrected to `high_risk` in Classification. |
 | F9 | Two `ModeSnapshot` conventions on one module's surface | Recorded as Gaps 5 for `US-0103`. |
+| F10 | F1's replacement variant guard did not guard anything | New in-crate exhaustive `match`; see below. |
+
+**F10, from the final re-check at `a9c8fb1`.** Closing F1 cost the equivalence test its
+exhaustiveness, and the replacement offered in its place -- "`named_key_variant_sets_are_identical`
+holds that line instead, by counting" -- was wrong. `NEW_NAMED` is a hand-written `[NamedKey; 38]`
+literal, so the length assertion compares two constants that move together, and the `_` arm cannot
+fire for a variant nobody put in the array. The verifier demonstrated it by adding `NamedKey::Menu`
+to the engine: every test still passed. Nothing out-of-crate can hold this line, which is the point
+of `#[non_exhaustive]`.
+
+Fixed where it can be held: `input::key::tests::every_named_key_is_known_here`, inside the crate,
+where `#[non_exhaustive]` does not apply. It lists all 38 variants in an exhaustive `match` with no
+`_` arm, so a new variant stops the build there, and asserts each one has an encoding.
+`verify_us0099_equiv.rs` now says plainly that it cannot catch a new variant and points at that
+test.
 
 The verifier's two test files are adopted as `crates/vt/tests/verify_us0099_equiv.rs` and
 `verify_us0099_terminal.rs`. The one acceptance criterion still open is the manual Windows walk,

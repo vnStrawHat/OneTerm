@@ -493,3 +493,76 @@ Verifier test files (in this worktree only, never committed; parked in the scrat
 
 - `crates/vt/tests/zz_verify_us0099_equiv.rs` -- the 19 200 000-case cross-product
 - `crates/vt/tests/zz_verify_us0099_terminal.rs` -- `Terminal::encode_key` against the live modes
+
+(Both were subsequently adopted into the branch without the `zz_` prefix -- see the re-check below.)
+
+---
+
+## Final re-check at `a9c8fb1`
+
+Re-verified after the fix pass and the rebase onto `main` @ `491dff8` (which carries `US-0100`).
+`git merge-base HEAD main` = `491dff8`; six commits on top, `9de2d6b`..`a9c8fb1`.
+
+**Verdict: PASS-WITH-ONE-NOTE.** Every finding F1-F8 is closed in code or in the record. One *new*
+note, F10, is a side effect of F1's own fix: a test-strength regression, not a behaviour one.
+
+### F1-F8 closed
+
+| # | Closed how |
+| --- | --- |
+| F1 | `#[non_exhaustive]` on `NamedKey` (`crates/vt/src/input/key.rs:30`) and `KeySpec` (`:115`), each with a rustdoc line saying why. `TerminalMouseButton`, `KeyMods` and `MouseModifiers` correctly left exhaustive. |
+| F2 | Reconciliation now cites § 2, § 3, § 10, § 11 and § 12 -- all correct against `grep -n '^## ' docs/terminal-backend.md`. |
+| F3 | Evidence diffstat corrected to 21 files / 1308 insertions / 1078 deletions, with the reason for the earlier figure. |
+| F4 | "+74, of which +62 rustdoc, +4 blank, +8 code", with the full breakdown. |
+| F5 | The rustfmt line join named in Acceptance with its file and line. |
+| F6 | `crates/terminal/src/lib.rs:50-53` now re-exports all ten names, the four `encode_mouse_*` included, and the doc comment says **"for one release"**. |
+| F7 | `crates/vt/README.md:34` now reads "no platform event handling", with a following sentence pointing at `input`. |
+| F8 | Classification corrected to `risk_lane: high_risk`; the harness snippet follows. |
+
+Both verifier test files were adopted under `crates/vt/tests/` without the `zz_` prefix
+(`verify_us0099_equiv.rs`, `verify_us0099_terminal.rs`). Their module docs correctly describe
+`mod orig_key` / `mod orig_mouse` as **frozen copies** of the production half at `0558fa2`, and warn
+against "fixing" them to match the engine. Content is otherwise unchanged; the 19 200 000-case
+comparison still runs green.
+
+The rebase kept both packets: `crates/vt/src/lib.rs` declares `input` (`:40`) and `search` (`:45`);
+`docs/agents/structure.md` lists `input/` (`:198`) and `search/` (`:206`) and names both in the `vt`
+responsibility row; `crates/vt/CHANGELOG.md` `[Unreleased] / Added` carries the `search` block
+(`:51`), the `input` block (`:65`) and `Terminal::encode_key` (`:75`).
+
+### F10 (new, low) -- the replacement for the compile-time variant guard does not work
+
+`crates/vt/tests/verify_us0099_equiv.rs:495-500`:
+
+> `NamedKey` is `#[non_exhaustive]`, so from out here the `_` arm is mandatory and the compiler can
+> no longer catch a new variant; `named_key_variant_sets_are_identical` holds that line instead, by
+> counting.
+
+It does not hold that line. `NEW_NAMED` is a hand-written `[NamedKey; 38]` literal in the same file,
+so `assert_eq!(NEW_NAMED.len(), 38)` (`:745`) compares two constants that both live in the test and
+neither of which derives from the enum. The `other => panic!(..)` arm (`:542`) fires only for a
+variant actually passed in, and a variant missing from `NEW_NAMED` never is.
+
+**Measured, not argued.** A 39th variant (`NamedKey::Menu`, with its `encode_key` arm) was added to
+`crates/vt/src/input/key.rs`, and `cargo test -p oneterm-vt --test verify_us0099_equiv` reported
+`5 passed; 0 failed`. The probe was reverted with `git checkout --` immediately afterwards.
+
+This is a real loss against the pre-`#[non_exhaustive]` state, where the exhaustive `match` was the
+guard. It is not a correctness problem today -- all 38 variants are still compared byte for byte --
+but the file claims a guarantee it does not provide, and the next person to add a named key gets no
+signal. `#[non_exhaustive]` does not apply inside the defining crate, so the cheap fix is one
+test-only exhaustive `match` over `NamedKey` (no wildcard) in `crates/vt/src/input/key_tests.rs`:
+that fails to compile on a new variant exactly as before, and the integration test's count then has
+something real to agree with. Either fix it or delete the sentence.
+
+### Gates at `a9c8fb1`
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p oneterm-vt` (default) | **pass** -- 439 lib (2 ignored) + 6 + 8 + 7 + 5 + 6 + 5 + 5 integration, 0 failed |
+| `cargo test -p oneterm-vt --features regex` | **pass** -- 444 lib, the search suite 5 -> 12, 0 failed |
+| `python scripts/vt-public-api.py --check` | **pass** -- "public API surface unchanged" |
+| `pwsh scripts/ci-local.ps1 -Full` | **pass**, exit 0, `ci-local: all checks passed.`; `cargo-deny`: `advisories ok, bans ok, licenses ok` |
+
+Still open and unchanged: the manual `vim` / `htop` walk over SSH (§ 8 item 1). Nothing in this
+re-check touched it.

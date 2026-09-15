@@ -17,6 +17,111 @@ fn encode_key(key: &KeySpec, mods: KeyMods, app_cursor: bool) -> Option<Vec<u8>>
     )
 }
 
+/// Every `NamedKey` there is, and every one of them encodes to something.
+///
+/// The `match` is exhaustive on purpose and this is the only place it can be:
+/// `NamedKey` is `#[non_exhaustive]`, which does not apply inside the defining
+/// crate, so out-of-crate callers -- `tests/verify_us0099_equiv.rs` among them
+/// -- are forced into a `_` arm and cannot notice a new variant at all. Adding
+/// one is a compile error *here*, which is the signal to extend `NEW_NAMED` in
+/// that file and give the new key its own case.
+#[test]
+fn every_named_key_is_known_here() {
+    const ALL: [NamedKey; 38] = [
+        NamedKey::Enter,
+        NamedKey::Backspace,
+        NamedKey::Delete,
+        NamedKey::Tab,
+        NamedKey::Escape,
+        NamedKey::ArrowUp,
+        NamedKey::ArrowDown,
+        NamedKey::ArrowLeft,
+        NamedKey::ArrowRight,
+        NamedKey::Home,
+        NamedKey::End,
+        NamedKey::PageUp,
+        NamedKey::PageDown,
+        NamedKey::Insert,
+        NamedKey::F1,
+        NamedKey::F2,
+        NamedKey::F3,
+        NamedKey::F4,
+        NamedKey::F5,
+        NamedKey::F6,
+        NamedKey::F7,
+        NamedKey::F8,
+        NamedKey::F9,
+        NamedKey::F10,
+        NamedKey::F11,
+        NamedKey::F12,
+        NamedKey::F13,
+        NamedKey::F14,
+        NamedKey::F15,
+        NamedKey::F16,
+        NamedKey::F17,
+        NamedKey::F18,
+        NamedKey::F19,
+        NamedKey::F20,
+        NamedKey::F21,
+        NamedKey::F22,
+        NamedKey::F23,
+        NamedKey::F24,
+    ];
+
+    // Do not add a `_` arm. Its absence is the whole guard.
+    fn listed_above(k: NamedKey) -> bool {
+        match k {
+            NamedKey::Enter
+            | NamedKey::Backspace
+            | NamedKey::Delete
+            | NamedKey::Tab
+            | NamedKey::Escape
+            | NamedKey::ArrowUp
+            | NamedKey::ArrowDown
+            | NamedKey::ArrowLeft
+            | NamedKey::ArrowRight
+            | NamedKey::Home
+            | NamedKey::End
+            | NamedKey::PageUp
+            | NamedKey::PageDown
+            | NamedKey::Insert
+            | NamedKey::F1
+            | NamedKey::F2
+            | NamedKey::F3
+            | NamedKey::F4
+            | NamedKey::F5
+            | NamedKey::F6
+            | NamedKey::F7
+            | NamedKey::F8
+            | NamedKey::F9
+            | NamedKey::F10
+            | NamedKey::F11
+            | NamedKey::F12
+            | NamedKey::F13
+            | NamedKey::F14
+            | NamedKey::F15
+            | NamedKey::F16
+            | NamedKey::F17
+            | NamedKey::F18
+            | NamedKey::F19
+            | NamedKey::F20
+            | NamedKey::F21
+            | NamedKey::F22
+            | NamedKey::F23
+            | NamedKey::F24 => true,
+        }
+    }
+
+    assert_eq!(ALL.len(), 38, "extend ALL and the match together");
+    for k in ALL {
+        assert!(listed_above(k));
+        assert!(
+            encode_key(&KeySpec::Named(k), m(false, false, false), false).is_some(),
+            "{k:?} has no encoding"
+        );
+    }
+}
+
 /// Every other field of the snapshot is noise to the encoder: flip them all and
 /// the bytes do not move.
 #[test]
