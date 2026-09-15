@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use oneterm_terminal::SelectionKind as SelectionType;
-use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
+use oneterm_terminal::{MouseModifiers, TerminalMouseButton};
 use oneterm_terminal::{
     SessionKind, TerminalError, TerminalIme, TerminalInput, TerminalLifecycle, TerminalRender,
     TerminalSecurityPolicy,

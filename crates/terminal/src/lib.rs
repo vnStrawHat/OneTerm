@@ -17,10 +17,8 @@ pub(crate) mod color_classification;
 pub(crate) mod content;
 pub(crate) mod factory;
 pub mod handle;
-pub(crate) mod key_encode;
 pub mod logging;
 pub mod model;
-pub mod mouse_encode;
 pub(crate) mod osc;
 pub mod osc_agent;
 pub(crate) mod osc_color;
@@ -42,11 +40,15 @@ pub use color_classification::is_decorative_character;
 pub use content::{LineRangeCells, SnapshotCell, TerminalContent, last_content_row};
 pub use factory::{PtySize, SessionFactory};
 pub use handle::{DEFAULT_SCROLLBACK_LINES, SharedTerminal, TerminalHandle, new_shared_terminal};
-pub use key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 pub use logging::{
     TerminalLogController, TerminalLogError, TerminalLogState, local_log_identity, ssh_log_identity,
 };
-pub use mouse_encode::{MouseModifiers, TerminalMouseButton};
+/// The input encoders are the engine's (`US-0099`): the bytes a key press or a
+/// mouse click sends depend on DECCKM and on `? 1005` / `? 1006`, which only
+/// the engine knows. This crate re-exports them so a consumer keeps one `use`.
+pub use oneterm_vt::input::{
+    KeyMods, KeySpec, MouseModifiers, NamedKey, TerminalMouseButton, encode_key,
+};
 pub use oneterm_vt::search::{SearchMatch, SearchOptions};
 /// The engine vocabulary this crate's own API speaks, re-exported so a consumer
 /// can name what [`TerminalContent`]'s native accessors return without taking a

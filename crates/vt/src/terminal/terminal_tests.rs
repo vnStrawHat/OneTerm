@@ -666,7 +666,7 @@ fn mode_2027_is_recognised_and_inert() {
 
 #[test]
 fn app_keypad_mode_is_reported() {
-    // R-64: the keypad state `crates/terminal/src/key_encode.rs` needs.
+    // R-64: the keypad state `crate::input::key` needs.
     let mut session = Session::new(10, 3);
     assert!(!session.term.mode_snapshot().app_keypad);
 
