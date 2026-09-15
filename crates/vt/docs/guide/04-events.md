@@ -41,8 +41,15 @@ new variant is a patch release rather than a break.
 
 ## Answering a query
 
-Four of those are questions. Three of them the engine cannot answer, because the
-answer is something only you hold.
+Three of those events are about a question the program asked. Two of them --
+`ColorQuery` and `ClipboardLoad` -- are questions **you** have to answer,
+because the answer is something only you hold. The third, `Reply`, is an answer
+the engine has already written for you.
+
+Every one of those answers goes back to the program the same way: write the
+bytes to its input. If you are using the bundled transport that is
+`EventedReadWrite::writer` (chapter 13); if you brought your own, it is whatever
+you feed the far end with.
 
 **`Reply` is not a question**, it is the answer to one. The engine has already
 composed the bytes; write them to the process input exactly as given and in the

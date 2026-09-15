@@ -41,6 +41,25 @@ One more bound worth knowing: a batch whose arena grew past 1 MiB shrinks back
 when it is cleared, so a single hostile clipboard write does not keep its
 megabytes for the rest of the session.
 
+## Where the last three of those live
+
+Three of the ceilings above belong to `oneterm_vt::intern`, the tables that let
+a cell be 64 bits: a cell stores a style id, a grapheme id and a hyperlink id,
+and `oneterm_vt::intern` holds the values behind them. That is why those
+ceilings are the odd ones out -- they bound a *table*, not a sequence.
+
+A stream that prints a million distinct emoji sequences fills the grapheme
+arena; a sweep reclaims every entry no live cell references, and an over-long
+cluster is truncated rather than allowed to grow one. A stream that emits a
+`OSC 8` link per cell fills the hyperlink table; further links are dropped,
+counted in `FeedStats::hyperlink_table_exhausted`, and the text still renders
+without them.
+
+You normally never name any of it. The snapshot resolves a cell's hyperlink for
+you under the lock -- `SnapshotState::hyperlink` -- and a row's clusters are
+copied into the row itself. `Terminal::interner` is there for a consumer reading
+the grid directly rather than through a snapshot.
+
 ## The counters
 
 `feed` returns a `FeedStats` describing exactly that call -- never cumulative.

@@ -171,5 +171,44 @@ cells are one `char` and paying a `String` for every one of them is what makes a
 naive grid slow. A wide glyph occupies its own cell plus a `WideSpacer`, which a
 renderer skips and a text extractor drops.
 
-That is the whole embedding. Everything after this chapter is detail on one of
-those seven fragments.
+## Fragment 8: printing the screen
+
+```rust
+# use std::time::Instant;
+# use oneterm_vt::{
+#     CellWidth, Config, EventBatch, Size, SnapshotContent, SnapshotRow, SnapshotState, Terminal,
+# };
+# fn row_text(row: &SnapshotRow) -> String {
+#     let mut text = String::new();
+#     for cell in &row.cells {
+#         if cell.width == CellWidth::WideSpacer {
+#             continue;
+#         }
+#         match cell.content {
+#             SnapshotContent::Scalar(c) => text.push(c),
+#             SnapshotContent::Cluster { start, len } => text.extend(row.cluster(start, len)),
+#         }
+#     }
+#     text
+# }
+# let mut term = Terminal::new(Size { rows: 4, cols: 32 }, Config::default());
+# term.feed(b"\x1b[1;32mhello\x1b[0m world", &mut EventBatch::new(), Instant::now());
+# let mut state = SnapshotState::new();
+let update = term.snapshot_update(&mut state, Instant::now());
+
+println!("-- screen ({update:?}) --");
+for row in state.rows() {
+    println!("|{}|", row_text(row));
+}
+# assert_eq!(row_text(&state.rows()[0]).trim_end(), "hello world");
+```
+
+`state.rows()` is always the full viewport, indexed by viewport row, whatever
+the update said -- so a loop like that one needs no special case for a partial
+update or an unchanged frame. A renderer that wants to redraw only what moved
+reads `state.changed()` instead, which chapter 3 covers.
+
+Put fragments 1 to 8 together with a `fn main`, and that is
+`examples/headless.rs`: a terminal with no window, that feeds one chunk, prints
+its events and prints its screen. Everything after this chapter is detail on one
+of those eight fragments.

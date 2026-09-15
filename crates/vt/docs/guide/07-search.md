@@ -89,13 +89,20 @@ The `regex` feature adds `SearchPattern::Regex(&regex::Regex)` and with it the
 default dependency set is a promise.
 
 ```rust,ignore
-// `ignore`: `SearchPattern::Regex` does not exist in a default build, and the
-// same chapter text is compiled with the feature both on and off.
+// `ignore`: `SearchPattern::Regex` exists only with the `regex` feature on, and
+// the same chapter text is compiled by the doctest run with it both on and off.
+// Everything else here is the shape a live block would have.
+use std::time::Instant;
 use oneterm_vt::search::{GridText, SearchOptions, SearchPattern, search_grid_text};
+use oneterm_vt::{Config, EventBatch, Size, Terminal};
+
+let mut term = Terminal::new(Size { rows: 24, cols: 80 }, Config::default());
+term.feed(b"error 404 not found", &mut EventBatch::new(), Instant::now());
 
 let text = GridText::from_terminal(&term);
 let pattern = regex::Regex::new(r"error\s+\d+").unwrap();
 let hits = search_grid_text(&text, SearchPattern::Regex(&pattern), SearchOptions::default());
+assert_eq!(hits.len(), 1);
 ```
 
 Three things to know before you reach for it.

@@ -63,7 +63,7 @@ the reason this crate exists at all.
 | Edition / MSRV | 2024 / 1.85.0 | 2021 / 1.96.1 | 2024 / 1.96.0 |
 | Parser | delegates to `vte`, a second crate | its own | its own |
 | Unconditional dependencies | 11 plus three platform sets | 15 plus platform sets | **6** |
-| Dependencies with the transport off | not possible, the PTY is unconditional | still 15 | **6**, and a CI target |
+| Dependencies with the transport off | not possible, the PTY is unconditional | not measured; turning the default features off still leaves 15 unconditional | **6**, and a CI target |
 | PTY in the core | yes, and not removable | yes, on by default | yes, on by default, removable |
 | Clipboard / renderer / window in the core | no / no / no | optional / optional / optional | no / no / no |
 | Event delivery | `EventListener` callback, invoked inside the terminal | `EventListener`, four callbacks, events carry a pane id | **values**: `feed` fills an `EventBatch`; nothing runs inside the engine |
@@ -95,6 +95,11 @@ one subsystem each -- search, images, resize, and the ceilings that keep a
 hostile stream from costing you memory. Chapter 11 says what is conformant and
 what is missing, chapter 12 what a version number promises, and chapter 13 the
 transport.
+
+These chapters are themselves part of the crate: they render as
+`oneterm_vt::guide`, beside the API reference and at the version you depend on,
+and every Rust block in them is a doctest, so a chapter that describes an API
+the crate no longer has fails the build.
 
 The crate is not published to a registry. Depend on it by git, pinned to a
 commit; the top of `README.md` has the three lines.
