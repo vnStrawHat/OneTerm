@@ -639,6 +639,44 @@ fn deccolm_does_not_change_the_width() {
 }
 
 #[test]
+fn locking_and_single_shifts_reach_g2_and_g3() {
+    // `SI` and `SO` only ever select `G0` and `G1`, so before the shifts a
+    // designation into `G2` or `G3` could never be printed from.
+    let mut session = Session::new(10, 3);
+    let stats = session.feed(b"\x1b*0\x1bnqq");
+    assert_eq!(stats.unhandled_sequences, 0);
+    assert_eq!(session.row(0), "──        ", "LS2 locks G2 in");
+
+    // `ESC o` (LS3) does the same for `G3`, and `ESC n` back to `G2`.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b+0\x1boq\x1b*B\x1bnq");
+    assert_eq!(session.row(0), "─q        ");
+
+    // `SS3` shifts exactly one character; the next comes from the locking set.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b+0\x1bOqq");
+    assert_eq!(session.row(0), "─q        ");
+
+    // `SS2` likewise, and the shift survives an intervening escape sequence —
+    // only a printed character consumes it, which is `preceding_char`'s rule
+    // (trap 43).
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1bN\x1b[1mq\x1b[0mq");
+    assert_eq!(session.row(0), "─q        ");
+
+    // `DECSC` / `DECRC` save the designations but not the locking set, which is
+    // reference behaviour: the active set lives on the terminal, not the cursor.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1b7\x1bn\x1b8q");
+    assert_eq!(session.row(0), "─         ");
+
+    // `RIS` puts the locking set and any pending single shift back to `G0`.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1bn\x1bN\x1bcq");
+    assert_eq!(session.row(0), "q         ");
+}
+
+#[test]
 fn mouse_modes_9_and_1015_reach_the_snapshot() {
     let mut session = Session::new(10, 3);
     session.feed(b"\x1b[?9h");

@@ -138,9 +138,14 @@ pub(crate) struct State {
     pub(crate) config: Config,
     pub(crate) theme: ThemeColors,
     pub(crate) cursor_style: Option<CursorStyle>,
-    /// Which of `G0..G3` `SI` / `SO` selected. Lives on the terminal, not the
-    /// cursor, so `DECSC` / `DECRC` do not save it — reference behaviour.
+    /// Which of `G0..G3` `SI` / `SO` and the locking shifts selected. Lives on
+    /// the terminal, not the cursor, so `DECSC` / `DECRC` do not save it —
+    /// reference behaviour.
     pub(crate) active_charset: usize,
+    /// `SS2` / `SS3`: the set the **next printed character** comes from, and
+    /// only that one. Like `preceding_char` it survives an intervening escape
+    /// sequence, because only printing consumes it.
+    pub(crate) single_shift: Option<usize>,
     /// `REP`'s source, which survives intervening escape sequences (trap 43).
     pub(crate) preceding_char: Option<char>,
     pub(crate) modify_other_keys: u8,
@@ -197,6 +202,7 @@ impl Terminal {
                 theme: ThemeColors::new(),
                 cursor_style: None,
                 active_charset: 0,
+                single_shift: None,
                 preceding_char: None,
                 modify_other_keys: 0,
                 cell_pixels: (0, 0),

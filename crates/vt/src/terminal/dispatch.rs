@@ -164,9 +164,17 @@ impl Handler<'_> {
     // ── Printing ────────────────────────────────────────────────────────────
 
     fn input(&mut self, c: char) {
+        // `SS2` / `SS3` shift exactly one printed character, so the take is
+        // here and nowhere else: an escape sequence between the shift and the
+        // character must not eat it.
+        let index = self
+            .state
+            .single_shift
+            .take()
+            .unwrap_or(self.state.active_charset);
         let charset = {
             let cursor = self.state.grid.screen().cursor();
-            cursor.charsets[self.state.active_charset]
+            cursor.charsets[index]
         };
         let mode = self.print_mode();
         let State { grid, interner, .. } = self.state;
@@ -388,6 +396,7 @@ impl Handler<'_> {
         // blanked every row they cover.
         self.state.graphics.reset();
         self.state.active_charset = 0;
+        self.state.single_shift = None;
         self.state.cursor_style = None;
         self.state.title.reset();
         self.state.keyboard.reset();
@@ -981,6 +990,15 @@ impl Dispatch for Handler<'_> {
                 let report = self.state.grid.reverse_index();
                 self.report(report);
             }
+            // `LS2` / `LS3`: the locking shifts, which are what make `G2` and
+            // `G3` reachable at all — `SI` and `SO` only ever select `G0` and
+            // `G1`, so without these two a designation into `G2` or `G3` could
+            // never be printed from.
+            (b'n', []) => self.state.active_charset = 2,
+            (b'o', []) => self.state.active_charset = 3,
+            // `SS2` / `SS3`: the same two sets, for exactly one character.
+            (b'N', []) => self.state.single_shift = Some(2),
+            (b'O', []) => self.state.single_shift = Some(3),
             (b'Z', []) => self.identify_terminal(None),
             (b'c', []) => self.reset_state(),
             (b'7', []) => self.state.grid.screen_mut().save_cursor(),
