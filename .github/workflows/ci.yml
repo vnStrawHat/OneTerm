@@ -236,6 +236,16 @@ jobs:
             echo "::error::published rustdoc cites a document only this repository has"
             exit 1
           fi
+      # The embedder's guide is `//!` text too: every chapter is `include_str!`d
+      # into an empty module. The chapters are Markdown, so there is no comment
+      # prefix to match on.
+      - name: The embedder guide must stand alone
+        run: |
+          if grep -rn '\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|crates/\|docs/\)' \
+              crates/vt/docs/guide --include='*.md' | grep -v 'https://github.com/'; then
+            echo "::error::the embedder guide cites a document only this repository has"
+            exit 1
+          fi
 
   windows-quality:
     # Windows is the primary platform, so lint and run the whole workspace
