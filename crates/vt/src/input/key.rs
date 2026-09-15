@@ -11,6 +11,8 @@
 
 use crate::snapshot::ModeSnapshot;
 
+use super::kitty::{self, Encoded};
+
 /// Modifier state when encoding a key (bit-agnostic, uses bool for clarity).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct KeyMods {
@@ -120,8 +122,76 @@ pub enum KeySpec {
     Named(NamedKey),
 }
 
+/// Which kind of key event this is.
+///
+/// A repeat is encoded as a press and a release produces no bytes at all until
+/// the program asks for event types with the kitty `REPORT_EVENT_TYPES` flag.
+///
+/// `#[non_exhaustive]`: a keyboard protocol that reports a fourth kind would
+/// land here. Construction is unaffected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum KeyEventKind {
+    /// The key went down.
+    #[default]
+    Press,
+    /// The key is being auto-repeated while held.
+    Repeat,
+    /// The key came up.
+    Release,
+}
+
+/// Everything the enhanced keyboard protocols can report about one key event.
+///
+/// `#[non_exhaustive]`: build it with [`KeyEvent::new`] and assign the rest.
+/// The three optional fields come from the embedder's platform layer; leave one
+/// `None` when the platform does not know it and the encoder omits the
+/// corresponding sub-field, which the protocol allows.
+///
+/// ```
+/// use oneterm_vt::input::{KeyEvent, KeyEventKind, KeyMods, KeySpec, NamedKey};
+///
+/// let mut event = KeyEvent::new(KeySpec::Named(NamedKey::Escape), KeyMods::default());
+/// event.kind = KeyEventKind::Release;
+/// assert_eq!(event.text, None);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct KeyEvent {
+    /// Which key.
+    pub key: KeySpec,
+    /// Which modifiers were held.
+    pub mods: KeyMods,
+    /// Press, repeat or release.
+    pub kind: KeyEventKind,
+    /// The code point this key produces with shift applied, for the kitty
+    /// `REPORT_ALTERNATE_KEYS` flag. Sent only when shift is in `mods`.
+    pub shifted: Option<char>,
+    /// The code point this key carries in the standard PC-101 layout, for the
+    /// same flag: what a Cyrillic `C` is when the shortcut is `Ctrl+C`.
+    pub base_layout: Option<char>,
+    /// The text this event would insert, for `REPORT_ASSOCIATED_TEXT`. A
+    /// `Character` key's own payload is used when this is `None`.
+    pub text: Option<String>,
+}
+
+impl KeyEvent {
+    /// A plain press of `key` with `mods` held, and nothing the platform had to
+    /// look up.
+    pub fn new(key: KeySpec, mods: KeyMods) -> KeyEvent {
+        KeyEvent {
+            key,
+            mods,
+            kind: KeyEventKind::Press,
+            shifted: None,
+            base_layout: None,
+            text: None,
+        }
+    }
+}
+
 /// Byte CSI u / xterm modifier: `1 + shift + alt*2 + ctrl*4`.
-fn modifier_byte(mods: KeyMods) -> u8 {
+pub(super) fn modifier_byte(mods: KeyMods) -> u8 {
     1 + mods.shift as u8 + (mods.alt as u8) * 2 + (mods.ctrl as u8) * 4
 }
 
@@ -152,11 +222,76 @@ fn ctrl_bytes(text: &str) -> Option<Vec<u8>> {
     Some(vec![byte])
 }
 
-/// Encode a single key event → escape sequence.
+/// Encode a plain key press → the bytes the program expects.
 ///
-/// Returns `None` only when the combination has no terminal encoding — today
-/// that is Ctrl + a non-ASCII or multi-codepoint `Character` (there is no
-/// control byte for `Ctrl+é`); the caller drops the event.
+/// [`encode_key_event`] for a [`KeyEvent::new`] press, which is what an
+/// embedder that has no release, repeat or alternate-key information to give
+/// wants. Everything that entry point documents applies here, including the two
+/// enhanced protocols: **the bytes this returns change once the program has
+/// pushed kitty keyboard flags or set a `modifyOtherKeys` level**, because that
+/// is what the program asked for. With both at their defaults the answer is the
+/// legacy encoding described below, byte for byte.
+///
+/// Returns `None` when the combination has no terminal encoding — Ctrl plus a
+/// non-ASCII or multi-codepoint `Character` (there is no control byte for
+/// `Ctrl+é`); the caller drops the event.
+pub fn encode_key(key: &KeySpec, mods: KeyMods, modes: &ModeSnapshot) -> Option<Vec<u8>> {
+    encode_key_event(&KeyEvent::new(key.clone(), mods), modes)
+}
+
+/// Encode one key event, honouring every keyboard protocol the snapshot
+/// reports.
+///
+/// Exactly one encoding is chosen, and the first rung that applies wins:
+///
+/// 1. a release event, with no `REPORT_EVENT_TYPES` to ask for it → `None`;
+/// 2. any kitty keyboard flag that applies to this key → the kitty `CSI u`
+///    form, or the legacy functional form with the kitty modifier and
+///    event-type fields attached;
+/// 3. a non-zero `modifyOtherKeys` level and a modified "other" key →
+///    `CSI 27 ; <modifier> ; <code point> ~`;
+/// 4. otherwise the legacy table, which reads only
+///    [`ModeSnapshot::app_cursor`].
+///
+/// Rung 2 before rung 3 is the protocols' own rule: a program that has pushed
+/// kitty flags *and* set `modifyOtherKeys` gets kitty. Once rung 2 applies,
+/// `app_cursor` is not read at all — an unmodified arrow under
+/// `DISAMBIGUATE_ESC_CODES` is `CSI A` and never `ESC O A`, even in application
+/// cursor key mode, because the kitty form is not the cursor-key form.
+///
+/// `None` means the event sends nothing: a release nobody asked to hear about,
+/// a key with no code point, or a chord with no encoding at all. The embedder
+/// drops it, exactly as it already must for `Ctrl` plus a non-ASCII character.
+///
+/// ```
+/// use oneterm_vt::input::{KeyEvent, KeyMods, KeySpec, NamedKey, encode_key_event};
+/// use oneterm_vt::{Config, EventBatch, Size, Terminal};
+/// use std::time::Instant;
+///
+/// let mut term = Terminal::new(Size { rows: 24, cols: 80 }, Config::default());
+/// let mut batch = EventBatch::new();
+/// let escape = KeyEvent::new(KeySpec::Named(NamedKey::Escape), KeyMods::default());
+///
+/// // Nothing negotiated: the legacy byte.
+/// assert_eq!(term.encode_key_event(&escape).as_deref(), Some(b"\x1b".as_slice()));
+///
+/// // The program pushes `DISAMBIGUATE_ESC_CODES`, and gets what it asked for.
+/// term.feed(b"\x1b[>1u", &mut batch, Instant::now());
+/// let modes = term.mode_snapshot();
+/// assert_eq!(
+///     encode_key_event(&escape, &modes).as_deref(),
+///     Some(b"\x1b[27u".as_slice())
+/// );
+/// ```
+pub fn encode_key_event(event: &KeyEvent, modes: &ModeSnapshot) -> Option<Vec<u8>> {
+    match kitty::encode(event, modes) {
+        Encoded::Silent => None,
+        Encoded::Bytes(bytes) => Some(bytes),
+        Encoded::Legacy => encode_legacy(&event.key, event.mods, modes),
+    }
+}
+
+/// The xterm legacy encoding, which is what rung 4 answers.
 ///
 /// The only field read from `modes` is [`ModeSnapshot::app_cursor`], the
 /// terminal's DECCKM state: when the program has enabled Application Cursor
@@ -175,7 +310,7 @@ fn ctrl_bytes(text: &str) -> Option<Vec<u8>> {
 ///   `app_cursor`, else `ESC [{ch}`.
 /// - `Home`/`End` + (shift|ctrl) → `CSI 1;{mod}H/F`; plain → `ESC OH/F`
 ///   when `app_cursor`, else `ESC [H/F`.
-pub fn encode_key(key: &KeySpec, mods: KeyMods, modes: &ModeSnapshot) -> Option<Vec<u8>> {
+fn encode_legacy(key: &KeySpec, mods: KeyMods, modes: &ModeSnapshot) -> Option<Vec<u8>> {
     let shift = mods.shift;
     let ctrl = mods.ctrl;
     let alt = mods.alt;

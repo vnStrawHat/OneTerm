@@ -139,6 +139,10 @@ fn only_app_cursor_is_read() {
             reporting: crate::snapshot::MouseReporting::AnyEvent,
             encoding: crate::snapshot::MouseEncoding::Sgr,
         }),
+        // The two keyboard-protocol fields are the exception, and they have
+        // their own tests; at their defaults the legacy rung is what answers.
+        keyboard_flags: crate::KeyboardFlags::empty(),
+        modify_other_keys: 0,
     };
     let quiet = ModeSnapshot {
         app_cursor: true,
