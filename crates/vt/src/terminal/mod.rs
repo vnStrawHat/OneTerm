@@ -22,6 +22,10 @@ mod osc;
 #[path = "terminal_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "verify_bug0058_tests.rs"]
+mod verify_bug0058_tests;
+
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;

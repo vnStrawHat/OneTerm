@@ -1643,8 +1643,10 @@ fn unhandled_sequences_are_counted_not_echoed() {
 
 /// `BUG-0058`: the intermediates are part of the DCS routing key. DECRQSS
 /// (`DCS $ q`) and XTGETTCAP (`DCS + q`) share the final byte `q` with Sixel,
-/// and tmux, neovim and kitty send the latter at startup — routing on the final
-/// byte alone fed their payloads to the image decoder.
+/// and clients such as tmux, neovim and kitty are documented to send the
+/// latter — routing on the final byte alone fed their payloads to the image
+/// decoder. This asserts the event batch as well; the wider routing suite is
+/// `verify_bug0058_tests.rs`.
 #[test]
 fn an_intermediate_dcs_q_is_not_sixel() {
     for bytes in [&b"\x1bP$qm\x1b\\"[..], &b"\x1bP+q544e\x1b\\"[..]] {
@@ -1667,33 +1669,6 @@ fn an_intermediate_dcs_q_is_not_sixel() {
             String::from_utf8_lossy(bytes)
         );
     }
-}
-
-/// The other half of the routing key: a bare `DCS q` is still Sixel.
-#[test]
-fn a_bare_dcs_q_still_decodes_a_sixel() {
-    let mut session = Session::new(10, 3);
-    session.feed(b"\x1bPq#0;2;0;0;0#0~\x1b\\");
-    assert_eq!(session.term.take_graphics().len(), 1);
-}
-
-/// The documented abort — a non-Sixel DCS clears a prior unterminated one —
-/// holds for an intermediate DCS too, not just for another final byte.
-#[test]
-fn an_intermediate_dcs_aborts_an_unterminated_sixel() {
-    let mut session = Session::new(10, 3);
-    session.feed(b"\x1bPq");
-    assert!(session.term.state.graphics.parser.is_some());
-
-    // The `ESC` ends the unterminated Sixel; the `$ q` behind it must not open a
-    // decoder of its own for the DECRQSS payload that follows.
-    let stats = session.feed(b"\x1bP$qm");
-    assert!(session.term.state.graphics.parser.is_none());
-    assert_eq!(stats.unhandled_sequences, 1);
-
-    session.feed(b"\x1b\\");
-    assert!(session.term.take_graphics().is_empty());
-    assert!(session.term.placements().is_empty());
 }
 
 #[test]

@@ -49,15 +49,27 @@ Each criterion is a command a verifier can run, not a claim to be believed.
 - [x] Feeding `\x1bP+q544e\x1b\\` behaves identically.
 - [x] Feeding a valid one-pixel Sixel (`\x1bPq#0;2;0;0;0#0~\x1b\\`) still places exactly one
   graphic. The existing `crates/vt/src/graphics/graphics_tests.rs` suite passes untouched.
-- [x] Feeding `\x1bPq` (an unterminated Sixel) followed by `\x1bP$qm\x1b\\` clears the in-flight
-  decoder and discards the partial image -- the documented "a non-Sixel DCS aborts the prior
-  unterminated one" behaviour is preserved for intermediates as well as for other final bytes.
-- [x] The three new tests fail on `main` @ `36977ca` and pass on this branch. A verifier proves this
-  by checking out `main`, applying only the test file, and observing the failures.
+- [x] Feeding `\x1bPq` (an unterminated Sixel) followed by `\x1bP$qm\x1b\\` leaves **no** in-flight
+  decoder and adds no graphic of its own. Corrected during verification: this criterion originally
+  said the partial image is aborted and discarded, which is not what the engine does. The `ESC` that
+  introduces the second DCS ends the first one *normally*, so a partial Sixel **with a payload** is
+  finished and placed; the empty one named here yields nothing only because `SixelParser::finish`
+  returns `None`. Both shapes are now pinned --
+  `verify_intermediate_dcs_aborts_an_empty_unterminated_sixel` and
+  `verify_intermediate_dcs_after_a_nonempty_unterminated_sixel`.
+- [x] The tests that encode the defect fail against the pre-fix `dcs_hook` and pass on this branch;
+  the two non-regression guards for the Sixel half of the routing key pass on both, as a test that
+  pins unchanged behaviour must. Measured on the final suite: **7 of 9 fail**, 2 pass. The base is
+  `main` @ `6dc3331`. (This line originally read "the three new tests fail on `main` @ `36977ca`".
+  `36977ca` is not an ancestor of `main`, and a guard test cannot fail before the change; both
+  errors are corrected here rather than left ticked.)
 - [x] `cargo test -p oneterm-vt` and `cargo test -p oneterm-vt --features vt-paranoid` green.
 - [x] No behaviour change for any byte sequence that does not contain a DCS with an intermediate: the
-  46 frozen parity corpus recordings replay identically
-  (`cargo run -p oneterm-tools --bin <parity harness>`), byte for byte.
+  frozen parity corpus replays identically, gated by
+  `cargo test -p oneterm-tools --test corpus_check` (which `cargo test --workspace` runs). The
+  original draft's `cargo run -p oneterm-tools --bin <parity harness>` was a placeholder naming no
+  real binary; `crates/tools/tests/corpus_check.rs:23` is the real gate, and it pins the vendored
+  set at 45 recordings plus OneTerm's own directory, not 46.
 
 ## Documentation
 
@@ -86,7 +98,13 @@ the defective thing guarantees the defect returns.
 
 Correction to the Documentation Action above: the sentence that states the defective rule is in
 `graphics.md` (SS Sixel decoder), not in `dispatch-and-modes.md`. Grep for "any other final byte"
-across `docs/` returns exactly one hit, `graphics.md:141`, so that is the paragraph that was edited.
+across `docs/` returns **two** hits on `main`, not one as an earlier draft of this line claimed:
+
+- `graphics.md:141` -- the live design rule. **Edited.**
+- `docs/spec-intakes/IN-0029-vt-engine/research/api-surface.md:361` -- **no change**. It is a
+  research note cataloguing the API of the *engine being replaced* (`Term`'s `dcs_hook` in the
+  vendored alacritty patch), where the sentence is an accurate description of that code. Rewriting
+  it would falsify a historical record; it describes what OneTerm moved away from.
 
 - `docs/spec-intakes/IN-0029-vt-engine/low-level-design/graphics.md` -- **edited**. The wiring
   sentence now reads "final byte `q` **and no intermediate** ... any other DCS clears an in-flight
@@ -128,8 +146,13 @@ fn dcs_hook(&mut self, _params: &Params, _intermediates: &[u8], byte: u8) {
 final byte `q`, so both take the first branch and their payloads are fed to `SixelParser::put` until
 `ST`. `dcs_unhook` then calls `SixelParser::finish`, which returns `None` on garbage, so no image is
 placed and no panic occurs -- the visible symptom is only that a query is silently mis-parsed and
-that up to `DCS_MAX_BYTES` (16 MiB) of a hostile payload is buffered in an image decoder that was
-never meant to see it.
+that a hostile payload is buffered in an image decoder that was never meant to see it.
+
+Two ceilings bound that exposure, and both are **read from the source, not measured** (`SixelParser`
+exposes no accessor a test could size): `DCS_MAX_BYTES` (`crates/vt/src/parser/mod.rs:40`, 16 MiB)
+caps the payload the parser will stream into the decoder, and `MAX_PIXEL_BYTES`
+(`crates/vt/src/graphics/mod.rs:50`, 4096 * 4096 * 4 = 64 MiB) caps the pixel buffer the decoder
+will grow from it. The pre-fix worst case is the pair, not the 16 MiB figure alone.
 
 The parser already collects and passes intermediates; only the handler ignores them.
 
@@ -175,76 +198,137 @@ being made that future work must inherit.
 - [x] Unit proof
 - [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
+- [x] Platform proof
 - [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Change: one `if` condition and its doc comment in `crates/vt/src/terminal/dispatch.rs`, three tests
-in `crates/vt/src/terminal/terminal_tests.rs`, one paragraph in `graphics.md`.
+Change, after the independent verification pass: two lines of production code and their doc comment
+in `crates/vt/src/terminal/dispatch.rs`, one test in `crates/vt/src/terminal/terminal_tests.rs`,
+eight in the adopted `crates/vt/src/terminal/verify_bug0058_tests.rs` (three lines of `#[cfg(test)]`
+wiring in `terminal/mod.rs`), and one paragraph in `graphics.md`.
 
 ```rust
-// crates/vt/src/terminal/dispatch.rs
+// crates/vt/src/terminal/dispatch.rs -- the whole production change
 if byte == b'q' && intermediates.is_empty() {
+    self.state.graphics.parser = Some(SixelParser::new());
+} else {
+    self.unhandled();
+}
 ```
 
-The three tests, in `crates/vt/src/terminal/terminal_tests.rs` SS Unhandled input:
+### The dead `else` branch, deleted
 
-- `an_intermediate_dcs_q_is_not_sixel` -- feeds `P$qm\` and `P+q544e\`; asserts
-  `graphics.parser` is `None`, `unhandled_sequences == 1`, `aborted_dcs == 0`, no image taken, and
-  that the batch holds exactly `[VtEvent::Repaint]`.
-- `a_bare_dcs_q_still_decodes_a_sixel` -- feeds `Pq#0;2;0;0;0#0~\`, asserts exactly one
-  graphic.
-- `an_intermediate_dcs_aborts_an_unterminated_sixel` -- feeds `Pq`, asserts a decoder is
-  in flight, then feeds `P$qm` and asserts the decoder is gone and the DECRQSS was counted, then
-  feeds the `ST` and asserts no image and no placement.
+The original fix kept the pre-existing `self.state.graphics.parser = None;` in the `else` arm. It is
+unreachable, and it was the source of the false "a non-Sixel DCS aborts the prior unterminated one"
+story that both the doc comment and `graphics.md` carried. Proof that no path reaches it with a live
+decoder:
 
-Fail-before / pass-after, run by reverting only the `&& intermediates.is_empty()` clause in the
-working tree (which is what `main` @ `6dc3331` has) and running the same three tests:
+- `graphics.parser` is assigned `Some` in exactly one place, the `if` arm of `dcs_hook`
+  (`grep -rn "graphics.parser" crates/vt/src` returns four sites: the two arms, `dcs_put`'s
+  `as_mut`, and `dcs_unhook`'s `take`).
+- `dcs_hook` moves the parser straight to `DcsPassthrough` (`crates/vt/src/parser/mod.rs:244`).
+- Every exit from `DcsPassthrough` calls `Dispatch::dcs_unhook`, which `take()`s the decoder:
+  `CAN`/`SUB` (`state.rs:243`), `ESC` (`state.rs:247`), 8-bit `ST` (`state.rs:256`), and the
+  `DCS_MAX_BYTES` cap (`state.rs:328`). Its `_ => ()` arm drops every other 8-bit byte, and unlike
+  the DCS entry states it never calls `advance_anywhere`, so there is no side door.
+- `Parser::reset()` would be such a door, but `Terminal` never calls it -- its only caller in the
+  workspace is `parser_tests.rs:847`, and `Terminal::parser` is a private field, so an embedder
+  cannot reach it either.
+
+So `dcs_hook` always runs with `parser == None`, the store was a no-op, and `self.unhandled()` is
+the whole `else` arm now. `verify_intermediate_dcs_after_a_nonempty_unterminated_sixel` pins the
+consequence that the deleted line pretended to prevent: the first Sixel is finished and placed by
+the `ESC`, and the DECRQSS behind it adds no second graphic.
+
+### Tests
+
+`crates/vt/src/terminal/terminal_tests.rs` (SS Unhandled input), one test:
+
+- `an_intermediate_dcs_q_is_not_sixel` -- feeds `\x1bP$qm\x1b\\` and `\x1bP+q544e\x1b\\`;
+  asserts `graphics.parser` is `None`, `unhandled_sequences == 1`, `aborted_dcs == 0`, no image
+  taken, and that the event batch holds exactly `[VtEvent::Repaint]` -- the acceptance criterion no
+  other test covers.
+
+Two further tests written for the first draft were **dropped** rather than kept: the verifier's
+`verify_bare_dcs_q_still_places_one_graphic` and
+`verify_intermediate_dcs_aborts_an_empty_unterminated_sixel` assert the same bytes with strictly
+stronger assertions. One of the dropped pair was also misnamed (`..._aborts_an_unterminated_sixel`
+proved no abort, only an empty payload), so deleting it settles that finding too.
+
+`crates/vt/src/terminal/verify_bug0058_tests.rs`, eight tests written independently by the verifier
+and adopted unchanged apart from the header note:
+
+| Test | Covers |
+| --- | --- |
+| `verify_intermediate_dcs_q_never_reaches_the_decoder` | DECRQSS and XTGETTCAP: no decoder, counted once, nothing placed, nothing echoed |
+| `verify_bare_dcs_q_still_places_one_graphic` | the Sixel half of the key still decodes |
+| `verify_parameterised_dcs_q_still_decodes` | `DCS 0;1 q` etc. -- parameters are not intermediates |
+| `verify_intermediate_dcs_aborts_an_empty_unterminated_sixel` | empty unterminated Sixel, then DECRQSS |
+| `verify_intermediate_dcs_after_a_nonempty_unterminated_sixel` | the same with a real payload: finished and placed, no second graphic |
+| `verify_one_mib_intermediate_payload_buffers_nothing` | 1 MiB DECRQSS payload, decoder checked after every 64 KiB |
+| `verify_eight_bit_st_ends_an_intermediate_dcs` | `0x9C` terminates it and the terminal returns to ground |
+| `verify_overflowed_intermediates_do_not_fall_back_to_sixel` | intermediate overflow does not re-open the Sixel branch |
+
+### Fail-before / pass-after
+
+Run by restoring `main`'s `dcs_hook` body in the working tree (both the missing
+`&& intermediates.is_empty()` and the dead store) and running the nine tests:
 
 ```
-running 3 tests
-test terminal::tests::a_bare_dcs_q_still_decodes_a_sixel ... ok
-test terminal::tests::an_intermediate_dcs_aborts_an_unterminated_sixel ... FAILED
+running 9 tests
+test terminal::verify_bug0058_tests::verify_bare_dcs_q_still_places_one_graphic ... ok
+test terminal::verify_bug0058_tests::verify_parameterised_dcs_q_still_decodes ... ok
 test terminal::tests::an_intermediate_dcs_q_is_not_sixel ... FAILED
+test terminal::verify_bug0058_tests::verify_eight_bit_st_ends_an_intermediate_dcs ... FAILED
+test terminal::verify_bug0058_tests::verify_intermediate_dcs_aborts_an_empty_unterminated_sixel ... FAILED
+test terminal::verify_bug0058_tests::verify_intermediate_dcs_after_a_nonempty_unterminated_sixel ... FAILED
+test terminal::verify_bug0058_tests::verify_intermediate_dcs_q_never_reaches_the_decoder ... FAILED
+test terminal::verify_bug0058_tests::verify_one_mib_intermediate_payload_buffers_nothing ... FAILED
+test terminal::verify_bug0058_tests::verify_overflowed_intermediates_do_not_fall_back_to_sixel ... FAILED
 
----- an_intermediate_dcs_aborts_an_unterminated_sixel ----
-assertion failed: session.term.state.graphics.parser.is_none()
----- an_intermediate_dcs_q_is_not_sixel ----
-assertion `left == right` failed   left: 0   right: 1     (unhandled_sequences)
-
-test result: FAILED. 1 passed; 2 failed
+test result: FAILED. 2 passed; 7 failed
 ```
 
-Deviation from the acceptance wording, recorded rather than hidden: **two** of the three tests fail
-on the old behaviour, not three. `a_bare_dcs_q_still_decodes_a_sixel` asserts behaviour that was
-already correct -- it is the non-regression guard for the other half of the routing key, and a test
-that pins existing behaviour cannot fail before the change. The two that encode the defect both
-fail.
+Selected panics: `verify_one_mib_intermediate_payload_buffers_nothing` fails at its **first**
+assertion ("the hook already opened a decoder"), which is the defect's mechanism stated directly --
+a 1 MiB DECRQSS payload reaching a live `SixelParser`. `an_intermediate_dcs_q_is_not_sixel` fails on
+`unhandled_sequences` (`left: 0, right: 1`): the query was not merely mis-parsed, it was not even
+counted.
 
-The fail-before run also shows the compiler catching the revert (`warning: unused variable:
-intermediates`), which is a second, independent signal that the argument is the whole fix.
+The two that pass are the non-regression guards. A test that pins behaviour which was already
+correct cannot fail before the change; that is what it is for.
 
-Corpus parity: `crates/tools/tests/corpus_check.rs` replays the frozen recordings inside
-`cargo test --workspace`. Both gates pass --
-`the_engine_matches_the_frozen_alacritty_expectations` (the 45 vendored alacritty recordings) and
-`the_engine_matches_the_frozen_oneterm_expectations` (OneTerm's own set). Note for the record: the
-acceptance list says 46 recordings; the corpus is 45 vendored plus OneTerm's own directory, which
-`corpus_check.rs:24` pins.
+The revert also drew `warning: unused variable: intermediates` from the compiler -- an independent
+signal that the argument is the whole fix.
 
-Verify command: `pwsh scripts/ci-local.ps1 -Full` with `CARGO_BUILD_JOBS=4`. All twelve steps pass,
-`cargo deny check licenses bans advisories` included -- "ci-local: all checks passed."
-`cargo test -p oneterm-vt` is 367 passed / 0 failed / 2 ignored, and the same with
-`--features vt-paranoid`.
+### Gate
 
-Not verified: nothing was run against a real tmux, neovim or kitty session. The claim that those
-programs send XTGETTCAP at startup is taken from the intake, not measured here; the tests pin the
-byte-level behaviour, not the client that produces the bytes.
+`pwsh scripts/ci-local.ps1 -Full` with `CARGO_BUILD_JOBS=4`: all twelve steps pass,
+`cargo deny check licenses bans advisories` included -- "ci-local: all checks passed".
+`cargo test -p oneterm-vt` is 373 passed / 0 failed / 2 ignored (the verifier report quotes 375,
+measured before the two duplicated tests were dropped), and identical with
+`--features vt-paranoid`. Corpus parity holds:
+`the_engine_matches_the_frozen_alacritty_expectations` (45 vendored recordings) and
+`the_engine_matches_the_frozen_oneterm_expectations` both green.
 
-Known gap to carry forward, not to fix here: neither DECRQSS nor XTGETTCAP is **answered**. A program
-that asks now gets silence rather than a wrong answer, which is correct but incomplete. Recorded in
-`US-0102`'s out-of-scope list so it is not lost.
+The independent verification report is
+[`evidence/BUG-0058-verify.md`](evidence/BUG-0058-verify.md): verdict PASS-WITH-NOTES, every note
+addressed above.
+
+### Gaps
+
+- Neither DECRQSS nor XTGETTCAP is **answered**. A program that asks now gets silence rather than a
+  wrong answer, which is correct but incomplete. Carried in `US-0102`'s out-of-scope list
+  (`US-0102-conformance-gaps.md:41`) and known-gaps paragraph (line 190); nothing to add.
+- Not verified: no tmux, neovim or kitty session was driven against the built engine. The claim that
+  those clients send XTGETTCAP comes from the intake, not from measurement, so both the source
+  comment and `graphics.md` now hedge it ("clients such as ... are documented to send"). The tests
+  pin the byte-level behaviour, not the client that produces the bytes.
+- Not verified: the pre-fix allocation ceilings in Context are read from the source, not measured.
+- Not run: `cargo fuzz` is not installed in this environment. The 1 MiB hostile-payload test and the
+  corpus drift gate stand in for it.
 
 ## Handoff
 
@@ -270,7 +354,7 @@ DB = "<path to harness.db>"
 ROW = dict(
     id="BUG-0058",
     title="DCS routing ignores intermediates, so DECRQSS and XTGETTCAP open the Sixel decoder",
-    created_at="2026-09-15",
+    created_at="2026-09-15T18:40:00",
     risk_lane="normal",
     contract_doc="docs/spec-intakes/IN-0029-vt-engine/low-level-design/graphics.md",
     packet_doc=(
@@ -281,18 +365,21 @@ ROW = dict(
     unit_proof=1,
     integration_proof=1,
     e2e_proof=0,
-    platform_proof=0,
+    platform_proof=1,
     evidence=(
-        "3 tests in crates/vt/src/terminal/terminal_tests.rs; 2 of them fail with the "
-        "intermediates check reverted, all 3 pass with it; corpus parity unchanged "
-        "(frozen alacritty + oneterm recordings)."
+        "9 tests (1 in terminal_tests.rs, 8 adopted from the verifier in "
+        "verify_bug0058_tests.rs); 7 fail against the pre-fix dcs_hook, 2 are "
+        "non-regression guards; dead else-branch store deleted as unreachable; "
+        "corpus parity unchanged. Verification: PASS-WITH-NOTES, "
+        "docs/spec-intakes/IN-0038-embeddable-vt-core/evidence/BUG-0058-verify.md."
     ),
     verify_command="pwsh scripts/ci-local.ps1 -Full",
     last_verified_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     last_verified_result="pass",
     notes=(
-        "Fix is one condition: dcs_hook routes on (intermediates, final). DECRQSS and "
-        "XTGETTCAP stay unhandled and counted; answering them is US-0102."
+        "dcs_hook routes on (intermediates, final). DECRQSS and XTGETTCAP stay "
+        "unhandled and counted; answering them is US-0102. platform_proof=1 because "
+        "ci-local -Full passed on Windows, the only platform exercised."
     ),
     intake_id=43,
 )

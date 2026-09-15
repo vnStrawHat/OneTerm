@@ -138,14 +138,22 @@ live placement.
 
 `crates/vt/src/graphics/sixel.rs`, ported from OneTerm's own patch — it is first-party code, so
 no licence question arises. The DCS sink is wired to `dcs_hook` with final byte `q` **and no
-intermediate** ([`parser.md`](parser.md)); any other DCS clears an in-flight parser, so a non-Sixel
-DCS aborts a prior unterminated Sixel.
+intermediate** ([`parser.md`](parser.md)); every other DCS is counted unhandled.
 
 The intermediates are part of the routing key, not decoration: `DCS $ q` (DECRQSS) and `DCS + q`
-(XTGETTCAP, which tmux, neovim and kitty send at startup) share the final byte `q` with Sixel and
-are not images. Routing on the final byte alone fed their payloads to the image decoder up to
-`DCS_MAX_BYTES` -- `BUG-0058`. Both are unhandled and counted; answering them is conformance work
+(XTGETTCAP, which clients such as tmux, neovim and kitty are documented to send) share the final
+byte `q` with Sixel and are not images. Routing on the final byte alone fed their payloads to the
+image decoder -- `BUG-0058`. Both are unhandled and counted; answering them is conformance work
 tracked in `US-0102`.
+
+`dcs_hook` never sees a decoder in flight, and does not need to clear one. An unterminated Sixel is
+ended by the `ESC` that introduces the next DCS: `advance_dcs_passthrough`
+([`parser.md`](parser.md)) leaves `DcsPassthrough` only through `dcs_unhook`, which takes the
+parser -- with `aborted = false` for `ESC` and `ST`, so a partial image with a real payload is
+**finished and placed**, not discarded. An empty one yields nothing because `SixelParser::finish`
+returns `None`. This corrects the earlier claim that a non-Sixel DCS "aborts" a prior unterminated
+Sixel, which the engine has never done; only `CAN`/`SUB` and the `DCS_MAX_BYTES` cap abort
+(`aborted = true`).
 
 Grammar (DEC STD 070 subset, unchanged from IN-0028):
 
