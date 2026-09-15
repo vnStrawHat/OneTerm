@@ -108,15 +108,16 @@ cargo clippy --workspace --all-targets -- -D warnings   # also type-checks every
 cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings
 cargo test --workspace
 cargo test -p oneterm-vt --features vt-paranoid # the VT engine's whole-history integrity walk
-# `oneterm-vt` is the only published crate, so its package is part of the gate:
+# `oneterm-vt` is consumed by other projects as a git dependency (it is not
+# published), so its package and its public API are part of the gate:
 cargo build -p oneterm-vt --no-default-features --examples
 cargo build -p oneterm-vt --all-features --examples
 cargo run -p oneterm-vt --example headless
 RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
-python scripts/vt-public-api.py --check --no-doc # the published API surface has not drifted
-# What the tarball carries (README, CHANGELOG, LICENSE, NOTICE, the example).
-# Offline, and works with uncommitted files — CI runs `cargo publish --dry-run`
-# instead, on its clean checkout.
+python scripts/vt-public-api.py --check --no-doc # the public API surface has not drifted
+# What the package carries (README, CHANGELOG, LICENSE, NOTICE, the example) and
+# that it reaches nothing outside `crates/vt`. Offline, and works with
+# uncommitted files.
 cargo package -p oneterm-vt --allow-dirty --list | python scripts/verify-dependency-graph.py --package-list -
 # ...plus a grep: no US-/BUG-/DEC-/IN- or docs/spec-intakes citation in the crate's rustdoc
 python scripts/verify-dependency-graph.py     # crate graph policy + workspace version inheritance

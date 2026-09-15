@@ -34,17 +34,17 @@ step cargo test --workspace
 # whole-history invariants are gated.
 step cargo test -p oneterm-vt --features vt-paranoid
 
-# `oneterm-vt` is published to crates.io, so its package, its feature matrix and
-# its documentation are part of the gate. Its default feature set is empty, so
-# the two builds below are the whole matrix.
+# Other projects consume `oneterm-vt` as a git dependency, so its package, its
+# feature matrix and its documentation are part of the gate. Its default
+# feature set is empty, so the two builds below are the whole matrix.
 step cargo build -p oneterm-vt --no-default-features --examples
 step cargo build -p oneterm-vt --all-features --examples
 step cargo run -p oneterm-vt --example headless
 step env RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
 step python scripts/vt-public-api.py --check --no-doc
-# The packaged file list, not `cargo publish --dry-run`: this runs offline and
-# with uncommitted work in the tree, which is the state an agent runs the gate
-# in. The workflow keeps the strict `--dry-run` on its clean checkout.
+# What the package carries, and that it reaches nothing outside `crates/vt`.
+# `--allow-dirty` because an agent runs this gate with uncommitted work; the
+# workflow packages a clean checkout without it.
 printf '\n==> cargo package -p oneterm-vt --list | verify-dependency-graph.py --package-list -\n'
 if ! cargo package -p oneterm-vt --allow-dirty --list |
     python scripts/verify-dependency-graph.py --package-list -; then
@@ -57,7 +57,7 @@ fi
 printf '\n==> rustdoc self-containment (crates/vt/src)\n'
 if grep -rn '^[[:space:]]*//[/!].*\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|docs/spec-intakes\)' \
     crates/vt/src --include='*.rs' | grep -v 'https://github.com/'; then
-  printf '\nci-local: FAILED: published rustdoc cites a document only this repository has\n' >&2
+  printf '\nci-local: FAILED: the crate rustdoc cites a document only this repository has\n' >&2
   exit 1
 fi
 

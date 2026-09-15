@@ -1,10 +1,21 @@
 # oneterm-vt
 
-[![crates.io](https://img.shields.io/crates/v/oneterm-vt.svg)](https://crates.io/crates/oneterm-vt)
-[![docs.rs](https://docs.rs/oneterm-vt/badge.svg)](https://docs.rs/oneterm-vt)
-
 An embeddable terminal core: a VT parser, a grid with scrollback, reflow, selection,
 damage-tracked snapshots and Sixel. You bring the pixels and the process.
+
+## Install
+
+The crate is **not on crates.io**. Depend on it by git:
+
+```toml
+[dependencies]
+oneterm-vt = { git = "https://github.com/vnStrawHat/OneTerm", tag = "v0.5.2" }
+```
+
+Pin a `tag` or a `rev`. `branch = "main"` builds whatever landed this morning, which is not what
+you want in a build you expect to reproduce. The semver promise and
+[`CHANGELOG.md`](CHANGELOG.md) apply to tags exactly as they would to published releases: a tag
+that changes what you compile against is a minor bump with an entry naming the item.
 
 ## What it is not
 
@@ -118,11 +129,11 @@ No feature adds a dependency today, and no feature changes behaviour -- only ava
 
 ## Documentation
 
-- The API reference: <https://docs.rs/oneterm-vt>. Every public item is documented, and the crate
-  builds with `#![warn(missing_docs)]` so it stays that way.
-- Locally: `cargo doc -p oneterm-vt --no-deps --all-features --open`.
+- The API reference: `cargo doc -p oneterm-vt --no-deps --open`. Every public item is documented,
+  and the crate builds with `#![warn(missing_docs)]` so it stays that way. There is no docs.rs
+  page, because the crate is not published.
 - An embedder's guide is planned, and will render beside the API reference rather than living
-  somewhere else. It does not exist yet; this line will carry its link when it does.
+  somewhere else. It does not exist yet; this line will say where it is when it does.
 - The full design, including why the grid, damage and reflow work the way they do:
   <https://github.com/vnStrawHat/OneTerm/tree/main/docs/spec-intakes/IN-0029-vt-engine>.
 
@@ -137,4 +148,4 @@ The crate is `0.x`, and the semver promise it keeps is written at the top of
 
 ## Licence
 
-Apache-2.0.
+Apache-2.0. The text is in [`LICENSE`](LICENSE) beside this file, with [`NOTICE`](NOTICE).

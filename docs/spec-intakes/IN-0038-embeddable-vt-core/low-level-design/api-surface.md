@@ -9,7 +9,7 @@ Date: 2026-09-15
 
 The exact set of `pub` items `oneterm-vt` exposes before and after this intake, the `render` ->
 `snapshot` rename, which types become `#[non_exhaustive]`, what is sealed, and what the crate
-promises about all of it once it is on crates.io.
+promises about all of it once anything outside this repository depends on it.
 
 ## Before
 
@@ -60,8 +60,11 @@ Nothing is `#[non_exhaustive]`. Nothing is sealed.
 | `Config::osc_claims` | `US-0098` | `Config::osc_routes` |
 | `Render*` names | `US-0101` | `Snapshot*` (below) |
 
-No deprecation shims anywhere. The crate has never been published, so `US-0097` is the last moment
-these renames are free; after it they cost a minor bump each.
+No deprecation shims anywhere. Nothing outside this repository depends on the crate yet, so
+`US-0097` is the last moment these renames are free; after it they cost a minor bump each. The
+owner ruling of 2026-09-15 -- consumed by git tag rather than published to crates.io -- does not
+buy any more time here. A consumer pinning a tag is as broken by a rename as one pinning a version,
+and the first outside pin is the deadline either way.
 
 ### Renamed: `render` -> `snapshot`
 
@@ -171,7 +174,11 @@ pub use width::{cluster_width, scalar_width};
 
 ## The semver promise
 
-Stated in the README and the CHANGELOG, and binding from the first published version:
+Stated in the README and the CHANGELOG, and binding from the first tag anything outside this
+repository pins. The crate is consumed as a git dependency rather than from crates.io (owner ruling
+2026-09-15), so **the promise below applies to tags exactly as it would to releases**: the version
+in a tag's `Cargo.toml` is the number these rules are about, and a consumer reads it the same way.
+The rules themselves are unchanged:
 
 1. The crate is `0.x`. Cargo treats a **minor** bump as breaking, and so does this crate: every
    removal, signature change, or new variant on an exhaustive enum is a minor bump with a CHANGELOG

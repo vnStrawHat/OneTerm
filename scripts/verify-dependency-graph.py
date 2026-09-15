@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Verify OneTerm's machine-readable workspace dependency policy and crate versions.
 
-Also the publish policy: exactly one crate may be published, and what it publishes
-has to carry its licence. Pipe a file list in to check the second half:
+Also the publish policy: no crate is published (owner ruling 2026-09-15), and the
+one crate other projects consume by git has to package cleanly and carry its
+licence. Pipe a file list in to check the second half:
 
     cargo package -p oneterm-vt --allow-dirty --list |
         python scripts/verify-dependency-graph.py --package-list -
@@ -21,10 +22,10 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "scripts" / "dependency-graph-policy.json"
 ROOT_MANIFEST = ROOT / "Cargo.toml"
 
-# What the published tarball must contain. `LICENSE` and `NOTICE` are Apache-2.0
+# What the packaged crate must contain. `LICENSE` and `NOTICE` are Apache-2.0
 # section 4(a) and 4(d): a distribution of the work carries them or it is not a
-# licensed distribution. The other three are what makes the crate usable by
-# somebody who has never seen this repository.
+# licensed distribution, and a git dependency is a distribution. The other three
+# are what makes the crate usable by somebody who has never seen this repository.
 REQUIRED_PACKAGE_FILES = (
     "CHANGELOG.md",
     "LICENSE",
@@ -50,16 +51,22 @@ def normal_workspace_dependencies(package: dict, workspace_names: set[str]) -> s
 
 
 def package_list_errors(source: str) -> list[str]:
-    """Check a `cargo package --list` file list for what a publish must carry."""
+    """Check a `cargo package --list` file list for what the crate must carry."""
     text = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
     paths = {line.strip().replace("\\", "/") for line in text.splitlines() if line.strip()}
     if not paths:
         return ["--package-list read an empty file list"]
-    return [
+    errors = [
         f"the oneterm-vt package does not contain {name}"
         for name in REQUIRED_PACKAGE_FILES
         if name not in paths
     ]
+    # Everything a consumer gets has to come from the crate directory: a file
+    # reached by `..` would be missing for anybody depending on the crate.
+    outside = sorted(path for path in paths if path.startswith("../") or path.startswith("/"))
+    if outside:
+        errors.append(f"the oneterm-vt package reaches outside crates/vt: {outside}")
+    return errors
 
 
 def main() -> None:
@@ -155,17 +162,26 @@ def main() -> None:
                 f"workspace version {workspace_version!r} (use version.workspace = true)"
             )
 
-    # `oneterm-vt` is the workspace's only published crate. Everything else
-    # inherits `publish = false`, and a stray override would put an internal
-    # crate on crates.io by accident. In `cargo metadata`, a publishable package
-    # has `publish: null` and a blocked one has `publish: []`.
+    # Owner ruling 2026-09-15: nothing here is published to crates.io. Other
+    # projects consume `oneterm-vt` as a git dependency instead. A stray
+    # `publish = true` would put a crate on the registry by accident, so the
+    # expectation is that the list is empty. In `cargo metadata`, a publishable
+    # package has `publish: null` and a blocked one has `publish: []`.
+    # The flip, when the owner decides to publish: set `publish = true` on
+    # `crates/vt/Cargo.toml` and change this expectation to `["oneterm-vt"]`.
     publishable = sorted(
         name for name, package in packages.items() if package["publish"] is None
     )
-    if publishable != ["oneterm-vt"]:
+    if publishable:
         errors.append(
-            f"oneterm-vt must be the only publishable crate; found {publishable}"
+            f"no crate in this workspace is published; found publishable: {publishable}"
         )
+
+    # The crate other projects depend on by git must stay a leaf: a path or
+    # workspace dependency would not resolve for them.
+    vt_dependencies = sorted(normal_workspace_dependencies(packages["oneterm-vt"], workspace_names))
+    if vt_dependencies:
+        errors.append(f"oneterm-vt must depend on no OneTerm crate; found {vt_dependencies}")
 
     for package_name in ("oneterm-core", "oneterm-terminal"):
         dependencies = normal_workspace_dependencies(packages[package_name], workspace_names)
@@ -192,9 +208,9 @@ def main() -> None:
     )
     if checked_package_list:
         print(
-            "Publish set passed: the oneterm-vt package carries "
+            "Package set passed: the oneterm-vt package carries "
             + ", ".join(REQUIRED_PACKAGE_FILES)
-            + "."
+            + ", and reaches nothing outside crates/vt."
         )
 
 

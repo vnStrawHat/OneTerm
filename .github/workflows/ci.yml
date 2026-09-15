@@ -135,10 +135,11 @@ jobs:
         run: cargo test -p oneterm-vt --features vt-paranoid
 
   vt-package:
-    # `oneterm-vt` is the workspace's only published crate, so what it packages,
-    # what it documents and what it exposes are contracts with people outside
-    # this repository. This job is where they are gated.
-    name: Publishable crate (oneterm-vt)
+    # `oneterm-vt` is not published (owner ruling 2026-09-15), but other projects
+    # depend on it by git, so what it packages, what it documents and what it
+    # exposes are still contracts with people outside this repository. This job
+    # is where they are gated.
+    name: Packaged crate (oneterm-vt)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -176,14 +177,15 @@ jobs:
         run: cargo doc -p oneterm-vt --no-deps --all-features
       - name: Check the public API surface
         run: python scripts/vt-public-api.py --check --no-doc
-      # Apache-2.0 4(a) and 4(d): a distribution carries the licence and the
-      # NOTICE, and `cargo publish` will not say so on its own.
+      # The crate packages cleanly and carries what a consumer needs. Apache-2.0
+      # 4(a) and 4(d) are why `LICENSE` and `NOTICE` are in the required set: a
+      # git dependency is a distribution too.
+      - name: Package the crate
+        run: cargo package -p oneterm-vt
       - name: Check what the package carries
         run: |
           cargo package -p oneterm-vt --list |
             python scripts/verify-dependency-graph.py --package-list -
-      - name: Package the crate
-        run: cargo publish -p oneterm-vt --dry-run
       # Published rustdoc must read for somebody who does not have this
       # repository: no work-packet, decision or intake citations in `///` or
       # `//!` text. A link to the public repository is the one allowed form.

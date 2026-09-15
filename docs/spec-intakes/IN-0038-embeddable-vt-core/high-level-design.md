@@ -10,9 +10,10 @@ Date: 2026-09-15
 any project can depend on. Three things change: everything that is terminal semantics rather than
 OneTerm policy moves **in** (OSC parsing, key and mouse encoding, scrollback search); the OSC layer
 gains an extension and override mechanism neither `alacritty_terminal` nor `rio-vt` has; and the
-crate gets the packaging a published library needs -- `publish = true`, a README, a compiled
-headless example, a CHANGELOG, `#![warn(missing_docs)]`, and rustdoc that does not cite documents
-only this repository holds.
+crate gets the packaging a distributed library needs -- a README, a compiled headless example, a
+CHANGELOG, the licence text, `#![warn(missing_docs)]`, and rustdoc that does not cite documents only
+this repository holds. **Owner ruling 2026-09-15: it is not published to crates.io**; other projects
+consume it as a git dependency on this repository, and the packaging is what makes that usable.
 
 Nothing that is a policy, a backend or a UI moves in. The line is: **the core reports, the embedder
 decides.** OSC 52 is the model that already works -- the engine decodes the base64 and emits
@@ -209,11 +210,14 @@ Three rules make this survivable as an external contract:
 - **MSRV.** `rust-version` stays inherited at 1.96.0. An MSRV raise is a minor bump plus a
   CHANGELOG line; it is never a patch. CI does not currently build at the MSRV -- that gap is
   recorded in `packaging.md` rather than papered over.
-- **Publish.** `publish = true` goes in `crates/vt/Cargo.toml` as an explicit override of the
-  workspace `publish = false`; every other crate keeps inheriting `false`. `US-0097` proves it with
-  `cargo publish --dry-run` in CI and leaves the real publish to a tag.
+- **Publish.** **Owner ruling 2026-09-15: nothing goes to crates.io.** `crates/vt/Cargo.toml`
+  carries an explicit `publish = false` so the decision is visible where a reader looks for it, and
+  `scripts/verify-dependency-graph.py` asserts that no crate in the workspace is publishable. What
+  CI proves instead is that the crate *packages*: `cargo package -p oneterm-vt` plus a check that
+  the file list carries `README.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE` and the example and reaches
+  nothing outside `crates/vt`. A consumer pins a tag, and the promise above applies to tags.
 
-## docs.rs, README and example plan
+## Documentation, README and example plan
 
 - **README** at `crates/vt/README.md`, referenced by `readme = "README.md"`: what the crate is, what
   it deliberately is not (no rendering, no PTY, no policy), the six-dependency tree, the
@@ -228,9 +232,10 @@ Three rules make this survivable as an external contract:
 - **CHANGELOG** at `crates/vt/CHANGELOG.md`, Keep-a-Changelog shape, starting with an `Unreleased`
   section that this intake's packets fill in. It documents the **crate's** API, not OneTerm's
   features.
-- **docs.rs** via `[package.metadata.docs.rs] all-features = true` and
-  `rustdoc-args = ["--cfg", "docsrs"]`, with `#[cfg_attr(docsrs, doc(cfg(feature = "regex")))]` on
-  the feature-gated items so the badge appears.
+- **Rendered documentation** is `cargo doc -p oneterm-vt --no-deps --open`, run by the consumer.
+  There is no docs.rs page and no `[package.metadata.docs.rs]` table, because the crate is not
+  published (owner ruling 2026-09-15). GitHub Pages is the obvious public host if one is ever
+  wanted; nobody has asked.
 - **`#![warn(missing_docs)]`** at the crate root. It is a `warn` and the workspace lint table turns
   warnings into errors in CI, so it is effectively a deny without making a local
   work-in-progress build fail.
@@ -238,8 +243,8 @@ Three rules make this survivable as an external contract:
 ## The doc-comment self-containment rule
 
 `crates/vt/src` carries **105 rustdoc lines** citing `US-NNNN`, `DEC-NNNN`, `IN-NNNN` or
-`docs/spec-intakes/...` paths, across 37 non-test files. On docs.rs every one of those is a dangling
-reference to a document the reader cannot open. They are also the crate's best commentary, so they
+`docs/spec-intakes/...` paths, across 37 non-test files. In the rendered API documentation every one
+of those is a dangling reference to a document the reader cannot open. They are also the crate's best commentary, so they
 are not deleted. The rule `US-0097` applies, mechanically:
 
 1. A citation that explains **why the code is the way it is** moves from `///` or `//!` to a plain
@@ -296,10 +301,10 @@ Required for the high-risk lane. Four concerns, one file each:
 - [`low-level-design/encoding-and-search.md`](low-level-design/encoding-and-search.md) -- moving
   `key_encode`, `mouse_encode` and `search`, the `regex` feature, which tests travel, and what
   `crates/terminal` keeps.
-- [`low-level-design/packaging.md`](low-level-design/packaging.md) -- `publish = true`, README,
-  example, CHANGELOG, `missing_docs`, MSRV, docs.rs metadata, and the effect on
+- [`low-level-design/packaging.md`](low-level-design/packaging.md) -- the manifest, README,
+  example, CHANGELOG, licence text, `missing_docs`, MSRV, and the effect on
   `third-party-notices.py`, `cargo-deny`, `check-english.py` and `check-doc-paths.py`.
 
 Reason: the intake changes a public contract and makes it external, which is a high-risk trigger on
-its own; and the OSC mechanism is the one part where a wrong shape would be expensive to undo after
-the first crates.io release.
+its own; and the OSC mechanism is the one part where a wrong shape would be expensive to undo once
+another project depends on a tag.

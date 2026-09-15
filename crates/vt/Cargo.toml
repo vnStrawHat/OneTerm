@@ -9,14 +9,9 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["terminal", "vt100", "ansi", "emulator", "tui"]
 categories = ["command-line-interface", "parser-implementations", "emulators"]
-# The only crate in the workspace that overrides the inherited `publish = false`.
-# A reviewer must be able to `grep -n publish crates/*/Cargo.toml` and see one
-# line; CI asserts the count.
-publish = true
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
+# Owner ruling 2026-09-15: not published to crates.io. Other projects depend on
+# it by git for now; everything above is kept so the flip is one line here.
+publish = false
 
 [lints]
 workspace = true

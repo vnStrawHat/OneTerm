@@ -6,6 +6,9 @@ changes what an embedder compiles against or what bytes the terminal replies wit
 
 ## The promise
 
+The crate is not on crates.io: other projects depend on it by git, pinned to a tag. The promise
+below applies to those tags exactly as it would to published releases.
+
 The crate is `0.x`, and Cargo treats a minor bump as breaking. So does this crate:
 
 1. A removal, a signature change, or a new variant on an exhaustive enum is a **minor** bump, with
@@ -38,9 +41,13 @@ carry no API change at all. Such a release says so below rather than being omitt
 ### Added
 
 - `Config::product_name`: what the terminal calls itself in `XTVERSION` (`CSI > 0 q`) and `DA2`
-  (`CSI > c`). `None` answers `oneterm-vt(<version>)`.
-- `README.md`, `CHANGELOG.md` and `examples/headless.rs`; the crate is packaged for crates.io and
-  documented for docs.rs.
+  (`CSI > c`). `None` answers `oneterm-vt(<version>)`. The value is sanitised before it is used:
+  C0, `DEL` and C1 controls are dropped so a name cannot end the DCS string early, and the result
+  is cut to 64 bytes. `DA2` packs the trailing `(<major>.<minor>.<patch>)` into one number with
+  each component saturating at 99.
+- `README.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE` and `examples/headless.rs`: the crate is
+  packaged so another project can depend on it by git, and documented so somebody who has never
+  seen the OneTerm repository can use it.
 
 ### Changed
 
