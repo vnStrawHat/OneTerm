@@ -25,11 +25,20 @@ workspace = true
 # build.
 vt-paranoid = []
 
+# Regular-expression scrollback search (`search::SearchPattern::Regex`). Off by
+# default: the literal scanner needs nothing, and the default dependency set is
+# a promise. Enabling it adds `regex` and its three crates and changes no
+# behaviour the literal scanner already had.
+regex = ["dep:regex"]
+
 [dependencies]
 bitflags.workspace = true
 log.workspace = true
 # The ground-state control-byte scan (`memchr3(ESC, LF, CR)`); already in Cargo.lock.
 memchr.workspace = true
+# Optional, default-off: the `regex` feature's matcher. Nothing in the default
+# build reaches it.
+regex = { workspace = true, optional = true }
 rustc-hash.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
