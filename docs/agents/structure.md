@@ -182,11 +182,13 @@ OneTerm/
 │       ├── README.md               # the crate's front page; its Rust blocks are doctests
 │       ├── LICENSE, NOTICE         # Apache-2.0 travels with the crate, not just the repo
 │       ├── CHANGELOG.md            # the crate's API changelog and its semver promise
-│       ├── public-api.txt          # the public surface; `scripts/vt-public-api.py` gates it
+│       ├── public-api.windows.txt  # the public surface, one file per platform family: the `pty`
+│       ├── public-api.unix.txt     #   module is cfg-dependent. `scripts/vt-public-api.py` gates both
 │       ├── examples/headless.rs    # feed bytes, read events, print the screen — no dependencies
 │       ├── src/
 │       │   ├── lib.rs              # module declarations + public re-exports only; `grid`, `input`,
-│       │   │                       #   `intern`, `parser` and `search` are the only modules named by path
+│       │   │                       #   `intern`, `parser`, `search` and `pty` are the six modules
+│       │   │                       #   named by path
 │       │   ├── cell.rs             # 8-byte packed Cell, CellWidth, Semantic, Style, Attrs, Color
 │       │   ├── intern.rs           # per-terminal style / extras / grapheme / hyperlink tables
 │       │   ├── width.rs            # scalar_width + cluster_width (mode 2027 storage, not the mode)
@@ -200,9 +202,17 @@ OneTerm/
 │       │   ├── reflow/             # resize policies (BottomAnchor / KeepViewportTop)
 │       │   ├── search/             # scrollback search: copy the grid, then match — regex behind a feature
 │       │   ├── selection/          # the four selection kinds, anchored so they survive a repaint
-│       │   └── graphics/           # Sixel decode, placements, the virtual cell
-│       └── tests/                  # parser_limits.rs, us0087_cleanup_rows.rs
-│                                   #   (the parity corpus moved to crates/tools/corpus/ at US-0093)
+│       │   ├── graphics/           # Sixel decode, placements, the virtual cell
+│       │   └── pty/                # the pseudo-console transport, behind the default-on `pty` feature
+│       │       │                   #   (US-0104; `--no-default-features` compiles none of it)
+│       │       ├── mod.rs          #   Options / Shell / WindowSize / GlyphWidth / ChildEvent + the
+│       │       │                   #   EventedReadWrite / EventedPty / OnResize traits and both tokens
+│       │       ├── windows.rs      #   + windows/{conpty,pipe,child}.rs — ConPTY, a conpty.dll beside
+│       │       │                   #   the executable preferred over kernel32 (DEC-0013)
+│       │       └── unix.rs         #   openpty + the reaper thread that makes child exit pollable
+│       └── tests/                  # parser_limits.rs, us0087_cleanup_rows.rs, pty_contract.rs,
+│                                   #   engine_without_pty.rs (the parity corpus moved to
+│                                   #   crates/tools/corpus/ at US-0093)
 │
 ├── docs/                           # Development documentation
 │   ├── architecture.md             # the crate map — the current-state index
