@@ -355,3 +355,47 @@ Merge after: deleting `firecap.bin` (F1); correcting the status and proof blocks
 rebase onto `main` with the README sentence and both snapshot files regenerated (F4); and the
 `structure.md` tree (F5). F6-F12 are one-line fixes that can ride along or follow. F13 closes itself
 on the first CI run.
+
+---
+
+## Final re-check at `a2e9e4c`
+
+Branch rebased onto `491dff8`; `main` now `072560a`, one docs commit ahead. Same rules: pid-tracked
+spawns only, nothing written outside the repository and the scratchpad, no waiter left behind.
+
+**Verdict: PASS.** All thirteen findings are closed. Nothing new was found.
+
+| | Re-check | Result |
+| --- | --- | --- |
+| F1 | `firecap.bin` | Gone from the tree; `.gitignore:34` carries `/firecap.bin`. |
+| F2 | status block | Only `Planned` / `In progress` / `Implemented` ticked (`:12-17`). |
+| F3 | proof block + harness row | `E2E proof` unticked (`:338`). The SQL row is present (`:681-692`): `intake_id 43`, proof columns `1, 1, 0, 1, 1` - unit, integration, **e2e 0**, platform, verify - matching the block exactly. |
+| F4 | README + snapshots | README `:155-157` names **two** dependency-adding features, `pty` and `regex`. Both snapshots regenerated post-`US-0100` (5 `oneterm_vt::search` lines in each). `--diff-platforms` exits 0 with exactly the same six `pty` lines. Unix derivation re-spot-checked against `crates/vt/src/pty/unix.rs`: still exactly `SignalMask` (`:35`), `SignalMask::current` (`:39`), `PseudoConsole` (`:78`), `spawn` (`:89`), `child_pid` (`:193`) - nothing public was missed. |
+| F5 | `structure.md` tree | `src/pty/` at `:203`, both snapshot files at `:185-186`, and the module-count line corrected to five (`:189-190`). |
+| F6-F9 | docs and arithmetic | `scripts/README.md` row rewritten; `-73`; conpty `7` and the suites sum to 24; the rustdoc paragraph points at "The platform split". |
+| F10 | widened grep | `grep -rnE '^\s*//[/!].*(crates/\|docs/)'` over `crates/vt/src`, minus `https://github.com/`, returns **zero**. The widened pattern is live in `scripts/ci-local.ps1:106`, `scripts/ci-local.sh:80`, `.github/workflows/ci.yml:222` and `AGENTS.md:124`. |
+| F11 | `windows-sys` union | Recorded at `:618-622` with the trigger. The correction is right and mine was wrong: `Win32_Storage_FileSystem` **is** used (`ReadFile` / `WriteFile`, `pty/windows/pipe.rs:34`); the unused pair is `Win32_System_Diagnostics_ToolHelp` and `Win32_System_IO`. Verified by enumerating every `windows_sys::Win32::*` path in `crates/vt/src`. |
+| F12 | fixed, not just recorded | Root `Cargo.toml:69` `oneterm-vt = { path = "crates/vt", default-features = false }`; `crates/local-shell/Cargo.toml:22` and `crates/tools/Cargo.toml:65` take `features = ["pty"]`. `cargo tree -p oneterm-terminal -e normal` shows `oneterm-vt` over the six leaves only - no `polling`, no `windows-sys`. An external embedder is unaffected: a crate outside the workspace taking `oneterm-vt` with default features still gets the module, spawned a real ConPTY child (pid 25904) and exited 0, and its own tree still shows `polling` and `windows-sys 0.59` under `oneterm-vt`. `cargo tree -p oneterm-vt -e normal` is still 16 distinct. |
+| F13 | Unix snapshot | Still derived, still labelled so, still first checked by the `ubuntu-latest` `vt-package` job. Unchanged risk, unchanged mitigation. |
+
+Adopted tests, in-workspace: `crates/vt/tests/pty_contract.rs` (`#![cfg(all(windows, feature =
+"pty"))]`) **3 passed** inside `cargo test --workspace`; `crates/vt/tests/engine_without_pty.rs`
+(`#![cfg(not(feature = "pty"))]`) collects 0 in the default build and **1 passed** under
+`cargo test -p oneterm-vt --no-default-features --test engine_without_pty`. The compile-fail half
+was dropped on purpose rather than pulling `trybuild` into an embeddable crate; the expectation it
+encoded is still true and is recorded above (`E0433 ... gated behind the 'pty' feature`).
+
+One observation, not a finding: no CI entry point runs `cargo test -p oneterm-vt
+--no-default-features`, so `engine_without_pty.rs` is compiled by the `--no-default-features` build
+step but never *executed* by the gate. It is a two-second step if anyone wants it to be.
+
+`cargo test -p oneterm-local-shell`: **33 passed, 0 failed, 2 ignored**, `session_orphan_tests`
+included. `pwsh scripts/ci-local.ps1 -Full`: **exit 0, "ci-local: all checks passed"**, zero
+`test result: FAILED` lines, `cargo deny` "advisories ok, bans ok, licenses ok".
+
+Processes spawned in this pass: the `ci-local` `pwsh` and its toolchain children (exited); the
+external probe's `cmd.exe` pid **25904** and the three `pty_contract` children, each asserted gone
+by the test that spawned it; `tasklist /FI "PID eq N"` helpers (synchronous). Nothing was matched or
+listed by image name, and the running `oneterm.exe` was never touched. The scratch external crate
+was deleted afterwards; the only file this session leaves in the worktree is this evidence file,
+uncommitted.
