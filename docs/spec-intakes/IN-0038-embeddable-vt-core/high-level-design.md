@@ -38,6 +38,7 @@ OSC moving in this intake follows it.
                         |  input/     key_encode + mouse_encode         |  (moved in, US-0099)
                         |  search/    scrollback search, [regex] feat   |  (moved in, US-0100)
                         |  event/     VtEvent values in an EventBatch   |
+                        |  pty/       ConPTY / openpty, [pty] DEFAULT   |  (moved in, US-0104)
                         +-----------------------------------------------+
                             |  feed(bytes, &mut EventBatch, now)
                             |  -> FeedStats, batch of VtEvent VALUES
@@ -52,14 +53,15 @@ OSC moving in this intake follows it.
                         +-----------------------------------------------+
                             |                         ^
                             v                         |
-                        oneterm-pty / russh      SessionEvent -> GPUI
+                        oneterm_vt::pty / russh   SessionEvent -> GPUI
 ```
 
 What stays outside, and why (each row is R6/R7's boundary, not taste):
 
 | Outside the core | Why |
 | --- | --- |
-| PTY / ConPTY / SSH transport (`oneterm-pty`, `crates/ssh`) | a core that spawns processes cannot be used by a project that already owns its own process model. `rio-vt` puts the PTY behind a **default-on** feature; that is the mistake this crate does not make. R7. |
+| ~~PTY / ConPTY~~ -- **moved in** at `US-0104` | Superseded by the owner ruling of 2026-09-15. This row read that a core which spawns processes cannot be used by a project that already owns its own process model, and that `rio-vt`'s default-on PTY feature was the mistake this crate would not make. The ruling takes `rio-vt`'s shape on purpose, and the objection is answered by the feature rather than by exclusion: `--no-default-features` compiles no platform code, spawns no thread and resolves to six leaf dependencies, so an embedder with its own process model pays nothing. See [`low-level-design/pty.md`](low-level-design/pty.md). |
+| SSH transport (`crates/ssh`) | a protocol client with a hidden tokio runtime, a key store and an auth policy is not terminal semantics. R7. |
 | The lock | `IN-0029` decision 6 and 7: the engine holds no lock and no interior mutability, so the embedder picks `parking_lot`, `std`, a channel or nothing. `crates/vt/src/lib.rs` says so and `US-0090` made it true. |
 | Clipboard backend | reading and writing the OS clipboard is a platform capability with a policy attached. The engine decodes and reports. |
 | `TerminalSecurityPolicy` | size caps, the notification rate limit and the two remote-clipboard gates are product choices, and OneTerm's are not another embedder's. Decision (f). |
@@ -113,20 +115,35 @@ ruled by the owner: custom spellings are handled outside the engine), so no wire
 | `cell`, `reflow`, `width` | private, re-exported | `Cell`, `Style`, `Attrs`, `Color`, `ResizePolicy`, `cluster_width` | `cluster_width` gains its caller (`US-0102`) |
 | **`input`** | **`pub`** | `KeySpec`, `NamedKey`, `KeyMods`, `encode_key`; `TerminalMouseButton`, `MouseModifiers`, `encode_mouse_*`, `encode_wheel_event` | **new**, moved from `crates/terminal` (`US-0099`) |
 | **`search`** | **`pub`** | `SearchOptions`, `SearchMatch`, `GridText`, `search_grid_text`; `SearchPattern::Regex` behind the `regex` feature | **new**, moved from `crates/terminal` (`US-0100`) |
+| **`pty`** | **`pub`**, `#[cfg(feature = "pty")]` | `PseudoConsole`, `Options`, `Shell`, `WindowSize`, `GlyphWidth`, `ChildEvent`, `EventedReadWrite`, `EventedPty`, `OnResize`, `SignalMask` (Unix), `PipeReader` / `PipeWriter` (Windows), `PTY_CHILD_EVENT_TOKEN`, `PTY_READ_WRITE_TOKEN` | **new**, moved from `crates/pty` (`US-0104`); the whole module disappears under `--no-default-features` |
 
-`input` and `search` are `pub mod` rather than root re-exports because they are self-contained
-namespaces an embedder may want to `use` wholesale, and because `encode_key` at the crate root
-would read as if the crate were an input library. That is the same reason `grid`, `intern` and
-`parser` are `pub mod` today.
+`input`, `search` and `pty` are `pub mod` rather than root re-exports because they are
+self-contained namespaces an embedder may want to `use` wholesale, and because `encode_key` or
+`PseudoConsole` at the crate root would read as if the crate were an input library or a process
+launcher. That is the same reason `grid`, `intern` and `parser` are `pub mod` today.
+
+`pty` is the only module gated by a feature, and the only one that contains `unsafe`, platform FFI,
+a spawned thread or a blocking `Drop`. Everything above it in the table is true at every feature
+setting.
 
 ## Dependency budget
 
 The crate's whole `cargo tree -p oneterm-vt -e normal` is seven lines today. The rule after this
-intake: **default features add nothing.**
+intake, **replacing** the earlier "default features add nothing" (which the owner ruling of
+2026-09-15 made false): **`--no-default-features` adds nothing, and it is a CI target.** One default
+feature, `pty`, adds dependencies; every other feature is default-off, and no feature may add a
+platform dependency beyond `pty`'s three.
+
+| Build | Direct | Distinct crates | Notes |
+| --- | --- | --- | --- |
+| `--no-default-features`, any target | 6 | 6 | identical to the crate on `main` today |
+| default, `x86_64-pc-windows-msvc` | 8 | 16 | `+polling`, `+windows-sys 0.59` and their transitives |
+| default, `x86_64-unknown-linux-gnu` | 8 | 11 | `+polling`, `+libc` and their transitives |
 
 | Feature | Default | Adds | Why it is a feature and not a dependency |
 | --- | --- | --- | --- |
 | (none) | -- | `bitflags`, `log`, `memchr`, `rustc-hash`, `unicode-segmentation`, `unicode-width` | the six the engine cannot do without |
+| `pty` | **on** | `polling` (public), plus `windows-sys` on Windows or `libc` on Unix | owner ruling 2026-09-15: a terminal core that cannot open a terminal is a surprise, so it ships on. It is a feature and not a dependency because an embedder that already owns its process model must be able to compile the engine with no platform code, no thread and no blocking `Drop`. `rio-vt`'s shape; `US-0104`; [`low-level-design/pty.md`](low-level-design/pty.md). |
 | `regex` | **off** | `regex 1` | literal and whole-word search need no regex; an embedder who wants `SearchPattern::Regex` pays 3 crates (`regex`, `regex-automata`, `regex-syntax`) and about 1.5 MB of compiled matcher. OneTerm's own search is literal, so OneTerm does not turn it on. |
 | `serde` | **off** | `serde 1` (derive) | proposed, pending intake Open Decision 3. `Serialize`/`Deserialize` on the plain-data types only, never on `Terminal`, `EventBatch` or any span type. |
 | `vt-paranoid` | off | nothing | existing: the whole-history integrity walk for property tests and CI |
@@ -134,9 +151,13 @@ intake: **default features add nothing.**
 Rules the packets enforce:
 
 - A feature never changes behaviour, only availability. `search_grid_text` on a literal pattern
-  returns the same matches with and without `regex`.
+  returns the same matches with and without `regex`, and `feed` parses the same bytes with and
+  without `pty`.
 - `cargo build -p oneterm-vt --no-default-features` and `--all-features` must both be clean and are
-  both CI targets (`US-0097`).
+  both CI targets (`US-0097`), and the `--no-default-features` step carries a `cargo tree` assertion
+  that the six-dependency claim is still literally true (`US-0104`).
+- No feature except `pty` may add a platform dependency, and `pty` may add only `polling`,
+  `windows-sys` and `libc`. `vt` gains no OneTerm dependency in any feature combination.
 - No optional dependency may appear in the signature of a non-feature-gated item. `SearchPattern`
   is `#[non_exhaustive]` so its `Regex` variant can be feature-gated without breaking the match
   arms an embedder wrote.
@@ -185,6 +206,10 @@ pub mod search;  // SearchOptions, SearchMatch, search_grid_text
 pub mod grid;    // Pos, RowId, Size, Viewport, Screen
 pub mod parser;  // the state machine and its limits
 pub mod intern;  // Hyperlink and friends
+
+// The transport. Default-on, and the only feature-gated module.
+#[cfg(feature = "pty")]
+pub mod pty;     // PseudoConsole, Options, EventedReadWrite / EventedPty / OnResize
 ```
 
 Three rules make this survivable as an external contract:
@@ -220,9 +245,10 @@ Three rules make this survivable as an external contract:
 ## Documentation, README and example plan
 
 - **README** at `crates/vt/README.md`, referenced by `readme = "README.md"`: what the crate is, what
-  it deliberately is not (no rendering, no PTY, no policy), the six-dependency tree, the
-  twenty-line quick start, the OSC routing table with one override example, the feature table, and
-  the MSRV. Every code block in it is either the example file's content or is compiled by a doctest;
+  it deliberately is not (no rendering, no policy), the six-dependency tree -- pasted from
+  `cargo tree -e normal --no-default-features` once `US-0104` makes the two builds differ -- the
+  twenty-line quick start, the OSC routing table with one override example, the feature table
+  (`pty` is the one default-on row), and the MSRV. Every code block in it is either the example file's content or is compiled by a doctest;
   nothing is retyped prose. `rio-vt`'s README drifted from its manifest within seven weeks -- that
   is the failure this rule exists to prevent.
 - **Example** at `crates/vt/examples/headless.rs`: create a terminal, feed bytes including an OSC
@@ -289,7 +315,7 @@ keeps `DA2` a number as the protocol requires while letting the product own it.
 
 ## Detail Design
 
-Required for the high-risk lane. Four concerns, one file each:
+Required for the high-risk lane. Five concerns, one file each:
 
 - [x] Detail design: **required (high-risk)**
 - [`low-level-design/osc-extension.md`](low-level-design/osc-extension.md) -- `OscRoutes`, the
@@ -304,6 +330,11 @@ Required for the high-risk lane. Four concerns, one file each:
 - [`low-level-design/packaging.md`](low-level-design/packaging.md) -- the manifest, README,
   example, CHANGELOG, licence text, `missing_docs`, MSRV, and the effect on
   `third-party-notices.py`, `cargo-deny`, `check-english.py` and `check-doc-paths.py`.
+- [`low-level-design/pty.md`](low-level-design/pty.md) -- the owner ruling of 2026-09-15: the
+  pseudo-console transport moves into the crate behind a default-on `pty` feature. The file move,
+  the feature, what "overridable" means and the decision that the transport traits are gated with
+  the feature, the dependency arithmetic in both modes, the R1-R12 replacement text, the bundled
+  Windows console host and why it stays out of the published package, and the threading model.
 
 Reason: the intake changes a public contract and makes it external, which is a high-risk trigger on
 its own; and the OSC mechanism is the one part where a wrong shape would be expensive to undo once

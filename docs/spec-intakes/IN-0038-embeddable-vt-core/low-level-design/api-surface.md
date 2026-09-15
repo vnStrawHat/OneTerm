@@ -46,6 +46,7 @@ Nothing is `#[non_exhaustive]`. Nothing is sealed.
 | --- | --- | --- |
 | `pub mod input` -- `KeySpec`, `NamedKey`, `KeyMods`, `encode_key`, `TerminalMouseButton`, `MouseModifiers`, `encode_mouse_press`, `encode_mouse_release`, `encode_mouse_move`, `encode_wheel_event` | `US-0099` | moved in |
 | `pub mod search` -- `SearchOptions`, `SearchPattern`, `SearchMatch`, `GridText`, `search_grid_text` | `US-0100` | moved in |
+| `pub mod pty` (`#[cfg(feature = "pty")]`) -- `PseudoConsole`, `Options`, `Shell`, `WindowSize`, `GlyphWidth`, `ChildEvent`, `EventedReadWrite`, `EventedPty`, `OnResize`, `PTY_CHILD_EVENT_TOKEN`, `PTY_READ_WRITE_TOKEN`; `SignalMask` on Unix; `PipeReader`, `PipeWriter` on Windows | `US-0104` | moved in from `oneterm-pty` |
 | `OscRoute`, `OscRoutes` | `US-0098` | replaces `OscClaims` |
 | `Progress`, `ShellMark` | `US-0098` | new |
 | Seven `VtEvent` variants (`Cwd`, `IconName`, `Notification`, `Pointer`, `Progress`, `ShellMark`, `CursorStyleChanged`) | `US-0098` | new |
@@ -120,6 +121,7 @@ variants. Marking them now is free; marking them after the first release is a br
 | `FeedStats` | a new counter is a routine engine change |
 | `SearchOptions`, `SearchPattern` | `SearchPattern::Regex` is feature-gated, so the enum must be non-exhaustive or a `--no-default-features` build changes the match arms an embedder must write |
 | `KeySpec`, `NamedKey` | new named keys arrive with keyboard protocols |
+| `pty::ChildEvent`, `pty::GlyphWidth`, `pty::Options` | `US-0104`. `ChildEvent` has one variant today and will gain signal reporting; `GlyphWidth` tracks mode 2027 and its successors; `Options` is a configuration struct and grows for the same reason `Config` does. `Shell` and `WindowSize` stay exhaustive -- they are frozen value types the embedder constructs. |
 
 Deliberately **exhaustive** (frozen value types an embedder constructs and destructures, where
 non-exhaustive would be a usability tax for no benefit): `Pos`, `Size`, `RowId`, `SeqNo`, `Rgb`,
@@ -156,6 +158,11 @@ pub mod input;    // US-0099
 pub mod intern;
 pub mod parser;
 pub mod search;   // US-0100
+
+/// The pseudo-console transport. Default-on, and the only feature-gated
+/// module: `--no-default-features` compiles no platform code (US-0104).
+#[cfg(feature = "pty")]
+pub mod pty;      // US-0104
 
 pub use cell::{Attrs, Cell, CellContent, CellWidth, Color, NamedColor, Rgb, Semantic, Style};
 pub use event::{ClipboardKind, EventBatch, FeedStats, Progress, ShellMark, StringTerm, VtEvent};
@@ -196,6 +203,16 @@ The rules themselves are unchanged:
    shape half.
 7. `FeedStats` counter *semantics* are documented per field and are part of the contract; a counter
    that starts counting a different thing is a minor bump.
+8. **`polling` is a public dependency of the `pty` feature** (`US-0104`). `polling::Poller`,
+   `polling::Event` and `polling::PollMode` appear in the `EventedReadWrite` signatures, so a
+   `polling` **major** bump is a breaking change to this crate and is a **minor** bump with a
+   CHANGELOG line naming the old and new versions. It is the crate's only public dependency, and
+   [`pty.md`](pty.md) records the redesign that would remove it and the trigger for doing so. No
+   other optional dependency's type may appear in a public signature -- that rule is unchanged and
+   is why `SearchPattern::Regex` carries no `regex` type.
+9. `pty::PseudoConsole` is a **different type on each platform**: `windows::PseudoConsole` and
+   `unix::PseudoConsole` share the trait set, not the inherent API. Portable embedder code goes
+   through `EventedPty + OnResize`; anything else is platform code and is documented as such.
 
 What is explicitly **not** promised: grid internals reachable through `grid::Screen`, the exact
 `SeqNo` values, allocation behaviour, and performance. `DEC-0015`'s row-identity guarantee (a

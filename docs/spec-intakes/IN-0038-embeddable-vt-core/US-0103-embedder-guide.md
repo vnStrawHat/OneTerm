@@ -33,8 +33,8 @@ Created: 2026-09-15
 > wanted; nobody has asked. Where a criterion below names docs.rs or `cargo publish --dry-run`, read
 > `cargo doc` and `cargo package -p oneterm-vt --list` instead.
 
-`oneterm-vt` ships a twelve-chapter **embedder's guide** -- prose that teaches someone how to build a
-terminal on top of the crate -- rendered to HTML by `cargo doc` alongside the API reference, and
+`oneterm-vt` ships a thirteen-chapter **embedder's guide** -- prose that teaches someone how to build
+a terminal on top of the crate -- rendered to HTML by `cargo doc` alongside the API reference, and
 reproducible with one command.
 
 The guide is the answer to a question the API reference cannot answer: the reference says what
@@ -48,7 +48,7 @@ HTML.
 
 ## Scope
 
-- [ ] In scope: `crates/vt/docs/guide/*.md` (twelve chapters); `crates/vt/src/guide.rs` and its
+- [ ] In scope: `crates/vt/docs/guide/*.md` (thirteen chapters); `crates/vt/src/guide.rs` and its
   `pub mod guide` line in `lib.rs`; `scripts/vt-docs.ps1` and `scripts/vt-docs.sh`; the `cargo doc`
   step in `scripts/ci-local.sh`, `scripts/ci-local.ps1` and `.github/workflows/ci.yml`; one row in
   `scripts/README.md`; the "Documentation" section of the README that `US-0097` writes.
@@ -61,7 +61,8 @@ HTML.
 - [ ] Out of scope: mdBook, or any second documentation toolchain. Evaluated and rejected below.
 - [ ] Out of scope: translating the guide. English only, per `scripts/check-english.py`.
 - [ ] Out of scope: a tutorial that builds a renderer. The crate has no renderer by decision (f);
-  the guide stops at the snapshot.
+  the guide stops at the snapshot. The **transport** is no longer out: the owner ruling of
+  2026-09-15 reversed decision (f) for the PTY, so chapter 13 exists and is gated on `US-0104`.
 
 ## The rendering decision
 
@@ -119,12 +120,12 @@ the second external embedder.
 
 ## Chapter outline
 
-Twelve files under `crates/vt/docs/guide/`. One line each is the chapter's job, not its table of
+Thirteen files under `crates/vt/docs/guide/`. One line each is the chapter's job, not its table of
 contents.
 
 | # | File | Purpose |
 | --- | --- | --- |
-| 1 | `01-overview.md` | What the crate is, what is deliberately out (no renderer, no PTY, no policy -- decision f), and the comparison table against `alacritty_terminal` and `rio-vt` lifted from the intake's parity inventory, with the OSC-extensibility row as the headline. |
+| 1 | `01-overview.md` | What the crate is, what is deliberately out (no renderer, no policy -- decision f), and the comparison table against `alacritty_terminal` and `rio-vt` lifted from the intake's parity inventory, with the OSC-extensibility row as the headline. Its "PTY in the core" row reads "yes, default-on feature, and the only one of the three where turning it off leaves a six-dependency crate" (`US-0104`). |
 | 2 | `02-embedding.md` | Embedding in ten minutes: `Terminal::new`, `feed`, draining an `EventBatch`, taking a snapshot, `resize` -- the headless example walked line by line, ending with a working program. |
 | 3 | `03-threading.md` | The threading and locking model: the engine is synchronous and has no interior mutability, **the embedder owns the lock**, nothing the engine does can call back into embedder code, and `FeedStats` is how you decide when to wake a renderer. |
 | 4 | `04-events.md` | Every `VtEvent` variant: when it fires, what the embedder must do about it, which ones are queries that demand a reply and how to write that reply back to the PTY, and why an event may not outlive its batch. |
@@ -135,11 +136,18 @@ contents.
 | 9 | `09-resize.md` | Resize and reflow: what reflow guarantees and what it does not, what happens to the cursor, the selection and image placements, and the cost model of a resize on a full history. |
 | 10 | `10-limits.md` | Hostile input: every ceiling (OSC inline and large, parameter counts, history bounds), the counters that report what was dropped, and the rule that no byte sequence may panic the engine. |
 | 11 | `11-conformance.md` | Conformance: what is supported, the frozen parity corpus, the known gaps, and the `esctest` pass/fail counts `US-0102` produces. Gated on `US-0102`. |
-| 12 | `12-versioning.md` | Versioning, MSRV and the changelog policy: the semver promise from `api-surface.md`, the MSRV rule from `packaging.md`, and what an embedder should pin. |
+| 12 | `12-versioning.md` | Versioning, MSRV and the changelog policy: the semver promise from `api-surface.md`, the MSRV rule from `packaging.md`, and what an embedder should pin -- including the `polling` public-dependency clause. |
+| 13 | `13-pty.md` | **Pty**: the default-on `pty` feature and why it ships on; the evented, runtime-free IO model and the loop the embedder writes (`Poller`, the two tokens, `feed` under the embedder's lock); the `EventedReadWrite` / `EventedPty` / `OnResize` contract, with the loopback implementation as the worked override; what `--no-default-features` gives instead (`feed` is the transport seam, and the traits are gone with the feature -- stated plainly, not implied); the blocking `Drop` and `CHILD_EXIT_GRACE`; and the Windows ConPTY host situation -- the crate ships no console host, so an embedder gets the inbox `conhost.exe`, which swallows Sixel, unless they bundle their own pair. Gated on `US-0104`. |
 
-Chapters 6, 7 and 11 are written last because their subject matter does not exist until their gating
-packet lands. A chapter file is **not** created empty as a placeholder: twelve modules, twelve
-files, or the packet is not done.
+Chapters 6, 7, 11 and 13 are written last because their subject matter does not exist until their
+gating packet lands. A chapter file is **not** created empty as a placeholder: thirteen modules,
+thirteen files, or the packet is not done.
+
+**Why 13 and not a renumber.** The PTY sits logically next to chapter 3 (threading), but rustdoc
+orders the chapter list alphabetically by `chNN_` module name, so inserting it there renumbers ten
+files and ten module names for a reading-order gain. It is appended instead, and that is acceptable
+precisely **because** the feature is optional: chapters 1 to 12 are true at every feature setting,
+and a reader who never enables `pty` never needs chapter 13.
 
 ## Local render, and CI
 
@@ -169,11 +177,14 @@ Each criterion below is a command a verifier who distrusts this packet can run.
 
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` exits 0 and
   prints no warning.
-- [ ] `target/doc/oneterm_vt/guide/index.html` exists and links to exactly twelve chapter modules.
-- [ ] `ls crates/vt/docs/guide/*.md | wc -l` is 12, and
-  `grep -c 'include_str!' crates/vt/src/guide.rs` is 12.
+- [ ] `target/doc/oneterm_vt/guide/index.html` exists and links to exactly thirteen chapter modules.
+- [ ] `ls crates/vt/docs/guide/*.md | wc -l` is 13, and
+  `grep -c 'include_str!' crates/vt/src/guide.rs` is 13.
 - [ ] `cargo test -p oneterm-vt --doc` is green, and **every chapter contributes at least one
-  doctest**: `cargo test -p oneterm-vt --doc -- --list | grep -c 'docs/guide/'` is at least 12.
+  doctest**: `cargo test -p oneterm-vt --doc -- --list | grep -c 'docs/guide/'` is at least 13.
+  Chapter 13's doctests name `pty` types, so they compile only with the default features on; the
+  chapter module and its doctests are `#[cfg(feature = "pty")]` and the count above is taken from a
+  default-feature run.
 - [ ] Deleting one character from any chapter code block makes `cargo test -p oneterm-vt --doc`
   fail. Spot-checked on three chapters and recorded in Evidence; this is the same cannot-rot check
   `US-0097` applies to the README.
@@ -222,7 +233,10 @@ Each criterion below is a command a verifier who distrusts this packet can run.
 - `docs/spec-intakes/IN-0038-embeddable-vt-core/high-level-design.md` -- the module layout chapter 1
   describes, and the doc-comment self-containment rule.
 - `US-0097` -- the README this guide is linked from, and the `missing_docs` gate it depends on.
-- `US-0099`, `US-0100`, `US-0102` -- gating packets for chapters 6, 7 and 11.
+- `US-0099`, `US-0100`, `US-0102`, `US-0104` -- gating packets for chapters 6, 7, 11 and 13.
+- `docs/spec-intakes/IN-0038-embeddable-vt-core/low-level-design/pty.md` -- the feature, the
+  threading and IO model, the trait-gating decision and the missing-console-host consequence that
+  chapter 13 teaches.
 - `scripts/README.md` -- every script and which CI runs it; `vt-docs` is a new row.
 - `docs/agents/code-style.md` -- Rust conventions for `guide.rs`.
 
@@ -257,6 +271,7 @@ The guide's raw material already exists and should be moved, not invented:
 | 10 | the `OSC_INLINE = 2048` and `OSC_LARGE = 8 MiB` ceilings and the drop counters in `crates/vt/src/terminal/osc.rs` |
 | 11 | `US-0102` Evidence; `IN-0029-vt-engine/low-level-design/testing-and-bench.md` for the corpus |
 | 12 | `api-surface.md` and `packaging.md` |
+| 13 | `low-level-design/pty.md`; the moved `crates/vt/src/pty/mod.rs` rustdoc; `crates/local-shell/src/event_loop.rs` as the worked loop; `DEC-0013` for the console-host situation and `DEC-0016` for the blocking drop |
 
 Every one of those sources lives in `docs/spec-intakes/`, which a reader of the crate alone cannot
 open --
@@ -264,11 +279,11 @@ which is exactly why the guide has to restate them rather than link them.
 
 ## Plan
 
-- [ ] `crates/vt/src/guide.rs` with twelve `#[doc = include_str!]` modules, and `pub mod guide;` in
-  `lib.rs`. Write all twelve module stubs and all twelve files first, one heading each, so the build
-  is green from the first commit and each chapter is then filled in isolation.
+- [ ] `crates/vt/src/guide.rs` with thirteen `#[doc = include_str!]` modules, and `pub mod guide;` in
+  `lib.rs`. Write all thirteen module stubs and all thirteen files first, one heading each, so the
+  build is green from the first commit and each chapter is then filled in isolation.
 - [ ] Chapters 1, 2, 3, 4, 5, 8, 9, 10, 12 -- writable as soon as `US-0101` has fixed the API names.
-- [ ] Chapters 6, 7, 11 -- after `US-0099`, `US-0100` and `US-0102` respectively.
+- [ ] Chapters 6, 7, 11, 13 -- after `US-0099`, `US-0100`, `US-0102` and `US-0104` respectively.
 - [ ] `scripts/vt-docs.sh` and `scripts/vt-docs.ps1`; one row in `scripts/README.md`.
 - [ ] Tighten the existing `cargo doc` step in `scripts/ci-local.sh`, `scripts/ci-local.ps1` and
   `.github/workflows/ci.yml` with `RUSTDOCFLAGS="-D warnings"` and `--all-features`.
@@ -281,8 +296,8 @@ which is exactly why the guide has to restate them rather than link them.
 
 | Artefact | Budget |
 | --- | --- |
-| `crates/vt/docs/guide/*.md` | about 1 200 lines of Markdown across twelve chapters, average 100 |
-| `crates/vt/src/guide.rs` | about 40 lines, all of it `#[doc = include_str!]` and module headers |
+| `crates/vt/docs/guide/*.md` | about 1 300 lines of Markdown across thirteen chapters, average 100 |
+| `crates/vt/src/guide.rs` | about 43 lines, all of it `#[doc = include_str!]` and module headers |
 | `scripts/vt-docs.sh`, `scripts/vt-docs.ps1` | about 15 lines each |
 | CI and README edits | under 20 lines total |
 
@@ -352,6 +367,7 @@ Known gaps to carry forward:
 ## Handoff
 
 The packet splits cleanly along its gates: nine chapters are writable once `US-0101` lands, and
-chapters 6, 7 and 11 wait for `US-0099`, `US-0100` and `US-0102`. A session that writes only the
-scaffolding plus the nine unblocked chapters leaves the build green and the packet honestly
-incomplete; the stop condition for "done" is the twelve-file and twelve-doctest count in Acceptance.
+chapters 6, 7, 11 and 13 wait for `US-0099`, `US-0100`, `US-0102` and `US-0104`. A session that
+writes only the scaffolding plus the nine unblocked chapters leaves the build green and the packet
+honestly incomplete; the stop condition for "done" is the thirteen-file and thirteen-doctest count
+in Acceptance.

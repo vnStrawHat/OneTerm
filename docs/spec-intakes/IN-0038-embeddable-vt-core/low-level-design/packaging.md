@@ -28,7 +28,8 @@ As shipped by `US-0097`:
 [package]
 name = "oneterm-vt"
 description = "An embeddable terminal core: VT parser, grid with scrollback, reflow, selection, \
-damage-tracked snapshots and Sixel. No rendering, no PTY, no policy."
+# US-0104 replaces the trailing "no PTY" with the optional transport.
+damage-tracked snapshots, Sixel and an optional pseudo-console transport. No rendering, no policy."
 keywords = ["terminal", "vt100", "ansi", "emulator", "tui"]
 categories = ["command-line-interface", "parser-implementations", "emulators"]
 readme = "README.md"
@@ -42,6 +43,9 @@ rust-version.workspace = true
 publish = false
 
 [features]
+# US-0104, owner ruling 2026-09-15: the pseudo-console transport ships on.
+default = ["pty"]
+pty = ["dep:polling", "dep:windows-sys", "dep:libc"]
 vt-paranoid = []
 ```
 
@@ -57,11 +61,13 @@ only because it configures a builder that will never run: it says nothing true a
 `keywords` and `categories` are capped at five each by crates.io, which is where they would go if
 the ruling is ever reversed; both lists above are within it. Unpublished they are documentation, and
 `categories` in particular is a compact statement of what the crate claims to be.
-The `description` is what appears in search results, so it leads with what the crate is and ends
-with what it is not -- the three exclusions are the crate's selling point against `rio-vt`, which
-ships a PTY by default. It describes the crate **as it is today**, not as it will be after
-`US-0098` and `US-0099`: key and mouse encoding and the OSC routing table are not in it yet, and
-the sentence gains them in the packet that lands them.
+The `description` leads with what the crate is and ends with what it is not. It describes the crate
+**as it is today**, not as it will be after `US-0098` and `US-0099`: key and mouse encoding and the
+OSC routing table are not in it yet, and the sentence gains them in the packet that lands them. It
+also loses one exclusion at `US-0104`: "no PTY" was the crate's sharpest line against `rio-vt` and
+the owner ruling of 2026-09-15 took it away. What replaces it is narrower and still true, and the
+description must not overclaim: the transport is **optional**, and `--no-default-features` is the
+only build either crate can offer that has no transport in it.
 
 **Two features this document proposed are not there.** There is no `serde` feature: Open Decision 3
 is ruled against it, so `Serialize` / `Deserialize` on the plain-data types is not part of the
@@ -76,9 +82,16 @@ regex = ["dep:regex"]
 vt-paranoid = []
 ```
 
-There is therefore no `default = []` line either: an absent `[features] default` **is** the empty
-default set, so `cargo build --no-default-features` and a plain `cargo build` are the same
-configuration today. That is why `US-0097`'s CI builds two configurations rather than three.
+At `US-0097` there is therefore no `default` line either: an absent `[features] default` **is** the
+empty default set, so `cargo build --no-default-features` and a plain `cargo build` are the same
+configuration, which is why `US-0097`'s CI builds two configurations rather than three.
+
+**`US-0104` ends that.** The owner ruling of 2026-09-15 adds `default = ["pty"]`, and from that
+packet on the two configurations really are different: the default build carries `polling` plus
+`windows-sys` or `libc`, and `--no-default-features` is the only one that still resolves to the six
+leaf dependencies. Every claim in this document that reads "the crate has six dependencies" is from
+then on a claim about `--no-default-features` specifically, and `US-0104` adds the `cargo tree`
+assertion that keeps it honest. See [`pty.md`](pty.md).
 
 **Version inheritance.** The crate keeps `version.workspace = true`. That means an app patch
 release moves the engine's version with it, unchanged, and it keeps
@@ -114,10 +127,16 @@ what the manifest names. It is rule R7 either way, and it is now checked either 
    out of habit gets a resolver error and no explanation, so the README answers before they try.
    The same paragraph says the semver promise and the CHANGELOG apply to tags exactly as they would
    to releases.
-3. **What it is not**: no renderer, no PTY, no window, no clipboard backend, no policy. Say it
-   early, before anyone reads far enough to be disappointed.
-4. The dependency tree, pasted from `cargo tree -p oneterm-vt -e normal`. Six lines. This is the
-   crate's strongest claim and it should be visible without scrolling twice.
+3. **What it is not**: no renderer, no window, no clipboard backend, no policy. Say it early, before
+   anyone reads far enough to be disappointed. `US-0104` takes "no PTY" off this list; it becomes
+   "a PTY you can turn off" in the feature table at point 8.
+4. The dependency tree. `US-0097` pastes `cargo tree -p oneterm-vt -e normal`, six lines.
+   **`US-0104` must add `--no-default-features` to that command**, because the default build stops
+   being six lines the moment `pty` ships on: a README that pastes the default tree and calls it six
+   lines is exactly the `rio-vt` drift this document exists to prevent. The same packet puts the
+   default tree's counts beside it -- 8 direct / 16 crates on Windows, 8 / 11 on Linux -- so neither
+   number is a surprise. This is the crate's strongest claim and it should be visible without
+   scrolling twice.
 5. Quick start: a short snippet -- `Terminal::new`, `feed`, drain the batch, pull a snapshot --
    with `examples/headless.rs` linked below it for the longer version. It is **not** a copy of the
    example's body, as this document first proposed; instead `crates/vt/src/lib.rs` pulls the whole
@@ -137,8 +156,12 @@ what the manifest names. It is rule R7 either way, and it is now checked either 
    section around the `OscRoute` table when it replaces `OscClaims`.
 7. **Identity**: `Config::product_name`, the one field an embedder is expected to set, with what
    `XTVERSION` and `DA2` answer when it is left alone.
-8. Feature table: `vt-paranoid` only, default-off, with what it adds and why it is not for a release
-   build. `regex` joins the table with `US-0100`; there is no `serde` row (Open Decision 3).
+8. Feature table: `vt-paranoid` only at `US-0097`, default-off, with what it adds and why it is not
+   for a release build. `regex` joins the table with `US-0100`; there is no `serde` row (Open
+   Decision 3). **`US-0104` adds the first default-on row**, `pty`: what it adds (`polling` plus
+   `windows-sys` or `libc`), how to turn it off, and the sentence a Windows embedder needs -- the
+   crate ships no console host, so they get the inbox `conhost.exe`, which swallows Sixel, unless
+   they bundle their own matched ConPTY pair.
 9. **Documentation** (owner ruling 2026-09-15): `cargo doc -p oneterm-vt --no-deps --open` and a
    link to the repository for the full design. **No docs.rs URL anywhere**, for the crate or for
    the guide: docs.rs builds what it is given by the registry and it will never be given this. The
@@ -159,7 +182,7 @@ compiled by something.
 
 ## Guide
 
-The README is the shop window; the twelve-chapter embedder's guide is the manual. It is
+The README is the shop window; the thirteen-chapter embedder's guide is the manual. It is
 [`US-0103`](../US-0103-embedder-guide.md)'s, not `US-0097`'s: Markdown chapters under
 `crates/vt/docs/guide/`, pulled into the crate docs by `#[doc = include_str!]` modules so
 `cargo doc` renders them beside the API reference and their code blocks run as doctests. Two
@@ -271,12 +294,18 @@ their own checkout, which is where a git dependency's documentation has always c
 Three things this costs, and what replaces each:
 
 - **Feature badges.** `--cfg docsrs` was there so `#[cfg_attr(docsrs, doc(cfg(feature = ...)))]`
-  renders one. There is no feature-gated item today, and `US-0100` can pass `--cfg docsrs` through
-  `RUSTDOCFLAGS` locally if it wants the badge. Nothing is lost that exists yet.
+  renders one. There is no feature-gated item today; `US-0100` and `US-0104` can pass `--cfg docsrs`
+  through `RUSTDOCFLAGS` locally if they want the badge on `SearchPattern::Regex` and on
+  `pub mod pty`. Nothing is lost that exists yet.
 - **A build on somebody else's machine.** docs.rs's sandbox has no network and no Windows, which
   made it a free portability check. CI replaces it directly: `RUSTDOCFLAGS="-D warnings" cargo doc
   -p oneterm-vt --no-deps --all-features` runs on every push, and the crate is pure Rust with six
-  leaf dependencies and no build script, so there was never much to catch.
+  leaf dependencies and no build script, so there was never much to catch. **`US-0104` is the first
+  packet where "no Windows" would have mattered** -- docs.rs renders on Linux, so it would have
+  shown the `openpty` half of `pty` and hidden the ConPTY half, and the fix would have been a
+  `targets = [...]` key in a metadata table that no longer exists. Losing docs.rs turns that into a
+  non-problem: CI runs `cargo doc` on Windows, where the ConPTY half is the one that renders, and a
+  reader on either platform documents their own.
 - **A URL to link.** The README and the guide both link local commands instead, which is why
   neither may carry a docs.rs address.
 
@@ -292,8 +321,9 @@ same page as the default build.
 
 | Check | Effect | Action |
 | --- | --- | --- |
-| `python scripts/third-party-notices.py --check` | **none**, confirmed at `US-0097`. The script walks the graph reachable from `oneterm-app` only, and the crate gained no dependency. When `US-0100` adds `regex` it stays none: the feature is default-off and therefore unreachable, and `regex 1.12.4` is already in `THIRD-PARTY-NOTICES.md` via `oneterm-highlight`. | verify it still passes; no regeneration expected |
-| `python scripts/verify-dependency-graph.py` | **changed by `US-0097`, then by the owner ruling 2026-09-15.** It still requires `version.workspace = true`. It now also asserts that **no** package in the workspace is publishable (inverted from "exactly one"), that `oneterm-vt` depends on no other OneTerm crate, and, when given `--package-list -`, that the packaged file list carries `README.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE` and `examples/headless.rs` and reaches nothing outside `crates/vt`. | every packaging assertion lives here, in one language |
+| `python scripts/third-party-notices.py --check` | **none**, confirmed at `US-0097`. The script walks the graph reachable from `oneterm-app` only, and the crate gained no dependency. When `US-0100` adds `regex` it stays none: the feature is default-off and therefore unreachable, and `regex 1.12.4` is already in `THIRD-PARTY-NOTICES.md` via `oneterm-highlight`. **`US-0104` is the one packet where the feature is default-on and therefore reachable, and it is still none**: `polling`, `windows-sys` and `libc` are already in the app graph through `oneterm-local-shell` and `oneterm-tools`, and the bundled ConPTY pair does not move out of `crates/app`. | verify it still passes; no regeneration expected in any packet |
+| `python scripts/verify-dependency-graph.py` | **changed by `US-0097`, then by the owner ruling 2026-09-15.** It still requires `version.workspace = true`. It now also asserts that **no** package in the workspace is publishable (inverted from "exactly one"), that `oneterm-vt` depends on no other OneTerm crate, and, when given `--package-list -`, that the packaged file list carries `README.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE` and `examples/headless.rs` and reaches nothing outside `crates/vt`. **`US-0104` changes its other input**, `scripts/dependency-graph-policy.json`: `crates/pty` and the `oneterm-pty` entry go, and `oneterm-local-shell` / `oneterm-tools` re-point at `oneterm-vt`. The `--package-list` gate itself needs no change and must keep passing with `src/pty/**` in the list -- see the section below. | every packaging assertion lives here, in one language |
+| New (`US-0104`): `cargo tree -p oneterm-vt -e normal --no-default-features` | asserts the six-dependency claim the README makes is still literally true now that a **default** feature adds dependencies. Without it the claim is prose. | add beside the existing `--no-default-features` build step, not as a second step |
 | `python scripts/check-doc-paths.py` | **none.** Its `DOCUMENTS` list is `docs/architecture.md`, `docs/README.md`, `docs/terminal-backend.md`, `README.md`, `AGENTS.md` and `docs/agents/*.md`; it never looks in `crates/` or in `docs/spec-intakes/`. The new intake files are therefore unchecked, and the two documents this intake edits (`docs/README.md`, `docs/terminal-backend.md`) **are** checked, so every path added to them must exist. | run it; it is the gate on the two index edits |
 | `python scripts/check-english.py` | scans `crates/`, `docs/`, `scripts/`, `AGENTS.md`, `README.md` and `Cargo.toml`. For Rust it inspects comments only, for Markdown the whole file. The new README, CHANGELOG, example and every intake document are in scope. | run it; all new text is ASCII English |
 | `cargo deny check licenses bans advisories` | **none** at `US-0097`, which adds no dependency. `regex` (MIT OR Apache-2.0), which `US-0100` makes optional here, is already in the graph and already allowed by `deny.toml`. Nothing new to allow. | run with `ci-local --full` once at the end of the intake |
@@ -322,6 +352,65 @@ without it. `US-0097` therefore keeps a copy of `LICENSE` and `NOTICE` in `crate
 Licence section points at those copies rather than the repository root, and the assertion that both
 are in the packaged list is in `scripts/verify-dependency-graph.py` beside the rest, so it is one
 gate in one language rather than a grep in two shells.
+
+## The package file list after `US-0104`
+
+`US-0104` moves 2 759 lines of pseudo-console transport into `crates/vt/src/pty/`. The gate it has
+to satisfy is the one `US-0097` shipped:
+
+```bash
+cargo package -p oneterm-vt --list | python scripts/verify-dependency-graph.py --package-list -
+```
+
+It passes unchanged, and **nothing has to be excluded to make it pass**. The two things the gate
+cares about are unaffected: the required files (`README.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE`,
+`examples/headless.rs`) are untouched, and the "reaches nothing outside `crates/vt`" rule is
+satisfied because everything `US-0104` adds is ordinary source **inside** `crates/vt/src/pty/`.
+`US-0104` runs the gate as an acceptance criterion rather than assuming it.
+
+**In, and it is what the gate should see:** `src/pty/mod.rs`, `src/pty/unix.rs`,
+`src/pty/windows.rs` and `src/pty/windows/{conpty,pipe,child,pipe_tests,pseudo_console_tests}.rs`,
+plus `src/pty/loopback_tests.rs`. They are what the `pty` feature compiles, and the loopback tests
+are the crate's proof that the transport traits are implementable by a caller, so a consumer who
+vendors the crate should get them. `US-0104` asserts they appear in the list.
+
+**Out, and there is nothing to exclude.** The bundled Windows console host --
+`crates/app/assets/conpty.dll` (107.3 KB) and `crates/app/assets/x64/OpenConsole.exe` (1.0 MB),
+about **1.1 MB** together -- lives in `crates/app`, not in `crates/pty`, and is not moving.
+`crates/pty` contains no binary at all; what moves into `crates/vt` is the *loader*, which is
+ordinary Rust. `cargo package` only walks the package directory, so the bundle was never in the list
+and `Cargo.toml` needs no `exclude` key for it. `US-0104` still greps the list for `conpty` and
+`openconsole` and requires nothing, because "it happens to be true" and "it is asserted" are
+different things, and the cheap assertion is what survives somebody helpfully copying the assets
+into `crates/vt/assets/` one day.
+
+The reasons it must stay out, in order: redistributing signed Microsoft binaries is a provenance
+promise policed by `scripts/bump-conpty.ps1`, `crates/app/assets/conpty-manifest.json` and
+`python scripts/third-party-notices.py --check`, none of which travels with a packaged crate; a
+consumer on Linux or arm64 would carry 1.1 MB of Windows x86-64 dead weight in every vendored copy;
+and it would not work anyway, because `pty/windows/conpty.rs` resolves `conpty.dll` next to the
+**running executable**, not next to the crate source, so only the embedder's own build script can
+put it there.
+
+The consequence is documented, not hidden: **an embedder using the `pty` feature on Windows gets the
+inbox `conhost.exe`**, which swallows Sixel DCS payloads (`DEC-0013`), unless they bundle their own
+matched `conpty.dll` + `x64/OpenConsole.exe` pair the way `crates/app/build.rs` does. The README
+feature table, the `pty` module rustdoc and guide chapter 13 each say so and link `DEC-0013` by
+absolute repository URL, which is the self-containment rule's allowed form.
+
+**Licence: already discharged, verified not assumed.** `THIRD-PARTY-NOTICES.md` section 1 lists both
+binaries with version `1.24.2607.10001`, the NuGet source URL, per-file SHA-256 and the full MIT
+licence text of Windows Terminal; the repository root `NOTICE` carries the matching summary clause.
+Both are checked against `crates/app/assets/conpty-manifest.json` by
+`python scripts/third-party-notices.py --check`, already in CI. None of those files moves, so
+`US-0104` requires **no regeneration** -- and asserts that by running the check. The `NOTICE` copy
+**inside** `crates/vt/` that `US-0097` added is the engine's own Apache-2.0 notice and says nothing
+about the ConPTY pair, correctly: the crate does not ship it.
+
+**The 150-character path gate.** `US-0097`'s package check also bounds packaged path length. The
+deepest path `US-0104` adds is `crates/vt/src/pty/windows/pseudo_console_tests.rs`, 48 characters,
+and inside the package it is shorter still. No risk, recorded so the next mover of a deep module
+knows the gate exists.
 
 ## Harness row
 
