@@ -90,12 +90,13 @@ pub struct Config {
     /// `DA2` answers one number, `major * 10000 + minor * 100 + patch`, so each
     /// component saturates at 99: `1.0.100` reports what `1.0.99` reports.
     ///
-    /// **The value is sanitised before it is used.** `XTVERSION` replies inside
-    /// a DCS string, so every C0 control, `DEL` and every C1 control
+    /// **The value is sanitised by [`Terminal::new`].** `XTVERSION` replies
+    /// inside a DCS string, so every C0 control, `DEL` and every C1 control
     /// (`0x00..=0x1f`, `0x7f`, `0x80..=0x9f`) is dropped rather than allowed to
     /// end that string early, and what is left is cut to **64 bytes** on a
     /// character boundary. A name that is empty, or that sanitises to nothing,
-    /// is treated as `None`.
+    /// is stored as `None`. [`Terminal::config`] therefore reports the
+    /// sanitised name, not the one you passed.
     pub product_name: Option<Cow<'static, str>>,
     // `accept_c1` (the `S8C1T` hook) is deliberately **absent**. The LLD
     // publishes it, but the parser hard-codes trap 48 — an 8-bit C1 byte is
@@ -167,6 +168,18 @@ impl Terminal {
     /// you by [`Size::clamped`], so an absurd one is not an error.
     pub fn new(size: Size, config: Config) -> Terminal {
         let size = size.clamped();
+        // The product name is sanitised once, here, rather than on every
+        // `XTVERSION` and `DA2`: the replies then read a value that is already
+        // safe to splice into a DCS string, the two can never disagree, and
+        // neither walks the embedder's string again. A name that sanitises to
+        // nothing is stored as `None`, which is what it means.
+        let mut config = config;
+        config.product_name = config
+            .product_name
+            .as_deref()
+            .map(dispatch::sanitize_product_name)
+            .filter(|name| !name.is_empty())
+            .map(Cow::Owned);
         Terminal {
             parser: Parser::new(),
             state: State {

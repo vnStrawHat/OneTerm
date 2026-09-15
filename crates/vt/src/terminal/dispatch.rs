@@ -456,25 +456,20 @@ impl Handler<'_> {
     // ── Answers ─────────────────────────────────────────────────────────────
 
     /// What `XTVERSION` answers: the embedder's product, or the engine itself.
-    fn product_name(&self) -> String {
-        let Some(name) = self.state.config.product_name.as_deref() else {
-            return ENGINE_PRODUCT_NAME.to_owned();
-        };
-        // Sanitised once, here, so `XTVERSION` and `DA2` can never disagree
-        // about what the product is called. A name that sanitises to nothing
-        // is the same as no name at all.
-        let name = sanitize_product_name(name);
-        if name.is_empty() {
-            ENGINE_PRODUCT_NAME.to_owned()
-        } else {
-            name
-        }
+    ///
+    /// Already sanitised: `Terminal::new` stored it that way.
+    fn product_name(&self) -> &str {
+        self.state
+            .config
+            .product_name
+            .as_deref()
+            .unwrap_or(ENGINE_PRODUCT_NAME)
     }
 
     /// What `DA2` answers: the product's own version when its name carries one,
     /// otherwise the engine's.
     fn product_version_number(&self) -> u32 {
-        trailing_version(&self.product_name())
+        trailing_version(self.product_name())
             .unwrap_or_else(|| version_number(env!("CARGO_PKG_VERSION")))
     }
 
@@ -800,6 +795,8 @@ pub(super) const PRODUCT_NAME_MAX: usize = 64;
 /// name loose in the program's input. Every C0 control, `DEL` and every C1
 /// control is therefore dropped, and what is left is cut to
 /// `PRODUCT_NAME_MAX` bytes on a character boundary.
+///
+/// Called once, by `Terminal::new`, never per query.
 pub(super) fn sanitize_product_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len().min(PRODUCT_NAME_MAX));
     for c in name.chars() {
