@@ -80,13 +80,14 @@ There is therefore no `default = []` line either: an absent `[features] default`
 default set, so `cargo build --no-default-features` and a plain `cargo build` are the same
 configuration today. That is why `US-0097`'s CI builds two configurations rather than three.
 
-**Version inheritance.** The crate keeps `version.workspace = true`. That means an app patch release
-moves the engine's version with it, unchanged, and it means
-`python scripts/verify-dependency-graph.py` keeps passing -- that script asserts every workspace package's version equals `[workspace.package]
-version` and would fail on an independent number. It also means the tag a consumer pins names a
-version the crate itself reports. An independent version was considered and
-rejected: it buys tidier release notes and costs a second version source, a script change, and a
-new way for the two to drift. `rio-vt` inherits its workspace version for the same reason.
+**Version inheritance.** The crate keeps `version.workspace = true`. That means an app patch
+release moves the engine's version with it, unchanged, and it keeps
+`python scripts/verify-dependency-graph.py` passing -- that script asserts every workspace
+package's version equals `[workspace.package] version` and would fail on an independent number. It also
+means the tag a consumer pins names a version the crate itself reports. An independent version was
+considered and rejected: it buys tidier release notes and costs a second version source, a script
+change, and a new way for the two to drift. `rio-vt` inherits its workspace version for the same
+reason.
 
 **Nothing in the workspace is publishable (owner ruling 2026-09-15).** `US-0097` adds the CI
 assertion, and the ruling inverted it: `scripts/verify-dependency-graph.py` reads `cargo metadata`
@@ -255,9 +256,9 @@ Two honest gaps, recorded rather than papered over:
    separate decision because it costs CI minutes on every push.
 2. **OneTerm bumps its toolchain freely.** A crate other projects pin cannot. The policy proposed
    in the intake (Open Decision 4) is that an MSRV raise is a minor version bump plus a CHANGELOG
-   line and never a patch. `US-0097` states that rule as the crate's promise -- `crates/vt/CHANGELOG.md`
-   rule 3 and the README's Compatibility section both state it -- while Open Decision 4 itself is
-   still unrecorded. A different ruling costs two sentences in two files.
+   line and never a patch. `US-0097` states that rule as the crate's promise --
+   `crates/vt/CHANGELOG.md` rule 3 and the README's Compatibility section both state it -- while
+   Open Decision 4 itself is still unrecorded. A different ruling costs two sentences in two files.
 
 ## Rendered documentation
 
