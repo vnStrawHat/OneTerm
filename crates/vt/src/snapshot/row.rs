@@ -13,7 +13,7 @@
 use crate::cell::{CellContent, CellWidth, Semantic, Style};
 use crate::grid::{RowId, RowRef, SeqNo};
 use crate::intern::{ExtrasId, GraphicId, Hyperlink, HyperlinkId, Interner};
-use crate::render::palette::Palette;
+use crate::snapshot::palette::Palette;
 
 /// A run of columns sharing one style, carrying the **resolved value**.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -27,12 +27,12 @@ pub struct StyleRun {
 /// What a copied cell holds instead of a `char`: a scalar, or a span into the
 /// row's own cluster arena.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum RenderContent {
+pub enum SnapshotContent {
     /// A single Unicode scalar value, the common case.
     Scalar(char),
-    /// A grapheme cluster, as a span of [`RenderRow::clusters`].
+    /// A grapheme cluster, as a span of [`SnapshotRow::clusters`].
     Cluster {
-        /// Index of the cluster's first `char` in [`RenderRow::clusters`].
+        /// Index of the cluster's first `char` in [`SnapshotRow::clusters`].
         start: u32,
         /// The cluster's length in `char`s.
         len: u32,
@@ -42,22 +42,22 @@ pub enum RenderContent {
 /// One copied cell. `run` indexes the row's [`StyleRun`] list rather than
 /// repeating the style per cell.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct RenderCell {
+pub struct SnapshotCell {
     /// The text this cell paints.
-    pub content: RenderContent,
+    pub content: SnapshotContent,
     /// Whether the cell is narrow, the left half of a wide glyph, or that
     /// glyph's spacer.
     pub width: CellWidth,
     /// Shell-prompt marking from `OSC 133`, if the program sent any.
     pub semantic: Semantic,
-    /// Index into [`RenderRow::runs`] of the style this cell paints with; see
-    /// [`RenderRow::style_of`].
+    /// Index into [`SnapshotRow::runs`] of the style this cell paints with; see
+    /// [`SnapshotRow::style_of`].
     pub run: u16,
     /// The `OSC 8` hyperlink this cell belongs to; resolve it with
-    /// [`crate::RenderState::hyperlink`].
+    /// [`crate::SnapshotState::hyperlink`].
     pub hyperlink: Option<HyperlinkId>,
     /// The image covering this cell, if any; resolve it with
-    /// [`crate::RenderState::placement`].
+    /// [`crate::SnapshotState::placement`].
     pub graphic: Option<GraphicId>,
 }
 
@@ -66,7 +66,7 @@ pub struct RenderCell {
 /// Allocations are reused across frames: a row that is copied again clears its
 /// vectors and refills them, so the steady state allocates nothing.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct RenderRow {
+pub struct SnapshotRow {
     /// The row's absolute id. It names the same content for as long as that
     /// content is live, so a consumer's per-row cache can be keyed by it.
     pub id: RowId,
@@ -75,16 +75,16 @@ pub struct RenderRow {
     /// Whether the line continues on the next row rather than ending here.
     pub wrapped: bool,
     /// One entry per column, left to right.
-    pub cells: Vec<RenderCell>,
-    /// The style runs [`RenderCell::run`] indexes.
+    pub cells: Vec<SnapshotCell>,
+    /// The style runs [`SnapshotCell::run`] indexes.
     pub runs: Vec<StyleRun>,
-    /// Backs every [`RenderContent::Cluster`] in this row.
+    /// Backs every [`SnapshotContent::Cluster`] in this row.
     pub clusters: Vec<char>,
 }
 
-impl RenderRow {
+impl SnapshotRow {
     /// The style of one cell, without a table lookup outside this row.
-    pub fn style_of(&self, cell: &RenderCell) -> &Style {
+    pub fn style_of(&self, cell: &SnapshotCell) -> &Style {
         // A cell always names a run this row owns; the fallback keeps a
         // corrupted index from panicking the render thread.
         self.runs
@@ -92,7 +92,7 @@ impl RenderRow {
             .map_or(&Style::DEFAULT, |run| &run.style)
     }
 
-    /// The codepoints of a [`RenderContent::Cluster`] span.
+    /// The codepoints of a [`SnapshotContent::Cluster`] span.
     pub fn cluster(&self, start: u32, len: u32) -> &[char] {
         let start = start as usize;
         self.clusters
@@ -131,12 +131,12 @@ impl RenderRow {
             }
 
             let content = match cell.content() {
-                CellContent::Scalar(scalar) => RenderContent::Scalar(scalar),
+                CellContent::Scalar(scalar) => SnapshotContent::Scalar(scalar),
                 CellContent::Grapheme(id) => {
                     let cluster = interner.resolve_grapheme(id);
                     let start = self.clusters.len() as u32;
                     self.clusters.extend_from_slice(cluster);
-                    RenderContent::Cluster {
+                    SnapshotContent::Cluster {
                         start,
                         len: cluster.len() as u32,
                     }
@@ -153,7 +153,7 @@ impl RenderRow {
                 )
             };
 
-            self.cells.push(RenderCell {
+            self.cells.push(SnapshotCell {
                 content,
                 width: cell.width(),
                 semantic: cell.semantic(),
@@ -181,7 +181,7 @@ impl RenderRow {
     }
 }
 
-/// Copy a hyperlink's strings into the render state's own table once per
+/// Copy a hyperlink's strings into the snapshot state's own table once per
 /// distinct id, so a link whose interned entry is later replaced cannot change
 /// the painted URL mid-frame.
 fn resolve_link(

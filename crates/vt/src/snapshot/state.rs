@@ -1,17 +1,17 @@
-//! The incremental render state: what the renderer gets instead of a copy of
+//! The incremental snapshot state: what the renderer gets instead of a copy of
 //! the viewport.
 //!
 //! Two phases, and the split is the whole point:
 //!
-//! * [`RenderState::begin_update`] runs **under the caller's lock** and copies
+//! * [`SnapshotState::begin_update`] runs **under the caller's lock** and copies
 //!   only the rows whose sequence number passed this state's watermark.
-//! * [`RenderState::map_colors`] runs **outside it** and does the one thing that
+//! * [`SnapshotState::map_colors`] runs **outside it** and does the one thing that
 //!   needs no engine state.
 //!
 //! The result is tri-state. `Unchanged` lets the element skip layout and paint
 //! entirely; `Partial { scrolled }` means "shift your own cache by `scrolled`
-//! rows, then rebuild exactly the rows in [`RenderState::changed`]"; `Full`
-//! means rebuild everything. [`RenderState::rows`] always holds the whole
+//! rows, then rebuild exactly the rows in [`SnapshotState::changed`]"; `Full`
+//! means rebuild everything. [`SnapshotState::rows`] always holds the whole
 //! viewport either way.
 
 // Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`,
@@ -24,27 +24,27 @@ use crate::graphics::Placement;
 use crate::grid::SeqNo;
 use crate::grid::{RowId, Screen, Size, TerminalGrid, Viewport};
 use crate::intern::{GraphicId, Hyperlink, HyperlinkId, Interner};
-use crate::render::modes::ModeSnapshot;
-use crate::render::palette::Palette;
-use crate::render::row::RenderRow;
-use crate::render::sync::SyncState;
 use crate::selection::SelectionRange;
+use crate::snapshot::modes::ModeSnapshot;
+use crate::snapshot::palette::Palette;
+use crate::snapshot::row::SnapshotRow;
+use crate::snapshot::sync::SyncState;
 
 /// How far a consumer has read the engine's per-row sequence numbers.
 ///
-/// One per consumer, owned by that consumer's [`RenderState`]: there is no reset
+/// One per consumer, owned by that consumer's [`SnapshotState`]: there is no reset
 /// pass and nobody clears anybody else's damage.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct Watermark(pub SeqNo);
 
 /// What one update did.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum RenderUpdate {
+pub enum SnapshotUpdate {
     /// Nothing changed: no row was copied, and the cursor, the modes and the
     /// viewport all stand where they did.
     Unchanged,
     /// Shift the consumer's own row cache by `scrolled` viewport rows, then
-    /// rebuild the rows in [`RenderState::changed`].
+    /// rebuild the rows in [`SnapshotState::changed`].
     Partial {
         /// Viewport rows the content moved by: positive scrolls up (older
         /// content leaves the top), negative scrolls down.
@@ -57,7 +57,7 @@ pub enum RenderUpdate {
 /// Where the cursor is, refreshed every update so a blink or a drag never
 /// forces a row rebuild.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct RenderCursor {
+pub struct SnapshotCursor {
     /// The absolute id of the row the cursor is on.
     pub id: RowId,
     /// Zero-based column.
@@ -72,10 +72,10 @@ pub struct RenderCursor {
 ///
 /// The cell carries only the [`GraphicId`]; the painter derives the cell's
 /// offset inside the image from this record (see
-/// [`RenderState::graphic_offset`]), which is what keeps a whole image to
+/// [`SnapshotState::graphic_offset`]), which is what keeps a whole image to
 /// **one** interned entry.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct RenderPlacement {
+pub struct SnapshotPlacement {
     /// The image this placement shows.
     pub id: GraphicId,
     /// The row holding the image's top-left cell.
@@ -93,8 +93,8 @@ pub struct RenderPlacement {
 
 /// The engine fields one update reads, borrowed as the disjoint fields they are.
 ///
-/// [`crate::Terminal::render_update`] builds one of these from its own fields;
-/// the split exists so the render state can borrow exactly the fields it reads
+/// [`crate::Terminal::snapshot_update`] builds one of these from its own fields;
+/// the split exists so the snapshot state can borrow exactly the fields it reads
 /// and reach nothing else.
 pub(crate) struct EngineView<'a> {
     pub grid: &'a TerminalGrid,
@@ -119,17 +119,17 @@ pub(crate) struct EngineView<'a> {
 
 /// One consumer's view of the terminal, reused across frames.
 #[derive(Debug, Default)]
-pub struct RenderState {
+pub struct SnapshotState {
     generation: Option<u32>,
     watermark: Watermark,
     viewport_top: RowId,
     scroll_offset: u32,
     size: Option<Size>,
-    rows: Vec<RenderRow>,
+    rows: Vec<SnapshotRow>,
     changed: Vec<u16>,
-    cursor: RenderCursor,
+    cursor: SnapshotCursor,
     selection: Option<SelectionRange>,
-    placements: Vec<RenderPlacement>,
+    placements: Vec<SnapshotPlacement>,
     modes: ModeSnapshot,
     palette_epoch: u32,
     mapped_epoch: Option<u32>,
@@ -145,15 +145,15 @@ pub struct RenderState {
     meta_dirty: bool,
 }
 
-impl RenderState {
+impl SnapshotState {
     /// A fresh state that has read nothing yet, so its first update rebuilds
     /// every row.
-    pub fn new() -> RenderState {
-        RenderState::default()
+    pub fn new() -> SnapshotState {
+        SnapshotState::default()
     }
 
     /// Phase 1, under the caller's lock.
-    pub(crate) fn begin_update(&mut self, engine: EngineView<'_>, now: Instant) -> RenderUpdate {
+    pub(crate) fn begin_update(&mut self, engine: EngineView<'_>, now: Instant) -> SnapshotUpdate {
         let EngineView {
             grid,
             interner,
@@ -174,7 +174,7 @@ impl RenderState {
         self.placements
             .extend(placements.iter().filter_map(|placement| {
                 let pos = grid.anchors().get(placement.anchor)?;
-                Some(RenderPlacement {
+                Some(SnapshotPlacement {
                     id: placement.id,
                     row: pos.row,
                     col: pos.col,
@@ -202,7 +202,7 @@ impl RenderState {
         if sync.suppresses_frame(now) && !self.rows.is_empty() {
             self.meta_dirty |= modes_changed || cursor_changed || selection_changed;
             self.changed.clear();
-            return RenderUpdate::Unchanged;
+            return SnapshotUpdate::Unchanged;
         }
 
         let seq = grid.seq();
@@ -241,7 +241,7 @@ impl RenderState {
         // nothing to keep: that is what Full means. This is also how RIS and a
         // full-screen repaint reach the renderer.
         let update = if full || self.changed.len() == self.rows.len() {
-            RenderUpdate::Full
+            SnapshotUpdate::Full
         } else if self.changed.is_empty()
             && scrolled == Some(0)
             && !modes_changed
@@ -249,13 +249,13 @@ impl RenderState {
             && !selection_changed
             && !self.meta_dirty
         {
-            RenderUpdate::Unchanged
+            SnapshotUpdate::Unchanged
         } else {
-            RenderUpdate::Partial {
+            SnapshotUpdate::Partial {
                 scrolled: scrolled.unwrap_or(0),
             }
         };
-        if update != RenderUpdate::Unchanged {
+        if update != SnapshotUpdate::Unchanged {
             // Whatever was held back by a skipped frame has now been reported.
             self.meta_dirty = false;
         }
@@ -267,7 +267,7 @@ impl RenderState {
     /// A palette epoch change remaps every row; otherwise only the rows this
     /// update copied need it, and calling it twice is a no-op.
     pub fn map_colors(&mut self, palette: &Palette) {
-        let RenderState {
+        let SnapshotState {
             rows,
             changed,
             palette_epoch,
@@ -289,7 +289,7 @@ impl RenderState {
     }
 
     /// Always the full viewport, indexed by viewport row.
-    pub fn rows(&self) -> &[RenderRow] {
+    pub fn rows(&self) -> &[SnapshotRow] {
         &self.rows
     }
 
@@ -305,7 +305,7 @@ impl RenderState {
     }
 
     /// Where the cursor is and whether it is visible, refreshed every update.
-    pub fn cursor(&self) -> &RenderCursor {
+    pub fn cursor(&self) -> &SnapshotCursor {
         &self.cursor
     }
 
@@ -317,13 +317,13 @@ impl RenderState {
 
     /// The live image placements, refreshed every update. Ids only: the pixels
     /// come from `Terminal::take_graphics`, which is the one drain.
-    pub fn placements(&self) -> &[RenderPlacement] {
+    pub fn placements(&self) -> &[SnapshotPlacement] {
         &self.placements
     }
 
     /// The placement a cell's [`GraphicId`] names, or `None` once the image is
     /// gone — a stale reference paints nothing rather than painting wrongly.
-    pub fn placement(&self, id: GraphicId) -> Option<&RenderPlacement> {
+    pub fn placement(&self, id: GraphicId) -> Option<&SnapshotPlacement> {
         self.placements.iter().find(|placement| placement.id == id)
     }
 
@@ -415,7 +415,7 @@ impl RenderState {
     }
 
     fn rebuild(&mut self, screen: &Screen, interner: &Interner, viewport: Viewport) {
-        let RenderState {
+        let SnapshotState {
             rows,
             changed,
             hyperlinks,
@@ -423,7 +423,7 @@ impl RenderState {
             force_full,
             ..
         } = self;
-        rows.resize_with(viewport.rows as usize, RenderRow::default);
+        rows.resize_with(viewport.rows as usize, SnapshotRow::default);
         hyperlinks.clear();
         for index in 0..viewport.rows {
             let id = viewport.top + u64::from(index);
@@ -450,7 +450,7 @@ impl RenderState {
     }
 
     fn copy_changed(&mut self, screen: &Screen, interner: &Interner, viewport: Viewport) {
-        let RenderState {
+        let SnapshotState {
             rows,
             changed,
             hyperlinks,
@@ -476,11 +476,11 @@ impl RenderState {
     }
 }
 
-fn cursor_of(screen: &Screen, visible: bool) -> RenderCursor {
+fn cursor_of(screen: &Screen, visible: bool) -> SnapshotCursor {
     let cursor = screen.cursor();
     let top = screen.visible_top();
     let row = cursor.pos.row.distance(top);
-    RenderCursor {
+    SnapshotCursor {
         id: cursor.pos.row,
         col: cursor.pos.col,
         row: (cursor.pos.row >= top && row < u64::from(screen.rows())).then_some(row as u16),

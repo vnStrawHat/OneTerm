@@ -7,7 +7,7 @@
 //! | --- | --- | --- |
 //! | 1 `parser` | the state machine alone, against a no-op `Dispatch` | 160x45 |
 //! | 2 `grid` | parse plus grid mutation (`Terminal::feed`) | 160x45 |
-//! | 3 `render` | tier 2 plus one `render_update` per simulated frame | 160x45 |
+//! | 3 `render` | tier 2 plus one `snapshot_update` per simulated frame | 160x45 |
 //! | 4 `resize` | resize latency at three scrollback depths | its own, deliberately |
 //! | 5 `rss` | heap held after filling scrollback with four content kinds | 160x45 |
 //!
@@ -29,7 +29,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use oneterm_vt::RenderState;
+use oneterm_vt::SnapshotState;
 use oneterm_vt::parser::{Dispatch, OscParams, Params, Parser, StringTerm};
 use oneterm_vt::{Config, EventBatch, ResizePolicy, Size, Terminal};
 
@@ -378,11 +378,11 @@ pub struct FrameCost {
     pub cells: usize,
 }
 
-/// Tier 3: tier 2 plus one `render_update` per simulated frame.
+/// Tier 3: tier 2 plus one `snapshot_update` per simulated frame.
 ///
 /// This is the primary metric: it is the tier that would have caught a
 /// per-frame viewport copy, because it is the only one where a bigger viewport
-/// costs anything. The `RenderState` is reused across frames, exactly as the
+/// costs anything. The `SnapshotState` is reused across frames, exactly as the
 /// view reuses its own — a fresh one every frame would measure a `Full` rebuild
 /// and nothing the damage model does.
 pub fn run_render(frames: usize) -> Vec<FrameCost> {
@@ -391,12 +391,12 @@ pub fn run_render(frames: usize) -> Vec<FrameCost> {
         .map(|fixture| {
             let mut term = new_term();
             let mut batch = EventBatch::new();
-            let mut render = RenderState::new();
+            let mut render = SnapshotState::new();
             let now = Instant::now();
             // Prime a full frame so the update is never over an empty grid.
             term.feed(&dense_cells(COLS * ROWS * 20), &mut batch, now);
             batch.clear();
-            term.render_update(&mut render, now);
+            term.snapshot_update(&mut render, now);
 
             // Bytes arriving between paints, as a PTY would deliver them.
             let stream = (fixture.make)(frames * 512 + 1024);
@@ -408,7 +408,7 @@ pub fn run_render(frames: usize) -> Vec<FrameCost> {
                 batch.clear();
 
                 let timed = Instant::now();
-                term.render_update(&mut render, now);
+                term.snapshot_update(&mut render, now);
                 cells = render.rows().iter().map(|row| row.cells.len()).sum();
                 spent += timed.elapsed();
             }

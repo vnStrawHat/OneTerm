@@ -266,60 +266,6 @@ enum oneterm_vt::Progress
     variant Paused
     variant Remove
     variant Set
-struct oneterm_vt::RenderCell
-    structfield content
-    structfield graphic
-    structfield hyperlink
-    structfield run
-    structfield semantic
-    structfield width
-enum oneterm_vt::RenderContent
-    variant Cluster
-    variant Scalar
-struct oneterm_vt::RenderCursor
-    structfield col
-    structfield id
-    structfield row
-    structfield visible
-struct oneterm_vt::RenderPlacement
-    structfield col
-    structfield cols
-    structfield id
-    structfield pixel_size
-    structfield row
-    structfield rows
-struct oneterm_vt::RenderRow
-    method cluster
-    method map_colors
-    method style_of
-    structfield cells
-    structfield clusters
-    structfield id
-    structfield runs
-    structfield seq
-    structfield wrapped
-struct oneterm_vt::RenderState
-    method changed
-    method cursor
-    method graphic_offset
-    method hyperlink
-    method invalidate
-    method map_colors
-    method modes
-    method new
-    method placement
-    method placements
-    method rows
-    method rows_copied
-    method scroll_offset
-    method selection
-    method size
-    method viewport_top
-    method watermark
-enum oneterm_vt::RenderUpdate
-    variant Full
-    variant Partial
-    variant Unchanged
 enum oneterm_vt::ResizePolicy
     variant BottomAnchor
     variant KeepViewportTop
@@ -359,6 +305,60 @@ enum oneterm_vt::ShellMark
 enum oneterm_vt::Side
     variant Left
     variant Right
+struct oneterm_vt::SnapshotCell
+    structfield content
+    structfield graphic
+    structfield hyperlink
+    structfield run
+    structfield semantic
+    structfield width
+enum oneterm_vt::SnapshotContent
+    variant Cluster
+    variant Scalar
+struct oneterm_vt::SnapshotCursor
+    structfield col
+    structfield id
+    structfield row
+    structfield visible
+struct oneterm_vt::SnapshotPlacement
+    structfield col
+    structfield cols
+    structfield id
+    structfield pixel_size
+    structfield row
+    structfield rows
+struct oneterm_vt::SnapshotRow
+    method cluster
+    method map_colors
+    method style_of
+    structfield cells
+    structfield clusters
+    structfield id
+    structfield runs
+    structfield seq
+    structfield wrapped
+struct oneterm_vt::SnapshotState
+    method changed
+    method cursor
+    method graphic_offset
+    method hyperlink
+    method invalidate
+    method map_colors
+    method modes
+    method new
+    method placement
+    method placements
+    method rows
+    method rows_copied
+    method scroll_offset
+    method selection
+    method size
+    method viewport_top
+    method watermark
+enum oneterm_vt::SnapshotUpdate
+    variant Full
+    variant Partial
+    variant Unchanged
 enum oneterm_vt::StringTerm
     variant Bel
     variant St
@@ -392,7 +392,6 @@ struct oneterm_vt::Terminal
     method mouse_reporting
     method new
     method placements
-    method render_update
     method resize
     method row_text
     method screen
@@ -406,6 +405,7 @@ struct oneterm_vt::Terminal
     method set_scrollback_limit
     method set_theme_colors
     method size
+    method snapshot_update
     method stats
     method style
     method sync

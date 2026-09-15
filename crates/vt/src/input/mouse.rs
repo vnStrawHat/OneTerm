@@ -4,7 +4,7 @@
 //! whether the caller sends at all (`? 1000` / `? 1002` / `? 1003`); this module
 //! reads only the **encoding** half of it (`? 1005` / `? 1006`).
 
-use crate::render::{ModeSnapshot, MouseEncoding};
+use crate::snapshot::{ModeSnapshot, MouseEncoding};
 
 /// Mouse button for terminal encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

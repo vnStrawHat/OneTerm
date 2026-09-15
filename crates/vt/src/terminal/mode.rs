@@ -8,7 +8,7 @@
 
 use bitflags::bitflags;
 
-use crate::render::{MouseEncoding, MouseProtocol, MouseReporting};
+use crate::snapshot::{MouseEncoding, MouseProtocol, MouseReporting};
 
 // Title-stack depth. xterm caps at 4096, which no program approaches and
 // which is a cheap memory sink.
@@ -66,7 +66,7 @@ pub enum Mode {
     /// `? 2004`.
     BracketedPaste,
     /// `? 2026`. The bit is not stored: the real state lives in
-    /// `crate::render::SyncState`, which also holds its timeout.
+    /// `crate::snapshot::SyncState`, which also holds its timeout.
     SyncUpdate,
     /// `? 2027`, grapheme clustering. Recognised and inert.
     GraphemeClusters,
@@ -82,7 +82,7 @@ pub enum Mode {
 impl Mode {
     /// The bit this mode occupies in [`Modes`], or `None` for a mode whose state
     /// is not a bit: `DecCoLm` stores nothing and `SyncUpdate` lives in
-    /// [`crate::render::SyncState`].
+    /// [`crate::snapshot::SyncState`].
     const fn bit(self) -> Option<u32> {
         let index = match self {
             Mode::AppCursor => 0,

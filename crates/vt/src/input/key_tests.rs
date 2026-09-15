@@ -134,9 +134,9 @@ fn only_app_cursor_is_read() {
         show_cursor: false,
         insert: true,
         alternate_scroll: true,
-        mouse: Some(crate::render::MouseProtocol {
-            reporting: crate::render::MouseReporting::AnyEvent,
-            encoding: crate::render::MouseEncoding::Sgr,
+        mouse: Some(crate::snapshot::MouseProtocol {
+            reporting: crate::snapshot::MouseReporting::AnyEvent,
+            encoding: crate::snapshot::MouseEncoding::Sgr,
         }),
     };
     let quiet = ModeSnapshot {

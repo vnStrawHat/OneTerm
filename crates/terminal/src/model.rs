@@ -92,7 +92,7 @@ impl TerminalModel {
     /// Read cells for a range of display lines (O(window×cols)).
     ///
     /// Damage-free: it reads the rows by `RowId` straight off the screen instead
-    /// of going through a render state, so a URL hover or a completion lookup
+    /// of going through a snapshot state, so a URL hover or a completion lookup
     /// never consumes the renderer's damage.
     pub fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells {
         line_range_cells(&self.term.lock(), start_line, count)

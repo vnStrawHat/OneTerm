@@ -1,7 +1,7 @@
 //! The terminal adapter: `oneterm-vt` behind `TerminalSession`.
 //!
 //! Since `US-0082` this crate speaks the engine's vocabulary — `RowId`,
-//! `RenderState`, `EventBatch`, `ColorKey`, `ResizePolicy` — and owns the two
+//! `SnapshotState`, `EventBatch`, `ColorKey`, `ResizePolicy` — and owns the two
 //! things the engine deliberately does not: the lock ([`TerminalHandle`]) and
 //! the event-delivery policy ([`backend`]).
 //!
@@ -58,8 +58,8 @@ pub use oneterm_vt::search::{SearchMatch, SearchOptions};
 pub use oneterm_vt::{
     Attrs, CellWidth, Color, CursorShape, GraphicData, GraphicId, HyperlinkId, ModeSnapshot,
     MouseEncoding, MouseProtocol, MouseReporting, NamedColor, Progress as TerminalProgress,
-    RenderCell, RenderContent, RenderCursor, RenderPlacement, RenderRow, RenderUpdate,
     ResizePolicy, Rgb, RowId, SelectionKind, SelectionRange, Semantic, SeqNo, ShellMark, Size,
+    SnapshotCell, SnapshotContent, SnapshotCursor, SnapshotPlacement, SnapshotRow, SnapshotUpdate,
     Style, StyleRun, Terminal, VIRTUAL_CELL as SIXEL_VIRTUAL_CELL,
 };
 pub use osc::encode_osc52;

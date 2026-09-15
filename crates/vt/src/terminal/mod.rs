@@ -45,10 +45,10 @@ use crate::input::{KeyMods, KeySpec};
 use crate::intern::Interner;
 use crate::parser::Parser;
 use crate::reflow::{ResizeOutcome, ResizePolicy};
-use crate::render::{
-    EngineView, ModeSnapshot, MouseProtocol, Palette, RenderState, RenderUpdate, SyncState,
-};
 use crate::selection::{Selection, SelectionKind, SelectionRange, Side};
+use crate::snapshot::{
+    EngineView, ModeSnapshot, MouseProtocol, Palette, SnapshotState, SnapshotUpdate, SyncState,
+};
 
 /// The theme the engine needs to answer a colour query. The renderer still
 /// resolves final colours itself, including bold-to-bright and dim mixing.
@@ -260,7 +260,7 @@ impl Terminal {
     /// Take the images decoded since the last call, oldest first.
     ///
     /// This is the only drain. More than one consumer may hold its own
-    /// [`RenderState`], so draining inside `render_update` would hand an image
+    /// [`SnapshotState`], so draining inside `snapshot_update` would hand an image
     /// to whichever consumer asked first and nothing to the rest. A paint
     /// skipped by synchronised output (`CSI ? 2026 h`) therefore loses nothing:
     /// the pixels wait here until somebody takes them.
@@ -269,19 +269,19 @@ impl Terminal {
     }
 
     /// Every live placement, for a consumer that is not going through a
-    /// [`RenderState`]. The painter reads `RenderState::placements` instead.
+    /// [`SnapshotState`]. The painter reads `SnapshotState::placements` instead.
     pub fn placements(&self) -> &[crate::graphics::Placement] {
         &self.state.graphics.placements
     }
 
     // ── Render hand-off ─────────────────────────────────────────────────────
 
-    /// Take everything that changed since this [`RenderState`] last asked.
+    /// Take everything that changed since this [`SnapshotState`] last asked.
     ///
     /// Phase 1 of the hand-off, cheap enough to run under the caller's lock;
-    /// the returned [`RenderUpdate`] borrows the engine, so drawing happens
+    /// the returned [`SnapshotUpdate`] borrows the engine, so drawing happens
     /// after it is dropped.
-    pub fn render_update(&mut self, render: &mut RenderState, now: Instant) -> RenderUpdate {
+    pub fn snapshot_update(&mut self, render: &mut SnapshotState, now: Instant) -> SnapshotUpdate {
         let modes = self.mode_snapshot();
         let selection = self.selection_range();
         let view = EngineView {

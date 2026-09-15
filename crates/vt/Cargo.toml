@@ -25,7 +25,7 @@ default = ["pty"]
 pty = ["dep:polling", "dep:windows-sys", "dep:libc"]
 # The whole-history integrity walk, for property tests, fuzzing and CI.
 # By default the always-on checks stay O(1) and the debug walk at `feed`,
-# `resize` and `render_update` is bounded to the rows that operation touched.
+# `resize` and `snapshot_update` is bounded to the rows that operation touched.
 # This feature widens both to the whole scrollback, which costs milliseconds per
 # call at a 100 000-row history: correct to gate on, far too slow for a release
 # build.

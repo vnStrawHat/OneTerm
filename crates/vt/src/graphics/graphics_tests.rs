@@ -17,7 +17,7 @@ use crate::event::{EventBatch, VtEvent};
 use crate::grid::{RowId, Size};
 use crate::intern::Extras;
 use crate::reflow::ResizePolicy;
-use crate::render::{RenderState, RenderUpdate};
+use crate::snapshot::{SnapshotState, SnapshotUpdate};
 use crate::terminal::{Config, Terminal};
 
 // ── Harness ─────────────────────────────────────────────────────────────────
@@ -136,9 +136,9 @@ impl Session {
         out
     }
 
-    fn render(&mut self) -> (RenderState, RenderUpdate) {
-        let mut state = RenderState::new();
-        let update = self.term.render_update(&mut state, self.now);
+    fn render(&mut self) -> (SnapshotState, SnapshotUpdate) {
+        let mut state = SnapshotState::new();
+        let update = self.term.snapshot_update(&mut state, self.now);
         (state, update)
     }
 }
@@ -599,19 +599,19 @@ fn aborted_dcs_stamps_no_cells() {
 fn images_survive_a_frame_skipped_by_mode_2026() {
     let mut session = Session::new(10, 5);
     session.feed(b"hello");
-    let mut state = RenderState::new();
-    session.term.render_update(&mut state, session.now);
+    let mut state = SnapshotState::new();
+    session.term.snapshot_update(&mut state, session.now);
 
     session.feed(b"\x1b[?2026h");
     session.feed(&sixel("\"1;1;16;16#0~"));
     assert_eq!(
-        session.term.render_update(&mut state, session.now),
-        RenderUpdate::Unchanged,
+        session.term.snapshot_update(&mut state, session.now),
+        SnapshotUpdate::Unchanged,
         "the frame is suppressed"
     );
-    // And no number of render states drains it.
-    let mut second = RenderState::new();
-    session.term.render_update(&mut second, session.now);
+    // And no number of snapshot states drains it.
+    let mut second = SnapshotState::new();
+    session.term.snapshot_update(&mut second, session.now);
     assert_eq!(session.term.take_graphics().len(), 1);
 }
 

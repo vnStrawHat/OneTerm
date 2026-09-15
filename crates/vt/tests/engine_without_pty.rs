@@ -12,17 +12,19 @@
 
 use std::time::Instant;
 
-use oneterm_vt::{CellWidth, EventBatch, RenderContent, RenderRow, RenderState, Size, Terminal};
+use oneterm_vt::{
+    CellWidth, EventBatch, Size, SnapshotContent, SnapshotRow, SnapshotState, Terminal,
+};
 
-fn row_text(row: &RenderRow) -> String {
+fn row_text(row: &SnapshotRow) -> String {
     let mut text = String::new();
     for cell in &row.cells {
         if cell.width == CellWidth::WideSpacer {
             continue;
         }
         match cell.content {
-            RenderContent::Scalar(scalar) => text.push(scalar),
-            RenderContent::Cluster { start, len } => text.extend(row.cluster(start, len)),
+            SnapshotContent::Scalar(scalar) => text.push(scalar),
+            SnapshotContent::Cluster { start, len } => text.extend(row.cluster(start, len)),
         }
     }
     text
@@ -38,8 +40,8 @@ fn the_engine_feeds_and_renders_with_no_transport_compiled() {
     let stats = terminal.feed(bytes, &mut batch, Instant::now());
     assert_eq!(stats.bytes, bytes.len());
 
-    let mut state = RenderState::new();
-    let _ = terminal.render_update(&mut state, Instant::now());
+    let mut state = SnapshotState::new();
+    let _ = terminal.snapshot_update(&mut state, Instant::now());
     let first = state.rows().first().map(row_text).unwrap_or_default();
     assert!(
         first.starts_with("hello no-pty"),

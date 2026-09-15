@@ -27,7 +27,7 @@ pub enum ResizePolicy {
 }
 
 /// What one resize did. The full repaint a resize implies is derived by the
-/// render state from the size it last observed, not stamped per row here.
+/// snapshot state from the size it last observed, not stamped per row here.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct ResizeOutcome {
     /// Whether the column count changed, so the rows were re-laid out.

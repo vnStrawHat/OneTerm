@@ -97,7 +97,7 @@ pub(super) struct OverlayColors {
 }
 
 /// The settings a frame reads, copied out so the settings borrow ends before
-/// the render state is touched.
+/// the snapshot state is touched.
 struct FrameSettings {
     font: Font,
     font_size: Pixels,

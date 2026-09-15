@@ -22,8 +22,8 @@ pub(crate) const SYNC_WATCHDOG: Duration = Duration::from_secs(1);
 
 /// The open synchronized update, if any.
 ///
-/// Owned by the terminal and passed to the render state through
-/// [`crate::render::EngineView`].
+/// Owned by the terminal and passed to the snapshot state through
+/// [`crate::snapshot::EngineView`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct SyncState {
     /// When the current update stops holding frames back.

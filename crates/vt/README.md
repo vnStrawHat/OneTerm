@@ -72,7 +72,7 @@ Windows or `libc` on Unix. That comes to 8 direct dependencies and 16 crates in 
 
 ```rust
 use std::time::Instant;
-use oneterm_vt::{Config, EventBatch, RenderState, Size, Terminal, VtEvent};
+use oneterm_vt::{Config, EventBatch, SnapshotState, Size, Terminal, VtEvent};
 
 let mut term = Terminal::new(Size { rows: 24, cols: 80 }, Config::default());
 let mut batch = EventBatch::new();
@@ -91,9 +91,9 @@ for event in batch.iter() {
 }
 
 // Drawing is a pull, not a push: ask when you want to, and get back only the
-// rows whose content changed since this `RenderState` last asked.
-let mut state = RenderState::new();
-let _update = term.render_update(&mut state, Instant::now());
+// rows whose content changed since this `SnapshotState` last asked.
+let mut state = SnapshotState::new();
+let _update = term.snapshot_update(&mut state, Instant::now());
 assert_eq!(state.rows().len(), 24);
 ```
 

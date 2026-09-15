@@ -1,4 +1,4 @@
-//! `TerminalContent` over the render state it owns.
+//! `TerminalContent` over the snapshot state it owns.
 //!
 //! `US-0085` deleted the compatibility surface, so what used to be asserted
 //! through the dense `IndexedCell` vector is asserted through `rows()` — the
@@ -19,8 +19,8 @@ fn row_text(content: &TerminalContent, row: usize) -> String {
     row.cells
         .iter()
         .map(|cell| match cell.content {
-            oneterm_vt::RenderContent::Scalar(scalar) => scalar,
-            oneterm_vt::RenderContent::Cluster { start, len } => {
+            oneterm_vt::SnapshotContent::Scalar(scalar) => scalar,
+            oneterm_vt::SnapshotContent::Cluster { start, len } => {
                 row.cluster(start, len).first().copied().unwrap_or(' ')
             }
         })
@@ -35,7 +35,7 @@ fn the_frame_source_is_the_render_state() {
     feed(&mut term, b"hello\r\nworld");
     let snap = snapshot(&mut term);
 
-    assert_eq!(snap.update(), RenderUpdate::Full);
+    assert_eq!(snap.update(), SnapshotUpdate::Full);
     assert_eq!(snap.rows().len(), 2, "rows() is always the full viewport");
     assert_eq!(snap.size(), Size { rows: 2, cols: 5 });
     assert_eq!(snap.changed(), &[0, 1]);
@@ -74,11 +74,11 @@ fn cursor_visible_default() {
 
 #[test]
 fn the_first_update_is_full() {
-    // The first frame of a fresh render state must be Full.
+    // The first frame of a fresh snapshot state must be Full.
     let mut term = terminal(GridSize { cols: 5, lines: 2 });
     feed(&mut term, b"hello");
     let snap = snapshot(&mut term);
-    assert_eq!(snap.update(), RenderUpdate::Full);
+    assert_eq!(snap.update(), SnapshotUpdate::Full);
 }
 
 /// TEST-24: a second frame with no new output copies no row at all — which is
@@ -91,7 +91,7 @@ fn an_unchanged_frame_copies_nothing() {
     content.refill(&mut term);
 
     content.refill(&mut term);
-    assert_eq!(content.update(), RenderUpdate::Unchanged);
+    assert_eq!(content.update(), SnapshotUpdate::Unchanged);
     assert!(content.changed().is_empty(), "no row was copied");
     assert_eq!(
         content.rows().len(),
@@ -108,14 +108,14 @@ fn only_the_changed_rows_are_copied_when_the_viewport_stood_still() {
     feed(&mut term, b"aaa\r\nbbb\r\nccc");
     let mut content = TerminalContent::default();
     content.refill(&mut term);
-    assert_eq!(content.update(), RenderUpdate::Full);
+    assert_eq!(content.update(), SnapshotUpdate::Full);
     let seq_before = content.rows()[0].seq;
 
     // Overwrite the middle row in place: CUP to row 2, column 1.
     feed(&mut term, b"\x1b[2;1HZZZ");
     content.refill(&mut term);
 
-    assert_eq!(content.update(), RenderUpdate::Partial { scrolled: 0 });
+    assert_eq!(content.update(), SnapshotUpdate::Partial { scrolled: 0 });
     assert_eq!(content.changed(), &[1], "one row copied");
     assert_eq!(row_text(&content, 0), "aaa", "an untouched row is kept");
     assert_eq!(row_text(&content, 1), "ZZZ");
@@ -145,7 +145,7 @@ fn a_scrollback_move_reports_a_delta_and_keeps_row_identity() {
     content.refill(&mut term);
 
     assert_eq!(content.scroll_offset(), 1);
-    assert_eq!(content.update(), RenderUpdate::Partial { scrolled: -1 });
+    assert_eq!(content.update(), SnapshotUpdate::Partial { scrolled: -1 });
     assert_eq!(
         content.display_row(was_on_top),
         Some(1),

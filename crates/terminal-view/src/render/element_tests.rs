@@ -462,7 +462,7 @@ fn cursor_layer_and_gutter_paint(cx: &mut TestAppContext) {
 #[test]
 fn render_has_single_engine_file() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/render");
-    // The engine's *cell* vocabulary. `RenderUpdate` is deliberately not in the
+    // The engine's *cell* vocabulary. `SnapshotUpdate` is deliberately not in the
     // list: the tri-state is the contract the plan cache is written against.
     // Spelled in halves so this file does not match its own list.
     let needles = [
