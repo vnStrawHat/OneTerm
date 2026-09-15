@@ -100,7 +100,8 @@ fn r_has_builtin_is_the_published_array_for_every_number() {
     for &code in &[4096u32, 20308, 31337, 65535, u32::MAX] {
         assert!(!OscRoutes::has_builtin(code), "OSC {code}");
     }
-    assert_eq!(OscRoutes::BUILTIN.len(), 18);
+    // 18 at `US-0098`, plus OSC 17 and 19 at `US-0102`.
+    assert_eq!(OscRoutes::BUILTIN.len(), 20);
     // Every built-in must be inside the bitmap, which is what the const
     // assertion in the crate relies on.
     for code in OscRoutes::BUILTIN {

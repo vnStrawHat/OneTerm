@@ -188,11 +188,11 @@ impl Handler<'_> {
     }
 
     /// The `? 2027` print path, kept **out of line** from `print_str`.
-    ///
-    /// `print_str` is the hottest function in the engine and is inlined into
-    /// the parser's ground state; putting the segmentation machinery in its
-    /// body stopped that happening and cost ten per cent on every fixture, mode
-    /// set or not. Measured, not assumed (`US-0102`).
+    //
+    // `print_str` is the hottest function in the engine and is inlined into the
+    // parser's ground state; putting the segmentation machinery in its body
+    // stopped that happening and cost ten per cent on every fixture, mode set
+    // or not. Measured, not assumed.
     #[inline(never)]
     fn print_clusters(&mut self, text: &str) {
         // One `Vec` for the whole run, cleared per cluster: `cluster_width`

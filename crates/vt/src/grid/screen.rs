@@ -1090,11 +1090,11 @@ impl Screen {
     /// [`crate::width::cluster_width`], prints the cluster's leading scalar at
     /// that width, and then attaches every following scalar at width 0 — which
     /// is how a ZWJ sequence lands in one cell instead of several.
-    ///
-    /// `inline(always)`, because the split is for the caller and not for the
-    /// code generator: leaving the decision to LLVM put a call frame back on
-    /// the per-character path and cost ten per cent on `plain_ascii`,
-    /// `cjk_wide` and `dense_cells` alike (`US-0102`, measured).
+    //
+    // `inline(always)`, because the split is for the caller and not for the
+    // code generator: leaving the decision to LLVM put a call frame back on the
+    // per-character path and cost ten per cent on `plain_ascii`, `cjk_wide` and
+    // `dense_cells` alike. Measured, not assumed.
     #[inline(always)]
     pub(crate) fn print_with_width(
         &mut self,
