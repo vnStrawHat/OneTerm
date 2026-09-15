@@ -178,8 +178,11 @@ Each criterion below is a command a verifier who distrusts this packet can run.
 - [x] `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` exits 0 and
   prints no warning.
 - [x] `target/doc/oneterm_vt/guide/index.html` exists and links to exactly thirteen chapter modules.
-- [x] `ls crates/vt/docs/guide/*.md | wc -l` is 13, and
-  `grep -c 'include_str!' crates/vt/src/guide.rs` is 13.
+- [x] Thirteen chapters, in **fourteen** files: `ls crates/vt/docs/guide/*.md | wc -l` is 14 and
+  `grep -c 'include_str!' crates/vt/src/guide.rs` is 14, because chapter 7's regex section is a
+  file of its own, appended by `cfg_attr` only when the feature that gives it a subject is on.
+  `target/doc/oneterm_vt/guide/index.html` still links exactly thirteen chapter modules, which is
+  the number that matters to a reader.
 - [x] `cargo test -p oneterm-vt --doc` is green, and **every chapter contributes at least one
   doctest**: `cargo test -p oneterm-vt --doc -- --list | grep -c 'docs/guide/'` is at least 13.
   **Built as the packet says, after a correction.** The first attempt left chapter 13 un-gated
@@ -313,7 +316,7 @@ which is exactly why the guide has to restate them rather than link them.
 | Artefact | Budget |
 | --- | --- |
 | `crates/vt/docs/guide/*.md` | budgeted about 1 300 lines across thirteen chapters; **actual 1 956**, average 150. Over by a third, and not padding: chapters 4 (twenty variants plus twenty-two intra-doc link definitions), 5 (four routes and two worked examples) and 13 (a full poll loop) each run to about 180. No acceptance criterion counts lines |
-| `crates/vt/src/guide.rs` | budgeted about 43 lines; **actual 71** -- 50 before verification rework, then the `cfg` split of chapter 13 and its off-state stub |
+| `crates/vt/src/guide.rs` | budgeted about 43 lines; **actual 95** -- 50 before verification rework, then the two feature splits (chapter 13's `cfg` arms, chapter 7's `cfg_attr` tail) and the prose each off-state arm puts in place of the section it replaces |
 | `scripts/vt-docs.sh`, `scripts/vt-docs.ps1` | about 15 lines each |
 | CI and README edits | under 20 lines total |
 
@@ -351,21 +354,21 @@ Run on `x86_64-pc-windows-msvc`, branch `docs/vt-embedder-guide` off `main` at `
 
 **Chapters.** Thirteen files under `crates/vt/docs/guide/`, 1 956 lines of Markdown after the
 verification rework: `01-overview.md` 105, `02-embedding.md` 214, `03-threading.md` 132,
-`04-events.md` 182, `05-osc.md` 186, `06-input.md` 148, `07-search.md` 141, `08-graphics.md` 136,
-`09-resize.md` 100, `10-limits.md` 133, `11-conformance.md` 127, `12-versioning.md` 132,
-`13-pty.md` 220. `grep -c 'include_str!' crates/vt/src/guide.rs` is 13.
+`04-events.md` 182, `05-osc.md` 186, `06-input.md` 148, `07-search.md` 93 plus
+`07-search-regex.md` 44, `08-graphics.md` 136, `09-resize.md` 100, `10-limits.md` 133,
+`11-conformance.md` 127, `12-versioning.md` 132, `13-pty.md` 220. `grep -c 'include_str!' crates/vt/src/guide.rs` is 13.
 
 **Render.** `RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps` and the same with
 `--all-features` both exit 0 with no warning. `target/doc/oneterm_vt/guide/index.html` links
 exactly thirteen `chNN_*/index.html` modules.
 
-**Doctests.** `cargo test -p oneterm-vt --doc`: 34 passed, 0 failed, 1 ignored, the same under
-`--all-features`; 32 passed, 0 failed, 1 ignored under `--no-default-features`, where chapter 13's
-two blocks are compiled out with the module. Of the 34, 30 come from the guide, at least one from
+**Doctests.** **There is no `ignore` block left in the guide.** Measured in four feature states,
+all green and all with 0 ignored: default 34 passed, `--all-features` 35, `--features regex` 35,
+`--no-default-features` 32, where chapter 13's two blocks and chapter 7's regex block are compiled
+out with their features. Of the 34 in the default run, 30 come from the guide, at least one from
 every chapter: 01 x1, 02 x8, 03 x1, 04 x2, 05 x4, 06 x2, 07 x3, 08 x1, 09 x1, 10 x1, 11 x1,
-12 x2, 13 x2. Chapter 13's poll loop is `no_run`: compiled, never executed. The single `ignore` is
-chapter 7's `SearchPattern::Regex` block, whose variant does not exist in a default build; it says
-so in the block.
+12 x2, 13 x2. Chapter 13's poll loop is `no_run` -- compiled, never executed, because it spawns a
+child and then loops forever; every other block runs.
 
 **Cannot rot.** One character deleted from a code block in `04-events.md`, `07-search.md` and
 `10-limits.md` in turn; `cargo test -p oneterm-vt --doc` exited 101 each time and passed again
@@ -484,6 +487,7 @@ measurable claim true, and four prose sentences about the API false. The full re
 | 9. `guide.rs` is 50 lines, not 51 | LOC table corrected, and corrected again for the `cfg` split: 71. |
 | 10. Chapter 1 drops the intake's "not measured" hedge on `rio-vt`'s dependency count | Hedge restored. |
 | 11. Chapter 3 says `Terminal` is not `Sync`; the API reference says it is | Rewritten. `Terminal` is `Send` **and** `Sync`, both automatic; the chapter now says what each buys, and that `&mut self` on `feed` is what serialises mutation -- not a missing `Sync`. |
+| 13. Chapter 7's `regex` block was the last thing in the guide that nothing compiled | The same split one level down: `07-search-regex.md` is appended by `cfg_attr` under `feature = "regex"`, so the block is a live doctest where the variant exists. The chapter itself is **not** gated -- `regex` is off by default, so stubbing chapter 7 in the common build would be the cure killing the patient -- and the `not(feature)` arm replaces only the tail section. The guide now has zero `ignore` blocks in every feature state. Raised after the report, in the same spirit as note 1. |
 | 12. Chapter 13 says the transport's threads are "all joined on drop"; none is joined | Rewritten to the real lifecycle: the Windows pipe threads are parked in a blocking read or write and cannot be joined, the Unix reaper deliberately outlives the drop, none of them holds anything of yours, and the bounded wait in `drop` is for the **child**, not for them. |
 
 Two notes are recorded rather than closed. The verifier's own "could not be verified" list stands

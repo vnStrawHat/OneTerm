@@ -28,7 +28,31 @@ pub mod ch05_osc {}
 #[doc = include_str!("../docs/guide/06-input.md")]
 pub mod ch06_input {}
 
+// The search chapter's regex section is the only other part of the guide whose
+// subject can be compiled away, so it is the other part whose block would have
+// to be `ignore`d. Unlike the transport, `regex` is **off** by default, so
+// gating the whole chapter would stub it in the common build; only the tail
+// section moves, and the other arm says in its place what turning the feature
+// on buys.
 #[doc = include_str!("../docs/guide/07-search.md")]
+#[cfg_attr(feature = "regex", doc = include_str!("../docs/guide/07-search-regex.md"))]
+#[cfg_attr(
+    not(feature = "regex"),
+    doc = "
+## Regular expressions, behind a feature
+
+The `regex` feature -- **off** in this build -- adds one more
+`search::SearchPattern` variant, taking a reference to a compiled
+`regex::Regex`, and with it the `regex` crate and its three dependencies. Turn
+it on and this section is the rest of the chapter: what a regular expression
+matches against (one row at a time, exactly as wide as the grid), why
+`search::SearchOptions` is ignored for one, and why compiling the pattern stays
+yours.
+
+`search::SearchPattern` is `#[non_exhaustive]`, so a `match` on it always needs
+a wildcard arm. That is what lets the same code compile whether or not the
+feature is on."
+)]
 pub mod ch07_search {}
 
 #[doc = include_str!("../docs/guide/08-graphics.md")]
