@@ -31,6 +31,7 @@ use std::time::Instant;
 
 pub use color::ColorKey;
 pub(crate) use color::ColorOverrides;
+pub(crate) use dispatch::ClusterCarry;
 pub use mode::{CursorShape, KeyboardFlags, Mode};
 pub(crate) use mode::{CursorStyle, KeyboardStacks, Modes, TitleState};
 pub use osc::{OscRoute, OscRoutes};
@@ -146,6 +147,16 @@ pub(crate) struct State {
     /// only that one. Like `preceding_char` it survives an intervening escape
     /// sequence, because only printing consumes it.
     pub(crate) single_shift: Option<usize>,
+    /// What `DECSC` saved of the two above, one slot per screen because the
+    /// saved cursor is per screen. Correction C12: VT510's `DECSC` saves the
+    /// sets in GL and GR and any pending single shift, and the engine being
+    /// replaced saves neither.
+    pub(crate) saved_shifts: [(usize, Option<usize>); 2],
+    /// Mode `? 2027` only: the grapheme cluster the last printed run ended on,
+    /// so a cluster split across two `feed` calls is measured whole. `None`
+    /// whenever the mode is reset, and cleared by any dispatch that is not a
+    /// print.
+    pub(crate) cluster_carry: Option<ClusterCarry>,
     /// `REP`'s source, which survives intervening escape sequences (trap 43).
     pub(crate) preceding_char: Option<char>,
     pub(crate) modify_other_keys: u8,
@@ -203,6 +214,8 @@ impl Terminal {
                 cursor_style: None,
                 active_charset: 0,
                 single_shift: None,
+                saved_shifts: [(0, None); 2],
+                cluster_carry: None,
                 preceding_char: None,
                 modify_other_keys: 0,
                 cell_pixels: (0, 0),
@@ -401,6 +414,9 @@ impl Terminal {
     pub fn resize(&mut self, size: Size, policy: ResizePolicy) -> ResizeOutcome {
         let outcome = self.state.grid.resize(size, policy);
         self.state.generation = self.state.generation.wrapping_add(1);
+        // A reflow moves cells between rows, so a half-printed cluster's cell
+        // is no longer where it was; the continuation starts a new one.
+        self.state.cluster_carry = None;
         self.prune_selection();
         // A reflow can destroy the rows a placement was anchored to; the
         // releases queue until the next `feed` delivers them.

@@ -8,6 +8,7 @@
 //!
 //! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md>.
 
+use std::borrow::Cow;
 use std::time::Instant;
 
 use crate::cell::{Cell, CellContent, Color, NamedColor, Rgb, Semantic, Style};
@@ -15,7 +16,7 @@ use crate::event::batch::StrSpan;
 use crate::event::{ClipboardKind, EventBatch, Progress, ShellMark, VtEvent};
 use crate::graphics::{self, SixelParser};
 use crate::grid::{
-    AnchorKind, Charset, DisplayClear, LineClear, Pos, PrintMode, ScrollRegion, ScrollReport,
+    AnchorKind, Charset, DisplayClear, LineClear, Pos, PrintMode, RowId, ScrollRegion, ScrollReport,
 };
 use crate::parser::{Dispatch, MAX_OSC_PARAMS, OscParams, ParamGroups, Params, StringTerm};
 use crate::selection::Invalidation;
@@ -34,6 +35,31 @@ use crate::terminal::osc::OscRoute;
 use crate::terminal::{MARK_MAX, State};
 use crate::width::cluster_width;
 use unicode_segmentation::UnicodeSegmentation;
+
+/// Scalars a grapheme cluster may hold and still be carried across a `feed`
+/// boundary. Longer than any well-formed cluster, and short enough that
+/// re-placing one costs nothing.
+pub(crate) const CLUSTER_CARRY_MAX: usize = 32;
+
+/// The grapheme cluster the last printed run ended on, under mode `? 2027`.
+///
+/// A pty read can end anywhere, and the parser hands over one run per validated
+/// chunk, so without this the tail of a split cluster measures as a cluster of
+/// its own and takes a cell it should have joined. This is the cross-chunk
+/// pending-cluster buffer the cell-and-style design asked for.
+#[derive(Clone, Debug)]
+pub(crate) struct ClusterCarry {
+    /// The row the leading cell is on, by identity rather than by index, so a
+    /// scroll between the two halves is detectable rather than silent.
+    row: RowId,
+    /// The leading cell's column.
+    col: u16,
+    /// The scalars already placed, so the continuation can be re-segmented
+    /// against them.
+    text: String,
+    /// The set the leading scalar was mapped through.
+    charset: Charset,
+}
 
 /// The dispatch sink, built by `Terminal::feed` over its own fields.
 pub(crate) struct Handler<'a> {
@@ -166,11 +192,21 @@ impl Handler<'_> {
     // ── Printing ────────────────────────────────────────────────────────────
 
     fn input(&mut self, c: char) {
-        // `SS2` / `SS3` shift exactly one printed character, so the clear is
-        // here and nowhere else: an escape sequence between the shift and the
-        // character must not eat it. Written as a match rather than `take()` so
-        // that the overwhelmingly common `None` costs a predictable branch and
-        // **no store** — this is the per-character print path.
+        let charset = self.take_charset();
+        let mode = self.print_mode();
+        let State { grid, interner, .. } = self.state;
+        grid.print(map_charset(charset, c), mode, interner);
+    }
+
+    /// The set the next printed character comes from, consuming a pending
+    /// single shift.
+    ///
+    /// `SS2` / `SS3` shift exactly one printed character, so the clear is here
+    /// and nowhere else: an escape sequence between the shift and the character
+    /// must not eat it. Written as a match rather than `take()` so that the
+    /// overwhelmingly common `None` costs a predictable branch and **no store**
+    /// — this is the per-character print path.
+    fn take_charset(&mut self) -> Charset {
         let index = match self.state.single_shift {
             Some(index) => {
                 self.state.single_shift = None;
@@ -178,13 +214,41 @@ impl Handler<'_> {
             }
             None => self.state.active_charset,
         };
-        let charset = {
-            let cursor = self.state.grid.screen().cursor();
-            cursor.charsets[index]
-        };
-        let mode = self.print_mode();
-        let State { grid, interner, .. } = self.state;
-        grid.print(map_charset(charset, c), mode, interner);
+        self.state.grid.screen().cursor().charsets[index]
+    }
+
+    /// `DECSC`, plus what lives outside the cursor.
+    ///
+    /// Correction C12: the locking-set invocation and a pending single shift
+    /// are saved and restored with the cursor, which is what VT510's DECSC
+    /// specifies ("character sets currently in GL and GR" and "any SS2 or SS3
+    /// sent") and what xterm's `CursorSave` does. The engine being replaced
+    /// saves neither, because it keeps the invocation on the terminal rather
+    /// than the cursor; so does this one, and the save slot is per screen for
+    /// the same reason `Screen` owns the saved cursor.
+    fn save_cursor(&mut self) {
+        self.state.grid.screen_mut().save_cursor();
+        let slot = usize::from(self.state.grid.alt_active());
+        self.state.saved_shifts[slot] = (self.state.active_charset, self.state.single_shift);
+    }
+
+    /// `DECRC`, the other half of [`Handler::save_cursor`].
+    fn restore_cursor(&mut self) {
+        self.state.grid.screen_mut().restore_cursor();
+        let slot = usize::from(self.state.grid.alt_active());
+        let (charset, shift) = self.state.saved_shifts[slot];
+        self.state.active_charset = charset;
+        self.state.single_shift = shift;
+    }
+
+    /// Forget a half-printed grapheme cluster.
+    ///
+    /// Called by every dispatch that is not a print: a control, an escape
+    /// sequence, an OSC or a string introducer all break a cluster, in the
+    /// segmentation algorithm and here, so what follows one starts a cluster of
+    /// its own.
+    fn break_cluster(&mut self) {
+        self.state.cluster_carry = None;
     }
 
     /// The `? 2027` print path, kept **out of line** from `print_str`.
@@ -195,46 +259,128 @@ impl Handler<'_> {
     // or not. Measured, not assumed.
     #[inline(never)]
     fn print_clusters(&mut self, text: &str) {
+        // A read can end anywhere, so the first cluster of this run may be the
+        // tail of the one the last run printed. Re-segment the two together:
+        // only the first cluster of the joined text can be a continuation, and
+        // only a live carry makes the join cost an allocation.
+        let carry = self.state.cluster_carry.take();
+        let joined: Cow<'_, str> = match &carry {
+            Some(carry) => Cow::Owned(format!("{}{text}", carry.text)),
+            None => Cow::Borrowed(text),
+        };
+        let joined = joined.as_ref();
+        let head = carry.as_ref().map_or(0, |carry| carry.text.len());
         // One `Vec` for the whole run, cleared per cluster: `cluster_width`
         // reads scalars, and the mode is rare enough that a reusable buffer is
         // not worth a field on `State`.
         let mut scalars: Vec<char> = Vec::new();
-        for cluster in UnicodeSegmentation::graphemes(text, true) {
+        let mut rest = joined;
+        if let Some(carry) = &carry {
+            let first_len = UnicodeSegmentation::graphemes(rest, true)
+                .next()
+                .map_or(0, str::len);
+            if first_len > head {
+                scalars.extend(rest[..first_len].chars());
+                self.replace_carried(carry, &scalars);
+            }
+            // `first_len == head` means this run began a cluster of its own and
+            // what the last run printed still stands. Shorter is impossible:
+            // appending text cannot split a cluster that already segmented as
+            // one.
+            rest = &rest[first_len.max(head)..];
+        }
+        for cluster in UnicodeSegmentation::graphemes(rest, true) {
             scalars.clear();
             scalars.extend(cluster.chars());
-            self.input_cluster(&scalars);
+            let charset = self.take_charset();
+            let placed = self.place_cluster(&scalars, charset);
             self.state.preceding_char = scalars.last().copied();
+            self.remember_carry(&scalars, charset, placed);
         }
     }
 
-    /// One grapheme cluster, one cell.
+    /// Print the whole of a cluster whose head the last run already placed,
+    /// over the cell the head took.
+    ///
+    /// The print path repairs the half of a wide pair an overwrite orphans, so
+    /// a cluster that gets *narrower* — a text presentation selector arriving
+    /// after a wide base — needs no blanking of its own.
+    fn replace_carried(&mut self, carry: &ClusterCarry, cluster: &[char]) {
+        let charset = match self.state.grid.screen().index_of(carry.row) {
+            Some(index) => {
+                self.state.grid.screen_mut().goto(index, carry.col);
+                // The head was mapped through the set that was active then, and
+                // through the single shift that was consumed then; neither is
+                // taken a second time.
+                carry.charset
+            }
+            // The head's row left the screen between the two halves, which
+            // takes a control, which breaks the carry — so this is unreachable
+            // rather than merely unlikely. Printing the tail where the cursor
+            // is beats writing into a row that is no longer the one.
+            None => self.take_charset(),
+        };
+        let placed = self.place_cluster(cluster, charset);
+        self.state.preceding_char = cluster.last().copied();
+        self.remember_carry(cluster, charset, placed);
+    }
+
+    /// One grapheme cluster, one cell. Returns where the leading cell landed.
     ///
     /// The charset map is applied to the leading scalar only, exactly as the
     /// per-scalar path applies it to every scalar: a cluster whose base is a
     /// line-drawing letter is the single-scalar case, and one that is not
     /// cannot be in the DEC special set anyway.
-    fn input_cluster(&mut self, cluster: &[char]) {
-        let Some((&first, rest)) = cluster.split_first() else {
-            return;
-        };
+    fn place_cluster(&mut self, cluster: &[char], charset: Charset) -> Option<(RowId, u16)> {
+        let (&first, rest) = cluster.split_first()?;
         let width = cluster_width(cluster);
-        let charset = {
-            let cursor = self.state.grid.screen().cursor();
-            cursor.charsets[self
-                .state
-                .single_shift
-                .take()
-                .unwrap_or(self.state.active_charset)]
-        };
         let mode = self.print_mode();
         let State { grid, interner, .. } = self.state;
         grid.print_with_width(map_charset(charset, first), width, mode, interner);
+        // Read the position back rather than predicting it: the leading scalar
+        // may have wrapped, and at the last column the cursor stays put with
+        // the pending wrap armed instead of moving past the end.
+        let placed = (width > 0).then(|| {
+            let screen = grid.screen();
+            let cursor = screen.cursor();
+            let past = if cursor.pending_wrap {
+                screen.cols()
+            } else {
+                cursor.pos.col
+            };
+            (cursor.pos.row, past.saturating_sub(u16::from(width)))
+        });
         // Width 0 is what puts the rest of the cluster in the cell the leading
         // scalar just took, however wide `unicode-width` thinks each one is on
         // its own.
         for &c in rest {
             grid.print_with_width(c, 0, mode, interner);
         }
+        placed
+    }
+
+    /// Hold this cluster so the next run can extend it.
+    ///
+    /// Two clusters are never held. One that measured zero columns attached to
+    /// the cell on its left, and a further scalar attaches there too, which is
+    /// already right. One past [`CLUSTER_CARRY_MAX`] scalars is dropped and
+    /// counted, because a hostile stream can feed an unbounded cluster one
+    /// scalar per chunk and re-placing a growing cluster every time is
+    /// quadratic; past the cap the tail starts a cluster of its own, which is
+    /// what the mode did before the carry existed.
+    fn remember_carry(&mut self, cluster: &[char], charset: Charset, placed: Option<(RowId, u16)>) {
+        let Some((row, col)) = placed else { return };
+        if cluster.len() > CLUSTER_CARRY_MAX {
+            self.state.stats.dropped_cluster_carries =
+                self.state.stats.dropped_cluster_carries.wrapping_add(1);
+            return;
+        }
+        self.state.cluster_carry = Some(ClusterCarry {
+            row,
+            col,
+            text: cluster.iter().collect(),
+            charset,
+        });
     }
 
     // ── Erase and scroll ────────────────────────────────────────────────────
@@ -341,11 +487,10 @@ impl Handler<'_> {
             }
             // Correction C8: `? 1048` is `DECSC` / `DECRC` with no screen swap.
             Mode::SaveCursor1048 => {
-                let screen = self.state.grid.screen_mut();
                 if on {
-                    screen.save_cursor();
+                    self.save_cursor();
                 } else {
-                    screen.restore_cursor();
+                    self.restore_cursor();
                 }
             }
             Mode::Origin => {
@@ -453,6 +598,7 @@ impl Handler<'_> {
         self.state.graphics.reset();
         self.state.active_charset = 0;
         self.state.single_shift = None;
+        self.state.saved_shifts = [(0, None); 2];
         self.state.cursor_style = None;
         self.state.title.reset();
         self.state.keyboard.reset();
@@ -485,7 +631,7 @@ impl Handler<'_> {
         self.state.grid.screen_mut().set_region_raw(0, rows);
         self.set_template(Cell::EMPTY);
         self.state.grid.screen_mut().goto(0, 0);
-        self.state.grid.screen_mut().save_cursor();
+        self.save_cursor();
     }
 
     // ── Tabs ────────────────────────────────────────────────────────────────
@@ -983,6 +1129,7 @@ impl Dispatch for Handler<'_> {
 
     fn execute(&mut self, byte: u8) {
         self.state.dispatched = true;
+        self.break_cluster();
         match byte {
             0x09 => {
                 let autowrap = self.state.modes.contains(Mode::LineWrap);
@@ -1009,6 +1156,7 @@ impl Dispatch for Handler<'_> {
 
     fn esc(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
         self.state.dispatched = true;
+        self.break_cluster();
         if ignore || intermediates.len() > 2 {
             self.unhandled();
             return;
@@ -1061,9 +1209,9 @@ impl Dispatch for Handler<'_> {
             (b'O', []) => self.state.single_shift = Some(3),
             (b'Z', []) => self.identify_terminal(None),
             (b'c', []) => self.reset_state(),
-            (b'7', []) => self.state.grid.screen_mut().save_cursor(),
+            (b'7', []) => self.save_cursor(),
             (b'8', [b'#']) => self.decaln(),
-            (b'8', []) => self.state.grid.screen_mut().restore_cursor(),
+            (b'8', []) => self.restore_cursor(),
             (b'=', []) => self.state.modes.set(Mode::AppKeypad, true),
             (b'>', []) => self.state.modes.set(Mode::AppKeypad, false),
             // String terminator: the parser already closed the string.
@@ -1074,6 +1222,7 @@ impl Dispatch for Handler<'_> {
 
     fn csi(&mut self, params: &Params, intermediates: &[u8], ignore: bool, byte: u8) {
         self.state.dispatched = true;
+        self.break_cluster();
         if ignore || intermediates.len() > 2 {
             self.unhandled();
             return;
@@ -1318,7 +1467,7 @@ impl Dispatch for Handler<'_> {
                 let report = self.state.grid.scroll_up(region, n);
                 self.report(Some(report));
             }
-            (b's', []) => self.state.grid.screen_mut().save_cursor(),
+            (b's', []) => self.save_cursor(),
             (b'T', []) => {
                 let n = args.next_or(1);
                 let region = self.region();
@@ -1354,7 +1503,7 @@ impl Dispatch for Handler<'_> {
                 let count = args.next_or(1);
                 self.state.keyboard.active.pop(count);
             }
-            (b'u', []) => self.state.grid.screen_mut().restore_cursor(),
+            (b'u', []) => self.restore_cursor(),
             (b'X', []) => {
                 let n = args.next_or(1);
                 self.state.grid.screen_mut().erase_chars(n);
@@ -1371,6 +1520,7 @@ impl Dispatch for Handler<'_> {
         truncated: bool,
     ) {
         self.state.dispatched = true;
+        self.break_cluster();
         if truncated {
             self.state.stats.truncated_osc = self.state.stats.truncated_osc.saturating_add(1);
         }
@@ -1412,6 +1562,7 @@ impl Dispatch for Handler<'_> {
     /// aborted by it, and this branch has nothing to clear.
     fn dcs_hook(&mut self, _params: &Params, intermediates: &[u8], byte: u8) {
         self.state.dispatched = true;
+        self.break_cluster();
         if byte == b'q' && intermediates.is_empty() {
             self.state.graphics.parser = Some(SixelParser::new());
         } else {
@@ -1443,6 +1594,7 @@ impl Dispatch for Handler<'_> {
 
     fn apc_start(&mut self, _introducer: u8) {
         self.state.dispatched = true;
+        self.break_cluster();
         self.unhandled();
     }
 

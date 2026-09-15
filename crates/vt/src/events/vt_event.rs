@@ -221,4 +221,10 @@ pub struct FeedStats {
     /// `OSC 8` links dropped because the hyperlink table was full. The text
     /// still renders; the link is simply not clickable.
     pub hyperlink_table_exhausted: u32,
+    /// Grapheme clusters that grew past the engine's cross-chunk carry limit
+    /// under mode `? 2027`, so a continuation arriving in a later `feed` starts
+    /// a cluster of its own instead of extending them. Zero for every
+    /// well-formed stream; a rising count means something is feeding one
+    /// unbounded cluster.
+    pub dropped_cluster_carries: u32,
 }

@@ -36,16 +36,33 @@ pub fn scalar_width(c: char) -> Option<u8> {
 
 /// Columns one grapheme cluster occupies, for the mode 2027 print path.
 ///
-/// The rules, in order: a flag (two or more regional indicators) is one wide
-/// cell; an explicit presentation selector decides; otherwise the cluster is as
-/// wide as its first non-zero-width scalar, clamped to two columns — so a ZWJ
-/// sequence and a skin-tone sequence each measure one cell, however many
-/// codepoints they carry.
+/// The rules, in order: a cluster with no base is zero-width; a flag (two or
+/// more regional indicators) is one wide cell; an explicit presentation
+/// selector decides the width of the base it follows; otherwise the cluster is
+/// as wide as that base, clamped to two columns — so a ZWJ sequence and a
+/// skin-tone sequence each measure one cell, however many codepoints they
+/// carry.
+///
+/// **A presentation selector needs a base.** A cluster that is nothing but
+/// combining scalars — a stray `VS16`, a leading combining mark, the tail of a
+/// keycap sequence split across two reads — measures zero and joins the cell
+/// on its left, which is what it does with the mode reset and what every other
+/// terminal does with it set. Known limitation: `VS16` widens any base, where
+/// the standard widens only a base that carries the Emoji property; telling
+/// those apart needs a property table this crate does not carry, and the case
+/// (`a` followed by `VS16`) does not occur in well-formed output.
 pub fn cluster_width(cluster: &[char]) -> u8 {
     debug_assert!(
         is_at_most_one_cluster(cluster),
         "cluster_width expects a single grapheme cluster"
     );
+    let Some(base) = cluster
+        .iter()
+        .filter(|c| **c != ZERO_WIDTH_JOINER)
+        .find_map(|c| scalar_width(*c).filter(|width| *width > 0))
+    else {
+        return 0;
+    };
     if cluster
         .iter()
         .filter(|c| is_regional_indicator(**c))
@@ -60,11 +77,7 @@ pub fn cluster_width(cluster: &[char]) -> u8 {
     if cluster.contains(&TEXT_PRESENTATION) {
         return 1;
     }
-    cluster
-        .iter()
-        .filter(|c| **c != ZERO_WIDTH_JOINER)
-        .find_map(|c| scalar_width(*c).filter(|width| *width > 0))
-        .unwrap_or(0)
+    base
 }
 
 fn is_regional_indicator(c: char) -> bool {
