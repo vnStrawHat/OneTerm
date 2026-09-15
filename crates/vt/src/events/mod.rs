@@ -10,7 +10,7 @@
 // The module is `event` (the name the design and its test filters use) and its
 // files live in `events/`, one concept each.
 
-mod batch;
+pub(crate) mod batch;
 mod vt_event;
 
 pub use batch::EventBatch;

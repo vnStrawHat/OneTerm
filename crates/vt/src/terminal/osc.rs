@@ -56,6 +56,16 @@ pub enum OscRoute {
 /// Which OSC numbers the engine handles, forwards, or ignores.
 ///
 /// Cheap to clone and compare; holds no allocation for any number below 2048.
+/// Two tables that route every number the same way **are** equal: the bits are
+/// canonical, so saying `Drop` about a number the engine does not implement
+/// leaves the table exactly as it was.
+///
+/// The table is read when a `Terminal` is built and is not live: a `Terminal`
+/// keeps the `Config` it was given ([`Terminal::config`](crate::Terminal::config)
+/// hands out a shared reference and there is no setter), so an embedder that
+/// wants a different route mid-session builds a new terminal. This is
+/// deliberate — a route that could change under a half-parsed sequence would be
+/// a race the engine has no way to describe.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct OscRoutes {
     forward: CodeSet,
@@ -78,8 +88,11 @@ impl OscRoutes {
     }
 
     /// Whether the engine implements this number itself.
+    ///
+    /// A bitmap read, not a scan of [`OscRoutes::BUILTIN`], so the whole
+    /// routing decision stays three bit tests.
     pub fn has_builtin(code: u32) -> bool {
-        OscRoutes::BUILTIN.contains(&code)
+        code < BITMAP_BITS && BUILTIN_BITS[(code / 64) as usize] & (1 << (code % 64)) != 0
     }
 
     /// Set the route for one number. Idempotent; later calls win.
@@ -96,11 +109,16 @@ impl OscRoutes {
             "OSC {code} has no built-in handler, so routing it to `Builtin` can never run \
              anything; ask `OscRoutes::has_builtin` first"
         );
+        // Store the bits of the route the number will *actually* get, not of
+        // the one that was asked for. Two tables that behave the same way then
+        // compare equal, and a number put back to its default leaves the spill
+        // list instead of sitting in it for ever.
+        let builtin = OscRoutes::has_builtin(code);
         let (forward, suppress) = match route {
             OscRoute::Builtin => (false, false),
-            OscRoute::BuiltinAndForward => (true, false),
-            OscRoute::Forward => (true, true),
-            OscRoute::Drop => (false, true),
+            OscRoute::BuiltinAndForward if builtin => (true, false),
+            OscRoute::BuiltinAndForward | OscRoute::Forward => (true, true),
+            OscRoute::Drop => (false, builtin),
         };
         self.forward.set(code, forward);
         self.suppress.set(code, suppress);
@@ -125,7 +143,11 @@ impl OscRoutes {
     ///
     /// Buying a ceiling for a number whose route is [`OscRoute::Drop`] is a
     /// **debug assertion**: the payload is accumulated and then thrown away,
-    /// which is a memory hazard with no benefit.
+    /// which is a memory hazard with no benefit. The assertion reads the table
+    /// as it stands, so **route the number first**:
+    /// `route(n, OscRoute::Forward).large(n, true)`, not the other way round.
+    /// A table assembled from configuration data in an arbitrary order should
+    /// apply every route before any ceiling.
     pub fn large(&mut self, code: u32, allow: bool) -> &mut Self {
         debug_assert!(
             !allow || self.get(code) != OscRoute::Drop,
@@ -169,6 +191,24 @@ impl OscRoutes {
             .filter(|&(code, route)| route != default_route(code))
     }
 }
+
+/// [`OscRoutes::BUILTIN`] as a bitmap, so asking whether a number has a
+/// built-in is a bit test rather than a scan. Every built-in number is below
+/// [`BITMAP_BITS`], which this build check relies on.
+const BUILTIN_BITS: [u64; BITMAP_WORDS] = {
+    let mut bits = [0u64; BITMAP_WORDS];
+    let mut index = 0;
+    while index < OscRoutes::BUILTIN.len() {
+        let code = OscRoutes::BUILTIN[index];
+        assert!(
+            code < BITMAP_BITS,
+            "a built-in OSC number must fit the bitmap"
+        );
+        bits[(code / 64) as usize] |= 1 << (code % 64);
+        index += 1;
+    }
+    bits
+};
 
 /// The route a number has when nothing has been said about it.
 fn default_route(code: u32) -> OscRoute {

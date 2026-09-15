@@ -11,7 +11,8 @@
 use std::time::Instant;
 
 use crate::cell::{Cell, CellContent, Color, NamedColor, Rgb, Semantic, Style};
-use crate::event::{ClipboardKind, Progress, ShellMark, VtEvent};
+use crate::event::batch::StrSpan;
+use crate::event::{ClipboardKind, EventBatch, Progress, ShellMark, VtEvent};
 use crate::graphics::{self, SixelParser};
 use crate::grid::{
     AnchorKind, Charset, DisplayClear, LineClear, Pos, PrintMode, ScrollRegion, ScrollReport,
@@ -1367,16 +1368,20 @@ impl Handler<'_> {
     ) {
         match code {
             0 | 2 => {
-                let Some(title) = self.osc_text(params) else {
+                let Some(span) = self.osc_text(params) else {
                     return;
                 };
-                self.set_title(Some(title));
+                // The event reads the arena; the title stack and
+                // `Terminal::title` own the one copy the engine has to keep.
+                let title = self.out.str(span).to_owned();
+                self.out.push(VtEvent::Title(span));
+                self.state.title.title = Some(title);
             }
             1 => {
-                let Some(name) = self.osc_text(params) else {
+                let Some(span) = self.osc_text(params) else {
                     return;
                 };
-                self.out.push_text(name.as_bytes(), VtEvent::IconName);
+                self.out.push(VtEvent::IconName(span));
             }
             4 => self.osc_palette(params, term),
             7 => self.osc_cwd(params, truncated),
@@ -1446,49 +1451,72 @@ impl Handler<'_> {
     }
 
     /// `OSC 0 / 1 / 2`: every parameter after the number, rejoined on `;` and
-    /// trimmed. `None` when there is nothing to report, which is counted.
-    fn osc_text(&mut self, params: &OscParams<'_>) -> Option<String> {
+    /// trimmed, assembled straight into the batch's arena. A parameter that is
+    /// not valid UTF-8 is skipped, as it always was. `None` when there is
+    /// nothing to report, which is counted.
+    fn osc_text(&mut self, params: &OscParams<'_>) -> Option<StrSpan> {
         if params.len() < 2 {
             self.unhandled();
             return None;
         }
-        Some(
-            (1..params.len())
-                .filter_map(|index| params.get(index))
-                .filter_map(|part| str::from_utf8(part).ok())
-                .collect::<Vec<&str>>()
-                .join(";")
-                .trim()
-                .to_owned(),
-        )
+        let mark = self.out.mark();
+        let mut first = true;
+        for index in 1..params.len() {
+            let Some(part) = params.get(index).and_then(|part| str::from_utf8(part).ok()) else {
+                continue;
+            };
+            if !first {
+                self.out.extend(b";");
+            }
+            first = false;
+            self.out.extend(part.as_bytes());
+        }
+        self.out.finish_trimmed(mark)
     }
 
     /// `OSC 7`: `file://host/path`, or a bare path. The host and the path are
     /// reported **separately and unresolved** — the engine percent-decodes and
     /// strips a Windows drive URL's leading slash, and stops there, because
     /// deciding whether to trust a remote shell's directory is policy.
+    ///
+    /// Both spans are assembled in the batch's arena, so a shell emitting
+    /// `OSC 7` on every prompt costs one arena copy and no allocation.
     fn osc_cwd(&mut self, params: &OscParams<'_>, truncated: bool) {
-        // A cut path is a different path, not a shorter one.
+        // A cut path is a different path, not a shorter one; and a URL that is
+        // not UTF-8 is not a URL.
         let url = match params.get(1) {
-            Some(url) if !truncated => String::from_utf8_lossy(url).into_owned(),
-            _ => {
-                self.unhandled();
-                return;
-            }
+            Some(url) if !truncated => str::from_utf8(url).ok(),
+            _ => None,
         };
-        let (host, path) = match url.strip_prefix("file://") {
+        let Some(url) = url else {
+            self.unhandled();
+            return;
+        };
+        // `rooted` remembers the `/` that the authority split consumed.
+        let (host, path, rooted) = match url.strip_prefix("file://") {
             Some(rest) => match rest.split_once('/') {
-                Some((host, path)) => (host.to_owned(), format!("/{path}")),
-                None => (String::new(), rest.to_owned()),
+                Some((host, path)) => (host, path, true),
+                None => ("", rest, false),
             },
-            None => (String::new(), url),
+            None => ("", url, false),
         };
-        let decoded = percent_decode(&path);
-        let path = strip_windows_drive_slash(&decoded);
-        self.out
-            .push_text_pair(host.as_bytes(), path.as_bytes(), |host, path| {
-                VtEvent::Cwd { host, path }
-            });
+
+        let mark = self.out.mark();
+        self.out.extend(host.as_bytes());
+        let host = self.out.finish_lossy(mark);
+
+        let mark = self.out.mark();
+        if rooted {
+            self.out.extend(b"/");
+        }
+        percent_decode_into(path, self.out);
+        let path = self.out.finish_lossy(mark);
+        // `/C:/Users` is a Windows drive path wearing a URL's leading slash,
+        // and that slash is not part of the name. One ASCII byte, so cutting
+        // the span cannot land inside a character.
+        let path = path.skip(drive_slash_len(self.out.str(path)));
+
+        self.out.push(VtEvent::Cwd { host, path });
     }
 
     /// `OSC 9`: ConEmu taskbar progress under sub-code `4`, a desktop
@@ -1504,13 +1532,17 @@ impl Handler<'_> {
                 self.unhandled();
                 return;
             }
+            // Both fields are read as `u32` and the percentage is **clamped**,
+            // which is what the sequence's definition says. Reading them as
+            // `u8` instead — as the adapter did — turned `9;4;1;1000` into
+            // `Set(0)`, because the parse failed before the clamp could run.
             let field = |index: usize| {
                 params
                     .get(index)
                     .and_then(|value| str::from_utf8(value).ok())
-                    .and_then(|value| value.parse::<u8>().ok())
+                    .and_then(|value| value.parse::<u32>().ok())
             };
-            let percent = field(3).unwrap_or(0).min(100);
+            let percent = field(3).unwrap_or(0).min(100) as u8;
             let progress = match field(2).unwrap_or(0) {
                 0 => Progress::Remove,
                 1 => Progress::Set(percent),
@@ -1525,22 +1557,27 @@ impl Handler<'_> {
             self.out.push(VtEvent::Progress(progress));
             return;
         }
-        // The message may itself contain `;`, which the parser has already
-        // split, so rejoin it.
-        let body = (1..params.len())
-            .filter_map(|index| params.get(index))
-            .map(String::from_utf8_lossy)
-            .collect::<Vec<_>>()
-            .join(";");
-        if body.is_empty() {
+        // The body is every remaining parameter rejoined on `;`, so it is empty
+        // only when there is exactly one and it is empty.
+        if params.len() == 2 && params.get(1).unwrap_or_default().is_empty() {
             self.unhandled();
             return;
         }
-        self.out
-            .push_text_pair(b"", body.as_bytes(), |title, body| VtEvent::Notification {
-                title,
-                body,
-            });
+        // `OSC 9` carries no title, so the title span is an empty one.
+        let mark = self.out.mark();
+        let title = self.out.finish_lossy(mark);
+        let mark = self.out.mark();
+        for index in 1..params.len() {
+            if index > 1 {
+                self.out.extend(b";");
+            }
+            // Borrowed, and so allocation-free, for anything that is already
+            // UTF-8.
+            let part = String::from_utf8_lossy(params.get(index).unwrap_or_default());
+            self.out.extend(part.as_bytes());
+        }
+        let body = self.out.finish_lossy(mark);
+        self.out.push(VtEvent::Notification { title, body });
     }
 
     /// `OSC 133`: the semantic goes on the cell template and the mark is also
@@ -1711,45 +1748,44 @@ impl Handler<'_> {
     }
 }
 
-/// Decode `%XX` escapes, as a shell emits them in an `OSC 7` URL. A malformed
-/// escape is kept verbatim and the result is read as UTF-8 leniently, because a
-/// directory name is not required to be valid UTF-8 and reporting a lossy name
-/// beats reporting none.
-fn percent_decode(input: &str) -> String {
+/// Decode `%XX` escapes, as a shell emits them in an `OSC 7` URL, straight into
+/// the batch's arena. A malformed escape is kept verbatim, and a decoded byte
+/// run that is not valid UTF-8 is repaired by
+/// [`EventBatch::finish_lossy`](crate::EventBatch) — a directory name is not
+/// required to be valid UTF-8, and reporting a lossy name beats reporting none.
+///
+/// Whole runs are copied at a time, so a URL with no escapes in it — the common
+/// case — is one `extend_from_slice`.
+fn percent_decode_into(input: &str, out: &mut EventBatch) {
     let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
+    let (mut index, mut run) = (0, 0);
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let high = (bytes[index + 1] as char).to_digit(16);
-            let low = (bytes[index + 2] as char).to_digit(16);
-            if let (Some(high), Some(low)) = (high, low) {
-                out.push((high * 16 + low) as u8);
-                index += 3;
-                continue;
-            }
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let Some(high) = (bytes[index + 1] as char).to_digit(16)
+            && let Some(low) = (bytes[index + 2] as char).to_digit(16)
+        {
+            out.extend(&bytes[run..index]);
+            out.extend(&[(high * 16 + low) as u8]);
+            index += 3;
+            run = index;
+            continue;
         }
-        out.push(bytes[index]);
         index += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out.extend(&bytes[run..]);
 }
 
-/// `/C:/Users` becomes `C:/Users`. A `file:///C:/...` URL is a Windows drive
-/// path with a URL's leading slash on it, and that slash is not part of the
-/// name.
-fn strip_windows_drive_slash(path: &str) -> &str {
+/// How many bytes of `/C:/Users` are the URL's leading slash rather than the
+/// name: `1` for a Windows drive path, `0` for everything else.
+fn drive_slash_len(path: &str) -> u32 {
     let bytes = path.as_bytes();
-    if bytes.len() >= 3
+    let drive = bytes.len() >= 3
         && bytes[0] == b'/'
         && bytes[1].is_ascii_alphabetic()
         && bytes[2] == b':'
-        && (bytes.len() == 3 || bytes[3] == b'/' || bytes[3] == b'\\')
-    {
-        &path[1..]
-    } else {
-        path
-    }
+        && (bytes.len() == 3 || bytes[3] == b'/' || bytes[3] == b'\\');
+    u32::from(drive)
 }
 
 /// A palette index: a decimal run that fits in a `u8`, so 256 and above is
