@@ -21,7 +21,7 @@
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
-// Six modules are reachable by path from outside, and only six: `grid`
+// Six modules of API are reachable by path from outside, and only six: `grid`
 // (`crates/tools` replays a recording through `grid::Screen`, and the adapter
 // reads `grid::{DEFAULT_SCROLLBACK, SCROLLBACK_MAX}`), `input` (the key and
 // mouse encoders, a family an embedder takes wholesale), `intern` (the adapter
@@ -29,6 +29,8 @@ pub struct ReadmeDoctests;
 // parser), `search` (a namespace of its own, because its two phases only make
 // sense together) and `pty`, the transport. Everything else an embedder names
 // is re-exported below, so the modules themselves are the crate's own business.
+// `guide` is the seventh public module and carries no item at all: it is the
+// embedder's guide, rendered by rustdoc.
 pub(crate) mod cell;
 // The module is `event` — the name the design and its test filters use — and
 // its files live in `events/`, one concept each.
@@ -36,6 +38,10 @@ pub(crate) mod cell;
 pub(crate) mod event;
 pub(crate) mod graphics;
 pub mod grid;
+// Prose, not API: thirteen empty modules, each carrying one Markdown chapter of
+// the embedder's guide. Public so `cargo doc` renders them and `cargo test
+// --doc` compiles the Rust blocks inside them.
+pub mod guide;
 pub mod input;
 pub mod intern;
 pub mod parser;
