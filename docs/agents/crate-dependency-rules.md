@@ -20,20 +20,21 @@ L2  state · theme            (shared runtime state / theming)
     │
 L1  actions · settings · update   (gpui action structs / config load-save / GitHub Releases updater)
     │
-L0  core · terminal · completion · highlight · pty · vt   (domain + engines + transport + leaf; core = pure domain)
+L0  core · terminal · completion · highlight · vt   (domain + engine + leaf; core = pure domain)
 ```
 
 An edge `A → B` (A depends on B) is allowed **only** when B sits in a strictly
 lower layer — with the single explicit same-layer exception noted in R5
 (`session-ui → terminal-view`). Same-layer and upward edges are otherwise forbidden.
-Within L0, `terminal` and `completion` depend on `core` (the pure-domain leaf);
-`highlight` is a leaf, and so are `pty` (`oneterm-pty`, the pseudo-console transport) and
-`vt` (`oneterm-vt`, IN-0029, OneTerm's own VT engine): each depends on **no** OneTerm crate at
-all, which is stricter than R2 requires. `crates/terminal` depends on `vt` since `US-0081`
-and on nothing else for its engine: the vendored fork went at `US-0087`. `crates/tools`
-(`oneterm-tools`, developer diagnostics: DOOM-fire workload, raw PTY throughput probe, VT
-parity and bench harness) is a workspace member **outside** the layering: nothing depends on
-it, and it may only reach down to L0 leaves (`pty`, `vt`).
+Within L0, `terminal` and `completion` depend on `core` (the pure-domain leaf); `highlight` is a
+leaf, and so is `vt` (`oneterm-vt`, `IN-0029`, OneTerm's own VT engine): it depends on **no**
+OneTerm crate at all, which is stricter than R2 requires. Since `US-0104` `vt` also carries the
+pseudo-console transport, in `src/pty/`, behind its **default-on `pty` cargo feature**; there is no
+separate `oneterm-pty` crate. `crates/terminal` depends on `vt` since `US-0081` and on nothing else
+for its engine: the vendored fork went at `US-0087`. `crates/tools` (`oneterm-tools`, developer
+diagnostics: DOOM-fire workload, raw PTY throughput probe, VT parity and bench harness) is a
+workspace member **outside** the layering: nothing depends on it, and it may only reach down to the
+L0 leaf `vt`.
 
 ## Invariants
 
@@ -44,9 +45,9 @@ it, and it may only reach down to L0 leaves (`pty`, `vt`).
 | **R3** | **No UI→backend edge.** No UI crate (shell **or** any feature) may depend on `ssh` / `local-shell`. Only `app` depends on the backends. UI creates sessions through `oneterm_terminal::SessionFactory` (installed by `app`). | Keeps protocol code out of the UI; lets features stay backend-agnostic and testable. | `cargo tree -i oneterm-ssh -e normal` and `cargo tree -i oneterm-local-shell -e normal` must each list **only `oneterm-app`**. |
 | **R4** | **The shell is feature-agnostic.** `workspace` MUST NOT depend on any `*-ui` feature crate or backend. It builds panels **by name** (gpui-component `PanelRegistry`) and drives features via the `oneterm_state::commands::WorkspaceCommands` fn-pointer registry. | The shell must not know which features exist. | `cargo tree -p oneterm-workspace -e normal` shows no `*-ui`, `oneterm-ssh`, or `oneterm-local-shell`. |
 | **R5** | **Features do not cross-depend.** A feature crate MUST NOT depend on another feature's internals — with the **single allowed edge** `session-ui → terminal-view` (opening an SSH session spawns a `TerminalPanel`). Shared cross-feature logic goes in `state`. | Prevents a feature tangle; keeps the one legitimate edge explicit. | `cargo tree -p <feature> -e normal`: the only `*-ui` dep permitted is `session-ui → terminal-view`. |
-| **R6** | **`core` is pure domain.** No `gpui`, no `gpui-component`, no `oneterm-pty`, no `oneterm-vt`. Types + traits (`AppError`, `SftpBackend`, `SshConfig`, `LocalShellConfig`) only. | The domain must not pull in UI or a specific terminal engine. | `cargo tree -p oneterm-core -e normal` shows no `gpui*`, no `oneterm-pty` and no `oneterm-vt`. |
-| **R7** | **The engines and the transport are gpui-free.** `terminal` is coupled to `oneterm-vt` but MUST NOT depend on `gpui` / `gpui-component`; `completion`, `highlight`, `pty` and `vt` depend on no terminal engine at all, and `pty` and `vt` additionally depend on no OneTerm crate. | The engines are reusable and unit-testable without a UI; the transport survives an engine swap. | `cargo tree -p oneterm-terminal -e normal`, `-p oneterm-completion`, `-p oneterm-highlight`, `-p oneterm-pty`, `-p oneterm-vt` show no `gpui*`. |
-| **R8** | **Backends implement traits only.** `ssh` / `local-shell` depend on **only** `core` + `terminal` + `pty` (+ their protocol crates); they implement `TerminalSession` / `SftpBackend` and depend on **no** UI crate. | Backends are swappable behind trait objects. | `cargo tree -p oneterm-ssh -e normal` / `-p oneterm-local-shell` show no UI crate. |
+| **R6** | **`core` is pure domain.** No `gpui`, no `gpui-component`, no `oneterm-vt`. Types + traits (`AppError`, `SftpBackend`, `SshConfig`, `LocalShellConfig`) only. | The domain must not pull in UI or a specific terminal engine. | `cargo tree -p oneterm-core -e normal` shows no `gpui*` and no `oneterm-vt`. |
+| **R7** | **The engines are gpui-free, and `vt` is OneTerm-free in every feature combination.** `terminal` is coupled to `oneterm-vt` but MUST NOT depend on `gpui` / `gpui-component`; `completion` and `highlight` depend on no terminal engine at all. `vt` depends on no OneTerm crate under any feature set. `vt` is **not** unconditionally platform-free: its default-on `pty` feature adds `polling` plus `windows-sys` (Windows) or `libc` (Unix), and those three are the **only** platform dependencies any `vt` feature may add. `cargo build -p oneterm-vt --no-default-features` must stay at the six leaf dependencies. | The engines are reusable and unit-testable without a UI; an embedder who owns its own process model must be able to take the engine without the transport. | `cargo tree -p oneterm-vt -e normal` shows no `gpui*` and no `oneterm-*`; `cargo tree -p oneterm-vt -e normal --no-default-features` lists exactly `bitflags`, `log`, `memchr`, `rustc-hash`, `unicode-segmentation`, `unicode-width`. |
+| **R8** | **Backends implement traits only.** `ssh` / `local-shell` depend on **only** `core` + `terminal` + `vt` (+ their protocol crates); they implement `TerminalSession` / `SftpBackend` and depend on **no** UI crate. | Backends are swappable behind trait objects. | `cargo tree -p oneterm-ssh -e normal` / `-p oneterm-local-shell` show no UI crate. |
 | **R9** | **`app` is the only omniscient crate.** Only `app` may depend on backends + features + shell together. It installs `AppSessionFactory`, runs each feature's `init()`, and assembles `WorkspaceCommands`. | Single wiring point; everyone else stays layered. | Only `crates/app/Cargo.toml` lists a backend **and** a feature crate. |
 | **R10** | **New shared types go in the lowest crate that needs them.** A type used by two features/shell belongs in `core` / `terminal` / `settings` / `state` (whichever is lowest and fits), never duplicated. | Avoids duplicate/divergent types and up-edges. | Review: is the new type reachable from the lowest common layer? |
 | **R11** | **Naming.** Package name = `oneterm-<dir>`; backends import the domain crate as `oneterm_core` directly. New path crates are workspace members and listed in root `members`. | Consistency + discoverability. | Check `crates/<x>/Cargo.toml` `name` and root `Cargo.toml` `members`. |
@@ -62,8 +63,8 @@ cargo tree -i oneterm-local-shell -e normal               # R3: only oneterm-app
 cargo tree -p oneterm-core   -e normal                    # R6: no gpui*, no oneterm-vt
 cargo tree -p oneterm-terminal -e normal                  # R7: no gpui*
 cargo tree -p oneterm-completion -e normal                # R7: no gpui*, no oneterm-vt
-cargo tree -p oneterm-pty -e normal                       # R7: no gpui*, no OneTerm crate
 cargo tree -p oneterm-vt -e normal                        # R7: no gpui*, no oneterm-*
+cargo tree -p oneterm-vt -e normal --no-default-features  # R7: exactly six leaf deps
 cargo tree -p oneterm-workspace -e normal                 # R4: no *-ui / backend
 ```
 

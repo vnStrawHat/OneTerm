@@ -38,10 +38,22 @@ step cargo test -p oneterm-vt --features vt-paranoid
 step cargo test -p oneterm-vt --features regex
 
 # Other projects consume `oneterm-vt` as a git dependency, so its package, its
-# feature matrix and its documentation are part of the gate. Its default
-# feature set is empty, so the two builds below are the ends of the matrix.
+# feature matrix and its documentation are part of the gate. The default set is
+# `pty` (`US-0104`), so the two builds below really are different
+# configurations and only the first one is transport-free.
 step cargo build -p oneterm-vt --no-default-features --examples
 step cargo build -p oneterm-vt --all-features --examples
+# The six-dependency claim the README makes is a claim about
+# `--no-default-features` specifically now that a *default* feature adds
+# dependencies. Without this assertion it would be prose.
+printf '\n==> cargo tree -p oneterm-vt -e normal --no-default-features\n'
+vt_leaves="$(cargo tree -p oneterm-vt -e normal --no-default-features --prefix none |
+  awk 'NR > 1 {print $1}' | sort -u | paste -sd' ' -)"
+if [ "$vt_leaves" != 'bitflags log memchr rustc-hash unicode-segmentation unicode-width' ]; then
+  printf '\nci-local: FAILED: oneterm-vt --no-default-features must be exactly six leaf dependencies, got: %s\n' \
+    "$vt_leaves" >&2
+  exit 1
+fi
 step cargo run -p oneterm-vt --example headless
 step env RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
 step python scripts/vt-public-api.py --check --no-doc

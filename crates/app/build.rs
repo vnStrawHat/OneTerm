@@ -7,7 +7,7 @@
 //!    exe, embedding the app icon (48px + 96px) and VS_VERSION_INFO. Windows only.
 //! 2. Copy `conpty.dll` + `x64/OpenConsole.exe` to the target directory so they ship with the exe.
 //!
-//! `oneterm-pty` loads conpty.dll itself (via LoadLibraryW) if found in the exe's
+//! `oneterm_vt::pty` loads conpty.dll itself (via LoadLibraryW) if found in the exe's
 //! directory or on PATH. conpty.dll uses the bundled OpenConsole.exe instead of the
 //! system conhost.exe, so ConPTY handles Ctrl+C correctly:
 //! the signal reaches only the child process and does not exit the shell or OneTerm.

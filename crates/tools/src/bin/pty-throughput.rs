@@ -1,7 +1,7 @@
 //! ConPTY / PTY throughput probe (diagnostic).
 //!
 //! Spawns a child command inside a real pseudoconsole via the same
-//! `oneterm-pty` path OneTerm uses, then reads from the PTY as fast as
+//! `oneterm_vt::pty` path OneTerm uses, then reads from the PTY as fast as
 //! possible and reports MiB/s over the active window (first byte → last byte).
 //!
 //! This isolates the *transport* (ConPTY relay + reserialization) from OneTerm's

@@ -454,7 +454,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                         // query answer, and that must not queue behind a frame.
                         // And the yield must not leave the read loop: the conout
                         // ring re-arms its wake-up only when a read finds it
-                        // empty (`crates/pty/src/windows/pipe.rs`), so a loop
+                        // empty (`crates/vt/src/pty/windows/pipe.rs`), so a loop
                         // that stops reading with bytes still buffered parks in
                         // `poll.wait` and the session freezes. The next pass
                         // keeps draining the pipe into `buf` and re-locks once

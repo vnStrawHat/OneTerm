@@ -27,8 +27,9 @@
 >    event delivery and the state cache come from the shared pump layer in
 >    `oneterm-terminal::backend` (§5.3).
 > 2. **Both sessions share one engine and one custom GPUI `Element`.**
-> 3. **Local uses `oneterm-pty` + OneTerm's own poll loop** (not `portable-pty`, and not
->    an engine-supplied event loop). `oneterm-pty` owns the ConPTY / `openpty` transport and
+> 3. **Local uses `oneterm_vt::pty` + OneTerm's own poll loop** (not `portable-pty`, and not
+>    an engine-supplied event loop). `oneterm_vt::pty` — `oneterm-vt`'s default-on `pty`
+>    feature (`US-0104`) — owns the ConPTY / `openpty` transport and
 >    nothing else; see `docs/spec-intakes/IN-0029-vt-engine/low-level-design/pty.md`.
 > 4. **The VT engine is first-party** (`crates/vt`): no forked dependency, no `[patch]`, and a
 >    new capability is added under ordinary review (`DEC-0014`).
@@ -107,7 +108,7 @@
 |---|---|
 | `core` | `ShellKind` + `LocalShellConfig` + `SshConfig` (config), `SftpBackend`, `AppError` (leaf, no GPUI). |
 | `terminal` | `TerminalSession` trait + `SessionEvent`, the `TerminalContent` frame, `TerminalPalette`, printable-output logging controller/parser, `osc`/`url` (key and mouse encoding moved to `oneterm_vt::input` at `US-0099`; this crate re-exports the names), the shared terminal handle (`TerminalHandle`: the `parking_lot::FairMutex` around `oneterm_vt::Terminal` plus the render-demand flag), and the **backend pump layer** (`backend` module: `SharedState`, `SessionEventSink`, `OscRouter`, `TerminalPump`, `PtyTransport`) shared by both backends. |
-| `local-shell` | `LocalSession` implementing `PtyOwner`; `spawn` returns the `PtySession` the UI drives (`US-0091`). Spawns a shell via `oneterm_pty::PseudoConsole::spawn` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
+| `local-shell` | `LocalSession` implementing `PtyOwner`; `spawn` returns the `PtySession` the UI drives (`US-0091`). Spawns a shell via `oneterm_vt::pty::PseudoConsole::spawn` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
 | `ssh` | `SshSession` implementing `PtyOwner`; `connect` returns the `PtySession` the UI drives (`US-0091`). russh client on the shared tokio runtime; `ssh_main_task` feeds `TerminalPump`. pty-req + shell + `window_change` + exit-status. `SshTransport: PtyTransport` (bounded `Cmd` channel). SFTP task lifetime tied to the connection. Only `SshSession` + `connect` are public. |
 | `terminal-view` | `TerminalElement` (custom `gpui::Element`), `TerminalView` (`Render`; one view type hosts any `TerminalSession`, local or SSH), `TerminalPanel`/`PanelSpec` (dock tab), IME (`EntityInputHandler`), mouse/wheel, font measure, theme → `TerminalPalette`. |
 | `app` | Installs the `SessionFactory` (`AppSessionFactory`) + `WorkspaceCommands` through `AppServices`; only crate that links `ssh`/`local-shell`. |
@@ -123,7 +124,7 @@
 ```toml
 # root Cargo.toml [workspace.dependencies] (authoritative list: docs/agents/dependencies.md §1/§3)
 oneterm-vt = { path = "crates/vt" }   # the VT engine: parser, grid, reflow, selection, damage, graphics
-oneterm-pty = { path = "crates/pty" } # the pseudo-console transport (ConPTY / openpty)
+oneterm-vt = { path = "crates/vt" }   # the engine, and its default-on `pty` transport
 async-channel = "2"      # event sub (no tokio leaked out)
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }  # keys API is russh::keys (russh-keys was merged in)
 russh-sftp = "2.3"
@@ -191,7 +192,7 @@ at a chunk boundary. `US-0082` wired the adapter's half of it:
 
   The yield gives the engine up **without leaving the read loop**, which is a
   platform constraint rather than a preference: the conout ring re-arms its wake-up
-  only when a read finds it empty (`crates/pty/src/windows/pipe.rs`,
+  only when a read finds it empty (`crates/vt/src/pty/windows/pipe.rs`,
   `PipeReader::read` arming `caller_waiting`), so a loop that stops reading while
   bytes are still buffered parks in `poll.wait` and the session freezes. The loop
   therefore drops the guard, keeps draining the pipe into its buffer, and re-locks
@@ -408,7 +409,7 @@ OneTerm's generated prompt integration emits OSC 7 whenever it controls the Wind
 
 The local listener already parses forwarded OSC 7 payloads into `SessionEvent::Cwd` and updates `TerminalSession::cwd()`.
 
-### 6.2. Spawn via `oneterm-pty`
+### 6.2. Spawn via `oneterm_vt::pty`
 
 > Original design sketch (the forked engine's `EventLoop` + an `ArcSwap` cache). The shipped code
 > described below the sketch differs: a custom `ShellEventLoop`, no `last_content`
@@ -496,7 +497,7 @@ reproduces the full table on demand.
 
 ### 6.3. Windows-specific
 
-- **ConPTY**: `oneterm-pty` resolves the bundled `conpty.dll` next to the executable first and
+- **ConPTY**: `oneterm_vt::pty` resolves the bundled `conpty.dll` next to the executable first and
   falls back to `kernel32!CreatePseudoConsole` (Win10 1809+) only when it is missing — DEC-0013.
   The resolved host is logged once at `info` (`conpty: bundled` / `conpty: system`).
 - **UTF-8**: `Cmd` → `chcp 65001` (via `/K` args). `pwsh`/`powershell` → set env
@@ -508,7 +509,7 @@ reproduces the full table on demand.
   and never repaints, so scrollback is not pulled in and joined or split wrapped rows
   move the cursor row exactly as they do in conhost.
 - **Ctrl-C**: byte `0x03` → shell handles it. OK.
-- **Child exit**: `oneterm-pty` watches the child handle (race-free) and reports
+- **Child exit**: `oneterm_vt::pty` watches the child handle (race-free) and reports
   `ChildEvent::Exited` on `PTY_CHILD_EVENT_TOKEN` → `SessionEvent::Exited(code)`.
 - **Close**: `ClosePseudoConsole` only *asks* the host to end the session, and a client
   that had not finished starting when the console went away never processes that request —

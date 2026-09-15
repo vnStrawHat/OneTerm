@@ -165,12 +165,26 @@ jobs:
           python-version: "3.11"
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
-      # The default feature set is empty, so these two builds are the whole
-      # matrix, and `--examples` proves the example in the README still builds.
+      # The default feature set is `pty` (`US-0104`), so these two builds are
+      # different configurations, and `--examples` proves the example in the
+      # README still builds.
       - name: Build the feature matrix
         run: |
           cargo build -p oneterm-vt --no-default-features --examples
           cargo build -p oneterm-vt --all-features --examples
+      # The README's six-dependency claim is a claim about
+      # `--no-default-features` specifically now that a default feature adds
+      # dependencies. This is what keeps it from being prose.
+      - name: The transport-free build is six leaf dependencies
+        run: |
+          set -euo pipefail
+          leaves="$(cargo tree -p oneterm-vt -e normal --no-default-features --prefix none |
+            awk 'NR > 1 {print $1}' | sort -u | paste -sd' ' -)"
+          expected='bitflags log memchr rustc-hash unicode-segmentation unicode-width'
+          if [ "$leaves" != "$expected" ]; then
+            echo "::error::oneterm-vt --no-default-features must be exactly six leaf dependencies, got: $leaves"
+            exit 1
+          fi
       - name: Run the headless example
         run: cargo run -p oneterm-vt --example headless
       # `#![warn(missing_docs)]` plus denied rustdoc warnings: an undocumented
