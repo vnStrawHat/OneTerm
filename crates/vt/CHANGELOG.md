@@ -91,9 +91,37 @@ carry no API change at all. Such a release says so below rather than being omitt
   deliberately exhaustive — a terminal has three mouse buttons and three modifiers that matter.
 - `Terminal::encode_key`: `input::encode_key` with this terminal's own modes, so encoding one key
   does not need a `ModeSnapshot` fetched first.
+- `OscRoute` and `OscRoutes`: what the engine does with one OSC number, as data. `Builtin` (its own
+  handler runs), `BuiltinAndForward` (the handler runs **and** the raw parameters follow as
+  `VtEvent::Osc`, typed event first), `Forward` (the handler is skipped) and `Drop`. An embedder can
+  now add a number the engine has never heard of, override a built-in, or watch one, without a fork
+  and without any of its code running inside `feed`. `OscRoutes::BUILTIN` publishes the eighteen
+  numbers the engine implements; `route`, `route_all`, `large`, `get`, `allows_large`,
+  `has_builtin` and `overrides` are the whole surface.
+- Six OSC numbers are now built in, each with a typed event: `OSC 1` icon name
+  (`VtEvent::IconName`), `OSC 7` working directory (`VtEvent::Cwd { host, path }`, percent-decoded
+  and with a `file:///C:/...` drive URL's leading slash stripped, but otherwise unresolved),
+  `OSC 9` desktop notification (`VtEvent::Notification`) and `OSC 9;4` ConEmu taskbar progress
+  (`VtEvent::Progress(Progress)`), `OSC 22` pointer shape (`VtEvent::Pointer`), `OSC 50`
+  (`VtEvent::CursorStyleChanged`, alongside the cursor-shape change it already applied) and
+  `OSC 133` (`VtEvent::ShellMark(ShellMark)`, alongside the cell semantics and anchors it already
+  recorded).
+- `Progress` and `ShellMark`, both `#[non_exhaustive]`.
 
 ### Changed
 
+- **Breaking.** `OscClaims` is replaced by `OscRoutes` and `Config::osc_claims` by
+  `Config::osc_routes`. `OscClaims::NATIVE`, `is_native`, `claim`, `claim_large` and `is_claimed`
+  are gone; `OscRoutes::BUILTIN`, `has_builtin`, `route` and `get` are their replacements, and
+  `claim_large(n)` is `route(n, OscRoute::Forward).large(n, true)` for a number the engine does not
+  implement, or `large(n, true)` alone for one it does. There is no deprecation shim: the crate has
+  not been published, so this was the last moment the rename was free.
+- **Breaking.** `VtEvent` is `#[non_exhaustive]`, so a `match` on it needs a `_` arm. A new built-in
+  event is a patch-level change from here on rather than a break.
+- `OSC 7`, `OSC 9`, `OSC 9;4` and `OSC 133` are parsed by the engine instead of being forwarded raw,
+  so an embedder that parsed them itself should delete that code and match the typed events. The
+  wire behaviour is unchanged, down to the percent decoding and the Windows drive-slash rule.
+- `OSC 22` and `OSC 1` are no longer counted in `FeedStats::unhandled_sequences`; they are handled.
 - With no `product_name` set, `XTVERSION` now answers `oneterm-vt(<version>)` instead of naming
   the application this engine was extracted from.
 - Every public item is documented; `#![warn(missing_docs)]` keeps it that way.

@@ -80,6 +80,22 @@ fn route(router: &Router, build: impl FnOnce(&mut EventBatch)) -> Vec<SessionEve
     out
 }
 
+/// Route the events a real engine produces for `bytes`, configured exactly as
+/// a session is. The typed OSC events carry spans into the engine's own arena,
+/// so they cannot be hand-built here — and feeding the bytes is the stronger
+/// assertion anyway, because it covers the route table too.
+fn feed(router: &Router, bytes: &[u8]) -> Vec<SessionEvent> {
+    let term = new_term();
+    let mut batch = EventBatch::new();
+    let mut out = Vec::new();
+    {
+        let mut guard = term.lock();
+        guard.feed(bytes, &mut batch, std::time::Instant::now());
+        router.drain(&batch, &mut out);
+    }
+    out
+}
+
 fn osc(batch: &mut EventBatch, params: &[&[u8]]) {
     let code = std::str::from_utf8(params[0])
         .ok()
@@ -250,9 +266,7 @@ fn clear_screen_bumps_clear_epoch() {
 #[test]
 fn osc7_cwd_forwards_and_caches() {
     let f = local(16);
-    let events = route(&f.router, |batch| {
-        osc(batch, &[b"7", b"file:///tmp"]);
-    });
+    let events = feed(&f.router, b"\x1b]7;file:///tmp\x07");
     assert_eq!(
         events,
         vec![SessionEvent::Cwd(std::path::PathBuf::from("/tmp"))]
@@ -264,10 +278,7 @@ fn osc7_cwd_forwards_and_caches() {
 #[test]
 fn osc133_prompt_forwards_and_counts() {
     let f = local(16);
-    let events = route(&f.router, |batch| {
-        osc(batch, &[b"133", b"A"]);
-        osc(batch, &[b"133", b"D", b"3"]);
-    });
+    let events = feed(&f.router, b"\x1b]133;A\x07\x1b]133;D;3\x07");
     assert_eq!(events.len(), 2);
     assert!(matches!(events[0], SessionEvent::ShellIntegration(_)));
     assert_eq!(f.state.prompt_count(), 1);
