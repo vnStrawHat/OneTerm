@@ -501,13 +501,12 @@ impl russh_sftp::server::Handler for CountingSftpServer {
     }
 }
 
-/// OneTerm's striped download (retired by `IN-0037`) seeked to a stripe offset,
-/// read one chunk, then
-/// seeks elsewhere. russh-sftp 3.0 answers each read by queueing
-/// `max_concurrent_reads` (16 by default) read requests ahead of the current
-/// offset; a seek clears the queue *locally*, but the requests are already on
-/// the wire, so the server serves — and the link carries — read-ahead the
-/// client throws away.
+/// OneTerm's striped download, retired by `IN-0037`, seeked to a stripe offset,
+/// read one chunk, then seeked elsewhere. russh-sftp 3.0 answers each read by
+/// queueing `max_concurrent_reads` (16 by default) read requests ahead of the
+/// current offset; a seek cleared the queue *locally*, but the requests were
+/// already on the wire, so the server served, and the link carried, read-ahead
+/// the client then threw away.
 ///
 /// The test asserts data integrity (which holds) and prints the measured
 /// amplification for the evidence record.

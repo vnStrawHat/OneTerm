@@ -490,13 +490,21 @@ pub fn connect(
     }
 }
 
-/// The russh-sftp client configuration, pinned to the transfer budget
-/// russh-sftp 2.3.0 gave OneTerm (`IN-0036`, `US-0095` Changes F and G).
+/// The russh-sftp client configuration OneTerm's transfer budget depends on.
 ///
-/// 3.0's defaults are not a drop-in: they cut the in-flight write budget 4x and
-/// add a read-ahead that OneTerm's own striped download throws away. Every field
-/// below restores measured 2.3.0 behaviour; none of them raises a limit past
-/// what the server allows.
+/// The two directions are pinned for opposite reasons, and neither field raises
+/// a limit past what the server allows:
+///
+/// - **Writes.** 3.0's defaults are not a drop-in: a new 32 KiB
+///   `max_write_packet_len` cuts the in-flight write budget 4x. Both write
+///   fields below restore the budget measured under russh-sftp 2.3.0
+///   (`IN-0036`, `US-0095` Change F).
+/// - **Reads.** `max_concurrent_reads` is 3.0's own default, deliberately, and
+///   is *not* a 2.3.0 value: 2.3.0 had no read-ahead at all. Since `IN-0037`
+///   retired OneTerm's striped download, that read-ahead is the transfer
+///   engine, so holding it down would be the regression rather than the fix.
+///
+/// `sftp_task::transfer::pipeline_budget_tests` measures every field here.
 pub(crate) fn sftp_config() -> russh_sftp::client::Config {
     russh_sftp::client::Config {
         // 3.0 added `max_write_packet_len` (32 KiB) as a *third* cap on every
