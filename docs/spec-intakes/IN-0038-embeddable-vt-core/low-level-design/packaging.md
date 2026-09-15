@@ -71,13 +71,28 @@ stray `publish = true` on `oneterm-app` or `oneterm-ssh` would be a genuine acci
 5. OSC routing: the `OscRoute` table, the three-line OSC 20308 example from
    [`osc-extension.md`](osc-extension.md), and a sentence pointing at the module docs.
 6. Feature table: `regex`, `serde`, `vt-paranoid`, all default-off, with what each adds.
-7. MSRV, licence, and a link to the repository's `docs/spec-intakes/IN-0029-vt-engine/` for the
+7. **Documentation**: the embedder's guide -- its docs.rs URL
+   (`https://docs.rs/oneterm-vt/latest/oneterm_vt/guide/`) and the one-command local render,
+   `scripts/vt-docs.sh` or `pwsh scripts/vt-docs.ps1`. Written by
+   [`US-0103`](../US-0103-embedder-guide.md); `US-0097` leaves the section in place with the URL, so
+   the README is never missing it.
+8. MSRV, licence, and a link to the repository's `docs/spec-intakes/IN-0029-vt-engine/` for the
    full design.
 
 `rio-vt`'s README drifted from its own manifest within seven weeks of publication -- its feature
 table names a default set the manifest contradicts, and its `EventListener` example calls a method
 the trait does not have. Rule 4 above is the specific defence: every code block in the README is
 compiled by something.
+
+## Guide
+
+The README is the shop window; the twelve-chapter embedder's guide is the manual. It is
+[`US-0103`](../US-0103-embedder-guide.md)'s, not `US-0097`'s: Markdown chapters under
+`crates/vt/docs/guide/`, pulled into the crate docs by `#[doc = include_str!]` modules so `cargo doc`
+and docs.rs render them beside the API reference and their code blocks run as doctests. Two
+consequences land on this document: the package must ship `docs/guide/` (checked in `US-0103`'s
+`cargo publish --dry-run` criterion, because `include_str!` fails on docs.rs otherwise), and the
+`cargo doc` step below is the one CI already runs for `missing_docs`, tightened rather than doubled.
 
 ## Example
 
@@ -177,6 +192,7 @@ items), so there is nothing to exclude.
 | New: `cargo publish -p oneterm-vt --dry-run` | packages the crate and checks the manifest, the `readme` path and the file list. Catches a missing README or an excluded example before a tag does. | add to `ci-local` and to `.github/workflows/ci.yml` |
 | New: `cargo build -p oneterm-vt --no-default-features` and `--all-features` | proves the feature matrix | add to CI |
 | New: `crates/vt/public-api.txt` diff | see [`api-surface.md`](api-surface.md) | add to CI |
+| New: `cargo doc -p oneterm-vt --no-deps --all-features` | `US-0097` adds it for the `missing_docs` gate; `US-0103` tightens the same step with `RUSTDOCFLAGS="-D warnings"` so a broken intra-doc link in a guide chapter fails CI. One doc build, not two. | add in `US-0097`, tighten in `US-0103` |
 
 The crates.io package will include `crates/vt/**` only. `Cargo.toml` needs no `exclude` today: the
 parity corpus moved to `crates/tools` at `US-0093`, so there is no large test data left in the
