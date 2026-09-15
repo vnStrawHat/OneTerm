@@ -11,9 +11,9 @@ Created: 2026-09-14
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
 - [ ] In progress
-- [x] Implemented
+- [ ] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -31,6 +31,46 @@ opens the same connect dialog the SSH Sessions panel opens for that session, and
 successful connect lands in a new center terminal tab exactly as it does from the panel.
 When nothing is saved, the section shows a disabled "No saved sessions" hint and every
 other entry in the menu behaves exactly as it does today.
+
+## Rework (acceptance, 2026-09-15)
+
+The owner tried the built "+" menu before accepting it and asked for a different
+layout. Per `docs/HARNESS.md` this is acceptance rework of this packet, not a new bug.
+
+Owner's required order, verbatim (translated from Vietnamese, 2026-09-15):
+
+1. the shell entries (unchanged)
+2. a separator carrying the label "SSH Sessions"
+3. the saved SSH sessions that have NO group — **title only** (no `user@host:port` subtitle)
+4. for each group, in the store's order: a **dashed** separator whose label is the group
+   name, then that group's sessions (title only)
+5. a separator
+6. "New SSH Session" (moved from its current position above the sessions to the END)
+
+What changes:
+
+- **The subtitle is removed.** `D2` of the independent verification had added
+  `label — user@host:port` to every row so that two sessions sharing a label stayed
+  distinguishable. The owner asked for the title only, so that disambiguation is gone:
+  **two saved sessions with the same label are now indistinguishable in the menu**, and
+  clicking either opens whichever one owns that row's id. The owner chose this trade
+  knowingly; the tree in the right dock still shows the subtitle for telling them apart.
+  A blank label (only a hand-edited file can produce one) still falls back to `host:port`,
+  because an empty row would be worse than a slightly longer one.
+- **The list is grouped.** `menu_entries` now returns sections: the ungrouped sessions
+  first, then one section per group in the order the groups first appear in
+  `ssh_session.json`. The intake's open decision "group the sessions? No" is reversed by
+  the owner here; the store order (not the tree's alphabetical order) is kept, so the
+  section list still follows the file.
+- **"New SSH Session" moves to the end**, behind a plain separator.
+- **The section heading and the group headings are separators that carry a label.** The
+  kit's `PopupMenu` has a plain `Separator` and a plain `Label` but nothing that is both,
+  so the row is composed from `PopupMenuItem::element(...).disabled(true)`: the label text
+  plus a rule that fills the rest of the row, `border_dashed()` for a group. Colours come
+  from `cx.theme()` (`muted_foreground`, `border`); no literal is introduced.
+- Unchanged: the id-not-index seam, `scrollable(true)` and the kit's height cap, the
+  disabled "No saved sessions" hint, the shell entries above the heading, and the connect
+  path below the dialog.
 
 ## Scope
 
@@ -51,44 +91,40 @@ other entry in the menu behaves exactly as it does today.
 
 ## Acceptance
 
-- [x] With two sessions saved, opening the "+" menu shows an "SSH Sessions" section listing
-      both names, in the order they appear in `ssh_session.json`, below the unchanged local
-      shell entries and "New SSH Session".
-      *Evidence:* `evidence/US-0094-menu-with-two-saved-sessions.png` —
-      `prod-web — root@10.77.0.11:22` then `db-01 — admin@10.77.0.12:2222`, file order,
-      flat, while the right dock's tree shows `db-01` nested under its `infra` group in the
-      same frame.
-- [x] A long list stays reachable: the section is capped and scrolls rather than running off
+Superseded by the 2026-09-15 rework (kept for the record, no longer the contract):
+
+- [~] ~~The section lists the names flat, in storage order, below the unchanged local shell
+      entries **and "New SSH Session"**.~~ The order changed: the heading and the sessions
+      now come *before* "New SSH Session", and the list is grouped.
+- [~] ~~Two saved sessions that share a label are still distinguishable in the menu.~~
+      Withdrawn by the owner with the subtitle: see Rework above.
+- [~] ~~The row mapping maps N stored entries to N rows in storage order.~~ Replaced by
+      the sectioned mapping below.
+
+Current acceptance:
+
+- [ ] The menu reads, top to bottom: the platform's local shell entries (unchanged), a
+      separator labelled "SSH Sessions", the saved sessions that have no group, then for
+      each group in store order a dashed separator labelled with the group name followed by
+      that group's sessions, then a plain separator, then "New SSH Session".
+- [ ] Every session row shows the session title only — no `user@host:port` subtitle.
+- [ ] A long list stays reachable: the section is capped and scrolls rather than running off
       the window, and a row reached only by scrolling still opens its own session.
-      *Evidence:* `evidence/US-0094-menu-50-sessions-scrollable.png` (50 saved sessions, the
-      popup ends inside the window with a scrollbar),
-      `evidence/US-0094-menu-50-sessions-scrolled-to-end.png` (`host-50` reached by wheel),
-      `evidence/US-0094-dialog-from-scrolled-row.png` (clicking it opens "Connect to host-50
-      (ops@10.9.1.50:22)"). Added after independent verification found `D1`.
-- [x] Two saved sessions that share a label are still distinguishable in the menu.
-      *Evidence:* the same 50-session screenshot shows `alpha — root@10.9.0.1:22` and
-      `alpha — root@10.9.0.2:22` as separate rows, plus
-      `verify_duplicate_unicode_and_fifty_entries`. Added after `D2`.
-- [x] Clicking a listed session opens the connect dialog for **that** session (title and
-      server banner name its host), and Connect starts a real connection attempt — reaching
-      the host is not required.
-      *Evidence:* `evidence/US-0094-connect-dialog-for-clicked-session.png` (titled
-      "Connect to prod-web (root@10.77.0.11:22)", banner `ssh://root@10.77.0.11:22`) and
-      `evidence/US-0094-connect-failed-notification.png`, plus the app log line
-      `oneterm_ssh::session] SshSession::connect: host=10.77.0.11, port=22, user=root`.
-- [x] With no sessions saved, the section shows a disabled "No saved sessions" hint and the
-      rest of the menu is unchanged from today.
-      *Evidence:* `evidence/US-0094-menu-empty-state.png`.
-- [x] The row mapping maps N stored entries to N rows in storage order, an empty store to no
-      rows, and a blank label to `host:port`, proven by unit tests.
-      *Evidence:* the four `menu_entries_*` tests in `crates/session-ui/src/tree_builder.rs`,
-      with the tamper results recorded below.
-- [x] No new crate edge: `crates/terminal-view` still does not depend on
+      *Evidence (still valid, the cap is unchanged by this rework):*
+      `evidence/US-0094-menu-50-sessions-scrollable.png`,
+      `evidence/US-0094-menu-50-sessions-scrolled-to-end.png`,
+      `evidence/US-0094-dialog-from-scrolled-row.png`.
+- [ ] Clicking a listed session — including one inside a group — opens the connect dialog
+      for **that** session (title and server banner name its host).
+- [ ] With no sessions saved, the heading still shows with the disabled "No saved sessions"
+      hint, and "New SSH Session" is still present at the end.
+- [ ] The row mapping returns the ungrouped sessions as the first section and one section
+      per group in the order the groups first appear in the store, title only, with a
+      blank-or-whitespace group counted as ungrouped and the stable ids unchanged by a
+      delete — proven by unit tests with no gpui dependency.
+- [ ] No new crate edge: `crates/terminal-view` still does not depend on
       `crates/session-ui`, and `crates/terminal-view/Cargo.toml` is unchanged.
-      *Evidence:* `python scripts/verify-dependency-graph.py` — "Dependency graph policy
-      passed for 21 workspace packages and 21 explicit members"; `git status` never lists
-      `crates/terminal-view/Cargo.toml`.
-- [x] `pwsh scripts/ci-local.ps1` is green. *Evidence:* "ci-local: all checks passed."
+- [ ] `pwsh scripts/ci-local.ps1` is green.
 
 ## Documentation
 
