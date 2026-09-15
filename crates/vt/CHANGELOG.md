@@ -120,7 +120,10 @@ carry no API change at all. Such a release says so below rather than being omitt
   event is a patch-level change from here on rather than a break.
 - `OSC 7`, `OSC 9`, `OSC 9;4` and `OSC 133` are parsed by the engine instead of being forwarded raw,
   so an embedder that parsed them itself should delete that code and match the typed events. The
-  wire behaviour is unchanged, down to the percent decoding and the Windows drive-slash rule.
+  wire behaviour is unchanged, down to the percent decoding, the Windows drive-slash rule, and
+  dropping an `OSC 7` URL that is not valid UTF-8 — with one deliberate correction: `OSC 9;4` reads
+  its state and percentage as `u32` and **clamps** the percentage, where reading them as `u8` turned
+  `9;4;1;1000` into `Set(0)` and a state above 255 into `Remove`.
 - `OSC 22` and `OSC 1` are no longer counted in `FeedStats::unhandled_sequences`; they are handled.
 - With no `product_name` set, `XTVERSION` now answers `oneterm-vt(<version>)` instead of naming
   the application this engine was extracted from.

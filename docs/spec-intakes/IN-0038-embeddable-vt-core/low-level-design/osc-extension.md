@@ -14,6 +14,18 @@ How an embedder of `oneterm-vt` gets OSC behaviour it can extend and override, w
 ever running embedder code, taking a lock, or allocating per sequence -- and how OneTerm's OSC 20308
 agent channel and `TerminalSecurityPolicy` stay outside the crate while doing it.
 
+"Allocating per sequence" is a **binding** claim on the routing table and on the built-in arms
+alike, and `US-0098`'s verification found the arms breaking it: they each built a `String` to join
+or decode what the batch arena was about to copy anyway. An arm that has to assemble a payload
+assembles it **in the arena** -- `EventBatch::mark`, `extend`, then one `finish_trimmed` or
+`finish_lossy` -- so the steady state allocates nothing. Two exceptions, both deliberate and both
+the case that was going to cost an allocation whatever happened:
+
+* `OSC 0` / `OSC 2` keep one owned `String`, because `Terminal::title` and the title stack own the
+  title after the batch is gone. The event itself is a span.
+* a percent escape that decodes to bytes that are not valid UTF-8 costs one repair in
+  `finish_lossy`. A valid payload costs nothing.
+
 ## The problem the mechanism has to solve
 
 Four requirements, and they fight:
@@ -53,8 +65,12 @@ up to be registerable. **Rejected.** It breaks the no-callback invariant outrigh
 would run inside `feed`, under whatever lock the embedder holds, in the middle of a grid mutation.
 It also means the handler cannot touch the terminal (it is mutably borrowed), cannot easily push a
 reply, and turns every OSC into an indirect call on a path that a Sixel flood hits thousands of
-times per second. And a `Box<dyn ...>` in `Config` makes `Config` neither `Clone` nor `PartialEq`,
-both of which it is today and both of which the adapter's tests use.
+times per second. And a `Box<dyn ...>` in `Config` makes `Config` no longer `Clone`, which it is
+today and which an embedder building one terminal per pane relies on. (An earlier draft said
+"neither `Clone` nor `PartialEq`, both of which it is today". `Config` has never been `PartialEq` —
+`crates/vt/src/terminal/mod.rs` derives `Clone, Debug`. The rejection rests on the no-callback
+invariant, which is the load-bearing half; `Clone` is the secondary cost. What is `PartialEq` is
+`OscRoutes` itself, which is what this design needed.)
 
 ### Option 2 -- route the number, parse into typed events
 
@@ -152,8 +168,10 @@ impl OscRoutes {
 }
 ```
 
-`OscRoute` is stored as two independent bits so the hot path stays two bitmap reads and no branch
-table:
+`OscRoute` is stored as two independent bits, and the set of numbers the engine implements is a
+third bitmap built from `OscRoutes::BUILTIN` at compile time, so the hot path is three bit tests and
+no branch table (a fourth answers `allows_large` before the parser buffers; a number above 2048
+costs a binary search of the spill instead):
 
 | `forward` | `suppress` | `has_builtin` | `get()` returns |
 | --- | --- | --- | --- |
@@ -164,13 +182,29 @@ table:
 | 0 | 1 | either | `Drop` |
 | 1 | 1 | either | `Forward` |
 
+The bits stored are the bits of the route the number will **actually** get, not of the one that was
+asked for: `BuiltinAndForward` on a number with no built-in stores `Forward`'s bits, and `Drop` on a
+number that has no built-in stores nothing at all. Two tables that route every number the same way
+are therefore the same value -- `PartialEq` is semantic, not structural -- and a number above 2048
+put back to its default leaves the spill list instead of sitting in it for ever.
+
+The table is read when a `Terminal` is built and is **not live**. `Terminal::config` hands out a
+shared reference and there is no setter, so an embedder that wants a different route mid-session
+builds a new terminal. This is deliberate: a route that could change under a half-parsed sequence
+would be a race the engine has no way to describe, and the batch-of-values contract has no place to
+report it.
+
 `route(code, Builtin)` on a number with no built-in is a **debug assertion**, the same shape as
 today's `claim` on a `NATIVE` number: the caller asked for something that can never happen and would
 otherwise never find out. It is an assertion and not a panic in release, because `Config` can be
 built from data.
 
 `large(code, true)` on a number whose route is `Drop` is also a debug assertion: the payload ceiling
-was bought and the payload is thrown away, which is a pure memory hazard with no benefit.
+was bought and the payload is thrown away, which is a pure memory hazard with no benefit. The
+assertion reads the table **as it stands**, so the ceiling must be bought after the route:
+`route(n, Forward).large(n, true)`, never the other way round. The builder chain makes that order
+natural; a table assembled from configuration data in an arbitrary order should apply every route
+before any ceiling.
 
 ### The dispatch path
 
@@ -210,7 +244,7 @@ payload goes through the batch arena rather than a `String` per sequence.
 | --- | --- | --- |
 | 1 | icon name (`US-0102`) | `VtEvent::IconName(StrSpan)` |
 | 7 | `file://host/path`, percent-decoded, Windows drive slash stripped | `VtEvent::Cwd { host: StrSpan, path: StrSpan }` |
-| 9;4 | ConEmu progress, `st` in `0..=4`, `pr` clamped to 100 | `VtEvent::Progress(Progress)` |
+| 9;4 | ConEmu progress, `st` in `0..=4`, `pr` clamped to 100 (both read as `u32`: the adapter read them as `u8`, so `9;4;1;1000` failed the parse and became `Set(0)` before the clamp could run, and a state above 255 silently became `Remove`) | `VtEvent::Progress(Progress)` |
 | 9;`<text>` | desktop notification, remaining parameters rejoined on `;` | `VtEvent::Notification { title: StrSpan, body: StrSpan }` |
 | 22 | pointer shape name, passed through verbatim | `VtEvent::Pointer(StrSpan)` |
 | 50 | cursor shape (already applies to engine state) | `VtEvent::CursorStyleChanged` |
@@ -272,6 +306,14 @@ Unchanged in mechanism, extended in coverage:
   channel, lifted into the engine and generalised.
 - No new `FeedStats` counter. Every new rejection path moves `unhandled_sequences`; a base64 or
   UTF-8 failure moves `malformed_sequences`, as `osc_clipboard` does today.
+- **The ceiling is unchanged; the cost per ceiling-sized sequence on a wrapped number is not.** A
+  `BuiltinAndForward` number pays for both outcomes: the built-in arm's payload *and* the forwarded
+  parameters land in the arena. OneTerm wraps exactly one number, `OSC 9`, and buys it the 8 MiB
+  tier for the legacy alias's sake, so one hostile 8 MiB `OSC 9` now costs the parser spill plus two
+  arena copies where it used to cost the spill plus one. Bounded, verified
+  (`v_a_hostile_8_mib_osc_9_under_the_shipped_table_is_bounded`), and the price of the owner's
+  ruling on the alias -- but it is the reason to keep `BuiltinAndForward` rare rather than the
+  default for anything an embedder is merely curious about.
 - The existing fuzz target (`crates/vt/fuzz/fuzz_targets/parser.rs`) gains a randomised
   `OscRoutes` derived from the fuzz input's first bytes, so every route combination is fuzzed rather
   than only the default.
@@ -422,7 +464,7 @@ table, and the two-event wrap already covers the case in one adapter line.
 The substantive difference is the **separation of routing from handling**. Both reference crates fuse
 them: the `match` decides both "which number is this" and "what do I do about it", so the only
 extension point is the trait whose methods that match calls, and that trait's method set is the OSC
-set. Splitting them costs two bitmap lookups and buys the entire requirement list.
+set. Splitting them costs three bit tests and buys the entire requirement list.
 
 The second difference is **delivery by value**. Alacritty and rio both invoke a listener from inside
 the terminal, which forces `Arc<dyn Fn(..) -> String + Send + Sync>` closures into their event enums

@@ -43,8 +43,10 @@ OSC extensibility is expressed as **per-number routing data**, not as registered
 - `Drop` -- parsed, counted in `FeedStats::unhandled_sequences`, discarded. The default for any
   number with no built-in.
 
-The table is two bitmaps over codes `0..2048` plus a sorted spill list, so a lookup is two bit tests
-and no allocation. The payload ceiling stays a separate, orthogonal per-number opt-in
+The table is two bitmaps over codes `0..2048` plus a sorted spill list, and the set of numbers the
+engine implements is a third, built from `OscRoutes::BUILTIN` at compile time. A lookup is therefore
+three bit tests and no allocation, plus a fourth for the payload ceiling the parser asks about
+before it buffers. A number above 2048 costs a binary search of the spill instead. The payload ceiling stays a separate, orthogonal per-number opt-in
 (`OscRoutes::large`), because who may spend 8 MiB is a memory question and who parses the bytes is a
 routing question.
 
@@ -62,15 +64,19 @@ Future work must inherit three consequences:
 ## Alternatives
 
 - [x] **Selected: a routing table of pure data.** Satisfies extend, override, wrap and typed
-  outcomes; keeps `Config` `Clone` and `PartialEq`; costs two bit tests per OSC; and is a smaller
-  change than the status quo, because today's `OscClaims` is already this table with one of the four
-  states missing.
+  outcomes; keeps `Config` `Clone`, and makes the table itself `Clone + PartialEq`; costs three bit
+  tests per OSC, plus a fourth for the payload ceiling; and is a smaller change than the status quo,
+  because today's `OscClaims` is already this table with one of the four states missing.
 - [ ] **A trait-object handler registry called during `feed`** (`Vec<(u32, Box<dyn OscHandler>)>`) --
   the reference crates' shape made registerable. Rejected: it runs embedder code inside `feed`, under
   the embedder's own lock, mid-grid-mutation, which is the invariant above; the handler cannot touch
   the terminal because it is mutably borrowed; it puts an indirect call on a path a Sixel flood hits
-  thousands of times a second; and a `Box<dyn ...>` in `Config` costs `Clone` and `PartialEq`, both
-  of which `Config` has today and both of which existing tests use.
+  thousands of times a second; and a `Box<dyn ...>` in `Config` costs `Clone`, which `Config` has
+  today and which every embedder building one terminal per pane depends on. (An earlier draft of
+  this record also claimed `Config` is `PartialEq`. It is not, and never has been —
+  `crates/vt/src/terminal/mod.rs` derives `Clone, Debug`. The rejection rests on the no-callback
+  invariant above, which is the load-bearing half; `Clone` is the secondary cost. What is
+  `PartialEq` is `OscRoutes` itself, which is what the design actually needed.)
 - [ ] **`OscClaims` extended with a decoder function** (`claim_with(code, |params| -> Option<T>)`).
   Rejected twice over: the engine cannot name `T` without a generic parameter on `Terminal`, which
   infects every signature and every field of the adapter, or a `Box<dyn Any>`, which is an
@@ -83,13 +89,20 @@ Future work must inherit three consequences:
 
 ## Consequences
 
-- [ ] **Benefit to confirm:** OneTerm's OSC 20308 agent channel keeps working through three lines in
-  `adapter_config` and **zero** lines in `crates/vt`. `US-0098`'s acceptance criterion
-  `grep -rn '20308\|AGENT_OSC' crates/vt/` returning 0 is the proof. If a future change to the
+- [x] **Benefit confirmed** (`US-0098`, independently verified 2026-09-15): OneTerm's OSC 20308
+  agent channel keeps working through three lines in `adapter_config` and **zero** lines in
+  `crates/vt`. `grep -rn '20308\|AGENT_OSC' crates/vt/` returns nothing. If a future change to the
   engine ever makes the agent channel need an engine edit, this decision has failed and should be
   revisited rather than patched around.
-- [ ] **Benefit to confirm:** every OSC number is parsed once. `crates/terminal` sheds at least 350
-  production lines and the double-parse of OSC 7, 9 and 133 disappears.
+- [~] **Benefit partly confirmed:** every OSC number is parsed once — the double-parse of OSC 7, 9
+  and 133 is gone, and that half holds. The line count does not: `crates/terminal` shed **151**
+  production lines, not 350. The estimate assumed the adapter would lose the parsers and gain
+  nothing, and it gained the agent-channel dispatch that used to live inside `parse_osc`
+  (`parse_agent_osc`, `AgentOsc`, `is_legacy_agent_notification`) plus four typed router arms in
+  place of one raw one. `crates/vt` grew by 527, so the pair is not a wash either — which is the
+  honest shape of moving parsing into a core: the core carries it, and the embedder keeps its
+  policy. Future estimates on this intake should not use a line count as the proxy for "the
+  duplication is gone"; the symbol list is the proxy that held.
 - [ ] **Tradeoff:** an embedder extending the engine with a new OSC number gets byte slices and
   parses them itself, where a fork of `alacritty_terminal` would have got a typed method. This is
   deliberate and is the boundary that keeps the built-in set equal to the standard set.
