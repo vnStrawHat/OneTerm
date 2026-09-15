@@ -165,11 +165,12 @@ what the manifest names. It is rule R7 either way, and it is now checked either 
 9. **Documentation** (owner ruling 2026-09-15): `cargo doc -p oneterm-vt --no-deps --open` and a
    link to the repository for the full design. **No docs.rs URL anywhere**, for the crate or for
    the guide: docs.rs builds what it is given by the registry and it will never be given this. The
-   embedder's guide is named as **planned** work for the same reason it always was -- the module
-   does not exist until [`US-0103`](../US-0103-embedder-guide.md) writes it -- and a front page
-   linking a page that cannot exist is the drift this section exists to prevent. `US-0103` replaces
-   the line with a local path, and writes `scripts/vt-docs.sh` / `.ps1` if it wants a one-command
-   render of its own.
+   embedder's guide was named as **planned** work for the same reason -- a front page linking a
+   page that cannot exist is the drift this section exists to prevent. **Done**:
+   [`US-0103`](../US-0103-embedder-guide.md) replaced that line with a real one that names the
+   thirteen chapters, gives `cargo doc -p oneterm-vt --no-deps --all-features --open`, links
+   `docs/guide/` for the Markdown view, and says in as many words that there is no hosted copy. It
+   also added `scripts/vt-docs.ps1` / `.sh` for a one-command render.
 10. MSRV, the semver promise by reference, and a **Licence** section pointing at the crate's own
    `LICENSE` and `NOTICE` -- the copies inside `crates/vt/`, which are the ones a consumer actually
    receives -- plus a link to the repository's `docs/spec-intakes/IN-0029-vt-engine/` for the full
@@ -342,7 +343,8 @@ same page as the default build.
 | New: `cargo build -p oneterm-vt --no-default-features --examples` and `--all-features --examples` | proves the feature matrix and that the example still builds | add to CI |
 | New: `cargo run -p oneterm-vt --example headless` | proves the example still runs, not just compiles | `.github/workflows/ci.yml` |
 | New: the public-API snapshot diff | see [`api-surface.md`](api-surface.md). `US-0104` splits it into `public-api.windows.txt` and `public-api.unix.txt` and adds `--diff-platforms`, because the `pty` module's surface is cfg-dependent and `cargo doc` renders only the host's half. | add to CI |
-| New: `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` | the `missing_docs` gate. `US-0097` adds it already tightened, rather than leaving the `-D warnings` to `US-0103`: it caught a public-to-private intra-doc link on the way in, and the guide chapters will fail the same step. One doc build, not two. | added in `US-0097` |
+| New: `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` | the `missing_docs` gate. `US-0097` adds it already tightened, rather than leaving the `-D warnings` to `US-0103`: it caught a public-to-private intra-doc link on the way in, and the guide chapters fail the same step. One doc build, not two, which is why `US-0103` adds no doc step and `scripts/vt-docs.{ps1,sh}` is a local twin of this command rather than a second gate. | added in `US-0097` |
+| New (`US-0103`): a second self-containment grep, over `crates/vt/docs/guide --include='*.md'` | the existing grep matches `///` and `//!` lines only, so the guide chapters -- which are published rustdoc, `include_str!`d into empty modules, but spelled in Markdown -- were outside it. The new one applies the same pattern with no comment prefix and the same `https://github.com/` exemption, so a chapter citing a work packet, a decision, an intake or a bare `crates/` or `docs/` path fails CI. It caught `guide.rs`'s own header on the way in. | `.github/workflows/ci.yml` ("The embedder guide must stand alone") and `scripts/ci-local.{sh,ps1}`, beside the existing grep |
 
 The package includes `crates/vt/**` only, confirmed at `US-0097` by reading the file list
 `cargo package --list` prints and now asserted by the script that reads it. This is what a consumer

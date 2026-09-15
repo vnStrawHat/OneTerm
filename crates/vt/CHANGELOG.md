@@ -40,6 +40,11 @@ carry no API change at all. Such a release says so below rather than being omitt
 
 ### Added
 
+- `guide`, a public module that carries the embedder's guide: thirteen Markdown chapters rendered
+  by `cargo doc` beside the API reference, one empty module each. It adds no item and no
+  dependency, and every Rust block in it is a doctest, so a chapter that describes an API the
+  crate no longer has fails the build rather than misleading a reader.
+
 - `pty`, a cargo feature that is **on by default**, and the `oneterm_vt::pty` module behind it: a
   child process behind a ConPTY on Windows or an `openpty` on Unix, exposed as a passive pollable
   object. `PseudoConsole`, `Options`, `Shell`, `WindowSize`, `GlyphWidth`, `ChildEvent`, the

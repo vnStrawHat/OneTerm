@@ -92,6 +92,15 @@ if grep -rn '^[[:space:]]*//[/!].*\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\
   printf '\nci-local: FAILED: the crate rustdoc cites a document only this repository has\n' >&2
   exit 1
 fi
+# The embedder's guide is `//!` text too: every chapter is `include_str!`d into
+# an empty module, so it is published rustdoc and obeys the same rule. The
+# chapters are Markdown, so there is no comment prefix to match on.
+printf '\n==> rustdoc self-containment (crates/vt/docs/guide)\n'
+if grep -rn '\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|crates/\|docs/\)' \
+    crates/vt/docs/guide --include='*.md' | grep -v 'https://github.com/'; then
+  printf '\nci-local: FAILED: the embedder guide cites a document only this repository has\n' >&2
+  exit 1
+fi
 
 step python scripts/verify-dependency-graph.py
 step python scripts/check-doc-paths.py

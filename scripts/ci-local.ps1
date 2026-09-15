@@ -121,6 +121,20 @@ if ($citations) {
     exit 1
 }
 
+# The embedder's guide is `//!` text too: every chapter is `include_str!`d into
+# an empty module, so it is published rustdoc and obeys the same rule. The
+# chapters are Markdown, so there is no comment prefix to match on.
+Write-Host ""
+Write-Host "==> rustdoc self-containment (crates/vt/docs/guide)"
+$guideCitations = Get-ChildItem -Path "crates/vt/docs/guide" -Recurse -Filter "*.md" |
+    Select-String -Pattern '(US-0\d{3}|BUG-0\d{3}|DEC-0\d{3}|IN-0\d{3}|crates/|docs/)' |
+    Where-Object { $_.Line -notmatch 'https://github\.com/' }
+if ($guideCitations) {
+    $guideCitations | ForEach-Object { Write-Host $_ }
+    Write-Error "ci-local: FAILED: the embedder guide cites a document only this repository has"
+    exit 1
+}
+
 Invoke-Step @("python", "scripts/verify-dependency-graph.py")
 Invoke-Step @("python", "scripts/check-doc-paths.py")
 Invoke-Step @("python", "-m", "unittest", "scripts/test_check_english.py")
