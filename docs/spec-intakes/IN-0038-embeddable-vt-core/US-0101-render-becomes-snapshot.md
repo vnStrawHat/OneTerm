@@ -44,8 +44,8 @@ name of its largest public module, that it draws something -- which is the first
 
 - [x] `grep -rn '\bRender[A-Z]' crates/vt/ crates/terminal/ crates/tools/` returns **0** lines of
   Rust. (`crates/terminal-view` keeps its own render types and is excluded on purpose.) The literal
-  grep returns 15: the CHANGELOG's own old -> new table, and alacritty's `RenderApi` inside the
-  frozen parity recordings. See Evidence.
+  grep returns 18: 7 rows of the CHANGELOG's own old -> new table, and 11 lines of alacritty's
+  `RenderApi` inside the frozen parity recordings. See Evidence.
 - [x] `grep -rn 'render_update' crates/` returns 0 lines outside that same CHANGELOG table.
 - [x] `crates/terminal-view/src/render/` still exists and still contains that crate's own
   `Render*` types.
@@ -193,9 +193,9 @@ inherits -- it needs no decision record.
 Branch `refactor/vt-snapshot`, three commits on top of `main` @ `98a72148`.
 
 - `grep -rnE 'Render[A-Z]' crates/vt crates/terminal crates/tools` -> **0 lines of Rust**. It is
-  not literally 0 lines: 7 are the CHANGELOG's own old -> new table, which has to name the old
-  types, and 8 are inside the frozen parity recordings, where the captured `vim` session is editing
-  alacritty's `RenderApi`. Neither is source this packet may touch.
+  not literally 0 lines: it returns **18**. Seven are the CHANGELOG's own old -> new table, which
+  has to name the old types; eleven are inside the frozen parity recordings, where the captured
+  `vim` session is editing alacritty's `RenderApi`. Neither is source this packet may touch.
   `grep -rnE 'render_update' crates/` -> the same one CHANGELOG table row, nothing else.
   `crates/terminal-view/src/render/` still holds that crate's `RenderState`, `RenderInputs` and
   `RenderImage`.
@@ -228,6 +228,70 @@ Gaps:
 - **E2E is not proven.** No Windows launch was made from this worktree: the owner runs their agent
   session inside OneTerm, so this agent does not start or stop the app. The packet itself calls this
   a smoke check on a change that compiles and replays the corpus byte-identically.
+
+## Harness Row
+
+`harness.db` lives in the main checkout and is not edited from a worktree. The row this packet
+needs, against the real schema:
+
+```python
+import sqlite3
+
+c = sqlite3.connect(r"D:\TrungKFC-Research\Rust\myTerm2\harness.db")
+c.execute(
+    """INSERT INTO story (id, title, created_at, risk_lane, contract_doc, packet_doc, status,
+                          unit_proof, integration_proof, e2e_proof, platform_proof, evidence,
+                          verify_command, last_verified_at, last_verified_result, notes, intake_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+    (
+        "US-0101",
+        "the engine's read model is called snapshot, not render",
+        "2026-09-15T00:00:00",
+        "high_risk",
+        "docs/spec-intakes/IN-0038-embeddable-vt-core/low-level-design/api-surface.md",
+        "docs/spec-intakes/IN-0038-embeddable-vt-core/US-0101-render-becomes-snapshot.md",
+        "implemented",
+        1, 1, 0, 1,
+        "branch refactor/vt-snapshot (4 rename commits on main@98a72148 plus the verification "
+        "close-out); ci-local -Full all checks passed; vt-corpus check 45/45; public-api --check "
+        "clean and --diff-platforms 6 pty lines; .rs diff 36 files 324+/318- (net +6, rustfmt "
+        "reflow); rename proof: the map applied to each old blob matches the new blob's word bag "
+        "for 36/36 changed .rs files",
+        "pwsh scripts/ci-local.ps1 -Full",
+        "2026-09-15T00:00:00+00:00",
+        "pass",
+        "E2E unproven: no Windows launch (the owner runs their session inside OneTerm). Net .rs "
+        "delta +6 against the packet's +-5, all of it rustfmt reflow. The corpus is 45 recordings, "
+        "not the 46 the packet said.",
+        43,
+    ),
+)
+c.commit()
+```
+
+## Verification Notes Closed
+
+Independent verification returned PASS-WITH-NOTES: the rename proof reproduced, the API snapshots
+are exact permutations, and an external probe confirmed no deprecation shim. Its five notes:
+
+1. **Harness row.** Added above, rather than written into `harness.db` from this worktree.
+2. **Two IN-0038 design files still named the old surface.**
+   `low-level-design/osc-extension.md` said `RenderState` in the rejected-option argument, and
+   `low-level-design/packaging.md` wrote the example's step 4 as `render_update()` and described the
+   rename in the future tense. Both now name `SnapshotState` / `snapshot_update`, in the past tense.
+3. **The literal grep count was wrong.** It is 18 (7 CHANGELOG rows + 11 recording lines), not 15.
+   Corrected in Acceptance and in Evidence.
+4. **`cargo doc -p oneterm-vt --no-deps` failed with no features**, on the intra-doc link to
+   `SearchPattern::Regex` in `search/mod.rs` -- the variant exists only behind the `regex` feature,
+   so the link resolves under `--all-features` and is broken in the default build most embedders
+   get. Pre-existing from `US-0100`, fixed here: the reference is plain text and says which feature
+   adds the variant. The gate only ever ran the `--all-features` half, so the no-feature `cargo doc`
+   is now a step of its own in `scripts/ci-local.ps1`, `scripts/ci-local.sh` and
+   `.github/workflows/ci.yml`. The "warning-free rustdoc" box is now true in **both** feature states.
+5. **The `snapshot_update` parameter was still called `render`**, and rustdoc prints it. It is
+   `snapshot`, and the section banner above it says "Snapshot hand-off".
+
+No further verification round; the gate was re-run in full after these five.
 
 ## Handoff
 

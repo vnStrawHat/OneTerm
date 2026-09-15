@@ -88,7 +88,7 @@ claims.claim_with(20308, |params| -> Option<T> { ... });
 
 **Rejected**, for two reasons that are each fatal. The engine cannot name `T` without a generic
 parameter on `Terminal` (`Terminal<E>` infects every signature, every field of the adapter, and the
-`RenderState` borrow) or a `Box<dyn Any>` (an allocation per OSC on the hot path, plus a downcast at
+`SnapshotState` borrow) or a `Box<dyn Any>` (an allocation per OSC on the hot path, plus a downcast at
 the far end -- worse ergonomics than the byte slices it was meant to improve). And a function
 pointer is still a call at feed time: it inherits Option 1's problem with none of its flexibility.
 

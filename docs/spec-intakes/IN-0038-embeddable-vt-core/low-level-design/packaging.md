@@ -203,12 +203,12 @@ ruling 2026-09-15); the guide is no less useful for it, and `US-0103` inherits t
    OSC 0 title, an OSC 7 cwd, and an OSC 1337 the example handles itself.
 3. Drain the batch and print each VtEvent, showing the typed Title next to
    the raw Osc payloads the example claimed.
-4. render_update() and print the visible rows as plain text.
+4. snapshot_update() and print the visible rows as plain text.
 ```
 
 Two names in the sketch above moved to later packets: the routing verb is `claim`, not `Forward`
 (`US-0098`), and `OSC 7` arrives as a raw `VtEvent::Osc` rather than a typed `Cwd` for the same
-reason. `render_update` becomes `snapshot_update` at `US-0101`, and the example changes with it.
+reason. `render_update` became `snapshot_update` at `US-0101`, and the example changed with it.
 
 It is built by CI (`cargo build -p oneterm-vt --examples`) and runnable
 (`cargo run -p oneterm-vt --example headless`), and its output is small enough to paste into the
