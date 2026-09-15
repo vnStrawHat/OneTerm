@@ -79,12 +79,17 @@ Incidental in-range moves the same re-resolution pulled in: `bitflags 2.13.0 -> 
 
 | Crate | Locked | Latest on crates.io | Reason it stays |
 |---|---|---|---|
-| `ssh-key` | `0.7.0-rc.11` | `0.7.0-rc.11` | **no stable 0.7.0 released.** `cargo info ssh-key` reports the rc as `latest`. |
-| `rsa` | `0.10.0-rc.18` | `0.10.0-rc.18` | **no stable 0.10.0 released.** |
-| `pkcs1` | `0.8.0-rc.4` | `0.8.0-rc.4` | **no stable 0.8.0 released.** Pulled only by `rsa`. |
+| `ssh-key` | `0.7.0-rc.11` | `0.7.0-rc.11` | **russh 0.63.3 pins it exactly**: `russh-0.63.3/Cargo.toml:351` `version = "=0.7.0-rc.11"`. |
+| `rsa` | `0.10.0-rc.18` | `0.10.0-rc.18` | **pinned exactly**: `russh-0.63.3/Cargo.toml:309` `version = "=0.10.0-rc.18"`. |
+| `pkcs1` | `0.8.0-rc.4` | `0.8.0-rc.4` | **pinned exactly**: `russh-0.63.3/Cargo.toml:281` `version = "=0.8.0-rc.4"`. Pulled only by `rsa`. |
 
-All three are upstream gaps, not OneTerm choices. `ssh-key` did move forward (`rc.10 -> rc.11`).
-The count goes 16 `-rc` crates -> 3.
+The decisive fact is the `=` requirement, not the absence of a stable release. Each crate *does*
+have older stable releases (`rsa 0.9.x`, `pkcs1 0.7.x`, `ssh-key 0.6.x`); what has no stable
+release is each crate's **current major line**, and `cargo info` confirms the rc is the newest
+published version of each. But even that is secondary: with an `=` requirement cargo gives
+OneTerm no choice at all, so these three move only when russh does. Not an upstream gap OneTerm
+could work around, and not a OneTerm decision. The count goes 16 `-rc` crates -> 3; `ssh-key`
+did move forward (`rc.10 -> rc.11`).
 
 ## Changelog items per release that touch OneTerm's surface
 
@@ -101,6 +106,24 @@ diffing the two vendored sources in the cargo registry, not by reading release n
 | 4 | **GSSAPI `gssapi-with-mic` auth** added: `MethodKind::GssapiWithMic`, `auth::GssapiStep`, `auth::GssapiError`, `auth::GssapiAuthenticator`, `Handle::authenticate_gssapi_with_mic`, `Handler::send_gssapi_step`. | Nothing. OneTerm never enumerates `MethodKind` exhaustively — it only calls `MethodSet::{contains, empty, from}` (`crates/ssh/src/agent.rs:158`, `crates/ssh/src/session.rs:574,929,1105,1112`). |
 | 5 | **`MethodSet::all()` renamed** to `MethodSet::client_supported()`, and `MethodSet::server_supported()` added. | Nothing. OneTerm never called `all()`. |
 | 6 | Internals: vendored `internal-russh-num-bigint` replaced by `num-bigint`; new `drain_priority_msgs` / `finalize_server_channel_open_reply` private hooks on the session loop. | Nothing. |
+| 7 | **Three server-reachable panics fixed, and one comparison hardened** — see below. | `crates/ssh` gets them for free. They are the strongest reason to take this bump. |
+
+### Remote-crash fixes in 0.63.3 (the real case for the bump)
+
+Established by diffing the vendored sources; each is a panic a **hostile or broken server** could
+reach in `russh 0.61.2`, on the connect path, before any OneTerm code runs. A panic inside the
+shared SSH runtime kills the connection and, on an unwinding panic across the tokio worker, can
+take unrelated sessions' tasks with it — these are availability bugs, not cosmetics.
+
+| Upstream site (0.63.3) | 0.61.2 behaviour | 0.63.3 behaviour |
+|---|---|---|
+| `kex/mod.rs:486` | `encode_mpint` on an **all-zero shared secret** indexed `s[s.len()]` and panicked. Reachable by an attacker-chosen all-zero Curve25519 point — the peer fully controls this value. | Encodes mpint `0`. |
+| `cipher/mod.rs:317` | A `packet_length` shorter than the probe block **underflowed** the `buffer[l..]` slice and panicked. The length comes off the wire before authentication. | `Error::PacketSize`. |
+| `keys/format/pkcs8_legacy.rs:220` | `clone_from_slice` on an IV that was not 16 bytes panicked. Reached by parsing a malformed local key file. | `Error::InvalidParameters`. |
+| `keys/agent/server.rs:251` | The agent **unlock password** was compared with `==`, a non-constant-time comparison. | `subtle::ct_eq`. |
+
+The first two are the significant ones for OneTerm: both sit on the inbound path of every SSH
+connection, before authentication, and both are driven by values the remote end chooses.
 
 **What did *not* change** — verified by diff, and load-bearing for the risk table:
 
@@ -127,7 +150,7 @@ OneTerm calls is source-compatible: no OneTerm SFTP call site failed to compile.
 | # | Change | Where it lands in OneTerm |
 |---|---|---|
 | 1 | **`FileAttributes::default()` semantics inverted.** In 2.3, `Default` produced *dummy* attributes (`size: Some(0)`, `uid/gid: Some(0)`, `permissions: Some(0o777 \| FileMode::DIR)`, `atime/mtime: Some(0)`) and `empty()` produced all-`None`. In 3.0, `Default` **is** `empty()` (all-`None`) and the old dummy value moved to the new `FileAttributes::dummy()`. | One site: `crates/tools/src/bin/sftp-dev-server.rs:320`, the metadata-read fallback in `opendir`. `crates/ssh` only calls `empty()`, whose meaning is unchanged. |
-| 2 | **Concurrency defaults raised.** `max_concurrent_writes` 8 -> 16; new `max_concurrent_reads: 16` and `max_write_packet_len: 32768`. Both clamped with `.max(1)`. | `crates/ssh/src/session.rs:529` uses `SftpSession::new(stream)` (defaults), so remote transfers run at twice the previous write concurrency and gain pipelined reads. Throughput only — no protocol or correctness change. |
+| 2 | **Transfer pacing rebuilt** — and it is a regression on both directions, not the improvement the first pass recorded. (a) `max_concurrent_writes` 8 -> 16, but a **new** `max_write_packet_len: 32768` caps *every* `SSH_FXP_WRITE`, on top of `max_packet_len` and the server's own `limits@openssh.com` reply. With OneTerm's 255 KiB chunks the new cap always binds: a 5 MiB upload measured **161 packets of 32 742 B** where 2.3.0 sent 21 of 261 120 B, so in-flight write bytes fall 2 088 960 -> 523 872, **4x less**. (b) New `max_concurrent_reads: 16` puts 16 `SSH_FXP_READ` packets on the wire immediately, and `poll_seek` clears only the *local* queue — OneTerm's striped download seeks before every chunk, so the server serves read-ahead the client throws away: **9.3x the file size** measured on a 5 MiB download. | `crates/ssh/src/session.rs` now calls `SftpSession::new_with_config(stream, sftp_config())` and pins all three fields back to 2.3.0's effective values. See the risk table and `US-0095` Changes F and G. |
 | 3 | `SftpSession::read`/`write` convenience helpers now `close()` the file handle before returning. | `crates/ssh` opens files explicitly through `File`, so no call site changes; a leaked-handle class of bug is closed upstream. |
 | 4 | `io::Error { kind: TimedOut }` now converts to `Error::Timeout` instead of `Error::IO(..)`, and `Error -> io::Error` gained a reverse impl. | `map_sftp_err` (`crates/ssh/src/sftp_task.rs:335`) matches `Error::Status(..)` and falls through on everything else, so a timeout is still `AppError::msg(..)` — only the message text changes ("Timeout" instead of an IO string). No code change. |
 | 5 | New `expand-path@openssh.com` extension: `extensions::EXPAND_PATH`, `ExpandPathExtension`, `SftpSession::expand_path`, `features.expand_path`. | Nothing. Opt-in; OneTerm does not call it. |
@@ -145,7 +168,7 @@ BEFORE (russh 0.61.2)                     AFTER (russh 0.63.3)
 oneterm-ssh / oneterm-tools               oneterm-ssh / oneterm-tools
   |                                         |
   +-- russh 0.61.2                          +-- russh 0.63.3
-  |     +-- ssh-key       0.7.0-rc.10       |     +-- ssh-key       0.7.0-rc.11   <-- rc, no stable
+  |     +-- ssh-key       0.7.0-rc.10       |     +-- ssh-key       0.7.0-rc.11   <-- rc, '=' pinned
   |     |     +-- ssh-cipher  0.3.0-rc.9    |     |     +-- ssh-cipher  0.3.0      <-- stable
   |     |     +-- ssh-encoding 0.3.0-rc.9   |     |     +-- ssh-encoding 0.3.0      <-- stable
   |     |     +-- ed25519-dalek 3.0.0-rc.0  |     |     +-- ed25519-dalek 3.0.0     <-- stable
@@ -157,8 +180,8 @@ oneterm-ssh / oneterm-tools               oneterm-ssh / oneterm-tools
   |     |     +-- p256/p384/p521            |     |     +-- p256/p384/p521
   |     |     |            0.14.0-rc.10     |     |     |            0.14.0         <-- stable
   |     |     +-- primeorder 0.14.0-rc.10   |     |     +-- primeorder 0.14.0       <-- stable
-  |     |     +-- rsa        0.10.0-rc.18   |     |     +-- rsa        0.10.0-rc.18 <-- rc, no stable
-  |     |     |     +-- pkcs1 0.8.0-rc.4    |     |     |     +-- pkcs1 0.8.0-rc.4  <-- rc, no stable
+  |     |     +-- rsa        0.10.0-rc.18   |     |     +-- rsa        0.10.0-rc.18 <-- rc, '=' pinned
+  |     |     |     +-- pkcs1 0.8.0-rc.4    |     |     |     +-- pkcs1 0.8.0-rc.4  <-- rc, '=' pinned
   |     |     +-- argon2     0.6.0-rc.8     |     |     +-- argon2     0.6.0        <-- stable
   |     |     |     +-- blake2 0.11.0-rc.6  |     |     |     +-- blake2 0.11.0     <-- stable
   |     |     +-- aes-gcm    0.11.0-rc.4    |     |     +-- aes-gcm    0.11.1       <-- stable
@@ -176,7 +199,7 @@ oneterm-ssh / oneterm-tools               oneterm-ssh / oneterm-tools
 | **Host-key verification** | `check_server_key` argument type `&PublicKey` -> `&PublicKeyOrCertificate`. A naive port (`_ => Ok(true)`, or matching only the key arm and defaulting) would silently accept a host certificate OneTerm cannot verify. | **High** | The certificate arm returns an explicit refusal (`SshHandlerError::UnknownHostKey` with a `cert:` marker), never `Ok(true)`. The key arm keeps the exact `verify_server_key` body — recorded key match, changed-key refusal, algorithm-mismatch refusal, `AcceptNewFingerprint` learn, strict refusal — unchanged. Proof: the eight `handler_tests.rs` known_hosts / mismatch tests plus the loopback `check_server_key` connect test, all unmodified. |
 | **Host-cert advertising** | New `Preferred::host_key_certificates`, empty by default. | Low | OneTerm never sets it and never builds a custom `Preferred`. A conforming server therefore never sends a certificate. Verified by reading `Preferred::DEFAULT` in `negotiation.rs:210`. |
 | **known_hosts format / round trip** | none | None | `src/keys/known_hosts.rs` is byte-identical between the two releases. `handler_tests.rs` round-trips `learn_known_hosts_path` -> `known_host_keys_path` for ed25519, ECDSA-P256 and RSA. |
-| **Key-file parsing** (OpenSSH / PKCS#8 / PEM, encrypted keys) | `ssh-key` `rc.10 -> rc.11`; `pkcs1`/`rsa` unchanged; `ecdsa`/`ed25519-dalek`/`p256` rc -> stable. `load_secret_key`'s signature is unchanged. | Medium | `US-0095` adds `crates/ssh/src/keyfile_tests.rs`: generate one key per supported algorithm (Ed25519, ECDSA P256/P384/P521, RSA-2048), write it in OpenSSH format both unencrypted and passphrase-encrypted, and assert `load_secret_key` returns the matching public key (and rejects a wrong passphrase). This path had no direct coverage before. |
+| **Key-file parsing** (OpenSSH / PKCS#8 / PEM, encrypted keys) | `ssh-key` `rc.10 -> rc.11`; `pkcs1`/`rsa` unchanged; `ecdsa`/`ed25519-dalek`/`p256` rc -> stable. `load_secret_key`'s signature is unchanged. | Medium | `US-0095` adds `crates/ssh/src/keyfile_tests.rs` (5 tests): **generate** one key per fast algorithm (Ed25519, ECDSA P256/P384/P521) and round-trip it through a file; RSA is a **fixed `ssh-keygen` fixture**, because RSA generation is far too slow for a debug-build test; encrypted round trips cover **Ed25519** (right passphrase, wrong passphrase, no passphrase). Encrypted **RSA** and the PKCS#8-PEM, CRLF and truncated-file cases come from the adopted verification suite `us0095_verify_tests.rs` (Change H). This path had no direct coverage before. |
 | **Agent protocol** | none | None | `src/keys/agent/client.rs` is byte-identical. `agent_tests.rs` runs a real in-process `russh::keys::agent::server::serve` and authenticates against a loopback SSH server through `AgentClient`. |
 | **Auth methods** | `MethodKind` gains `GssapiWithMic`; `MethodSet::all()` renamed. | Low | OneTerm calls only `contains` / `empty` / `from`; no exhaustive match exists. The keyboard-interactive `proceed_with_methods` and the `publickey_still_accepted` partial-auth logic are untouched. Proof: `session.rs` keyboard-interactive suite and `agent.rs` multi-key fallback suite. |
 | **Channel / forwarding semantics** | Server-initiated channel opens are no longer pre-confirmed; the handler owns accept/reject. | Medium | Each of the two client handlers explicitly `accept()`s exactly where 0.61 would have confirmed, and drops the handle (-> `AdministrativelyProhibited`) exactly where OneTerm previously confirmed-then-closed. This makes the DEC-0011 "channels for listeners OneTerm never asked for are dropped, never bridged" rule *stronger*: the peer now gets a proper refusal instead of a confirmation followed by a close. Proof: `tunnel_tests.rs` (direct-tcpip and forwarded-tcpip over loopback), `agent_tests.rs::agent_forward_*`. |

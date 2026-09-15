@@ -54,3 +54,12 @@ how much of SOCKS to implement without a new dependency.
   there is no "share on the network" shortcut.
 - [ ] Follow-up: a status indicator for active tunnels was left out of IN-0023; add it when
   the warning toast alone proves insufficient.
+- [x] Mechanism update (`IN-0036` / `US-0095`, 2026-09-15): the Decision above says the handler
+  **closes** an agent channel the server opens while the switch is off, and says the same for a
+  `forwarded-tcpip` channel on a port that was never requested. That described russh 0.61, which
+  confirmed a server-initiated channel *before* calling the handler, so closing it straight
+  afterwards was the strongest answer available. russh 0.63 hands the handler a
+  `ChannelOpenHandle` instead, and OneTerm now drops it — the peer receives
+  `ChannelOpenFailure::AdministrativelyProhibited` and the channel is never confirmed at all.
+  **The decision is unchanged and is now enforced more strictly**: read "closes" as "refuses".
+  Nothing a user grants or is denied changes.

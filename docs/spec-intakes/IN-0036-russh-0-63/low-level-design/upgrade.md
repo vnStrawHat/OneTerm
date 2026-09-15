@@ -56,11 +56,17 @@ async fn check_server_key(
     let server_key = match server_key {
         russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
         russh::keys::PublicKeyOrCertificate::Certificate(certificate) => {
-            return Err(SshHandlerError::UnknownHostKey {
+            return Err(SshHandlerError::HostCertificate {
                 host: self.host.clone(),
                 port: self.port,
                 algorithm: certificate.algorithm().to_string(),
-                fingerprint: format!("cert:{}", certificate.fingerprint(HashAlg::Sha256)),
+                // The fingerprint of the key *inside* the certificate: the value
+                // an operator can compare against a known_hosts line.
+                // `Certificate` has no `fingerprint()` of its own.
+                fingerprint: format!(
+                    "cert:{}",
+                    certificate.public_key().fingerprint(HashAlg::Sha256)
+                ),
             });
         }
     };
@@ -86,6 +92,17 @@ Invariants this must preserve, all of them already asserted by `handler_tests.rs
 deliberately discarded: it names the *signature* algorithm used for the exchange
 (`rsa-sha2-256` vs `ssh-rsa`), not the key, and known_hosts records the bare key. Discarding it
 keeps `verify_server_key`'s RSA matching identical to 0.61's.
+
+`SshHandlerError::HostCertificate` is a **new variant**, not a reuse of `UnknownHostKey`, and
+that distinction is the whole of the fix. `SshHandlerError::to_app_error` maps `UnknownHostKey`
+to `AppError::HostKeyUnknown`, which `crates/session-ui/src/common.rs` answers with the first-use
+"trust this host key?" dialog. Approving it retries with
+`HostKeyPolicy::AcceptNewFingerprint("cert:…")`, and the certificate arm returns `Err`
+unconditionally *before* any policy check — so there was never a trust bypass, but the user was
+shown an Accept button that can only fail again. `HostCertificate` maps to
+`AppError::Connect { phase: Transport, .. }` instead: an ordinary connect failure whose message
+names host certificates as unsupported and gives the certified key's fingerprint. No new
+`AppError` variant and no UI change are needed.
 
 ### Change B — server-initiated channel opens carry a `ChannelOpenHandle` (2 client sites, **security**)
 
@@ -163,6 +180,26 @@ unconfirmed channel.
 `auth_password`, `auth_publickey` and `auth_keyboard_interactive` are **unchanged** in 0.63 and
 are not touched.
 
+**Scope of "now refuses" — informational.** The client trait has seven hooks that can receive a
+server-initiated channel open; OneTerm overrides **two** of them
+(`server_channel_open_agent_forward`, `server_channel_open_forwarded_tcpip`). In russh 0.63.3 the
+**client-side** defaults for the other five all *accept*
+(`russh-0.63.3/src/client/mod.rs` ~2477-2600: `server_channel_open_session`,
+`server_channel_open_x11`, `server_channel_open_direct_tcpip`,
+`server_channel_open_direct_streamlocal`, `server_channel_open_forwarded_streamlocal` each run
+`reply.accept().await`; only `server_channel_open_unknown` drops the handle, gated behind
+`should_accept_unknown_server_channel`, default `false`). So a server-initiated session, x11,
+direct-tcpip or streamlocal channel is still confirmed and then dropped — exactly what 0.61 did.
+**This is not a regression** and nothing OneTerm asked for changed; the statement "unrequested
+channels are now refused" applies specifically to agent-forward and forwarded-tcpip. Closing the
+remaining five would be five one-line `reply.reject(…)` overrides, and is deliberately out of
+scope here: it is a fail-closed posture change to argue on its own evidence, not a consequence of
+the bump.
+
+Note that Change C's "russh's default drops the handle and therefore rejects" is correct for the
+**server** trait, which is what Change C is about (`russh-0.63.3/src/server/mod.rs:362,377,395,417`
+are all `async { Ok(()) }`). It does not hold on the client side.
+
 ### Change D — `FileAttributes::default()` flipped meaning (1 site, compiler-silent)
 
 `crates/tools/src/bin/sftp-dev-server.rs:320`, in `opendir`'s per-entry metadata fallback:
@@ -180,6 +217,92 @@ browser would render it with no size, no permissions and no mtime. This is the o
 workspace that relied on `FileAttributes::default()`; `crates/ssh/src/sftp_task/transfer.rs:105`
 uses `FileAttributes::empty()`, whose meaning did not change.
 
+### Change F — pin the SFTP transfer budget back to 2.3.0's (1 site, **throughput**)
+
+Added at acceptance rework. russh-sftp 3.0 introduced a *third* size cap that 2.3.0 did not have,
+and the first pass missed it because it only compared `max_concurrent_writes` (8 -> 16).
+
+`russh-sftp-3.0.0/src/client/fs/file.rs:374-395`, `poll_write`:
+
+```rust
+let packet_write_len    = features.max_packet_len       - (25 + handle.len());  // 256 KiB default
+let server_write_len    = features.limits.and_then(|l| l.write_len).unwrap_or(u32::MAX as u64);
+let preferred_write_len = features.max_write_packet_len - (25 + handle.len());  //  32 KiB default  <-- NEW
+let len = buf.len().min(packet_write_len).min(server_write_len).min(preferred_write_len);
+```
+
+2.3.0 had only the first two terms. OneTerm feeds `CHUNK_LEN = 255 KiB`, so the new third term is
+always the binding one, and SFTP throughput — `in-flight bytes / RTT` — collapses:
+
+| | packet payload | in flight | in-flight bytes |
+|---|---|---:|---:|
+| russh-sftp 2.3.0 | 261 120 B (one per chunk) | 8 | **2 088 960** |
+| russh-sftp 3.0.0 defaults | 32 742 B (8 per chunk) | 16 | **523 872** (4.0x less) |
+| after this change | 261 095 B | 8 | **2 088 760** (2.3.0 restored) |
+
+`crates/ssh/src/session.rs`, `open_sftp`:
+
+```rust
+// before
+let sftp_channel = russh_sftp::client::SftpSession::new(stream).await?;
+// after
+let sftp_channel =
+    russh_sftp::client::SftpSession::new_with_config(stream, sftp_config()).await?;
+```
+
+with one named constructor next to it so the production path and the regression test cannot
+drift:
+
+```rust
+/// russh-sftp client config pinned to the transfer budget russh-sftp 2.3.0 had.
+pub(crate) fn sftp_config() -> russh_sftp::client::Config {
+    russh_sftp::client::Config {
+        // 3.0's 32 KiB default caps every SSH_FXP_WRITE and cuts the in-flight
+        // write budget 4x. Raise it to `max_packet_len` so the packet size is
+        // bounded only by the SFTP packet limit and the server's own
+        // `limits@openssh.com` reply, exactly as 2.3.0 was.
+        max_write_packet_len: 262_144,
+        // 2.3.0's value. With 255 KiB packets this is ~2 MiB in flight; 3.0's
+        // 16 would double it, which is an unreviewed change, not a bump.
+        max_concurrent_writes: 8,
+        // OneTerm stripes its own downloads (`transfer::pipeline::copy_striped`
+        // seeks per chunk), which discards 3.0's read-ahead after the requests
+        // are already on the wire. One in flight per handle; the striping
+        // supplies the concurrency. See Change G.
+        max_concurrent_reads: 1,
+        ..Default::default()
+    }
+}
+```
+
+The server's advertised `limits@openssh.com` `max-write-length` needs no code: `server_write_len`
+above already clamps to it whenever the server sends the extension, and `SftpSession::new_with_config`
+already clamps `max_packet_len` to the server's `packet_len`
+(`russh-sftp-3.0.0/src/client/session.rs:74`). Raising `max_write_packet_len` only removes
+russh-sftp's *own* extra cap; it can never exceed what the server allows.
+
+### Change G — stop paying for read-ahead OneTerm throws away (same site)
+
+`transfer::pipeline::read_chunk` seeks before **every** chunk. russh-sftp 3.0 answers a read by
+putting `max_concurrent_reads` (16) `SSH_FXP_READ` packets on the wire immediately
+(`fs/file.rs ReadState::request` -> `rawsession.rs:451 read_nowait` -> `send`), and `poll_seek`
+calls `ReadState::reset`, which clears only the **local** queue. The server has already served
+the discarded requests.
+
+Two candidate fixes, both measured on the same 5 MiB loopback download (see the packet's PROOF):
+
+| | bytes on the wire | READ requests | wall time |
+|---|---:|---:|---:|
+| striping + `max_concurrent_reads: 16` (shipped a33a994) | 3.6x the file | 29 per 8 useful | baseline |
+| striping + `max_concurrent_reads: 1` | 1.0x | one per chunk | see PROOF |
+| no striping + `max_concurrent_reads: 16` | 1.0x | one per chunk | see PROOF |
+
+Both candidates remove the amplification; the measured winner is recorded in the packet and the
+choice is `max_concurrent_reads: 1`. Dropping the striping instead would delete `copy_striped`,
+`read_handles_for`, `REORDER_WINDOW` and their tests, and re-open resume, progress and
+cancellation behaviour that this dependency-bump packet has no mandate to change — a larger diff
+for the same measured result.
+
 ### Change E — new coverage for key-file parsing (new file)
 
 The bump moves `ssh-key` `rc.10 -> rc.11` and takes `ecdsa`, `ed25519-dalek`, `p256/384/521`,
@@ -187,17 +310,50 @@ The bump moves `ssh-key` `rc.10 -> rc.11` and takes `ecdsa`, `ed25519-dalek`, `p
 (`crates/ssh/src/session.rs:28`) decodes every private key OneTerm reads from disk through that
 stack, and **had no direct test** — the loopback suites all generate keys in memory.
 
-New `crates/ssh/src/keyfile_tests.rs`, one focused module:
+New `crates/ssh/src/keyfile_tests.rs`, one focused module (5 tests):
 
-- for each of Ed25519, ECDSA P-256, ECDSA P-384, ECDSA P-521 and RSA-2048: generate a
-  `PrivateKey`, write it in OpenSSH format to a temp file, `load_secret_key(path, None)`, assert
-  the loaded public key equals the generated one;
-- for Ed25519 and RSA-2048: write the same key **encrypted** with a passphrase, assert
-  `load_secret_key(path, Some(passphrase))` round-trips, and assert a wrong passphrase is an
-  `Err` (not a panic and not a silent success).
+- **Generated** keys, round-tripped through a file: Ed25519, ECDSA P-256, P-384, P-521. RSA is
+  **not** generated — RSA key generation is far too slow for a debug-build unit test, the same
+  reason `handler_tests.rs` keeps a fixed RSA public key.
+- **RSA** is a fixed 2048-bit fixture written by `ssh-keygen`, loaded unencrypted and re-encoded.
+  Using real OpenSSH output makes this the one case that proves interoperability with OpenSSH's
+  writer rather than a russh round trip.
+- **Encrypted**: Ed25519 only — loads with the right passphrase, errors on the wrong one, errors
+  with no passphrase.
+
+Encrypted **RSA** is covered by Change H's adopted suite
+(`us0095_verify_tests::an_aes256_ctr_bcrypt_rsa_key_loads_with_its_passphrase`), which encrypts
+the same fixture rather than generating a key.
 
 This is the one gap the change opens that the existing suites do not close; everything else the
 bump touches already has loopback coverage.
+
+### Change H — adopt the independent verification's 11 tests (new file)
+
+Added at acceptance rework. `crates/ssh/src/us0095_verify_tests.rs`, wired from
+`crates/ssh/src/lib.rs`, taken from the verification recorded in
+[`../evidence/US-0095-verify.md`](../evidence/US-0095-verify.md). It closes the gap this LLD
+listed as untestable and adds the key-file cases Change E omits:
+
+- `a_recorded_host_key_is_accepted_through_the_handshake`,
+  `an_unrecorded_host_key_is_unknown_through_the_handshake`,
+  `a_changed_host_key_is_refused_as_changed_not_unknown` — the `PublicKey` arm end to end
+  through a real loopback handshake, not just `verify_server_key` in isolation;
+- `a_host_certificate_is_refused_even_when_its_inner_key_is_trusted` — builds a real self-signed
+  host certificate, serves it from a loopback `russh::server` with `Config::certificates`,
+  forces negotiation by setting `preferred.host_key_certificates` on the **client**, and
+  pre-records the certificate's inner key in known_hosts first. A fall-through to the inner key
+  would make this connect succeed. It does not. **This closes the gap Change A could only argue
+  from code reading.** Adopted with one change: it now expects `SshHandlerError::HostCertificate`
+  rather than `UnknownHostKey`, and additionally asserts `to_app_error()` yields
+  `AppError::Connect` — the Change A fix above;
+- `an_aes256_ctr_bcrypt_rsa_key_loads_with_its_passphrase`, `a_pkcs8_pem_ed25519_key_loads`,
+  `a_key_file_with_crlf_line_endings_records_its_outcome` (it loads: `str::lines()` strips the
+  `\r`), `an_empty_passphrase_on_an_encrypted_key_is_refused`,
+  `a_truncated_key_file_errors_rather_than_panics`;
+- `seek_per_chunk_reads_measure_the_new_pipeline_read_ahead` and
+  `a_five_mib_round_trip_matches_and_records_the_write_packet_budget` — the measurements behind
+  Changes F and G, and a 5 MiB byte-compared SFTP round trip in both directions.
 
 ## Interfaces
 
