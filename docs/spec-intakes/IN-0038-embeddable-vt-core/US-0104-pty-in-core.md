@@ -463,11 +463,16 @@ No `gpui*` and no `oneterm-*` in either.
 
 ### Tests
 
-- `cargo test -p oneterm-vt`: 398 passed, 0 failed, 2 ignored (lib), plus 24 in the integration
-  targets. 24 of the lib tests are `pty::*`.
-- `cargo test -p oneterm-vt --no-default-features`: 374 passed, 0 failed, 2 ignored. 398 - 374 = 24,
-  the whole transport suite, and the engine suite passes with no transport compiled.
-- `cargo test -p oneterm-vt --features vt-paranoid`: 398 passed, 0 failed.
+Re-measured after the rebase onto `main` @ `491dff8`, so the totals carry `US-0100`'s search tests
+as well.
+
+- `cargo test -p oneterm-vt`: 410 passed, 0 failed, 2 ignored (lib), plus the integration targets,
+  of which `pty_contract` is 3. 24 of the lib tests are `pty::*`.
+- `cargo test -p oneterm-vt --no-default-features`: 386 passed, 0 failed, 2 ignored.
+  410 - 386 = 24, the whole transport suite, and the engine suite passes with no transport
+  compiled -- plus `engine_without_pty`, 1 passed, which is the same statement from outside.
+- `cargo test -p oneterm-vt --features vt-paranoid`: 410 passed, 0 failed.
+- `cargo test -p oneterm-vt --features regex`: 415 passed, 0 failed.
 - `cargo test -p oneterm-local-shell`: 33 passed, 0 failed, 2 ignored, including `event_loop_tests`
   and `session_orphan_tests`.
 - `cargo test --workspace`: 0 failures.
