@@ -195,13 +195,16 @@ jobs:
       # public item or a broken intra-doc link fails here rather than on docs.rs.
       # Both feature states: an intra-doc link to a cfg-gated item resolves under
       # `--all-features` and is broken in a default build, which is the build
-      # most embedders get (`US-0101` verification note 4).
+      # most embedders get (`US-0101` verification note 4). `--all-features` runs
+      # **last** because the next step reads `target/doc` with `--no-doc` and the
+      # committed surface is the all-features one; swapping the two silently
+      # drops every gated item from the generated surface.
       - name: Document with warnings denied
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: |
-          cargo doc -p oneterm-vt --no-deps --all-features
           cargo doc -p oneterm-vt --no-deps
+          cargo doc -p oneterm-vt --no-deps --all-features
       # This job runs on Linux, so `--check` compares `public-api.unix.txt`; the
       # Windows job's surface lives in `public-api.windows.txt` (`US-0104`).
       # `--diff-platforms` asserts the two differ only inside `oneterm_vt::pty`.

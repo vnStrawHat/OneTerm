@@ -70,11 +70,14 @@ Invoke-Step @("cargo", "run", "-p", "oneterm-vt", "--example", "headless")
 $previousRustdocFlags = $env:RUSTDOCFLAGS
 $env:RUSTDOCFLAGS = "-D warnings"
 try {
-    Invoke-Step @("cargo", "doc", "-p", "oneterm-vt", "--no-deps", "--all-features")
-    # ...and again with no features: an intra-doc link to a cfg-gated item
-    # resolves under `--all-features` and is broken in a default build, which is
-    # the build most embedders get (`US-0101` verification note 4).
+    # No features first: an intra-doc link to a cfg-gated item resolves under
+    # `--all-features` and is broken in a default build, which is the build most
+    # embedders get (`US-0101` verification note 4).
     Invoke-Step @("cargo", "doc", "-p", "oneterm-vt", "--no-deps")
+    # `--all-features` must be the **last** rustdoc: the API check below reads
+    # `target/doc` with `--no-doc`, and the surface it compares against is the
+    # all-features one. Swapping these two silently drops every gated item.
+    Invoke-Step @("cargo", "doc", "-p", "oneterm-vt", "--no-deps", "--all-features")
 } finally {
     $env:RUSTDOCFLAGS = $previousRustdocFlags
 }
