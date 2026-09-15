@@ -304,6 +304,12 @@ Repaint
 |                                |
 ```
 
+> **Superseded in part by `US-0104`.** `crates/vt/public-api.txt` is now two files,
+> `public-api.windows.txt` and `public-api.unix.txt`: `pub mod pty` has a cfg-dependent surface and
+> `cargo doc` renders only the host's half. Everything below was measured before that split and is
+> left as measured. `scripts/vt-public-api.py` picks the host's file, and `--diff-platforms`
+> asserts the two differ only inside `oneterm_vt::pty`.
+
 **Surface.** `crates/vt/public-api.txt`, **688** lines over 100 public items, regenerated with no
 diff by `python scripts/vt-public-api.py --check`. It lists only paths an embedder can write: the
 crate root and the three `pub mod`s, read from `lib.rs` rather than hard-coded. Two break tests,

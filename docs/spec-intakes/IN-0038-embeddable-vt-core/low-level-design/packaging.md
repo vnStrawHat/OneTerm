@@ -303,9 +303,18 @@ Three things this costs, and what replaces each:
   leaf dependencies and no build script, so there was never much to catch. **`US-0104` is the first
   packet where "no Windows" would have mattered** -- docs.rs renders on Linux, so it would have
   shown the `openpty` half of `pty` and hidden the ConPTY half, and the fix would have been a
-  `targets = [...]` key in a metadata table that no longer exists. Losing docs.rs turns that into a
-  non-problem: CI runs `cargo doc` on Windows, where the ConPTY half is the one that renders, and a
-  reader on either platform documents their own.
+  `targets = [...]` key in a metadata table that no longer exists. **Losing docs.rs does not by
+  itself solve that, and an earlier version of this paragraph wrongly said it did**: the
+  `Packaged crate (oneterm-vt)` job runs on `ubuntu-latest`, so CI's `cargo doc` renders the
+  `openpty` half and never the ConPTY half. `US-0104` answers it in two places instead. The module
+  rustdoc in `pty/mod.rs` describes **both** platforms in prose, so neither rendering hides the
+  other's existence. And the public-API snapshot is split in two --
+  `crates/vt/public-api.windows.txt` and `crates/vt/public-api.unix.txt` -- because one file cannot
+  describe a surface that carries `PipeReader`, `PipeWriter` and `Options::escape_args` on one
+  platform and `SignalMask` and `Options::child_signal_mask` on the other.
+  `scripts/vt-public-api.py` selects the host's file for `--check` and `--update` and names it in
+  its output, and `--diff-platforms` fails if the two files disagree anywhere outside
+  `oneterm_vt::pty`. A reader on either platform still documents their own.
 - **A URL to link.** The README and the guide both link local commands instead, which is why
   neither may carry a docs.rs address.
 
@@ -332,7 +341,7 @@ same page as the default build.
 | New: `cargo package -p oneterm-vt` | actually builds the package and compiles it out of tree, which the `--list` form does not. Works unchanged with `publish = false` and needs no `--no-verify`. | `.github/workflows/ci.yml`, job "Packaged crate (oneterm-vt)" |
 | New: `cargo build -p oneterm-vt --no-default-features --examples` and `--all-features --examples` | proves the feature matrix and that the example still builds | add to CI |
 | New: `cargo run -p oneterm-vt --example headless` | proves the example still runs, not just compiles | `.github/workflows/ci.yml` |
-| New: `crates/vt/public-api.txt` diff | see [`api-surface.md`](api-surface.md) | add to CI |
+| New: the public-API snapshot diff | see [`api-surface.md`](api-surface.md). `US-0104` splits it into `public-api.windows.txt` and `public-api.unix.txt` and adds `--diff-platforms`, because the `pty` module's surface is cfg-dependent and `cargo doc` renders only the host's half. | add to CI |
 | New: `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` | the `missing_docs` gate. `US-0097` adds it already tightened, rather than leaving the `-D warnings` to `US-0103`: it caught a public-to-private intra-doc link on the way in, and the guide chapters will fail the same step. One doc build, not two. | added in `US-0097` |
 
 The package includes `crates/vt/**` only, confirmed at `US-0097` by reading the file list
@@ -340,7 +349,7 @@ The package includes `crates/vt/**` only, confirmed at `US-0097` by reading the 
 gets whether they fetch a tarball or a git checkout: `cargo` vendors the crate directory, not the
 repository around it. `Cargo.toml` needs no `exclude`: the parity corpus moved to
 `crates/tools` at `US-0093`, so there is no large test data left, and `crates/vt/fuzz/` drops out on
-its own because it declares its own `[workspace]` table. `public-api.txt` does ship, which is
+its own because it declares its own `[workspace]` table. Both public-API snapshots ship, which is
 harmless -- it describes the crate the reader is holding.
 
 **Licence text travels with the package.** Apache-2.0 section 4(a) requires a copy of the licence

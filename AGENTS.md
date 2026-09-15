@@ -115,7 +115,8 @@ cargo build -p oneterm-vt --no-default-features --examples
 cargo build -p oneterm-vt --all-features --examples
 cargo run -p oneterm-vt --example headless
 RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
-python scripts/vt-public-api.py --check --no-doc # the public API surface has not drifted
+python scripts/vt-public-api.py --check --no-doc # the host platform's public API surface
+python scripts/vt-public-api.py --diff-platforms # ...and the other platform's differs only in `pty`
 # What the package carries (README, CHANGELOG, LICENSE, NOTICE, the example) and
 # that it reaches nothing outside `crates/vt`. Offline, and works with
 # uncommitted files.

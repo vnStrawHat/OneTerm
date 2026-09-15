@@ -193,8 +193,13 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc -p oneterm-vt --no-deps --all-features
+      # This job runs on Linux, so `--check` compares `public-api.unix.txt`; the
+      # Windows job's surface lives in `public-api.windows.txt` (`US-0104`).
+      # `--diff-platforms` asserts the two differ only inside `oneterm_vt::pty`.
       - name: Check the public API surface
-        run: python scripts/vt-public-api.py --check --no-doc
+        run: |
+          python scripts/vt-public-api.py --check --no-doc
+          python scripts/vt-public-api.py --diff-platforms
       # The crate packages cleanly and carries what a consumer needs. Apache-2.0
       # 4(a) and 4(d) are why `LICENSE` and `NOTICE` are in the required set: a
       # git dependency is a distribution too.

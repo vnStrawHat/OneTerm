@@ -56,7 +56,11 @@ if [ "$vt_leaves" != 'bitflags log memchr rustc-hash unicode-segmentation unicod
 fi
 step cargo run -p oneterm-vt --example headless
 step env RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
+# Two snapshots, one per platform family (`US-0104`): `--check` compares the
+# host's, `--diff-platforms` asserts the other one differs only inside
+# `oneterm_vt::pty` and needs no rustdoc.
 step python scripts/vt-public-api.py --check --no-doc
+step python scripts/vt-public-api.py --diff-platforms
 # What the package carries, and that it reaches nothing outside `crates/vt`.
 # `--allow-dirty` because an agent runs this gate with uncommitted work; the
 # workflow packages a clean checkout without it.

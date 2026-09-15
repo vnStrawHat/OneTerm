@@ -241,9 +241,17 @@ embedder's caches are keyed by it.
   the JSON format is nightly-only and `rust-toolchain.toml` pins stable `1.96.0`. It prints every
   public item, sorted, with its fields, variants, associated constants and inherent methods under
   it, and it keeps only items reachable through the crate's public module paths, so renaming a
-  private module is not a public-API change. The output is committed as `crates/vt/public-api.txt`
-  and a CI step diffs it, so any change to the public surface has to be an intentional line in a
-  diff.
+  private module is not a public-API change. The output is committed and a CI step diffs it, so any
+  change to the public surface has to be an intentional line in a diff.
+
+  **Two files, not one, from `US-0104`.** `pub mod pty` publishes `PipeReader`, `PipeWriter` and
+  `Options::escape_args` on Windows and `SignalMask` and `Options::child_signal_mask` on Unix, and
+  `cargo doc` renders only the host's half, so the snapshot is `crates/vt/public-api.windows.txt`
+  and `crates/vt/public-api.unix.txt`. The script selects by host for `--check` and `--update` and
+  prints which file it used; `--diff-platforms` reports every line the two disagree on and fails if
+  any of them is outside `oneterm_vt::pty`. That is the invariant the split has to keep: the
+  engine's surface is identical on both platforms and only the transport's cfg-gated items
+  differ.
 
   What that costs: an item, field, variant or method that is **added, removed or renamed** is
   caught; a **signature change is not**. Rustdoc JSON is the upgrade, and the script switches to it

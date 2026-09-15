@@ -192,7 +192,8 @@ Each criterion below is a command a verifier who distrusts this packet can run.
   is no `[package.metadata.docs.rs]` table any more (owner ruling 2026-09-15), so this is the whole
   render check.
 - [ ] Public-API coverage. If `US-0097` shipped `scripts/vt-public-api.py` and
-  `crates/vt/public-api.txt`, a cross-check reads that file and asserts every entry is named in at
+  the host's public-API snapshot (`public-api.windows.txt` or `public-api.unix.txt`,
+  `US-0104`), a cross-check reads that file and asserts every entry is named in at
   least one chapter or in the API reference. Otherwise the same check by grep, run from the
   repository root:
   ```bash

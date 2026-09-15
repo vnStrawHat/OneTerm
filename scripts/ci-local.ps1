@@ -71,7 +71,11 @@ try {
 } finally {
     $env:RUSTDOCFLAGS = $previousRustdocFlags
 }
+# Two snapshots, one per platform family (`US-0104`): `--check` compares the
+# host's, `--diff-platforms` asserts the other one differs only inside
+# `oneterm_vt::pty` and needs no rustdoc.
 Invoke-Step @("python", "scripts/vt-public-api.py", "--check", "--no-doc")
+Invoke-Step @("python", "scripts/vt-public-api.py", "--diff-platforms")
 
 # What the package carries, and that it reaches nothing outside `crates/vt`.
 # `--allow-dirty` because an agent runs this gate with uncommitted work; the

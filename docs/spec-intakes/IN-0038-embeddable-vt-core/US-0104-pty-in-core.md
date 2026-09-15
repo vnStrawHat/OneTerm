@@ -70,7 +70,7 @@ only**. Clipboard backends, `TerminalSecurityPolicy`, URL policy and GPUI stay o
     `windows/conpty.rs` and `windows/pipe_tests.rs`. Inside `crates/vt/src` they fail the grep
     `US-0097` added to `ci-local`. They go by the HLD's three rules: most drop from `///` to plain
     `//`, and the two module-level "Design:" lines become absolute links to this repository.
-  - [x] `crates/vt/public-api.txt` and `python scripts/vt-public-api.py --check --no-doc`. `pub mod pty`
+  - [x] The public-API snapshot and `python scripts/vt-public-api.py --check --no-doc`. `pub mod pty`
     adds roughly 13 public paths; the committed surface file is regenerated in the same commit so
     the diff is the reviewable record of what the module exposes.
 
@@ -95,17 +95,33 @@ Every criterion is a command a verifier who distrusts this packet can run from t
 - [x] `cargo test -p oneterm-vt --no-default-features` is green: the whole engine suite passes with
   no transport compiled. **This replaces the "bring your own transport test with the feature off"
   the brief asked for** -- see Gaps for why that criterion cannot be written as stated.
-- [ ] The workspace has no `oneterm-pty`. All three print nothing:
+- [x] The workspace has no `oneterm-pty`. All three print nothing:
   ```bash
   test ! -d crates/pty && echo gone
   grep -rn 'oneterm.pty\|oneterm_pty' --include='*.rs' --include='*.toml' --include='*.md' \
     --include='*.json' --include='*.ps1' --include='*.sh' --include='*.yml' \
     crates/ docs/ scripts/ .github/ Cargo.toml deny.toml \
-    | grep -v 'docs/spec-intakes/IN-0029' | grep -v 'docs/spec-intakes/IN-0038'
+    | grep -v 'docs/spec-intakes/' \
+    | grep -v 'docs/decisions/DEC-0014' \
+    | grep -v 'crate-dependency-rules.md'
   cargo metadata --no-deps --format-version 1 | grep -o '"oneterm-pty"'
   ```
-  The two `grep -v` exclusions are the historical record: `IN-0029`'s evidence files and this
-  intake's own documents name the crate as history and must not be rewritten.
+  **The exclusion list is `docs/spec-intakes/` wholesale, not `IN-0029` and `IN-0038` by name.**
+  As first written this criterion could not pass: `IN-0031` names `crates/pty` and `oneterm-pty`
+  across its packet, its high-level design and 14 lines of `evidence/BUG-0055-verify.md`, and
+  `IN-0032` names them in its high-level design and `US-0090`, for exactly the reason `IN-0029` was
+  excluded -- they are the record of what was true when they were written, and rewriting them would
+  falsify it. Two further exclusions, each deliberate and each one line:
+  - `docs/decisions/DEC-0014` names `crates/pty` in a historical clause ("extracted **before** the
+    engine"). The Owning Docs review below already rules it "reviewed, no change" for this reason.
+  - `docs/agents/crate-dependency-rules.md` carries the sentence this packet was told to write
+    verbatim: "there is no separate `oneterm-pty` crate." It is the one place a future agent looks
+    for the crate graph, and telling them the crate is gone is the point. A hygiene grep must not
+    delete the sentence that explains the hygiene.
+
+  With those three exclusions the grep returns nothing, and so does
+  `grep -rn 'oneterm.pty' docs/agents/ docs/*.md` apart from that one sentence -- which is what the
+  Reconciliation section below actually asks for.
 - [x] `cargo package -p oneterm-vt --list | grep -i -e conpty -e openconsole` prints nothing
   **except** the source file `src/pty/windows/conpty.rs`, and the same list contains
   `src/pty/mod.rs`, `src/pty/unix.rs` and `src/pty/loopback_tests.rs`. No Microsoft binary appears.
@@ -141,7 +157,10 @@ Every criterion is a command a verifier who distrusts this packet can run from t
 - [x] The self-containment grep returns **0** lines over `crates/vt/src` (baseline for the moved
   files on `main` @ `92ae9a6` is **13**, in `lib.rs`, `windows/child.rs`, `windows/conpty.rs` and
   `windows/pipe_tests.rs`), and `python scripts/vt-public-api.py --check --no-doc` passes against a
-  regenerated `crates/vt/public-api.txt` whose diff is only the `pty` paths.
+  regenerated public-API snapshot whose diff is only the `pty` paths.
+- [x] The public-API snapshot is **two files**, one per platform family, and
+  `python scripts/vt-public-api.py --diff-platforms` reports a delta that is entirely inside
+  `oneterm_vt::pty` and exits 0. See "The platform split" below.
 - [x] `RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features` exits 0 with
   `missing_docs` in force.
 - [x] `pwsh scripts/ci-local.ps1` green.
@@ -248,7 +267,7 @@ shape, which this copies, is `default = ["pty"]` with `pty = ["dep:corcovado",
   `--no-default-features` build step `US-0097` already put in `scripts/ci-local.sh`,
   `scripts/ci-local.ps1` and `.github/workflows/ci.yml`. One step, not a second build.
 - [x] Commit 5, the crate's own docs: the self-containment pass over the 13 citation lines, the
-  ~30 `missing_docs` lines, and a regenerated `crates/vt/public-api.txt`. Its own commit so the
+  ~30 `missing_docs` lines, and a regenerated public-API snapshot. Its own commit so the
   review is a diff of comment prefixes plus one generated file.
 - [x] Commit 6, repository docs: the six policy documents, the two decision path references, the
   four intake documents, `US-0103`'s outline, and the `crates/vt/CHANGELOG.md` entry -- the feature
@@ -372,7 +391,7 @@ nothing.
 | Commit | What |
 | --- | --- |
 | 1 | `git mv` only: `crates/pty/src/**` -> `crates/vt/src/pty/**`, `lib.rs` -> `mod.rs`, and `oneterm-pty` out of `members`, `[workspace.dependencies]` and `[profile.fast-dev.package]`. |
-| 2 | The feature, the wiring, the consumers, the policy JSON, `deny.toml`, `missing_docs`, the self-containment pass, `public-api.txt`. Green on its own. |
+| 2 | The feature, the wiring, the consumers, the policy JSON, `deny.toml`, `missing_docs`, the self-containment pass, the public-API snapshot. Green on its own. |
 | 3 | The `cargo tree` assertion in the three CI entry points, the README and CHANGELOG, and the repository policy documents. |
 
 ### `cargo tree -p oneterm-vt -e normal --no-default-features`
@@ -490,26 +509,57 @@ paths (`crate::` -> `crate::pty::`), log prefixes and thread names that spelled 
 longer exists, and three test-only string markers. `crates/pty/Cargo.toml` is -24;
 `crates/vt/Cargo.toml` is +18.
 
+### The platform split of the public-API snapshot
+
+`pub mod pty` is the first cfg-dependent public surface this crate has had, and `cargo doc` renders
+only the host's half, so one committed file cannot describe both platforms. `US-0104` splits it:
+
+| | |
+| --- | --- |
+| `crates/vt/public-api.windows.txt` | generated here by `python scripts/vt-public-api.py --update` on `x86_64-pc-windows-msvc` |
+| `crates/vt/public-api.unix.txt` | **derived by hand from the Windows file on 2026-09-15**, because `rustup target list --installed` on this machine holds only `x86_64-pc-windows-msvc`, so `cargo doc --target x86_64-unknown-linux-gnu` had no standard library to document against. The file says so in a `#` note at the top, which every comparison ignores, and it is regenerated on the first Unix host to run `--update`. |
+
+`scripts/vt-public-api.py` selects by `sys.platform`: `--check` compares the host's file only and
+names it, `--update` rewrites the host's file only and names it, and `--diff-platforms` needs no
+rustdoc at all -- it reports every line the two files disagree on and **exits non-zero if any of
+them is outside `oneterm_vt::pty`**. That is the invariant the split has to keep, and it is the
+reason the derivation is safe to hand-write: the engine's 682 common lines are byte-identical
+because one file is a copy of the other, and the only edits are the six the transport's `cfg`
+attributes require.
+
+Measured output of `python scripts/vt-public-api.py --diff-platforms`:
+
+```text
+windows only: oneterm_vt::pty::Options    structfield escape_args
+windows only: struct oneterm_vt::pty::PipeReader
+windows only: struct oneterm_vt::pty::PipeWriter
+unix only:    oneterm_vt::pty::Options    structfield child_signal_mask
+unix only:    struct oneterm_vt::pty::SignalMask
+unix only:    oneterm_vt::pty::SignalMask    method current
+
+the delta is 6 lines, all inside `oneterm_vt::pty`
+```
+
+Six lines, exactly the predicted set. The Unix side was read off `crates/vt/src/pty/unix.rs`:
+`pub struct SignalMask` has one public inherent method, `current` (`apply` is private and the tuple
+field is private, so no `structfield` line), and `unix::PseudoConsole` has the same two public
+methods as the Windows one, `spawn` and `child_pid`, so its block is unchanged. Both files are 716
+surface lines.
+
+The first Linux CI run is the check on the derivation: it either passes, or `--check` prints a
+unified diff naming exactly what a real `cargo doc` on Linux found that the hand derivation did not.
+
+`low-level-design/packaging.md` said "CI runs `cargo doc` on Windows, where the ConPTY half is the
+one that renders". That was wrong -- the `Packaged crate (oneterm-vt)` job runs on `ubuntu-latest` --
+and the sentence is corrected there.
+
 ### Gaps found while doing it
 
-1. **`crates/vt/public-api.txt` is platform-dependent from this packet on, and CI checks it on
-   Linux.** `pty` publishes `PipeReader` / `PipeWriter` and `Options::escape_args` on Windows, and
-   `SignalMask` / `Options::child_signal_mask` on Unix, so `scripts/vt-public-api.py` produces a
-   different file on each host. The committed file was generated on Windows; the
-   `Packaged crate (oneterm-vt)` job in `.github/workflows/ci.yml` runs on `ubuntu-latest` and will
-   disagree. `low-level-design/packaging.md` assumed the opposite ("CI runs `cargo doc` on Windows")
-   and that premise is wrong. **Not fixed here**: choosing between pinning the surface to one
-   `--target` in all three call sites (a new toolchain prerequisite for every developer) and
-   splitting the file per platform is a contract decision, not an implementation detail. It is the
-   one thing on this branch that fails GitHub CI.
-2. **The acceptance grep cannot pass as written.** It excludes only
-   `docs/spec-intakes/IN-0029` and `IN-0038`, but `IN-0031` and `IN-0032` also name `crates/pty` and
-   `oneterm-pty` throughout their evidence, for the same reason `IN-0029` is excluded: rewriting
-   them would falsify the record. The check that does pass, and is the one the Reconciliation
-   section actually states, is that nothing outside `docs/spec-intakes/` names the crate -- with one
-   deliberate exception, the sentence this packet was told to write verbatim in
-   `crate-dependency-rules.md`: "there is no separate `oneterm-pty` crate."
-3. **The ten-launch probe was not run.** It drives the GPUI application, and the owner runs Claude
+1. **The acceptance grep could not pass as written**, and is rewritten above: the exclusion is
+   `docs/spec-intakes/` wholesale, because `IN-0031` and `IN-0032` name the old crate throughout
+   their evidence for exactly the reason `IN-0029` was excluded, plus `DEC-0014`'s historical clause
+   and the one deliberate sentence in `crate-dependency-rules.md`.
+2. **The ten-launch probe was not run.** It drives the GPUI application, and the owner runs Claude
    inside a running `oneterm.exe`; opening and closing ten shells in a second instance from a
    worktree build is not the cheap check the packet assumed. What was run instead, from
    `target/debug/` where `crates/app/build.rs` had already staged `conpty.dll` and
@@ -522,7 +572,7 @@ longer exists, and three test-only string markers. `crates/pty/Cargo.toml` is -2
    directory. **Unverified**: the `conpty: bundled` log line in the running application, and the
    ten-launch orphan count. `pty-throughput` initialises no logger, so the line has no way to
    appear.
-4. The `pty` module rustdoc had to stop linking `[`windows::conpty`]` -- `windows` is a private
+3. The `pty` module rustdoc had to stop linking `[`windows::conpty`]` -- `windows` is a private
    module, and `-D warnings` makes a public-to-private intra-doc link an error. It is prose now.
 
 ## Handoff

@@ -55,7 +55,9 @@ name of its largest public module, that it draws something -- which is the first
 - [ ] The 46 frozen parity corpus recordings replay byte-identically.
 - [ ] `git diff --shortstat` shows a net line delta within +-5. A rename that grows the tree has
   changed something it should not have.
-- [ ] `crates/vt/public-api.txt` (from `US-0097`) regenerates to a diff that contains **only**
+- [ ] The public-API snapshot (from `US-0097`, split per platform by `US-0104`: regenerate the
+  host's file with `--update` and hand-apply the same renames to the other, then confirm
+  `--diff-platforms`) regenerates to a diff that contains **only**
   renames: every removed path has a matching added path differing by `Render` -> `Snapshot`.
 - [ ] `cargo doc -p oneterm-vt --no-deps` warning-free; no doc link broken by the rename.
 
@@ -121,7 +123,8 @@ section "Renamed: render -> snapshot", and is the answer to owner decision (c).
   `render_update`. The compiler finds every site; do not grep-replace across the workspace, because
   `crates/terminal-view`'s own `Render*` types must survive.
 - [ ] Update the five documents and annotate `DEC-0015`.
-- [ ] Regenerate `crates/vt/public-api.txt`; confirm the diff is renames only.
+- [ ] Regenerate the host's public-API snapshot and mirror the renames into the other
+  platform's file; confirm the diff is renames only and `--diff-platforms` still passes.
 - [ ] CHANGELOG line under `Unreleased` / `Changed`, naming every renamed item, because this is
   exactly the kind of change the semver promise says must be named.
 
@@ -137,7 +140,7 @@ inherits -- it needs no decision record.
   assert that the compiler works.
 - Unit: `cargo test --workspace` with no assertion text changed.
 - Integration: the parity corpus replay.
-- Platform: `cargo doc -p oneterm-vt --no-deps`; the `public-api.txt` diff;
+- Platform: `cargo doc -p oneterm-vt --no-deps`; the public-API snapshot diff;
   `pwsh scripts/ci-local.ps1`; `python scripts/check-doc-paths.py` (which covers
   `terminal-backend.md`).
 - E2E: one manual Windows launch, enough to confirm the app still draws. A rename that compiles and
@@ -153,7 +156,7 @@ inherits -- it needs no decision record.
 
 ## Evidence and Gaps
 
-Record: the two greps returning 0; `git diff --shortstat`; the `public-api.txt` diff; the corpus
+Record: the two greps returning 0; `git diff --shortstat`; the public-API snapshot diff; the corpus
 replay result.
 
 No gaps expected. If the line delta exceeds +-5, say what else changed and why, rather than
