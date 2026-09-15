@@ -87,7 +87,7 @@ drag frame allocates nothing proportional to the scrollback.
 5. reset the scroll region to the full screen                    [trap 28]
 6. reset the tab stops for the new width                         [trap 27 rules]
 7. clear the selection iff the column count changed              [trap 28]
-8. mark everything damaged -> the next render_update returns Full
+8. mark everything damaged -> the next snapshot_update returns Full
 ```
 
 The ring length does **not** change on resize: it is sized once from

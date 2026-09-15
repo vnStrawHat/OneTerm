@@ -186,7 +186,7 @@ which deletes the deferred tier, `flush_reliable_blocking`, and the reason the c
 - **Mode changes.** `VtEvent::ModeChanged` and `Config::mode_watch` are **deleted** (R-54): no
   consumer was ever named for them, and the view reads modes from `ModeSnapshot` in the render
   state instead ([`damage-and-render-state.md`](damage-and-render-state.md), R-17).
-- **Cursor movement and selection changes.** `render_update` refreshes both every call. The fork
+- **Cursor movement and selection changes.** `snapshot_update` refreshes both every call. The fork
   emits `MouseCursorDirty`, `CursorBlinkingChange` and `TextAreaSizeRequest`, and OneTerm ignores
   all three (`crates/terminal/src/backend/osc_router.rs:264-266`).
 - **Passthrough of unhandled sequences.** Cut in v1 (R-35, [`parser.md`](parser.md)); they are
@@ -256,9 +256,9 @@ Applied per `docs/agents/error-policy.md`:
 | Class | Behaviour here |
 | --- | --- |
 | Terminal input (untrusted bytes) | Never an error and never a panic. Malformed sequences are dropped or truncated, the corresponding `FeedStats` counter increments, and the embedder logs at `debug` when a counter moves — the "optional telemetry" row. A single `log::warn!` per session is allowed for the style-table exhaustion ladder, because it indicates a pathological stream. |
-| Caller misuse | Debug assertion, never a release panic: feeding an undrained batch, reusing a `RenderState` across terminals, passing a zero dimension. Release builds clamp or reset and carry on. |
+| Caller misuse | Debug assertion, never a release panic: feeding an undrained batch, reusing a `SnapshotState` across terminals, passing a zero dimension. Release builds clamp or reset and carry on. |
 | Resource exhaustion | Bounded by construction (`../high-level-design.md`, "Memory model and caps"). Every cap truncates or degrades; none returns an error the caller has to handle, because there is no useful recovery for "the remote sent an 8 MiB title". |
-| Invariant violation | `assert_integrity()` in debug builds, **once per `feed` / `resize` / `render_update`, not per mutation** (R-28). The full two-screen walk is behind the `vt-paranoid` feature used by the property tests and the fuzz targets; the always-on check is O(1) (counters, ranges, the active screen's cursor). Budget in [`testing-and-bench.md`](testing-and-bench.md). |
+| Invariant violation | `assert_integrity()` in debug builds, **once per `feed` / `resize` / `snapshot_update`, not per mutation** (R-28). The full two-screen walk is behind the `vt-paranoid` feature used by the property tests and the fuzz targets; the always-on check is O(1) (counters, ranges, the active screen's cursor). Budget in [`testing-and-bench.md`](testing-and-bench.md). |
 
 No public method returns `Result`. The engine has no I/O, no allocation the caller can handle
 failing, and no configuration that can be invalid at run time; a `Result` on `feed` would be an
@@ -279,7 +279,7 @@ pub use graphics::{GraphicId, GraphicData, Placement, VIRTUAL_CELL, MAX_DIMENSIO
 pub use mode::{Mode, ModeSnapshot, MouseProtocol, CursorStyle, CursorShape, KeyboardFlags};
 pub use osc::{OscRoute, OscRoutes, ColorKey, ThemeColors};   // `OscClaims` until `US-0098`
 pub use reflow::{ResizePolicy, ResizeOutcome};
-pub use render::{RenderState, RenderUpdate, RenderRow, RenderCell, StyleRun, RenderCursor};
+pub use render::{SnapshotState, SnapshotUpdate, SnapshotRow, SnapshotCell, StyleRun, SnapshotCursor};
 pub use selection::{SelectionKind, SelectionRange, Side};
 pub use anchor::{AnchorId, AnchorKind};
 pub use terminal::{Terminal, Config};

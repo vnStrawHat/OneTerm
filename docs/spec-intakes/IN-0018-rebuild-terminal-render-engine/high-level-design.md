@@ -20,9 +20,9 @@ Three ideas drive the design:
    paints every plan inside a single `paint_layer` so the whole grid is one bounds-tree insert
    and a handful of draw calls. An idle terminal shapes nothing and plans nothing.
 
-   **Amended by IN-0029's `US-0085`.** The frame *is* the engine's render state: `Frame` wraps
-   the `TerminalContent` that owns this view's `RenderState`, and a `FrameRow` borrows a
-   `RenderRow` instead of a copied dense cell vector. "Which rows changed" is therefore no
+   **Amended by IN-0029's `US-0085`.** The frame *is* the engine's snapshot state: `Frame` wraps
+   the `TerminalContent` that owns this view's `SnapshotState`, and a `FrameRow` borrows a
+   `SnapshotRow` instead of a copied dense cell vector. "Which rows changed" is therefore no
    longer damage plus a per-row content hash — it is one comparison of `(RowId, SeqNo)`, the
    row's identity and the engine batch that last changed it. The engine stamps a row only when
    it really changes and copies it into this state only past this state's watermark, so the key
@@ -37,7 +37,7 @@ Three ideas drive the design:
 3. **The engine stops at `render/frame.rs`.** That file is the only module that names the
    engine's cell vocabulary; everything above it works with view-owned `Cell`, `CellFlags`,
    `Color`, `CursorShape` and `Selection`. (IN-0029's `US-0085` replaced the engine behind that
-   seam and deleted `Damage`: the tri-state `RenderUpdate` the render state returns says what a
+   seam and deleted `Damage`: the tri-state `SnapshotUpdate` the snapshot state returns says what a
    frame did, and `render_has_single_engine_file` is the boundary test.)
 
 ## Diagram
@@ -45,7 +45,7 @@ Three ideas drive the design:
 ```text
 crates/terminal (engine, unchanged)             crates/terminal-view (this intake)
 ┌──────────────────────────────┐   snapshot_into   ┌────────────────────────────────────────────┐
-│ Entity<Box<dyn TerminalSession>>│ ───────────────▶ │ render/frame.rs   Frame over RenderState    │
+│ Entity<Box<dyn TerminalSession>>│ ───────────────▶ │ render/frame.rs  Frame over SnapshotState   │
 │  · grid + per-row SeqNo      │   query_state    │      │ (RowId, SeqNo) key + scroll shift     │
 │  · SessionEvent channel      │ ◀─── write/mouse │ render/plan_cache.rs  key differs → rebuild │
 └──────────────────────────────┘                  │      │ RowPlan  (row_plan.rs + shapes.rs +   │
@@ -142,7 +142,7 @@ no renderer structure, and their tests are the acceptance spec).
 | `src/lib.rs` | module declarations, the 7 public items, `init` | 0050 | 50 |
 | `src/render/mod.rs` | declarations only | 0046 | 20 |
 | `src/render/shapes.rs` + `shapes_tests.rs` | `shape_quads`, `Stroke`/`DeviceRect` (with coverage alpha), mirror/rotate, symmetric snap, coverage rasterizer for arcs/diagonals/powerline | 0046 | 650 + 450 |
-| `src/render/frame.rs` | `Frame`, `FrameRow`, `Cell`, `Color`, `CellFlags`, `CursorShape`, `Selection`, `RowKey`; the only engine-typed file (`Damage` deleted at IN-0029's `US-0085`, which put the frame on `RenderState`) | 0047 | 320 |
+| `src/render/frame.rs` | `Frame`, `FrameRow`, `Cell`, `Color`, `CellFlags`, `CursorShape`, `Selection`, `RowKey`; the only engine-typed file (`Damage` deleted at IN-0029's `US-0085`, which put the frame on `SnapshotState`) | 0047 | 320 |
 | `src/render/metrics.rs` | `CellMetrics` (device-snapped cell), `GridGeometry` (origin, padding, gutter, rows/cols, hit-test), `grid_size_for` | 0047 | 220 |
 | `src/render/glyphs.rs` | `GlyphCache`: run text → `ShapedLine` via `shape_line_by_hash`/`force_width`, generation eviction | 0047 | 160 |
 | `src/render/row_plan.rs` | `RowPlan` + `build_row_plan` (bg spans, text runs, shape quads coalesced, decorations, class merge, contrast) | 0047 | 480 |
@@ -219,7 +219,7 @@ input handlers):
 
 | Field | Lifetime / reuse |
 | --- | --- |
-| `frame: Frame` | wraps the reused `TerminalContent`, which owns this view's `RenderState` and its damage watermark; `snapshot_into` reuses the copied rows |
+| `frame: Frame` | wraps the reused `TerminalContent`, which owns this view's `SnapshotState` and its damage watermark; `snapshot_into` reuses the copied rows |
 | `plans: PlanCache` | one `RowPlan` per display row (color spans flattened per row); vectors cleared, not reallocated, on rebuild; shifted on scroll; a `RowKey` per row, a `dirty` bitset, the URL mask double buffer and `wraps` scratch |
 | `glyphs: GlyphCache` | `HashMap<RunKey, (ShapedLine, generation)>`, cap 4096; entries unused for 2 generations are evicted when the cap is hit |
 | `geometry: Option<GridGeometry>` | written in prepaint, read by input handlers (hit-test contract) |
@@ -245,10 +245,10 @@ replace the damage list, the cursor-row candidate and the content hash.
 
 | Change | Effect on plans |
 | --- | --- |
-| `RenderUpdate::Unchanged` | nothing at all: no key scan, no URL scan, no rebuild (`FrameStats::frames_unchanged`) |
-| `RenderUpdate::Full` | every row's key differs, so every row is rebuilt |
-| `RenderUpdate::Partial { scrolled: 0 }` | the rows the engine copied have new `SeqNo`s; only those keys differ, and only they are rebuilt. A cursor move, a selection or a mode change copies no row and rebuilds none |
-| `RenderUpdate::Partial { scrolled: d }`, `abs(d) < rows` | plans and keys are shifted the way the render state shifts its rows (`rotate_left(d)` for `d > 0`); the rows shifted in from off-screen no longer match their key and are rebuilt |
+| `SnapshotUpdate::Unchanged` | nothing at all: no key scan, no URL scan, no rebuild (`FrameStats::frames_unchanged`) |
+| `SnapshotUpdate::Full` | every row's key differs, so every row is rebuilt |
+| `SnapshotUpdate::Partial { scrolled: 0 }` | the rows the engine copied have new `SeqNo`s; only those keys differ, and only they are rebuilt. A cursor move, a selection or a mode change copies no row and rebuilds none |
+| `SnapshotUpdate::Partial { scrolled: d }`, `abs(d) < rows` | plans and keys are shifted the way the snapshot state shifts its rows (`rotate_left(d)` for `d > 0`); the rows shifted in from off-screen no longer match their key and are rebuilt |
 | `abs(d) >= rows`, generation change (resize, reflow, alt swap, `RIS`), palette epoch change | the engine returns `Full` |
 | grid size change, `StyleKey` change (font family/size/weight/features, palette hash, min contrast, semantic enabled, shell profile, show_gutter), device cell size change | every key is dropped and every row rebuilt |
 | URL mask row changed vs previous frame | that row is rebuilt (fixes wrapped-URL continuation rows); the mask is recomputed only when some row's key actually changed, so an idle frame never rescans |

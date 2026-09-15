@@ -1,4 +1,4 @@
-# Low-Level Design: Damage and render state
+# Low-Level Design: Damage and snapshot state
 
 Intake: IN-0029
 HLD: ../high-level-design.md
@@ -6,7 +6,13 @@ Topic: damage-and-render-state
 Date: 2026-09-12
 
 > One concern per file. Implementation-level mechanics for `crates/vt/src/damage.rs` and
-> `crates/vt/src/render.rs`.
+> `crates/vt/src/snapshot/`.
+
+> **Renamed by `US-0101` (IN-0038):** the module and its types say *snapshot*, not *render* —
+> `RenderState` is `SnapshotState`, `Terminal::render_update` is `Terminal::snapshot_update`, and so
+> on for `SnapshotUpdate`, `SnapshotRow`, `SnapshotContent`, `SnapshotCell`, `SnapshotCursor` and
+> `SnapshotPlacement`. Nothing else about this design changed. The file keeps its name so links into
+> it keep working.
 
 ## Concern
 
@@ -24,7 +30,7 @@ The current per-frame copy costs 29.9 us at 200x50, 0.18 % of a 60 Hz budget
 shape, not of speed: it scales with change rather than with viewport area, and it removes the
 reason `query_line_range_cells` had to exist instead of a general snapshot.
 
-The premise binds the consumers too, not just `render_update`. `US-0092` (`IN-0032`) brought the
+The premise binds the consumers too, not just `snapshot_update`. `US-0092` (`IN-0032`) brought the
 last two viewport-area loops above this layer into line: the view's URL mask rescans the changed
 rows closed under their wrap runs, plus the viewport's top seam on a scrolled frame, rather than
 the whole viewport (`crates/terminal-view/src/render/plan_cache.rs`); and `last_content_row` skips
@@ -43,7 +49,7 @@ meet both:
 - **A viewport-relative derivation has a dependency no row key expresses.** A value computed for
   display row 0 from the row *above* it (the URL mask's wrap extension is the case in hand)
   changes when the viewport boundary moves, and a scroll moves it with every row's
-  `(RowId, SeqNo)` unchanged. `RenderUpdate::Partial { scrolled }` is the signal; the top seam has
+  `(RowId, SeqNo)` unchanged. `SnapshotUpdate::Partial { scrolled }` is the signal; the top seam has
   to be recomputed on any non-zero scroll.
 
 ## Design
@@ -65,7 +71,7 @@ consumer keeps a watermark; "changed for me" is `row.seq > watermark`. There is 
 no consumer can clear another's damage.
 
 **One watermark type, one owner for now (R-24, R-54).** `Watermark` is a newtype over `SeqNo` and
-lives inside `RenderState`. The speculative multi-consumer surface — `Terminal::changed_rows()`,
+lives inside `SnapshotState`. The speculative multi-consumer surface — `Terminal::changed_rows()`,
 a free-standing `damage` module, `VtEvent::ModeChanged` and `Config::mode_watch` — is **deleted**:
 its named consumers (a search index, a semantic-highlight pass, session logging) are not
 watermark consumers today and none is scoped in this intake. The per-row `SeqNo` is kept, because
@@ -77,57 +83,57 @@ false positives are allowed and false negatives are not. It is never cleared per
 Column bounds are not tracked: the reference tracks `left`/`right` per row and OneTerm's renderer
 ignores them (`crates/terminal/src/content.rs` reads only `.line`).
 
-### `render_update` — one call, under the lock
+### `snapshot_update` — one call, under the lock
 
 ```rust
-pub enum RenderUpdate {
+pub enum SnapshotUpdate {
     Unchanged,
     Partial { scrolled: i32 },
     Full,
 }
 
 impl Terminal {
-    pub fn render_update(&mut self, state: &mut RenderState, now: Instant) -> RenderUpdate;
+    pub fn snapshot_update(&mut self, state: &mut SnapshotState, now: Instant) -> SnapshotUpdate;
 }
 ```
 
 `&mut self` because it advances nothing the caller can see but does touch the sync deadline (the
-graphics release scan runs in `feed`, **never here**: `render_update` has no `EventBatch` to deliver
-a `GraphicReleased` into, and R-16 keeps `RenderState` out of graphics ownership — see
+graphics release scan runs in `feed`, **never here**: `snapshot_update` has no `EventBatch` to deliver
+a `GraphicReleased` into, and R-16 keeps `SnapshotState` out of graphics ownership — see
 [`graphics.md`](graphics.md) § "Liveness and the release signal"); `now` is passed in rather than read from the clock (R-11) so a replay
 is deterministic and the sync tests are not time-dependent. `feed` takes `now` for the same
 reason.
 
-### `RenderState` — full viewport plus a changed list
+### `SnapshotState` — full viewport plus a changed list
 
 The earlier design defined `rows()` as both "indexed by viewport row" and "the ones that
 changed", which cannot both be true (R-15). The renderer paints the whole viewport every frame
 and separately needs to know what to rebuild, so it gets both:
 
 ```rust
-pub struct RenderState {
+pub struct SnapshotState {
     generation: u32,              // engine generation; a mismatch forces Full
     watermark: Watermark,
     viewport_top: RowId,
     scroll_offset: u32,
-    rows: Vec<RenderRow>,         // ALWAYS the full viewport, indexed by viewport row
+    rows: Vec<SnapshotRow>,         // ALWAYS the full viewport, indexed by viewport row
     changed: Vec<u16>,            // viewport row indices copied by this update
-    cursor: RenderCursor,
+    cursor: SnapshotCursor,
     selection: Option<SelectionRange>,
     modes: ModeSnapshot,
     palette_epoch: u32,
 }
 
-pub struct RenderRow {
+pub struct SnapshotRow {
     pub id: RowId,
     pub seq: SeqNo,
     pub wrapped: bool,
-    pub cells: Vec<RenderCell>,   // reused; one entry per column
+    pub cells: Vec<SnapshotCell>,   // reused; one entry per column
     pub runs: Vec<StyleRun>,      // run-length over `cells`, resolved values
 }
 
-pub struct RenderCell {
-    pub content: RenderContent,   // Scalar(char) | Cluster(range into the row's char arena)
+pub struct SnapshotCell {
+    pub content: SnapshotContent,   // Scalar(char) | Cluster(range into the row's char arena)
     pub width: CellWidth,
     pub semantic: Semantic,
     pub run: u16,                 // index into `runs`
@@ -151,10 +157,10 @@ Phase 1, **under the lock**, copies resolved data:
 - A hyperlink id is resolved to `(id, uri)` strings in a small per-state table, keyed by
   `HyperlinkId`, so the view's identity hash is stable and needs no engine access.
 - `graphic` carries only the `GraphicId`; the placement geometry comes from the engine's
-  placement table, copied into the render state alongside
+  placement table, copied into the snapshot state alongside
   ([`graphics.md`](graphics.md)).
 
-Phase 2, **outside the lock**, is `RenderState::map_colors(&Palette)`: it maps
+Phase 2, **outside the lock**, is `SnapshotState::map_colors(&Palette)`: it maps
 `Color::Named` / `Color::Palette(u8)` through the theme and the OSC override table (copied as a
 small `PaletteSnapshot` under the lock, versioned by `palette_epoch`) into concrete `Rgb`. That is
 the only work that genuinely needs no engine state.
@@ -167,7 +173,7 @@ derivation with no override hook, or the adapter cannot supply the colours the p
 ships.
 
 This kills the whole hazard class the earlier design had: interned ids could be renumbered by the
-pump thread between `render_update` and `resolve`, and no assertion could catch the wrong colours
+pump thread between `snapshot_update` and `resolve`, and no assertion could catch the wrong colours
 that resulted. It also removes the need for the style sweep that created the hazard
 ([`cell-and-style.md`](cell-and-style.md), R-52) — and with style ids now immutable for the life
 of the terminal, even a future decision to pass ids would be safe.
@@ -191,7 +197,7 @@ pub struct ModeSnapshot {
 }
 ```
 
-Refreshed on **every** `render_update`, including one that returns `Unchanged`, because
+Refreshed on **every** `snapshot_update`, including one that returns `Unchanged`, because
 `crates/terminal-view/src/render/frame.rs:564` reads `APP_CURSOR` at paint time and
 `crates/terminal/src/model.rs:192-405` reads alt-screen and mouse state about ten times without
 holding the lock. Without this the view would have to take the lock during paint, which is the
@@ -204,11 +210,11 @@ repaint the cursor without repainting the screen.
 ### Graphics have exactly one drain owner (R-16)
 
 `Terminal::take_graphics()` is the only drain, and the **adapter** calls it after the batch, next
-to the other event handling. `RenderState` never touches pixels; it carries `GraphicId`s and the
+to the other event handling. `SnapshotState` never touches pixels; it carries `GraphicId`s and the
 placement geometry. The view's store is keyed by `GraphicId` and fed from the adapter, and entries
 are evicted on `VtEvent::GraphicReleased`.
 
-This matters because `DEC-0015` allows several render states: if `render_update` drained, only
+This matters because `DEC-0015` allows several snapshot states: if `snapshot_update` drained, only
 the first caller would ever receive an image, and the adapter's own `take_graphics` would see
 nothing.
 
@@ -225,7 +231,7 @@ anchored at row 0 with a bounded bottom reports the region with `delta = -n` **a
 it with `delta = +n`; a region not anchored at row 0 reports one event over its own id range; an
 invalid or empty region reports nothing and never a range with `bottom < top`.
 
-`Full` is returned by: the first call on a fresh `RenderState`; any resize or reflow; an
+`Full` is returned by: the first call on a fresh `SnapshotState`; any resize or reflow; an
 alternate-screen swap; `RIS`; a palette epoch change; a generation mismatch; and a `scrolled`
 larger than the viewport height. **The list is inclusive, not exhaustive**: returning `Full`
 whenever every viewport row was copied this update is correct and expected — `Full` means "rebuild
@@ -240,7 +246,7 @@ and "renderer acquires the lock" takes the only signal that frame had, every lat
 against 11-17 ms for a frame that keeps its signal. The rule:
 
 ```rust
-// crates/terminal/src/handle.rs (crates/vt/src/render/demand.rs until US-0090)
+// crates/terminal/src/handle.rs (crates/vt/src/snapshot/demand.rs until US-0090)
 pub struct Demand(Arc<AtomicUsize>);
 pub fn raise(&self);             // fetch_add          — the renderer, BEFORE it blocks
 pub fn release(&self);           // saturating sub     — the renderer, ONCE it holds the lock
@@ -284,7 +290,7 @@ impl Demand {
 ```
 
 **Placement: the adapter crate, `crates/terminal/src/handle.rs`.** This section originally
-recorded the opposite — the primitive shipped in `crates/vt/src/render/demand.rs` as a stated
+recorded the opposite — the primitive shipped in `crates/vt/src/snapshot/demand.rs` as a stated
 exception to the HLD's "`oneterm-vt` contains no lock, no atomic and no interior mutability",
 "until `US-0081` moves the pump loop over". `US-0081`, `US-0083` and `US-0084` shipped, and
 `US-0090` moved it, so the exception is gone and the HLD's sentence is now true as written.
@@ -339,10 +345,10 @@ const SYNC_WATCHDOG: Duration = Duration::from_secs(1);
 - `CSI ? 2026 h` sets `open_until = now + SYNC_REFRESH` and, on the first open,
   `watchdog = now + SYNC_WATCHDOG`. A further `h` refreshes `open_until` only. `CSI ? 2026 l`
   closes immediately.
-- `render_update(state, now)` returns `Unchanged` while the update is open and neither deadline
+- `snapshot_update(state, now)` returns `Unchanged` while the update is open and neither deadline
   has passed — but **never `Unchanged` over an incomplete state**. A suppressed frame must still
-  fill the render state to its full-viewport invariant (R-15) before it returns, so the first
-  update on a fresh `RenderState` that lands inside a sync block yields `rows().len() ==
+  fill the snapshot state to its full-viewport invariant (R-15) before it returns, so the first
+  update on a fresh `SnapshotState` that lands inside a sync block yields `rows().len() ==
   viewport.rows`, not zero.
 - **A change made inside a sync block is reported on the next frame, never swallowed.** Mode and
   cursor changes are refreshed on every call, including a suppressed one, so a suppressed frame
@@ -358,7 +364,7 @@ const SYNC_WATCHDOG: Duration = Duration::from_secs(1);
 
 ### What damage does not cover
 
-Selection and the cursor are not part of row damage; `render_update` refreshes both every call, so
+Selection and the cursor are not part of row damage; `snapshot_update` refreshes both every call, so
 a blinking cursor or a drag does not force a row rebuild.
 
 `INSERT` mode does **not** force full damage (trap 34, deviation D2): the reference calls
@@ -368,13 +374,13 @@ partial redraw for the session.
 ## Interfaces
 
 ```rust
-// crates/vt/src/render.rs
-impl RenderState {
+// crates/vt/src/snapshot/
+impl SnapshotState {
     pub fn new() -> Self;
     pub fn map_colors(&mut self, palette: &Palette);
-    pub fn rows(&self) -> &[RenderRow];          // always the full viewport
+    pub fn rows(&self) -> &[SnapshotRow];          // always the full viewport
     pub fn changed(&self) -> &[u16];             // viewport row indices to rebuild
-    pub fn cursor(&self) -> &RenderCursor;
+    pub fn cursor(&self) -> &SnapshotCursor;
     pub fn selection(&self) -> Option<SelectionRange>;
     pub fn modes(&self) -> ModeSnapshot;
     pub fn placements(&self) -> &[Placement];    // geometry only; pixels come from the adapter
@@ -388,13 +394,13 @@ impl RenderState {
 - [ ] **Trap 35 — damage indices shifting with the scroll offset.** Not applicable: rows carry
   `RowId` and the viewport is an offset, so an off-screen change stamps its row and is simply not
   copied ([`grid-and-scrollback.md`](grid-and-scrollback.md) § "Viewport anchoring").
-- [ ] **Generation mismatch** — a `RenderState` reused against a different `Terminal`, or after a
+- [ ] **Generation mismatch** — a `SnapshotState` reused against a different `Terminal`, or after a
   resize the consumer did not observe, returns `Full` and rebuilds.
 - [ ] **`scrolled` larger than the viewport** — returns `Full`.
 - [ ] **Mode change with no row change** — `Partial` with an empty `changed` list.
 - [ ] **Sync update opened and never closed** — the refresh deadline expires and frames resume;
   the watchdog forces the mode off and emits `ModeChanged`-equivalent state in `ModeSnapshot`.
-- [ ] **`render_update` called twice with no `feed` between** — the second returns `Unchanged`
+- [ ] **`snapshot_update` called twice with no `feed` between** — the second returns `Unchanged`
   with an empty `changed` list; `map_colors` is a no-op while the palette epoch is unchanged.
 - [ ] **A consumer that never calls `map_colors`** paints named colours as their fallback; a debug
   assertion catches an unmapped row reaching a `rows()` reader that expects resolved colours.
@@ -424,8 +430,8 @@ impl RenderState {
 - [ ] `render::tests::size_is_readable_from_the_render_state`
 - [ ] `render::tests::hyperlink_strings_are_resolved_under_the_lock`
 - [ ] `render::tests::render_state_never_drains_graphics` — R-16; asserts
-  `Terminal::take_graphics` still returns the image after any number of `render_update` calls, and
-  that two render states both see the placement.
+  `Terminal::take_graphics` still returns the image after any number of `snapshot_update` calls, and
+  that two snapshot states both see the placement.
 - [ ] `render::tests::steady_state_makes_no_allocation` — a counting allocator over 600
   update-plus-map cycles.
 - [ ] `render::tests::insert_mode_does_not_force_full_damage` — trap 34.

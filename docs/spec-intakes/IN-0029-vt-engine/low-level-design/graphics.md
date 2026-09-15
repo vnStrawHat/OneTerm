@@ -52,7 +52,7 @@ origin_px = cell_origin(row, col) - offset * cell_size
 ```
 
 which is the same arithmetic `crates/terminal-view/src/render/frame.rs` does today from the
-per-cell offset, moved one level up. `render_update` copies the placement table into the render
+per-cell offset, moved one level up. `snapshot_update` copies the placement table into the render
 state next to the rows, so the painter needs no engine access
 ([`damage-and-render-state.md`](damage-and-render-state.md)).
 
@@ -65,7 +65,7 @@ a `RowId`" was wrong for every in-region scroll, which is the normal case inside
 Pixels queue in the engine until `Terminal::take_graphics()` drains them: RGBA8, row-major,
 stride `width * 4`, **straight (non-premultiplied) alpha**, oldest first, each image handed out
 exactly once. **That is the only drain (R-16)**: the adapter calls it after the batch, and
-`RenderState` never touches pixels. If `render_update` drained, a second render state would never
+`SnapshotState` never touches pixels. If `snapshot_update` drained, a second snapshot state would never
 see an image and the adapter's own call would see nothing.
 
 The engine never learns the real font cell size. The renderer rescales by `cell_width / 10` and
@@ -82,7 +82,7 @@ The capability the current engine lacks: nothing tells the embedder that an imag
 stops referencing an image: `Row::reset`, scroll blanking, `clear_viewport`, an alt-screen wipe, and
 reflow destroying rows.
 
-**The scan runs in `feed`, never in `render_update`.** At the end of `feed` (and after `resize`
+**The scan runs in `feed`, never in `snapshot_update`.** At the end of `feed` (and after `resize`
 queues releases), the engine sweeps the placements whose anchor rows were touched:
 
 ```
@@ -92,8 +92,8 @@ for placement in placements:
             anchor.row .. anchor.row + rows carries RowFlags::HAS_GRAPHIC  -> release
 ```
 
-`render_update` cannot do it: it has no `EventBatch` to deliver a `GraphicReleased` into, and R-16
-keeps `RenderState` out of graphics ownership entirely, so a release discovered there would be
+`snapshot_update` cannot do it: it has no `EventBatch` to deliver a `GraphicReleased` into, and R-16
+keeps `SnapshotState` out of graphics ownership entirely, so a release discovered there would be
 unobservable. The consequence for the embedder is a contract, not an accident: **a `resize` queues
 releases that reach the batch only on the next `feed` — including an empty one.** The adapter must
 issue `feed(&[])` after a resize, or a reflow that killed an anchor leaves the view's texture live
@@ -279,7 +279,7 @@ instead of waiting for LRU eviction.
   and the in-flight parser are untouched (parity).
 - [ ] **A frame skipped by mode 2026** must not lose images: decoded pixels queue in the engine
   until the adapter's next `Terminal::take_graphics()`, which is the only drain and is not tied to
-  painting at all ([`damage-and-render-state.md`](damage-and-render-state.md), R-16). `RenderState`
+  painting at all ([`damage-and-render-state.md`](damage-and-render-state.md), R-16). `SnapshotState`
   never holds pixels.
 - [ ] **ConPTY byte loss inside a DCS** — OpenConsole 1.23 was observed dropping one byte per
   32 KiB `WriteFile` inside a DCS payload (IN-0028 risk table). The mitigation is a host bump

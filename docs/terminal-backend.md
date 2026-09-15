@@ -98,7 +98,7 @@
 
 **Data flow**:
 - Input: `Keystroke` (GPUI) → `terminal-view/src/input/keys.rs` maps it to a `KeySpec` → `oneterm_vt::input::encode_key` → `Vec<u8>` → `session.write(bytes)` → PTY/channel.
-- Output: PTY/channel → pump (`ShellEventLoop` local / `ssh_main_task` tokio ssh) → `TerminalPump::advance` feeds the per-session printable-output logger and the engine under the terminal lock, collecting the batch's events → `finish_batch` releases the lock, sends those events and then one `SessionEvent::Output` → View `cx.notify()` → `TerminalElement` prepaint calls `session.snapshot_into(&mut cache.snapshot)` (short lock, one `render_update` into the `RenderState` the reusable `TerminalContent` in `RenderCache` owns — zero steady-state allocation — and advances *that buffer's* damage watermark) and paints from that buffer; `session.snapshot()` remains as the allocating convenience for tests and one-off reads. Logging behavior and file lifecycle are owned by [`terminal-logging.md`](terminal-logging.md).
+- Output: PTY/channel → pump (`ShellEventLoop` local / `ssh_main_task` tokio ssh) → `TerminalPump::advance` feeds the per-session printable-output logger and the engine under the terminal lock, collecting the batch's events → `finish_batch` releases the lock, sends those events and then one `SessionEvent::Output` → View `cx.notify()` → `TerminalElement` prepaint calls `session.snapshot_into(&mut cache.snapshot)` (short lock, one `snapshot_update` into the `SnapshotState` the reusable `TerminalContent` in `RenderCache` owns — zero steady-state allocation — and advances *that buffer's* damage watermark) and paints from that buffer; `session.snapshot()` remains as the allocating convenience for tests and one-off reads. Logging behavior and file lifecycle are owned by [`terminal-logging.md`](terminal-logging.md).
 
 ---
 
@@ -221,16 +221,16 @@ it mutates with the batch's `SeqNo`; a consumer keeps a **watermark** and "chang
 is `row.seq > watermark`. Nobody clears anybody else's damage, so a second consumer needs
 no engine change.
 
-**The frame source is the render state, and `TerminalContent` owns it** (`US-0082`). The
+**The frame source is the snapshot state, and `TerminalContent` owns it** (`US-0082`). The
 watermark belongs to the buffer the consumer keeps — the one `RenderCache` reuses — so
-`snapshot_into` is one `Terminal::render_update` into it, and a freshly built
+`snapshot_into` is one `Terminal::snapshot_update` into it, and a freshly built
 `TerminalContent` reports `Full` by construction instead of consuming somebody else's
 damage. Native reads go through `TerminalContent::{update, rows, changed, size,
 render_cursor, modes, selection_range, placements, row_id, display_row}`.
 
 **There is nothing else on it** since `US-0085`. The dense `Vec<IndexedCell>`, the forked
 engine's value types around it and the per-frame rebuild that produced them are gone; the
-view reads `TerminalContent::rows` and resolves the engine's own `RenderRow` / `RenderCell`
+view reads `TerminalContent::rows` and resolves the engine's own `SnapshotRow` / `SnapshotCell`
 itself, so a frame that changed nothing copies nothing.
 
 The frame also carries `graphics`: the Sixel images decoded since the previous one (each
@@ -897,7 +897,7 @@ crates/
 │   ├── session.rs            # the four traits + PtyOwner + PtySession + TerminalSession façade, SessionEvent, TerminalCapabilities
 │   ├── handle.rs             # TerminalHandle: the FairMutex + the render-demand flag
 │   ├── model.rs              # TerminalModel: snapshot / snapshot_into / query_state / input
-│   ├── content.rs            # TerminalContent: the RenderState it owns, in the engine's own vocabulary
+│   ├── content.rs            # TerminalContent: the SnapshotState it owns, in the engine's own vocabulary
 │   ├── palette.rs / color_classification.rs / osc_color.rs
 │   ├── paste.rs                  # (key + mouse encoding live in oneterm_vt::input)
 │   ├── osc.rs / osc_agent/ / url_policy.rs / security_policy.rs

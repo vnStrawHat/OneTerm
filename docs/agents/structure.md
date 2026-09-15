@@ -197,7 +197,7 @@ OneTerm/
 │       │   ├── parser/             # the VT state machine: CSI / OSC / DCS, params, memory limits
 │       │   ├── terminal/           # Terminal (the one public object) + dispatch, modes, colors, OSC claims
 │       │   ├── grid/               # Screen, TerminalGrid, Row, anchors — absolute RowId space (DEC-0015)
-│       │   ├── render/             # damage watermark, RenderState / RenderUpdate, palette, sync (?2026)
+│       │   ├── snapshot/           # damage watermark, SnapshotState / SnapshotUpdate, palette, sync (?2026)
 │       │   ├── events/             # EventBatch + VtEvent: values in a caller-owned batch, never callbacks
 │       │   ├── reflow/             # resize policies (BottomAnchor / KeepViewportTop)
 │       │   ├── search/             # scrollback search: copy the grid, then match — regex behind a feature

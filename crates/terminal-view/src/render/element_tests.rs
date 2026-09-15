@@ -216,7 +216,7 @@ impl<'a> Harness<'a> {
 /// `US-0085`'s stand-in for "frame time under `yes` and a 10 MB `type`" from the
 /// running app's diagnostics log: the desktop this packet was implemented on was
 /// disconnected, so no window could be presented or captured. Everything the
-/// packet changed is in here — the frame is built from the render state and the
+/// packet changed is in here — the frame is built from the snapshot state and the
 /// plans are keyed on `(RowId, SeqNo)` — and the counters printed are the same
 /// `FrameStats` the app's log line prints. Run it explicitly:
 ///

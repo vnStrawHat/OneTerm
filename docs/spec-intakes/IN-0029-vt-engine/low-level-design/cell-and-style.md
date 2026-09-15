@@ -137,7 +137,7 @@ derives the offset from the placement record: `offset = cell_pos - placement.ori
 **per-terminal** counter, not the reference's process-global `AtomicU32`, so two sessions cannot
 collide and a test is deterministic. The view's identity hash (today
 `crates/terminal-view/src/render/frame.rs:306-312`) becomes the `HyperlinkId`, resolved to its
-strings under the lock by `render_update`
+strings under the lock by `snapshot_update`
 ([`damage-and-render-state.md`](damage-and-render-state.md)).
 
 ### Graphemes — interned arena with GC by remap
