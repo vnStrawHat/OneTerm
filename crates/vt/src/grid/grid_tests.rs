@@ -1078,7 +1078,7 @@ fn first_visible_cell_is_viewport_top_column_zero() {
 //
 // This is the grid half of "a second consumer becomes possible without an engine
 // change": everything here is read through the public `row.seq()` /
-// `row.flags()`, the way a consumer that is not `RenderState` would have to.
+// `row.flags()`, the way a consumer that is not `SnapshotState` would have to.
 #[test]
 fn blanking_a_row_stamps_it_dirty_with_the_batch_seq() {
     for blank_with_a_scroll in [true, false] {

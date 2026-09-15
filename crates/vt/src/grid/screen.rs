@@ -164,7 +164,7 @@ pub enum DisplayClear {
 /// consumer holding a `RowId`-keyed row cache shifts the named rows by `delta`
 /// instead of rebuilding them. A whole screen scroll therefore reports
 /// **nothing**: every row keeps its id and its content, and the viewport's own
-/// motion reaches the renderer as `RenderUpdate::Partial { scrolled }` instead.
+/// motion reaches the renderer as `SnapshotUpdate::Partial { scrolled }` instead.
 ///
 /// It is a notification, not how anchors move, but it always agrees with what
 /// the anchors did.
@@ -1748,7 +1748,7 @@ impl Screen {
     /// The O(1) check every mutating method runs in debug builds (R-28): the
     /// counters are ordered, the cursor is inside the screen, and the viewport
     /// offset is inside history. The full walk is [`Screen::assert_integrity`],
-    /// which `feed`, `resize`, `render_update` and the property tests run.
+    /// which `feed`, `resize`, `snapshot_update` and the property tests run.
     pub(crate) fn debug_assert_integrity(&self) {
         if !cfg!(debug_assertions) {
             return;
@@ -1779,7 +1779,7 @@ impl Screen {
     /// Where the row walk starts.
     ///
     /// Starting at `oldest` makes every walk O(history), and with a 100 000-row scrollback
-    /// that is milliseconds per `feed` and per `render_update` in a debug
+    /// that is milliseconds per `feed` and per `snapshot_update` in a debug
     /// build. Without `vt-paranoid` the walk therefore covers only what the
     /// operation can have touched — the rows written, scrolled or blanked since
     /// the batch opened ([`Screen::batch_lo`]) plus the viewport window when the

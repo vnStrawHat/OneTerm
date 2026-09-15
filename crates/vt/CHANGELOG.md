@@ -110,6 +110,25 @@ carry no API change at all. Such a release says so below rather than being omitt
 
 ### Changed
 
+- **Breaking.** The read model is called *snapshot*, not *render*: the crate hands out a consistent
+  read of engine state and never draws, and its largest module no longer claims otherwise. The
+  module is private, so only the re-exported names and the one method are visible:
+
+  | Before | After |
+  | --- | --- |
+  | `RenderState` | `SnapshotState` |
+  | `RenderUpdate` | `SnapshotUpdate` |
+  | `RenderRow` | `SnapshotRow` |
+  | `RenderContent` | `SnapshotContent` |
+  | `RenderCell` | `SnapshotCell` |
+  | `RenderCursor` | `SnapshotCursor` |
+  | `RenderPlacement` | `SnapshotPlacement` |
+  | `Terminal::render_update` | `Terminal::snapshot_update` |
+
+  `ModeSnapshot`, `Palette`, `StyleRun`, `MouseEncoding`, `MouseProtocol` and `MouseReporting` keep
+  their names. Nothing else changed: same fields, same variants, same signatures, same behaviour.
+  There is no deprecation shim, for the same reason as `OscRoutes` above.
+
 - **Breaking.** `OscClaims` is replaced by `OscRoutes` and `Config::osc_claims` by
   `Config::osc_routes`. `OscClaims::NATIVE`, `is_native`, `claim`, `claim_large` and `is_claimed`
   are gone; `OscRoutes::BUILTIN`, `has_builtin`, `route` and `get` are their replacements, and

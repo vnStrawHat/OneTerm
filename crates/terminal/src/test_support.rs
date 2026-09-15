@@ -1,7 +1,7 @@
 //! Deterministic terminal fakes for cross-crate tests and diagnostic harnesses.
 //!
 //! Both shapes here sit on a **real** `oneterm-vt` terminal. `US-0085` deleted
-//! the hand-fabricated `TerminalContent`: the render state has no public
+//! the hand-fabricated `TerminalContent`: the snapshot state has no public
 //! constructor for rows, and building one would have meant an engine API whose
 //! only caller is a downstream test. Writing the cells into a real grid instead
 //! costs less code and makes every frame a frame the engine actually produced.
@@ -96,7 +96,7 @@ impl GridFixture {
     }
 
     /// Open a new batch, so the rows written after it carry a sequence number a
-    /// render state has not seen — which is what makes a refill copy them.
+    /// snapshot state has not seen — which is what makes a refill copy them.
     pub fn begin_batch(&mut self) {
         self.term.grid_mut().begin_batch();
     }

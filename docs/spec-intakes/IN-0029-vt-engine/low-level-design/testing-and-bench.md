@@ -46,7 +46,7 @@ into a multi-minute job. Ghostty's equivalent is per *page*, not per grid. The r
 | Where | Check |
 | --- | --- |
 | Every mutating public method | an O(1) check: counters ordered, cursor inside the active screen, viewport offset within history |
-| End of `feed`, `resize`, `render_update`, in debug builds | the full invariant set, **bounded to `integrity_lo() = min(batch_lo, visible_top)`** clamped into the live range |
+| End of `feed`, `resize`, `snapshot_update`, in debug builds | the full invariant set, **bounded to `integrity_lo() = min(batch_lo, visible_top)`** clamped into the live range |
 | Under `--features vt-paranoid` | `integrity_lo()` returns `oldest`, so every call is the whole-history, two-screen walk |
 | Release builds | both tiers compile out; the `cfg!(debug_assertions)` guards are unchanged |
 
@@ -61,7 +61,7 @@ O(touched rows) and is flat in the scrollback depth.
 
 **Measured** (debug, 160x45, a full 100 000-row history, ten calls each):
 
-| | `feed` (one line) | `render_update` |
+| | `feed` (one line) | `snapshot_update` |
 | --- | --- | --- |
 | whole-history walk (`--features vt-paranoid`) | 258 615 us | 252 772 us |
 | bounded (default) | 143 us | 150 us |
@@ -75,9 +75,9 @@ both walkers.
 change. **M12 is closed**: the manifest entry landed with `US-0076` and the `cfg!` gate and CI step
 with the `US-0075` / `US-0079` rework.
 
-**The guarding test** is `render::bench::integrity_walk_cost_per_feed_and_render_update`
-(`crates/vt/src/render/render_bench.rs`): it fills a 100 000-row history in one `feed`, reports the
-per-`feed` and per-`render_update` cost, and **asserts a 1 ms ceiling** when the feature is off.
+**The guarding test** is `snapshot::bench::integrity_walk_cost_per_feed_and_snapshot_update`
+(`crates/vt/src/snapshot/snapshot_bench.rs`): it fills a 100 000-row history in one `feed`, reports the
+per-`feed` and per-`snapshot_update` cost, and **asserts a 1 ms ceiling** when the feature is off.
 Debug only — the walk does not exist in a release build. It is a regression detector with three
 orders of magnitude of margin, not a benchmark gate, so it never fails on a slow machine.
 
@@ -251,7 +251,7 @@ benchmarks are POSIX shell scripts needing `ps -o tty=`, `/dev/<tty>` and `tput`
 | --- | --- | --- | --- |
 | 1 | parser only (a no-op `Dispatch`) | 160x45 | isolates the state machine |
 | 2 | parse + grid (`Terminal::feed`) | 160x45 | the real cost centre: the grid half costs 3-8x the parser half |
-| 3 | parse + grid + one `render_update` + `map_colors` per simulated frame | 160x45 | **the primary metric**; the tier that would have caught the per-frame viewport copy |
+| 3 | parse + grid + one `snapshot_update` + `map_colors` per simulated frame | 160x45 | **the primary metric**; the tier that would have caught the per-frame viewport copy |
 | 4 | resize latency at 0 / 10 000 / 100 000 rows of scrollback, 80x24 to 100x40 | its own geometry, deliberately (R-63) | this tier measures an operation, not a stream; it is never compared against tiers 1-3, only against the other engine at the same depth |
 | 5 | Live heap after filling N scrollback rows with plain / unicode / heavily styled / mixed content | 160x45 | the memory claim is a design property until this measures it |
 

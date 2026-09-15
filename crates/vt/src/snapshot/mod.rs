@@ -1,4 +1,4 @@
-//! Damage and the render-state hand-off: what the renderer gets, and when.
+//! Damage and the snapshot hand-off: what the renderer gets, and when.
 //!
 //! The embedder pulls: it asks for an update whenever it likes and gets back
 //! only the rows whose content changed since its own last ask, keyed by row id.
@@ -19,15 +19,15 @@ mod sync;
 
 pub use modes::{ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting};
 pub use palette::Palette;
-pub use row::{RenderCell, RenderContent, RenderRow, StyleRun};
+pub use row::{SnapshotCell, SnapshotContent, SnapshotRow, StyleRun};
 pub(crate) use state::EngineView;
-pub use state::{RenderCursor, RenderPlacement, RenderState, RenderUpdate};
+pub use state::{SnapshotCursor, SnapshotPlacement, SnapshotState, SnapshotUpdate};
 pub(crate) use sync::SyncState;
 
 #[cfg(test)]
-#[path = "render_tests.rs"]
+#[path = "snapshot_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "render_bench.rs"]
+#[path = "snapshot_bench.rs"]
 mod bench;

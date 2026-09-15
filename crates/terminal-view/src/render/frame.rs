@@ -1,13 +1,13 @@
 //! The per-frame terminal snapshot in view-owned types.
 //!
 //! This is the only file under `render/` that names the engine's own types: it
-//! wraps `TerminalContent` — which owns this view's `RenderState` and therefore
+//! wraps `TerminalContent` — which owns this view's `SnapshotState` and therefore
 //! its damage watermark — and exposes cells, cursor, selection and the changed
 //! rows through `Cell`, `Color`, `CellFlags`, `CursorShape` and `Selection`, so
 //! the rest of the engine never depends on the grid implementation (HLD idea 3).
 //!
 //! Since `US-0085` there is no copy in between. A `FrameRow` borrows the
-//! engine's `RenderRow` and a `Cell` is read out of it on demand, with the style
+//! engine's `SnapshotRow` and a `Cell` is read out of it on demand, with the style
 //! taken from the row's **runs of resolved values** rather than from a per-cell
 //! record: at 120 columns that is about three style conversions per row instead
 //! of a hundred and twenty, and the dense `IndexedCell` vector the view used to
@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use oneterm_terminal::{
     Attrs, CellWidth, Color as EngineColor, CursorShape as EngineCursorShape, GraphicData,
-    GraphicId, HyperlinkId, ModeSnapshot, NamedColor, RenderContent, RenderRow, RenderUpdate,
-    RowId, SeqNo, Style, TerminalContent, TerminalSession,
+    GraphicId, HyperlinkId, ModeSnapshot, NamedColor, RowId, SeqNo, SnapshotContent, SnapshotRow,
+    SnapshotUpdate, Style, TerminalContent, TerminalSession,
 };
 
 /// FNV-1a, the hash used for shaped-run keys and the style key.
@@ -69,7 +69,7 @@ pub(crate) struct GridSize {
 ///
 /// This replaces the per-row content hash the cache used to compute every frame.
 /// The engine stamps a row only when it actually changes and copies a row into
-/// the render state only when the stamp passed this consumer's watermark, so the
+/// the snapshot state only when the stamp passed this consumer's watermark, so the
 /// pair answers "does this plan still describe this row?" exactly, for free.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct RowKey {
@@ -319,7 +319,7 @@ impl Cell<'_> {
 /// One display row of the frame.
 #[derive(Clone, Copy)]
 pub(crate) struct FrameRow<'a> {
-    row: &'a RenderRow,
+    row: &'a SnapshotRow,
     index: usize,
 }
 
@@ -345,8 +345,8 @@ impl<'a> FrameRow<'a> {
             flags = flags.union(CellFlags::WRAPLINE);
         }
         let (ch, zerowidth) = match cell.content {
-            RenderContent::Scalar(scalar) => (scalar, &[][..]),
-            RenderContent::Cluster { start, len } => {
+            SnapshotContent::Scalar(scalar) => (scalar, &[][..]),
+            SnapshotContent::Cluster { start, len } => {
                 let cluster = self.row.cluster(start, len);
                 match cluster.split_first() {
                     Some((base, rest)) => (*base, rest),
@@ -477,7 +477,7 @@ impl Frame {
 
     /// What the last snapshot did: nothing, a shift plus [`changed`](Self::changed),
     /// or everything.
-    pub(crate) fn update(&self) -> RenderUpdate {
+    pub(crate) fn update(&self) -> SnapshotUpdate {
         self.content.update()
     }
 
@@ -506,7 +506,7 @@ impl Frame {
         self.content.hyperlink(id).map(|link| link.uri.as_ref())
     }
 
-    /// Display row `r`. The render state always holds the full viewport, so a
+    /// Display row `r`. The snapshot state always holds the full viewport, so a
     /// row index below `size().rows` always resolves.
     pub(crate) fn row(&self, r: usize) -> FrameRow<'_> {
         FrameRow {
@@ -575,11 +575,11 @@ fn size_of(content: &TerminalContent) -> GridSize {
 /// Test-only frame construction from view-owned types, so tests of the modules
 /// above this one never touch the engine's types themselves.
 ///
-/// `US-0085` rebuilt it on a **real** engine: `RenderState` has no public
+/// `US-0085` rebuilt it on a **real** engine: `SnapshotState` has no public
 /// constructor for rows, and the cells the tests want — a wide pair on an ASCII
 /// char, a wrap flag without a wrap — cannot be stated as an escape-sequence
 /// stream. `oneterm_terminal::test_support::GridFixture` writes them into a real
-/// grid instead, and the frame comes back through `render_update` like any
+/// grid instead, and the frame comes back through `snapshot_update` like any
 /// other. The builder's own API is unchanged apart from `damage_rows`, which had
 /// no meaning left once damage became the engine's per-row sequence number.
 #[cfg(test)]
@@ -893,13 +893,13 @@ mod tests {
 
         // A frame with no new output keeps every key.
         super::test_support::resnapshot(&mut frame, &mut fixture);
-        assert_eq!(frame.update(), RenderUpdate::Unchanged);
+        assert_eq!(frame.update(), SnapshotUpdate::Unchanged);
         assert_eq!(frame.row_key(0).unwrap(), first[0]);
         assert_eq!(frame.row_key(1).unwrap(), first[1]);
 
         // Changing row 1 moves its key and leaves row 0's alone.
         super::test_support::rewrite_row(&mut frame, &mut fixture, 1, "ZZZZ");
-        assert_eq!(frame.update(), RenderUpdate::Partial { scrolled: 0 });
+        assert_eq!(frame.update(), SnapshotUpdate::Partial { scrolled: 0 });
         assert_eq!(frame.row_key(0).unwrap(), first[0]);
         assert_ne!(frame.row_key(1).unwrap(), first[1]);
         assert_eq!(frame.row(1).cell(0).ch, 'Z');
@@ -1001,6 +1001,6 @@ mod tests {
         assert!(!frame.row(1).wraps());
         let full = FrameBuilder::new(1, 1).build();
         assert_eq!(full.size(), GridSize { rows: 1, cols: 1 });
-        assert_eq!(full.update(), RenderUpdate::Full);
+        assert_eq!(full.update(), SnapshotUpdate::Full);
     }
 }

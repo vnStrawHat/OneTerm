@@ -5,8 +5,8 @@
 use std::time::Instant;
 
 use oneterm_vt::{
-    CellWidth, Config, EventBatch, OscRoute, OscRoutes, RenderContent, RenderRow, RenderState,
-    Size, Terminal, VtEvent,
+    CellWidth, Config, EventBatch, OscRoute, OscRoutes, Size, SnapshotContent, SnapshotRow,
+    SnapshotState, Terminal, VtEvent,
 };
 
 /// Everything below arrives in one `feed`: a title, a working directory, an
@@ -62,9 +62,9 @@ fn main() {
     );
 
     // Drawing is a pull: ask when you want to, and get back only what changed
-    // since this `RenderState` last asked.
-    let mut state = RenderState::new();
-    let update = term.render_update(&mut state, Instant::now());
+    // since this `SnapshotState` last asked.
+    let mut state = SnapshotState::new();
+    let update = term.snapshot_update(&mut state, Instant::now());
 
     println!("-- screen ({update:?}) --");
     for row in state.rows() {
@@ -73,15 +73,15 @@ fn main() {
 }
 
 /// One row as plain text, wide-glyph spacers dropped and clusters expanded.
-fn row_text(row: &RenderRow) -> String {
+fn row_text(row: &SnapshotRow) -> String {
     let mut text = String::new();
     for cell in &row.cells {
         if cell.width == CellWidth::WideSpacer {
             continue;
         }
         match cell.content {
-            RenderContent::Scalar(c) => text.push(c),
-            RenderContent::Cluster { start, len } => text.extend(row.cluster(start, len)),
+            SnapshotContent::Scalar(c) => text.push(c),
+            SnapshotContent::Cluster { start, len } => text.extend(row.cluster(start, len)),
         }
     }
     text

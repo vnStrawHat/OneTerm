@@ -13,7 +13,7 @@
 
 use oneterm_vt::{ExtrasId, ModeSnapshot, MouseReporting, SelectionKind, Size, Terminal};
 
-use crate::content::{LineRangeCells, SnapshotCell, TerminalContent};
+use crate::content::{ContentCell, LineRangeCells, TerminalContent};
 use crate::handle::SharedTerminal;
 use crate::osc_color::DynamicColors;
 use crate::{SearchMatch, SearchOptions, TerminalInfo, TerminalQueryState};
@@ -92,7 +92,7 @@ impl TerminalModel {
     /// Read cells for a range of display lines (O(window×cols)).
     ///
     /// Damage-free: it reads the rows by `RowId` straight off the screen instead
-    /// of going through a render state, so a URL hover or a completion lookup
+    /// of going through a snapshot state, so a URL hover or a completion lookup
     /// never consumes the renderer's damage.
     pub fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells {
         line_range_cells(&self.term.lock(), start_line, count)
@@ -391,7 +391,7 @@ pub(crate) fn line_range_cells(term: &Terminal, start_line: usize, count: usize)
     let actual_count = count.min(num_lines - start_line);
     let top = screen.visible_top();
     let interner = term.interner();
-    let mut cells: Vec<SnapshotCell> = Vec::with_capacity(actual_count * num_cols);
+    let mut cells: Vec<ContentCell> = Vec::with_capacity(actual_count * num_cols);
     let mut links: Vec<(oneterm_vt::HyperlinkId, String)> = Vec::new();
     for index in 0..actual_count {
         let row = screen.row(top + (start_line + index) as u64);
@@ -407,7 +407,7 @@ pub(crate) fn line_range_cells(term: &Terminal, start_line: usize, count: usize)
             {
                 links.push((id, link.uri.to_string()));
             }
-            cells.push(SnapshotCell {
+            cells.push(ContentCell {
                 ch: cell.text_char(&interner.graphemes),
                 spacer: cell.width().is_spacer(),
                 wrapline: wrapped && col == last,

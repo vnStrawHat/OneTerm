@@ -8,10 +8,10 @@ Date: 2026-09-12
 
 Replace the vendored `alacritty_terminal` + `vte` pair with two Apache-2.0 workspace crates
 OneTerm owns: `oneterm-pty` (pseudo-console transport) and `oneterm-vt` (parser, grid,
-dispatch, reflow, damage, render state, graphics). The engine is designed around OneTerm's
+dispatch, reflow, damage, snapshot state, graphics). The engine is designed around OneTerm's
 consumers rather than around alacritty's API shape: rows are positional ids with engine-owned
 anchors, events are values returned from `feed()`, damage is a per-row sequence number read
-through a watermark, the renderer gets an incremental render state instead of a viewport copy, and
+through a watermark, the renderer gets an incremental snapshot state instead of a viewport copy, and
 the ConPTY resize policy lives inside the engine instead of being corrected on top of it. It is a
 new build, not a port: the section below lists the problems of the engine it replaces and where
 each is solved.
@@ -26,7 +26,7 @@ Design is taken from the converged prior art rather than invented: dual-form row
 sequence-number damage from wezterm, packed 8-byte cells with interned styles and extras from
 Rio and Ghostty, GC-by-remap for the grapheme arena from kitty, lazily allocated power-of-two
 ring rows from foot, tracking-point reflow from kitty and foot with avt's iterator, and the
-two-phase render state from Ghostty ([`research/prior-art.md`](research/prior-art.md) § 2.2, § 9).
+two-phase snapshot state from Ghostty ([`research/prior-art.md`](research/prior-art.md) § 2.2, § 9).
 
 ## Problems of the current engine and how the new engine solves them
 
@@ -45,7 +45,7 @@ packet, and the test that proves it.
 | P5 | **Fully materialised scrollback**: every row is a full-width `Vec<Cell>` even when empty | `grid/storage.rs`; `research/prior-art.md` § 1.2 | Lazily allocated slots, `None` until written; the ring mask is a session constant — [`grid-and-scrollback.md`](low-level-design/grid-and-scrollback.md) § "Storage" | `US-0075` | `grid::tests::unwritten_slots_read_as_blanks`; `vt-bench rss` |
 | P6 | **Events fire under the `Term` lock**, forcing a two-tier deferred/reliable sink, a blocking flush and a deadlock test | `crates/terminal/src/backend/pump.rs:163-178`, `osc_router.rs:214-268` | `feed()` returns a batch of values; nothing runs inside the engine while the caller holds a lock — [`events-and-api.md`](low-level-design/events-and-api.md) § "`feed` and drain" | `US-0079` | `event::tests::events_are_in_byte_order`, `event::tests::feed_clears_the_batch_and_returns_stats` |
 | P7 | **`Event::Osc` deep-copies its parameters** into `Vec<Vec<u8>>` on the hot path, then the consumer re-borrows them | vendor patch `alacritty_terminal/0002`; `crates/terminal/src/backend/osc_router.rs:249-257` | One reusable arena per batch; OSC parameters are spans — [`events-and-api.md`](low-level-design/events-and-api.md) | `US-0079` | `event::tests::osc_params_are_spans_not_vectors` |
-| P8 | **Full-viewport clone per painted frame**, and the reason a general damage-free snapshot cannot exist | `crates/terminal/src/content.rs:173-222`; `docs/terminal-backend.md:151-155` | Incremental render state: changed rows only, under the lock, as resolved style runs; tri-state result — [`damage-and-render-state.md`](low-level-design/damage-and-render-state.md) | `US-0079` | `render::tests::single_row_change_lists_one_changed_index`, `render::tests::steady_state_makes_no_allocation`; `vt-bench render` tier 3 |
+| P8 | **Full-viewport clone per painted frame**, and the reason a general damage-free snapshot cannot exist | `crates/terminal/src/content.rs:173-222`; `docs/terminal-backend.md:151-155` | Incremental snapshot state: changed rows only, under the lock, as resolved style runs; tri-state result — [`damage-and-render-state.md`](low-level-design/damage-and-render-state.md) | `US-0079` | `render::tests::single_row_change_lists_one_changed_index`, `render::tests::steady_state_makes_no_allocation`; `vt-bench render` tier 3 |
 | P9 | **Damage is single-consumer and escalates to `Full` on any scroll**; no scroll event exists | `term/mod.rs` `TermDamage`; `research/prior-art.md` § 1.4 | Per-row sequence numbers plus a watermark; scroll reported as a delta; `VtEvent::RowsScrolled` for in-region motion — [`damage-and-render-state.md`](low-level-design/damage-and-render-state.md) | `US-0079` | `render::tests::pure_scroll_reports_a_delta_with_an_empty_changed_list`, `event::tests::rows_scrolled_is_emitted_for_in_region_motion` |
 | P10 | **`INSERT` mode forces full damage every frame**, silently disabling partial redraw for the session | `term/mod.rs:455-459` (trap 34) | Insert-mode writes stamp the rows they touch, like every other mutation — [`damage-and-render-state.md`](low-level-design/damage-and-render-state.md) | `US-0079` | `render::tests::insert_mode_does_not_force_full_damage` |
 | P11 | **Renderer starvation under sustained output**: fairness alone does not stop a relocking producer | `research/prior-art.md` § 2.3; `crates/local-shell/src/event_loop.rs:410-415` | Explicit demand/yield handshake at chunk boundaries, a 64 KiB cap as the backstop, replies drained before any yield — [`damage-and-render-state.md`](low-level-design/damage-and-render-state.md) § "Fairness and reply latency" | `US-0081` | `backend::tests::pump_yields_to_the_render_demand_within_one_chunk`, `backend::tests::da1_is_answered_within_the_startup_budget` |
@@ -204,11 +204,11 @@ also why it is extracted first, before any engine work.
    │  damage/  per-row seqno + dirty bit; scroll delta as a distinct event                 │
    │  graphics/ Sixel decoder, cell-anchored placements, release signal                    │
    └──────────────────────────────────────────┬────────────────────────────────────────────┘
-                                              │  render_update(&mut RenderState)  (under lock)
+                                              │  snapshot_update(&mut SnapshotState)  (under lock)
                                               │    Unchanged | Partial{rows, scroll} | Full
                                               ▼
    ┌────────────────── crates/terminal-view (render) ─────────────────────────────────────┐
-   │  RenderState::resolve(&Palette)   (outside the lock: style ids ─▶ colours, runs)      │
+   │  SnapshotState::resolve(&Palette)   (outside the lock: style ids ─▶ colours, runs)      │
    │  plan_cache keyed by (RowId, seqno) ─▶ row_plan ─▶ shapes/glyphs/quads ─▶ paint       │
    │  graphics store keyed by GraphicId, evicted on VtEvent::GraphicReleased               │
    └───────────────────────────────────────────────────────────────────────────────────────┘
@@ -243,7 +243,7 @@ impl Terminal {
     pub fn feed(&mut self, bytes: &[u8], batch: &mut EventBatch, now: Instant) -> FeedStats;
 
     /// Copy changed rows as resolved style runs. Call with the lock held.
-    pub fn render_update(&mut self, state: &mut RenderState, now: Instant) -> RenderUpdate;
+    pub fn snapshot_update(&mut self, state: &mut SnapshotState, now: Instant) -> SnapshotUpdate;
 
     /// Resize with an explicit policy. Anchors move themselves; there is no
     /// tracking-point slice and no public remap table (R-31).
@@ -266,7 +266,7 @@ impl Terminal {
 
     // cursor, modes, colours
     pub fn cursor(&self) -> Cursor;
-    pub fn modes(&self) -> ModeSnapshot;                // also carried in RenderState (R-17)
+    pub fn modes(&self) -> ModeSnapshot;                // also carried in SnapshotState (R-17)
     pub fn color(&self, key: ColorKey) -> Option<Rgb>;
     pub fn set_theme_colors(&mut self, theme: &ThemeColors);
     pub fn set_cell_pixels(&mut self, w: u16, h: u16);  // for CSI 14 t; one owner (R-40)
@@ -304,9 +304,9 @@ pub enum VtEvent {
 }
 
 // ─────────────────────────── render hand-off ───────────────────────────
-pub enum RenderUpdate { Unchanged, Partial { scrolled: i32 }, Full }
-impl RenderState {
-    pub fn rows(&self) -> &[RenderRow];    // ALWAYS the full viewport (R-15)
+pub enum SnapshotUpdate { Unchanged, Partial { scrolled: i32 }, Full }
+impl SnapshotState {
+    pub fn rows(&self) -> &[SnapshotRow];    // ALWAYS the full viewport (R-15)
     pub fn changed(&self) -> &[u16];       // viewport indices to rebuild
     pub fn modes(&self) -> ModeSnapshot;   // (R-17)
     pub fn placements(&self) -> &[Placement];
@@ -324,7 +324,7 @@ return (R-35).
 | Actor | Holds | Rule |
 | --- | --- | --- |
 | Pump thread (local poll loop / ssh tokio task) | `FairMutex<Terminal>` for the duration of one `feed()` call | Chunks are capped at 64 KiB. Between chunks it checks the demand flag and releases. |
-| GPUI main thread (render) | the same lock, for `render_update` only | `render_update` copies only changed rows; `resolve` runs after the guard is dropped. |
+| GPUI main thread (render) | the same lock, for `snapshot_update` only | `snapshot_update` copies only changed rows; `resolve` runs after the guard is dropped. |
 | Any other consumer (search, gutter, agent panel) | the same lock, briefly | Each holds its own watermark; nobody clears damage for anyone else. |
 
 - `oneterm-vt` itself contains no lock, no atomic and no interior mutability. `Terminal: Send`,
@@ -351,7 +351,7 @@ return (R-35).
 | --- | --- | --- |
 | `Terminal` | cells, rows, interned styles / extras / graphemes, tab stops, modes, colour overrides, title stack, keyboard flag stack, decoded graphics pixels not yet drained, graphics placements | the session |
 | `EventBatch` (caller-owned, reused) | one byte arena backing every `StrSpan` / `ByteSpan` in the batch | cleared at the start of each `feed()` |
-| `RenderState` (caller-owned, reused) | copied rows, style-run cache, its own watermark | until the consumer drops it; invalidated to `Full` on resize, alt swap and reflow |
+| `SnapshotState` (caller-owned, reused) | copied rows, style-run cache, its own watermark | until the consumer drops it; invalidated to `Full` on resize, alt swap and reflow |
 | Embedder (`crates/terminal`) | the mutex, the demand flag, OSC interpretation, the clipboard policy, session logging, key and mouse encoding | the session |
 | `crates/terminal-view` | `RenderImage` GPU tiles keyed by `GraphicId`, the row-plan cache keyed by `(RowId, seqno)` | evicted on `GraphicReleased` / on watermark advance |
 
@@ -385,7 +385,7 @@ rather than erroring**, because all of this input is untrusted.
 | Title stack | `Vec<Option<String>>` | `TITLE_STACK_MAX = 16` | drop the oldest |
 | Kitty keyboard stack | fixed `[Flags; 8]` | 8 | push wraps; `pop(n >= len)` resets |
 | `EventBatch` arena | one `Vec<u8>` | `EVENT_ARENA_SOFT = 1 MiB`, shrunk after a larger batch | further payloads truncate |
-| `RenderState` | full viewport of `RenderRow` + a `changed` list | bounded by the viewport | reused; resolved style runs cost ~20 B per run for changed rows only |
+| `SnapshotState` | full viewport of `SnapshotRow` + a `changed` list | bounded by the viewport | reused; resolved style runs cost ~20 B per run for changed rows only |
 
 Structural effect versus today: 24 B per cell with an `Arc<CellExtra>` heap allocation and
 refcount per decorated cell becomes 8 B per cell with two `u16` ids and no per-cell allocation,
@@ -414,13 +414,13 @@ This is a design property, not a claim; the RSS tier of the benchmark measures i
    ([`events-and-api.md`](low-level-design/events-and-api.md)): R-37 is a latency rule, "replies
    promptly", and reading it as "replies first" reorders a reply against the sequence that asked
    for it.
-5. **Render, phase 1 (locked).** GPUI prepaint takes the lock and calls `render_update`. Rows
-   whose sequence number exceeds the render state's watermark are copied into the render
+5. **Render, phase 1 (locked).** GPUI prepaint takes the lock and calls `snapshot_update`. Rows
+   whose sequence number exceeds the snapshot state's watermark are copied into the render
    state's arena; a pure scroll reports a delta instead of N changed rows; an unchanged frame
    returns `Unchanged` and the element skips layout and paint entirely. While mode 2026 is open
    the call returns `Unchanged` until the closing sequence or the 150 ms timeout, with a 1 s
    watchdog.
-6. **Render, phase 2 (unlocked).** `RenderState::resolve(&palette)` expands interned style ids
+6. **Render, phase 2 (unlocked).** `SnapshotState::resolve(&palette)` expands interned style ids
    into concrete colours and style runs. A rebuilt row that produced identical runs skips the
    per-cell style fill, which is the common case because text changes far more often than
    styling.
@@ -432,9 +432,9 @@ This is a design property, not a claim; the RSS tier of the benchmark measures i
 
 | Today | File:line | Becomes | Deleted? |
 | --- | --- | --- | --- |
-| `TerminalContent::refill` clones every visible cell | `crates/terminal/src/content.rs:173-222` | `Terminal::render_update` into a reusable `RenderState`; `TerminalContent` becomes a thin view over it | the clone loop, yes |
-| `Term::damage()` + `reset_damage()` | `content.rs:171-193` | per-row seqno + a watermark inside `RenderState` | yes |
-| `TerminalContent.mode: TermMode`, read at paint time | `content.rs:97`, `crates/terminal-view/src/render/frame.rs:564` | `ModeSnapshot` in the render state, refreshed every update (R-17) | the lock-at-paint hazard, yes |
+| `TerminalContent::refill` clones every visible cell | `crates/terminal/src/content.rs:173-222` | `Terminal::snapshot_update` into a reusable `SnapshotState`; `TerminalContent` becomes a thin view over it | the clone loop, yes |
+| `Term::damage()` + `reset_damage()` | `content.rs:171-193` | per-row seqno + a watermark inside `SnapshotState` | yes |
+| `TerminalContent.mode: TermMode`, read at paint time | `content.rs:97`, `crates/terminal-view/src/render/frame.rs:564` | `ModeSnapshot` in the snapshot state, refreshed every update (R-17) | the lock-at-paint hazard, yes |
 | `TermDamageInfo` display-line conversion | `content.rs:66-106` | rows carry `RowId`; no conversion | yes |
 | `resize_keeping_viewport_top` + `conhost_cursor_row` (parked alt grid, placeholder `Grid`, double `swap_alt`, scratch probe) | `crates/terminal/src/model.rs:481-541` | `Terminal::resize(size, ResizePolicy::KeepViewportTop)` — anchors move themselves, so there is no tracking-point argument (R-31) | **yes, 61 lines** |
 | `LineAccounting::observe` and its newline rescan (PERF-19) | `crates/terminal/src/backend/line_accounting.rs:1-49` | `Terminal::lines_produced()` — output lines, the same meaning it has today (R-05) | **yes, the whole file** |
@@ -448,13 +448,13 @@ This is a design property, not a claim; the RSS tier of the benchmark measures i
 | `input/mouse.rs`, `input/mouse_tests.rs`, `theme/palette.rs` importing engine types | `crates/terminal-view/src/…` | `SelectionKind`, `ModeSnapshot` and the engine's `Rgb` (R-26: these are the other three files above the seam, not just `frame.rs`) | the imports, yes |
 | `search.rs` topmost/bottommost `Line` span | `search.rs:41-52`, `:82-92` | `Terminal::row_range()` | yes |
 | `frame.rs` display-offset fallbacks (dense + binary-search) | `crates/terminal-view/src/render/frame.rs:514-532` | rows arrive with `RowId`; there is no non-dense case | **yes, both** |
-| `frame.rs` engine-type conversions (`Cell`, `Flags`, `Color`, `CursorShape`, `Hyperlink`) | `frame.rs:11-16`, `:208-233`, `:298-319` | `RenderRow` already carries the view's shapes; the conversion layer shrinks to colour resolution | mostly |
+| `frame.rs` engine-type conversions (`Cell`, `Flags`, `Color`, `CursorShape`, `Hyperlink`) | `frame.rs:11-16`, `:208-233`, `:298-319` | `SnapshotRow` already carries the view's shapes; the conversion layer shrinks to colour resolution | mostly |
 | `logging.rs` second `vte::Parser` just to strip escapes | `crates/terminal/src/logging.rs:8`, `:57-83` | `oneterm_vt::strip::EscapeStripper` (about 60 lines, shares the parser module) | the second parser, yes |
 | `local-shell` PTY imports, `PTY_CHILD_EVENT_TOKEN` hard-coded as `1`, two cfg'd child-pid functions | `crates/local-shell/src/event_loop.rs:58-64`, `:168-179` | `oneterm_pty::{PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN}`, `PseudoConsole::child_pid()` | the workarounds, yes |
 | `ssh` uses `alacritty_terminal` only for `Term` + `FairMutex` | `crates/ssh/src/session.rs:25-26`, `:56`, `task.rs:8-9` | `oneterm_vt::Terminal` + `parking_lot::FairMutex` | the dependency, yes |
 | `tools/src/bin/pty-throughput.rs` | `crates/tools/src/bin/pty-throughput.rs:21-22` | `oneterm-pty` | the engine dependency, yes |
 | `mock_term`, `TermSize`, `VoidListener` test helpers | `content.rs`, `model.rs`, `search.rs`, `sixel_tests.rs` | `oneterm_vt::testing::{terminal_from_text, feed}` — not `cfg(test)`-gated, so downstream crates use it without a feature flag | replaced |
-| `test_support.rs` fake session (fabricates `TerminalContent` directly) | `crates/terminal/src/test_support.rs:1-662` | same role, rebuilt on `RenderRow` | rewritten, not deleted |
+| `test_support.rs` fake session (fabricates `TerminalContent` directly) | `crates/terminal/src/test_support.rs:1-662` | same role, rebuilt on `SnapshotRow` | rewritten, not deleted |
 | `vendor/`, `vendor/patches/`, `vendor/refresh.sh`, its CI job, `[patch]` block, notices rows | `vendor/**`, `.github/workflows/ci.yml:65-68`, `Cargo.toml:240-244`, `scripts/third-party-notices.py:85-86` | nothing | **yes, all of it** |
 
 ## Risks
@@ -485,7 +485,7 @@ Three risks this design adds that the research did not list, each already mitiga
 | # | Risk | Mitigation |
 | --- | --- | --- |
 | 16 | The grapheme GC is a new failure class: a missed live reference corrupts text silently | GC by remap walks both screens, skipping rows without `HAS_GRAPHEME`; `assert_integrity` checks every live id resolves. The **style** sweep that carried the same risk is deleted (R-52), so style ids never move and a render copy can never be invalidated by table maintenance |
-| 17 | `RenderState` is stateful and can go stale (resize, alt swap, reflow, palette change) | every one of those returns `Full` and bumps a generation the state compares; a debug assertion checks the watermark never moves backwards |
+| 17 | `SnapshotState` is stateful and can go stale (resize, alt swap, reflow, palette change) | every one of those returns `Full` and bumps a generation the state compares; a debug assertion checks the watermark never moves backwards |
 | 18 | The tracked-anchor list must be updated by **every** row-moving primitive; one that forgets produces a silently misplaced mark, selection or image | it is the single mechanism (reflow uses it too, so the reflow property tests exercise it), every primitive's table row names its `shift_region` call, and a debug assertion checks every live anchor is inside the live row range |
 
 ## Phase plan
@@ -503,13 +503,13 @@ judgements, and **no exit criterion is a performance number** (R-29).
 | 4 | `US-0076` | Dispatch and modes | **The 45-recording parity gate is green** against the frozen expectations, with every difference covered by a declared cell-level window naming a correction and no stale window (`cargo test -p oneterm-vt --test ref_corpus`); corrections **C5-C11** implemented; every sequence marked supported in `docs/osc-sequences-checklist.md` has a byte-feed test; `? 9001` accepted silently (R-36); `AppKeypad` reported (R-64); mode 2027 recognised and inert (R-56) |
 | 5 | `US-0077` | Reflow and resize | The ten `keep_viewport_top_*` behaviours reproduced as engine tests **while the old suite still runs against the old engine** (R-44); seven proptest properties green over 10 000 cases; `measure_rows` fixtures carry their host version (R-39); resize recorded at three scrollback depths as a ratio, not a target (R-29) |
 | 6 | `US-0078` | Selection | The invalidation matrix proven row by row; anchors follow a region scroll; `selection_range()` allocation-free; block extraction and semantic expansion tested (R-18) |
-| 7 | `US-0079` | Damage, render state, events | `rows()` always full plus a `changed` list (R-15); style runs carry resolved values and survive a grapheme sweep (R-14); `ModeSnapshot` refreshed on every update (R-17); `RenderState` never drains graphics (R-16); mode 2026 deterministic with an injected clock (R-11) |
+| 7 | `US-0079` | Damage, snapshot state, events | `rows()` always full plus a `changed` list (R-15); style runs carry resolved values and survive a grapheme sweep (R-14); `ModeSnapshot` refreshed on every update (R-17); `SnapshotState` never drains graphics (R-16); mode 2026 deterministic with an injected clock (R-11) |
 | 8 | `US-0080` | Graphics in the engine | The ten `sixel_tests.rs` behaviours reproduced; one extras entry per image; a placement moves with an in-region scroll; `GraphicReleased` fires on `CSI 2 J`, on a row reset and on a trim (R-22); `vt-diff` green over the Sixel recordings. **Engine-level only — IN-0028's evidence walk moves to `US-0081`, because the new engine is not behind the application until the shim (N-02)** |
 | 9 | `US-0081` | **Engine behind the seam (shim)** | `cargo test --workspace` green with `LegacySnapshot` producing today's `TerminalContent`; `vt-diff` zero divergence over 45 recordings plus a captured session; the IN-0018, IN-0027 **and IN-0028** GUI walks reproduced (N-02); scope bounded by the table in `migration.md` — all of `crates/terminal`, and in the two backends only the shared-terminal type, its construction and the manifest line, with no backend test changed (N-04) |
-| 10 | `US-0082` | `crates/terminal` goes native | `RowId`, batch drain, `RenderState`, `ColorKey`; `model.rs:481-541`, `line_accounting.rs` and the deferred event tier deleted; the old and new resize suites both green in the same commit, then the old one deleted (R-44); `GridText` kept adapter-side (R-19) |
+| 10 | `US-0082` | `crates/terminal` goes native | `RowId`, batch drain, `SnapshotState`, `ColorKey`; `model.rs:481-541`, `line_accounting.rs` and the deferred event tier deleted; the old and new resize suites both green in the same commit, then the old one deleted (R-44); `GridText` kept adapter-side (R-19) |
 | 11 | `US-0083` | `crates/local-shell` goes native | the read loop drains the `EventBatch`, `ResizePolicy` is selected through the engine API, the `oneterm-pty` tokens replace the last local constants, the `alacritty_terminal` manifest line is deleted (N-04); `cargo test -p oneterm-local-shell` green; `local_session_grow_policy_matches_conpty` unchanged |
 | 12 | `US-0084` | `crates/ssh` goes native | the same three for the tokio task plus `BottomAnchor` selection and the manifest line (N-04); `cargo test -p oneterm-ssh` green; `ssh_session_keeps_the_default_grow_policy` unchanged; no `alacritty_terminal` dependency left |
-| 13 | `US-0085` | `crates/terminal-view` goes native | `frame.rs`, `plan_cache`, `input/mouse.rs`, `theme/palette.rs` on `RenderRow` / `SelectionKind` / `ModeSnapshot`; both display-offset fallbacks and `engine_shim.rs` deleted; GUI walks re-run |
+| 13 | `US-0085` | `crates/terminal-view` goes native | `frame.rs`, `plan_cache`, `input/mouse.rs`, `theme/palette.rs` on `SnapshotRow` / `SelectionKind` / `ModeSnapshot`; both display-offset fallbacks and `engine_shim.rs` deleted; GUI walks re-run |
 | 14 | `US-0086` | Additive features | The four capabilities the reference never had and no recording exercises: DECXCPR (D7), XTVERSION (D8), `modifyOtherKeys` reporting (D10) and reverse wrap `? 45` (D12). **Behaviour corrections are no longer deferred here** — the owner's correctness-first ruling put them in `US-0075` and `US-0076` with declared expected differences |
 | 15 | `US-0088` | Agent protocol off OSC 9;7 | A free OSC code chosen from a survey of the xterm / iTerm2 / ConEmu / WezTerm / kitty assignments; `9;7` kept as a deprecated alias for one release; `docs/osc-agent-status.md`, the registration in `crates/terminal` and the completion catalogs updated; the agent panel unchanged in behaviour |
 | 16 | `US-0087` | Decommission | **Done** (`c8d84ff`): `vendor/` absent and `test -d vendor` fails; no `refresh.sh` CI job; no `[patch]` block; the `vte` dev-oracle, `tests/differential.rs`, `vt-diff`, `vt-corpus bless` and the `US-0072` cross-check all deleted with the last engine that could drive them; `third-party-notices.py --check`, `check-doc-paths.py` and `ci-local` green; every owning doc reconciled |

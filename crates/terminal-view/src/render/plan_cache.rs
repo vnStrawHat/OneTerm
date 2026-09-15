@@ -3,7 +3,7 @@
 //! `US-0085` replaced the old three-phase selection — damage ∪ cursor row ∪
 //! never-built rows, then a per-row content hash to verify the candidates —
 //! with one comparison. A `RowKey` is `(RowId, SeqNo)`: the engine stamps a row
-//! only when it actually changes, and copies it into this view's render state
+//! only when it actually changes, and copies it into this view's snapshot state
 //! only when that stamp passed this view's watermark, so
 //! `stored_key != frame.row_key(r)` **is** the answer. The hash was there
 //! because the old damage escalated to `Full` on every scroll; the render
@@ -13,7 +13,7 @@
 //! An `Unchanged` frame returns before any of that: no key scan, no URL scan, no
 //! layout.
 
-use oneterm_terminal::RenderUpdate;
+use oneterm_terminal::SnapshotUpdate;
 
 use super::diagnostics::FrameStats;
 use super::frame::{Frame, GridSize, RowKey};
@@ -123,7 +123,7 @@ impl PlanCache {
             self.grid != Some(size) || self.style != Some(style_key) || self.cell != Some(cell);
 
         stats.rows_total = rows as u32;
-        if !restyled && frame.update() == RenderUpdate::Unchanged {
+        if !restyled && frame.update() == SnapshotUpdate::Unchanged {
             // Nothing moved and nothing was copied: the plans, the masks and
             // the keys all still describe this frame.
             stats.frames_unchanged += 1;
@@ -135,7 +135,7 @@ impl PlanCache {
             self.keys.clear();
             self.keys.resize(rows, None);
         } else {
-            if let RenderUpdate::Partial { scrolled } = frame.update() {
+            if let SnapshotUpdate::Partial { scrolled } = frame.update() {
                 self.shift(scrolled, rows);
             }
             self.rows.resize_with(rows, RowPlan::default);
@@ -169,7 +169,7 @@ impl PlanCache {
         // other, and it lands in `self.scan` rather than `self.dirty` so the
         // mask-delta compare still decides whether a plan is rebuilt.
         let scrolled_seam =
-            matches!(frame.update(), RenderUpdate::Partial { scrolled } if scrolled != 0);
+            matches!(frame.update(), SnapshotUpdate::Partial { scrolled } if scrolled != 0);
         let any_dirty = self.dirty.iter().any(|&d| d);
         if any_dirty {
             fill_wraps(frame, &mut self.wraps);
@@ -270,7 +270,7 @@ impl PlanCache {
         }
     }
 
-    /// Scrolling moves plans with their rows, exactly as the render state moves
+    /// Scrolling moves plans with their rows, exactly as the snapshot state moves
     /// the rows themselves; the key comparison then finds the rows that were
     /// shifted in from off-screen (deviation 8).
     fn shift(&mut self, scrolled: i32, rows: usize) {
@@ -461,7 +461,7 @@ mod tests {
         // Scroll two rows into history: content moves down, two new rows on top.
         fixture.scroll_back(2);
         resnapshot(&mut frame, &mut fixture);
-        assert_eq!(frame.update(), RenderUpdate::Partial { scrolled: -2 });
+        assert_eq!(frame.update(), SnapshotUpdate::Partial { scrolled: -2 });
         let s = h.update(cx, &frame, style_key(13.0));
         assert_eq!(s.rows_planned, 2, "only the scrolled-in rows rebuild");
         assert_eq!(s.rows_candidate, 2, "the rest kept their keys");
@@ -480,7 +480,7 @@ mod tests {
         resnapshot(&mut frame, &mut fixture);
         assert_eq!(
             frame.update(),
-            RenderUpdate::Full,
+            SnapshotUpdate::Full,
             "a scroll the cache cannot absorb is a rebuild"
         );
         let s = h.update(cx, &frame, style_key(13.0));

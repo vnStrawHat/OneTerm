@@ -46,10 +46,12 @@ mod regex;
 /// search). `whole_word` requires word boundaries on both sides of the match.
 ///
 /// Both apply to [`SearchPattern::Literal`] only. A regular expression owns its
-/// own flags — `(?i)` and `\b` — so for [`SearchPattern::Regex`] both fields
-/// are **ignored**, in every build. A debug assertion fires when either is
-/// non-default, so the mistake is loud while you are testing; a release build
-/// carries no such check and silently ignores them.
+/// own flags — `(?i)` and `\b` — so for `SearchPattern::Regex` (the variant the
+/// `regex` feature adds, so this is plain text rather than a link: it does not
+/// exist in a default build) both fields are **ignored**, in every build. A
+/// debug assertion fires when either is non-default, so the mistake is loud
+/// while you are testing; a release build carries no such check and silently
+/// ignores them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct SearchOptions {

@@ -1,5 +1,9 @@
 # DEC-0015 Absolute row ids and an incremental render state are the engine-to-view contract
 
+> Naming note (`US-0101`, IN-0038): what this record calls the *render state* is now
+> `SnapshotState`, reached through `Terminal::snapshot_update`. The decision itself is unchanged;
+> the record keeps its original wording as the historical document it is.
+
 Date: 2026-09-12
 
 ## Status

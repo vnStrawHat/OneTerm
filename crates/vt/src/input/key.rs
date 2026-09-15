@@ -9,7 +9,7 @@
 //! - Returns `None` only when the combination has no terminal encoding
 //!   (Ctrl + non-ASCII / multi-codepoint text) → the caller ignores it.
 
-use crate::render::ModeSnapshot;
+use crate::snapshot::ModeSnapshot;
 
 /// Modifier state when encoding a key (bit-agnostic, uses bool for clarity).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

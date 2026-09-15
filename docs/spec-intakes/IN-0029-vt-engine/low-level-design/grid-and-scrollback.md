@@ -119,7 +119,7 @@ three kinds and moves only `SelectionStart`, `SelectionEnd`, `Graphic` and `Mark
 [`reflow-and-resize.md`](reflow-and-resize.md) needs. After a reflow the moved entries are read
 back into the fields **before** the next `sync_anchors`, which otherwise overwrites them from the
 fields. A debug assertion checks field and entry agree at the end of `feed`, `resize` and
-`render_update`.
+`snapshot_update`.
 
 - The list is small and bounded: one saved cursor, two selection anchors, one per live graphics
   placement, one per visible OSC 133 mark. A linear scan per scroll is cheaper than any index.
@@ -138,7 +138,7 @@ fields. A debug assertion checks field and entry agree at the end of `feed`, `re
 
   | Case | Reported |
   | --- | --- |
-  | Whole-viewport scroll | **`None`**. Every surviving id keeps its content and the new rows are new ids, so a `RowId`-keyed cache is already correct; a `delta` here would make it corrupt itself. The viewport's own motion reaches the renderer as `RenderUpdate::Partial { scrolled }` instead |
+  | Whole-viewport scroll | **`None`**. Every surviving id keeps its content and the new rows are new ids, so a `RowId`-keyed cache is already correct; a `delta` here would make it corrupt itself. The viewport's own motion reaches the renderer as `SnapshotUpdate::Partial { scrolled }` instead |
   | Region anchored at row 0 with a bounded bottom | one event over the **region's** id range with `delta = -n`, and a **second** event over the tail below the region with `delta = +n`, because those rows kept their content but changed id |
   | Region not anchored at row 0 | one event over the region's id range, `delta = -n` for `SU` / `IL`, `+n` for `SD` / `DL` |
   | Invalid or empty region | **nothing**, and never a malformed range with `bottom < top` |
@@ -180,7 +180,7 @@ Effect of every operation that moves rows, stated once:
 | Alternate-screen swap | each screen keeps its own offset; the alternate's is always `0` (no history) |
 
 Trap 35 dissolves under this model: a change to a row that is currently off-screen stamps that
-row's sequence number, and `render_update` simply does not copy it because it is not in the
+row's sequence number, and `snapshot_update` simply does not copy it because it is not in the
 viewport. There are no shifted damage indices to get wrong.
 
 ### Storage: a power-of-two ring of lazily allocated rows
@@ -435,7 +435,7 @@ blanking — and `DIRTY` produces a **false negative**, which
 `GraphemeId` leaks an arena entry, and one that held a `GraphicId` never fires
 `VtEvent::GraphicReleased`, so the view's texture never evicts. Both are latent until `US-0074`'s
 sweep and `US-0080`'s release scan read `DIRTY`. `US-0079` works around it today with a private
-`RenderRow::allocated` flag, which is correct for that one consumer and only that one.
+`SnapshotRow::allocated` flag, which is correct for that one consumer and only that one.
 
 **Accepted simplification (M10):** `repair_wide_pairs` sweeps the **whole** row after every
 in-row mutation (`EL`, `ECH`, `DCH`, `ICH`, the insert shift), where the reference repairs only the

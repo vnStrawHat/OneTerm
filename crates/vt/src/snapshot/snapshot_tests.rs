@@ -1,4 +1,4 @@
-// The render state's contract: the tri-state, watermarks, resolved values and
+// The snapshot state's contract: the tri-state, watermarks, resolved values and
 // the fairness hand-off.
 //
 // Named for the verification list in
@@ -10,10 +10,10 @@ use crate::cell::{Cell, CellContent, Color, NamedColor, Style};
 use crate::grid::{Pos, PrintMode, RowId, ScrollRegion, Size, TerminalGrid};
 use crate::intern::{Extras, GraphicId, Interner};
 use crate::reflow::ResizePolicy;
-use crate::render::{
-    EngineView, ModeSnapshot, Palette, RenderContent, RenderState, RenderUpdate, SyncState,
-};
 use crate::selection::SelectionRange;
+use crate::snapshot::{
+    EngineView, ModeSnapshot, Palette, SnapshotContent, SnapshotState, SnapshotUpdate, SyncState,
+};
 
 /// The fields a `Terminal` owns, in the shape `EngineView` wants.
 ///
@@ -59,12 +59,12 @@ impl Engine {
         }
     }
 
-    pub fn update(&mut self, state: &mut RenderState) -> RenderUpdate {
+    pub fn update(&mut self, state: &mut SnapshotState) -> SnapshotUpdate {
         let now = self.now;
         self.update_at(state, now)
     }
 
-    pub fn update_at(&mut self, state: &mut RenderState, now: Instant) -> RenderUpdate {
+    pub fn update_at(&mut self, state: &mut SnapshotState, now: Instant) -> SnapshotUpdate {
         state.begin_update(self.view(), now)
     }
 
@@ -106,9 +106,9 @@ fn styled(engine: &mut Engine, fg: NamedColor) -> Cell {
 #[test]
 fn first_update_is_full() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
 
-    assert_eq!(engine.update(&mut state), RenderUpdate::Full);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Full);
     assert_eq!(state.rows().len(), 10);
     assert_eq!(state.changed().len(), 10);
 }
@@ -116,22 +116,22 @@ fn first_update_is_full() {
 #[test]
 fn idle_terminal_returns_unchanged() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
 
-    assert_eq!(engine.update(&mut state), RenderUpdate::Unchanged);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Unchanged);
     assert!(state.changed().is_empty());
 }
 
 #[test]
 fn unchanged_frame_copies_no_rows() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
     let copied = state.rows_copied();
 
     for _ in 0..5 {
-        assert_eq!(engine.update(&mut state), RenderUpdate::Unchanged);
+        assert_eq!(engine.update(&mut state), SnapshotUpdate::Unchanged);
     }
 
     assert_eq!(state.rows_copied(), copied, "an idle frame copied a row");
@@ -140,19 +140,19 @@ fn unchanged_frame_copies_no_rows() {
 #[test]
 fn rows_always_hold_the_full_viewport() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
 
-    assert_eq!(engine.update(&mut state), RenderUpdate::Full);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Full);
     assert_eq!(state.rows().len(), 10);
 
-    assert_eq!(engine.update(&mut state), RenderUpdate::Unchanged);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Unchanged);
     assert_eq!(state.rows().len(), 10);
 
     engine.batch();
     engine.write(4, "partial");
     assert!(matches!(
         engine.update(&mut state),
-        RenderUpdate::Partial { .. }
+        SnapshotUpdate::Partial { .. }
     ));
     assert_eq!(state.rows().len(), 10);
 }
@@ -160,7 +160,7 @@ fn rows_always_hold_the_full_viewport() {
 #[test]
 fn single_row_change_lists_one_changed_index() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
     let copied = state.rows_copied();
 
@@ -169,7 +169,7 @@ fn single_row_change_lists_one_changed_index() {
 
     assert_eq!(
         engine.update(&mut state),
-        RenderUpdate::Partial { scrolled: 0 }
+        SnapshotUpdate::Partial { scrolled: 0 }
     );
     assert_eq!(state.changed(), &[3]);
     assert_eq!(state.rows_copied(), copied + 1);
@@ -178,7 +178,7 @@ fn single_row_change_lists_one_changed_index() {
 #[test]
 fn pure_scroll_reports_a_delta_and_copies_only_the_exposed_row() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.batch();
     for index in 0..10 {
         engine.write(index, "row");
@@ -193,7 +193,7 @@ fn pure_scroll_reports_a_delta_and_copies_only_the_exposed_row() {
 
     assert_eq!(
         engine.update(&mut state),
-        RenderUpdate::Partial { scrolled: 1 }
+        SnapshotUpdate::Partial { scrolled: 1 }
     );
     // The rows that stayed on screen were moved, not rebuilt.
     assert_eq!(state.changed(), &[9]);
@@ -204,7 +204,7 @@ fn pure_scroll_reports_a_delta_and_copies_only_the_exposed_row() {
 #[test]
 fn scroll_larger_than_the_viewport_returns_full() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
 
     engine.batch();
@@ -213,13 +213,13 @@ fn scroll_larger_than_the_viewport_returns_full() {
         engine.grid.linefeed();
     }
 
-    assert_eq!(engine.update(&mut state), RenderUpdate::Full);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Full);
 }
 
 #[test]
 fn resize_and_alt_swap_and_ris_each_return_full() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
 
     engine.batch();
@@ -227,48 +227,48 @@ fn resize_and_alt_swap_and_ris_each_return_full() {
         .grid
         .resize(Size { rows: 12, cols: 20 }, ResizePolicy::BottomAnchor);
     engine.bump_generation();
-    assert_eq!(engine.update(&mut state), RenderUpdate::Full);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Full);
     assert_eq!(state.rows().len(), 12);
 
     engine.batch();
     engine.grid.swap_alt();
     engine.bump_generation();
-    assert_eq!(engine.update(&mut state), RenderUpdate::Full);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Full);
 
     engine.batch();
     engine.grid.reset();
     engine.bump_generation();
-    assert_eq!(engine.update(&mut state), RenderUpdate::Full);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Full);
 }
 
 #[test]
 fn generation_mismatch_forces_full() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
-    assert_eq!(engine.update(&mut state), RenderUpdate::Unchanged);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Unchanged);
 
     engine.bump_generation();
 
-    assert_eq!(engine.update(&mut state), RenderUpdate::Full);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Full);
 }
 
 #[test]
 fn invalidate_forces_full() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
 
     state.invalidate();
 
-    assert_eq!(engine.update(&mut state), RenderUpdate::Full);
-    assert_eq!(engine.update(&mut state), RenderUpdate::Unchanged);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Full);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Unchanged);
 }
 
 #[test]
 fn cursor_only_movement_returns_partial_with_no_changed_rows() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
 
     engine.batch();
@@ -276,7 +276,7 @@ fn cursor_only_movement_returns_partial_with_no_changed_rows() {
 
     assert_eq!(
         engine.update(&mut state),
-        RenderUpdate::Partial { scrolled: 0 }
+        SnapshotUpdate::Partial { scrolled: 0 }
     );
     assert!(state.changed().is_empty());
     assert_eq!(state.cursor().row, Some(4));
@@ -288,7 +288,7 @@ fn cursor_only_movement_returns_partial_with_no_changed_rows() {
 #[test]
 fn selection_change_only_returns_partial_and_refreshes_the_range() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
     assert_eq!(state.selection(), None);
 
@@ -302,26 +302,26 @@ fn selection_change_only_returns_partial_and_refreshes_the_range() {
 
     assert_eq!(
         engine.update(&mut state),
-        RenderUpdate::Partial { scrolled: 0 }
+        SnapshotUpdate::Partial { scrolled: 0 }
     );
     assert!(state.changed().is_empty());
     assert_eq!(state.selection(), Some(range));
 
     // Unchanged again once the renderer has seen it.
-    assert_eq!(engine.update(&mut state), RenderUpdate::Unchanged);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Unchanged);
 }
 
 #[test]
 fn mode_change_only_returns_partial_and_refreshes_the_snapshot() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
 
     engine.modes.app_cursor = true;
 
     assert_eq!(
         engine.update(&mut state),
-        RenderUpdate::Partial { scrolled: 0 }
+        SnapshotUpdate::Partial { scrolled: 0 }
     );
     assert!(state.changed().is_empty());
     assert!(state.modes().app_cursor);
@@ -330,7 +330,7 @@ fn mode_change_only_returns_partial_and_refreshes_the_snapshot() {
 #[test]
 fn insert_mode_does_not_force_full_damage() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
 
     engine.modes.insert = true;
@@ -346,7 +346,7 @@ fn insert_mode_does_not_force_full_damage() {
 
     assert_eq!(
         engine.update(&mut state),
-        RenderUpdate::Partial { scrolled: 0 }
+        SnapshotUpdate::Partial { scrolled: 0 }
     );
     assert_eq!(state.changed(), &[2]);
 }
@@ -354,7 +354,7 @@ fn insert_mode_does_not_force_full_damage() {
 #[test]
 fn changes_while_scrolled_back_are_not_copied() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.batch();
     engine.grid.screen_mut().goto(9, 0);
     for _ in 0..20 {
@@ -371,7 +371,7 @@ fn changes_while_scrolled_back_are_not_copied() {
     engine.write(9, "offscreen");
     let update = engine.update(&mut state);
 
-    assert!(matches!(update, RenderUpdate::Partial { scrolled: 0 }));
+    assert!(matches!(update, SnapshotUpdate::Partial { scrolled: 0 }));
     assert!(
         state.changed().is_empty(),
         "an off-screen change was copied: {:?}",
@@ -382,7 +382,7 @@ fn changes_while_scrolled_back_are_not_copied() {
 #[test]
 fn watermark_never_moves_backwards() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     let mut last = state.watermark();
 
     for index in 0..10u16 {
@@ -401,8 +401,8 @@ fn watermark_never_moves_backwards() {
 #[test]
 fn two_consumers_keep_independent_watermarks() {
     let mut engine = Engine::new(10, 20);
-    let mut view = RenderState::new();
-    let mut search = RenderState::new();
+    let mut view = SnapshotState::new();
+    let mut search = SnapshotState::new();
     engine.update(&mut view);
     engine.update(&mut search);
 
@@ -411,24 +411,24 @@ fn two_consumers_keep_independent_watermarks() {
 
     assert_eq!(
         engine.update(&mut view),
-        RenderUpdate::Partial { scrolled: 0 }
+        SnapshotUpdate::Partial { scrolled: 0 }
     );
     assert_eq!(view.changed(), &[6]);
     // The first consumer cleared nothing: the second still sees the change.
     assert_eq!(
         engine.update(&mut search),
-        RenderUpdate::Partial { scrolled: 0 }
+        SnapshotUpdate::Partial { scrolled: 0 }
     );
     assert_eq!(search.changed(), &[6]);
     // And neither sees it twice.
-    assert_eq!(engine.update(&mut view), RenderUpdate::Unchanged);
-    assert_eq!(engine.update(&mut search), RenderUpdate::Unchanged);
+    assert_eq!(engine.update(&mut view), SnapshotUpdate::Unchanged);
+    assert_eq!(engine.update(&mut search), SnapshotUpdate::Unchanged);
 }
 
 #[test]
 fn style_runs_carry_resolved_values() {
     let mut engine = Engine::new(4, 8);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     let template = styled(&mut engine, NamedColor::Red);
     engine.batch();
     engine
@@ -448,7 +448,7 @@ fn style_runs_carry_resolved_values() {
 #[test]
 fn a_copied_row_survives_a_grapheme_sweep() {
     let mut engine = Engine::new(4, 8);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     let cluster = ['a', '\u{0301}'];
     let id = engine.interner.grapheme(&cluster);
     engine.batch();
@@ -464,7 +464,7 @@ fn a_copied_row_survives_a_grapheme_sweep() {
     engine.interner.graphemes.sweep(std::iter::empty());
 
     let row = &state.rows()[2];
-    let RenderContent::Cluster { start, len } = row.cells[0].content else {
+    let SnapshotContent::Cluster { start, len } = row.cells[0].content else {
         panic!("the grapheme cell was not copied as a cluster");
     };
     assert_eq!(row.cluster(start, len), &cluster);
@@ -473,7 +473,7 @@ fn a_copied_row_survives_a_grapheme_sweep() {
 #[test]
 fn uniform_row_is_one_style_run() {
     let mut engine = Engine::new(50, 200);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     let template = styled(&mut engine, NamedColor::Green);
     engine.batch();
     engine
@@ -500,7 +500,7 @@ fn uniform_row_is_one_style_run() {
 #[test]
 fn hyperlink_strings_are_resolved_under_the_lock() {
     let mut engine = Engine::new(4, 8);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     let link = engine
         .interner
         .hyperlinks
@@ -541,8 +541,8 @@ fn two_render_states_both_see_the_graphic() {
         .row_mut(row_id)
         .set(3, Cell::EMPTY.with_extras(extras));
 
-    let mut view = RenderState::new();
-    let mut second = RenderState::new();
+    let mut view = SnapshotState::new();
+    let mut second = SnapshotState::new();
     engine.update(&mut view);
     engine.update(&mut second);
 
@@ -553,7 +553,7 @@ fn two_render_states_both_see_the_graphic() {
 #[test]
 fn map_colors_resolves_named_colours_and_is_idempotent() {
     let mut engine = Engine::new(4, 8);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
     let palette = Palette::new();
 
@@ -569,7 +569,7 @@ fn map_colors_resolves_named_colours_and_is_idempotent() {
 #[test]
 fn size_reports_the_viewport() {
     let mut engine = Engine::new(10, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     assert_eq!(state.size(), Size { rows: 0, cols: 0 });
 
     engine.update(&mut state);
@@ -620,7 +620,7 @@ fn dim_colours_match_oneterms_palette() {
 #[test]
 fn a_palette_epoch_change_rebuilds_and_remaps_every_row() {
     let mut engine = Engine::new(4, 8);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.update(&mut state);
     state.map_colors(&Palette::new());
 
@@ -628,7 +628,7 @@ fn a_palette_epoch_change_rebuilds_and_remaps_every_row() {
     themed.background = crate::cell::Rgb { r: 1, g: 2, b: 3 };
     engine.palette_epoch += 1;
 
-    assert_eq!(engine.update(&mut state), RenderUpdate::Full);
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Full);
     state.map_colors(&themed);
     for row in state.rows() {
         assert_eq!(row.runs[0].style.bg, Color::Rgb(themed.background));
@@ -638,7 +638,7 @@ fn a_palette_epoch_change_rebuilds_and_remaps_every_row() {
 #[test]
 fn steady_state_makes_no_allocation() {
     let mut engine = Engine::new(50, 200);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     let palette = Palette::new();
 
     let mut capacities = Vec::new();
@@ -661,7 +661,7 @@ fn steady_state_makes_no_allocation() {
     );
 }
 
-fn row_capacities(state: &RenderState) -> Vec<(usize, usize, usize)> {
+fn row_capacities(state: &SnapshotState) -> Vec<(usize, usize, usize)> {
     state
         .rows()
         .iter()
@@ -678,7 +678,7 @@ fn row_capacities(state: &RenderState) -> Vec<(usize, usize, usize)> {
 #[test]
 fn scroll_damage_is_consumed_as_a_move_instruction() {
     let mut engine = Engine::new(8, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.batch();
     for index in 0..8 {
         engine.write(index, "content");
@@ -693,7 +693,7 @@ fn scroll_damage_is_consumed_as_a_move_instruction() {
     engine.grid.linefeed();
     let update = engine.update(&mut state);
 
-    assert_eq!(update, RenderUpdate::Partial { scrolled: 2 });
+    assert_eq!(update, SnapshotUpdate::Partial { scrolled: 2 });
     // A consumer applying `scrolled` to its own cache lands where we did.
     for (index, id) in ids.iter().skip(2).enumerate() {
         assert_eq!(state.rows()[index].id, *id);
@@ -705,19 +705,22 @@ fn scroll_damage_is_consumed_as_a_move_instruction() {
 // used to be an unwritten slot, consume again - the row must come back as
 // changed, from the sequence number alone.
 //
-// The render state used to carry a private `allocated` flag for this, which made
+// The snapshot state used to carry a private `allocated` flag for this, which made
 // "a second consumer becomes possible without an engine change" (`DEC-0015`)
 // false. The plain watermark reader at the end is that second consumer, holding
 // nothing but a `SeqNo` and the public row API.
 #[test]
 fn a_blanked_row_reaches_a_consumer_holding_only_a_watermark() {
     let mut engine = Engine::new(6, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
 
     engine.batch();
     engine.write(3, "row3");
-    assert_eq!(engine.update(&mut state), RenderUpdate::Full);
-    assert_eq!(state.rows()[3].cells[0].content, RenderContent::Scalar('r'));
+    assert_eq!(engine.update(&mut state), SnapshotUpdate::Full);
+    assert_eq!(
+        state.rows()[3].cells[0].content,
+        SnapshotContent::Scalar('r')
+    );
     // What a second consumer would have taken away from the same frame.
     let watermark = engine.grid.seq();
     let id = engine.row_id(3);
@@ -728,7 +731,7 @@ fn a_blanked_row_reaches_a_consumer_holding_only_a_watermark() {
 
     assert_eq!(
         engine.update(&mut state),
-        RenderUpdate::Partial { scrolled: 0 }
+        SnapshotUpdate::Partial { scrolled: 0 }
     );
     assert!(
         state.changed().contains(&3),
@@ -738,7 +741,7 @@ fn a_blanked_row_reaches_a_consumer_holding_only_a_watermark() {
         state.rows()[3]
             .cells
             .iter()
-            .all(|cell| cell.content == RenderContent::Scalar(' ')),
+            .all(|cell| cell.content == SnapshotContent::Scalar(' ')),
         "the consumer kept painting the old content"
     );
     assert!(
@@ -750,7 +753,7 @@ fn a_blanked_row_reaches_a_consumer_holding_only_a_watermark() {
 #[test]
 fn an_in_region_scroll_moves_content_between_row_ids() {
     let mut engine = Engine::new(8, 20);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     engine.batch();
     for index in 0..8 {
         engine.write(index, "content");
@@ -764,7 +767,7 @@ fn an_in_region_scroll_moves_content_between_row_ids() {
     let update = engine.update(&mut state);
 
     assert!(report.scrolled.is_some());
-    assert_eq!(update, RenderUpdate::Partial { scrolled: 0 });
+    assert_eq!(update, SnapshotUpdate::Partial { scrolled: 0 });
     // Row 3 is the one the scroll blanked. The grid stamps a blanked row
     // (`US-0075`'s rework), so it is copied for the same reason as the other
     // two: its sequence number is above the watermark.
@@ -773,7 +776,7 @@ fn an_in_region_scroll_moves_content_between_row_ids() {
         state.rows()[3]
             .cells
             .iter()
-            .all(|cell| cell.content == RenderContent::Scalar(' ')),
+            .all(|cell| cell.content == SnapshotContent::Scalar(' ')),
         "the blanked row was painted with stale content"
     );
 }

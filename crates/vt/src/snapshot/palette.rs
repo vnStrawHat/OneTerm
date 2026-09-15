@@ -2,9 +2,9 @@
 //!
 //! This is the one part of building a frame that genuinely needs no engine
 //! state, which is why it runs **outside the lock**
-//! ([`crate::render::RenderState::map_colors`]). The palette itself is the
+//! ([`crate::snapshot::SnapshotState::map_colors`]). The palette itself is the
 //! embedder's: the theme's sixteen, the OSC override table on top, versioned by
-//! the palette epoch the render state carries so a theme change forces a full
+//! the palette epoch the snapshot state carries so a theme change forces a full
 //! rebuild rather than a half-mapped frame.
 
 // Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`
@@ -61,7 +61,7 @@ impl Palette {
     }
 
     /// Resolve one colour. Already-resolved `Rgb` passes straight through, which
-    /// is what makes [`crate::render::RenderState::map_colors`] idempotent.
+    /// is what makes [`crate::snapshot::SnapshotState::map_colors`] idempotent.
     pub fn resolve(&self, color: Color) -> Rgb {
         match color {
             Color::Rgb(rgb) => rgb,

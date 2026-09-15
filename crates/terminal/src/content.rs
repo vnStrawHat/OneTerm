@@ -1,8 +1,8 @@
-//! The frame: one `Terminal::render_update` into the render state this buffer
+//! The frame: one `Terminal::snapshot_update` into the snapshot state this buffer
 //! owns.
 //!
 //! `TerminalContent` **is** the consumer `DEC-0015` describes. It owns the
-//! [`RenderState`] and therefore the damage watermark, so "changed for me"
+//! [`SnapshotState`] and therefore the damage watermark, so "changed for me"
 //! means changed since *this* buffer last looked, and a second consumer needs
 //! no engine change. The render path reuses one buffer
 //! (`terminal-view/src/render/frame.rs`), so the watermark survives across
@@ -13,7 +13,7 @@
 //! in the reference's signed grid lines, the forked engine's value types
 //! around it and the per-frame rebuild that produced them are gone; the view
 //! reads [`TerminalContent::rows`] and resolves the engine's own
-//! [`RenderRow`] / [`RenderCell`] itself.
+//! [`SnapshotRow`] / [`SnapshotCell`] itself.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -21,8 +21,8 @@ use std::time::Instant;
 use oneterm_vt::grid::RowFlags;
 use oneterm_vt::{
     Attrs, CellWidth, Color, CursorShape, GraphicData, GraphicId, Hyperlink, HyperlinkId,
-    ModeSnapshot, NamedColor, RenderCursor, RenderPlacement, RenderRow, RenderState, RenderUpdate,
-    RowId, SelectionRange, Size, Terminal,
+    ModeSnapshot, NamedColor, RowId, SelectionRange, Size, SnapshotCursor, SnapshotPlacement,
+    SnapshotRow, SnapshotState, SnapshotUpdate, Terminal,
 };
 
 /// A blank cell = space + default background + no decoration (hyperlink,
@@ -116,7 +116,7 @@ pub fn last_content_row(term: &Terminal) -> usize {
 /// style machinery a painted frame needs. A frame goes through
 /// [`TerminalContent`] instead.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SnapshotCell {
+pub struct ContentCell {
     /// The cell's text as one scalar: `' '` for a blank, `'\t'` for a tab cell,
     /// the base scalar of a grapheme cluster.
     pub ch: char,
@@ -138,7 +138,7 @@ pub struct SnapshotCell {
 pub struct LineRangeCells {
     /// Up to `count × num_cols` cells starting at the requested display line,
     /// in row-major order. Empty when the range starts below the viewport.
-    pub cells: Vec<SnapshotCell>,
+    pub cells: Vec<ContentCell>,
     /// Viewport width in columns; the row stride of `cells`.
     pub num_cols: usize,
     /// The OSC 8 targets the cells reference, one entry per distinct link.
@@ -158,16 +158,16 @@ impl LineRangeCells {
 /// One frame, as the engine hands it over.
 pub struct TerminalContent {
     /// The frame source. Owns this consumer's damage watermark.
-    state: RenderState,
+    state: SnapshotState,
     /// What the last [`TerminalContent::refill`] did.
-    update: RenderUpdate,
-    /// `DECSCUSR`. The render state carries where the cursor is and whether it
+    update: SnapshotUpdate,
+    /// `DECSCUSR`. The snapshot state carries where the cursor is and whether it
     /// is visible, not what it looks like, so the shape is copied beside it.
     cursor_shape: CursorShape,
     /// Scrollback + viewport, for the scrollbar.
     total_lines: usize,
     /// Images decoded since the previous frame, each handed out once; the cells
-    /// reference them through [`RenderCell::graphic`].
+    /// reference them through [`SnapshotCell::graphic`].
     graphics: Vec<Arc<GraphicData>>,
 }
 
@@ -195,8 +195,8 @@ impl Default for TerminalContent {
     /// reports `Full`.
     fn default() -> Self {
         Self {
-            state: RenderState::new(),
-            update: RenderUpdate::Full,
+            state: SnapshotState::new(),
+            update: SnapshotUpdate::Full,
             cursor_shape: CursorShape::Hidden,
             total_lines: 0,
             graphics: Vec::new(),
@@ -222,11 +222,11 @@ impl TerminalContent {
     /// Advances **this buffer's** watermark: the next call reports only what
     /// changed after this one.
     pub fn refill(&mut self, term: &mut Terminal) {
-        self.update = term.render_update(&mut self.state, Instant::now());
+        self.update = term.snapshot_update(&mut self.state, Instant::now());
         self.cursor_shape = term.cursor_style().shape;
         let screen = term.screen();
         self.total_lines = screen.history_len() as usize + usize::from(screen.rows());
-        // The engine is the one drain (R-16): `render_update` never takes the
+        // The engine is the one drain (R-16): `snapshot_update` never takes the
         // pixels, so the adapter does, right here, once per frame.
         self.graphics.clear();
         self.graphics.extend(term.take_graphics());
@@ -234,13 +234,13 @@ impl TerminalContent {
 
     /// What the last [`refill`](Self::refill) did: nothing, a shift plus
     /// [`changed`](Self::changed), or everything.
-    pub fn update(&self) -> RenderUpdate {
+    pub fn update(&self) -> SnapshotUpdate {
         self.update
     }
 
     /// The full viewport, indexed by display row — always, whatever
     /// [`update`](Self::update) says (R-15).
-    pub fn rows(&self) -> &[RenderRow] {
+    pub fn rows(&self) -> &[SnapshotRow] {
         self.state.rows()
     }
 
@@ -255,7 +255,7 @@ impl TerminalContent {
     }
 
     /// Where the cursor is and whether it is visible, refreshed every refill.
-    pub fn render_cursor(&self) -> &RenderCursor {
+    pub fn render_cursor(&self) -> &SnapshotCursor {
         self.state.cursor()
     }
 
@@ -282,7 +282,7 @@ impl TerminalContent {
 
     /// Live image placements, ids and geometry only — the pixels are in
     /// [`graphics`](Self::graphics), drained once.
-    pub fn placements(&self) -> &[RenderPlacement] {
+    pub fn placements(&self) -> &[SnapshotPlacement] {
         self.state.placements()
     }
 
@@ -341,8 +341,8 @@ impl TerminalContent {
         for row in self.state.rows() {
             for cell in &row.cells {
                 out.push(match cell.content {
-                    oneterm_vt::RenderContent::Scalar(scalar) => scalar,
-                    oneterm_vt::RenderContent::Cluster { start, len } => {
+                    oneterm_vt::SnapshotContent::Scalar(scalar) => scalar,
+                    oneterm_vt::SnapshotContent::Cluster { start, len } => {
                         row.cluster(start, len).first().copied().unwrap_or(' ')
                     }
                 });

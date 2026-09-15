@@ -58,6 +58,13 @@ if [ "$vt_leaves" != 'bitflags log memchr rustc-hash unicode-segmentation unicod
   exit 1
 fi
 step cargo run -p oneterm-vt --example headless
+# No features first: an intra-doc link to a cfg-gated item resolves under
+# `--all-features` and is broken in a default build, which is the build most
+# embedders get (`US-0101` verification note 4).
+step env RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps
+# `--all-features` must be the **last** rustdoc: the API check below reads
+# `target/doc` with `--no-doc`, and the surface it compares against is the
+# all-features one. Swapping these two silently drops every gated item.
 step env RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
 # Two snapshots, one per platform family (`US-0104`): `--check` compares the
 # host's, `--diff-platforms` asserts the other one differs only inside

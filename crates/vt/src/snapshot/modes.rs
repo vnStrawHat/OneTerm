@@ -1,7 +1,7 @@
 //! The modes the renderer reads, snapshotted so paint never takes the lock.
 //!
 //! A painter reads `DECCKM` at paint time, and alt-screen and mouse state
-//! about ten times per frame. Copying them into the render state on **every**
+//! about ten times per frame. Copying them into the snapshot state on **every**
 //! update, including one that returns `Unchanged`, is what lets an embedder
 //! paint without taking its engine lock a second time.
 

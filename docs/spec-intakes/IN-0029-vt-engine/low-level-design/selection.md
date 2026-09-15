@@ -190,7 +190,7 @@ impl Terminal {
 pub struct SelectionRange { pub start: Pos, pub end: Pos, pub is_block: bool }
 ```
 
-`SelectionRange` is also what `render_update` copies into the render state each frame, so the
+`SelectionRange` is also what `snapshot_update` copies into the snapshot state each frame, so the
 painter never asks the engine a second question
 ([`damage-and-render-state.md`](damage-and-render-state.md)).
 

@@ -1,4 +1,4 @@
-// What one frame's render state costs, recorded and never gated.
+// What one frame's snapshot state costs, recorded and never gated.
 //
 // Benchmark tier 3 of
 // `docs/spec-intakes/IN-0029-vt-engine/low-level-design/testing-and-bench.md`,
@@ -12,8 +12,8 @@
 
 use std::time::{Duration, Instant};
 
-use crate::render::tests::Engine;
-use crate::render::{Palette, RenderState};
+use crate::snapshot::tests::Engine;
+use crate::snapshot::{Palette, SnapshotState};
 use crate::{Config, EventBatch, Size, Terminal};
 
 // `docs/spec-intakes/IN-0029-vt-engine/research/perf-baseline.md` section 4,
@@ -28,7 +28,7 @@ const FRAMES: u32 = 2_000;
 )]
 fn render_state_build_cost_per_frame() {
     let mut engine = Engine::new(50, 200);
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     let palette = Palette::new();
     let line = "the quick brown fox jumps over the lazy dog, repeatedly and at length.";
 
@@ -44,7 +44,7 @@ fn render_state_build_cost_per_frame() {
     let one_row = measure(&mut engine, &mut state, &palette, 1, line);
     let all_rows = measure(&mut engine, &mut state, &palette, 50, line);
 
-    eprintln!("render-state build cost per frame, 200x50, {FRAMES} frames each:");
+    eprintln!("snapshot-state build cost per frame, 200x50, {FRAMES} frames each:");
     eprintln!(
         "  unchanged frame : {idle:>8.3} us  ({:.0}x the old snapshot)",
         OLD_SNAPSHOT_US / idle.max(f64::MIN_POSITIVE)
@@ -68,7 +68,7 @@ fn render_state_build_cost_per_frame() {
     );
 }
 
-// What the debug integrity walk costs per `feed` and per `render_update` over a
+// What the debug integrity walk costs per `feed` and per `snapshot_update` over a
 // full 100 000-row history (R-28, the `US-0075` / `US-0079` rework).
 //
 // Recorded, not a benchmark gate - but the R-28 budget itself is asserted
@@ -80,7 +80,7 @@ fn render_state_build_cost_per_frame() {
     not(debug_assertions),
     ignore = "the integrity walk is compiled out of release builds"
 )]
-fn integrity_walk_cost_per_feed_and_render_update() {
+fn integrity_walk_cost_per_feed_and_snapshot_update() {
     const HISTORY: usize = 100_000;
     // Ten is enough for a number whose two states differ by three orders of
     // magnitude, and keeps the `vt-paranoid` CI run down to a few seconds.
@@ -97,7 +97,7 @@ fn integrity_walk_cost_per_feed_and_render_update() {
         },
     );
     let mut batch = EventBatch::default();
-    let mut state = RenderState::new();
+    let mut state = SnapshotState::new();
     let palette = Palette::new();
 
     // One feed, so filling the history costs one walk rather than 100 000.
@@ -109,7 +109,7 @@ fn integrity_walk_cost_per_feed_and_render_update() {
         fill.push_str("\r\n");
     }
     term.feed(fill.as_bytes(), &mut batch, Instant::now());
-    term.render_update(&mut state, Instant::now());
+    term.snapshot_update(&mut state, Instant::now());
     state.map_colors(&palette);
     assert_eq!(term.grid().primary().history_len() as usize, HISTORY);
 
@@ -121,7 +121,7 @@ fn integrity_walk_cost_per_feed_and_render_update() {
         term.feed(line.as_bytes(), &mut batch, Instant::now());
         fed += started.elapsed();
         let started = Instant::now();
-        term.render_update(&mut state, Instant::now());
+        term.snapshot_update(&mut state, Instant::now());
         rendered += started.elapsed();
     }
     let per_feed = fed.as_secs_f64() * 1e6 / f64::from(CALLS);
@@ -132,7 +132,7 @@ fn integrity_walk_cost_per_feed_and_render_update() {
         cfg!(feature = "vt-paranoid")
     );
     eprintln!("  feed(one line)  : {per_feed:>9.1} us");
-    eprintln!("  render_update() : {per_render:>9.1} us");
+    eprintln!("  snapshot_update() : {per_render:>9.1} us");
 
     #[cfg(not(feature = "vt-paranoid"))]
     {
@@ -146,7 +146,7 @@ fn integrity_walk_cost_per_feed_and_render_update() {
         );
         assert!(
             per_render < 1000.0,
-            "render_update cost {per_render:.1} us is O(history)"
+            "snapshot_update cost {per_render:.1} us is O(history)"
         );
     }
 }
@@ -154,7 +154,7 @@ fn integrity_walk_cost_per_feed_and_render_update() {
 /// Time `FRAMES` frames, each dirtying `rows` rows before the clock starts.
 fn measure(
     engine: &mut Engine,
-    state: &mut RenderState,
+    state: &mut SnapshotState,
     palette: &Palette,
     rows: u16,
     line: &str,

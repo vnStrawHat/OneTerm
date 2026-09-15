@@ -1,4 +1,4 @@
-use crate::render::{MouseProtocol, MouseReporting};
+use crate::snapshot::{MouseProtocol, MouseReporting};
 
 use super::*;
 

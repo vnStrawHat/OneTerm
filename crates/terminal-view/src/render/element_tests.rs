@@ -216,7 +216,7 @@ impl<'a> Harness<'a> {
 /// `US-0085`'s stand-in for "frame time under `yes` and a 10 MB `type`" from the
 /// running app's diagnostics log: the desktop this packet was implemented on was
 /// disconnected, so no window could be presented or captured. Everything the
-/// packet changed is in here — the frame is built from the render state and the
+/// packet changed is in here — the frame is built from the snapshot state and the
 /// plans are keyed on `(RowId, SeqNo)` — and the counters printed are the same
 /// `FrameStats` the app's log line prints. Run it explicitly:
 ///
@@ -462,7 +462,7 @@ fn cursor_layer_and_gutter_paint(cx: &mut TestAppContext) {
 #[test]
 fn render_has_single_engine_file() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/render");
-    // The engine's *cell* vocabulary. `RenderUpdate` is deliberately not in the
+    // The engine's *cell* vocabulary. `SnapshotUpdate` is deliberately not in the
     // list: the tri-state is the contract the plan cache is written against.
     // Spelled in halves so this file does not match its own list.
     let needles = [

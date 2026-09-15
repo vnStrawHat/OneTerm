@@ -45,9 +45,9 @@ pub mod parser;
 #[cfg(feature = "pty")]
 pub mod pty;
 pub(crate) mod reflow;
-pub(crate) mod render;
 pub mod search;
 pub(crate) mod selection;
+pub(crate) mod snapshot;
 pub(crate) mod terminal;
 pub(crate) mod width;
 
@@ -59,11 +59,12 @@ pub use graphics::{GraphicData, VIRTUAL_CELL};
 pub use grid::{Pos, RowId, RowRef, SeqNo, Size, Viewport};
 pub use intern::{Extras, ExtrasId, GraphicId, Hyperlink, HyperlinkId, Interner};
 pub use reflow::ResizePolicy;
-pub use render::{
-    ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting, Palette, RenderCell, RenderContent,
-    RenderCursor, RenderPlacement, RenderRow, RenderState, RenderUpdate, StyleRun,
-};
 pub use selection::{Selection, SelectionKind, SelectionRange, Side};
+pub use snapshot::{
+    ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting, Palette, SnapshotCell,
+    SnapshotContent, SnapshotCursor, SnapshotPlacement, SnapshotRow, SnapshotState, SnapshotUpdate,
+    StyleRun,
+};
 pub use terminal::{
     ColorKey, Config, CursorShape, KeyboardFlags, Mode, OscRoute, OscRoutes, Terminal,
 };
