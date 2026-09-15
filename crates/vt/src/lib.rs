@@ -21,14 +21,14 @@
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
-// Five modules are reachable by path from outside, and only five: `grid`
+// Six modules are reachable by path from outside, and only six: `grid`
 // (`crates/tools` replays a recording through `grid::Screen`, and the adapter
-// reads `grid::{DEFAULT_SCROLLBACK, SCROLLBACK_MAX}`), `intern` (the adapter
+// reads `grid::{DEFAULT_SCROLLBACK, SCROLLBACK_MAX}`), `input` (the key and
+// mouse encoders, a family an embedder takes wholesale), `intern` (the adapter
 // resolves `intern::Hyperlink`), `parser` (the session logger drives its own
 // parser), `search` (a namespace of its own, because its two phases only make
-// sense together) and `pty`, which an embedder uses wholesale. Everything else
-// an embedder names is re-exported below, so the modules themselves are the
-// crate's own business.
+// sense together) and `pty`, the transport. Everything else an embedder names
+// is re-exported below, so the modules themselves are the crate's own business.
 pub(crate) mod cell;
 // The module is `event` — the name the design and its test filters use — and
 // its files live in `events/`, one concept each.
@@ -36,8 +36,6 @@ pub(crate) mod cell;
 pub(crate) mod event;
 pub(crate) mod graphics;
 pub mod grid;
-// `input` is a fourth path-reachable module: the encoders are a family, and an
-// embedder that writes one `use` for them all reads better than six root names.
 pub mod input;
 pub mod intern;
 pub mod parser;
