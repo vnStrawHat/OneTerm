@@ -64,7 +64,9 @@ name of its largest public module, that it draws something -- which is the first
   host's file with `--update` and hand-apply the same renames to the other, then confirm
   `--diff-platforms`) regenerates to a diff that contains **only**
   renames: every removed path has a matching added path differing by `Render` -> `Snapshot`.
-- [x] `cargo doc -p oneterm-vt --no-deps` warning-free; no doc link broken by the rename.
+- [x] `cargo doc -p oneterm-vt --no-deps` warning-free; no doc link broken by the rename. True in
+  **both** feature states since verification note 4; the no-feature half was failing on a
+  pre-existing `US-0100` link and is now its own gate step.
 
 ## Documentation
 
