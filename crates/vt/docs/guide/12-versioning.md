@@ -50,13 +50,31 @@ sequence-number values, allocation behaviour, and performance.
 as long as that content is live. Embedder caches are keyed on it, so it is a
 contract rather than an implementation detail.
 
-## Which enums you must write a wildcard arm for
+## Which types are `#[non_exhaustive]`
 
-`#[non_exhaustive]` is on the types that will grow, and the compiler will tell
-you, but it is worth knowing which they are before you design around them:
-`VtEvent`, `OscRoute`, `Progress`, `ShellMark`, `NamedKey`, `SearchPattern` and
-`SearchOptions`. A new variant on any of them is a patch release, and the
-wildcard arm is what makes that true for your code too.
+Eight public types are marked, and the mark costs a caller two different things
+depending on whether it is an enum or a struct. The compiler will tell you
+either way, but it is worth knowing before you design around them.
+
+**Seven enums**, on which a `match` needs a wildcard arm: `VtEvent`,
+`OscRoute`, `Progress`, `ShellMark`, `input::KeySpec`, `input::NamedKey` and
+`search::SearchPattern`. A new variant on any of them is a patch release, and
+your wildcard arm is what makes that true for your code too.
+
+**One struct**, `search::SearchOptions`. There are no variants and no wildcard
+arm; what the mark costs you is that you cannot build it with a struct literal.
+Start from the default and assign:
+
+```rust
+use oneterm_vt::search::SearchOptions;
+
+let mut options = SearchOptions::default();
+options.whole_word = true;
+assert!(!options.case_sensitive);
+```
+
+A new field on it is likewise a patch release, and code written that way keeps
+compiling across it.
 
 `SearchPattern` is the one where it matters immediately rather than eventually:
 its variant set depends on whether the `regex` feature is on, so the wildcard

@@ -1,8 +1,28 @@
 # 3. Threading, locking and when to draw
 
-The engine is synchronous and single-threaded by construction. It has no
-`Mutex`, no `RefCell`, no atomic and no global. `Terminal` is `Send` because
-everything in it is, and it is not `Sync` because `feed` takes `&mut self`.
+The engine is synchronous by construction. It has no `Mutex`, no `RefCell`, no
+atomic and no global.
+
+`Terminal` is both `Send` and `Sync`, and both are automatic: it is a plain
+value holding a parser and its state, with no interior mutability anywhere in
+it, so the compiler grants both. Neither is what makes the engine safe to share,
+and it is worth being exact about what each one buys.
+
+`Send` is what lets the terminal live on the thread that owns it -- typically a
+reader thread -- rather than on the one that created it.
+
+`Sync` means a `&Terminal` may be held on several threads at once, which is
+useful for the read-only half of the API: `size`, `viewport`, `mode_snapshot`,
+`cursor_style`, `title`, `stats` and `encode_key` all take `&self`, so a UI
+thread can call them behind a read lock while another thread holds a read lock
+of its own.
+
+What `Sync` does **not** buy is concurrent use of the engine. `feed`,
+`resize` and `snapshot_update` all take `&mut self`, so exactly one caller can
+be mutating at a time, and the type system says so without needing to know
+anything about your lock. That is the sense in which the embedder owns the
+lock: the engine does not serialise anything, it simply cannot be mutated by two
+callers at once, and choosing what kind of lock enforces that is your decision.
 
 There is no atomic in the crate on purpose. A "something changed, come and draw"
 flag belongs with the lock policy that reads it, and that policy is yours.
@@ -106,6 +126,7 @@ engine is a syscall you cannot batch and a value your tests cannot control.
 ## Threads in the crate
 
 None, with one exception: the `pty` feature's transport runs its own internal
-threads -- two on Windows, one on Unix -- all joined on drop, none of which
-calls into your code. Build with `--no-default-features` and the crate spawns no
-thread at all. Chapter 13 has the detail.
+threads -- two on Windows, one on Unix -- none of which calls into your code,
+and none of which is joined on drop. Build with `--no-default-features` and the
+crate spawns no thread at all. Chapter 13 has the detail, including why not
+joining them is deliberate and what it means for your shutdown ordering.
