@@ -456,22 +456,25 @@ impl Handler<'_> {
     // ── Answers ─────────────────────────────────────────────────────────────
 
     /// What `XTVERSION` answers: the embedder's product, or the engine itself.
-    fn product_name(&self) -> &str {
-        self.state
-            .config
-            .product_name
-            .as_deref()
-            .unwrap_or(ENGINE_PRODUCT_NAME)
+    fn product_name(&self) -> String {
+        let Some(name) = self.state.config.product_name.as_deref() else {
+            return ENGINE_PRODUCT_NAME.to_owned();
+        };
+        // Sanitised once, here, so `XTVERSION` and `DA2` can never disagree
+        // about what the product is called. A name that sanitises to nothing
+        // is the same as no name at all.
+        let name = sanitize_product_name(name);
+        if name.is_empty() {
+            ENGINE_PRODUCT_NAME.to_owned()
+        } else {
+            name
+        }
     }
 
     /// What `DA2` answers: the product's own version when its name carries one,
     /// otherwise the engine's.
     fn product_version_number(&self) -> u32 {
-        self.state
-            .config
-            .product_name
-            .as_deref()
-            .and_then(trailing_version)
+        trailing_version(&self.product_name())
             .unwrap_or_else(|| version_number(env!("CARGO_PKG_VERSION")))
     }
 
@@ -787,6 +790,30 @@ fn colon_color(rest: &[u16]) -> Option<Color> {
 /// What the terminal calls itself when the embedder set no `product_name`.
 const ENGINE_PRODUCT_NAME: &str = concat!("oneterm-vt(", env!("CARGO_PKG_VERSION"), ")");
 
+/// The longest product name the terminal will report, in bytes.
+pub(super) const PRODUCT_NAME_MAX: usize = 64;
+
+/// The embedder's product name, made safe to splice into a reply.
+///
+/// `XTVERSION` puts the name inside a DCS string, so a name carrying `ESC \`,
+/// a `0x9c` or a `BEL` would end that string early and leave the tail of the
+/// name loose in the program's input. Every C0 control, `DEL` and every C1
+/// control is therefore dropped, and what is left is cut to
+/// `PRODUCT_NAME_MAX` bytes on a character boundary.
+pub(super) fn sanitize_product_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len().min(PRODUCT_NAME_MAX));
+    for c in name.chars() {
+        if matches!(c, '\0'..='\u{1f}' | '\u{7f}'..='\u{9f}') {
+            continue;
+        }
+        if out.len() + c.len_utf8() > PRODUCT_NAME_MAX {
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// The `1.2.3` of a `Product(1.2.3)` name, as `DA2`'s single number.
 ///
 /// A name that does not end in a parsable version answers `None`, and `DA2`
@@ -800,10 +827,15 @@ fn trailing_version(name: &str) -> Option<u32> {
 }
 
 /// A dotted version as `major * 10000 + minor * 100 + patch`.
+///
+/// `DA2`'s `Pv` is one number, so each component saturates at 99 and the whole
+/// answer is at most `999999`. That keeps a version an embedder did not write
+/// from overflowing the arithmetic, at the price of `1.0.100` reporting the
+/// same number as `1.0.99`.
 pub(super) fn version_number(version: &str) -> u32 {
     let mut parts = version
         .split('.')
-        .map(|part| part.parse::<u32>().unwrap_or(0));
+        .map(|part| part.parse::<u32>().unwrap_or(0).min(99));
     let major = parts.next().unwrap_or(0);
     let minor = parts.next().unwrap_or(0);
     let patch = parts.next().unwrap_or(0);
@@ -1157,7 +1189,7 @@ impl Dispatch for Handler<'_> {
             // Deviation D8: XTVERSION.
             (b'q', [b'>']) => {
                 if args.next_or(0) == 0 {
-                    let name = self.product_name().to_owned();
+                    let name = self.product_name();
                     self.reply(&format!("\x1bP>|{name}\x1b\\"));
                 } else {
                     self.unhandled();
