@@ -56,13 +56,14 @@ operations (`t`); `modifyOtherKeys` (`> 4 m`); the kitty keyboard stack (`? u`,
 `= u`, `> u`, `< u`); and `REP` (`b`), whose source character survives
 intervening escape sequences.
 
-**Modes.** Private: `1` application cursor keys, `3` column mode, `5` reverse
-video, `6` origin, `7` autowrap, `9` X10 mouse, `12` cursor blink, `25` cursor
-visibility, `45` reverse wrap, `47` / `1047` / `1049` alternate screen, `1000` /
-`1002` / `1003` mouse reporting, `1004` focus reporting, `1005` / `1006` /
-`1015` mouse encoding, `1007` alternate scroll, `1042` urgency, `1048` save
-cursor, `2004` bracketed paste, `2026` synchronised output, `2027` grapheme
-clustering. ANSI: `4` insert mode, `20` newline mode.
+**Modes.** Private: `1` application cursor keys, `5` reverse video, `6` origin,
+`7` autowrap, `9` X10 mouse, `12` cursor blink, `25` cursor visibility, `45`
+reverse wrap, `47` / `1047` / `1049` alternate screen, `1000` / `1002` / `1003`
+mouse reporting, `1004` focus reporting, `1005` / `1006` / `1015` mouse
+encoding, `1007` alternate scroll, `1042` urgency, `1048` save cursor, `2004`
+bracketed paste, `2026` synchronised output, `2027` grapheme clustering. ANSI:
+`4` insert mode. Three more are parsed and stored but read by nothing; see
+"Recognised but inert" below.
 
 `? 5` (`DECSCNM`) reaches you as `ModeSnapshot::reverse_video`, a screen-level
 flag and never a cell attribute: **you** swap the two defaults when you resolve
@@ -119,10 +120,52 @@ in `WcsWidth`, know that a `? 2027` stream can desynchronise it.
 
 ## Recognised but inert
 
-One mode is accepted so that a stream setting it is not noise, and does nothing:
-`? 9001`, win32 input mode. The Windows console host sends it unprompted, so
-accepting it silently is better than counting it as unhandled; the encoding is
-not implemented, and `DECRQM` answers "not supported".
+Three modes are accepted so that a stream setting one is not noise, and then do
+nothing. The rule that governs all three is the one at the top of this chapter:
+**`DECRQM` never answers `Set` for a mode nothing reads.** An inert mode answers
+`NotSupported` when its state is not even stored, and `Reset` when it is stored
+and simply unread -- so a program probing for the capability is told the truth
+and falls back, instead of being told it has something it has not.
+
+| Mode | `DECRQM` answers | Why it is inert |
+| --- | --- | --- |
+| `? 3`, `DECCOLM` | `NotSupported` (`0`) | both `h` and `l` act on the screen, but the column count never changes, so "not supported" is the honest answer about the capability |
+| `? 9001`, win32 input | `Reset` (`2`) | the Windows console host sends `? 9001 h` unprompted, so accepting it silently beats counting it unhandled; the input encoding it selects is not implemented |
+| `20`, `LNM` (an ANSI mode) | `Reset` (`2`) | the state is tracked and read by nothing: `LF` never implies `CR` here |
+
+A mode leaves that table on the day something reads it, and the answer changes
+with it. The doctest below pins all three, so this section cannot drift away
+from the engine the way it did once already.
+
+```rust
+use std::time::Instant;
+use oneterm_vt::{Config, EventBatch, Size, Terminal, VtEvent};
+
+fn decrqm(term: &mut Terminal, batch: &mut EventBatch, query: &[u8]) -> String {
+    term.feed(query, batch, Instant::now());
+    let reply = batch
+        .iter()
+        .find_map(|event| match event {
+            VtEvent::Reply(span) => Some(batch.bytes(*span)),
+            _ => None,
+        })
+        .expect("DECRQM is always answered");
+    String::from_utf8_lossy(reply).into_owned()
+}
+
+let mut term = Terminal::new(Size { rows: 24, cols: 80 }, Config::default());
+let mut batch = EventBatch::new();
+
+// `CSI ? Ps $ p` -> `CSI ? Ps ; state $ y`. State 0 is "not recognised,
+// do not use it", 1 is set, 2 is reset.
+assert_eq!(decrqm(&mut term, &mut batch, b"\x1b[?3$p"), "\x1b[?3;0$y");
+assert_eq!(decrqm(&mut term, &mut batch, b"\x1b[?9001$p"), "\x1b[?9001;2$y");
+// `LNM` is an ANSI mode, so the query and the answer carry no `?`.
+assert_eq!(decrqm(&mut term, &mut batch, b"\x1b[20$p"), "\x1b[20;2$y");
+
+// A mode something reads answers its real state, for contrast.
+assert_eq!(decrqm(&mut term, &mut batch, b"\x1b[?25$p"), "\x1b[?25;1$y");
+```
 
 ## Known gaps
 

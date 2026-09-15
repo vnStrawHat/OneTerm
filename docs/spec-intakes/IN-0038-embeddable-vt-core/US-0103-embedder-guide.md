@@ -184,7 +184,13 @@ Each criterion below is a command a verifier who distrusts this packet can run.
   `target/doc/oneterm_vt/guide/index.html` still links exactly thirteen chapter modules, which is
   the number that matters to a reader.
 - [x] `cargo test -p oneterm-vt --doc` is green, and **every chapter contributes at least one
-  doctest**: `cargo test -p oneterm-vt --doc -- --list | grep -c 'docs/guide/'` is at least 13.
+  doctest** -- counted by **module**, not by file name:
+  `cargo test -p oneterm-vt --doc -- --list | grep -oE 'guide::(ch[0-9]{2})' | sort -u | wc -l`
+  is 13, over 29 guide doctests. The file-name form the packet first wrote
+  (`grep -c 'docs/guide/'`) undercounts by two and reports chapter 7 as having none: a module
+  carrying `cfg_attr(..., doc = include_str!(...))` as well as a plain `#[doc]` loses its
+  per-file attribution in rustdoc's test names, and chapter 7's two doctests are listed against
+  `crates/vt/src/guide.rs` instead. They compile and run; only the label moved.
   **Built as the packet says, after a correction.** The first attempt left chapter 13 un-gated
   and made its poll loop ```rust,ignore```, on the reasoning that gating the module would hide a
   chapter from a `--no-default-features` reader. Independent verification found the cost of that:
@@ -315,7 +321,7 @@ which is exactly why the guide has to restate them rather than link them.
 
 | Artefact | Budget |
 | --- | --- |
-| `crates/vt/docs/guide/*.md` | budgeted about 1 300 lines across thirteen chapters; **actual 1 956**, average 150. Over by a third, and not padding: chapters 4 (twenty variants plus twenty-two intra-doc link definitions), 5 (four routes and two worked examples) and 13 (a full poll loop) each run to about 180. No acceptance criterion counts lines |
+| `crates/vt/docs/guide/*.md` | budgeted about 1 300 lines across thirteen chapters; **actual 2067**, average 159. Over by a third, and not padding: chapters 4 (twenty variants plus twenty-two intra-doc link definitions), 5 (four routes and two worked examples) and 13 (a full poll loop) each run to about 180. No acceptance criterion counts lines |
 | `crates/vt/src/guide.rs` | budgeted about 43 lines; **actual 95** -- 50 before verification rework, then the two feature splits (chapter 13's `cfg` arms, chapter 7's `cfg_attr` tail) and the prose each off-state arm puts in place of the section it replaces |
 | `scripts/vt-docs.sh`, `scripts/vt-docs.ps1` | about 15 lines each |
 | CI and README edits | under 20 lines total |
@@ -352,11 +358,11 @@ switch to a static site is a new packet, not an amendment to this one.
 
 Run on `x86_64-pc-windows-msvc`, branch `docs/vt-embedder-guide` off `main` at `af5df2e7`.
 
-**Chapters.** Thirteen chapters under `crates/vt/docs/guide/`, 2024 lines of Markdown after the
+**Chapters.** Thirteen chapters under `crates/vt/docs/guide/`, 2067 lines of Markdown after the
 verification rework: `01-overview.md` 105, `02-embedding.md` 214, `03-threading.md` 132,
 `04-events.md` 184, `05-osc.md` 186, `06-input.md` 177, `07-search.md` 93 plus
 `07-search-regex.md` 44, `08-graphics.md` 136, `09-resize.md` 100, `10-limits.md` 141,
-`11-conformance.md` 160, `12-versioning.md` 132,
+`11-conformance.md` 203, `12-versioning.md` 132,
 `13-pty.md` 220. Chapters 1, 4, 5, 6, 10 and 11 were rewritten against the
 conformance work after the rebase; see **Rebased onto the closed gaps** below. `grep -c 'include_str!' crates/vt/src/guide.rs` is 13.
 
@@ -365,12 +371,14 @@ conformance work after the rebase; see **Rebased onto the closed gaps** below. `
 exactly thirteen `chNN_*/index.html` modules.
 
 **Doctests.** **There is no `ignore` block left in the guide.** Measured in four feature states,
-all green and all with 0 ignored: default 34 passed, `--all-features` 35, `--features regex` 35,
-`--no-default-features` 32, where chapter 13's two blocks and chapter 7's regex block are compiled
-out with their features. Of the 34 in the default run, 30 come from the guide, at least one from
-every chapter: 01 x1, 02 x8, 03 x1, 04 x2, 05 x4, 06 x2, 07 x3, 08 x1, 09 x1, 10 x1, 11 x1,
-12 x2, 13 x2. Chapter 13's poll loop is `no_run` -- compiled, never executed, because it spawns a
-child and then loops forever; every other block runs.
+all green and all with 0 ignored: default 35 passed, `--all-features` 36, `--features regex` 36,
+`--no-default-features` 33, where chapter 13's two blocks and chapter 7's regex block are compiled
+out with their features. Of the 35 in the default run, **29** come from the guide, at least one
+from every chapter: 01 x1, 02 x8, 03 x1, 04 x2, 05 x4, 06 x2, 07 x2, 08 x1, 09 x1, 10 x1, 11 x2,
+12 x2, 13 x2. Two of those 29 are labelled `crates/vt/src/guide.rs` rather than `07-search.md`,
+for the `cfg_attr` reason under Acceptance; count by module and all thirteen are there. Chapter
+13's poll loop is `no_run` -- compiled, never executed, because it spawns a child and then loops
+forever; every other block runs.
 
 **Cannot rot.** One character deleted from a code block in `04-events.md`, `07-search.md` and
 `10-limits.md` in turn; `cargo test -p oneterm-vt --doc` exited 101 each time and passed again
@@ -523,11 +531,15 @@ measurable claim true, and four prose sentences about the API false. The full re
 | 6. A Plan tick claims a `cargo doc` tightening this branch did not do | Unticked and replaced with what the branch did add to those three files. |
 | 7. The one genuinely new CI gate is undocumented in its owning design | `packaging.md`'s checks table gains a row for the guide self-containment grep, and its point 9 no longer describes the guide as planned work. |
 | 8. The coverage grep is vacuous for `guide` and `intern` | The grep now matches a module path or a backticked identifier, never the English word. Chapter 1 names `oneterm_vt::guide`; chapter 10 gains a section on `oneterm_vt::intern`. |
-| 9. `guide.rs` is 50 lines, not 51 | LOC table corrected, and corrected again for the `cfg` split: 71. |
+| 9. `guide.rs` is 50 lines, not 51 | LOC table corrected, and corrected again after each feature split: 95 now, and the LOC table is the one place that number lives. |
 | 10. Chapter 1 drops the intake's "not measured" hedge on `rio-vt`'s dependency count | Hedge restored. |
 | 11. Chapter 3 says `Terminal` is not `Sync`; the API reference says it is | Rewritten. `Terminal` is `Send` **and** `Sync`, both automatic; the chapter now says what each buys, and that `&mut self` on `feed` is what serialises mutation -- not a missing `Sync`. |
 | 13. Chapter 7's `regex` block was the last thing in the guide that nothing compiled | The same split one level down: `07-search-regex.md` is appended by `cfg_attr` under `feature = "regex"`, so the block is a live doctest where the variant exists. The chapter itself is **not** gated -- `regex` is off by default, so stubbing chapter 7 in the common build would be the cure killing the patient -- and the `not(feature)` arm replaces only the tail section. The guide now has zero `ignore` blocks in every feature state. Raised after the report, in the same spirit as note 1. |
 | 12. Chapter 13 says the transport's threads are "all joined on drop"; none is joined | Rewritten to the real lifecycle: the Windows pipe threads are parked in a blocking read or write and cannot be joined, the Unix reaper deliberately outlives the drop, none of them holds anything of yours, and the bounded wait in `drop` is for the **child**, not for them. |
+
+| 14. Chapter 11 said one mode is inert; `Mode::inert_state` has three, and two of them (`? 3` `DECCOLM` and ANSI `20` `LNM`) were listed under **Supported** | Both moved out of Supported into "Recognised but inert", which is now a table of three with the exact `DECRQM` answer each gives -- `NotSupported` (`0`) for `? 3`, `Reset` (`2`) for `? 9001` and for `LNM` -- and the rule behind the difference: an inert mode answers `NotSupported` when its state is not stored and `Reset` when it is stored and unread. A new doctest asserts all three replies byte for byte, plus one live mode for contrast, so the section cannot drift from `inert_state` again. |
+| 15. Three Evidence numbers were stale | Re-measured and corrected here: guide doctests in the default run, the chapter line total and per-file counts, and `guide.rs`. |
+| 16. Chapter 7's doctests are labelled `guide.rs`, not `07-search.md` | Found while re-measuring note 15, and the reason its count looked wrong. A module carrying a `cfg_attr(..., doc = include_str!(...))` alongside a plain `#[doc]` loses per-file attribution in rustdoc's doctest names. The tests compile and run; only the label moved. The packet's "every chapter contributes a doctest" criterion is re-stated to count by module (`guide::chNN`), which is exact, instead of by file name, which silently undercounts. |
 
 Two notes are recorded rather than closed. The verifier's own "could not be verified" list stands
 as written -- no Unix host, no real browser, and the two reference crates checked against this
