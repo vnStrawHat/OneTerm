@@ -171,6 +171,10 @@ jobs:
       - name: Build the feature matrix
         run: |
           cargo build -p oneterm-vt --no-default-features --examples
+          # Building it is not running it: `tests/engine_without_pty.rs` is
+          # gated `#[cfg(not(feature = "pty"))]`, so this is the only step
+          # that executes the transport-free engine.
+          cargo test -p oneterm-vt --no-default-features
           cargo build -p oneterm-vt --all-features --examples
       # The README's six-dependency claim is a claim about
       # `--no-default-features` specifically now that a default feature adds

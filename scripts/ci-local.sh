@@ -42,6 +42,9 @@ step cargo test -p oneterm-vt --features regex
 # `pty` (`US-0104`), so the two builds below really are different
 # configurations and only the first one is transport-free.
 step cargo build -p oneterm-vt --no-default-features --examples
+# Building it is not running it: `tests/engine_without_pty.rs` is gated
+# `#[cfg(not(feature = "pty"))]`, so this is the only step that executes it.
+step cargo test -p oneterm-vt --no-default-features
 step cargo build -p oneterm-vt --all-features --examples
 # The six-dependency claim the README makes is a claim about
 # `--no-default-features` specifically now that a *default* feature adds

@@ -112,6 +112,8 @@ cargo test -p oneterm-vt --features regex # the optional regex matcher, and the 
 # `oneterm-vt` is consumed by other projects as a git dependency (it is not
 # published), so its package and its public API are part of the gate:
 cargo build -p oneterm-vt --no-default-features --examples
+cargo test -p oneterm-vt --no-default-features # the engine with no transport compiled;
+                                               # the only step that runs engine_without_pty.rs
 cargo build -p oneterm-vt --all-features --examples
 cargo run -p oneterm-vt --example headless
 RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features

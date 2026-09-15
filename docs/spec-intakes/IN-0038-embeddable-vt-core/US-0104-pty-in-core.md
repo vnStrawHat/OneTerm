@@ -592,6 +592,14 @@ somebody's scratch directory is not a gate.
 They are integration tests, so nothing in them can reach a private item, and they run in
 `cargo test --workspace` and `cargo test -p oneterm-vt --no-default-features` respectively.
 
+**The second of those was not a CI step, and now is.** The final re-check pointed out that every
+entry point only *built* the transport-free configuration -- `US-0097`'s
+`cargo build -p oneterm-vt --no-default-features --examples` -- so `engine_without_pty.rs`
+compiled in the gate and never ran. `cargo test -p oneterm-vt --no-default-features` now sits
+beside that build in `scripts/ci-local.sh`, `scripts/ci-local.ps1`,
+`.github/workflows/ci.yml` and `AGENTS.md` § 4. It is the only step that executes the engine
+with no transport compiled; the workspace run cannot, because feature unification turns `pty` on.
+
 **Process hygiene is part of the test, not around it.** Every child is tracked by the pid
 `child_pid()` returned and liveness is asked of that pid alone, through
 `tasklist /FI "PID eq <pid>"`. Nothing is matched, enumerated or terminated by image name: this
