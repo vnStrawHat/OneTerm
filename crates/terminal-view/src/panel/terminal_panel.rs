@@ -9,8 +9,8 @@
 
 use gpui::{
     Anchor, App, AppContext as _, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Subscription,
-    WeakEntity, Window, div,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::dock::{ClosePanel, Panel, PanelControl, PanelEvent, TabGroup};
 use gpui_component::{
@@ -34,6 +34,48 @@ use crate::input::edit;
 use crate::security::security_policy_from_settings;
 use crate::space::{SpaceId, SpaceTree, SplitContext, SplitDir};
 use crate::terminal_view::{TerminalDeps, TerminalView, TerminalViewEvent};
+
+/// How a [`labelled_separator`]'s rule is drawn: the "SSH Sessions" heading is
+/// solid, a session group's heading dashed (`IN-0033`, 2026-09-15 rework).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SeparatorRule {
+    Solid,
+    Dashed,
+}
+
+/// A menu separator that carries a label.
+///
+/// `PopupMenu` has a plain `Separator` and a plain `Label` but nothing that is
+/// both, so the row is composed from a disabled element item: the label text
+/// followed by a rule that fills the rest of the row. Disabled keeps it out of
+/// hover and keyboard navigation, like the separator it stands in for. Colours
+/// come from the theme; the widths are the kit separator's own 2px, which is
+/// also what makes the dashes read as dashes.
+fn labelled_separator(label: impl Into<SharedString>, rule: SeparatorRule) -> PopupMenuItem {
+    let label = label.into();
+    PopupMenuItem::element(move |_, cx| {
+        let line = div()
+            .flex_1()
+            .h(px(0.))
+            .border_t(px(2.))
+            .border_color(cx.theme().border);
+        gpui_component::h_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(label.clone()),
+            )
+            .child(match rule {
+                SeparatorRule::Solid => line,
+                SeparatorRule::Dashed => line.border_dashed(),
+            })
+    })
+    .disabled(true)
+}
 
 /// Initial PTY size for a freshly spawned session; the element resizes it to
 /// the real grid on the first prepaint.
@@ -623,26 +665,30 @@ impl Panel for TerminalPanel {
                         .menu("Sh", Box::new(AddPanelWithShell(ShellKind::Sh)))
                         .menu("Zsh", Box::new(AddPanelWithShell(ShellKind::Zsh)));
                 }
-                menu = menu
-                    .separator()
-                    .menu("New SSH Session", Box::new(NewSession));
-
                 // The sessions saved in `ssh_session.json`, so a saved host
                 // opens from the same place a local shell does. This closure
                 // runs on every open, so the list is never stale.
                 let commands = oneterm_state::commands::commands(cx);
-                menu = menu.separator().label("SSH Sessions");
+                menu = menu.item(labelled_separator("SSH Sessions", SeparatorRule::Solid));
                 let saved = (commands.saved_ssh_sessions)(cx);
                 if saved.is_empty() {
-                    return menu.item(PopupMenuItem::new("No saved sessions").disabled(true));
+                    menu = menu.item(PopupMenuItem::new("No saved sessions").disabled(true));
                 }
-                saved.into_iter().fold(menu, |menu, (id, name)| {
-                    let open = commands.open_saved_ssh_session;
-                    menu.item(
-                        PopupMenuItem::new(name)
-                            .on_click(move |_, window, cx| open(id, window, cx)),
-                    )
-                })
+                for (group, rows) in saved {
+                    if !group.is_empty() {
+                        menu = menu.item(labelled_separator(group, SeparatorRule::Dashed));
+                    }
+                    for (id, name) in rows {
+                        let open = commands.open_saved_ssh_session;
+                        menu = menu.item(
+                            PopupMenuItem::new(name)
+                                .on_click(move |_, window, cx| open(id, window, cx)),
+                        );
+                    }
+                }
+
+                menu.separator()
+                    .menu("New SSH Session", Box::new(NewSession))
             })
             .anchor(Anchor::TopRight);
         Some(btn)

@@ -133,7 +133,7 @@ mod tests {
         ) {
         }
         fn app(_: &mut gpui::App) {}
-        fn saved_sessions(_: &App) -> Vec<(u64, String)> {
+        fn saved_sessions(_: &App) -> crate::commands::SavedSshSessionSections {
             Vec::new()
         }
         fn open_saved_session(_: u64, _: &mut gpui::Window, _: &mut gpui::App) {}

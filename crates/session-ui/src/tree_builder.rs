@@ -7,6 +7,8 @@ use gpui::SharedString;
 
 use gpui_component::tree::TreeItem;
 
+use oneterm_state::commands::SavedSshSessionSections;
+
 use crate::session_state::{SshSession, SshSessionEntry, SshSessionId};
 
 use super::panel::{GROUP_ID_PREFIX, SESSION_ID_PREFIX};
@@ -35,32 +37,46 @@ pub(crate) fn session_subtitle(s: &SshSession) -> String {
     }
 }
 
-/// Rows for a flat menu listing the saved sessions — `(stable id, display
-/// name)` in storage order, which is what the "+" (New Terminal) menu shows
-/// (`IN-0033`).
+/// Sections for the "+" (New Terminal) menu's saved-session list (`IN-0033`):
+/// the sessions with no group first, then one section per group.
 ///
-/// Unlike [`build_tree_items`] this neither sorts nor groups: the menu is a
-/// flat list and storage order is the order `ssh_session.json` holds.
+/// Unlike [`build_tree_items`] this sorts nothing — neither the rows nor the
+/// groups. Both follow the store, so the menu reads in the order
+/// `ssh_session.json` holds and a group sits where it first appears.
 ///
-/// The name carries the [`session_subtitle`] as well as the label, because
-/// nothing stops two saved sessions sharing a label and a menu row has no
-/// second line to disambiguate them the way the session tree's subtitle does.
-/// An entry whose label is blank (only a hand-edited file can produce one)
-/// shows the subtitle alone rather than an unidentifiable empty row.
-pub(crate) fn menu_entries(sessions: &[SshSessionEntry]) -> Vec<(u64, String)> {
-    sessions
-        .iter()
-        .map(|entry| {
-            let label = entry.session.label.trim();
-            let subtitle = session_subtitle(&entry.session);
-            let name = if label.is_empty() {
-                subtitle
-            } else {
-                format!("{label} — {subtitle}")
-            };
-            (entry.id.raw(), name)
-        })
-        .collect()
+/// Rows carry the session title alone: the owner asked for that during the
+/// acceptance of `US-0094`, accepting that two saved sessions sharing a label
+/// are then indistinguishable here (the session tree in the right dock still
+/// shows their `user@host:port`). An entry whose label is blank — only a
+/// hand-edited file can produce one — falls back to [`session_subtitle`]
+/// rather than rendering an unidentifiable empty row.
+pub(crate) fn menu_entries(sessions: &[SshSessionEntry]) -> SavedSshSessionSections {
+    let mut ungrouped: Vec<(u64, String)> = Vec::new();
+    let mut groups: Vec<(String, Vec<(u64, String)>)> = Vec::new();
+
+    for entry in sessions {
+        let title = match entry.session.label.trim() {
+            "" => session_subtitle(&entry.session),
+            label => label.to_string(),
+        };
+        let row = (entry.id.raw(), title);
+        match entry.session.group.as_deref().map(str::trim) {
+            Some(group) if !group.is_empty() => {
+                match groups.iter_mut().find(|(name, _)| name == group) {
+                    Some((_, rows)) => rows.push(row),
+                    None => groups.push((group.to_string(), vec![row])),
+                }
+            }
+            _ => ungrouped.push(row),
+        }
+    }
+
+    let mut sections = Vec::with_capacity(groups.len() + 1);
+    if !ungrouped.is_empty() {
+        sections.push((String::new(), ungrouped));
+    }
+    sections.append(&mut groups);
+    sections
 }
 
 /// Check whether a session matches the search query (case-insensitive).
@@ -268,22 +284,18 @@ mod tests {
 
     // ── menu_entries: the "+" (New Terminal) menu rows (IN-0033) ──
 
+    /// The ungrouped section (empty group name) holds every session in file
+    /// order, titles only.
     #[test]
-    fn menu_entries_keeps_storage_order_and_ids() {
-        // Deliberately not alphabetical, and grouped entries mixed in: the menu
-        // is flat and follows the file, unlike the tree.
-        let sessions = vec![
-            entry(7, "prod", None),
-            entry(2, "alpha", Some("infra")),
-            entry(5, "db", None),
-        ];
+    fn menu_entries_lists_ungrouped_sessions_in_storage_order() {
+        // Deliberately not alphabetical: the menu follows the file, unlike the tree.
+        let sessions = vec![entry(7, "prod", None), entry(5, "db", None)];
         assert_eq!(
             menu_entries(&sessions),
-            vec![
-                (7, "prod — prod.example.test:22".to_string()),
-                (2, "alpha — even@alpha.example.test:22".to_string()),
-                (5, "db — db.example.test:22".to_string()),
-            ]
+            vec![(
+                String::new(),
+                vec![(7, "prod".to_string()), (5, "db".to_string())]
+            )]
         );
     }
 
@@ -292,15 +304,90 @@ mod tests {
         assert!(menu_entries(&[]).is_empty());
     }
 
+    /// With nothing ungrouped there is no leading empty section — the first
+    /// thing under the "SSH Sessions" heading is the first group's heading.
+    #[test]
+    fn menu_entries_of_only_grouped_sessions_has_no_ungrouped_section() {
+        let sessions = vec![
+            entry(1, "db-01", Some("infra")),
+            entry(2, "db-02", Some("infra")),
+        ];
+        assert_eq!(
+            menu_entries(&sessions),
+            vec![(
+                "infra".to_string(),
+                vec![(1, "db-01".to_string()), (2, "db-02".to_string())]
+            )]
+        );
+    }
+
+    /// Ungrouped first, then the groups in the order they first appear in the
+    /// store — not sorted, which is what separates this from the tree.
+    #[test]
+    fn menu_entries_orders_groups_by_first_appearance() {
+        let sessions = vec![
+            entry(1, "prod", None),
+            entry(2, "web", Some("zeta")),
+            entry(3, "staging", None),
+            entry(4, "db-01", Some("alpha")),
+            entry(5, "cache", Some("zeta")),
+        ];
+        assert_eq!(
+            menu_entries(&sessions),
+            vec![
+                (
+                    String::new(),
+                    vec![(1, "prod".to_string()), (3, "staging".to_string())]
+                ),
+                (
+                    "zeta".to_string(),
+                    vec![(2, "web".to_string()), (5, "cache".to_string())]
+                ),
+                ("alpha".to_string(), vec![(4, "db-01".to_string())]),
+            ],
+            "groups keep store order, and a group's members do too"
+        );
+    }
+
+    /// A hand-edited `"group": ""` or `"  "` is not a group: those sessions
+    /// belong with the ungrouped ones, exactly as the tree treats them.
+    #[test]
+    fn menu_entries_treats_a_blank_group_as_ungrouped() {
+        let sessions = vec![
+            entry(1, "empty", Some("")),
+            entry(2, "spaces", Some("  ")),
+            entry(3, "none", None),
+            entry(4, "real", Some(" infra ")),
+        ];
+        assert_eq!(
+            menu_entries(&sessions),
+            vec![
+                (
+                    String::new(),
+                    vec![
+                        (1, "empty".to_string()),
+                        (2, "spaces".to_string()),
+                        (3, "none".to_string()),
+                    ]
+                ),
+                ("infra".to_string(), vec![(4, "real".to_string())]),
+            ],
+            "a padded group name is trimmed, a blank one is no group at all"
+        );
+    }
+
     #[test]
     fn menu_entries_falls_back_to_the_subtitle_for_a_blank_label() {
         // Only a hand-edited ssh_session.json can get here: the session dialog
-        // rejects an empty label.
+        // rejects an empty label. A row with no text at all would be worse.
         let mut session = entry(3, "placeholder", None);
         session.session.label = "   ".into();
         session.session.host = "10.0.0.9".into();
         session.session.port = 2222;
-        assert_eq!(menu_entries(&[session]), vec![(3, "10.0.0.9:2222".into())]);
+        assert_eq!(
+            menu_entries(&[session]),
+            vec![(String::new(), vec![(3, "10.0.0.9:2222".to_string())])]
+        );
     }
 
     #[test]
@@ -309,44 +396,45 @@ mod tests {
         session.session.label = "  staging  ".into();
         assert_eq!(
             menu_entries(&[session]),
-            vec![(4, "staging — even@padded.example.test:22".into())]
+            vec![(String::new(), vec![(4, "staging".to_string())])]
         );
     }
 
-    /// Adopted from the independent verification of `US-0094` (`D2`): two saved
-    /// sessions may share a label, so the row text must still tell them apart,
-    /// and neither a non-ASCII label nor a long store may distort the mapping.
+    /// Adopted from the independent verification of `US-0094`, then narrowed by
+    /// the 2026-09-15 rework: rows are the title alone, so two sessions sharing
+    /// a label are deliberately identical here (the owner's call) and only the
+    /// row's id tells them apart. A non-ASCII label and a long store must still
+    /// map 1:1.
     #[test]
     fn verify_duplicate_unicode_and_fifty_entries() {
         let mut first = entry(1, "alpha", None);
         first.session.host = "10.9.0.1".into();
         let mut second = entry(2, "alpha", None);
         second.session.host = "10.9.0.2".into();
-        second.session.username = None;
-        let rows = menu_entries(&[first, second]);
+        let sections = menu_entries(&[first, second]);
         assert_eq!(
-            rows,
-            vec![
-                (1, "alpha — 10.9.0.1:22".to_string()),
-                (2, "alpha — 10.9.0.2:22".to_string()),
-            ],
-            "duplicate labels must stay distinguishable by their subtitle"
+            sections,
+            vec![(
+                String::new(),
+                vec![(1, "alpha".to_string()), (2, "alpha".to_string())]
+            )],
+            "title-only rows: the id, not the text, distinguishes duplicate labels"
         );
 
         let unicode = entry(9, "日本-🚀", None);
         assert_eq!(
             menu_entries(&[unicode]),
-            vec![(9, "日本-🚀 — 日本-🚀.example.test:22".to_string())]
+            vec![(String::new(), vec![(9, "日本-🚀".to_string())])]
         );
 
         let many: Vec<SshSessionEntry> = (1..=50)
             .map(|id| entry(id, &format!("host-{id:02}"), None))
             .collect();
-        let rows = menu_entries(&many);
+        let sections = menu_entries(&many);
+        assert_eq!(sections.len(), 1, "none of them is grouped");
+        let rows = &sections[0].1;
         assert_eq!(rows.len(), 50, "every stored session gets exactly one row");
-        assert_eq!(rows[0].0, 1);
-        assert_eq!(rows[49].0, 50);
-        assert!(rows[0].1.starts_with("host-01 — "));
-        assert!(rows[49].1.starts_with("host-50 — "));
+        assert_eq!(rows[0], (1, "host-01".to_string()));
+        assert_eq!(rows[49], (50, "host-50".to_string()));
     }
 }
