@@ -963,7 +963,9 @@ mod tests {
             entries: vec![host(1, "10.9.0.1"), host(2, "10.9.0.2")],
             next_id: 3,
         });
-        let rows = crate::tree_builder::menu_entries(before.sessions());
+        let sections = crate::tree_builder::menu_entries(before.sessions());
+        assert_eq!(sections.len(), 1, "neither session is grouped");
+        let rows = &sections[0].1;
         assert_eq!(rows.len(), 2);
         // The row the user is about to click: the second one, id 2.
         let clicked = SshSessionId::from_raw(rows[1].0);

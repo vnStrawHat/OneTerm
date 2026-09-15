@@ -9,8 +9,8 @@
 
 use gpui::{
     Anchor, App, AppContext as _, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Subscription,
-    WeakEntity, Window, div,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::dock::{ClosePanel, Panel, PanelControl, PanelEvent, TabGroup};
 use gpui_component::{
@@ -34,6 +34,52 @@ use crate::input::edit;
 use crate::security::security_policy_from_settings;
 use crate::space::{SpaceId, SpaceTree, SplitContext, SplitDir};
 use crate::terminal_view::{TerminalDeps, TerminalView, TerminalViewEvent};
+
+/// How a [`labelled_separator`]'s rule is drawn: the "SSH Sessions" heading is
+/// solid, a session group's heading dashed (`IN-0033`, 2026-09-15 rework).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SeparatorRule {
+    Solid,
+    Dashed,
+}
+
+/// A menu separator that carries a label, centred between two rules.
+///
+/// `PopupMenu` has a plain `Separator` and a plain `Label` but nothing that is
+/// both, so the row is composed from a disabled element item: a rule, the label
+/// text, another rule. Disabled keeps it out of hover and keyboard navigation,
+/// like the separator it stands in for. Colours come from the theme; the rules
+/// are the kit separator's own 2px, which is also what makes the dashes read as
+/// dashes.
+fn labelled_separator(label: impl Into<SharedString>, rule: SeparatorRule) -> PopupMenuItem {
+    let label = label.into();
+    PopupMenuItem::element(move |_, cx| {
+        let line = || {
+            let line = div()
+                .flex_1()
+                .h(px(0.))
+                .border_t(px(2.))
+                .border_color(cx.theme().border);
+            match rule {
+                SeparatorRule::Solid => line,
+                SeparatorRule::Dashed => line.border_dashed(),
+            }
+        };
+        gpui_component::h_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .child(line())
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(label.clone()),
+            )
+            .child(line())
+    })
+    .disabled(true)
+}
 
 /// Initial PTY size for a freshly spawned session; the element resizes it to
 /// the real grid on the first prepaint.
@@ -592,16 +638,8 @@ impl Panel for TerminalPanel {
             .ghost()
             .tab_stop(false)
             .tooltip("New Terminal")
-            .dropdown_menu(|menu, _, cx| {
-                // The saved-session section is as long as the user's
-                // `ssh_session.json`, so the popup must be able to scroll: the
-                // kit applies its height cap (half the window, at most 450px)
-                // only when `scrollable` is set, and without it a long list
-                // runs off the bottom of the window unreachable by mouse *and*
-                // by keyboard (`scroll_to_item` is a no-op outside a scrolling
-                // container). This menu has no submenus, which is the only
-                // thing `scrollable` gives up.
-                let mut menu = menu.scrollable(true);
+            .dropdown_menu(|menu, window, cx| {
+                let mut menu = menu;
                 // Platform-specific shells.
                 #[cfg(windows)]
                 {
@@ -623,26 +661,57 @@ impl Panel for TerminalPanel {
                         .menu("Sh", Box::new(AddPanelWithShell(ShellKind::Sh)))
                         .menu("Zsh", Box::new(AddPanelWithShell(ShellKind::Zsh)));
                 }
-                menu = menu
-                    .separator()
-                    .menu("New SSH Session", Box::new(NewSession));
-
                 // The sessions saved in `ssh_session.json`, so a saved host
                 // opens from the same place a local shell does. This closure
                 // runs on every open, so the list is never stale.
                 let commands = oneterm_state::commands::commands(cx);
-                menu = menu.separator().label("SSH Sessions");
+                menu = menu.item(labelled_separator("SSH Sessions", SeparatorRule::Solid));
                 let saved = (commands.saved_ssh_sessions)(cx);
+                let mut session_rows = 0;
                 if saved.is_empty() {
-                    return menu.item(PopupMenuItem::new("No saved sessions").disabled(true));
+                    menu = menu.item(PopupMenuItem::new("No saved sessions").disabled(true));
+                    session_rows += 1;
                 }
-                saved.into_iter().fold(menu, |menu, (id, name)| {
-                    let open = commands.open_saved_ssh_session;
-                    menu.item(
-                        PopupMenuItem::new(name)
-                            .on_click(move |_, window, cx| open(id, window, cx)),
-                    )
-                })
+                for (group, rows) in saved {
+                    if !group.is_empty() {
+                        menu = menu.item(labelled_separator(group, SeparatorRule::Dashed));
+                        session_rows += 1;
+                    }
+                    session_rows += rows.len();
+                    for (id, name) in rows {
+                        let open = commands.open_saved_ssh_session;
+                        menu = menu.item(
+                            PopupMenuItem::new(name)
+                                .on_click(move |_, window, cx| open(id, window, cx)),
+                        );
+                    }
+                }
+
+                menu = menu
+                    .separator()
+                    .menu("New SSH Session", Box::new(NewSession));
+
+                // A saved list can be longer than the window, and the kit
+                // applies its height cap (half the window, at most 450px) only
+                // when `scrollable` is set: without it a long list runs off the
+                // bottom, unreachable by mouse *and* by keyboard
+                // (`scroll_to_item` is a no-op outside a scrolling container).
+                // But a scrollable menu also carries a scrollbar, which this
+                // app's theme keeps permanently visible, so scrolling is turned
+                // on only when the rows really cannot fit: the everyday menu
+                // stays free of the bar and a long one stays reachable.
+                //
+                // ponytail: the row height is the kit's own 26px item plus its
+                // 2px gap, estimated rather than measured, so a menu within a
+                // row of the cap can guess wrong by one row. Measuring would
+                // need the popup's laid-out bounds, which do not exist while it
+                // is being built.
+                const ROW_HEIGHT: f32 = 28.;
+                // 3 shells + the "SSH Sessions" heading + the closing separator
+                // and "New SSH Session".
+                const FIXED_ROWS: usize = 6;
+                let cap = (window.window_bounds().get_bounds().size.height * 0.5).min(px(450.));
+                menu.scrollable(px((FIXED_ROWS + session_rows) as f32 * ROW_HEIGHT) > cap)
             })
             .anchor(Anchor::TopRight);
         Some(btn)

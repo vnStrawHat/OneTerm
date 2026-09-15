@@ -451,7 +451,7 @@ fn duplicate_test_commands() -> WorkspaceCommands {
     }
     fn app(_: &mut gpui::App) {}
     fn dock(_: &gpui::Entity<DockArea>, _: &mut gpui::Window, _: &mut gpui::App) {}
-    fn saved_sessions(_: &gpui::App) -> Vec<(u64, String)> {
+    fn saved_sessions(_: &gpui::App) -> oneterm_state::commands::SavedSshSessionSections {
         Vec::new()
     }
     fn open_saved_session(_: u64, _: &mut gpui::Window, _: &mut gpui::App) {}

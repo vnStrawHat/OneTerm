@@ -60,13 +60,16 @@ control (`Panel::title_suffix`). The button itself does not change: it stays a p
                             | Command Prompt               |   <- local shells, platform
                             | PowerShell                   |      specific, unchanged.
                             | PowerShell 7                 |      (Bash / Sh / Zsh on unix)
+                            |------ SSH Sessions ---------|   <- labelled separator
+                            | prod-web                     |   <- ungrouped sessions,
+                            | staging                      |      store order, title only
+                            |- - - - - infra - - - - - - -|   <- dashed separator, group name
+                            | db-01                        |   <- that group's sessions
+                            | db-02                        |
+                            |- - - - - - lab - - - - - - -|   <- next group, store order
+                            | sandbox                      |
                             |------------------------------|
-                            | New SSH Session              |   <- unchanged
-                            |------------------------------|
-                            | SSH Sessions                 |   <- new section label
-                            | prod-web                     |   <- saved sessions, store order
-                            | db-01                        |
-                            | staging                      |
+                            | New SSH Session              |   <- moved to the end
                             +------------------------------+
 ```
 
@@ -77,11 +80,10 @@ Empty state — nothing saved in `ssh_session.json` yet:
                             | Command Prompt               |
                             | PowerShell                   |
                             | PowerShell 7                 |
+                            |------ SSH Sessions ---------|
+                            | No saved sessions            |   <- disabled hint, not clickable
                             |------------------------------|
                             | New SSH Session              |
-                            |------------------------------|
-                            | SSH Sessions                 |
-                            | No saved sessions            |   <- disabled hint, not clickable
                             +------------------------------+
 ```
 
@@ -98,10 +100,24 @@ Decisions this wireframe fixes:
   click is a bad trade. Keyboard reach is unchanged: `Ctrl-T` (`AddPanel`) still opens a
   local terminal without touching the menu, and the popup itself is arrow-key navigable
   because it is the kit's standard `PopupMenu`.
-- **Flat list, storage order, session labels as names.** The same order
-  `ssh_session.json` holds and the SSH Sessions panel's store order. Groups stay a tree-panel
-  concern (see the intake's open decisions). A hand-edited entry with a blank label falls
-  back to `host:port` so no row is ever invisible.
+- **Grouped, storage order, title only** (owner, 2026-09-15 acceptance rework; this
+  reverses the intake's "flat" open decision). The ungrouped sessions come first, then one
+  section per group in the order the groups first appear in `ssh_session.json` — the file's
+  order, not the tree's alphabetical order. Rows carry the session title alone, so two
+  sessions sharing a label are indistinguishable here; the owner accepted that, and the
+  right dock's tree still shows `user@host:port`. A hand-edited entry with a blank label
+  still falls back to `host:port` so no row is ever invisible.
+- **The headings are separators that carry a centred label.** The kit's `PopupMenu` offers
+  a plain `Separator` and a plain `Label` but nothing that is both, so the heading row is
+  composed from `PopupMenuItem::element(...).disabled(true)`: a rule, the label text,
+  another rule, with `border_dashed()` for a group heading and solid for "SSH Sessions".
+- **No scrollbar until the menu needs one.** The kit caps the popup's height only when the
+  menu is `scrollable`, and a scrollable menu always shows a scrollbar under this app's
+  `ScrollbarMode::Always` theme. `scrollable` is therefore set only when the estimated row
+  height exceeds that cap (`min(half the window, 450px)`), so the everyday menu carries no
+  bar while a long saved list still gets the cap and the scrolling.
+- **"New SSH Session" is last**, behind a plain separator, so the saved list sits directly
+  under the shells where the owner looks for it.
 - **Section label "SSH Sessions"** matches the panel the owner named, so the two surfaces
   read as the same list.
 - **No colour or icon literals.** The section is plain `PopupMenu::label` and
@@ -115,9 +131,11 @@ Decisions this wireframe fixes:
    `saved_ssh_sessions(cx)`.
 3. That fn pointer resolves to `oneterm_session_ui::saved_ssh_sessions`, which reads the
    `SshSessionStore` global and maps its entries through `menu_entries` to
-   `Vec<(u64, String)>` — the stable session id and the display name, in storage order.
-4. The closure appends a separator, the "SSH Sessions" label, and either one
-   `PopupMenuItem` per entry or the disabled "No saved sessions" hint.
+   `Vec<(String, Vec<(u64, String)>)>` — sections of `(group name, rows)`, the ungrouped
+   rows under an empty group name first, each row the stable session id and its title.
+4. The closure appends the labelled "SSH Sessions" separator and then either the sections
+   — ungrouped rows first, then a dashed labelled separator and its rows per group — or the
+   disabled "No saved sessions" hint, and finally a plain separator and "New SSH Session".
 5. Clicking a row calls `open_saved_ssh_session(id, window, cx)` with the **id**, not an
    index: the store's schema v2 gives every session a stable id precisely so a concurrent
    add or delete cannot retarget a pending UI action.

@@ -32,6 +32,55 @@ successful connect lands in a new center terminal tab exactly as it does from th
 When nothing is saved, the section shows a disabled "No saved sessions" hint and every
 other entry in the menu behaves exactly as it does today.
 
+## Rework (acceptance, 2026-09-15)
+
+The owner tried the built "+" menu before accepting it and asked for a different
+layout. Per `docs/HARNESS.md` this is acceptance rework of this packet, not a new bug.
+
+Owner's required order, verbatim (translated from Vietnamese, 2026-09-15):
+
+1. the shell entries (unchanged)
+2. a separator carrying the label "SSH Sessions"
+3. the saved SSH sessions that have NO group — **title only** (no `user@host:port` subtitle)
+4. for each group, in the store's order: a **dashed** separator whose label is the group
+   name, then that group's sessions (title only)
+5. a separator
+6. "New SSH Session" (moved from its current position above the sessions to the END)
+
+What changes:
+
+- **The subtitle is removed.** `D2` of the independent verification had added
+  `label — user@host:port` to every row so that two sessions sharing a label stayed
+  distinguishable. The owner asked for the title only, so that disambiguation is gone:
+  **two saved sessions with the same label are now indistinguishable in the menu**, and
+  clicking either opens whichever one owns that row's id. The owner chose this trade
+  knowingly; the tree in the right dock still shows the subtitle for telling them apart.
+  A blank label (only a hand-edited file can produce one) still falls back to `host:port`,
+  because an empty row would be worse than a slightly longer one.
+- **The list is grouped.** `menu_entries` now returns sections: the ungrouped sessions
+  first, then one section per group in the order the groups first appear in
+  `ssh_session.json`. The intake's open decision "group the sessions? No" is reversed by
+  the owner here; the store order (not the tree's alphabetical order) is kept, so the
+  section list still follows the file.
+- **"New SSH Session" moves to the end**, behind a plain separator.
+- **The section heading and the group headings are separators that carry a label.** The
+  kit's `PopupMenu` has a plain `Separator` and a plain `Label` but nothing that is both,
+  so the row is composed from `PopupMenuItem::element(...).disabled(true)`: the label text
+  plus a rule that fills the rest of the row, `border_dashed()` for a group. Colours come
+  from `cx.theme()` (`muted_foreground`, `border`); no literal is introduced.
+- **The heading labels sit in the middle** (owner, same session): rule, label, rule.
+- **The popup's scrollbar is hidden** for the everyday menu (owner, same session). The kit
+  applies its height cap only when the menu is `scrollable`, and a scrollable menu always
+  draws a scrollbar because this app's theme sets `ScrollbarMode::Always` globally. So
+  `scrollable` is now switched on only when the rows cannot fit the cap
+  (`min(half the window, 450px)`), estimated from the row count at the kit's 26px item plus
+  its 2px gap. A normal-sized menu therefore has no bar, and a long one still gets the cap
+  and the scrolling that `D1` asked for. Marked with a `ponytail:` comment: the height is
+  estimated, not measured, so a menu within a row of the cap can guess wrong by one row.
+- Unchanged: the id-not-index seam, the kit's height cap for a long list, the disabled
+  "No saved sessions" hint, the shell entries above the heading, and the connect path below
+  the dialog.
+
 ## Scope
 
 - [x] In scope:
@@ -51,44 +100,67 @@ other entry in the menu behaves exactly as it does today.
 
 ## Acceptance
 
-- [x] With two sessions saved, opening the "+" menu shows an "SSH Sessions" section listing
-      both names, in the order they appear in `ssh_session.json`, below the unchanged local
-      shell entries and "New SSH Session".
-      *Evidence:* `evidence/US-0094-menu-with-two-saved-sessions.png` —
-      `prod-web — root@10.77.0.11:22` then `db-01 — admin@10.77.0.12:2222`, file order,
-      flat, while the right dock's tree shows `db-01` nested under its `infra` group in the
-      same frame.
+Superseded by the 2026-09-15 rework (kept for the record, no longer the contract):
+
+- [~] ~~The section lists the names flat, in storage order, below the unchanged local shell
+      entries **and "New SSH Session"**.~~ The order changed: the heading and the sessions
+      now come *before* "New SSH Session", and the list is grouped.
+- [~] ~~Two saved sessions that share a label are still distinguishable in the menu.~~
+      Withdrawn by the owner with the subtitle: see Rework above.
+- [~] ~~The row mapping maps N stored entries to N rows in storage order.~~ Replaced by
+      the sectioned mapping below.
+
+Current acceptance (all re-proved on the 2026-09-15 build):
+
+- [x] The menu reads, top to bottom: the platform's local shell entries (unchanged), a
+      separator labelled "SSH Sessions", the saved sessions that have no group, then for
+      each group in store order a dashed separator labelled with the group name followed by
+      that group's sessions, then a plain separator, then "New SSH Session".
+      *Evidence:* `evidence/US-0094-rework-menu-grouped-order.png` — Command Prompt /
+      PowerShell / PowerShell 7, the "SSH Sessions" rule, `prod-web` and `staging`, the
+      dashed `infra` rule with `db-01` and `db-02`, the dashed `lab` rule with `sandbox`, a
+      plain separator, "New SSH Session" last — the seeded file's order, with the right
+      dock's tree showing the same five sessions in the same frame.
+- [x] Every session row shows the session title only — no `user@host:port` subtitle.
+      *Evidence:* the same screenshot (the tree beside it still shows the subtitles), plus
+      the `menu_entries_*` tests.
 - [x] A long list stays reachable: the section is capped and scrolls rather than running off
       the window, and a row reached only by scrolling still opens its own session.
-      *Evidence:* `evidence/US-0094-menu-50-sessions-scrollable.png` (50 saved sessions, the
-      popup ends inside the window with a scrollbar),
-      `evidence/US-0094-menu-50-sessions-scrolled-to-end.png` (`host-50` reached by wheel),
-      `evidence/US-0094-dialog-from-scrolled-row.png` (clicking it opens "Connect to host-50
-      (ops@10.9.1.50:22)"). Added after independent verification found `D1`.
-- [x] Two saved sessions that share a label are still distinguishable in the menu.
-      *Evidence:* the same 50-session screenshot shows `alpha — root@10.9.0.1:22` and
-      `alpha — root@10.9.0.2:22` as separate rows, plus
-      `verify_duplicate_unicode_and_fifty_entries`. Added after `D2`.
-- [x] Clicking a listed session opens the connect dialog for **that** session (title and
-      server banner name its host), and Connect starts a real connection attempt — reaching
-      the host is not required.
-      *Evidence:* `evidence/US-0094-connect-dialog-for-clicked-session.png` (titled
-      "Connect to prod-web (root@10.77.0.11:22)", banner `ssh://root@10.77.0.11:22`) and
-      `evidence/US-0094-connect-failed-notification.png`, plus the app log line
-      `oneterm_ssh::session] SshSession::connect: host=10.77.0.11, port=22, user=root`.
-- [x] With no sessions saved, the section shows a disabled "No saved sessions" hint and the
-      rest of the menu is unchanged from today.
-      *Evidence:* `evidence/US-0094-menu-empty-state.png`.
-- [x] The row mapping maps N stored entries to N rows in storage order, an empty store to no
-      rows, and a blank label to `host:port`, proven by unit tests.
-      *Evidence:* the four `menu_entries_*` tests in `crates/session-ui/src/tree_builder.rs`,
-      with the tamper results recorded below.
+      *Evidence:* `evidence/US-0094-rework-menu-50-sessions-scrollable.png` — 50 saved
+      sessions, the popup capped inside the window with its scrollbar. The pre-rework
+      `evidence/US-0094-menu-50-sessions-scrolled-to-end.png` and
+      `evidence/US-0094-dialog-from-scrolled-row.png` still stand for a scrolled row opening
+      its own session: the row-to-id routing is unchanged.
+- [x] Clicking a listed session — including one inside a group — opens the connect dialog
+      for **that** session (title and server banner name its host). *Evidence:*
+      `evidence/US-0094-rework-dialog-from-grouped-session.png` — clicking `db-01` under the
+      dashed `infra` heading opens "Connect to db-01 (admin@10.77.0.21:22)" with the banner
+      `ssh://admin@10.77.0.21:22`.
+- [x] With no sessions saved, the heading still shows with the disabled "No saved sessions"
+      hint, and "New SSH Session" is still present at the end. *Evidence:*
+      `evidence/US-0094-rework-menu-empty-state.png`.
+- [x] The row mapping returns the ungrouped sessions as the first section and one section
+      per group in the order the groups first appear in the store, title only, with a
+      blank-or-whitespace group counted as ungrouped and the stable ids unchanged by a
+      delete — proven by unit tests with no gpui dependency. *Evidence:* the eight
+      `menu_entries_*` / `verify_*` tests listed under Focused proof, with their tamper
+      results.
 - [x] No new crate edge: `crates/terminal-view` still does not depend on
       `crates/session-ui`, and `crates/terminal-view/Cargo.toml` is unchanged.
       *Evidence:* `python scripts/verify-dependency-graph.py` — "Dependency graph policy
-      passed for 21 workspace packages and 21 explicit members"; `git status` never lists
-      `crates/terminal-view/Cargo.toml`.
-- [x] `pwsh scripts/ci-local.ps1` is green. *Evidence:* "ci-local: all checks passed."
+      passed for 21 workspace packages and 21 explicit members"; the changed-file list never
+      included `crates/terminal-view/Cargo.toml`.
+- [x] `pwsh scripts/ci-local.ps1` is green. *Evidence:* "ci-local: all checks passed",
+      60 sections / 1979 passed / 0 failed / 14 ignored.
+
+Owner tweaks asked for and accepted during the same rework:
+
+- [x] The heading labels sit in the middle of their rule.
+      *Evidence:* `evidence/US-0094-rework-menu-grouped-order.png`.
+- [x] The everyday menu shows no scrollbar, while a menu too long for the cap still scrolls.
+      *Evidence:* the same screenshot (5 sessions, no bar) against
+      `evidence/US-0094-rework-menu-50-sessions-scrollable.png` (50 sessions, capped, bar
+      present).
 
 ## Documentation
 
@@ -148,6 +220,24 @@ the row text gained the subtitle and the popup gained scrolling, neither of whic
 contract that sentence states. `docs/ssh-client-connect.md` is likewise unaffected: the
 connect flow below the dialog did not move. No further doc change is required by `D1`-`D3`.
 
+Acceptance rework, 2026-09-15 — the order *is* the contract that sentence stated, so it had
+to move:
+
+- `docs/gui-layout.md` §Panel registration and presentation now spells the menu out in the
+  owner's order, records that rows are title-only (and that duplicate labels are therefore
+  indistinguishable here by design), that the two labelled separators are composed from a
+  disabled `PopupMenuItem::element` because the kit has no item that is both, and that the
+  popup scrolls — and so shows its bar — only past the kit's height cap. The §Source map
+  lines still point at the same two files.
+- `high-level-design.md` — the wireframe, the decision list and the data-flow step for the
+  menu section are redrawn for the grouped, title-only order with "New SSH Session" last.
+- `IN-0033.md` — the open decision "group the sessions? No" records the owner's reversal.
+- `docs/ssh-client-connect.md` — re-reviewed, unchanged: the set of surfaces that reach the
+  connect dialog did not grow or shrink, and the flow below the dialog did not move.
+- `docs/agents/crate-dependency-rules.md`, `docs/terminal-split.md`,
+  `docs/agents/persistence.md` — re-reviewed, no-change reasons above still hold. The seam
+  is the same one, only its payload type changed (`SavedSshSessionSections`).
+
 ## Context
 
 - The "+" button is `TerminalPanel::title_suffix` in
@@ -179,6 +269,20 @@ connect flow below the dialog did not move. No further doc change is required by
 - [x] Update the two owning docs.
 - [x] `cargo fmt --all`, then `pwsh scripts/ci-local.ps1`.
 - [x] GUI walk on the Windows desktop: empty state, two seeded sessions, click one.
+
+Acceptance rework, 2026-09-15:
+
+- [x] Reopen the packet, record the owner's order verbatim and redraw the HLD wireframe.
+- [x] Turn `menu_entries` into sections (ungrouped first, then groups in store order),
+      title only, and name the seam type `SavedSshSessionSections`.
+- [x] Rewrite the model's unit tests for the sections; keep the id-not-index tests.
+- [x] Rebuild the menu in the owner's order with a composed labelled separator, dashed per
+      group, and move "New SSH Session" to the end.
+- [x] Owner tweaks in the same session: centre the heading labels; hide the popup's
+      scrollbar unless the rows exceed the kit's cap.
+- [x] Update `docs/gui-layout.md`, the HLD and the intake's open decision.
+- [x] `cargo fmt --all`, `pwsh scripts/ci-local.ps1`, and the GUI walk with a seeded store
+      (2 ungrouped, `infra` × 2, `lab` × 1) plus a 50-session store for the cap.
 
 ## Decisions
 
@@ -336,8 +440,89 @@ Two tests the verification specified are adopted here. Its worktree
 so they were re-written from the report's specification rather than applied verbatim; both
 assert the properties it named, and the positional-id tamper it used fails them here too.
 
+### Acceptance rework proof (2026-09-15)
+
+Code, on top of the above:
+
+| File | Change |
+| --- | --- |
+| `crates/state/src/commands.rs` | `SavedSshSessionSections` type alias; `saved_ssh_sessions` returns it |
+| `crates/state/src/services.rs`, `crates/terminal-view/src/panel/tests.rs` | the two test doubles follow the type |
+| `crates/session-ui/src/tree_builder.rs` | `menu_entries` returns sections, title only; 8 unit tests |
+| `crates/session-ui/src/session_state.rs` | the id-survives-delete test reads the section's rows |
+| `crates/session-ui/src/lib.rs` | the seam's doc comment |
+| `crates/terminal-view/src/panel/terminal_panel.rs` | `SeparatorRule` + `labelled_separator`, the menu rebuilt in the owner's order, conditional `scrollable` |
+| `docs/gui-layout.md`, `high-level-design.md`, `IN-0033.md` | owning-doc updates |
+
+`crates/terminal-view/Cargo.toml` is still untouched and `crates/app/src/init.rs` needed no
+change: the seam's shape changed, not its wiring.
+
+Focused proof — `cargo test -p oneterm-session-ui` **60 passed / 0 failed / 0 ignored**,
+`cargo test -p oneterm-terminal-view` **304 passed / 0 failed / 3 ignored**. The model tests:
+
+| Test | Asserts |
+| --- | --- |
+| `menu_entries_lists_ungrouped_sessions_in_storage_order` | one section with an empty group name, file order, titles only |
+| `menu_entries_of_an_empty_store_is_empty` | no sections at all (the view renders the hint) |
+| `menu_entries_of_only_grouped_sessions_has_no_ungrouped_section` | no empty leading section when nothing is ungrouped |
+| `menu_entries_orders_groups_by_first_appearance` | ungrouped first, then `zeta` before `alpha` because that is the store's order |
+| `menu_entries_treats_a_blank_group_as_ungrouped` | `""` and `"  "` are no group; `" infra "` is trimmed |
+| `menu_entries_falls_back_to_the_subtitle_for_a_blank_label` | a hand-edited blank label still renders `10.0.0.9:2222` |
+| `menu_entries_trims_a_padded_label` | `"  staging  "` renders `staging`, with no subtitle |
+| `verify_duplicate_unicode_and_fifty_entries` | duplicate labels are now deliberately identical text (only the id differs), a non-ASCII label survives, 50 entries map 1:1 |
+| `verify_menu_row_id_survives_a_delete_of_an_earlier_session` (in `session_state.rs`) | the clicked row's id still resolves to its own host after an earlier session is deleted |
+
+Tamper check, each reverted afterwards:
+
+- sorting the group sections by name → `menu_entries_orders_groups_by_first_appearance`
+  FAILED, `alpha` ahead of `zeta` where the store has `zeta` first.
+- accepting a blank `group` as a real group → `menu_entries_treats_a_blank_group_as_ungrouped`
+  FAILED with two sections named `""` instead of one.
+
+Gate — `pwsh scripts/ci-local.ps1` exit 0, ending `ci-local: all checks passed.` Summed over
+every `test result:` line of that run:
+
+| | sections | passed | failed | ignored |
+| --- | --- | --- | --- | --- |
+| **measured** | **60** | **1979** | **0** | **14** |
+
+(Baseline before this rework: 60 / 1976 / 0 / 14. The eight model tests replace five.)
+
+E2E — Windows interactive desktop, `cargo build -p oneterm-app --profile fast-dev` in this
+worktree, the app launched with its working directory set to the worktree so
+`oneterm_core::config_dir()` ("target" under `debug_assertions`) resolved inside it. The
+store was seeded at `<worktree>/target/ssh_session.json` with `prod-web` and `staging`
+(ungrouped), `db-01` and `db-02` (group `infra`) and `sandbox` (group `lab`), and separately
+with 50 ungrouped sessions for the cap; the file was deleted afterwards. The owner's real
+config was never read or written.
+
+Safety, because the owner runs Claude Code inside their own `oneterm.exe`: `Get-Process
+oneterm` was recorded before every launch (owner pid `14804`, the same one before and after
+every walk), each instance was started with `Start-Process -PassThru` and identified as the
+pid that was not there before (`20772, 19436, 20376, 8128, 20420, 17676, 3788, 17948`), and
+only that pid's window was driven, captured and stopped. Nothing was ever matched by process
+name or window title.
+
+| Screenshot | Shows |
+| --- | --- |
+| `evidence/US-0094-rework-menu-grouped-order.png` | the owner's order end to end, labels centred in their rules, the group rules dashed, no scrollbar, and the right dock's tree of the same five sessions beside it |
+| `evidence/US-0094-rework-dialog-from-grouped-session.png` | clicking `db-01` under the dashed `infra` heading opens "Connect to db-01 (admin@10.77.0.21:22)" |
+| `evidence/US-0094-rework-menu-empty-state.png` | no `ssh_session.json`: the heading, the greyed "No saved sessions", the separator and "New SSH Session" last |
+| `evidence/US-0094-rework-menu-50-sessions-scrollable.png` | 50 saved sessions: the popup capped inside the window with its scrollbar — the `D1` fix still engages when it is needed |
+
 ### Gaps
 
+- **The scrollbar decision is an estimate, not a measurement.** `scrollable` is switched on
+  when `rows × 28px` exceeds the kit's cap; 28px is the kit's 26px item plus its 2px gap,
+  and the menu's own bounds do not exist while it is being built. A menu within a row of the
+  cap can therefore guess wrong by one row — either a bar that was not needed, or a menu one
+  row taller than the cap. Marked in the source with a `ponytail:` comment. The clean fix
+  belongs in the kit: a per-menu scrollbar-visibility option, since the only control today
+  is the app-wide `ScrollbarMode`, which OneTerm deliberately sets to `Always`.
+- **Duplicate labels are indistinguishable in this menu.** Title-only rows are the owner's
+  explicit choice, replacing the subtitle `D2` had added. The click still routes by the
+  session's stable id, so it opens the right host — the user simply cannot tell the two rows
+  apart by reading them. The right dock's tree still shows `user@host:port`.
 - **Nothing automated pins the menu's section order.** That local shells come first, then
   "New SSH Session", then the "SSH Sessions" heading and the rows, is proven only by the
   screenshots above: `PopupMenu` exposes no accessor for its built items (only `is_empty()`),
@@ -477,9 +662,79 @@ cur.execute(
 conn.commit()
 ```
 
+Acceptance rework, 2026-09-15 — the `story` row for `US-0094` goes through reopened and back
+to implemented. Run in the main checkout after merge (the rows above must exist first):
+
+```python
+import sqlite3
+
+conn = sqlite3.connect("harness.db")
+cur = conn.cursor()
+
+cur.execute(
+    """
+    UPDATE story
+       SET status = ?,
+           evidence = evidence || ?,
+           last_verified_at = ?,
+           last_verified_result = ?,
+           notes = notes || ?
+     WHERE id = 'US-0094'
+    """,
+    (
+        "implemented",
+        " ACCEPTANCE REWORK 2026-09-15 (reopened, then re-implemented): the owner tried the "
+        "built menu and asked for a different layout, so per docs/HARNESS.md this packet was "
+        "reopened rather than a new BUG filed. New order: shells, a separator labelled 'SSH "
+        "Sessions', the ungrouped sessions, then per group in store order a dashed separator "
+        "carrying the group name and that group's sessions, then a separator and 'New SSH "
+        "Session' last. Rows are TITLE ONLY, which withdraws the subtitle D2 had added: two "
+        "saved sessions sharing a label are now indistinguishable in this menu, the owner's "
+        "explicit choice (the right dock's tree still shows user@host:port); a blank "
+        "hand-edited label still falls back to host:port. menu_entries returns sections "
+        "(ungrouped first, then groups in first-appearance order) and the seam type is named "
+        "SavedSshSessionSections in crates/state; the id-not-index seam is unchanged. The kit "
+        "has a Separator and a Label but no item that is both, so each heading is a disabled "
+        "PopupMenuItem::element -- rule, centred label, rule -- with border_dashed() for a "
+        "group and theme colours only. Two owner tweaks in the same session: the labels are "
+        "centred, and the popup's scrollbar is hidden unless the rows exceed the kit's cap "
+        "(min(half the window, 450px)), because the kit caps the height only when scrollable "
+        "and this app's theme sets ScrollbarMode::Always. FOCUSED: 8 menu_entries tests plus "
+        "the id-survives-delete test; sorting the group sections fails the store-order test "
+        "and accepting a blank group fails the blank-group test (both reverted). "
+        "cargo test -p oneterm-session-ui 60 passed / 0 failed; -p oneterm-terminal-view 304 "
+        "passed / 0 failed / 3 ignored. GATE pwsh scripts/ci-local.ps1 exit 0, 60 sections / "
+        "1979 passed / 0 failed / 14 ignored. E2E Windows desktop, fast-dev, working directory "
+        "set to the worktree so config_dir() resolved inside it and the owner's real config was "
+        "never touched: seeded 2 ungrouped + infra x2 + lab x1 (the owner's order rendered, "
+        "labels centred, group rules dashed, no scrollbar), clicking db-01 under the dashed "
+        "infra heading opened 'Connect to db-01 (admin@10.77.0.21:22)', the empty store showed "
+        "the hint with New SSH Session last, and a 50-session store still capped the popup with "
+        "its scrollbar. 4 screenshots under evidence/US-0094-rework-*.png; the seed file was "
+        "deleted afterwards. NEW GAP: the scrollbar decision estimates 28px per row rather than "
+        "measuring the popup, so a menu within a row of the cap can guess wrong by one row "
+        "(ponytail: comment in the source); the clean fix is a per-menu scrollbar option in the "
+        "kit.",
+        "2026-09-15T09:30:00",
+        "pass",
+        " Acceptance rework implemented on worktree agent-a580e6e3c74ab401d off main @621e4c9 "
+        "in four commits (reopen record, implementation, the owner tweaks, evidence). NOT merged, NOT pushed. Docs "
+        "changed: docs/gui-layout.md, the intake's high-level-design.md and IN-0033.md. Safety: "
+        "Get-Process oneterm recorded before every launch (owner pid 14804 alive before and "
+        "after every walk), Start-Process -PassThru, and only the launched pids (20772, 19436, "
+        "20376, 8128, 20420, 17676, 3788, 17948) were driven, captured and stopped; nothing was "
+        "matched by process name or window title.",
+    ),
+)
+
+conn.commit()
+```
+
 ## Handoff
 
-Implemented, independently verified (PASS-WITH-NOTES), and reworked on worktree
-`agent-a85e44f034eb1c863` off `main` @ `4dd57e7`. Not merged, not pushed. All four
-verification items (`D1`-`D3`, `N4`/`N5`) are closed. Next owner: merge, then mirror the two
-`harness.db` rows above in the main checkout.
+Implemented, independently verified (PASS-WITH-NOTES), reworked for that verification, and
+then reworked again for the owner's acceptance feedback on 2026-09-15 — that last pass on
+worktree `agent-a580e6e3c74ab401d` off `main` @ `621e4c9`. Not merged, not pushed. All four
+verification items (`D1`-`D3`, `N4`/`N5`) and the owner's layout, centring and scrollbar
+requests are closed. Next owner: merge, then mirror the `harness.db` rows above — the two
+inserts first, then the acceptance-rework update — in the main checkout.

@@ -27,9 +27,9 @@ use gpui::{App, Window};
 use gpui_component::dock::{panel_handle, register_panel};
 use oneterm_state::panel_names;
 
-/// `WorkspaceCommands::saved_ssh_sessions` — the saved sessions as
-/// `(stable id, display name)` in storage order, for the terminal feature's
-/// "+" (New Terminal) menu (`IN-0033`).
+/// `WorkspaceCommands::saved_ssh_sessions` — the saved sessions grouped for the
+/// terminal feature's "+" (New Terminal) menu (`IN-0033`): the ungrouped ones
+/// first, then one section per group, all in store order.
 ///
 /// `oneterm-terminal-view` cannot depend on this crate (that edge is a cycle:
 /// this crate already depends on it), so the list crosses through the command
@@ -40,7 +40,7 @@ use oneterm_state::panel_names;
 /// installs the bundle holding this function pointer. It does
 /// (`oneterm_app::init`), which is what makes the panic unreachable rather than
 /// merely unlikely — the pointer does not exist until after the store does.
-pub fn saved_ssh_sessions(cx: &App) -> Vec<(u64, String)> {
+pub fn saved_ssh_sessions(cx: &App) -> oneterm_state::commands::SavedSshSessionSections {
     tree_builder::menu_entries(SshSessionStore::global(cx).read(cx).sessions())
 }
 
