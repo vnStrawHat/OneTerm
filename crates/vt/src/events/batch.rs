@@ -21,6 +21,18 @@ pub struct StrSpan {
     len: u32,
 }
 
+impl StrSpan {
+    /// The same text without its first `bytes` bytes. The caller must know the
+    /// cut lands on a character boundary; an over-long cut reads as empty.
+    pub(crate) fn skip(self, bytes: u32) -> StrSpan {
+        let bytes = bytes.min(self.len);
+        StrSpan {
+            start: self.start + bytes,
+            len: self.len - bytes,
+        }
+    }
+}
+
 /// Raw bytes in the batch's arena.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ByteSpan {
@@ -126,6 +138,80 @@ impl EventBatch {
             text: span,
         });
         true
+    }
+
+    /// Intern one string payload and push the event that names it, or drop
+    /// both when the bytes are not UTF-8. Keeping the validation here is what
+    /// keeps [`EventBatch::str`] infallible.
+    pub(crate) fn push_text(
+        &mut self,
+        text: &[u8],
+        event: impl FnOnce(StrSpan) -> VtEvent,
+    ) -> bool {
+        let Some(span) = self.push_str(text) else {
+            return false;
+        };
+        self.events.push(event(span));
+        true
+    }
+
+    // ── Assembling a payload in place ──────────────────────────────────────
+    //
+    // An arm whose payload is not one contiguous parameter — a title rejoined
+    // on `;`, a percent-decoded path — would otherwise build a `String` per
+    // sequence on the hot path. These three let it build the payload directly
+    // in the arena the event was going to be copied into anyway: `mark` before,
+    // `extend` per piece, one `finish_*` after.
+
+    /// Where a payload assembled with [`EventBatch::extend`] starts.
+    pub(crate) fn mark(&self) -> usize {
+        self.arena.len()
+    }
+
+    /// Append one piece of the payload under construction.
+    pub(crate) fn extend(&mut self, bytes: &[u8]) {
+        self.arena.extend_from_slice(bytes);
+    }
+
+    /// Finish the payload at `mark`, trimmed. `None`, and the arena rewound,
+    /// when what was assembled is not valid UTF-8.
+    pub(crate) fn finish_trimmed(&mut self, mark: usize) -> Option<StrSpan> {
+        let (offset, len) = {
+            let Ok(text) = std::str::from_utf8(&self.arena[mark..]) else {
+                // The rewind is the point: the caller is dropping the payload,
+                // and half of it must not stay in the arena for the rest of the
+                // batch.
+                self.arena.truncate(mark);
+                return None;
+            };
+            let trimmed = text.trim();
+            (
+                trimmed.as_ptr() as usize - text.as_ptr() as usize,
+                trimmed.len(),
+            )
+        };
+        self.arena.truncate(mark + offset + len);
+        Some(StrSpan {
+            start: (mark + offset) as u32,
+            len: len as u32,
+        })
+    }
+
+    /// Finish the payload at `mark`, repairing invalid UTF-8 in place.
+    ///
+    /// Allocates **only** when the bytes are not already valid UTF-8 — a
+    /// percent escape that decoded to a lone continuation byte, say — which is
+    /// the case that was going to cost an allocation whatever happened.
+    pub(crate) fn finish_lossy(&mut self, mark: usize) -> StrSpan {
+        if std::str::from_utf8(&self.arena[mark..]).is_err() {
+            let repaired = String::from_utf8_lossy(&self.arena[mark..]).into_owned();
+            self.arena.truncate(mark);
+            self.arena.extend_from_slice(repaired.as_bytes());
+        }
+        StrSpan {
+            start: mark as u32,
+            len: (self.arena.len() - mark) as u32,
+        }
     }
 
     /// Push bytes the terminal owes the program, to be written to its input.

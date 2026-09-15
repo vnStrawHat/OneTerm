@@ -273,63 +273,32 @@ Handled natively:
 | `10` / `11` / `12` | foreground / background / cursor, set or `?` query; a multi-parameter form advances the key and stops past `Cursor` |
 | `104` / `110` / `111` / `112` | reset |
 | `52` | clipboard; `?` -> `VtEvent::ClipboardLoad`, otherwise base64-decode -> `VtEvent::ClipboardStore`. The selection byte must be `c`, `p` or `s`; anything else drops the request; undecodable base64 or invalid UTF-8 is dropped silently (trap 25). **The engine never applies a policy** — the decision stays in `crates/terminal/src/security_policy.rs` |
-| `22` | mouse cursor icon; parsed and ignored |
+| `22` | mouse pointer shape; reported by name (`US-0098`) |
 | `50` | cursor shape (`CursorShape=0/1/2`) |
 
-Everything else goes through the registration table.
+Everything else goes through the routing table.
 
 ### OSC registration — the extension point
 
-```rust
-pub struct OscClaims { low: [u64; 32], high: Vec<u32> }   // bitmap for 0..2048, list above
-
-impl OscClaims {
-    pub fn claim(&mut self, code: u32) -> &mut Self;
-    pub fn claim_large(&mut self, code: u32) -> &mut Self;  // also allow-lists the 8 MiB spill
-}
-```
-
-Claimed numbers are delivered as `VtEvent::Osc { code, params, terminator }` with the parameter
-bytes living in the batch arena — no `Vec<Vec<u8>>` per OSC, which is what the fork allocates on
-the hot path today (`crates/terminal/src/backend/osc_router.rs:249-257`). Unclaimed and unhandled
-numbers are dropped and counted, exactly as the reference drops them (R-35).
-
-`claim_large(code)` additionally allows that number's payload to spill past `OSC_INLINE` to
-`OSC_LARGE` ([`parser.md`](parser.md), R-55). It is a **memory ceiling only**; who may write or
-read the clipboard, and under what limits, stays in `crates/terminal/src/security_policy.rs`.
-
-**A published payload cap above `OSC_INLINE` requires `claim_large`.** `claim` alone bounds the
-*whole* payload — prefix included — at 2 KiB, so a protocol documenting an 8 KiB limit while
-claiming plainly cuts anything past about 2040 base64 bytes and then drops it as malformed, with no
-signal. `crates/terminal` therefore uses `claim_large` for **both** agent spellings, `20308` and
-the deprecated `9` alias: "parsed identically for one release" includes the ceiling. The spill is
-transient — the parser grows into it and shrinks back after each OSC — so the steady-state cost is
-zero and the exposure is the class `claim_large(52)` already accepts. The protocol's own 8 KiB cap
-stays in `crates/terminal/src/osc_agent/`, not in the claim.
-
-**A truncated payload is dropped, not parsed.** The parser's `truncated` flag must reach the
-handler: cut base64 can decode to a shorter well-formed event the agent never sent, so a truncated
-agent OSC is discarded before parsing and counted separately from the silent malformed path.
-
-`crates/terminal` claims 7, 9, 133, 633 and **20308**, plus 52 and 8 as large.
-
-**The agent channel is `OSC 20308 ; 1` (`docs/osc-agent-status.md`), and it is a claim, not an
-engine change** — which is the whole point of the extension point. It moved off `OSC 9;7` in
-`US-0088` because `9;7` is ConEmu's "run some process with arguments"
-([`../research/prior-art.md`](../research/prior-art.md) § 6.4): an agent emitting the old sequence
-under ConEmu or cmder asks it to spawn a process with the payload as its command line. `20308` is
-`0x4F54` (`OT`), in the 10000-29999 band no surveyed terminal touches; sub-code `0` is the support
-query, `1` the status event, `2`+ reserved for OneTerm. `OSC 9` stays claimed for notifications and
-`9;4` progress, and for **one release** `9;7` is accepted as a deprecated alias — parsed
-identically, counted, logged once per session — then dropped. Both are sub-code matches in
-`crates/terminal/src/osc_agent/`; the engine only routes the numbers.
-
-A claimed number whose handler is missing is a debug assertion, never a panic — and so is the
-mirror: **the natively handled set is queryable data (`OscClaims::NATIVE`, `is_native`), and a
-`claim` on one of those numbers is a debug assertion** rather than a silent no-op, because it can
-only mean the embedder believes it will receive something the engine handles itself.
-`claim_large` on a native number is *not* an error: it registers the memory ceiling without a dead
-delivery claim, which is what OSC 52 and OSC 8 need. A duplicate `claim` is idempotent.
+> **Superseded by `US-0098`.** `OscClaims` — a one-bit "is this number delivered to the embedder"
+> table — became `OscRoutes`, a four-state routing table (`Builtin`, `BuiltinAndForward`, `Forward`,
+> `Drop`), and the numbers `crates/terminal` used to re-parse (OSC 1, 7, 9, 22, 50, 133) became
+> built-in arms emitting typed events. What replaced this section, in full — the semantics, the bit
+> layout, the dispatch path, the exact signatures, the payload ceilings and the `OSC 9;7` collision
+> — is
+> [`../../IN-0038-embeddable-vt-core/low-level-design/osc-extension.md`](../../IN-0038-embeddable-vt-core/low-level-design/osc-extension.md),
+> and the choice behind it is
+> [`DEC-0017`](../../../decisions/DEC-0017-osc-routing-table-not-handler-registry.md).
+>
+> Four things this section established survived the rename verbatim and are still binding:
+>
+> * a delivered number's parameter bytes live in the batch arena, never a `Vec<Vec<u8>>` per OSC;
+> * the payload ceiling is a **memory** opt-in per number (`OscRoutes::large`), orthogonal to the
+>   route, and a protocol publishing a cap above `OSC_INLINE` must buy it — `crates/terminal` does,
+>   for both agent spellings, because "parsed identically for one release" includes the ceiling;
+> * a truncated payload is dropped, not parsed: cut base64 can decode to a shorter well-formed event
+>   the agent never sent;
+> * a table that can never do what the caller asked is a debug assertion, never a panic.
 
 ### The hyperlink table needs a ladder, and `US-0076` owns it
 

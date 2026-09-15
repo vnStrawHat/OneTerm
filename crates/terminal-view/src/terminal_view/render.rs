@@ -531,6 +531,10 @@ pub(super) fn progress_style(
         TerminalProgress::Error(pct) => (pct as f32 / 100.0, colors.danger),
         TerminalProgress::Paused(pct) => (pct as f32 / 100.0, colors.warning),
         TerminalProgress::Indeterminate => (1.0, colors.blue),
+        // The engine's enum is `#[non_exhaustive]`: a state it learns later
+        // shows a full bar rather than no bar, which is the safer default for
+        // an indicator whose whole job is to say "something is running".
+        _ => (1.0, colors.blue),
     };
     Some((fraction.clamp(0.0, 1.0), color))
 }

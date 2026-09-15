@@ -31,12 +31,48 @@ pub enum StringTerm {
     St,
 }
 
+/// ConEmu taskbar progress, `OSC 9 ; 4 ; state ; percent`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum Progress {
+    /// `state = 0`: clear the indicator.
+    Remove,
+    /// `state = 1`: normal progress, `0..=100`.
+    Set(u8),
+    /// `state = 2`: error, `0..=100`.
+    Error(u8),
+    /// `state = 3`: indeterminate.
+    Indeterminate,
+    /// `state = 4`: paused, `0..=100`.
+    Paused(u8),
+}
+
+/// A shell-integration boundary, `OSC 133`.
+///
+/// Spec: <https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md>.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum ShellMark {
+    /// `OSC 133 ; A`: the shell is about to draw its prompt.
+    PromptStart,
+    /// `OSC 133 ; B`: the prompt ended and the user's input starts.
+    PromptEnd,
+    /// `OSC 133 ; C`: the command was submitted and its output starts.
+    OutputStart,
+    /// `OSC 133 ; D [ ; exit ]`: the command finished.
+    OutputEnd {
+        /// The exit code the shell reported, when it reported a number.
+        exit_code: Option<i32>,
+    },
+}
+
 /// One thing that happened while parsing a chunk.
 ///
 /// Deliberately **not** `Clone`: a payload is a span into the batch that
 /// produced it, so an event outliving its batch is a bug the borrow checker
 /// should catch rather than a copy that silently reads the next batch's bytes.
 #[derive(PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum VtEvent {
     /// Something changed, so a consumer that draws should ask for an update.
     ///
@@ -113,6 +149,42 @@ pub enum VtEvent {
     /// The last cell referencing this image is gone; a consumer holding a
     /// texture for it should drop it.
     GraphicReleased(GraphicId),
+    /// `OSC 7`: the working directory the shell reports, **unresolved**.
+    ///
+    /// The engine percent-decodes the path and strips the leading slash of a
+    /// `file:///C:/...` Windows drive URL, and stops there: it builds no path,
+    /// consults no current directory, checks no host and touches no
+    /// filesystem. A remote shell sending `file://evil/../../etc` is data, and
+    /// deciding what to trust is the embedder's.
+    Cwd {
+        /// The URL's authority, verbatim and possibly empty. Not decoded.
+        host: StrSpan,
+        /// The path, percent-decoded. A payload that was not a `file://` URL
+        /// is reported here verbatim.
+        path: StrSpan,
+    },
+    /// `OSC 1`: the icon name the program asks for.
+    IconName(StrSpan),
+    /// `OSC 9`: a desktop notification. Whether to show it, how large it may
+    /// be and how often it may arrive are the embedder's policy.
+    Notification {
+        /// Empty for `OSC 9`, which carries no title.
+        title: StrSpan,
+        /// The message.
+        body: StrSpan,
+    },
+    /// `OSC 22`: the mouse pointer shape the program asks for, by name and
+    /// verbatim. The engine has no pointer.
+    Pointer(StrSpan),
+    /// `OSC 9 ; 4`: ConEmu taskbar progress.
+    Progress(Progress),
+    /// `OSC 133`: a shell-integration boundary. The engine has already marked
+    /// its own cell template and anchors; this is the same fact for a consumer
+    /// that tracks prompts or exit codes.
+    ShellMark(ShellMark),
+    /// `OSC 50`: the cursor shape changed. Read the new one from
+    /// [`Terminal::cursor_style`](crate::Terminal::cursor_style).
+    CursorStyleChanged,
 }
 
 /// What one `feed` did, and everything it had to degrade while doing it.

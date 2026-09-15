@@ -57,12 +57,12 @@ pub use oneterm_vt::search::{SearchMatch, SearchOptions};
 /// direct dependency on `oneterm-vt` first (`US-0085`).
 pub use oneterm_vt::{
     Attrs, CellWidth, Color, CursorShape, GraphicData, GraphicId, HyperlinkId, ModeSnapshot,
-    MouseEncoding, MouseProtocol, MouseReporting, NamedColor, RenderCell, RenderContent,
-    RenderCursor, RenderPlacement, RenderRow, RenderUpdate, ResizePolicy, Rgb, RowId,
-    SelectionKind, SelectionRange, Semantic, SeqNo, Size, Style, StyleRun, Terminal,
-    VIRTUAL_CELL as SIXEL_VIRTUAL_CELL,
+    MouseEncoding, MouseProtocol, MouseReporting, NamedColor, Progress as TerminalProgress,
+    RenderCell, RenderContent, RenderCursor, RenderPlacement, RenderRow, RenderUpdate,
+    ResizePolicy, Rgb, RowId, SelectionKind, SelectionRange, Semantic, SeqNo, ShellMark, Size,
+    Style, StyleRun, Terminal, VIRTUAL_CELL as SIXEL_VIRTUAL_CELL,
 };
-pub use osc::{TerminalProgress, encode_osc52};
+pub use osc::encode_osc52;
 pub use osc_agent::{
     AgentPayload, AgentState, AgentStatusEvent, ApprovalChoice, ApprovalEvent, ApprovalKind,
     ApprovalRisk, FileAction, FileEvent, HeartbeatEvent, ModelEvent, StateEvent, ToolCallEvent,

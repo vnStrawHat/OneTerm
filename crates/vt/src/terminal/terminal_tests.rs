@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use super::*;
 use crate::cell::{Attrs, Color, NamedColor, Rgb, Semantic};
-use crate::event::VtEvent;
+use crate::event::{Progress, ShellMark, VtEvent};
 use crate::grid::{RowFlags, Size};
 use crate::input::NamedKey;
 use crate::intern::HYPERLINK_TABLE_LIMIT;
@@ -23,15 +23,17 @@ fn terminal(cols: u16, rows: u16) -> Terminal {
     Terminal::new(Size { rows, cols }, Config::default())
 }
 
-fn claiming(cols: u16, rows: u16, codes: &[u32]) -> Terminal {
-    let mut claims = OscClaims::new();
-    for &code in codes {
-        claims.claim(code);
-    }
+fn routing(cols: u16, rows: u16, codes: &[u32], route: OscRoute) -> Terminal {
+    let mut routes = OscRoutes::new();
+    routes.route_all(codes, route);
+    with_routes(cols, rows, routes)
+}
+
+fn with_routes(cols: u16, rows: u16, routes: OscRoutes) -> Terminal {
     Terminal::new(
         Size { rows, cols },
         Config {
-            osc_claims: claims,
+            osc_routes: routes,
             ..Config::default()
         },
     )
@@ -1383,7 +1385,7 @@ fn ris_clears_the_hyperlink_table() {
 
 #[test]
 fn osc_133_marks_reach_the_cells_and_the_anchor_list() {
-    let mut session = Session::with(claiming(20, 4, &[133]));
+    let mut session = Session::new(20, 4);
     let before = session.term.grid().anchors().live();
 
     session.feed(b"\x1b]133;A\x07$ \x1b]133;B\x07ls\x1b]133;C\x07\r\nout\x1b]133;D;0\x07");
@@ -1405,134 +1407,636 @@ fn forwarded_osc(session: &Session, code: u32) -> Option<Vec<Vec<u8>>> {
     })
 }
 
+fn osc_events(session: &Session) -> usize {
+    session
+        .batch
+        .iter()
+        .filter(|event| matches!(event, VtEvent::Osc { .. }))
+        .count()
+}
+
+/// All six rows of the routing truth table, for a number the engine
+/// implements, one below the bitmap's 2048 bits that it does not, and one
+/// above the bitmap that it does not.
 #[test]
-fn osc_20308_reaches_the_embedder_through_a_claim() {
-    // The extension point, and the whole reason `US-0088` could move the agent
-    // channel to a five-digit number: 20308 is past the claim bitmap's 2048
-    // bits, so it exercises the sorted overflow list, and the engine still
-    // needs no change at all — it only routes the number.
-    let mut session = Session::with(claiming(20, 4, &[20308]));
-    session.feed(b"\x1b]20308;1;agent-status\x07");
+fn the_routing_table_answers_every_row() {
+    const BUILTIN: u32 = 7;
+    const PRIVATE: u32 = 633;
+    const SPILL: u32 = 31337;
+
+    // Rows 1 and 2: nothing said about the number.
+    let routes = OscRoutes::new();
+    assert_eq!(routes.get(BUILTIN), OscRoute::Builtin);
+    assert_eq!(routes.get(PRIVATE), OscRoute::Drop);
+    assert_eq!(routes.get(SPILL), OscRoute::Drop);
+    assert_eq!(routes.overrides().count(), 0);
+
+    // Rows 3 and 4: forwarded, with the built-in kept where there is one.
+    let mut routes = OscRoutes::new();
+    routes.route_all(&[BUILTIN, PRIVATE, SPILL], OscRoute::BuiltinAndForward);
+    assert_eq!(routes.get(BUILTIN), OscRoute::BuiltinAndForward);
+    assert_eq!(routes.get(PRIVATE), OscRoute::Forward);
+    assert_eq!(routes.get(SPILL), OscRoute::Forward);
+
+    // Row 5: dropped.
+    let mut routes = OscRoutes::new();
+    routes.route_all(&[BUILTIN, PRIVATE, SPILL], OscRoute::Drop);
+    assert_eq!(routes.get(BUILTIN), OscRoute::Drop);
+    assert_eq!(routes.get(PRIVATE), OscRoute::Drop);
+    assert_eq!(routes.get(SPILL), OscRoute::Drop);
+    // Only the built-in moved off its default, so only it is an override.
     assert_eq!(
-        forwarded_osc(&session, 20308).expect("a claimed OSC reaches the batch"),
-        vec![b"20308".to_vec(), b"1".to_vec(), b"agent-status".to_vec()]
+        routes.overrides().collect::<Vec<_>>(),
+        vec![(BUILTIN, OscRoute::Drop)]
     );
 
-    // The support query is forwarded the same way; answering it is the
-    // embedder's business (`docs/osc-agent-status.md` § 3.2).
-    let mut session = Session::with(claiming(20, 4, &[20308]));
-    session.feed(b"\x1b]20308;0\x07");
+    // Row 6: forwarded with the built-in skipped.
+    let mut routes = OscRoutes::new();
+    routes.route_all(&[BUILTIN, PRIVATE, SPILL], OscRoute::Forward);
+    assert_eq!(routes.get(BUILTIN), OscRoute::Forward);
+    assert_eq!(routes.get(PRIVATE), OscRoute::Forward);
+    assert_eq!(routes.get(SPILL), OscRoute::Forward);
     assert_eq!(
-        forwarded_osc(&session, 20308).expect("the support query reaches the batch"),
-        vec![b"20308".to_vec(), b"0".to_vec()]
+        routes.overrides().collect::<Vec<_>>(),
+        vec![
+            (BUILTIN, OscRoute::Forward),
+            (PRIVATE, OscRoute::Forward),
+            (SPILL, OscRoute::Forward),
+        ]
     );
 
-    // Unclaimed, the same bytes are dropped and counted.
+    // A later call wins, and the published built-in set is the one the engine
+    // implements.
+    let mut routes = OscRoutes::new();
+    routes.route(BUILTIN, OscRoute::Forward);
+    routes.route(BUILTIN, OscRoute::Builtin);
+    assert_eq!(routes.get(BUILTIN), OscRoute::Builtin);
+    for code in OscRoutes::BUILTIN {
+        assert!(OscRoutes::has_builtin(code), "OSC {code}");
+    }
+    for code in [3, 6, 13, 633, 777, 1337, 31337] {
+        assert!(!OscRoutes::has_builtin(code), "OSC {code}");
+    }
+}
+
+/// Two tables that route every number the same way are the same table. The
+/// bits stored are the ones the number actually gets, so saying `Drop` about a
+/// number that was already dropped changes nothing -- including in the spill
+/// list, which a number put back to its default leaves.
+#[test]
+fn table_equality_is_semantic() {
+    let default = OscRoutes::new();
+
+    let mut redundant = OscRoutes::new();
+    redundant.route(633, OscRoute::Drop);
+    assert_eq!(redundant, default);
+    assert_eq!(redundant.overrides().count(), 0);
+
+    let mut spilled = OscRoutes::new();
+    spilled.route(31337, OscRoute::Drop);
+    assert_eq!(spilled, default);
+
+    // `BuiltinAndForward` on a number with no built-in *is* `Forward`, and
+    // compares equal to it.
+    let mut asked = OscRoutes::new();
+    asked.route(633, OscRoute::BuiltinAndForward);
+    let mut got = OscRoutes::new();
+    got.route(633, OscRoute::Forward);
+    assert_eq!(asked.get(633), OscRoute::Forward);
+    assert_eq!(asked, got);
+
+    // Routed away and back again is where it started, spill included.
+    let mut round_trip = OscRoutes::new();
+    round_trip
+        .route(31337, OscRoute::Forward)
+        .large(31337, true);
+    round_trip.large(31337, false);
+    round_trip.route(31337, OscRoute::Drop);
+    assert_eq!(round_trip, default);
+
+    // A ceiling is not a route, so it is not an override -- but it is part of
+    // the table's value.
+    let mut ceiling = OscRoutes::new();
+    ceiling.large(52, true);
+    assert_ne!(ceiling, default);
+    assert_eq!(ceiling.overrides().count(), 0);
+}
+
+/// One `feed` per row, so the table's answer and the engine's behaviour are
+/// asserted to be the same thing.
+#[test]
+fn every_route_behaves_the_way_the_table_says() {
+    // `Builtin`: the title is set and nothing is forwarded.
     let mut session = Session::new(20, 4);
-    let stats = session.feed(b"\x1b]20308;1;agent-status\x07");
+    session.feed(b"\x1b]0;hello\x07");
+    assert_eq!(session.term.title(), Some("hello"));
+    assert_eq!(osc_events(&session), 0);
+
+    // `Forward` on a built-in is an override: the raw sequence arrives and the
+    // engine does nothing with it.
+    let mut session = Session::with(routing(20, 4, &[0], OscRoute::Forward));
+    session.feed(b"\x1b]0;hello\x07");
+    assert_eq!(session.term.title(), None);
+    assert_eq!(osc_events(&session), 1);
     assert!(
         !session
             .batch
             .iter()
-            .any(|event| matches!(event, VtEvent::Osc { .. }))
+            .any(|event| matches!(event, VtEvent::Title(_)))
     );
-    assert_eq!(stats.unhandled_sequences, 1);
-}
-
-// The alias and its sunset are `docs/osc-agent-status.md` § 3.1.
-/// `OSC 9;7` is the agent channel's deprecated alias, kept for one release. Its
-/// counterpart — asserting the claim is gone — belongs to the release that
-/// drops it.
-#[test]
-fn osc_9_7_still_reaches_the_embedder_during_the_alias_release() {
-    let mut session = Session::with(claiming(20, 4, &[9]));
-    session.feed(b"\x1b]9;7;agent-status\x07");
     assert_eq!(
-        forwarded_osc(&session, 9).expect("a claimed OSC reaches the batch"),
-        vec![b"9".to_vec(), b"7".to_vec(), b"agent-status".to_vec()]
+        forwarded_osc(&session, 0).expect("the raw sequence"),
+        vec![b"0".to_vec(), b"hello".to_vec()]
     );
 
-    // Unclaimed, the same bytes are dropped and counted.
-    let mut session = Session::new(20, 4);
-    let stats = session.feed(b"\x1b]9;7;agent-status\x07");
-    assert!(
-        !session
-            .batch
-            .iter()
-            .any(|event| matches!(event, VtEvent::Osc { .. }))
-    );
+    // `BuiltinAndForward` is a wrap: two events, the typed one first. That
+    // order is the contract.
+    let mut session = Session::with(routing(20, 4, &[0], OscRoute::BuiltinAndForward));
+    session.feed(b"\x1b]0;hello\x07");
+    assert_eq!(session.term.title(), Some("hello"));
+    let kinds: Vec<&VtEvent> = session
+        .batch
+        .iter()
+        .filter(|event| !matches!(event, VtEvent::Repaint))
+        .collect();
+    assert_eq!(kinds.len(), 2);
+    assert!(matches!(kinds[0], VtEvent::Title(_)));
+    assert!(matches!(kinds[1], VtEvent::Osc { code: 0, .. }));
+
+    // `Drop` suppresses a built-in: no event, no effect, one count.
+    let mut session = Session::with(routing(20, 4, &[8], OscRoute::Drop));
+    let stats = session.feed(b"\x1b]8;;https://example.invalid\x07x");
     assert_eq!(stats.unhandled_sequences, 1);
+    assert_eq!(osc_events(&session), 0);
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .hyperlink
+            .is_none(),
+        "a dropped OSC 8 leaves no link on the cell"
+    );
+}
+
+/// The escape hatch: a table that forwards everything turns the engine into a
+/// pure parser.
+#[test]
+fn a_table_that_forwards_everything_makes_the_engine_a_parser() {
+    let every: Vec<u32> = (0..2048).collect();
+    let mut routes = OscRoutes::new();
+    routes.route_all(&every, OscRoute::Forward);
+    let mut session = Session::with(with_routes(20, 4, routes));
+
+    session.feed(b"\x1b]0;hello\x07");
+    assert_eq!(session.term.title(), None, "no engine state changed");
+    assert_eq!(
+        forwarded_osc(&session, 0).expect("the raw sequence"),
+        vec![b"0".to_vec(), b"hello".to_vec()]
+    );
+}
+
+/// The payload ceiling is bought per number and is orthogonal to the route: a
+/// `Forward` route on its own cannot be used to buy memory.
+#[test]
+fn a_large_ceiling_is_opt_in_per_number() {
+    let payload = "x".repeat(3 * 1024 * 1024);
+
+    let mut routes = OscRoutes::new();
+    routes.route(31337, OscRoute::Forward).large(31337, true);
+    let mut session = Session::with(with_routes(20, 4, routes));
+    session.feed(format!("\x1b]31337;1;{payload}\x07").as_bytes());
+    let event = session
+        .batch
+        .iter()
+        .find_map(|event| match event {
+            VtEvent::Osc {
+                code: 31337,
+                params,
+                truncated,
+                ..
+            } => Some((*params, *truncated)),
+            _ => None,
+        })
+        .expect("a large payload reaches the batch whole");
+    assert!(!event.1, "not truncated");
+    assert_eq!(
+        session
+            .batch
+            .params(event.0)
+            .nth(2)
+            .unwrap_or_default()
+            .len(),
+        payload.len()
+    );
+
+    // The same input without the ceiling stops at `OSC_INLINE`.
+    let mut session = Session::with(routing(20, 4, &[31337], OscRoute::Forward));
+    let stats = session.feed(format!("\x1b]31337;1;{payload}\x07").as_bytes());
+    assert_eq!(stats.truncated_osc, 1);
+    let (params, truncated) = session
+        .batch
+        .iter()
+        .find_map(|event| match event {
+            VtEvent::Osc {
+                code: 31337,
+                params,
+                truncated,
+                ..
+            } => Some((*params, *truncated)),
+            _ => None,
+        })
+        .expect("a capped payload still reaches the batch");
+    assert!(truncated);
+    assert!(
+        session.batch.params(params).map(<[u8]>::len).sum::<usize>() <= crate::parser::OSC_INLINE
+    );
+}
+
+/// The two ways a table can be wrong on purpose. Debug only — a release build
+/// of an embedder never dies over a configuration mistake, and `get` reports
+/// what actually happens.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "has no built-in handler")]
+fn routing_a_number_with_no_builtin_to_builtin_asserts() {
+    OscRoutes::new().route(633, OscRoute::Builtin);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "is dropped")]
+fn buying_a_ceiling_for_a_dropped_number_asserts() {
+    OscRoutes::new().large(633, true);
+}
+
+// ── The parsers that moved in from the adapter ──────────────────────────────
+//
+// Every input literal below was an input literal of the adapter's own OSC
+// tests, with the same expectation, so the move can be diffed rather than
+// trusted.
+
+fn cwd_of(session: &Session) -> Option<(String, String)> {
+    session.batch.iter().find_map(|event| match event {
+        VtEvent::Cwd { host, path } => Some((
+            session.batch.str(*host).to_owned(),
+            session.batch.str(*path).to_owned(),
+        )),
+        _ => None,
+    })
+}
+
+fn cwd(url: &str) -> (String, String) {
+    let mut session = Session::new(20, 4);
+    session.feed(format!("\x1b]7;{url}\x07").as_bytes());
+    cwd_of(&session).expect("OSC 7 reports a directory")
 }
 
 #[test]
-fn osc_7_reaches_the_embedder_through_a_claim() {
-    let mut session = Session::with(claiming(20, 4, &[7]));
-    session.feed(b"\x1b]7;file://host/tmp\x07");
+fn osc_7_reports_the_host_and_the_path_unresolved() {
+    assert_eq!(cwd("file:///home/marc").1, "/home/marc");
+    assert_eq!(
+        cwd("file://host/var/log"),
+        ("host".into(), "/var/log".into())
+    );
+    assert_eq!(cwd("/tmp/x"), (String::new(), "/tmp/x".into()));
+}
+
+/// An xterm-derived parser accepts a zero-padded number, and the engine routes
+/// and handles the number rather than its spelling, so `007` is `7`. Was the
+/// adapter's `a_zero_padded_number_reaches_the_same_arm`.
+#[test]
+fn a_zero_padded_osc_number_reaches_the_same_builtin() {
+    let mut session = Session::new(20, 4);
+    session.feed(b"\x1b]007;file:///tmp\x07");
+    assert_eq!(cwd_of(&session), Some((String::new(), "/tmp".into())));
+
+    let mut session = Session::new(20, 4);
+    session.feed(b"\x1b]0133;A\x07");
     assert!(
         session
             .batch
             .iter()
-            .any(|event| matches!(event, VtEvent::Osc { code: 7, .. }))
+            .any(|event| matches!(event, VtEvent::ShellMark(ShellMark::PromptStart)))
+    );
+
+    // Still not a number, still dropped and counted.
+    let mut session = Session::new(20, 4);
+    assert_eq!(
+        session.feed(b"\x1b]7x;file:///tmp\x07").unhandled_sequences,
+        1
     );
 }
 
+/// A URL that is not valid UTF-8 is not a URL: dropped and counted, which is
+/// what the adapter's `str::from_utf8(..).ok()?` did. Percent escapes that
+/// decode to something that is not UTF-8 are still reported leniently, because
+/// a directory name is not required to be UTF-8 and by then the sequence has
+/// already been accepted.
 #[test]
-fn a_claim_cannot_be_shadowed_silently() {
-    // The registration table is API (`DEC-0014`), so the three ways a claim can
-    // quietly do nothing are all closed.
+fn osc_7_refuses_a_url_that_is_not_utf8() {
+    let mut session = Session::new(20, 4);
+    let mut bytes = b"\x1b]7;file:///tmp/".to_vec();
+    bytes.extend_from_slice(&[0xC3, 0xA9, 0xC3]);
+    bytes.push(0x07);
+    let stats = session.feed(&bytes);
+    assert_eq!(cwd_of(&session), None);
+    assert_eq!(stats.unhandled_sequences, 1);
 
-    // 1. A duplicate claim is idempotent — a bitmap, so no ordering and no
-    //    handler to shadow. Claiming twice registers exactly what claiming once
-    //    registers, and the second call does not revoke the first.
-    let mut claims = OscClaims::new();
-    claims.claim(633).claim(633);
-    assert!(claims.is_claimed(633));
-    assert!(!claims.allows_large(633));
-    let mut once = OscClaims::new();
-    once.claim(633);
-    assert_eq!(claims, once);
-
-    // 2. The set of natively handled numbers is published, so an embedder can
-    //    ask before it registers instead of finding out from a missing event.
-    for code in OscClaims::NATIVE {
-        assert!(OscClaims::is_native(code), "OSC {code}");
-    }
-    for code in [7, 9, 133, 633, 1337] {
-        assert!(!OscClaims::is_native(code), "OSC {code}");
-    }
-
-    // 3. `claim_large` is the memory ceiling and accepts a native number for
-    //    that reason — `claim_large(52)` buys a large clipboard payload. Its
-    //    delivery half is inert there, which `is_native` is how you find out;
-    //    `crates/terminal` depends on both bits being set, so this is the one
-    //    place a native number may be claimed without an assertion.
-    let mut claims = OscClaims::new();
-    claims.claim_large(52).claim_large(1337);
-    assert!(claims.allows_large(52));
-    assert!(claims.is_claimed(52) && OscClaims::is_native(52));
-    assert!(claims.allows_large(1337));
-    assert!(claims.is_claimed(1337));
+    // The percent-decoded half stays lossy.
+    assert_eq!(cwd("file:///tmp/%C3%A9%C3").1, "/tmp/é\u{FFFD}");
 }
 
-/// The fourth way, split out because it is an assertion: a `claim` on a number
-/// the engine answers itself is dead, and dies loudly in debug rather than
-/// leaving the embedder waiting for an event that never comes. Debug only —
-/// a release build carries no `debug_assert!`.
-#[cfg(debug_assertions)]
+/// Percent escapes are decoded and a Windows drive URL loses the URL's leading
+/// slash; a malformed escape stays verbatim.
 #[test]
-#[should_panic(expected = "handled by the engine itself")]
-fn claiming_a_natively_handled_osc_asserts() {
-    OscClaims::new().claim(52);
+fn osc_7_decodes_percent_escapes_and_the_windows_drive_slash() {
+    assert_eq!(cwd("file://host/home/me/My%20Docs").1, "/home/me/My Docs");
+    assert_eq!(cwd("file:///C:/Users/me/src").1, "C:/Users/me/src");
+    assert_eq!(cwd("file:///C:").1, "C:");
+    assert_eq!(cwd("file:///tmp/100%25/x%zz").1, "/tmp/100%/x%zz");
+    assert_eq!(cwd("file:///home/%C3%A9t%C3%A9").1, "/home/été");
+    // A plain absolute path that happens to start with `/C:` is left alone.
+    assert_eq!(cwd("/Cx/y").1, "/Cx/y");
+}
+
+/// A cut path is a different path, not a shorter one.
+#[test]
+fn osc_7_refuses_a_truncated_payload() {
+    let mut session = Session::new(20, 4);
+    let url = "x".repeat(crate::parser::OSC_INLINE * 2);
+    let stats = session.feed(format!("\x1b]7;file:///{url}\x07").as_bytes());
+    assert_eq!(stats.truncated_osc, 1);
+    assert_eq!(stats.unhandled_sequences, 1);
+    assert_eq!(cwd_of(&session), None);
+}
+
+fn progress_of(session: &Session) -> Option<Progress> {
+    session.batch.iter().find_map(|event| match event {
+        VtEvent::Progress(progress) => Some(*progress),
+        _ => None,
+    })
+}
+
+fn progress(sequence: &str) -> Option<Progress> {
+    let mut session = Session::new(20, 4);
+    session.feed(format!("\x1b]{sequence}\x07").as_bytes());
+    progress_of(&session)
 }
 
 #[test]
-fn claimed_osc_reaches_the_batch_without_allocating_per_osc() {
-    // The fork allocates a `Vec` per OSC parameter plus an outer `Vec` on the
-    // hot path. Measured through the batch's own capacities, because a
-    // `GlobalAlloc` is an `unsafe` trait and this crate has none.
-    let mut session = Session::with(claiming(20, 4, &[20308]));
+fn osc_9_4_reports_every_progress_state() {
+    assert_eq!(progress("9;4;1;42"), Some(Progress::Set(42)));
+    assert_eq!(progress("9;4;0"), Some(Progress::Remove));
+    assert_eq!(progress("9;4;2;80"), Some(Progress::Error(80)));
+    assert_eq!(progress("9;4;3"), Some(Progress::Indeterminate));
+    assert_eq!(progress("9;4;4;10"), Some(Progress::Paused(10)));
+    // The percentage clamps at 100 whatever its size. The adapter read both
+    // fields as `u8`, so `1000` failed to parse and became `Set(0)` before the
+    // clamp could run; the sequence's own definition says "clamped", and the
+    // engine now does that.
+    assert_eq!(progress("9;4;1;250"), Some(Progress::Set(100)));
+    assert_eq!(progress("9;4;1;1000"), Some(Progress::Set(100)));
+    // An unknown state is dropped and counted, out of `u8` range included --
+    // where the adapter silently turned one into `Remove`, clearing a bar
+    // nobody asked to clear.
+    for sequence in ["9;4;9;50", "9;4;300;50"] {
+        let mut session = Session::new(20, 4);
+        let stats = session.feed(format!("\x1b]{sequence}\x07").as_bytes());
+        assert_eq!(progress_of(&session), None, "{sequence}");
+        assert_eq!(stats.unhandled_sequences, 1, "{sequence}");
+    }
+    // Faithful to the adapter: a missing or non-numeric state reads as 0.
+    assert_eq!(progress("9;4"), Some(Progress::Remove));
+    assert_eq!(progress("9;4;x;1"), Some(Progress::Remove));
+}
+
+fn notification(sequence: &str) -> Option<(String, String)> {
+    let mut session = Session::new(20, 4);
+    session.feed(format!("\x1b]{sequence}\x07").as_bytes());
+    session.batch.iter().find_map(|event| match event {
+        VtEvent::Notification { title, body } => Some((
+            session.batch.str(*title).to_owned(),
+            session.batch.str(*body).to_owned(),
+        )),
+        _ => None,
+    })
+}
+
+#[test]
+fn osc_9_reports_a_notification_with_its_semicolons_rejoined() {
+    assert_eq!(
+        notification("9;Build finished"),
+        Some((String::new(), "Build finished".into()))
+    );
+    assert_eq!(
+        notification("9;done: 3 tests; 0 failed"),
+        Some((String::new(), "done: 3 tests; 0 failed".into()))
+    );
+    // A message that merely starts with `7` is a message. The engine knows
+    // nothing about any sub-code here.
+    assert_eq!(
+        notification("9;71 bottles"),
+        Some((String::new(), "71 bottles".into()))
+    );
+}
+
+fn shell_mark(sequence: &str) -> Option<ShellMark> {
+    let mut session = Session::new(20, 4);
+    session.feed(format!("\x1b]{sequence}\x07").as_bytes());
+    session.batch.iter().find_map(|event| match event {
+        VtEvent::ShellMark(mark) => Some(*mark),
+        _ => None,
+    })
+}
+
+#[test]
+fn osc_133_reports_every_marker() {
+    assert_eq!(shell_mark("133;A"), Some(ShellMark::PromptStart));
+    assert_eq!(shell_mark("133;B"), Some(ShellMark::PromptEnd));
+    assert_eq!(shell_mark("133;C"), Some(ShellMark::OutputStart));
+    assert_eq!(
+        shell_mark("133;D"),
+        Some(ShellMark::OutputEnd { exit_code: None })
+    );
+    assert_eq!(
+        shell_mark("133;D;0"),
+        Some(ShellMark::OutputEnd { exit_code: Some(0) })
+    );
+    assert_eq!(
+        shell_mark("133;D;127"),
+        Some(ShellMark::OutputEnd {
+            exit_code: Some(127)
+        })
+    );
+    // A `D` with something that is not a number keeps the marker and loses the
+    // code, which is what the adapter did.
+    assert_eq!(
+        shell_mark("133;D;not-a-number"),
+        Some(ShellMark::OutputEnd { exit_code: None })
+    );
+    // An unknown sub-code is dropped and counted.
+    assert_eq!(shell_mark("133;X"), None);
+    assert_eq!(shell_mark("133;Z;foo"), None);
+    let mut session = Session::new(20, 4);
+    assert_eq!(session.feed(b"\x1b]133;X\x07").unhandled_sequences, 1);
+}
+
+#[test]
+fn osc_1_reports_the_icon_name() {
+    let mut session = Session::new(20, 4);
+    let stats = session.feed(b"\x1b]1;  shell  \x07");
+    assert_eq!(stats.unhandled_sequences, 0);
+    assert!(session.batch.iter().any(
+        |event| matches!(event, VtEvent::IconName(span) if session.batch.str(*span) == "shell")
+    ));
+    assert_eq!(session.term.title(), None, "an icon name is not a title");
+}
+
+#[test]
+fn osc_50_reports_that_the_cursor_shape_changed() {
+    let mut session = Session::new(20, 4);
+    session.feed(b"\x1b]50;CursorShape=1\x07");
+    assert_eq!(session.term.cursor_style().shape, CursorShape::Beam);
+    assert!(
+        session
+            .batch
+            .iter()
+            .any(|event| matches!(event, VtEvent::CursorStyleChanged))
+    );
+}
+
+/// The worked example: an embedder's own OSC number, and a built-in it wants
+/// to keep *and* discriminate by sub-code. Both work through the table alone,
+/// and this crate knows neither the number nor the sub-code.
+///
+/// Routing is per number because sub-codes are payload. An embedder whose
+/// private protocol once shared a built-in's number takes the wrap route and
+/// recognises its own sub-code in its own code — which is exactly what the two
+/// halves below are.
+#[test]
+fn an_embedder_private_osc_number_and_a_wrapped_builtin_both_work() {
+    let mut routes = OscRoutes::new();
+    routes.route(31337, OscRoute::Forward).large(31337, true);
+    routes.route(9, OscRoute::BuiltinAndForward).large(9, true);
+    let config = Config {
+        osc_routes: routes,
+        ..Config::default()
+    };
+
+    // The private number: forwarded raw, sub-code and all, and never parsed.
+    let mut session = Session::with(Terminal::new(Size { rows: 4, cols: 20 }, config.clone()));
+    session.feed(b"\x1b]31337;1;private-payload\x07");
+    assert_eq!(
+        forwarded_osc(&session, 31337).expect("a forwarded OSC reaches the batch"),
+        vec![
+            b"31337".to_vec(),
+            b"1".to_vec(),
+            b"private-payload".to_vec()
+        ]
+    );
+    let mut session = Session::with(Terminal::new(Size { rows: 4, cols: 20 }, config.clone()));
+    session.feed(b"\x1b]31337;0\x07");
+    assert_eq!(
+        forwarded_osc(&session, 31337).expect("a sub-code carrying no payload"),
+        vec![b"31337".to_vec(), b"0".to_vec()]
+    );
+
+    // The wrapped built-in: the engine parses `9;7` as the notification it
+    // looks like *and* hands over the bytes, so the embedder can recognise its
+    // own sub-code and discard the notification. The engine has no opinion.
+    let mut session = Session::with(Terminal::new(Size { rows: 4, cols: 20 }, config));
+    session.feed(b"\x1b]9;7;private-payload\x07");
+    assert_eq!(
+        forwarded_osc(&session, 9).expect("the wrapped sequence reaches the batch"),
+        vec![b"9".to_vec(), b"7".to_vec(), b"private-payload".to_vec()]
+    );
+    let kinds: Vec<&VtEvent> = session
+        .batch
+        .iter()
+        .filter(|event| !matches!(event, VtEvent::Repaint))
+        .collect();
+    assert_eq!(kinds.len(), 2);
+    assert!(matches!(kinds[0], VtEvent::Notification { .. }));
+    assert!(matches!(kinds[1], VtEvent::Osc { code: 9, .. }));
+}
+
+/// Hostile bytes plus a hostile table: neither may panic, and the counters a
+/// `feed` reports may only go up within the batch it reports on.
+#[test]
+fn arbitrary_bytes_and_an_arbitrary_table_never_panic() {
+    let mut rng: u64 = 0x5EED_1234_ABCD_0003;
+    let mut next = move || {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        rng
+    };
+    const ROUTES: [OscRoute; 4] = [
+        OscRoute::Builtin,
+        OscRoute::BuiltinAndForward,
+        OscRoute::Forward,
+        OscRoute::Drop,
+    ];
+    const BIAS: &[u8] = b"\x1b[]P_X;:?0123456789m\x07\\";
+
+    for round in 0..64 {
+        let mut routes = OscRoutes::new();
+        for &code in OscRoutes::BUILTIN.iter().chain([633, 1337, 31337].iter()) {
+            let mut route = ROUTES[(next() % 4) as usize];
+            // `Builtin` on a number with no built-in is the documented debug
+            // assertion, not a table an embedder can build by accident.
+            if route == OscRoute::Builtin && !OscRoutes::has_builtin(code) {
+                route = OscRoute::Drop;
+            }
+            routes.route(code, route);
+            if next() % 2 == 0 && routes.get(code) != OscRoute::Drop {
+                routes.large(code, true);
+            }
+        }
+        let mut session = Session::with(with_routes(20, 4, routes));
+        let mut input = vec![0u8; 4096];
+        for (index, byte) in input.iter_mut().enumerate() {
+            let value = (next() >> 24) as u8;
+            *byte = if index % 3 == 0 {
+                BIAS[usize::from(value) % BIAS.len()]
+            } else {
+                value
+            };
+        }
+        for chunk in input.chunks(1 + round * 7) {
+            let stats = session.feed(chunk);
+            // Counters are per `feed` and count sequences, so none of them can
+            // have outrun the bytes this call was given.
+            let bytes = chunk.len() as u32;
+            assert_eq!(stats.bytes, chunk.len());
+            assert!(stats.unhandled_sequences <= bytes);
+            assert!(stats.malformed_sequences <= bytes);
+            assert!(stats.truncated_osc <= bytes);
+            assert!(stats.aborted_dcs <= bytes);
+        }
+    }
+}
+
+/// The guard `claimed_osc_reaches_the_batch_without_allocating_per_osc` used to
+/// be: the OSC path must not grow the batch once it is warm. It matters more
+/// now than it did, because six numbers that used to be forwarded raw are
+/// parsed here, and a shell emits `OSC 7` and `OSC 133` on **every prompt**.
+///
+/// Measured through the batch's own capacities, because a `GlobalAlloc` is an
+/// `unsafe` trait and this crate has none. A payload assembled in the arena
+/// keeps these flat; a `String` per sequence would not show up here, so the
+/// companion assertion is that the arena high-water mark stays the size of one
+/// batch's payloads rather than growing with the number of sequences.
+#[test]
+fn the_builtin_arms_do_not_grow_the_batch_once_warm() {
+    let mut routes = OscRoutes::new();
+    routes.route(31337, OscRoute::Forward);
+    let mut session = Session::with(with_routes(20, 4, routes));
+    let warm = b"\x1b]7;file://host/home/me/My%20Docs\x07        \x1b]9;4;1;40\x07        \x1b]9;build finished; 3 tests\x07        \x1b]133;A\x07\x1b]133;D;0\x07        \x1b]0;title\x07\x1b]1;icon\x07\x1b]22;pointer\x07        \x1b]31337;1;private\x07";
+
     for _ in 0..64 {
-        session.feed(b"\x1b]20308;1;warm\x07");
+        session.feed(warm);
     }
     let (arena, params, events) = (
         session.batch.arena_capacity(),
@@ -1541,7 +2045,7 @@ fn claimed_osc_reaches_the_batch_without_allocating_per_osc() {
     );
 
     for _ in 0..1000 {
-        session.feed(b"\x1b]20308;1;warm\x07");
+        session.feed(warm);
     }
 
     assert_eq!(session.batch.arena_capacity(), arena);
@@ -1563,10 +2067,16 @@ fn osc_50_sets_the_cursor_shape() {
 }
 
 #[test]
-fn osc_22_is_parsed_and_counted_but_ignored() {
+fn osc_22_reports_the_pointer_shape_by_name() {
     let mut session = Session::new(10, 3);
     let stats = session.feed(b"\x1b]22;pointer\x07");
-    assert_eq!(stats.unhandled_sequences, 1);
+    assert_eq!(stats.unhandled_sequences, 0);
+    assert!(session.batch.iter().any(
+        |event| matches!(event, VtEvent::Pointer(span) if session.batch.str(*span) == "pointer")
+    ));
+    // A shape nobody named is still counted, as it was.
+    let mut session = Session::new(10, 3);
+    assert_eq!(session.feed(b"\x1b]22\x07").unhandled_sequences, 1);
 }
 
 #[test]

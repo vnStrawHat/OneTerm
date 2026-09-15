@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oneterm_vt::grid::{DEFAULT_SCROLLBACK, SCROLLBACK_MAX};
-use oneterm_vt::{Config, OscClaims, Size, Terminal};
+use oneterm_vt::{Config, OscRoute, OscRoutes, Size, Terminal};
 use parking_lot::{FairMutex, FairMutexGuard};
 
 use crate::backend::GridSize;
@@ -164,44 +164,39 @@ pub fn new_shared_terminal(size: GridSize, scrollback: usize) -> SharedTerminal 
 
 /// The engine configuration the adapter needs.
 ///
-/// `OscClaims` is the extension point that replaces the fork's `report_osc`
-/// patch: the engine forwards only what is claimed here, and `crates/terminal`
-/// claims exactly the four numbers it interprets itself — OSC 7 (cwd), OSC 9
-/// (notification, `9;4` progress, and `9;7` for one more release), OSC 133
-/// (shell integration) and OSC 20308 (the agent channel). Everything else the
-/// engine either handles natively (title, colours, hyperlinks, clipboard) or
-/// drops and counts, which is what the engine being replaced did.
+/// Every standard OSC number is the engine's, parsed once and delivered as a
+/// typed event. What is left here is the OSC that is OneTerm's rather than a
+/// terminal's, and it is three calls:
 ///
-/// Claiming OSC 9 **large** also lifts the inline cap on notifications, which
-/// the security policy already truncates to 8 KiB — the parser's spill is
-/// transient, so the cost is a larger buffer while one oversized OSC is being
-/// parsed, the same exposure `claim_large(52)` already accepts.
-///
-/// `AGENT_OSC` is above the claim bitmap's 2048-bit range, so it lands in the
-/// sorted overflow list — which is the whole reason the table has one, and the
-/// reason moving the agent protocol to a five-digit number
-/// (`docs/osc-agent-status.md` §2.2) needed no engine change at all.
+/// * the agent channel (`docs/osc-agent-status.md`) is OneTerm's own proposal,
+///   not a terminal standard, so the engine must not know it exists: the number
+///   is routed straight out and parsed in `osc_agent`. It sits above the route
+///   table's 2048-bit bitmap and lands in its sorted spill list, which is why
+///   moving the protocol to a five-digit number needed no engine change;
+/// * the channel's deprecated alias shares its number with a built-in, and
+///   routing is per number because sub-codes are payload. `BuiltinAndForward`
+///   keeps the engine's notification and `9;4` progress handling *and* hands
+///   over the raw sequence, so the legacy sub-code stays this crate's
+///   knowledge and no engine arm has ever heard of it;
+/// * the ceilings. A ceiling is a memory question and not a policy one: who may
+///   write the clipboard stays in `security_policy.rs`. Without them a
+///   legitimate large OSC 52 write, and every agent payload past ~2040 base64
+///   bytes, is truncated at the 2 KiB inline cap — and §3.4 of the spec
+///   publishes an 8 KiB allowance to third-party agents. The spill is transient
+///   (the parser doubles into it and shrinks back after each OSC) and the
+///   8 KiB cap itself is enforced in `osc_agent`.
 fn adapter_config(scrollback: usize) -> Config {
-    let mut claims = OscClaims::new();
-    claims.claim(7).claim(133);
-    // A memory ceiling, not a policy: who may write the clipboard stays in
-    // `security_policy.rs`. Without it a legitimate large OSC 52 write is
-    // truncated at the 2 KiB inline cap.
-    claims.claim_large(52);
-    // The agent channel, both spellings, for the same reason — and this one is
-    // a **published** cap: `docs/osc-agent-status.md` § 3.4 tells third-party
-    // agents they may send up to 8 KiB of base64 and calls "< 4 KiB worst case"
-    // legitimate. Plain `claim` bounds the whole payload at `OSC_INLINE`
-    // (2 KiB), prefix included, so the real ceiling was ~2040 base64 bytes and
-    // everything above it was truncated by the parser and then dropped by
-    // `parse_agent_status` as malformed — a silent hole under the number we
-    // publish. The spill is transient (the parser doubles into it and shrinks
-    // back after each OSC), so this costs nothing in the steady state, and the
-    // 8 KiB cap itself is still enforced in `osc_agent`, not here.
-    claims.claim_large(AGENT_OSC).claim_large(LEGACY_AGENT_OSC);
+    let mut routes = OscRoutes::new();
+    routes
+        .route(AGENT_OSC, OscRoute::Forward)
+        .large(AGENT_OSC, true);
+    routes
+        .route(LEGACY_AGENT_OSC, OscRoute::BuiltinAndForward)
+        .large(LEGACY_AGENT_OSC, true);
+    routes.large(52, true);
     Config {
         scrollback_limit: scrollback.min(SCROLLBACK_MAX as usize) as u32,
-        osc_claims: claims,
+        osc_routes: routes,
         // The identity `XTVERSION` and `DA2` report is the product's, not the
         // engine's: tmux and vim key capability detection off it. Left unset,
         // the engine would answer `oneterm-vt(...)`.
@@ -412,30 +407,47 @@ mod tests {
         assert!(handle.try_lock().is_some());
     }
 
-    /// The adapter claims every OSC number it interprets itself; without them
-    /// the agent channel, the cwd tracker and shell integration go silent.
+    /// The adapter routes out only what is OneTerm's. Every standard number
+    /// stays the engine's, and the two that are not go silent without this.
     #[test]
-    fn the_adapter_claims_the_osc_numbers_it_routes() {
+    fn the_adapter_routes_only_the_osc_numbers_that_are_its_own() {
         let config = adapter_config(DEFAULT_SCROLLBACK_LINES);
-        for code in [7, 9, 133, 52, AGENT_OSC] {
-            assert!(
-                config.osc_claims.is_claimed(code),
-                "OSC {code} is not claimed"
-            );
+        let routes = &config.osc_routes;
+
+        // OneTerm's own proposal: the engine never sees it.
+        assert_eq!(routes.get(AGENT_OSC), OscRoute::Forward);
+        // The deprecated alias shares a built-in's number, so the built-in is
+        // kept and the raw sequence comes too.
+        assert_eq!(
+            routes.get(LEGACY_AGENT_OSC),
+            OscRoute::BuiltinAndForward,
+            "the OSC 9 built-in must survive, or notifications and 9;4 progress die with the alias"
+        );
+        // Everything a terminal is expected to do is the engine's, untouched.
+        for code in [0, 2, 4, 7, 8, 52, 133] {
+            assert_eq!(routes.get(code), OscRoute::Builtin, "OSC {code}");
         }
-        assert!(!config.osc_claims.is_claimed(8), "OSC 8 is the engine's");
+        assert_eq!(
+            routes.overrides().collect::<Vec<_>>(),
+            vec![
+                (LEGACY_AGENT_OSC, OscRoute::BuiltinAndForward),
+                (AGENT_OSC, OscRoute::Forward),
+            ],
+            "nothing else was taken away from the engine"
+        );
+
         assert!(
-            config.osc_claims.allows_large(52),
+            routes.allows_large(52),
             "OSC 52 needs the large payload ceiling"
         );
         // The agent channel publishes an 8 KiB cap (`docs/osc-agent-status.md`
-        // § 3.4), which a plain claim cannot deliver: `OSC_INLINE` bounds the
+        // § 3.4), which the inline tier cannot deliver: `OSC_INLINE` bounds the
         // whole payload at 2 KiB, prefix included. Both spellings need the
         // ceiling, because the alias is parsed identically for one release and
         // that includes how much of it there may be.
         for code in [AGENT_OSC, LEGACY_AGENT_OSC] {
             assert!(
-                config.osc_claims.allows_large(code),
+                routes.allows_large(code),
                 "OSC {code} carries agent status and needs the large ceiling, \
                  or the documented 8 KiB cap is unreachable"
             );

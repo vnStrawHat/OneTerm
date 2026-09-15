@@ -1,10 +1,11 @@
 //! `OscRouter` — the event drain shared by every backend.
 //!
 //! Routes engine events into the state cache + `SessionEvent`s: title, OSC 52
-//! clipboard, OSC 7/9/133 side-channel payloads, screen clears, colour queries,
-//! bell, and terminal replies (`VtEvent::Reply` → transport). The security
-//! policy is applied here for both backends, so local and SSH cannot drift
-//! (SEC-08).
+//! clipboard, the typed OSC 7 / 9 / 133 events, screen clears, colour queries,
+//! bell, and terminal replies (`VtEvent::Reply` → transport). The engine parses
+//! all of those; what happens here is **policy** — whether a directory may be
+//! trusted, a notification shown, a clipboard written, and how often — applied
+//! for both backends so local and SSH cannot drift (SEC-08).
 //!
 //! The engine returns events as values instead of calling back, so this is a
 //! plain function over a drained [`EventBatch`] (`events-and-api.md` § "`feed`
@@ -25,10 +26,10 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use log::warn;
-use oneterm_vt::{ColorKey, EventBatch, StringTerm, VtEvent};
+use oneterm_vt::{ColorKey, EventBatch, ShellMark, StringTerm, VtEvent};
 
 use crate::logging::TerminalLogController;
-use crate::osc::{Osc133Kind, OscPayload, agent_support_reply, parse_cwd_url, parse_osc};
+use crate::osc::{AgentOsc, agent_support_reply, is_legacy_agent_notification, parse_agent_osc};
 use crate::osc_agent::{AGENT_OSC, LEGACY_AGENT_OSC, LEGACY_AGENT_OSC_SUB, should_apply};
 use crate::osc_color::{ColorFormatter, PendingColorQuery};
 use crate::security_policy::{ClipboardOrigin, NotificationRateLimiter, TerminalSecurityPolicy};
@@ -186,7 +187,59 @@ impl<T: PtyTransport> OscRouter<T> {
             VtEvent::Reply(span) => self.reply(batch.bytes(*span)),
             // ── Bell ──────────────────────────────────────────────────
             VtEvent::Bell => out.push(SessionEvent::Bell),
-            // ── OSC 7/9/133/20308 (the engine's OSC registration table) ─
+            // ── OSC 7: the working directory the shell reports ──────────
+            //
+            // Policy, not parsing: the engine handed over a host and a path it
+            // has deliberately not resolved, and deciding whether to trust them
+            // is this crate's.
+            VtEvent::Cwd { path, .. } => {
+                if let Some(sanitized) = self.security.sanitize_cwd(batch.str(*path)) {
+                    let dir = std::path::PathBuf::from(&sanitized);
+                    self.state.lock().cwd = Some(dir.clone());
+                    out.push(SessionEvent::Cwd(dir));
+                }
+            }
+            // ── OSC 9;4: taskbar progress ──────────────────────────────
+            VtEvent::Progress(progress) => out.push(SessionEvent::Progress(*progress)),
+            // ── OSC 9: desktop notification ────────────────────────────
+            VtEvent::Notification { body, .. } => {
+                let body = batch.str(*body);
+                // `OSC 9;7` is the agent channel's deprecated alias, and the
+                // engine routes per number, so it arrives here looking like a
+                // notification. The raw sequence arrives too; that is where it
+                // is handled.
+                if is_legacy_agent_notification(body) {
+                    return;
+                }
+                let Some(sanitized) = self.security.sanitize_notification(body) else {
+                    return;
+                };
+                let allowed = self
+                    .notification_limiter
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .allow();
+                if allowed {
+                    out.push(SessionEvent::Notification(sanitized));
+                } else {
+                    log::debug!("OscRouter: notification rate limit exceeded");
+                }
+            }
+            // ── OSC 133: shell integration ─────────────────────────────
+            VtEvent::ShellMark(mark) => {
+                {
+                    let mut st = self.state.lock();
+                    match mark {
+                        ShellMark::PromptStart => {
+                            st.prompt_count = st.prompt_count.saturating_add(1);
+                        }
+                        ShellMark::OutputEnd { exit_code } => st.last_exit_code = *exit_code,
+                        _ => {}
+                    }
+                }
+                out.push(SessionEvent::ShellIntegration(*mark));
+            }
+            // ── OSC 20308, and OSC 9;7 wearing OSC 9's clothes ─────────
             VtEvent::Osc {
                 code,
                 params,
@@ -221,10 +274,20 @@ impl<T: PtyTransport> OscRouter<T> {
                     );
                     return;
                 }
-                match parse_osc(&params) {
-                    Some(payload) => self.handle_osc_payload(payload, *terminator, out),
+                match parse_agent_osc(*code, &params) {
+                    Some(AgentOsc::Status(ev)) => self.apply_agent_status(*ev, out),
+                    // `OSC 20308;0` — the support query (spec §3.2). Answered
+                    // here rather than in the engine because the engine only
+                    // routes numbers: the protocol, its version and the
+                    // terminal's name are the embedder's, exactly as the OSC 52
+                    // and colour replies are. It still leaves under the engine
+                    // guard, before the pump's yield check and before any UI
+                    // event is flushed (R-37).
+                    Some(AgentOsc::SupportQuery) => {
+                        self.reply(agent_support_reply(*terminator).as_bytes())
+                    }
                     None => log::debug!(
-                        "OscRouter: unparsed VtEvent::Osc with {} params",
+                        "OscRouter: forwarded OSC {code} is not the agent channel ({} params)",
                         params.len()
                     ),
                 }
@@ -241,6 +304,10 @@ impl<T: PtyTransport> OscRouter<T> {
             VtEvent::RowsScrolled(_) | VtEvent::RowsTrimmed { .. } => {}
             // ── Graphics: the view's store still evicts by LRU ──────────
             VtEvent::GraphicReleased(_) => {}
+            // ── Nothing above the seam speaks these yet: OSC 1 (icon name),
+            //    OSC 22 (pointer shape) and OSC 50 (the engine already
+            //    applied the new cursor shape to its own state) ───────────
+            _ => {}
         }
     }
 
@@ -298,87 +365,31 @@ impl<T: PtyTransport> OscRouter<T> {
         out.push(SessionEvent::Clipboard(Some(validated)));
     }
 
-    /// Handle an OSC forwarded by the engine (OSC 7/9/133/20308) — update the
-    /// state cache and queue the matching `SessionEvent`, or answer it.
+    /// Apply one agent-status event, or drop it as a replay.
     ///
-    /// `terminator` is the one the sequence itself carried, because a reply has
-    /// to end the way the question did.
-    fn handle_osc_payload(
+    /// `seq` dedup (spec §4.1 / §8.3): an event whose `seq` is at or below the
+    /// last applied `seq` for the same agent id is a repeat, not news.
+    fn apply_agent_status(
         &self,
-        payload: OscPayload,
-        terminator: StringTerm,
+        ev: crate::osc_agent::AgentStatusEvent,
         out: &mut Vec<SessionEvent>,
     ) {
-        match payload {
-            OscPayload::Cwd(url) => {
-                let cwd = parse_cwd_url(&url);
-                if let Some(sanitized) = self.security.sanitize_cwd(&cwd.to_string_lossy()) {
-                    let path = std::path::PathBuf::from(&sanitized);
-                    self.state.lock().cwd = Some(path.clone());
-                    out.push(SessionEvent::Cwd(path));
-                }
-            }
-            OscPayload::ShellIntegration(kind) => {
-                {
-                    let mut st = self.state.lock();
-                    match kind {
-                        Osc133Kind::PromptStart => {
-                            st.prompt_count = st.prompt_count.saturating_add(1);
-                        }
-                        Osc133Kind::OutputEnd { exit_code } => {
-                            st.last_exit_code = exit_code;
-                        }
-                        _ => {}
-                    }
-                }
-                out.push(SessionEvent::ShellIntegration(kind));
-            }
-            OscPayload::Notification(msg) => {
-                let Some(sanitized) = self.security.sanitize_notification(&msg) else {
-                    return;
-                };
-                let allowed = self
-                    .notification_limiter
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .allow();
-                if allowed {
-                    out.push(SessionEvent::Notification(sanitized));
-                } else {
-                    log::debug!("OscRouter: notification rate limit exceeded");
-                }
-            }
-            OscPayload::Progress(progress) => out.push(SessionEvent::Progress(progress)),
-            OscPayload::AgentStatus(ev) => {
-                // Agent-status `seq` dedup (spec §4.1 / §8.3): drop events whose
-                // `seq` is <= the last applied `seq` for the same agent id. `ev`
-                // is boxed on the parse path; unbox into the `Arc` for fan-out.
-                let ev = *ev;
-                let apply = should_apply(&mut self.state.lock().last_agent_seq, &ev);
-                if apply {
-                    log::debug!(
-                        "agent status applied & forwarded: agent={} type={} seq={}",
-                        ev.agent(),
-                        ev.type_name(),
-                        ev.seq()
-                    );
-                    out.push(SessionEvent::AgentStatus(Arc::new(ev)));
-                } else {
-                    log::debug!(
-                        "agent status dropped by dedup: agent={} type={} seq={}",
-                        ev.agent(),
-                        ev.type_name(),
-                        ev.seq()
-                    );
-                }
-            }
-            // `OSC 20308;0` — the support query (spec §3.2). Answered here
-            // rather than in the engine because the engine only routes numbers:
-            // the protocol, its version and the terminal's name are the
-            // embedder's, exactly as the OSC 52 and colour replies are. It
-            // still leaves under the engine guard, before the pump's yield
-            // check and before any UI event is flushed (R-37).
-            OscPayload::AgentSupportQuery => self.reply(agent_support_reply(terminator).as_bytes()),
+        let apply = should_apply(&mut self.state.lock().last_agent_seq, &ev);
+        if apply {
+            log::debug!(
+                "agent status applied & forwarded: agent={} type={} seq={}",
+                ev.agent(),
+                ev.type_name(),
+                ev.seq()
+            );
+            out.push(SessionEvent::AgentStatus(Arc::new(ev)));
+        } else {
+            log::debug!(
+                "agent status dropped by dedup: agent={} type={} seq={}",
+                ev.agent(),
+                ev.type_name(),
+                ev.seq()
+            );
         }
     }
 }

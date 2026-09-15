@@ -200,7 +200,7 @@ which deletes the deferred tier, `flush_reliable_blocking`, and the reason the c
 ```rust
 pub struct Config {
     pub scrollback_limit: u32,            // default 10_000, clamped to SCROLLBACK_MAX
-    pub osc_claims: OscClaims,            // which OSC numbers reach the embedder, and which spill
+    pub osc_routes: OscRoutes,            // `US-0098`: what the engine does with each OSC number
     pub default_cursor_style: CursorStyle,
     pub semantic_escape_chars: String,    // for word selection (selection.md)
     pub accept_c1: bool,                  // default false; the S8C1T hook
@@ -273,10 +273,11 @@ The full public surface of `oneterm-vt`, in one place, so review can see how sma
 ```rust
 pub use cell::{Cell, CellContent, CellWidth, Color, NamedColor, Style, Attrs, Rgb};
 pub use event::{EventBatch, VtEvent, FeedStats, ClipboardKind, StringTerm, ByteSpan, StrSpan};
+// `US-0098` adds `Progress` and `ShellMark` here, and makes `VtEvent` `#[non_exhaustive]`.
 pub use grid::{RowId, Pos, Size, Viewport, RowRef};
 pub use graphics::{GraphicId, GraphicData, Placement, VIRTUAL_CELL, MAX_DIMENSION};
 pub use mode::{Mode, ModeSnapshot, MouseProtocol, CursorStyle, CursorShape, KeyboardFlags};
-pub use osc::{OscClaims, ColorKey, ThemeColors};
+pub use osc::{OscRoute, OscRoutes, ColorKey, ThemeColors};   // `OscClaims` until `US-0098`
 pub use reflow::{ResizePolicy, ResizeOutcome};
 pub use render::{RenderState, RenderUpdate, RenderRow, RenderCell, StyleRun, RenderCursor};
 pub use selection::{SelectionKind, SelectionRange, Side};

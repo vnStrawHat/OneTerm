@@ -10,11 +10,11 @@
 // The module is `event` (the name the design and its test filters use) and its
 // files live in `events/`, one concept each.
 
-mod batch;
+pub(crate) mod batch;
 mod vt_event;
 
 pub use batch::EventBatch;
-pub use vt_event::{ClipboardKind, FeedStats, StringTerm, VtEvent};
+pub use vt_event::{ClipboardKind, FeedStats, Progress, ShellMark, StringTerm, VtEvent};
 
 #[cfg(test)]
 #[path = "event_tests.rs"]

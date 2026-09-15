@@ -8,9 +8,27 @@
 
 ## ⚠️ Methodology & confidence level
 
-Every ✅ / ◐ / ❌ below is read from the OneTerm codebase, not from memory:
-`crates/terminal/src/osc.rs`, `crates/terminal/src/osc_color.rs`,
-`crates/terminal/src/backend/osc_router.rs`, `crates/core/src/config/shell.rs`.
+Every ✅ / ◐ / ❌ below is read from the OneTerm codebase, not from memory.
+Since `US-0098` an OSC is parsed in **one** place, the engine, and met in the adapter by policy
+only, so there are two files to read and one table:
+
+* `crates/vt/src/terminal/dispatch.rs` — the built-in arms, one per number in
+  `OscRoutes::BUILTIN`, each emitting a typed `VtEvent`;
+* `crates/vt/src/terminal/osc.rs` — `OscRoutes`, the per-number routing table;
+* `crates/terminal/src/handle.rs` — `adapter_config`, the three calls that say which numbers are
+  OneTerm's rather than a terminal's;
+* `crates/terminal/src/backend/osc_router.rs`, `crates/terminal/src/osc_color.rs`,
+  `crates/terminal/src/security_policy.rs`, `crates/core/src/config/shell.rs` — the policy half.
+
+The **Route** column below is what `Config::osc_routes` says about the number:
+
+| Route | Meaning |
+| --- | --- |
+| `Builtin` | the engine parses it and emits a typed event; the default for every number it implements |
+| `BuiltinAndForward` | the engine parses it **and** hands over the raw sequence |
+| `Forward` | the engine does not touch it; the raw sequence goes to OneTerm |
+| `Drop` | parsed, counted in `FeedStats::unhandled_sequences`, discarded; the default for everything else |
+
 When the code changes, update this document from the code.
 
 ---
@@ -52,7 +70,7 @@ Example: `ESC ] 10 ; ? BEL` → asks for the default foreground color.
 | Check | OSC | Purpose | Format | OneTerm |
 |:-----:|-----|----------|--------|---------|
 | ☑ | **0** | Set **both** icon name + window title | `ESC]0;title ST` | ✅ — drives the tab title. |
-| ☐ | **1** | Set **icon name** (title unchanged) | `ESC]1;name ST` | ❌ — X11 legacy, no icon-name concept. |
+| ◐ | **1** | Set **icon name** (title unchanged) | `ESC]1;name ST` | ◐ — parsed (`VtEvent::IconName`); OneTerm has no icon-name concept, so nothing displays it. |
 | ☑ | **2** | Set **window title** | `ESC]2;title ST` | ✅ — equivalent to OSC 0. |
 
 ---
@@ -139,11 +157,13 @@ ESC ] 8 ; ; ST               ← close link
 | ☑ | **7** | Set CWD (file:// URI) | `ESC]7;file://host/path ST` | ✅ — de-facto standard. |
 | ☐ | **9;9** | Set CWD (Windows path) | `ESC]9;9;C:\path ST` | ❌ |
 
-- **OneTerm**: ✅ OSC 7 — `OscRouter` parses `file://` → `parse_cwd_url`. **No** 9;9.
-- No VT engine handles OSC 7 itself. There is exactly **one** parser, not two: the engine forwards
-  the sequence and OneTerm interprets it. Under `alacritty_terminal` that is the fork's
-  `report_osc` hook feeding `OscRouter<T>`; under `oneterm-vt` (IN-0029) it is a `claim(7)` in
-  `Config::osc_claims` feeding `VtEvent::Osc` out of the same `feed` batch.
+- **OneTerm**: ✅ OSC 7, route `Builtin`. **No** 9;9.
+- There is exactly **one** parser. `oneterm-vt` handles the number itself and reports
+  `VtEvent::Cwd { host, path }` — percent-decoded, with a `file:///C:/...` drive URL's leading
+  slash stripped, and otherwise **unresolved**: no `PathBuf`, no host check, no filesystem. Whether
+  a remote shell's directory may be trusted is policy, and stays in `OscRouter` →
+  `TerminalSecurityPolicy::sanitize_cwd` → `SessionEvent::Cwd`. Neither
+  `alacritty_terminal` nor `rio-vt` handles OSC 7 at all.
 
 ---
 
@@ -160,19 +180,26 @@ ESC ] 8 ; ; ST               ← close link
 | ☐ | **99** | Extended notification protocol | `ESC]99;i=ID;payload ST` | ❌ |
 | ☐ | **777** | urxvt notification | `ESC]777;notify;title;body ST` | ❌ |
 
-> ✅ **OneTerm**: OSC 9 (notification → toast via `window.push_notification`) and OSC 9;4
-> (progress → thin progress bar at the top edge of the terminal, state 0-4). Forwarded through the
-> engine's OSC registration table (`OscClaims`) to `OscRouter` →
-> `OscPayload::Notification`/`Progress` → `SessionEvent`.
+> ✅ **OneTerm**: OSC 9 and OSC 9;4 are the engine's, parsed into `VtEvent::Notification` and
+> `VtEvent::Progress(Progress)`. `OscRouter` applies the policy — the 8 KiB notification cap and the
+> ten-per-second rate limit — and emits `SessionEvent::Notification` (toast via
+> `window.push_notification`) or `SessionEvent::Progress` (a thin bar at the top edge, states 0–4).
 >
-> **OSC 20308** is the agent channel — see [`osc-agent-status.md`](osc-agent-status.md). Sub-code `1`
-> is the status event and `0` the support query, answered on the transport; `2` and above are
-> reserved, and an unrecognised sub-code is ignored and counted.
+> **OSC 20308** is the agent channel — see [`osc-agent-status.md`](osc-agent-status.md) — and is
+> OneTerm's own proposal rather than a terminal standard, so its route is **`Forward`**: the engine
+> never parses it and contains no mention of the number. Sub-code `1` is the status event and `0`
+> the support query, answered on the transport; `2` and above are reserved, and an unrecognised
+> sub-code is ignored and counted. `OscRoutes::large(20308, true)` raises its payload ceiling to the
+> 8 KiB §3.4 publishes.
 >
 > ⚠️ **OSC 9;7** carried the agent channel until `US-0088` and is kept as a deprecated alias for
-> **one release** — parsed identically, counted, and logged once per session. It is ConEmu's "run
-> some process with arguments" (§ 2.1), which is why it is going away: an agent emitting it under
-> ConEmu or cmder asks that terminal to spawn a process. Agents should emit `20308;1` only.
+> **one release** — parsed identically, counted, and logged once per session. Routing is per number
+> and sub-codes are payload, so OSC 9 carries the route **`BuiltinAndForward`**: the engine keeps
+> parsing notifications and `9;4` progress *and* hands over the raw sequence, and OneTerm discards
+> the notification whose first forwarded parameter is `7` and parses the alias itself. The engine
+> has never heard of the sub-code. `9;7` is ConEmu's "run some process with arguments" (§ 2.1),
+> which is why it is going away: an agent emitting it under ConEmu or cmder asks that terminal to
+> spawn a process. Agents should emit `20308;1` only.
 >
 > Still ❌: 9;1/2/3, 99, 777.
 
@@ -196,11 +223,12 @@ ESC]133;C ST      ← Command output start
 ESC]133;D;exit ST ← Block end (exit code optional)
 ```
 
-- **OneTerm**: ✅ OSC 133 A/B/C/D (code: `Osc133Kind` enum + exit code). **No** 133;P/633.
-- `alacritty_terminal` does not handle OSC 133 at all, so OneTerm interprets it from the forwarded
-  sequence. `oneterm-vt` additionally records the mark **in the engine**: the A/B/C/D state lands on
-  the cell as `Semantic::{Prompt, Input, Output}` and A and C each register a tracked
-  `AnchorKind::Mark`, so a mark survives a reflow.
+- **OneTerm**: ✅ OSC 133 A/B/C/D, route `Builtin` (`VtEvent::ShellMark(ShellMark)`, exit code
+  included). **No** 133;P/633.
+- `alacritty_terminal` does not handle OSC 133 at all. `oneterm-vt` both records the mark **in the
+  engine** — the A/B/C/D state lands on the cell as `Semantic::{Prompt, Input, Output}` and A and C
+  each register a tracked `AnchorKind::Mark`, so a mark survives a reflow — and reports it, because
+  the prompt counter and the last exit code live above the seam in `SharedState`.
 
 ---
 
@@ -208,7 +236,7 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 
 | Check | OSC | Purpose | Format | OneTerm |
 |:-----:|-----|----------|--------|---------|
-| ☐ | **50** | Set/query font | `ESC]50;font-spec ST` | ❌ — xterm origin; font is a settings concern. |
+| ◐ | **50** | Set/query font (xterm) / **cursor shape** (rxvt, `CursorShape=0\|1\|2`) | `ESC]50;CursorShape=1 ST` | ◐ — cursor shape ✅ (`VtEvent::CursorStyleChanged`); the font half ❌, font is a settings concern. |
 
 ---
 
@@ -219,7 +247,7 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 | ☐ | **1337** | Inline image + subcodes | `ESC]1337;File=...;inline=1:base64 ST` | ❌ |
 | ☐ | **20** | Background opacity | `ESC]20;alpha ST` | ❌ |
 | ☐ | **21** | Extended color protocol | `ESC]21;... ST` | ❌ |
-| ☐ | **22** | Mouse pointer shape | `ESC]22;name ST` | ❌ |
+| ◐ | **22** | Mouse pointer shape | `ESC]22;name ST` | ◐ — parsed and reported by name (`VtEvent::Pointer`); the view does not change the pointer yet. |
 | ☐ | **46** | Log file (xterm) | `ESC]46;path ST` | ❌ |
 | ☐ | **66** | Text sizing | `ESC]66;... ST` | ❌ |
 | ☐ | **3008** | systemd context signal (UAPI) | `ESC]3008;... ST` | ❌ |
@@ -292,16 +320,15 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 7. **Vendor-specific**: only use when you are sure of the target terminal. Detect via `TERM`, `TERM_PROGRAM`,
    and terminal-specific environment variables.
 8. **Do not nest OSC**: close one OSC before opening another.
-9. **OneTerm** (VT engine = `alacritty_terminal`): supports **OSC 0/2, 7, 8, 52 (base64+query), 133 (A/B/C/D+exit),
-   4 (set+query) + 104 (reset), 10/11/12 (set+query) + 110/111/112 (reset), 9 (notification), 9;4 (progress),
-   9;7 (agent status)**.
-   - 7/9/9;4/133 are **forwarded** out of the one VT pass and interpreted by `OscRouter<T>`; there is
-     no second parser. Forwarding is byte-ordered, so multiple OSCs in the same read batch arrive in
-     the order they were written. Under `oneterm-vt` (IN-0029) the same numbers are registered with
-     `OscClaims::claim`, arrive as `VtEvent::Osc` in the `feed` batch, and that batch is a `Vec` in
-     byte order — the ordering promise is a property of the batch, not of a queue.
-   - OSC 8 stored in cell; OSC 52 is decoded by the engine and the **policy** stays in
-     `security_policy.rs`.
+9. **OneTerm** (VT engine = `oneterm-vt`): the engine implements **OSC 0, 1, 2, 4, 7, 8, 9 (and
+   `9;4`), 10/11/12, 22, 50, 52, 104, 110/111/112 and 133** — the set `OscRoutes::BUILTIN`
+   publishes — each parsed once and reported as a typed `VtEvent`. OneTerm adds **OSC 20308** (the
+   agent channel) and its deprecated `9;7` alias through `Config::osc_routes`, with no engine
+   change.
+   - There is no second parser anywhere. Events arrive in the `feed` batch in byte order, and that
+     batch is a `Vec` — the ordering promise is a property of the batch, not of a queue.
+   - OSC 8 is stored on the cell; OSC 52 is decoded by the engine and the **policy** — clipboard,
+     notifications, cwd, rate limits — stays in `security_policy.rs`.
    - OSC 4/104 + 10/11/12/110-112: the VT engine already parses these (set → `Term.colors`, reset → clear);
      OneTerm renders via `dynamic_colors()` (`TerminalPalette.indexed` for index 0-255) and answers queries via
      `Event::ColorRequest` (enqueue → reply after parse batch, fallback default palette via `set_default_colors`

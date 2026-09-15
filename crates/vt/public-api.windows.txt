@@ -80,7 +80,7 @@ enum oneterm_vt::ColorKey
     variant Palette
 struct oneterm_vt::Config
     structfield default_cursor_style
-    structfield osc_claims
+    structfield osc_routes
     structfield product_name
     structfield scrollback_limit
     structfield semantic_escape_chars
@@ -235,14 +235,21 @@ enum oneterm_vt::NamedColor
     variant Red
     variant White
     variant Yellow
-struct oneterm_vt::OscClaims
-    associatedconstant NATIVE
+enum oneterm_vt::OscRoute
+    variant Builtin
+    variant BuiltinAndForward
+    variant Drop
+    variant Forward
+struct oneterm_vt::OscRoutes
+    associatedconstant BUILTIN
     method allows_large
-    method claim
-    method claim_large
-    method is_claimed
-    method is_native
+    method get
+    method has_builtin
+    method large
     method new
+    method overrides
+    method route
+    method route_all
 struct oneterm_vt::Palette
     method dim
     method new
@@ -253,6 +260,12 @@ struct oneterm_vt::Palette
     structfield dim_foreground
     structfield foreground
     structfield indexed
+enum oneterm_vt::Progress
+    variant Error
+    variant Indeterminate
+    variant Paused
+    variant Remove
+    variant Set
 struct oneterm_vt::RenderCell
     structfield content
     structfield graphic
@@ -338,6 +351,11 @@ enum oneterm_vt::Semantic
     variant None
     variant Output
     variant Prompt
+enum oneterm_vt::ShellMark
+    variant OutputEnd
+    variant OutputStart
+    variant PromptEnd
+    variant PromptStart
 enum oneterm_vt::Side
     variant Left
     variant Right
@@ -402,13 +420,20 @@ enum oneterm_vt::VtEvent
     variant ClipboardLoad
     variant ClipboardStore
     variant ColorQuery
+    variant CursorStyleChanged
+    variant Cwd
     variant GraphicReleased
+    variant IconName
+    variant Notification
     variant Osc
+    variant Pointer
+    variant Progress
     variant Repaint
     variant Reply
     variant RowsScrolled
     variant RowsTrimmed
     variant ScreenCleared
+    variant ShellMark
     variant Title
     variant TitleReset
 fn oneterm_vt::cluster_width

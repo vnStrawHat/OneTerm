@@ -5,8 +5,8 @@
 use std::time::Instant;
 
 use oneterm_vt::{
-    CellWidth, Config, EventBatch, OscClaims, RenderContent, RenderRow, RenderState, Size,
-    Terminal, VtEvent,
+    CellWidth, Config, EventBatch, OscRoute, OscRoutes, RenderContent, RenderRow, RenderState,
+    Size, Terminal, VtEvent,
 };
 
 /// Everything below arrives in one `feed`: a title, a working directory, an
@@ -18,16 +18,16 @@ const INPUT: &[u8] = b"\x1b]0;headless demo\x07\
     \x1b[3;3Hrow three";
 
 fn main() {
-    // Claim the two OSC numbers this program answers itself. Anything the
-    // engine handles natively still arrives as a typed event, so claiming is
-    // only ever about sequences the engine has no opinion on.
-    let mut claims = OscClaims::new();
-    claims.claim(7).claim(1337);
+    // One call adds an OSC number the engine has never heard of. Everything the
+    // engine implements — the title, the working directory, colours, the
+    // clipboard — already arrives as a typed event without any of this.
+    let mut routes = OscRoutes::new();
+    routes.route(1337, OscRoute::Forward);
 
     let mut term = Terminal::new(
         Size { rows: 4, cols: 32 },
         Config {
-            osc_claims: claims,
+            osc_routes: routes,
             // What `XTVERSION` and `DA2` will tell programs they are talking to.
             product_name: Some("headless-demo(1.0.0)".into()),
             ..Config::default()

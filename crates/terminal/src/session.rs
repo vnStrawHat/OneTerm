@@ -14,14 +14,16 @@ use std::sync::{Arc, Mutex};
 
 use async_channel::Receiver;
 use oneterm_core::sftp::SftpBackend;
-use oneterm_vt::{CursorShape, ModeSnapshot, ResizePolicy, Rgb, RowId, SelectionKind};
+use oneterm_vt::{
+    CursorShape, ModeSnapshot, Progress as TerminalProgress, ResizePolicy, Rgb, RowId,
+    SelectionKind, ShellMark,
+};
 
 use crate::backend::{DefaultColors, SharedState};
 use crate::content::{LineRangeCells, TerminalContent};
 use crate::handle::SharedTerminal;
 use crate::logging::TerminalLogController;
 use crate::model::TerminalModel;
-use crate::osc::{Osc133Kind, TerminalProgress};
 use crate::osc_agent::AgentStatusEvent;
 use crate::osc_color::DynamicColors;
 use crate::paste::{PasteMode, PastePolicy, PasteResult, encode_paste};
@@ -144,7 +146,7 @@ pub enum SessionEvent {
     /// exposes the local clipboard to programs, including remote ones over SSH).
     ClipboardRead,
     /// Shell integration marker (OSC 133) — prompt start/end, output start/end.
-    ShellIntegration(Osc133Kind),
+    ShellIntegration(ShellMark),
     /// Desktop notification (OSC 9) — the UI shows a toast.
     Notification(String),
     /// Taskbar progress (OSC 9;4) — the UI shows a progress indicator.
