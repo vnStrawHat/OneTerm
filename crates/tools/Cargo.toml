@@ -46,6 +46,15 @@ path = "src/bin/vt-corpus.rs"
 [[bin]]
 name = "vt-bench"
 path = "src/bin/vt-bench.rs"
+
+# --- IN-0039 / US-0106: the esctest bridge ---------------------------------
+# A pty-backed stdin/stdout bridge between the `esctest` conformance harness and
+# `oneterm_vt::Terminal`. Unix only in substance (the file carries a Windows
+# stub so every host still compiles it); the Linux CI job is the only place it
+# runs, and it runs report-only.
+[[bin]]
+name = "vt-esctest"
+path = "src/bin/vt-esctest.rs"
 # ---------------------------------------------------------------------------
 
 [dependencies]
