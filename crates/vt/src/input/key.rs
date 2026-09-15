@@ -23,7 +23,11 @@ pub struct KeyMods {
 }
 
 /// Special key names (not printable characters).
+///
+/// `#[non_exhaustive]`: new named keys arrive with new keyboard protocols, so
+/// an embedder must keep a `_` arm. Construction is unaffected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NamedKey {
     /// Return / Enter.
     Enter,
@@ -104,7 +108,11 @@ pub enum NamedKey {
 }
 
 /// Specification of a key event — framework-agnostic.
+///
+/// `#[non_exhaustive]`: a keyboard protocol that reports something other than a
+/// character or a named key would land here. Construction is unaffected.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeySpec {
     /// A character (may be multiple codepoints, e.g. a compose key).
     Character(String),
