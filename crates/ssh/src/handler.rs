@@ -39,6 +39,19 @@ pub(crate) enum SshHandlerError {
         known_algorithms: Vec<String>,
         fingerprint: String,
     },
+    /// The server proved its identity with an OpenSSH host *certificate*.
+    ///
+    /// Separate from [`Self::UnknownHostKey`] on purpose: a certificate can
+    /// never become trusted by approving it, because known_hosts records bare
+    /// keys and OneTerm has no certificate-authority trust store. Routing it
+    /// through the unknown-key path would show the user a first-use "trust this
+    /// host key?" dialog whose Accept can only fail again.
+    HostCertificate {
+        host: String,
+        port: u16,
+        algorithm: String,
+        fingerprint: String,
+    },
     /// The known_hosts file could not be read or updated.
     KeyStore(russh::keys::Error),
     /// An ordinary russh connection error.
@@ -75,6 +88,18 @@ impl fmt::Display for SshHandlerError {
                 f,
                 "SSH host key changed for {host}:{port}: server presented a {algorithm} key but known_hosts only records {}; refusing connection (SHA-256 fingerprint: {fingerprint})",
                 known_algorithms.join(", ")
+            ),
+            Self::HostCertificate {
+                host,
+                port,
+                algorithm,
+                fingerprint,
+            } => write!(
+                f,
+                "{host}:{port} proved its identity with an OpenSSH host certificate ({algorithm}), \
+                 which OneTerm does not support; refusing connection. known_hosts records bare \
+                 host keys and there is no certificate authority to check this against \
+                 (certified key SHA-256 fingerprint: {fingerprint})"
             ),
             Self::KeyStore(error) => write!(f, "SSH known-hosts error: {error}"),
             Self::Russh(error) => error.fmt(f),
@@ -122,6 +147,13 @@ impl SshHandlerError {
                 port: *port,
                 fingerprint: fingerprint.clone(),
             },
+            // A plain connect error, deliberately *not* `HostKeyUnknown`: the
+            // connect dialog answers that with a first-use approval prompt, and
+            // approving a certificate can never succeed.
+            Self::HostCertificate { .. } => AppError::Connect {
+                phase: ConnectPhase::Transport,
+                message: self.to_string(),
+            },
             Self::KeyStore(error) => AppError::Connect {
                 phase: ConnectPhase::Transport,
                 message: format!("known-hosts error: {error}"),
@@ -145,7 +177,10 @@ pub(crate) struct SshClientHandler {
     /// relays die with; `None` for jump hops and connections without forwards.
     forwards: Option<(ForwardTable, CancellationToken)>,
     /// Set only when the session forwards the local agent; without it every
-    /// agent channel the server opens is closed unanswered (DEC-0011).
+    /// agent channel the server opens is refused with
+    /// `AdministrativelyProhibited` (DEC-0011). Before russh 0.63 the channel
+    /// was already confirmed by the time the handler ran, so the best OneTerm
+    /// could do was close it immediately (`IN-0036`).
     agent_bridge: Option<(AgentConnector, CancellationToken)>,
 }
 
@@ -328,7 +363,7 @@ impl client::Handler for SshClientHandler {
         let server_key = match server_key {
             russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
             russh::keys::PublicKeyOrCertificate::Certificate(certificate) => {
-                return Err(SshHandlerError::UnknownHostKey {
+                return Err(SshHandlerError::HostCertificate {
                     host: self.host.clone(),
                     port: self.port,
                     algorithm: certificate.algorithm().to_string(),
