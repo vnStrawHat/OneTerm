@@ -15,6 +15,12 @@
 
 #![warn(missing_docs)]
 
+// Every Rust block in the README is compiled and run by `cargo test --doc`, so
+// the front page cannot drift away from the API it advertises.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
 // Three modules are reachable by path from outside, and only three: `grid`
 // (`crates/tools` replays a recording through `grid::Screen`, and the adapter
 // reads `grid::{DEFAULT_SCROLLBACK, SCROLLBACK_MAX}`), `intern` (the adapter
