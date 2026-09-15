@@ -1,11 +1,11 @@
 //! Materialising the selected text.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/selection.md`
-//! section "`selection_text`"; reference
-//! Alacritty's `alacritty_terminal/src/term/mod.rs:544-645`.
-//!
 //! One function, shared by copy, the clipboard policy path and
-//! `Terminal::selection_text`.
+//! [`crate::Terminal::selection_text`].
+
+// Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/selection.md`
+// section "`selection_text`"; reference
+// Alacritty's `alacritty_terminal/src/term/mod.rs:544-645`.
 
 use crate::cell::{CellContent, CellWidth};
 use crate::grid::{RowId, RowRef, Screen};

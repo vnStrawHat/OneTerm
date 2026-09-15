@@ -1,17 +1,17 @@
 //! How many columns a character occupies.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/cell-and-style.md`,
-//! section "Width".
+//! Design:
+//! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/cell-and-style.md>
 //!
-//! **Mode 2027 is not implemented in this intake.** Width today is decided per
-//! scalar by [`scalar_width`], which is what the engine being replaced does and
-//! what the parity corpus pins: a ZWJ family emoji lands as a base plus a
-//! zero-width tail and the next emoji starts a new cell — visibly wrong, and
-//! deliberately unchanged here.
+//! **Mode 2027 (grapheme clustering) is not implemented.** Width today is
+//! decided per scalar by [`scalar_width`], which is what most terminals do: a
+//! ZWJ family emoji lands as a base plus a zero-width tail and the next emoji
+//! starts a new cell. Visibly wrong, and deliberately unchanged, because the
+//! recordings the engine is held to pin it.
 //!
 //! [`cluster_width`] is the answer mode 2027 will need. It is implemented and
-//! tested now so that landing the mode is a print-path change rather than a
-//! design change. Nothing in the engine calls it yet.
+//! tested ahead of the mode so that landing the mode is a print-path change
+//! rather than a design change. Nothing in the engine calls it yet.
 //!
 //! The glyph-width axis is settled outside this module: the pseudo-console is
 //! spawned with `PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH`, which matches this module

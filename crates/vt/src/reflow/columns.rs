@@ -2,15 +2,13 @@
 //! at the new width, and carry every tracked anchor with the character it sat
 //! on.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/reflow-and-resize.md`
-//! section "`reflow_columns` — the iterator".
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/reflow-and-resize.md>
 //!
 //! Derived from the algorithm of `avt`'s `Reflow` iterator (Apache-2.0,
-//! <https://github.com/asciinema/avt>) as described in that design and in
-//! `research/prior-art.md` § 9.3: group rows into logical lines on the wrap
-//! flag, trim, redistribute. No `avt` source is copied — the storage, the cell
-//! representation and the anchor mechanism are OneTerm's — but the approach is
-//! theirs and the attribution is deliberate.
+//! <https://github.com/asciinema/avt>): group rows into logical lines on the
+//! wrap flag, trim, redistribute. No `avt` source is copied, the storage, the
+//! cell representation and the anchor mechanism are this crate's own, but the
+//! approach is theirs and the attribution is deliberate.
 
 use std::collections::VecDeque;
 
@@ -20,7 +18,7 @@ use crate::grid::{Anchors, Pos, Row, RowFlags, RowId, Screen, SeqNo, flags_for};
 /// One position the reflow was asked to carry, and where it landed.
 ///
 /// `dest` is a **produced-row index**, not a `RowId`: rows produced before the
-/// oldest survivor are trimmed away (trap 32), and the index is what says which
+/// oldest survivor are trimmed away, and the index is what says which
 /// side of that line a point fell on.
 struct Point {
     key: Pos,
@@ -41,8 +39,8 @@ trait RowSink {
 }
 
 /// Collects the reflow's output, dropping the oldest rows once the screen's own
-/// bound is reached (trap 32). Capping here rather than afterwards is also what
-/// keeps the result inside the ring, whose length is a session constant (R-30).
+/// bound is reached. Capping here rather than afterwards is also what
+/// keeps the result inside the ring, whose length is a session constant.
 struct RingSink {
     rows: VecDeque<Option<Row>>,
     cap: usize,
@@ -113,7 +111,7 @@ impl RowSink for CountSink {
 pub(crate) struct Reflowed {
     pub(crate) rows_trimmed: u32,
     /// The cursor's new position. `col == new_cols` means "past the last
-    /// column", which is how the pending wrap is carried through (trap 31).
+    /// column", which is how the pending wrap is carried through.
     pub(crate) cursor: Option<Pos>,
 }
 
@@ -258,7 +256,7 @@ pub(crate) fn reflow_columns(
 /// same iterator, so joins, splits and wide spacers are decided by the code that
 /// reflows the real screen. History above the screen never enters the count, and
 /// the top row starts a logical line whether or not the row above it wrapped —
-/// which is the measured conhost rule (BUG-0051 § Measurements (b)).
+/// which is the rule measured from conhost itself.
 pub(crate) fn measure_rows(screen: &Screen, new_cols: u16) -> u16 {
     let cursor = screen.cursor();
     let old_cols = screen.cols();

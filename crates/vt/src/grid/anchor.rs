@@ -1,10 +1,10 @@
 //! The tracked-anchor list: one mechanism, shared by every row-moving primitive
 //! and by reflow.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/grid-and-scrollback.md`
+//! Design:
+//! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/grid-and-scrollback.md>,
 //! section "Tracked anchors", which is the canonical definition of
-//! [`AnchorKind`]; `reflow-and-resize.md`, `selection.md` and `graphics.md`
-//! reference it and never restate the variant list.
+//! [`AnchorKind`].
 //!
 //! A [`RowId`] names a position, so a consumer that stored one has no way to
 //! know its content moved. Anchoring is therefore an engine service: a consumer
@@ -31,7 +31,9 @@ pub enum AnchorKind {
     SavedCursor,
     /// The first visible row, so reflow can restate the viewport.
     ViewportTop,
+    /// Where an active selection began.
     SelectionStart,
+    /// Where an active selection currently ends.
     SelectionEnd,
     /// One per placement.
     Graphic(GraphicId),
@@ -40,7 +42,7 @@ pub enum AnchorKind {
 }
 
 impl AnchorKind {
-    /// Whether the screen owns this entry as the cached mirror of a field (N-01).
+    /// Whether the screen owns this entry as the cached mirror of a field.
     ///
     /// The cursor and the viewport top are ordinary fields on the screen, because
     /// the print path writes the cursor on every glyph and must not pay a lookup.
@@ -61,8 +63,11 @@ impl AnchorKind {
 /// pointing at unrelated content.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Anchor {
+    /// What this entry tracks.
     pub kind: AnchorKind,
+    /// Where that content is now. Meaningless once `alive` is false.
     pub pos: Pos,
+    /// False once the content was blanked, trimmed or reflowed away.
     pub alive: bool,
 }
 
@@ -74,6 +79,7 @@ pub struct Anchors {
 }
 
 impl Anchors {
+    /// An empty list.
     pub fn new() -> Anchors {
         Anchors::default()
     }
@@ -110,6 +116,7 @@ impl Anchors {
         }
     }
 
+    /// What an anchor tracks, or `None` if the id was never issued.
     pub fn kind(&self, id: AnchorId) -> Option<AnchorKind> {
         self.entries.get(id.0 as usize).map(|anchor| anchor.kind)
     }
@@ -215,6 +222,7 @@ impl Anchors {
             .count()
     }
 
+    /// Every entry with its id, dead ones included.
     pub fn iter(&self) -> impl Iterator<Item = (AnchorId, &Anchor)> {
         self.entries
             .iter()

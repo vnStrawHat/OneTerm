@@ -1,14 +1,12 @@
 //! One row: a header the renderer reads and a vector of cells.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/grid-and-scrollback.md`
-//! section "Row", and `damage-and-render-state.md` for the two header fields
-//! (`seq`, `RowFlags::DIRTY`) the render state reads.
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/grid-and-scrollback.md>
 //!
-//! **One row representation (R-51).** The dual-form (uniform run plus general
-//! vector) design is deferred: every operation that matters coerces to the
-//! general form anyway, and the memory win the design claims comes from the
-//! ring's lazy `Option<Row>` slots, which is independent. [`RowRef`] and
-//! [`RowMut`] exist so that change stays internal.
+//! A row has **one** representation, the general cell vector. The dual-form
+//! alternative (a uniform run beside the general vector) is deferred: every
+//! operation that matters coerces to the general form anyway, and the memory it
+//! would save is already saved by leaving unwritten ring slots unallocated.
+//! [`RowRef`] and [`RowMut`] exist so that change would stay internal.
 
 use bitflags::bitflags;
 
@@ -34,12 +32,17 @@ bitflags! {
     #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
     pub struct RowFlags: u8 {
         /// The logical line continues on the next row. A row flag rather than a
-        /// flag on the last cell (deviation G1).
+        /// flag on the last cell.
         const WRAPPED      = 1 << 0;
+        /// The row was written since it was last handed to a consumer.
         const DIRTY        = 1 << 1;
+        /// At least one cell carries a non-default style.
         const STYLED       = 1 << 2;
+        /// At least one cell holds a multi-scalar grapheme cluster.
         const HAS_GRAPHEME = 1 << 3;
+        /// At least one cell carries out-of-line data such as a hyperlink.
         const HAS_EXTRAS   = 1 << 4;
+        /// At least one cell is covered by an image placement.
         const HAS_GRAPHIC  = 1 << 5;
 
         /// What a reset keeps: everything else describes content that is gone.
@@ -56,11 +59,12 @@ bitflags! {
 pub struct RowHeader {
     /// The batch that last mutated this row.
     pub seq: SeqNo,
+    /// The row's stream-wide id.
     pub id: RowId,
+    /// The row's damage bit and content hints.
     pub flags: RowFlags,
-    /// The reference's over-approximating hint: no column at or above `occ` has
-    /// been touched since the last reset. Not exact, not part of any equality,
-    /// and deliberately **not** checked by `assert_integrity` (R-10).
+    /// An over-approximating hint: no column at or above `occ` has been touched
+    /// since the last reset. Not exact, and not part of any equality.
     pub occ: u16,
 }
 
@@ -76,6 +80,7 @@ pub struct Row {
 static BLANK_CELLS: [Cell; MAX_COLS as usize] = [Cell::EMPTY; MAX_COLS as usize];
 
 impl Row {
+    /// A fresh row of `cols` cells, every one a copy of `template`.
     pub fn new(id: RowId, cols: u16, seq: SeqNo, template: Cell) -> Row {
         Row {
             header: RowHeader {
@@ -90,7 +95,7 @@ impl Row {
         }
     }
 
-    /// Build a row the reflow has just laid out (`US-0077`).
+    /// Build a row the reflow has just laid out.
     ///
     /// `hints` is the **complete** content-hint set: the reflow visits every
     /// cell as it lays the row out, so it accumulates the hints there rather
@@ -147,18 +152,18 @@ impl Row {
         &self.header
     }
 
+    /// Every cell of the row, left to right.
     pub fn cells(&self) -> &[Cell] {
         &self.cells
     }
 
     /// Clear the row to `template`, reusing the allocation.
     ///
-    /// Trap 36: only `0..occ` is cleared when the last cell already carries the
-    /// template's style, and the whole row otherwise. The reference compares the
-    /// background alone; comparing the interned style id instead is an
-    /// over-approximation in the safe direction — it can only clear more than
-    /// strictly necessary, never less — and it keeps the erase paths off the
-    /// interner.
+    /// Only `0..occ` is cleared when the last cell already carries the
+    /// template's style, and the whole row otherwise. Comparing the interned
+    /// style id rather than the background colour over-approximates in the safe
+    /// direction: it can only clear more than strictly necessary, never less,
+    /// and it keeps the erase paths off the interner.
     pub fn reset(&mut self, template: Cell, seq: SeqNo) {
         if self.cells.last().map(|cell| cell.style_id()) != Some(template.style_id()) {
             self.header.occ = self.cells.len() as u16;
@@ -271,6 +276,7 @@ impl<'a> RowRef<'a> {
         }
     }
 
+    /// The row's stream-wide id.
     pub fn id(&self) -> RowId {
         self.id
     }
@@ -281,24 +287,29 @@ impl<'a> RowRef<'a> {
         self.header.map_or(SeqNo::default(), |header| header.seq)
     }
 
-    /// The row's content hints. `pub` because `oneterm-terminal`'s
-    /// `last_content_row` needs them to read `occ` correctly: `reset` sets
-    /// `flags = DIRTY | flags_for(template)` and *then* zeroes `occ`, so the
-    /// hints are the only thing that says whether an `occ == 0` row is blank or
-    /// painted with a non-default erase template (`US-0092`; `US-0090` had
-    /// narrowed this to `pub(crate)` when nothing outside used it).
+    /// The row's damage bit and content hints.
+    ///
+    /// A caller scanning for the last row that holds content needs these to
+    /// read [`RowRef::occ`] correctly: a reset sets the flags from the erase
+    /// template and *then* zeroes `occ`, so the hints are the only thing that
+    /// says whether an `occ == 0` row is blank or painted with a non-default
+    /// background.
     pub fn flags(&self) -> RowFlags {
         self.header.map_or(RowFlags::empty(), |header| header.flags)
     }
 
+    /// Whether the logical line continues on the next row.
     pub fn wrapped(&self) -> bool {
         self.flags().contains(RowFlags::WRAPPED)
     }
 
+    /// The over-approximating occupancy hint from the row header; `0` for a row
+    /// that was never written.
     pub fn occ(&self) -> u16 {
         self.header.map_or(0, |header| header.occ)
     }
 
+    /// Every cell of the row, left to right; blanks for an unwritten row.
     pub fn cells(&self) -> &'a [Cell] {
         self.cells
     }
@@ -323,24 +334,28 @@ pub struct RowMut<'a> {
 }
 
 impl<'a> RowMut<'a> {
+    /// Open `row` for writing, stamping it with the current batch and marking it
+    /// dirty.
     pub fn new(row: &'a mut Row, seq: SeqNo) -> RowMut<'a> {
         row.header.seq = seq;
         row.header.flags.insert(RowFlags::DIRTY);
         RowMut { row }
     }
 
+    /// The row's stream-wide id.
     pub fn id(&self) -> RowId {
         self.row.header.id
     }
 
+    /// Every cell of the row, left to right.
     pub fn cells(&self) -> &[Cell] {
         &self.row.cells
     }
 
     /// Write one cell over whatever half of a wide pair was there.
     ///
-    /// Trap 6, same-row half: this is the reference's `write_at_cursor` repair,
-    /// run against the cell being overwritten before the new one lands.
+    /// The repair runs against the cell being overwritten, before the new one
+    /// lands.
     pub(crate) fn write_repairing(&mut self, col: u16, cell: Cell) {
         crate::cell::repair_wide_pair_in_row(&mut self.row.cells, col as usize);
         self.set(col, cell);
@@ -359,17 +374,16 @@ impl<'a> RowMut<'a> {
 
     /// Write one cell **without** clearing the row's wrap flag.
     ///
-    /// The reference's wide-pair repairs change flag *bits* on a cell — its
-    /// `clear_wide`, and `flags.remove(LEADING_WIDE_CHAR_SPACER)` on the row
-    /// above — rather than assigning a whole new cell, so `WRAPLINE` survives
-    /// them. `put_tab` is the same shape: it assigns `cell.c` alone. Under
-    /// deviation G1 the flag lives on the row, so those paths need a write that
-    /// says "this is a repair, not an overwrite".
+    /// A wide-pair repair, and a tab stop's fill, change one cell in place
+    /// rather than assigning a whole new cell, so the wrap flag has to survive
+    /// them. Here the wrap flag lives on the row rather than on its last cell,
+    /// so those paths need a write that says "this is a repair, not an
+    /// overwrite".
     ///
-    /// Found by the `US-0076` verification (M2): a wide glyph repainted over the
-    /// first columns of a row released the previous row's trailing
-    /// `LeadingWideSpacer` and cleared **that row's** wrap flag with it, which
-    /// would split a wrapped CJK line on the next reflow.
+    /// Without it, a wide glyph repainted over the first columns of a row
+    /// releases the previous row's trailing `LeadingWideSpacer` and clears
+    /// **that row's** wrap flag with it, splitting a wrapped CJK line on the
+    /// next reflow.
     pub(crate) fn repair(&mut self, col: u16, cell: Cell) {
         let Some(slot) = self.row.cells.get_mut(col as usize) else {
             return;
@@ -381,16 +395,14 @@ impl<'a> RowMut<'a> {
 
     /// The wrap flag dies with the cell that carried it.
     ///
-    /// The reference keeps `WRAPLINE` on the row's last **cell** and assigns the
-    /// whole template over it on any write, so overwriting or erasing that cell
-    /// wipes the flag. Here the flag lives on the row (deviation G1), so every
-    /// write that reaches the last column clears it explicitly — otherwise a TUI
-    /// repainting over the end of a wrapped row leaves a stale flag behind and a
-    /// later reflow rejoins two rows that are not one logical line.
+    /// A terminal that keeps the wrap flag on the row's last **cell** wipes it
+    /// whenever that cell is overwritten or erased. Here the flag lives on the
+    /// row, so every write that reaches the last column clears it explicitly.
+    /// Otherwise a TUI repainting over the end of a wrapped row leaves a stale
+    /// flag behind and a later reflow rejoins two rows that are not one logical
+    /// line.
     ///
-    /// `end` is the exclusive end of what was written. Found by the `US-0076`
-    /// old-versus-new differential on the `tui_redraw` bench fixture; no corpus
-    /// recording reaches it.
+    /// `end` is the exclusive end of what was written.
     fn clear_wrap_at(&mut self, end: usize) {
         if end >= self.row.cells.len() {
             self.row.header.flags.remove(RowFlags::WRAPPED);
@@ -412,7 +424,7 @@ impl<'a> RowMut<'a> {
         self.clear_wrap_at(end);
     }
 
-    /// `DCH`, correction C1: a plain shift left by `n`, not the reference's
+    /// `DCH`: a plain shift left by `n`, not an `end`-clamped swap.
     /// `end`-clamped swap.
     pub(crate) fn delete_cells(&mut self, col: u16, n: u16, template: Cell) {
         let cols = self.row.cells.len();
@@ -446,8 +458,8 @@ impl<'a> RowMut<'a> {
     }
 
     /// Insert mode's shift, which moves the whole row right by the glyph width.
-    /// Correction C4: the pair the shift splits is repaired rather than left as
-    /// an orphaned spacer.
+    /// A wide pair the shift splits is repaired rather than left as an orphaned
+    /// spacer.
     pub(crate) fn shift_right_from(&mut self, col: u16, n: u16) {
         let cols = self.row.cells.len();
         let col = (col as usize).min(cols);
@@ -461,6 +473,7 @@ impl<'a> RowMut<'a> {
         self.clear_wrap_at(cols);
     }
 
+    /// Declare whether the logical line continues on the next row.
     pub fn set_wrapped(&mut self, wrapped: bool) {
         self.row.header.flags.set(RowFlags::WRAPPED, wrapped);
     }
@@ -472,6 +485,7 @@ impl<'a> RowMut<'a> {
         self.row.header.flags.insert(RowFlags::HAS_GRAPHIC);
     }
 
+    /// Clear the row to `template`, reusing the allocation.
     pub fn reset(&mut self, template: Cell, seq: SeqNo) {
         self.row.reset(template, seq);
     }
@@ -483,6 +497,7 @@ impl<'a> RowMut<'a> {
 
 /// Ring-side helpers, kept out of the public surface.
 impl Row {
+    /// The row's stream-wide id.
     pub fn id(&self) -> RowId {
         self.header.id
     }
@@ -492,6 +507,7 @@ impl Row {
         self
     }
 
+    /// Live heap this row owns, in bytes.
     pub fn bytes(&self) -> usize {
         self.heap_bytes()
     }

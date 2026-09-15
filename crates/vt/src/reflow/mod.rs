@@ -1,19 +1,10 @@
 //! Resize: the two policies, and the column reflow they share.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/reflow-and-resize.md`;
-//! the ConPTY contract is `docs/decisions/DEC-0008-local-conpty-grow-resize-keeps-viewport-top.md`
-//! and `docs/terminal-backend.md` § 5.3.
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/reflow-and-resize.md>
 //!
-//! Replaces Alacritty's `alacritty_terminal/src/grid/resize.rs` **and**
-//! `crates/terminal/src/model.rs`'s `resize_keeping_viewport_top` /
-//! `conhost_cursor_row`, which parked the alternate grid, installed a
-//! placeholder, swapped screens twice and reflowed a scratch grid to guess what
-//! conhost had done. The engine owns both screens, so the correction addresses
-//! the primary one directly.
-//!
-//! There is no public tracking-point slice and no public row remap (R-31):
-//! everything that has to move is already an entry in the tracked-anchor list,
-//! and a consumer that wants its own anchor registers one.
+//! There is no public tracking-point slice and no public row remap: everything
+//! that has to move is already an entry in the tracked-anchor list, and a
+//! consumer that wants its own anchor registers one.
 
 use crate::grid::{Anchors, Pos, Screen, Size};
 
@@ -24,35 +15,34 @@ pub(crate) use columns::measure_rows;
 /// Where a resize leaves the content.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum ResizePolicy {
-    /// The reference's behaviour, and what a remote PTY expects: a grow pulls
+    /// What a remote PTY expects, and what most terminals do: a grow pulls
     /// scrollback into the top of the viewport and the cursor moves down with
-    /// it. SSH sessions and Unix local shells.
+    /// it. The right policy for SSH sessions and Unix local shells.
     #[default]
     BottomAnchor,
-    /// conhost's behaviour behind ConPTY (`DEC-0008`): the viewport keeps its
-    /// top row, the cursor moves to the row conhost addresses, and new rows are
-    /// blank at the bottom. Windows local shells.
+    /// What Windows conhost does behind ConPTY: the viewport keeps its top row,
+    /// the cursor moves to the row conhost addresses, and new rows are blank at
+    /// the bottom. The right policy for Windows local shells.
     KeepViewportTop,
 }
 
-/// What one resize did. The `Full` render update a resize implies is derived by
-/// `RenderState` from the size it last observed (`damage-and-render-state.md`),
-/// not stamped per row here.
+/// What one resize did. The full repaint a resize implies is derived by the
+/// render state from the size it last observed, not stamped per row here.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct ResizeOutcome {
     /// Whether the column count changed, so the rows were re-laid out.
     pub reflowed: bool,
     /// Rows dropped off the oldest end because the reflow produced more than the
-    /// scrollback limit allows (trap 32).
+    /// scrollback limit allows.
     pub rows_trimmed: u32,
 }
 
 /// Resize both screens.
 ///
-/// The order is the design's: the early identity return, the primary screen's
-/// columns then rows, the alternate screen without reflow (trap 29), the
-/// `KeepViewportTop` correction, the selection, and one `sync_anchors` at the
-/// end — after the reflow has read its remapped entries back into the fields.
+/// The order matters: the early identity return, the primary screen's columns
+/// then rows, the alternate screen without reflow, the `KeepViewportTop`
+/// correction, the selection, and one `sync_anchors` at the end, after the
+/// reflow has read its remapped entries back into the fields.
 pub(crate) fn resize(
     primary: &mut Screen,
     alt: &mut Screen,

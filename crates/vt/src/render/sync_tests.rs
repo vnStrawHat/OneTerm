@@ -1,7 +1,7 @@
-//! Mode 2026, driven by an injected clock so nothing here is time-dependent.
-//!
-//! Named for the verification list in
-//! `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`.
+// Mode 2026, driven by an injected clock so nothing here is time-dependent.
+//
+// Named for the verification list in
+// `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`.
 
 use crate::render::sync::{SYNC_REFRESH, SYNC_WATCHDOG};
 use crate::render::tests::Engine;

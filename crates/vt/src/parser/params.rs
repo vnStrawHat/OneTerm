@@ -1,15 +1,15 @@
 //! CSI and DCS parameters, with the separator that produced each value.
 //!
-//! The reference stores sub-parameters as run lengths, which is enough for SGR
-//! but loses the structural difference the dispatch layer needs: `38;5;n`
-//! consumes a following *parameter* where `38:5:n` reads a *sub-parameter*, and
-//! `38:2:<cs>:R:G:B` skips a colour-space id that `38:2:R:G:B` does not
-//! (IN-0029 trap 20). Keeping the separator per value makes that a lookup
-//! instead of a re-derivation.
+//! Storing sub-parameters as run lengths is enough for SGR but loses the
+//! structural difference the dispatch layer needs: `38;5;n` consumes a
+//! following *parameter* where `38:5:n` reads a *sub-parameter*, and
+//! `38:2:<cs>:R:G:B` skips a colour-space id that `38:2:R:G:B` does not.
+//! Keeping the separator per value makes that a lookup instead of a
+//! re-derivation.
 
 /// Maximum number of values, parameters and sub-parameters together.
 ///
-/// The reference's budget. Williams asks for at least 16.
+/// Williams' table asks for at least 16; this is a wider budget.
 pub const MAX_PARAMS: usize = 32;
 
 /// Maximum number of collected intermediate bytes (`0x20..=0x2F`, plus a CSI
@@ -37,7 +37,7 @@ pub struct Params {
     len: u8,
     /// Set when the 33rd value or the third intermediate arrived. The dispatch
     /// still fires so the sequence can be dropped deliberately, which is a
-    /// different path from `CsiIgnore` (trap 23).
+    /// different path from the `CsiIgnore` state.
     overflowed: bool,
 }
 
@@ -151,6 +151,7 @@ pub struct Intermediates {
 }
 
 impl Intermediates {
+    /// The collected bytes, in the order they arrived.
     pub fn as_slice(&self) -> &[u8] {
         &self.bytes[..self.len as usize]
     }

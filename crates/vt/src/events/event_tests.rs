@@ -1,8 +1,8 @@
-//! The batch's contract: order, one arena, spans instead of vectors, and the
-//! grid's scroll report turned into events.
-//!
-//! Named for the verification list in
-//! `docs/spec-intakes/IN-0029-vt-engine/low-level-design/events-and-api.md`.
+// The batch's contract: order, one arena, spans instead of vectors, and the
+// grid's scroll report turned into events.
+//
+// Named for the verification list in
+// `docs/spec-intakes/IN-0029-vt-engine/low-level-design/events-and-api.md`.
 
 use crate::event::batch::EVENT_ARENA_SOFT;
 use crate::event::{ClipboardKind, EventBatch, StringTerm, VtEvent};

@@ -1,13 +1,13 @@
 //! Expanding an anchor into a word, a bracket pair or a whole logical line.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/selection.md`
-//! section "Semantic expansion"; reference
-//! Alacritty's `alacritty_terminal/src/term/search.rs:465-620`.
-//!
 //! Every rule the reference phrases as "the cell at the last column carries
-//! `WRAPLINE`" is `RowRef::wrapped()` here: `WRAPPED` is a **row** flag
-//! (deviation G1, `grid-and-scrollback.md`), which is strictly better defined —
-//! the reference reads a flag off a cell an `EL` can erase.
+//! `WRAPLINE`" is `RowRef::wrapped()` here: wrapping is a **row** flag, which
+//! is strictly better defined than the reference's, which reads a flag off a
+//! cell an `EL` can erase.
+
+// Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/selection.md`
+// section "Semantic expansion" (deviation G1, `grid-and-scrollback.md`);
+// reference Alacritty's `alacritty_terminal/src/term/search.rs:465-620`.
 
 use crate::cell::CellContent;
 use crate::grid::{Pos, Screen};

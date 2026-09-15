@@ -1,7 +1,6 @@
 //! The screen: rows, scrollback, the viewport and the tracked anchors.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/grid-and-scrollback.md`,
-//! contract: `docs/decisions/DEC-0015-absolute-row-ids-and-incremental-render-state.md`.
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/grid-and-scrollback.md>
 //!
 //! A [`RowId`] names a **position** in the output stream, not a piece of content,
 //! and the ring index *is* the id (`slot = id & mask`). Content therefore moves
@@ -30,14 +29,14 @@ pub use screen::{
 };
 pub use terminal_grid::TerminalGrid;
 
-/// Hard cap on the viewport height (N-11). The ring is sized once from
+/// Hard cap on the viewport height. The ring is sized once from
 /// `scrollback_limit + MAX_ROWS`, so a resize can never invalidate the mask.
 pub(crate) const MAX_ROWS: u16 = 1024;
-/// Hard cap on the viewport width (N-11).
+/// Hard cap on the viewport width.
 pub(crate) const MAX_COLS: u16 = 2048;
-/// Hard cap on the configured scrollback depth.
+/// Hard cap on the configured scrollback depth, in rows.
 pub const SCROLLBACK_MAX: u32 = 1_000_000;
-/// The shipped default, unchanged from the engine being replaced.
+/// The default scrollback depth, in rows, when the embedder configures none.
 pub const DEFAULT_SCROLLBACK: u32 = 10_000;
 
 /// A position in the output stream.
@@ -53,12 +52,12 @@ impl RowId {
     pub const PRIMARY_ORIGIN: RowId = RowId(0);
     /// Where the alternate screen's run starts.
     ///
-    /// The two screens grow independently — the alternate scrolls while the
-    /// primary is frozen, and `US-0077`'s `KeepViewportTop` corrects the primary
-    /// *while* the alternate is active — so one shared counter cannot keep both
-    /// runs contiguous. Splitting the `u64` into two lanes keeps every property
-    /// the design asks for (one id space, ids unambiguous, each screen
-    /// contiguous, the two runs disjoint) without a gap in either run.
+    /// The two screens grow independently: the alternate scrolls while the
+    /// primary is frozen, and a resize can add rows to the primary *while* the
+    /// alternate is active, so one shared counter cannot keep both runs
+    /// contiguous. Splitting the `u64` into two lanes keeps every property that
+    /// matters (one id space, ids unambiguous, each screen contiguous, the two
+    /// runs disjoint) without a gap in either run.
     pub const ALT_ORIGIN: RowId = RowId(1 << 63);
 
     /// Distance from `earlier` to `self`, saturating rather than wrapping on an
@@ -87,14 +86,18 @@ impl Sub<u64> for RowId {
 /// One grid position: an absolute row and a column.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct Pos {
+    /// The row's stream-wide id, not an index into the viewport.
     pub row: RowId,
+    /// Zero-based column, `0` being the leftmost cell of the row.
     pub col: u16,
 }
 
 /// A viewport size in cells.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Size {
+    /// Visible rows, clamped to 1..=1024 by [`Size::clamped`].
     pub rows: u16,
+    /// Visible columns, clamped to 1..=2048 by [`Size::clamped`].
     pub cols: u16,
 }
 
@@ -115,18 +118,23 @@ impl Size {
 pub struct Viewport {
     /// The first visible row.
     pub top: RowId,
+    /// Visible rows, the height the viewport was last sized to.
     pub rows: u16,
+    /// Visible columns, the width the viewport was last sized to.
     pub cols: u16,
 }
 
 /// `DECSTBM`, in viewport coordinates. `bottom` is exclusive.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ScrollRegion {
+    /// Zero-based index of the first row in the region.
     pub top: u16,
+    /// Zero-based index one past the last row in the region.
     pub bottom: u16,
 }
 
 impl ScrollRegion {
+    /// The whole viewport: `0..rows`.
     pub fn full(rows: u16) -> ScrollRegion {
         ScrollRegion {
             top: 0,
@@ -134,10 +142,12 @@ impl ScrollRegion {
         }
     }
 
+    /// Rows in the region, `0` if it is empty or inverted.
     pub fn height(self) -> u16 {
         self.bottom.saturating_sub(self.top)
     }
 
+    /// Whether a zero-based viewport row index falls inside the region.
     pub fn contains(self, index: u16) -> bool {
         index >= self.top && index < self.bottom
     }

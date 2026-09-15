@@ -1,6 +1,7 @@
 //! What one grid position stores.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/cell-and-style.md`.
+//! Design:
+//! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/cell-and-style.md>
 //!
 //! A [`Cell`] is eight bytes with no pointer and no allocation. Everything that
 //! is rare — the style, a hyperlink, an image — is a `u16` id into a table the
@@ -14,7 +15,7 @@ use bitflags::bitflags;
 use crate::intern::{ExtrasId, GraphemeArena, GraphemeId, Interner, StyleId};
 
 // Bit layout, exactly as the design states it. There is deliberately no
-// `has_extras` bit (R-34): `extras_id() != ExtrasId::NONE` is the same test in
+// `has_extras` bit: `extras_id() != ExtrasId::NONE` is the same test in
 // one compare, and the freed bit joins the reserved five.
 //
 //   0..21   content    Unicode scalar value, or a GraphemeId when `is_grapheme`
@@ -53,14 +54,19 @@ const _: () = assert!(size_of::<Cell>() == 8);
 /// What the content bits mean, decided by the `is_grapheme` bit.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum CellContent {
+    /// A single Unicode scalar value.
     Scalar(char),
+    /// A multi-scalar grapheme cluster, stored in the terminal's arena.
     Grapheme(GraphemeId),
 }
 
-/// One exhaustive enum instead of the reference's three independent flags, so
-/// "wide character with no spacer" is unrepresentable.
+/// How one cell takes part in a double-width pair.
+///
+/// One exhaustive enum instead of three independent flags, so "wide character
+/// with no spacer" is unrepresentable.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum CellWidth {
+    /// An ordinary single-column cell.
     #[default]
     Narrow,
     /// The glyph of a double-width pair; its `WideSpacer` is the next column.
@@ -75,10 +81,14 @@ pub enum CellWidth {
 /// OSC 133 shell integration: which part of the dialogue wrote this cell.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum Semantic {
+    /// Written outside any marked region, or before the shell reported one.
     #[default]
     None,
+    /// Inside the prompt, `OSC 133;A` to `OSC 133;B`.
     Prompt,
+    /// The command line the user typed, `OSC 133;B` to `OSC 133;C`.
     Input,
+    /// The command's output, `OSC 133;C` to `OSC 133;D`.
     Output,
 }
 
@@ -128,8 +138,10 @@ impl Semantic {
 }
 
 impl Cell {
+    /// The all-zero cell: a space, the default style, no extras.
     pub const EMPTY: Cell = Cell(0);
 
+    /// The cell's text, as a scalar or as a grapheme id.
     pub fn content(self) -> CellContent {
         let bits = (self.0 & CONTENT_MASK) as u32;
         if self.0 & (1 << IS_GRAPHEME_SHIFT) != 0 {
@@ -144,6 +156,7 @@ impl Cell {
         })
     }
 
+    /// Which half of a double-width pair this cell is, if any.
     pub fn width(self) -> CellWidth {
         CellWidth::from_bits((self.0 >> WIDTH_SHIFT) & TWO_BIT_MASK)
     }
@@ -157,6 +170,8 @@ impl Cell {
         self.0 & (1 << PROTECTED_SHIFT) != 0
     }
 
+    /// The cell's style, as an id into the terminal's style table.
+    /// `StyleId::DEFAULT` is the default style and is never evicted.
     pub fn style_id(self) -> StyleId {
         StyleId(((self.0 >> STYLE_SHIFT) & ID_MASK) as u16)
     }
@@ -166,6 +181,8 @@ impl Cell {
         ExtrasId(((self.0 >> EXTRAS_SHIFT) & ID_MASK) as u16)
     }
 
+    /// This cell with different text. A grapheme id must fit the 21 content
+    /// bits.
     #[must_use]
     pub fn with_content(self, content: CellContent) -> Cell {
         let (bits, is_grapheme) = match content {
@@ -181,26 +198,31 @@ impl Cell {
         Cell(raw)
     }
 
+    /// This cell with a different [`CellWidth`] role.
     #[must_use]
     pub fn with_width(self, width: CellWidth) -> Cell {
         Cell((self.0 & !(TWO_BIT_MASK << WIDTH_SHIFT)) | (width.to_bits() << WIDTH_SHIFT))
     }
 
+    /// This cell tagged with a different shell-integration region.
     #[must_use]
     pub fn with_semantic(self, semantic: Semantic) -> Cell {
         Cell((self.0 & !(TWO_BIT_MASK << SEMANTIC_SHIFT)) | (semantic.to_bits() << SEMANTIC_SHIFT))
     }
 
+    /// This cell with the `DECSCA` protected bit set or cleared.
     #[must_use]
     pub fn with_protected(self, protected: bool) -> Cell {
         Cell((self.0 & !(1 << PROTECTED_SHIFT)) | (u64::from(protected) << PROTECTED_SHIFT))
     }
 
+    /// This cell pointing at a different interned style.
     #[must_use]
     pub fn with_style(self, id: StyleId) -> Cell {
         Cell((self.0 & !(ID_MASK << STYLE_SHIFT)) | (u64::from(id.0) << STYLE_SHIFT))
     }
 
+    /// This cell pointing at a different extras entry (hyperlink or graphic).
     #[must_use]
     pub fn with_extras(self, id: ExtrasId) -> Cell {
         Cell((self.0 & !(ID_MASK << EXTRAS_SHIFT)) | (u64::from(id.0) << EXTRAS_SHIFT))
@@ -208,9 +230,9 @@ impl Cell {
 
     /// The renderer's fast-path question: is there provably nothing to draw?
     ///
-    /// Deliberately stricter than [`Cell::is_erasable`]: a bold space is blank
-    /// to the reference's erase scan (trap 37) but must not take the
-    /// renderer's blank fast path, because its background may differ.
+    /// Deliberately stricter than [`Cell::is_erasable`]: a bold space counts as
+    /// blank for the erase scan, but must not take the renderer's blank fast
+    /// path, because its background may differ.
     ///
     /// **Width is ignored by design.** A default-styled `WideSpacer` or
     /// `LeadingWideSpacer` is blank — correctly, since a spacer paints nothing —
@@ -222,8 +244,8 @@ impl Cell {
             && self.extras_id() == ExtrasId::NONE
     }
 
-    /// The reference's looser "this cell holds nothing worth keeping" rule,
-    /// used by row shrink and the `ED 2` occupancy scan.
+    /// The looser "this cell holds nothing worth keeping" rule, used by row
+    /// shrink and the `ED 2` occupancy scan.
     ///
     /// Takes the interner because the rule inspects the cell's colours and
     /// attributes, which live behind `style_id`, as well as its extras.
@@ -234,7 +256,7 @@ impl Cell {
         if self.width().is_spacer() {
             return false;
         }
-        // R-13: a cell covered by an image is never erasable, or shrinking a
+        // A cell covered by an image is never erasable, or shrinking a
         // row would drop rows an image still occupies.
         if interner.resolve_extras(self.extras_id()).graphic.is_some() {
             return false;
@@ -259,14 +281,14 @@ impl Cell {
         }
     }
 
-    /// The raw packed word. For tests and for the corpus snapshot only.
+    /// The raw packed word. For tests and snapshots only; the bit layout is
+    /// not part of the crate's stable surface.
     pub fn to_bits(self) -> u64 {
         self.0
     }
 }
 
-/// Repair the wide pair a write at `col` is about to split — the same-row half
-/// of trap 6.
+/// Repair the wide pair a write at `col` is about to split, within one row.
 ///
 /// Writing over a `Wide` cell clears the `WideSpacer` to its right; writing
 /// over a `WideSpacer` clears the `Wide` cell to its left, which drops its
@@ -306,15 +328,20 @@ impl fmt::Debug for Cell {
 /// Everything about a cell's appearance, interned once per distinct value.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Style {
+    /// Foreground colour, as the stream named it.
     pub fg: Color,
+    /// Background colour, as the stream named it.
     pub bg: Color,
-    /// SGR 58/59. Stored now, rendered when the renderer grows underline
-    /// colours; today's engine drops it entirely.
+    /// SGR 58/59, the underline's own colour. Stored and reported unchanged;
+    /// whether a renderer honours it is the renderer's business.
     pub underline_color: Option<Color>,
+    /// Bold, italic, the underline family, and the rest of the SGR flags.
     pub attrs: Attrs,
 }
 
 impl Style {
+    /// Default foreground and background, no attributes. Always interned at
+    /// `StyleId::DEFAULT`.
     pub const DEFAULT: Style = Style {
         fg: Color::Named(NamedColor::Foreground),
         bg: Color::Named(NamedColor::Background),
@@ -330,26 +357,42 @@ impl Default for Style {
 }
 
 bitflags! {
-    /// Blink and overline are stored even though the current renderer draws
-    /// neither: the bits are already allocated, so a later renderer packet
-    /// needs no engine change.
+    /// The SGR attribute flags a style carries.
+    ///
+    /// Every flag the parser understands is stored, including ones a given
+    /// renderer may choose not to draw.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
     pub struct Attrs: u16 {
+        /// SGR 1.
         const BOLD             = 1 << 0;
+        /// SGR 2.
         const DIM              = 1 << 1;
+        /// SGR 3.
         const ITALIC           = 1 << 2;
+        /// SGR 7: swap foreground and background at draw time.
         const INVERSE          = 1 << 3;
+        /// SGR 8: draw nothing, keep the background.
         const HIDDEN           = 1 << 4;
+        /// SGR 9.
         const STRIKEOUT        = 1 << 5;
+        /// SGR 5.
         const BLINK_SLOW       = 1 << 6;
+        /// SGR 6.
         const BLINK_FAST       = 1 << 7;
+        /// SGR 4.
         const UNDERLINE        = 1 << 8;
+        /// SGR 21.
         const DOUBLE_UNDERLINE = 1 << 9;
+        /// SGR 4:3.
         const UNDERCURL        = 1 << 10;
+        /// SGR 4:4.
         const DOTTED_UNDERLINE = 1 << 11;
+        /// SGR 4:5.
         const DASHED_UNDERLINE = 1 << 12;
+        /// SGR 53.
         const OVERLINE         = 1 << 13;
 
+        /// Every underline style at once, for "is this cell underlined at all".
         const ALL_UNDERLINES = Self::UNDERLINE.bits()
             | Self::DOUBLE_UNDERLINE.bits()
             | Self::UNDERCURL.bits()
@@ -362,55 +405,93 @@ bitflags! {
 /// lock, against the theme and the OSC override table.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Color {
+    /// One of the terminal's named slots, such as the default foreground.
     Named(NamedColor),
+    /// An index into the 256-colour palette, SGR 38;5 / 48;5.
     Palette(u8),
+    /// A direct 24-bit colour, SGR 38;2 / 48;2.
     Rgb(Rgb),
 }
 
+/// A 24-bit colour, one byte per channel.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Rgb {
+    /// Red, 0 to 255.
     pub r: u8,
+    /// Green, 0 to 255.
     pub g: u8,
+    /// Blue, 0 to 255.
     pub b: u8,
 }
 
-/// Typed colour keys, replacing the magic indices 256 / 257 / 258 the current
-/// code carries in three files.
+/// The named colour slots a stream can select, resolved against the embedder's
+/// theme and any `OSC 4` / `OSC 10` overrides.
+///
+/// The first sixteen are palette entries 0 to 15 under their conventional
+/// names; the rest are slots that have no palette index at all.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum NamedColor {
+    /// Palette 0.
     Black,
+    /// Palette 1.
     Red,
+    /// Palette 2.
     Green,
+    /// Palette 3.
     Yellow,
+    /// Palette 4.
     Blue,
+    /// Palette 5.
     Magenta,
+    /// Palette 6.
     Cyan,
+    /// Palette 7.
     White,
+    /// Palette 8.
     BrightBlack,
+    /// Palette 9.
     BrightRed,
+    /// Palette 10.
     BrightGreen,
+    /// Palette 11.
     BrightYellow,
+    /// Palette 12.
     BrightBlue,
+    /// Palette 13.
     BrightMagenta,
+    /// Palette 14.
     BrightCyan,
+    /// Palette 15.
     BrightWhite,
+    /// The default foreground, `OSC 10`.
     Foreground,
+    /// The default background, `OSC 11`.
     Background,
+    /// The cursor colour, `OSC 12`.
     Cursor,
+    /// The foreground bold text uses when bright-bold is enabled.
     BrightForeground,
+    /// The foreground dim text uses, SGR 2 over the default foreground.
     DimForeground,
+    /// SGR 2 over palette 0.
     DimBlack,
+    /// SGR 2 over palette 1.
     DimRed,
+    /// SGR 2 over palette 2.
     DimGreen,
+    /// SGR 2 over palette 3.
     DimYellow,
+    /// SGR 2 over palette 4.
     DimBlue,
+    /// SGR 2 over palette 5.
     DimMagenta,
+    /// SGR 2 over palette 6.
     DimCyan,
+    /// SGR 2 over palette 7.
     DimWhite,
 }
 
-// Kept in a sibling file (the suite is substantial) while staying `cell::tests`,
-// which is the path the design's verification list names.
+// Kept in a sibling file (the suite is substantial) while staying `cell::tests`.
 #[cfg(test)]
 #[path = "cell_tests.rs"]
 mod tests;

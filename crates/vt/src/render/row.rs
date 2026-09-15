@@ -1,14 +1,14 @@
 //! One copied row: cells, run-length styles and the row's own cluster arena.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`
-//! section "Resolved values, never ids" (R-14).
-//!
 //! Everything here is a **value**. An interned id indexes tables the render
 //! thread cannot read once the lock is released, and the grapheme arena may
 //! renumber on a later batch, so a copied row resolves the style, the cluster
 //! and the hyperlink while the lock is still held. The cost is about 20 bytes
 //! per style run instead of two per cell — for **changed rows only**, and a
 //! uniformly styled 200-column row is one run.
+
+// Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`
+// section "Resolved values, never ids" (R-14).
 
 use crate::cell::{CellContent, CellWidth, Semantic, Style};
 use crate::grid::{RowId, RowRef, SeqNo};
@@ -18,7 +18,9 @@ use crate::render::palette::Palette;
 /// A run of columns sharing one style, carrying the **resolved value**.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct StyleRun {
+    /// The half-open column range this run covers.
     pub cols: std::ops::Range<u16>,
+    /// The style every column in the run paints with, already resolved.
     pub style: Style,
 }
 
@@ -26,19 +28,36 @@ pub struct StyleRun {
 /// row's own cluster arena.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RenderContent {
+    /// A single Unicode scalar value, the common case.
     Scalar(char),
-    Cluster { start: u32, len: u32 },
+    /// A grapheme cluster, as a span of [`RenderRow::clusters`].
+    Cluster {
+        /// Index of the cluster's first `char` in [`RenderRow::clusters`].
+        start: u32,
+        /// The cluster's length in `char`s.
+        len: u32,
+    },
 }
 
 /// One copied cell. `run` indexes the row's [`StyleRun`] list rather than
 /// repeating the style per cell.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RenderCell {
+    /// The text this cell paints.
     pub content: RenderContent,
+    /// Whether the cell is narrow, the left half of a wide glyph, or that
+    /// glyph's spacer.
     pub width: CellWidth,
+    /// Shell-prompt marking from `OSC 133`, if the program sent any.
     pub semantic: Semantic,
+    /// Index into [`RenderRow::runs`] of the style this cell paints with; see
+    /// [`RenderRow::style_of`].
     pub run: u16,
+    /// The `OSC 8` hyperlink this cell belongs to; resolve it with
+    /// [`crate::RenderState::hyperlink`].
     pub hyperlink: Option<HyperlinkId>,
+    /// The image covering this cell, if any; resolve it with
+    /// [`crate::RenderState::placement`].
     pub graphic: Option<GraphicId>,
 }
 
@@ -48,10 +67,16 @@ pub struct RenderCell {
 /// vectors and refills them, so the steady state allocates nothing.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct RenderRow {
+    /// The row's absolute id. It names the same content for as long as that
+    /// content is live, so a consumer's per-row cache can be keyed by it.
     pub id: RowId,
+    /// The sequence number this copy was taken at.
     pub seq: SeqNo,
+    /// Whether the line continues on the next row rather than ending here.
     pub wrapped: bool,
+    /// One entry per column, left to right.
     pub cells: Vec<RenderCell>,
+    /// The style runs [`RenderCell::run`] indexes.
     pub runs: Vec<StyleRun>,
     /// Backs every [`RenderContent::Cluster`] in this row.
     pub clusters: Vec<char>,

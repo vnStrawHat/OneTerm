@@ -4,7 +4,8 @@
 //! so the two suites stay independently readable. Six of the eight fail against
 //! the pre-fix `dcs_hook`; the other two are the non-regression guards for the
 //! Sixel half of the routing key. The verification report they come from is
-//! `docs/spec-intakes/IN-0038-embeddable-vt-core/evidence/BUG-0058-verify.md`.
+// Evidence:
+// `docs/spec-intakes/IN-0038-embeddable-vt-core/evidence/BUG-0058-verify.md`.
 
 use std::time::Instant;
 

@@ -1,10 +1,6 @@
 //! The incremental render state: what the renderer gets instead of a copy of
 //! the viewport.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`,
-//! contract: `docs/decisions/DEC-0015-absolute-row-ids-and-incremental-render-state.md`
-//! clause 2.
-//!
 //! Two phases, and the split is the whole point:
 //!
 //! * [`RenderState::begin_update`] runs **under the caller's lock** and copies
@@ -16,7 +12,11 @@
 //! entirely; `Partial { scrolled }` means "shift your own cache by `scrolled`
 //! rows, then rebuild exactly the rows in [`RenderState::changed`]"; `Full`
 //! means rebuild everything. [`RenderState::rows`] always holds the whole
-//! viewport either way (R-15).
+//! viewport either way.
+
+// Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`,
+// contract: `docs/decisions/DEC-0015-absolute-row-ids-and-incremental-render-state.md`
+// clause 2 (R-15).
 
 use std::time::Instant;
 
@@ -45,7 +45,11 @@ pub enum RenderUpdate {
     Unchanged,
     /// Shift the consumer's own row cache by `scrolled` viewport rows, then
     /// rebuild the rows in [`RenderState::changed`].
-    Partial { scrolled: i32 },
+    Partial {
+        /// Viewport rows the content moved by: positive scrolls up (older
+        /// content leaves the top), negative scrolls down.
+        scrolled: i32,
+    },
     /// Rebuild everything.
     Full,
 }
@@ -54,27 +58,33 @@ pub enum RenderUpdate {
 /// forces a row rebuild.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct RenderCursor {
+    /// The absolute id of the row the cursor is on.
     pub id: RowId,
+    /// Zero-based column.
     pub col: u16,
     /// The viewport row, or `None` while the user is scrolled back past it.
     pub row: Option<u16>,
+    /// Whether the program asked for a visible cursor (`DECTCEM`).
     pub visible: bool,
 }
 
 /// One image's place on the grid, with its anchor already resolved.
 ///
 /// The cell carries only the [`GraphicId`]; the painter derives the cell's
-/// offset inside the image from this record
-/// (`graphics.md` § "Ownership", [`RenderState::graphic_offset`]), which is what
-/// keeps a whole image to **one** interned extras entry.
+/// offset inside the image from this record (see
+/// [`RenderState::graphic_offset`]), which is what keeps a whole image to
+/// **one** interned entry.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RenderPlacement {
+    /// The image this placement shows.
     pub id: GraphicId,
     /// The row holding the image's top-left cell.
     pub row: RowId,
     /// The column holding the image's top-left cell.
     pub col: u16,
+    /// How many columns the image covers.
     pub cols: u16,
+    /// How many rows the image covers.
     pub rows: u16,
     /// The decoded image's size in pixels; the renderer rescales it by
     /// `cell_width / 10` and `line_height / 20`.
@@ -96,14 +106,14 @@ pub(crate) struct EngineView<'a> {
     pub generation: u32,
     /// Bumped when the theme or the OSC colour overrides change.
     pub palette_epoch: u32,
-    /// The active selection, already resolved (`US-0078`). Refreshed every
+    /// The active selection, already resolved. Refreshed every
     /// update like the cursor, because a drag must not force a row rebuild —
     /// but a drag over static content must still produce a frame, so a change
     /// here defeats `Unchanged`.
     pub selection: Option<SelectionRange>,
     /// The live placements, copied into the state next to the rows so the
-    /// painter needs no engine access. **Never the pixels** (R-16): those are
-    /// drained once, by `Terminal::take_graphics`.
+    /// painter needs no engine access. **Never the pixels**: those are drained
+    /// once, by `Terminal::take_graphics`.
     pub placements: &'a [Placement],
 }
 
@@ -136,6 +146,8 @@ pub struct RenderState {
 }
 
 impl RenderState {
+    /// A fresh state that has read nothing yet, so its first update rebuilds
+    /// every row.
     pub fn new() -> RenderState {
         RenderState::default()
     }
@@ -297,14 +309,14 @@ impl RenderState {
         &self.cursor
     }
 
-    /// The active selection, refreshed every update (`US-0078`). The painter
-    /// reads it here rather than asking the engine a second question.
+    /// The active selection, refreshed every update. The painter reads it here
+    /// rather than asking the engine a second question.
     pub fn selection(&self) -> Option<SelectionRange> {
         self.selection
     }
 
-    /// The live image placements, refreshed every update. Ids only — the pixels
-    /// come from `Terminal::take_graphics`, which is the one drain (R-16).
+    /// The live image placements, refreshed every update. Ids only: the pixels
+    /// come from `Terminal::take_graphics`, which is the one drain.
     pub fn placements(&self) -> &[RenderPlacement] {
         &self.placements
     }

@@ -1,6 +1,6 @@
 //! The state transitions: Paul Williams' fourteen states, with the deviations
-//! [`low-level-design/parser.md`](../../../../docs/spec-intakes/IN-0029-vt-engine/low-level-design/parser.md)
-//! lists.
+//! listed in the parser design,
+//! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/parser.md>.
 //!
 //! `Ground` is not handled here — it is the scan in [`super::utf8`] — and
 //! `Utf8` is not a state at all: a partial codepoint lives in a four-byte carry

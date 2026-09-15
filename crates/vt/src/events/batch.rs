@@ -1,13 +1,10 @@
 //! The caller-owned event batch and its one reusable arena.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/events-and-api.md`
-//! section "Events are values in a caller-owned batch".
-//!
-//! The fork allocates one `Vec` per OSC parameter plus an outer `Vec` on the hot
-//! path, purely so an event can cross a channel, and the consumer immediately
-//! re-borrows them. Here every payload is a span into one byte arena that is
-//! cleared — not freed — at the top of each `feed`, so the steady state grows to
-//! a high-water mark and then allocates nothing.
+//! Every payload is a span into one byte arena that is cleared, not freed, at
+//! the top of each `feed`, so the steady state grows to a high-water mark and
+//! then allocates nothing. A `Vec` per OSC parameter would be the obvious
+//! alternative and would allocate on the hot path for no gain, because the
+//! consumer immediately re-borrows what it was handed.
 
 use crate::event::vt_event::{ClipboardKind, StringTerm, VtEvent};
 use crate::grid::ScrollReport;
@@ -52,6 +49,7 @@ pub struct EventBatch {
 }
 
 impl EventBatch {
+    /// An empty batch. Build one, keep it, and pass it to every `feed`.
     pub fn new() -> EventBatch {
         EventBatch::default()
     }
@@ -72,14 +70,17 @@ impl EventBatch {
         &self.events
     }
 
+    /// Every event in this batch, in byte order.
     pub fn iter(&self) -> std::slice::Iter<'_, VtEvent> {
         self.events.iter()
     }
 
+    /// `true` when the last `feed` produced no events at all.
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
 
+    /// How many events the last `feed` produced.
     pub fn len(&self) -> usize {
         self.events.len()
     }
@@ -103,8 +104,9 @@ impl EventBatch {
         self.events.push(VtEvent::Repaint);
     }
 
-    /// `false` when the title was dropped because it was not UTF-8, which is
-    /// what the fork does and what keeps [`EventBatch::str`] infallible.
+    /// Push a title, returning `false` when it was dropped because the bytes
+    /// were not UTF-8. Validating here is what keeps [`EventBatch::str`]
+    /// infallible.
     pub fn push_title(&mut self, text: &[u8]) -> bool {
         let Some(span) = self.push_str(text) else {
             return false;
@@ -113,7 +115,8 @@ impl EventBatch {
         true
     }
 
-    /// `false` when the payload was dropped because it was not UTF-8 (trap 25).
+    /// Push a clipboard write, returning `false` when the payload was dropped
+    /// because the decoded bytes were not UTF-8.
     pub fn push_clipboard_store(&mut self, selection: ClipboardKind, text: &[u8]) -> bool {
         let Some(span) = self.push_str(text) else {
             return false;
@@ -125,11 +128,13 @@ impl EventBatch {
         true
     }
 
+    /// Push bytes the terminal owes the program, to be written to its input.
     pub fn push_reply(&mut self, bytes: &[u8]) {
         let span = self.push_bytes(bytes);
         self.events.push(VtEvent::Reply(span));
     }
 
+    /// Push an OSC the engine does not handle itself, parameters and all.
     pub fn push_osc(
         &mut self,
         code: u32,
@@ -164,7 +169,8 @@ impl EventBatch {
         }
     }
 
-    /// An out-of-range span reads as empty rather than panicking.
+    /// The text a `StrSpan` names. An out-of-range span reads as empty rather
+    /// than panicking.
     ///
     /// A span is an index, not a borrow, so a consumer that squirrels one away
     /// across a `clear` reads whatever now sits at that offset — wrong bytes,
@@ -180,12 +186,14 @@ impl EventBatch {
             .unwrap_or("")
     }
 
+    /// The bytes a `ByteSpan` names, empty if the span is out of range.
     pub fn bytes(&self, span: ByteSpan) -> &[u8] {
         let start = span.start as usize;
         let end = start + span.len as usize;
         self.arena.get(start..end).unwrap_or(&[])
     }
 
+    /// The `;`-separated parameters of a forwarded OSC, in order.
     pub fn params(&self, spans: ParamSpans) -> impl Iterator<Item = &[u8]> {
         let first = spans.first as usize;
         let end = first + spans.count as usize;
@@ -196,18 +204,21 @@ impl EventBatch {
             .map(|span| self.bytes(*span))
     }
 
-    /// Capacity of the byte arena. One of three probes the allocation tests
-    /// watch instead of installing a counting global allocator, which would
-    /// need `unsafe` — the same reason the grid measures its heap from its own
-    /// capacities.
+    // These three capacities are what the allocation tests watch, instead of
+    // installing a counting global allocator, which would need `unsafe`.
+
+    /// Capacity of the payload arena, in bytes. Stable across batches once the
+    /// high-water mark is reached, which is the property worth asserting.
     pub fn arena_capacity(&self) -> usize {
         self.arena.capacity()
     }
 
+    /// Capacity of the OSC parameter span list, in spans.
     pub fn param_capacity(&self) -> usize {
         self.params.capacity()
     }
 
+    /// Capacity of the event list, in events.
     pub fn event_capacity(&self) -> usize {
         self.events.capacity()
     }

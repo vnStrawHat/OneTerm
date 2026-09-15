@@ -1,13 +1,12 @@
 //! Both screens, the shared anchor list and the counters that outlive a screen.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/grid-and-scrollback.md`
-//! sections "Alternate screen" and "Line counting".
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/grid-and-scrollback.md>
 //!
-//! This is the grid half of the future `Terminal` (`US-0079`), which will own
-//! one of these next to the parser, the interner and the mode table. It exists
-//! now because three things have no other owner: the row-id space shared by both
-//! screens, the anchor list every primitive updates, and `lines_produced`, which
-//! must not jump when the alternate screen is entered.
+//! This is the grid half of a terminal: the parser, the interner and the mode
+//! table sit beside it. It exists as its own type because three things belong
+//! to neither screen alone: the row-id space the two screens share, the anchor
+//! list every primitive updates, and the output-line counter, which must not
+//! jump when the alternate screen is entered.
 
 use crate::grid::anchor::Anchors;
 use crate::grid::row::SeqNo;
@@ -23,12 +22,14 @@ pub struct TerminalGrid {
     alt: Screen,
     alt_active: bool,
     anchors: Anchors,
-    /// Output lines, not rows created (R-05): the number the gutter shows.
+    // Output lines, not rows created: the number a line gutter shows.
     lines_produced: u64,
     seq: SeqNo,
 }
 
 impl TerminalGrid {
+    /// Both screens at `size`, the primary one with `scrollback_limit` rows of
+    /// history and the alternate one with none.
     pub fn new(size: Size, scrollback_limit: u32) -> TerminalGrid {
         let mut anchors = Anchors::new();
         let primary = Screen::new(ScreenKind::Primary, size, scrollback_limit, &mut anchors);
@@ -54,6 +55,7 @@ impl TerminalGrid {
         }
     }
 
+    /// The active screen, open for writing.
     pub fn screen_mut(&mut self) -> &mut Screen {
         self.active().0
     }
@@ -69,14 +71,17 @@ impl TerminalGrid {
         (screen, &mut self.anchors)
     }
 
+    /// The primary screen, whether or not it is the active one.
     pub fn primary(&self) -> &Screen {
         &self.primary
     }
 
+    /// The alternate screen, whether or not it is the active one.
     pub fn alt(&self) -> &Screen {
         &self.alt
     }
 
+    /// Whether the alternate screen is the active one (`CSI ? 1049 h`).
     pub fn alt_active(&self) -> bool {
         self.alt_active
     }
@@ -140,7 +145,7 @@ impl TerminalGrid {
         report
     }
 
-    /// `SD`. Never touches history, so it never counts (trap 18).
+    /// `SD`. Never touches history, so it never counts.
     pub(crate) fn scroll_down(&mut self, region: ScrollRegion, n: u16) -> ScrollReport {
         let (screen, anchors) = self.active();
         screen.scroll_down(region, n, anchors)
@@ -178,7 +183,7 @@ impl TerminalGrid {
     }
 
     /// `HT`. `autowrap` is `DECAWM`, which decides whether a pending wrap turns
-    /// into a line break or is merely consumed (trap 3).
+    /// into a line break or is merely consumed.
     pub(crate) fn put_tab(&mut self, count: u16, autowrap: bool) {
         let (screen, anchors) = self.active();
         screen.put_tab(count, autowrap, anchors);
@@ -193,8 +198,8 @@ impl TerminalGrid {
         screen.erase_display(mode, anchors, interner)
     }
 
-    /// `RIS`. Ids are never reset and neither is `lines_produced`: the gutter's
-    /// numbers keep their meaning across a clear.
+    /// `RIS`. Ids are never reset and neither is the output-line counter, so a
+    /// line gutter's numbers keep their meaning across a clear.
     pub fn reset(&mut self) {
         self.primary.reset(&mut self.anchors);
         self.alt.reset(&mut self.anchors);
@@ -203,11 +208,12 @@ impl TerminalGrid {
         self.assert_integrity(None);
     }
 
-    /// Resize both screens under one policy (`US-0077`).
+    /// Resize both screens under one policy.
     ///
-    /// The primary screen reflows; the alternate screen never does (trap 29).
-    /// `KeepViewportTop` always corrects the **primary** screen, including while
-    /// a TUI holds the alternate one, which is what `DEC-0008` requires.
+    /// The primary screen reflows; the alternate screen never does. Under
+    /// [`ResizePolicy::KeepViewportTop`] the correction always applies to the
+    /// **primary** screen, including while a TUI holds the alternate one, which
+    /// is what Windows conhost expects.
     pub(crate) fn resize(&mut self, size: Size, policy: ResizePolicy) -> ResizeOutcome {
         let outcome = crate::reflow::resize(
             &mut self.primary,
@@ -232,7 +238,7 @@ impl TerminalGrid {
 
     /// `CSI ? 1049 h/l`.
     ///
-    /// Trap 14: entering takes the primary `DECSC` slot, which is exactly what
+    /// Entering takes the primary screen's `DECSC` slot, which is exactly what
     /// `? 1049` means; leaving takes none of that branch, so the primary returns
     /// with the cursor and saved cursor it had on entry.
     pub(crate) fn swap_alt(&mut self) {
@@ -244,7 +250,7 @@ impl TerminalGrid {
             // them across in both directions reproduces that.
             self.alt.adopt_region_and_tabs(&self.primary);
             // The cursor carries its row INDEX across, never a row id from the
-            // other screen (R-04). It is installed *before* the wipe, so the
+            // other screen. It is installed *before* the wipe, so the
             // wipe is a background erase with the entering template.
             let row = self.alt.row_of_index(index);
             let alt_cursor = self.alt.cursor_mut();
@@ -272,9 +278,9 @@ impl TerminalGrid {
         self.alt.sync_anchors(&mut self.anchors);
     }
 
-    /// The full two-screen walk (R-28): once per `feed`, `resize` and
-    /// `render_update`, plus after every step of the property tests. The O(1)
-    /// tier runs at the end of every mutating method.
+    /// The full two-screen integrity walk: once per feed, resize and render
+    /// update, plus after every step of the property tests. The O(1) tier runs
+    /// at the end of every mutating method.
     pub(crate) fn assert_integrity(&self, interner: Option<&Interner>) {
         if !cfg!(debug_assertions) {
             return;

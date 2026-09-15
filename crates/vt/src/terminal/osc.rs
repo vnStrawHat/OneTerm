@@ -1,15 +1,13 @@
-//! The OSC registration table — the extension point.
-//!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md`
-//! section "OSC registration".
+//! The OSC registration table: the extension point.
 //!
 //! The engine handles a fixed set of OSC numbers natively; everything else is
 //! delivered to the embedder as [`crate::VtEvent::Osc`] **only if the embedder
-//! claimed it**. That is what replaces the fork's `report_osc` patch: OSC 20308,
-//! the agent channel, is a claim plus a sub-code match in
-//! `crates/terminal/src/osc_agent/`, with no engine change — and when the
-//! channel moved off `OSC 9;7` in `US-0088`, the engine side of that move was
-//! one number in one call.
+//! claimed it**. Supporting a new OSC number in an application is therefore one
+//! `claim` call plus a match on the event, with no change to this crate, and
+//! moving an application protocol from one OSC number to another is one number
+//! in one call.
+//!
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md>.
 
 /// The bitmap covers `0..2048`, which is every OSC number in common use; larger
 /// numbers fall back to a sorted list, because a bitmap over `u32` would be half
@@ -28,8 +26,7 @@ pub struct OscClaims {
 }
 
 impl OscClaims {
-    /// The OSC numbers the engine answers itself, in the order
-    /// `dispatch-and-modes.md` § "OSC" tabulates them.
+    /// The OSC numbers the engine answers itself.
     ///
     /// A native arm runs **before** the claim lookup, so a [`OscClaims::claim`]
     /// on one of these could never be delivered. Publishing the set is what
@@ -38,6 +35,7 @@ impl OscClaims {
     /// the shell mark *and* forwards the whole sequence to whoever claimed it.
     pub const NATIVE: [u32; 14] = [0, 2, 4, 8, 10, 11, 12, 22, 50, 52, 104, 110, 111, 112];
 
+    /// An empty table: nothing is claimed and nothing may spill.
     pub fn new() -> OscClaims {
         OscClaims::default()
     }
@@ -54,9 +52,8 @@ impl OscClaims {
     /// bitmap, so there is no handler to shadow and no order to depend on.
     /// Claiming a [`OscClaims::NATIVE`] number is a **debug assertion**: the
     /// engine's own arm wins, so the claim is dead and the embedder would
-    /// otherwise never find out. That is the mirror of the rule in
-    /// `dispatch-and-modes.md` — a claimed number whose handler is missing is a
-    /// debug assertion, never a panic.
+    /// otherwise never find out. It is a debug assertion rather than a panic:
+    /// a release build of an embedder never dies over a registration mistake.
     pub fn claim(&mut self, code: u32) -> &mut Self {
         debug_assert!(
             !OscClaims::is_native(code),
@@ -70,8 +67,8 @@ impl OscClaims {
     /// Deliver it, and allow its payload to spill to
     /// [`crate::parser::OSC_LARGE`].
     ///
-    /// A **memory ceiling only**: who may write or read the clipboard, and under
-    /// what limits, stays in `crates/terminal/src/security_policy.rs`. Unlike
+    /// A **memory ceiling only**: who may write or read the clipboard, and
+    /// under what limits, is the embedder's policy, not the engine's. Unlike
     /// [`OscClaims::claim`] this accepts a [`OscClaims::NATIVE`] number without
     /// complaint, because the ceiling is the point there — `claim_large(52)`
     /// buys a large clipboard write, and the delivery half is simply inert
@@ -83,10 +80,13 @@ impl OscClaims {
         self
     }
 
+    /// Whether this OSC number was claimed, and so reaches the embedder.
     pub fn is_claimed(&self, code: u32) -> bool {
         contains(&self.low, &self.high, code)
     }
 
+    /// Whether this OSC number's payload may spill past
+    /// [`crate::parser::OSC_INLINE`].
     pub fn allows_large(&self, code: u32) -> bool {
         contains(&self.large_low, &self.large_high, code)
     }
