@@ -69,6 +69,16 @@ Every criterion below is a test a hostile verifier can run and read.
 
 **The migration**
 
+- [x] **Two deliberate departures from the adapter's behaviour**, both found by the independent
+  verification and both recorded in the CHANGELOG. (a) `OSC 9;4` reads its state and percentage as
+  `u32` and clamps the percentage, where the adapter read both as `u8`: `9;4;1;1000` was `Set(0)`
+  because the parse failed before the clamp could run, and a state above 255 silently became
+  `Remove`, clearing a progress bar nobody asked to clear. The contract already said "`st` in
+  `0..=4`, `pr` clamped to 100", so the code was made to match the contract rather than the other
+  way round. (b) A non-UTF-8 `OSC 7` URL is dropped and counted, which is what the adapter did and
+  what the first implementation accidentally changed to a lossy report. Percent escapes that decode
+  to non-UTF-8 bytes are still reported leniently, as they always were: by then the sequence has
+  been accepted.
 - [x] Every input literal in `crates/terminal/src/osc.rs`'s current `mod tests` appears verbatim in
   the new `crates/vt` test module, with the same expectation. A verifier diffs
   `git show main:crates/terminal/src/osc.rs` against the new tests and checks the list: OSC 7
@@ -87,7 +97,13 @@ Every criterion below is a test a hostile verifier can run and read.
   (`parse_agent_osc`, `AgentOsc`, `is_legacy_agent_notification`) and four typed arms in
   `osc_router.rs` in place of one raw one. Every symbol the criterion below names is gone, which
   is what the line count was standing in for.
-- [x] `adapter_config` in `handle.rs` contains **no** reference to OSC 7, 9 or 133.
+- [~] `adapter_config` in `handle.rs` contains **no** reference to OSC 7, 9 or 133. **True for
+  7 and 133, and not for 9.** There is no numeric `7`, `9` or `133` literal, but `adapter_config`
+  routes `LEGACY_AGENT_OSC`, which *is* `9`, and its doc comment explains OSC 9 at length. The
+  owner's ruling on the `9;7` alias made that unavoidable: the alias shares a built-in's number,
+  routing is per number, so wrapping OSC 9 is the only way to keep the alias outside the engine.
+  The criterion holds in the form that was meant — no OSC 7 or OSC 133 knowledge, and the agent
+  channel named by a constant rather than a number.
 
 **The worked example**
 
@@ -161,9 +177,18 @@ Changed:
 3. `docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md` -- the "OSC
    registration" section is a pointer to `osc-extension.md` and `DEC-0017`, keeping the four rules
    that survived the rename verbatim; the OSC 22 table row.
-4. `crates/vt/CHANGELOG.md` (Added and Changed, including the breaking rename), `crates/vt/README.md`
-   (the "Extending it: OSC" section, with the four-route table), `crates/vt/public-api.txt`
-   (regenerated).
+4. `crates/vt/CHANGELOG.md` (Added and Changed, including the breaking rename and the two
+   behaviour corrections), `crates/vt/README.md` (the "Extending it: OSC" section, with the
+   four-route table), `crates/vt/public-api.txt` (regenerated).
+5. After the independent verification: `DEC-0017` (the consequence boxes reconciled, the `Config`
+   `PartialEq` claim and the lookup cost corrected),
+   `low-level-design/osc-extension.md` (the same two corrections, the allocation promise restated
+   with its two documented exceptions, what the table's value and lifetime mean, the `9;4` clamp,
+   and what a wrapped number costs on a ceiling-sized payload),
+   `docs/spec-intakes/IN-0029-vt-engine/low-level-design/events-and-api.md` (two code blocks that
+   still showed `osc_claims` and `OscClaims` — listed as "reviewed, no change needed" in the first
+   pass, which was wrong), and `IN-0038.md` (this packet's line-count estimate, against the
+   measurement).
 
 Reviewed, no change needed:
 
@@ -178,7 +203,9 @@ Reviewed, no change needed:
   `osc_router.rs`, called from the same place in the same batch order. Not edited.
 - `docs/spec-intakes/IN-0029-vt-engine/low-level-design/events-and-api.md` -- the events-are-values
   rule and the `EventBatch` arena. Still true; the seven new variants are spans into the same arena
-  and no callback was added. Not edited.
+  and no callback was added. **But two of its code blocks named `osc_claims` and `OscClaims`**, which
+  this packet renamed; the independent verification caught that and they are now updated. Listing
+  this file as "no change needed" was a review miss, not a judgement.
 
 ## Context
 
@@ -221,8 +248,13 @@ Sites this packet touches, with line numbers on `main` @ `36977ca`:
 ## Decisions
 
 - [`DEC-0017`](../../decisions/DEC-0017-osc-routing-table-not-handler-registry.md) -- OSC extension
-  is a routing table, not a handler registry. Proposed; the owner accepts. This packet must not start
-  before it is accepted, because the alternative shapes it rejects would each be a different packet.
+  is a routing table, not a handler registry. **Accepted by the owner on 2026-09-15**, so this
+  packet's "must not start before it is accepted" precondition is satisfied. Its two "benefit to
+  confirm" boxes were reconciled after the verification: the `20308` one is confirmed, the
+  350-line one is not (see the line-count criterion above). Two statements in the record were also
+  wrong and are corrected there and in `osc-extension.md`: `Config` is `Clone + Debug` and has never
+  been `PartialEq` (the handler-registry rejection rests on the no-callback invariant, which is
+  unaffected), and the lookup is three bit tests rather than two.
 
 ## Verification Plan
 
@@ -278,8 +310,16 @@ returns **0 lines**; `adapter_config` is three calls and names no OSC 7, 9 or 13
 `osc_agent/` file and every agent test in `backend_tests.rs` is untouched, and
 `cargo test -p oneterm-terminal` passes 276 tests.
 
-**Line counts.** `crates/vt/src` +400 production lines, `crates/terminal/src` -151 (the criterion
+**Line counts.** `crates/vt/src` +527 production lines, `crates/terminal/src` -151 (the criterion
 above records why that is short of the estimate, and what was measured instead).
+
+**Independent verification.** [`evidence/US-0098-verify.md`](evidence/US-0098-verify.md),
+**PASS-WITH-NOTES** at `82680ce`, no functional defect: 20 behaviour claims attacked with tests
+written against the public API by somebody who had not read the in-crate module, and all 20 upheld
+on the first run. Its 27 tests are adopted as `crates/vt/tests/us0098_verify.rs` and its 3 adapter
+tests as the `legacy_alias_drops_the_notification_and_dispatches_the_payload`,
+`the_wrap_route_does_not_break_the_rest_of_osc_9` and `every_policy_call_still_happens` cases in
+`backend_tests.rs`. The 16 notes are closed below.
 
 **Gaps.**
 
@@ -291,10 +331,46 @@ above records why that is short of the estimate, and what was measured instead).
   `BuiltinAndForward`, and `is_legacy_agent_notification` in `crates/terminal/src/osc.rs` discards
   the notification whose forwarded first parameter is `7`. The engine's OSC 9 arm knows nothing
   about `7`.
-- Branched from `0558fa2`; `main` has since moved to `a13002a` (the US-0104 records). A rebase is
-  expected before merge, and two sibling packets (`US-0099`, `US-0100`) touch
-  `crates/vt/src/lib.rs` too -- this packet's edit there is two lines, both in existing `pub use`
+- **A hostile ceiling-sized `OSC 9` costs more than it did.** `adapter_config` buys OSC 9 the 8 MiB
+  tier so the legacy alias's payloads are not cut, and a `BuiltinAndForward` number pays for both
+  outcomes: the notification arm's body *and* the forwarded parameters land in the arena. One
+  hostile 8 MiB `OSC 9` therefore costs the parser spill plus two arena copies where it used to cost
+  the spill plus one. Bounded and verified
+  (`v_a_hostile_8_mib_osc_9_under_the_shipped_table_is_bounded`), and it disappears with the alias;
+  the general lesson, recorded in the LLD, is to keep `BuiltinAndForward` rare.
+- **`crates/terminal` lost compile-time exhaustiveness on `VtEvent`.** `#[non_exhaustive]` forces a
+  wildcard across the crate boundary, so `OscRouter::handle` ends in `_ => {}` and `progress_style`
+  and `set_progress` do the same for `Progress`. A future engine event that OneTerm *should* handle
+  will be ignored instead of failing the build. This is the documented price of the
+  `#[non_exhaustive]` follow-up in `DEC-0017`; the three sites each chose a sensible default, and
+  the mitigation is the CHANGELOG, not the compiler.
+- Rebased onto `072560a` (`US-0100` merged, `DEC-0017` accepted). `US-0099` and `US-0104` may land
+  before this; this packet's `crates/vt/src/lib.rs` edit is two lines, both in existing `pub use`
   lists.
+
+## Verification Notes Closed
+
+Every note in [`evidence/US-0098-verify.md`](evidence/US-0098-verify.md), and what was done with it.
+
+| # | Note | Outcome |
+| --- | --- | --- |
+| 1 | `DEC-0017` still `Proposed`; its consequence boxes never reconciled | **Closed.** The owner accepted it on 2026-09-15. The `20308` benefit is ticked as confirmed; the 350-line benefit is marked partly met with the measured -151 and why the estimate was wrong. |
+| 2 | Both contracts say `Config` is `PartialEq`. It is not, and never was | **Closed.** Corrected in `DEC-0017` and `osc-extension.md`. The handler-registry rejection rests on the no-callback invariant, which is untouched; the conclusion does not change. `OscRoutes` is what is `Clone + PartialEq`. |
+| 3 | "Two bit tests" understates the lookup: `has_builtin` was a linear scan | **Closed, by fixing the code.** `has_builtin` reads a `BUILTIN_BITS` bitmap built from `OscRoutes::BUILTIN` at compile time. The prose now says three bit tests, plus a fourth for the payload ceiling. |
+| 4 | The new arms allocate per sequence, contradicting `osc-extension.md` | **Closed, by fixing the code.** `EventBatch` gains `mark`/`extend`/`finish_trimmed`/`finish_lossy`; the arms assemble their payload in the arena. `OSC 7` went from up to five allocations to none. Two exceptions are documented in the LLD: the title's owned copy (the title stack outlives the batch) and a UTF-8 repair for a percent escape that decodes to invalid bytes. |
+| 5a | `large()` asserts on call ordering, not intent | **Closed as documented, not changed.** The rustdoc and the LLD now say to route before buying the ceiling, and why. Relaxing the assertion would mean re-checking every ceiling whenever any route changes, for a builder whose chain already makes the order natural. |
+| 5b | Routes cannot be changed on a live `Terminal`, and nothing says so | **Closed as documented.** `OscRoutes`'s rustdoc and the LLD say the table is read at construction and is not live, and why: a route that changed under a half-parsed sequence would be a race the batch-of-values contract has no way to report. |
+| 6 | `OscRoutes: PartialEq` was structural, not semantic | **Closed, by fixing the code.** `route()` stores the bits of the route the number actually gets, so a redundant `Drop` is a no-op and a spilled number routed back to its default leaves the spill. The verifier's test is adopted, inverted to assert equality. |
+| 7 | The fuzz target's `Sink` never reaches the mechanism | **Closed, by fixing the target.** It builds a real `Terminal` with the input-derived table and drains the batch, so the route lookup, the six arms and `forward_osc` are all in the fuzzed path. Still Linux-only and still not a gate, but it does type-check on stable now (`cargo check` inside `crates/vt/fuzz`), so it cannot rot unnoticed between runs. |
+| 8 | The deleted allocation guard was not replaced | **Closed.** `the_builtin_arms_do_not_grow_the_batch_once_warm` feeds eight OSC kinds 1024 times and asserts all three batch capacities are flat. |
+| 9 | The zero-padded `007` literal lost its test | **Closed.** `a_zero_padded_osc_number_reaches_the_same_builtin` covers `007;file:///tmp` and `0133;A`. |
+| 10 | Non-UTF-8 `OSC 7` changed behaviour and the CHANGELOG denied it | **Closed, by restoring the old behaviour.** The URL must be valid UTF-8 or the sequence is dropped and counted, as the adapter did. |
+| 11 | The wrap route roughly doubles what a hostile 8 MiB `OSC 9` costs | **Closed as recorded.** Noted in the LLD's hostile-input section and in Gaps below. Bounded and verified; it is the price of the owner's ruling on the alias. |
+| 12 | The "no reference to OSC 7, 9 or 133" criterion is over-ticked | **Closed.** The criterion is re-marked partial and says that `adapter_config` routes `LEGACY_AGENT_OSC`, which is 9. |
+| 13 | `events-and-api.md` and `IN-0038.md` were stale | **Closed.** Both updated; the Reconciliation section records that listing `events-and-api.md` as "no change needed" was a miss. |
+| 14 | The arm table's "clamped to 100" was not what the code did | **Closed, by fixing the code.** Both `9;4` fields are read as `u32` and the percentage clamps. The LLD's table records what the adapter did and why it changed. |
+| 15 | `crates/terminal` lost compile-time exhaustiveness on `VtEvent` | **Closed as recorded.** Noted in Gaps below; it is the documented price of `#[non_exhaustive]` and the three wildcard arms each chose a defensible default. |
+| 16 | An unrelated flake in `render_bench` | **Acknowledged, not acted on.** Pre-existing and timing-sensitive. Seen once here too, in `handle::tests::a_pump_yields_to_the_demand_within_a_bounded_number_of_chunks`, under a parallel build; green in isolation and in `ci-local -Full`. |
 
 ## Harness Row
 
