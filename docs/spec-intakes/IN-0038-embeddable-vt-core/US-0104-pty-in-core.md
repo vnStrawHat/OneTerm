@@ -12,9 +12,9 @@ Created: 2026-09-15
 - [x] Planned
 - [x] In progress
 - [x] Implemented
-- [x] Changed
-- [x] Reopened (acceptance rework)
-- [x] Retired
+- [ ] Changed
+- [ ] Reopened (acceptance rework)
+- [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
 ## Classification
@@ -335,7 +335,7 @@ Revised intake dependency order: `BUG-0058` -> `US-0097` -> { `US-0098`, `US-009
 <!-- HARNESS:PROOF:BEGIN -->
 - [x] Unit proof
 - [x] Integration proof
-- [x] E2E proof
+- [ ] E2E proof
 - [x] Platform proof
 - [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
@@ -475,7 +475,9 @@ No `gpui*` and no `oneterm-*` in either.
   `crates/vt/src/pty` **30**. Not one test was added, removed or renamed. By suite:
   `pty::loopback_tests` 2, `pty::windows::pipe::pipe_tests` 2,
   `pty::windows::pseudo_console_tests` 6, `pty::windows::child::tests` 4,
-  `pty::windows::conpty::tests` 8, `pty::windows::tests` 3.
+  `pty::windows::conpty::tests` **7**, `pty::windows::tests` 3 -- 24, which is the measured total
+  two lines above. (An earlier revision said 8 for `conpty::tests` and therefore summed to 25;
+  `conpty.rs` has seven `#[test]` attributes.)
 
 ### Package
 
@@ -497,13 +499,30 @@ was 13). Eleven `missing_docs` items were documented: `Shell::new`, four `Window
 surfaced with the move -- `[`PipeReader::read`]` in `windows/pipe.rs`, a trait method rustdoc cannot
 resolve as an inherent -- and became a code span; the doc gate had never run over this code.
 `RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features` exits 0, and
-`python scripts/vt-public-api.py --check --no-doc` passes against a regenerated
-`crates/vt/public-api.txt` whose diff is 28 added lines, all under `oneterm_vt::pty`.
+`python scripts/vt-public-api.py --check --no-doc` passes against a regenerated snapshot whose
+`pty` diff is 28 lines. The snapshot is two files, one per platform family -- see
+"The platform split" below; this paragraph named the single `public-api.txt` it replaced.
 
 ### LOC
 
-`git diff --stat -M main` shows the nine files as renames. Inside them the delta is **+110 / -97**,
-net **+37**: the module header (both platforms in prose, the absolute design link, the threading
+`git diff --stat -M main` shows the nine files as renames. Inside them the delta is
+**+110 / -73, net +37**, and the three numbers agree -- an earlier revision said `-97`, which does
+not subtract from 110 to 37. Per file, from `git diff --numstat` over the commit that edited them:
+
+| File | + | - |
+| --- | --- | --- |
+| `pty/mod.rs` | 61 | 22 |
+| `pty/windows/conpty.rs` | 17 | 18 |
+| `pty/windows/child.rs` | 13 | 12 |
+| `pty/windows/pseudo_console_tests.rs` | 8 | 10 |
+| `pty/windows/pipe.rs` | 5 | 5 |
+| `pty/unix.rs` | 4 | 4 |
+| `pty/windows.rs` | 1 | 1 |
+| `pty/windows/pipe_tests.rs` | 1 | 1 |
+| `pty/loopback_tests.rs` | 0 | 0 |
+| **total** | **110** | **73** |
+
+The +37 is the module header (both platforms in prose, the absolute design link, the threading
 model), the eleven `missing_docs` lines and the citation rewrites. No function body changed except
 paths (`crate::` -> `crate::pty::`), log prefixes and thread names that spelled a crate that no
 longer exists, and three test-only string markers. `crates/pty/Cargo.toml` is -24;
@@ -553,27 +572,149 @@ unified diff naming exactly what a real `cargo doc` on Linux found that the hand
 one that renders". That was wrong -- the `Packaged crate (oneterm-vt)` job runs on `ubuntu-latest` --
 and the sentence is corrected there.
 
+### The adopted external-embedder tests
+
+The independent verification wrote its own crates **outside** the workspace, each with its own
+`[workspace]` table, so they consumed `oneterm-vt` exactly as a consumer does: public API only, no
+`super::`, no private item. They are adopted here rather than cited, because a test that lives in
+somebody's scratch directory is not a gate.
+
+| Adopted as | What it pins |
+| --- | --- |
+| `crates/vt/tests/pty_contract.rs` (`#![cfg(all(windows, feature = "pty"))]`) | Three tests. A real `cmd.exe` child runs, its bytes come back, `next_child_event` reports the exit **without a read**, and the pid is gone after the drop. `on_resize` on both sides of the child's exit returns `io::Result` and never panics. Dropping a console whose child is still running (`ping -n 30`) ends that child inside the documented two-second grace. Also, by construction: `Options` is buildable from `Default` without naming a cfg-gated field, which is what makes portable embedder code possible. |
+| `crates/vt/tests/engine_without_pty.rs` (`#![cfg(not(feature = "pty"))]`) | The engine feeds and renders with no transport compiled -- "bring your own transport", from the outside, as a gate rather than as prose. |
+
+They are integration tests, so nothing in them can reach a private item, and they run in
+`cargo test --workspace` and `cargo test -p oneterm-vt --no-default-features` respectively.
+
+**Process hygiene is part of the test, not around it.** Every child is tracked by the pid
+`child_pid()` returned and liveness is asked of that pid alone, through
+`tasklist /FI "PID eq <pid>"`. Nothing is matched, enumerated or terminated by image name: this
+machine runs other consoles. Measured after the run: `3 passed`, and no new `cmd.exe`, `PING.EXE`
+or `OpenConsole.exe` pid.
+
+The verifier's third artefact does not become a test. A binary that names `oneterm_vt::pty` must
+**fail** to compile with the feature off, and `trybuild` is a dev-dependency this embeddable crate
+should not grow for one expectation. It is a build step instead, run here against a throwaway crate
+outside the workspace whose only dependency is
+`oneterm-vt = { path = "...", default-features = false }`:
+
+```text
+$ cargo build --bin usepty
+error[E0433]: cannot find `pty` in `oneterm_vt`
+ --> src\bin\usepty.rs:5:31
+ --> ...\crates\vt\src\lib.rs:45:9
+exit=101
+```
+
+### `windows-sys` features come from the workspace, not from this crate
+
+`cargo package` flattens `windows-sys.workspace = true` into the nine features the root
+`[workspace.dependencies]` table lists, so a consumer of the packaged crate gets all nine. The
+transport uses **seven**: `Win32_Foundation`, `Win32_Security`, `Win32_Storage_FileSystem`,
+`Win32_System_Console`, `Win32_System_LibraryLoader`, `Win32_System_Pipes` and
+`Win32_System_Threading`. The two it never names are `Win32_System_Diagnostics_ToolHelp`
+(`crates/update`'s install-directory process sweep) and `Win32_System_IO`.
+
+**Not trimmed here, and it is not the one-line change it looks like.** Cargo's
+`features = [...]` on an inherited dependency only *adds*; subtracting means `crates/vt` stops
+inheriting and writes `windows-sys = { version = "0.59", optional = true, features = [...] }` of
+its own, which contradicts `docs/agents/dependencies.md`'s "declared once in root
+`[workspace.dependencies]`" rule and creates a second place the version can drift. The cost today
+is a superset of features on a crate that is compiled from source anyway, which is a compile-time
+non-event.
+
+Trigger to do it: **the day `oneterm-vt` stops being a member of this workspace** -- its own
+repository, or a crates.io release -- at which point the inheritance is gone regardless and the
+seven features are written out explicitly. A second, weaker trigger: a workspace crate leaving and
+silently changing the union under the engine, which is exactly the failure this note exists to
+name.
+
 ### Gaps found while doing it
 
 1. **The acceptance grep could not pass as written**, and is rewritten above: the exclusion is
    `docs/spec-intakes/` wholesale, because `IN-0031` and `IN-0032` name the old crate throughout
    their evidence for exactly the reason `IN-0029` was excluded, plus `DEC-0014`'s historical clause
    and the one deliberate sentence in `crate-dependency-rules.md`.
-2. **The ten-launch probe was not run.** It drives the GPUI application, and the owner runs Claude
-   inside a running `oneterm.exe`; opening and closing ten shells in a second instance from a
-   worktree build is not the cheap check the packet assumed. What was run instead, from
-   `target/debug/` where `crates/app/build.rs` had already staged `conpty.dll` and
-   `x64/OpenConsole.exe`: `pty-throughput.exe cmd /c "echo vt-pty-probe"`, which spawned a real
-   ConPTY child through the moved loader, read from it and exited 0, leaving no new `cmd.exe` and no
-   new `OpenConsole.exe` (the one new pid was this session's own shell wrapper, checked by command
-   line). The bundled-versus-system resolution itself is covered by
-   `pty::windows::conpty::tests::conpty_api_prefers_the_bundled_host` and
+2. **The ten-launch probe was not run**, and most of what it was for is now covered another way.
+   It drives the GPUI application, and the owner runs Claude inside a running `oneterm.exe`;
+   opening and closing ten shells in a second instance from a worktree build is not the cheap
+   check the packet assumed.
+
+   What was run instead is the independent verifier's probe, which is better than the packet's
+   first attempt because it observes **which host was loaded** rather than inferring it. From
+   `target/debug/`, where `crates/app/build.rs` had already staged `conpty.dll` and
+   `x64/OpenConsole.exe`, `pty-throughput.exe` is started with `-PassThru` and its loaded modules
+   read:
+
+   ```text
+   spawned pid=25380
+   loaded: ...\agent-ac736b06b9eb6cf72\target\debug\conpty.dll
+   exit=0
+   new pids: (none)
+   ```
+
+   That is direct proof that the loader, now compiled into `crates/vt`, still resolves `conpty.dll`
+   against the **running executable's** directory and still prefers the bundled host over
+   `kernel32`, and that the child and its console host were reaped. The resolution order itself is
+   pinned by `pty::windows::conpty::tests::conpty_api_prefers_the_bundled_host` and
    `..._falls_back_to_the_system_host`, both green, which stage a real `conpty.dll` in a scratch
-   directory. **Unverified**: the `conpty: bundled` log line in the running application, and the
-   ten-launch orphan count. `pty-throughput` initialises no logger, so the line has no way to
-   appear.
+   directory.
+
+   **Still unverified**: the `conpty: bundled` log line itself (`pty-throughput` installs no
+   logger, so the line has nowhere to go) and the orphan count across ten open/close cycles in the
+   GPUI application. The `E2E proof` box stays unticked for exactly this.
 3. The `pty` module rustdoc had to stop linking `[`windows::conpty`]` -- `windows` is a private
    module, and `-D warnings` makes a public-to-private intra-doc link an error. It is prose now.
+
+## Harness Row
+
+The harness database is not edited by this packet's session. This is the row it owes, for whoever
+applies it (`intake_id` 43, proof columns as the block above: unit 1, integration 1, e2e **0**,
+platform 1):
+
+```sql
+INSERT INTO story (
+    key, intake_id, title, kind, risk, status,
+    proof_unit, proof_integration, proof_e2e, proof_platform, proof_verify,
+    path
+) VALUES (
+    'US-0104', 43,
+    'The pseudo-console transport moves into the core behind a default-on feature',
+    'US', 'high_risk', 'implemented',
+    1, 1, 0, 1, 1,
+    'docs/spec-intakes/IN-0038-embeddable-vt-core/US-0104-pty-in-core.md'
+);
+```
+
+`proof_e2e` is 0 on purpose: the ten-launch probe in the GPUI application was not run, and the
+`conpty: bundled` log line is unobserved. Everything else in "Gaps found while doing it" is closed.
+
+## Verification notes closed
+
+Independent verification: [`evidence/US-0104-verify.md`](evidence/US-0104-verify.md), verdict
+**PASS-WITH-NOTES**. All thirteen findings are closed in this packet or in the branch:
+
+| | Finding | Closed by |
+| --- | --- | --- |
+| F1 | `firecap.bin` committed by accident | Deleted and added to `.gitignore`. It is `pty-throughput`'s capture file, written into the current directory -- the repository root, when the bundled-loader probe ran -- and swept in by a `git add -A`. |
+| F2 | status block ticked states never entered | `Changed`, `Reopened` and `Retired` unticked. |
+| F3 | `E2E proof` ticked for a check that did not run | Unticked; the Gaps section already said so. |
+| F4 | six commits behind `main`, one README sentence dies on merge | Rebased onto `491dff8`. The README's feature paragraph now names **two** features that add dependencies, `pty` and `regex`. Both snapshots regenerated against the post-`US-0100` surface and the Unix one re-derived; `--diff-platforms` still shows exactly the six `pty` lines. The verifier's loaded-module probe is adopted above. |
+| F5 | `structure.md`'s `vt/` tree not extended | `src/pty/` added with its four sub-entries, `public-api.txt` replaced by the two snapshot files, and the "modules named by path" count corrected to five (`grid`, `intern`, `parser`, `search`, `pty`). |
+| F6 | `scripts/README.md` names the old single file | Row rewritten: two snapshots, `--update` / `--check` / `--diff-platforms`. |
+| F7 | LOC delta `-97` does not add up | `-73`, with the per-file table above. |
+| F8 | `conpty::tests` counted 8, total said 24 | **7**, and the suites now sum to 24. |
+| F9 | Rustdoc paragraph described the pre-split snapshot | Rewritten to point at "The platform split". |
+| F10 | two repository-path citations survived on public items | Both rewritten, and **the grep was widened**: `crates/` and `docs/` now count as citations in `///` and `//!` text, in all three CI entry points. That found six more inside `crates/vt/src` (four of them pre-existing, in `graphics`, `parser`, `selection`, `terminal`); all twelve are fixed and the grep returns zero. |
+| F11 | packaged manifest inherits the workspace `windows-sys` union | Recorded above with the trigger, and the two unused features named precisely. The verifier named `Win32_Storage_FileSystem` as one of them; it is used (`ReadFile` / `WriteFile` in `windows/pipe.rs`). The unused pair is `Win32_System_Diagnostics_ToolHelp` and `Win32_System_IO`. |
+| F12 | `polling` reaches `oneterm-terminal` unconditionally | **Fixed, not just recorded.** The adapter never names `oneterm_vt::pty`, so the root `[workspace.dependencies]` entry now carries `default-features = false` and the two members that do name it -- `local-shell` and `tools` -- take `features = ["pty"]`. `cargo tree -p oneterm-terminal -e normal` is clean of `polling` and `windows-sys`, and R7's verification column says so. An outside embedder still gets the transport by default. |
+| F13 | the Unix snapshot cannot be executed on this host | Left derived, and the header says so. The `Packaged crate (oneterm-vt)` job runs on `ubuntu-latest` and runs `vt-public-api.py --check --no-doc` against real Linux rustdoc, so **the first CI run on that job is the first real check of this file**; it either passes or prints a unified diff naming what differs. |
+
+One correction to the packet's own earlier wording, from the verifier's review: `crates/app` is not
+untouched. `crates/app/assets/` is -- the bundled pair, its manifest and the bump script never move
+-- but `crates/app/build.rs` has one word changed in a doc comment, `oneterm-pty` to
+`oneterm_vt::pty`.
 
 ## Handoff
 
