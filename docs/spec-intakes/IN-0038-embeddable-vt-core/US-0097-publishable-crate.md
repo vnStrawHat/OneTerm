@@ -130,7 +130,11 @@ The full design is in [`low-level-design/packaging.md`](low-level-design/packagi
   and the event types.
 - [ ] The self-containment pass over 37 files, by the three rules in the HLD. Mechanical, large, and
   best done as its own commit so the review is a diff of comment prefixes.
-- [ ] `README.md`, `CHANGELOG.md` (with the semver promise), `examples/headless.rs`.
+- [ ] `README.md`, `CHANGELOG.md` (with the semver promise), `examples/headless.rs`. The README
+  outline is in [`packaging.md`](low-level-design/packaging.md); its **Documentation** section links
+  the embedder's guide at `https://docs.rs/oneterm-vt/latest/oneterm_vt/guide/` and the local render
+  script `scripts/vt-docs.sh` / `scripts/vt-docs.ps1`. The guide itself is
+  [`US-0103`](US-0103-embedder-guide.md); this packet only writes the section and the links.
 - [ ] `scripts/vt-public-api.py` (about 40 lines over `cargo doc --output-format json`) and the
   committed `public-api.txt`.
 - [ ] CI: `cargo publish --dry-run`, the two feature-matrix builds, `--examples`, the public-api
