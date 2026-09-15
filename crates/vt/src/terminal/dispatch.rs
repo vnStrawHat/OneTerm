@@ -1340,7 +1340,7 @@ impl Dispatch for Handler<'_> {
     /// The intermediates are part of the routing key: `DCS $ q`
     /// (DECRQSS) and `DCS + q` (XTGETTCAP, which clients such as tmux, neovim
     /// and kitty are documented to send) share the final byte and are not
-    /// images (`BUG-0058`). Every other DCS is counted unhandled.
+    /// images. Every other DCS is counted unhandled.
     ///
     /// No decoder can be in flight here: an unterminated Sixel is ended by the
     /// `ESC` that introduces the next DCS, and `advance_dcs_passthrough` leaves
