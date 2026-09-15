@@ -71,6 +71,10 @@ $previousRustdocFlags = $env:RUSTDOCFLAGS
 $env:RUSTDOCFLAGS = "-D warnings"
 try {
     Invoke-Step @("cargo", "doc", "-p", "oneterm-vt", "--no-deps", "--all-features")
+    # ...and again with no features: an intra-doc link to a cfg-gated item
+    # resolves under `--all-features` and is broken in a default build, which is
+    # the build most embedders get (`US-0101` verification note 4).
+    Invoke-Step @("cargo", "doc", "-p", "oneterm-vt", "--no-deps")
 } finally {
     $env:RUSTDOCFLAGS = $previousRustdocFlags
 }
