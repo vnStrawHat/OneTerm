@@ -96,7 +96,7 @@
 ```
 
 **Data flow**:
-- Input: `Keystroke` (GPUI) → `core::key_encode` → `Vec<u8>` → `session.write(bytes)` → PTY/channel.
+- Input: `Keystroke` (GPUI) → `terminal-view/src/input/keys.rs` maps it to a `KeySpec` → `oneterm_vt::input::encode_key` → `Vec<u8>` → `session.write(bytes)` → PTY/channel.
 - Output: PTY/channel → pump (`ShellEventLoop` local / `ssh_main_task` tokio ssh) → `TerminalPump::advance` feeds the per-session printable-output logger and the engine under the terminal lock, collecting the batch's events → `finish_batch` releases the lock, sends those events and then one `SessionEvent::Output` → View `cx.notify()` → `TerminalElement` prepaint calls `session.snapshot_into(&mut cache.snapshot)` (short lock, one `render_update` into the `RenderState` the reusable `TerminalContent` in `RenderCache` owns — zero steady-state allocation — and advances *that buffer's* damage watermark) and paints from that buffer; `session.snapshot()` remains as the allocating convenience for tests and one-off reads. Logging behavior and file lifecycle are owned by [`terminal-logging.md`](terminal-logging.md).
 
 ---
@@ -106,7 +106,7 @@
 | Crate | Terminal role |
 |---|---|
 | `core` | `ShellKind` + `LocalShellConfig` + `SshConfig` (config), `SftpBackend`, `AppError` (leaf, no GPUI). |
-| `terminal` | `TerminalSession` trait + `SessionEvent`, the `TerminalContent` frame, `TerminalPalette`, printable-output logging controller/parser, `key_encode`/`mouse_encode`/`osc`/`url`, the shared terminal handle (`TerminalHandle`: the `parking_lot::FairMutex` around `oneterm_vt::Terminal` plus the render-demand flag), and the **backend pump layer** (`backend` module: `SharedState`, `SessionEventSink`, `OscRouter`, `TerminalPump`, `PtyTransport`) shared by both backends. |
+| `terminal` | `TerminalSession` trait + `SessionEvent`, the `TerminalContent` frame, `TerminalPalette`, printable-output logging controller/parser, `osc`/`url` (key and mouse encoding moved to `oneterm_vt::input` at `US-0099`; this crate re-exports the names), the shared terminal handle (`TerminalHandle`: the `parking_lot::FairMutex` around `oneterm_vt::Terminal` plus the render-demand flag), and the **backend pump layer** (`backend` module: `SharedState`, `SessionEventSink`, `OscRouter`, `TerminalPump`, `PtyTransport`) shared by both backends. |
 | `local-shell` | `LocalSession` implementing `PtyOwner`; `spawn` returns the `PtySession` the UI drives (`US-0091`). Spawns a shell via `oneterm_pty::PseudoConsole::spawn` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
 | `ssh` | `SshSession` implementing `PtyOwner`; `connect` returns the `PtySession` the UI drives (`US-0091`). russh client on the shared tokio runtime; `ssh_main_task` feeds `TerminalPump`. pty-req + shell + `window_change` + exit-status. `SshTransport: PtyTransport` (bounded `Cmd` channel). SFTP task lifetime tied to the connection. Only `SshSession` + `connect` are public. |
 | `terminal-view` | `TerminalElement` (custom `gpui::Element`), `TerminalView` (`Render`; one view type hosts any `TerminalSession`, local or SSH), `TerminalPanel`/`PanelSpec` (dock tab), IME (`EntityInputHandler`), mouse/wheel, font measure, theme → `TerminalPalette`. |
@@ -862,7 +862,7 @@ See [`decisions/0002-ssh-duplicate-auth.md`](decisions/0002-ssh-duplicate-auth.m
 Four input paths:
 
 1. **Raw keystroke** (`on_key_down` in the element): `try_keystroke(keystroke, mods)`
-   → `core::key_encode` → `session.write(bytes)`. Mapping: Ctrl+char → `& 0x1f`, F-key /
+   → `oneterm_vt::input::encode_key` → `session.write(bytes)`. Mapping: Ctrl+char → `& 0x1f`, F-key /
    arrow → ANSI escape, Enter → `\r`, Backspace → `0x7f`, Tab → `\t` / `\x1b[Z`…
 2. **GPUI action** (Ctrl-Shift-C/V copy/paste, Ctrl-Tab…): map → `try_keystroke` or
    clipboard.
@@ -898,7 +898,7 @@ crates/
 │   ├── model.rs              # TerminalModel: snapshot / snapshot_into / query_state / input
 │   ├── content.rs            # TerminalContent: the RenderState it owns, in the engine's own vocabulary
 │   ├── palette.rs / color_classification.rs / osc_color.rs
-│   ├── key_encode.rs / mouse_encode.rs / paste.rs
+│   ├── paste.rs                  # (key + mouse encoding live in oneterm_vt::input)
 │   ├── osc.rs / osc_agent/ / url_policy.rs / security_policy.rs
 │   ├── factory.rs            # PtySize + SessionFactory
 │   └── backend/              # shared pump layer (§5.3)

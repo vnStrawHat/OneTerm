@@ -62,6 +62,15 @@ carry no API change at all. Such a release says so below rather than being omitt
   the last cell included, so `start_col` can be one past the last column.
 - `SearchOptions` is `#[non_exhaustive]`: a future option must not be a breaking change.
   `SearchOptions::default()` plus field assignment is the construction form.
+- `input`: key and mouse encoding. `KeySpec`, `KeyMods`, `NamedKey`, `encode_key`,
+  `TerminalMouseButton`, `MouseModifiers`, `encode_mouse_press`, `encode_mouse_release`,
+  `encode_mouse_move` and `encode_wheel_event` turn a key press or a mouse event into the bytes
+  the program on the far end expects, following the X10, 1005 and SGR-1006 rules and the xterm
+  control table. The types are framework-neutral and the functions have no side effects, so
+  scrolling, selection and shift-tracking stay with the embedder's input handling. Not one byte
+  changed in the move: the encoders and their whole test suite came across unaltered.
+- `Terminal::encode_key`: `input::encode_key` with this terminal's own modes, so encoding one key
+  does not need a `ModeSnapshot` fetched first.
 
 ### Changed
 
