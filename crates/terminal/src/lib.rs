@@ -37,7 +37,7 @@ pub use backend::{
     SharedState, TerminalPump,
 };
 pub use color_classification::is_decorative_character;
-pub use content::{LineRangeCells, SnapshotCell, TerminalContent, last_content_row};
+pub use content::{ContentCell, LineRangeCells, TerminalContent, last_content_row};
 pub use factory::{PtySize, SessionFactory};
 pub use handle::{DEFAULT_SCROLLBACK_LINES, SharedTerminal, TerminalHandle, new_shared_terminal};
 pub use logging::{

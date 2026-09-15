@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use gpui::{Anchor, App, Context, IntoElement, ParentElement as _, anchored, deferred, point, px};
 
 use oneterm_core::config::ShellKind;
-use oneterm_terminal::{SessionKind, SnapshotCell};
+use oneterm_terminal::{ContentCell, SessionKind};
 
 use super::TerminalView;
 use crate::completion::{CompletionController, overlay::CompletionOverlay};
@@ -111,7 +111,7 @@ struct CursorCommand {
 /// stripped of the shell prompt prefix. `cells` are the cells of the cursor's
 /// display row, in column order; `cursor` is the cursor's `(row, column)` as
 /// reported by `TerminalQueryState`.
-fn extract_cursor_command(cells: &[SnapshotCell], cursor: (usize, usize)) -> CursorCommand {
+fn extract_cursor_command(cells: &[ContentCell], cursor: (usize, usize)) -> CursorCommand {
     let (cursor_line, cursor_col) = cursor;
 
     let row_str: String = cells.iter().take(cursor_col).map(|cell| cell.ch).collect();

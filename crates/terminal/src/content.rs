@@ -116,7 +116,7 @@ pub fn last_content_row(term: &Terminal) -> usize {
 /// style machinery a painted frame needs. A frame goes through
 /// [`TerminalContent`] instead.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SnapshotCell {
+pub struct ContentCell {
     /// The cell's text as one scalar: `' '` for a blank, `'\t'` for a tab cell,
     /// the base scalar of a grapheme cluster.
     pub ch: char,
@@ -138,7 +138,7 @@ pub struct SnapshotCell {
 pub struct LineRangeCells {
     /// Up to `count × num_cols` cells starting at the requested display line,
     /// in row-major order. Empty when the range starts below the viewport.
-    pub cells: Vec<SnapshotCell>,
+    pub cells: Vec<ContentCell>,
     /// Viewport width in columns; the row stride of `cells`.
     pub num_cols: usize,
     /// The OSC 8 targets the cells reference, one entry per distinct link.

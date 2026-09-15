@@ -3,10 +3,10 @@
 //! Works on the `query_line_range_cells` window around the pointer (a few rows,
 //! never the whole grid). That read is deliberately **not** a frame: it must not
 //! copy a viewport on every pointer move and must not touch the renderer's
-//! damage watermark, so it answers with [`SnapshotCell`] — the narrow owned
+//! damage watermark, so it answers with [`ContentCell`] — the narrow owned
 //! shape this file and the completion lookup are the only readers of.
 
-use oneterm_terminal::{LineRangeCells, SnapshotCell};
+use oneterm_terminal::{ContentCell, LineRangeCells};
 
 use super::{DetectedUrl, PREFIXES, is_trailing_punct};
 
@@ -40,8 +40,8 @@ pub(crate) fn detect_url_at(
     if col >= n {
         return None;
     }
-    let at = |i: usize| -> &SnapshotCell { &cells[i] };
-    let visible_char = |cell: &SnapshotCell| match cell.ch {
+    let at = |i: usize| -> &ContentCell { &cells[i] };
+    let visible_char = |cell: &ContentCell| match cell.ch {
         '\0' | '\t' => ' ',
         ch => ch,
     };
