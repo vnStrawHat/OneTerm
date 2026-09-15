@@ -352,11 +352,13 @@ switch to a static site is a new packet, not an amendment to this one.
 
 Run on `x86_64-pc-windows-msvc`, branch `docs/vt-embedder-guide` off `main` at `af5df2e7`.
 
-**Chapters.** Thirteen files under `crates/vt/docs/guide/`, 1 956 lines of Markdown after the
+**Chapters.** Thirteen chapters under `crates/vt/docs/guide/`, 2024 lines of Markdown after the
 verification rework: `01-overview.md` 105, `02-embedding.md` 214, `03-threading.md` 132,
-`04-events.md` 182, `05-osc.md` 186, `06-input.md` 148, `07-search.md` 93 plus
-`07-search-regex.md` 44, `08-graphics.md` 136, `09-resize.md` 100, `10-limits.md` 133,
-`11-conformance.md` 127, `12-versioning.md` 132, `13-pty.md` 220. `grep -c 'include_str!' crates/vt/src/guide.rs` is 13.
+`04-events.md` 184, `05-osc.md` 186, `06-input.md` 177, `07-search.md` 93 plus
+`07-search-regex.md` 44, `08-graphics.md` 136, `09-resize.md` 100, `10-limits.md` 141,
+`11-conformance.md` 160, `12-versioning.md` 132,
+`13-pty.md` 220. Chapters 1, 4, 5, 6, 10 and 11 were rewritten against the
+conformance work after the rebase; see **Rebased onto the closed gaps** below. `grep -c 'include_str!' crates/vt/src/guide.rs` is 13.
 
 **Render.** `RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps` and the same with
 `--all-features` both exit 0 with no warning. `target/doc/oneterm_vt/guide/index.html` links
@@ -467,6 +469,43 @@ Known gaps to carry forward:
   is not merged. The chapter names the pending state in a marked paragraph rather than claiming
   either state; when `US-0102` merges, the gaps table shrinks and that paragraph goes. That edit is
   the one thing in this packet that is known to be needed and not yet done.
+
+## Rebased onto the closed gaps
+
+Chapter 11 was written against a tree in which seven conformance gaps were open, and carried a
+marked paragraph saying a separate piece of work would close them. That work merged; this branch is
+rebased onto it and the paragraph is gone. What changed in the guide:
+
+- **Chapter 11** now lists `? 5`, `? 9`, `? 1015` and `? 2027` among the supported modes, `DA3`
+  among the supported `CSI` sequences, `LS2` / `LS3` / `SS2` / `SS3` among the supported `ESC`
+  sequences with the note that `DECSC` / `DECRC` save the invoked set and any pending single shift,
+  and `OSC 17` / `19` among the twenty built-in numbers. "Recognised but inert" is down from two
+  modes to one, `? 9001`. `? 2027` gets three paragraphs of its own, because it is the one closed
+  gap with behaviour an embedder has to understand rather than merely have: the cross-chunk carry,
+  its 32-scalar bound and the counter that reports it, and the rule that a presentation selector
+  needs a base. The `WcsWidth` ConPTY caveat is stated where a Windows embedder will meet it.
+- **The known-gaps table is four rows, all new**: `DECRQCRA`, which is also why there is still no
+  `esctest` score -- the harness reads the screen back with rectangle checksums, so it cannot run
+  at all -- plus `DECRQSS` and `XTGETTCAP` unanswered, and the absent `Config` flag that would let
+  an embedder refuse `? 2027` on a `WcsWidth` session.
+- **Chapter 11's doctest** asserted `DA3` was counted unhandled, which is now false. It asserts
+  that `DA1`, `DA2` and `DA3` are all answered, and uses `DECRQCRA` as its example of a gap that is
+  counted rather than guessed at.
+- **Chapter 6** gains two tables -- the four reporting modes and the four encodings -- the rule
+  that an encoder returns an empty `Vec` for an event the mode does not report, the two
+  reference asymmetries (`? 9` outranks the extended encodings; setting one reporting mode clears
+  the other three, unsetting clears only itself), and the reason to keep checking
+  `mouse_reporting()` anyway: an empty answer means the event is yours, not that there is nothing
+  to do.
+- **Chapter 10** gains `FeedStats::dropped_cluster_carries` and the 32-scalar carry bound, with the
+  once-per-cluster counting rule stated twice because it is the one way to misread the number.
+- **Chapters 1, 4 and 5** move from eighteen built-in OSC numbers to twenty, and chapter 4's
+  `ColorQuery` row and prose gain `OSC 17` / `19` -- a highlight colour the engine never draws,
+  which is exactly why the query comes to you.
+
+No new `VtEvent` variant arrived, so chapter 4's table is still the whole enum at twenty variants;
+the addition was one `FeedStats` field. The public-API snapshots came over in the rebase unchanged
+by this branch, and `--check` and `--diff-platforms` both still pass.
 
 ## Verification notes closed
 

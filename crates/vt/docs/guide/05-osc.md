@@ -22,10 +22,10 @@ nothing is allocated per sequence.
 | `Drop` | nothing happens | not delivered; counted as unhandled |
 
 The default for a number the engine implements is `Builtin`; the default for
-every other number is `Drop`. The eighteen the engine implements are published
-as `OscRoutes::BUILTIN` -- `0, 1, 2, 4, 7, 8, 9, 10, 11, 12, 22, 50, 52, 104,
-110, 111, 112, 133` -- and `OscRoutes::has_builtin` answers for one number, so a
-route can never be dead on arrival:
+every other number is `Drop`. The twenty the engine implements are published as
+`OscRoutes::BUILTIN` -- `0, 1, 2, 4, 7, 8, 9, 10, 11, 12, 17, 19, 22, 50, 52,
+104, 110, 111, 112, 133` -- and `OscRoutes::has_builtin` answers for one number,
+so a route can never be dead on arrival:
 
 ```rust
 use oneterm_vt::{OscRoute, OscRoutes};

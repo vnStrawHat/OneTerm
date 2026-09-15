@@ -68,7 +68,7 @@ the reason this crate exists at all.
 | Clipboard / renderer / window in the core | no / no / no | optional / optional / optional | no / no / no |
 | Event delivery | `EventListener` callback, invoked inside the terminal | `EventListener`, four callbacks, events carry a pane id | **values**: `feed` fills an `EventBatch`; nothing runs inside the engine |
 | Event count | 13 variants | about 60 variants | 20 variants |
-| OSC numbers handled | 14 | 17 | 18, plus any number you claim |
+| OSC numbers handled | 14 | 17 | 20, plus any number you claim |
 | **OSC extensibility** | **none**: a fixed `match` in another crate; unknown numbers are logged and dropped | **none**: a fixed `match`; unknown numbers are dropped | **`OscRoutes`**: per number, `Builtin` / `BuiltinAndForward` / `Forward` / `Drop` |
 | Locks in the core | `parking_lot` | `parking_lot` | none |
 

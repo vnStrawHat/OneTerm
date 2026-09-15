@@ -111,20 +111,49 @@ assert_eq!(bytes, b"\x1b[<0;1;1M");
 # let _ = protocol;
 ```
 
-Check `Terminal::mouse_reporting()` before you send anything. `None` means no
-program asked, and a mouse event then belongs to your own UI -- selection,
-scrolling, a context menu. `Some(protocol)` carries two independent choices the
-program made: `reporting` says which events it wants (`Normal` for press and
-release, `ButtonEvent` to add drags, `AnyEvent` to add bare motion) and
-`encoding` says how they are spelled (`Default` for the legacy X11 byte form,
-`Utf8` for `? 1005`, `Sgr` for `? 1006`). Send only what `reporting` asked for;
-a flood of hover events to a program that asked for `Normal` is a bug you will
-see as latency.
+**An encoder returns an empty `Vec` for an event the current mode does not
+report**, and you write nothing. That covers every event when no program asked
+for reports at all, and everything but a press under `? 9`. The engine is the
+one place that knows, so forgetting to check cannot send mouse bytes into a
+program that never asked for them.
 
-The legacy encoding cannot express a coordinate past 223, which is why every
-modern program asks for SGR. The engine encodes what the program chose rather
-than what is best, because a terminal that silently upgrades an encoding is a
-terminal that breaks the program that chose it.
+Check `Terminal::mouse_reporting()` anyway, because an empty answer is not the
+same as no decision: `None` means the event belongs to **your** UI -- selection,
+scrolling, a context menu -- and you should act on it rather than drop it.
+
+`Some(protocol)` carries two independent choices the program made.
+
+`reporting` says which events it wants:
+
+| Mode | `MouseReporting` | Sends |
+| --- | --- | --- |
+| `? 9` | `X10` | button press only: no modifiers, no release, no motion |
+| `? 1000` | `Normal` | press and release |
+| `? 1002` | `ButtonEvent` | press, release, and motion while a button is down |
+| `? 1003` | `AnyEvent` | the above plus bare motion |
+
+`encoding` says how a report is spelled:
+
+| Mode | `MouseEncoding` | Report |
+| --- | --- | --- |
+| none | `Default` | `CSI M` then three raw bytes, each offset by 32 |
+| `? 1005` | `Utf8` | the same values, UTF-8 encoded |
+| `? 1015` | `Urxvt` | `CSI Cb ; Cx ; Cy M` -- the same values as decimal parameters, `Cb` keeping its `+ 32` offset |
+| `? 1006` | `Sgr` | `CSI < Cb ; Cx ; Cy M`, with `m` for a release |
+
+Send only what `reporting` asked for; a flood of hover events to a program that
+asked for `Normal` is a bug you will see as latency.
+
+Two asymmetries the reference has and this engine reproduces. **`? 9` outranks
+the extended encodings**: with `? 9` and `? 1006` both set the report is the
+legacy form, because the X10 protocol predates SGR and has no SGR shape defined
+for it. And **setting any reporting mode clears the other three**, while
+unsetting clears only the one named; the same holds for the three encodings.
+
+The legacy encoding cannot express a coordinate past 223, which is what `? 1015`
+and `? 1006` each fix in their own way. The engine encodes what the program
+chose rather than what is best, because a terminal that silently upgrades an
+encoding is a terminal that breaks the program that chose it.
 
 ## Kitty keyboard flags and modifyOtherKeys
 

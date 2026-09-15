@@ -25,7 +25,7 @@ new variant is a patch release rather than a break.
 | [`ClipboardStore`] | `OSC 52` store, already base64-decoded and UTF-8 checked | decide whether a program may write that selection, then write it |
 | [`ClipboardLoad`] | `OSC 52` with a `?` payload | the engine has no clipboard: format and write the reply yourself, or refuse |
 | [`Reply`] | the terminal owes the program bytes: `DA1`, `DA2`, `DSR`, `DECRQM`, `XTVERSION`, `DECRPSS` | write the bytes to the process input verbatim, in arrival order |
-| [`ColorQuery`] | `OSC 4` / `10` / `11` / `12` with a `?` value | you own the palette, so you format the answer |
+| [`ColorQuery`] | `OSC 4` / `10` / `11` / `12` / `17` / `19` with a `?` value | you own the palette, so you format the answer |
 | [`ScreenCleared`] | `ED 2`, `ED 3` or `RIS`; never `ED 0` or `ED 1` | drop caches keyed to screen content, such as a rendered overlay |
 | [`Osc`] | an OSC number routed `Forward` or `BuiltinAndForward` | your own protocol; chapter 5 |
 | [`RowsScrolled`] | content moved between row ids | shift a cache keyed by row id instead of rebuilding it |
@@ -90,8 +90,10 @@ early, then cut to 64 bytes -- and `Terminal::config` reports the sanitised
 value, not what you passed.
 
 **`ColorQuery` is a question the engine cannot answer.** It holds only the
-override layer a program wrote with `OSC 4 / 10 / 11 / 12`; the theme underneath
-is yours. `ColorKey::query_prefix` gives the number the answer has to echo back,
+override layer a program wrote with `OSC 4 / 10 / 11 / 12 / 17 / 19`; the theme
+underneath is yours, including the two selection colours, which are a highlight
+the engine never draws. `ColorKey::query_prefix` gives the number the answer has
+to echo back,
 and the event carries the terminator the question used, because the answer must
 end the way the question did:
 

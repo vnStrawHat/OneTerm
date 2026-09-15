@@ -23,6 +23,7 @@ is dropped, truncated, or degraded to a documented fallback, and counted.
 | Scrollback rows | 1 000 000 hard, 10 000 by default | the oldest rows are trimmed |
 | Viewport | 1024 rows, 2048 columns | clamped by `Size::clamped`, which `Terminal::new` and `resize` call for you |
 | Grapheme arena | 65 536 entries, 1 048 576 chars | a sweep reclaims what no cell references |
+| Cross-chunk cluster carry, mode `? 2027` | 32 scalars | the cluster is not carried, a later `feed` starts a new one, and `FeedStats::dropped_cluster_carries` counts it once |
 | Shell marks tracked | 1024 | the oldest is released |
 | Live image placements | bounded | the oldest is released, and you get `GraphicReleased` |
 
@@ -99,6 +100,13 @@ What each one means:
   past the payload ceiling.
 - `hyperlink_table_exhausted` -- `OSC 8` links dropped because the hyperlink
   table was full. The text still renders; the link is simply not clickable.
+- `dropped_cluster_carries` -- grapheme clusters that grew past the engine's
+  32-scalar cross-chunk carry limit under mode `? 2027`, so a continuation
+  arriving in a later `feed` starts a cluster of its own. Counted **once per
+  over-long cluster, never once per scalar**: a stream that sends twenty
+  thousand more marks after crossing the limit still moves it by one, so the
+  number counts offending clusters and is not a rate. Zero for every
+  well-formed stream, and always zero while the mode is reset.
 - `grapheme_truncated` and `style_table_exhausted` -- reserved, and always `0`
   today. The interner and the style table count their own exhaustion internally
   and do not yet report it here. They are in the struct so that wiring them up
