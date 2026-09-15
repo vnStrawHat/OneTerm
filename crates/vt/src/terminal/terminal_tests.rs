@@ -1641,6 +1641,36 @@ fn unhandled_sequences_are_counted_not_echoed() {
     assert_eq!(stats.unhandled_sequences, 0);
 }
 
+/// `BUG-0058`: the intermediates are part of the DCS routing key. DECRQSS
+/// (`DCS $ q`) and XTGETTCAP (`DCS + q`) share the final byte `q` with Sixel,
+/// and clients such as tmux, neovim and kitty are documented to send the
+/// latter — routing on the final byte alone fed their payloads to the image
+/// decoder. This asserts the event batch as well; the wider routing suite is
+/// `verify_bug0058_tests.rs`.
+#[test]
+fn an_intermediate_dcs_q_is_not_sixel() {
+    for bytes in [&b"\x1bP$qm\x1b\\"[..], &b"\x1bP+q544e\x1b\\"[..]] {
+        let mut session = Session::new(10, 3);
+        let stats = session.feed(bytes);
+
+        assert!(
+            session.term.state.graphics.parser.is_none(),
+            "{} opened the Sixel decoder",
+            String::from_utf8_lossy(bytes)
+        );
+        assert_eq!(stats.unhandled_sequences, 1);
+        assert_eq!(stats.aborted_dcs, 0);
+        assert!(session.term.take_graphics().is_empty());
+
+        let events: Vec<&VtEvent> = session.batch.iter().collect();
+        assert!(
+            matches!(events.as_slice(), [VtEvent::Repaint]),
+            "{} produced {events:?}",
+            String::from_utf8_lossy(bytes)
+        );
+    }
+}
+
 #[test]
 fn a_bell_reaches_the_batch() {
     let mut session = Session::new(10, 3);
