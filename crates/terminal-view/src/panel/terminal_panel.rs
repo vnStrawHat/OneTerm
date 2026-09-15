@@ -43,36 +43,40 @@ pub(super) enum SeparatorRule {
     Dashed,
 }
 
-/// A menu separator that carries a label.
+/// A menu separator that carries a label, centred between two rules.
 ///
 /// `PopupMenu` has a plain `Separator` and a plain `Label` but nothing that is
-/// both, so the row is composed from a disabled element item: the label text
-/// followed by a rule that fills the rest of the row. Disabled keeps it out of
-/// hover and keyboard navigation, like the separator it stands in for. Colours
-/// come from the theme; the widths are the kit separator's own 2px, which is
-/// also what makes the dashes read as dashes.
+/// both, so the row is composed from a disabled element item: a rule, the label
+/// text, another rule. Disabled keeps it out of hover and keyboard navigation,
+/// like the separator it stands in for. Colours come from the theme; the rules
+/// are the kit separator's own 2px, which is also what makes the dashes read as
+/// dashes.
 fn labelled_separator(label: impl Into<SharedString>, rule: SeparatorRule) -> PopupMenuItem {
     let label = label.into();
     PopupMenuItem::element(move |_, cx| {
-        let line = div()
-            .flex_1()
-            .h(px(0.))
-            .border_t(px(2.))
-            .border_color(cx.theme().border);
+        let line = || {
+            let line = div()
+                .flex_1()
+                .h(px(0.))
+                .border_t(px(2.))
+                .border_color(cx.theme().border);
+            match rule {
+                SeparatorRule::Solid => line,
+                SeparatorRule::Dashed => line.border_dashed(),
+            }
+        };
         gpui_component::h_flex()
             .w_full()
             .items_center()
             .gap_2()
+            .child(line())
             .child(
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(label.clone()),
             )
-            .child(match rule {
-                SeparatorRule::Solid => line,
-                SeparatorRule::Dashed => line.border_dashed(),
-            })
+            .child(line())
     })
     .disabled(true)
 }
@@ -634,16 +638,8 @@ impl Panel for TerminalPanel {
             .ghost()
             .tab_stop(false)
             .tooltip("New Terminal")
-            .dropdown_menu(|menu, _, cx| {
-                // The saved-session section is as long as the user's
-                // `ssh_session.json`, so the popup must be able to scroll: the
-                // kit applies its height cap (half the window, at most 450px)
-                // only when `scrollable` is set, and without it a long list
-                // runs off the bottom of the window unreachable by mouse *and*
-                // by keyboard (`scroll_to_item` is a no-op outside a scrolling
-                // container). This menu has no submenus, which is the only
-                // thing `scrollable` gives up.
-                let mut menu = menu.scrollable(true);
+            .dropdown_menu(|menu, window, cx| {
+                let mut menu = menu;
                 // Platform-specific shells.
                 #[cfg(windows)]
                 {
@@ -671,13 +667,17 @@ impl Panel for TerminalPanel {
                 let commands = oneterm_state::commands::commands(cx);
                 menu = menu.item(labelled_separator("SSH Sessions", SeparatorRule::Solid));
                 let saved = (commands.saved_ssh_sessions)(cx);
+                let mut session_rows = 0;
                 if saved.is_empty() {
                     menu = menu.item(PopupMenuItem::new("No saved sessions").disabled(true));
+                    session_rows += 1;
                 }
                 for (group, rows) in saved {
                     if !group.is_empty() {
                         menu = menu.item(labelled_separator(group, SeparatorRule::Dashed));
+                        session_rows += 1;
                     }
+                    session_rows += rows.len();
                     for (id, name) in rows {
                         let open = commands.open_saved_ssh_session;
                         menu = menu.item(
@@ -687,8 +687,31 @@ impl Panel for TerminalPanel {
                     }
                 }
 
-                menu.separator()
-                    .menu("New SSH Session", Box::new(NewSession))
+                menu = menu
+                    .separator()
+                    .menu("New SSH Session", Box::new(NewSession));
+
+                // A saved list can be longer than the window, and the kit
+                // applies its height cap (half the window, at most 450px) only
+                // when `scrollable` is set: without it a long list runs off the
+                // bottom, unreachable by mouse *and* by keyboard
+                // (`scroll_to_item` is a no-op outside a scrolling container).
+                // But a scrollable menu also carries a scrollbar, which this
+                // app's theme keeps permanently visible, so scrolling is turned
+                // on only when the rows really cannot fit: the everyday menu
+                // stays free of the bar and a long one stays reachable.
+                //
+                // ponytail: the row height is the kit's own 26px item plus its
+                // 2px gap, estimated rather than measured, so a menu within a
+                // row of the cap can guess wrong by one row. Measuring would
+                // need the popup's laid-out bounds, which do not exist while it
+                // is being built.
+                const ROW_HEIGHT: f32 = 28.;
+                // 3 shells + the "SSH Sessions" heading + the closing separator
+                // and "New SSH Session".
+                const FIXED_ROWS: usize = 6;
+                let cap = (window.window_bounds().get_bounds().size.height * 0.5).min(px(450.));
+                menu.scrollable(px((FIXED_ROWS + session_rows) as f32 * ROW_HEIGHT) > cap)
             })
             .anchor(Anchor::TopRight);
         Some(btn)
