@@ -11,7 +11,7 @@ Created: 2026-09-15
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -68,42 +68,42 @@ for the same reason and would otherwise be the identical bug one release later.
 
 ## Acceptance
 
-- [ ] **The claim is true.** One integration test drives a real `Terminal`: feed `CSI > 1 u`,
+- [x] **The claim is true.** One integration test drives a real `Terminal`: feed `CSI > 1 u`,
       assert `CSI ? u` answers `CSI ? 1 u`, **and** assert `Terminal::encode_key_event` for
       `Escape` returns `CSI 27 u`. This is the test the evaluation's gap 2 would have failed. It
       fails on `main` and passes here; both outputs attached.
-- [ ] **Every row of the specification's own worked examples passes, byte for byte.** The table in
+- [x] **Every row of the specification's own worked examples passes, byte for byte.** The table in
       [`low-level-design/kitty-keyboard.md`](low-level-design/kitty-keyboard.md) section
       "Verification" is the mandatory minimum, and each row's test cites the specification section
       it came from. A row that cannot be made to pass is a finding recorded in Evidence with the
       reason, never a quietly dropped row.
-- [ ] **Nothing changes when nothing is negotiated.** With `keyboard_flags` empty and
+- [x] **Nothing changes when nothing is negotiated.** With `keyboard_flags` empty and
       `modify_other_keys == 0`, `encode_key_event` returns exactly what `encode_key` returns on
       `main`, across `US-0099`'s full cross-product: 75 `KeySpec` values x 8 `KeyMods` x 1 280 mode
       snapshots. **768 000 comparisons, zero mismatches** is the bar, and the count is reported.
       A sample is not acceptance.
-- [ ] **The whole flag space is safe.** All 32 flag values x 75 keys x 8 modifier sets x 3 event
+- [x] **The whole flag space is safe.** All 32 flag values x 75 keys x 8 modifier sets x 3 event
       kinds: no panic, and every non-`None` result parses back as a well-formed `CSI ... u`,
       `CSI ... ~`, `CSI ... <letter>` or legacy byte string, by a round-trip parser living in the
       test module and not in the crate.
-- [ ] **`Enter`, `Tab` and `Backspace` still work in a shell after a crashed program leaves the
+- [x] **`Enter`, `Tab` and `Backspace` still work in a shell after a crashed program leaves the
       flags set.** With `DISAMBIGUATE_ESC_CODES` alone they return `0x0d`, `0x09` and `0x7f`
       unchanged -- the specification's explicit exception, and the one that decides whether a user
       can type `reset`. Tested directly, not inferred.
-- [ ] **A release event with flags empty returns `None`**, and the embedder-visible contract for
+- [x] **A release event with flags empty returns `None`**, and the embedder-visible contract for
       `None` is documented.
-- [ ] **Hostile input does not panic.** `US-0099`'s hostile set is re-run through the new entry
+- [x] **Hostile input does not panic.** `US-0099`'s hostile set is re-run through the new entry
       point: a 4-byte scalar, `U+10FFFF`, `U+FEFF`, a combining pair, `NUL`, the empty string, a
       100 000-character payload, and a text field containing a C0 byte (which must drop the text
       field rather than emit it).
-- [ ] **The corpus does not move.** The 46-recording parity corpus replays byte-identically. The
+- [x] **The corpus does not move.** The 46-recording parity corpus replays byte-identically. The
       encoder is not on the print path, so any difference is a bug in this packet.
-- [ ] **Guide chapter 6 no longer documents the gap**, and `grep -n "does not yet honour"
+- [x] **Guide chapter 6 no longer documents the gap**, and `grep -n "does not yet honour"
       crates/vt/docs/guide/06-input.md` returns nothing.
-- [ ] **Guide chapter 11's "Known gaps" table loses nothing about kitty keyboard**, because it
+- [x] **Guide chapter 11's "Known gaps" table loses nothing about kitty keyboard**, because it
       never listed this -- chapter 6 did. Checked, and the check recorded, so the two chapters do
       not drift apart.
-- [ ] **The surface diff is exactly the planned additions**: `KeyEvent`, `KeyEventKind`,
+- [x] **The surface diff is exactly the planned additions**: `KeyEvent`, `KeyEventKind`,
       `encode_key_event`, `Terminal::encode_key_event`, two `ModeSnapshot` fields. Nothing removed.
 - [ ] **The budget holds**: `crates/vt` +430 production, tests +400, measured with
       `git diff --stat` and attached.
@@ -171,18 +171,18 @@ or `crates/vt/src/` still says the encoder ignores the flags.
 
 ## Plan
 
-- [ ] Add `keyboard_flags` and `modify_other_keys` to `ModeSnapshot`, plus `#[non_exhaustive]`;
+- [x] Add `keyboard_flags` and `modify_other_keys` to `ModeSnapshot`, plus `#[non_exhaustive]`;
       populate them in `Terminal::mode_snapshot`.
-- [ ] Add `KeyEventKind`, `KeyEvent` and `KeyEvent::new`.
-- [ ] Write `crates/vt/src/input/kitty.rs`: the `CSI u` writer, the functional-key table, the
+- [x] Add `KeyEventKind`, `KeyEvent` and `KeyEvent::new`.
+- [x] Write `crates/vt/src/input/kitty.rs`: the `CSI u` writer, the functional-key table, the
       modifier and event-type fields, the alternate-key and text sub-fields.
-- [ ] Write the `modifyOtherKeys` arm.
-- [ ] Write `encode_key_event` as the three-rung ladder; make `encode_key` delegate.
-- [ ] Add `Terminal::encode_key_event`.
-- [ ] Port `US-0099`'s generator for the equivalence run; run it and report the comparison count.
-- [ ] Write the specification-example table tests, each citing its section.
-- [ ] Rewrite guide chapter 6; amend chapter 12; CHANGELOG; README sentence; the IN-0038 pointer.
-- [ ] Regenerate both surface files.
+- [x] Write the `modifyOtherKeys` arm.
+- [x] Write `encode_key_event` as the three-rung ladder; make `encode_key` delegate.
+- [x] Add `Terminal::encode_key_event`.
+- [x] Port `US-0099`'s generator for the equivalence run; run it and report the comparison count.
+- [x] Write the specification-example table tests, each citing its section.
+- [x] Rewrite guide chapter 6; amend chapter 12; CHANGELOG; README sentence; the IN-0038 pointer.
+- [x] Regenerate both surface files.
 
 ## Decisions
 
@@ -211,19 +211,111 @@ the CHANGELOG and guide chapter 12, which are the documents a consumer actually 
 - The manual Windows walk, local shell and SSH.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record: the equivalence comparison count and mismatch count; the
-specification-example table results row by row; the failing-on-`main` and passing-here integration
-test; `git diff --stat` against budget; the surface diff; the corpus replay result; the Windows
-walk transcript.
+Branch `feat/vt-kitty-keyboard`, from `main` at `c5ddad59`.
+
+**The claim is true.** `crates/vt/tests/verify_us0105.rs::a_negotiated_protocol_is_actually_spoken`
+drives a real `Terminal`: it feeds `CSI > 1 u`, asserts `CSI ? u` answers `CSI ? 1 u`, and asserts
+`Terminal::encode_key_event(Escape)` returns `CSI 27 u`. The third assertion is the one that fails
+on `main`, where the same terminal answers `CSI ? 1 u` and then sends `0x1b`. Popping the flag
+takes the claim back with it, which the same test checks.
+
+**The specification table.** `crates/vt/src/input/kitty_tests.rs::specification_worked_examples`
+is seventeen rows, each labelled with the specification section it came from, all passing. Beyond
+the mandatory list it adds the un-shifted-key-code rule (`ctrl+shift+a` is `97`, never `65`), the
+repeat event type, and `PageUp` keeping its `CSI 5 ~` form.
+
+**One mandatory row could not be made to pass and is recorded rather than dropped:**
+`alt+a -> CSI 0 ; ; 229 u`. Read in full, the specification's own prose for that row says the
+**OS consumed the alt modifier to produce the text and the terminal received a pure text event
+with no key information at all** -- which is why the key code is `0` and the modifier field empty.
+`input::KeySpec` has no way to say "text with no key": `Character("")` is spoken for (the legacy
+rung returns an empty write, which this packet did not change), and adding a variant is outside
+this packet's scope. `KeySpec` is `#[non_exhaustive]`, so a `Text` variant is a patch release
+whenever an embedder can produce one. Until then an IME-composed event reaches the encoder as the
+text it produced, and is encoded with that text's own key code.
+
+**Nothing changes when nothing is negotiated.**
+`crates/vt/tests/verify_us0099_equiv.rs::encode_key_is_byte_identical_to_main`, the frozen-copy
+harness, now runs both entry points against the frozen `0558fa2` oracle:
+
+```text
+encode_key cases compared: 3072000 (specs 75 x mods 8 x snapshots 2560)
+test encode_key_is_byte_identical_to_main ... ok
+```
+
+**3 072 000 comparisons, zero mismatches** -- 1 536 000 through `encode_key` and 1 536 000 through
+`encode_key_event`, which is the doubled count. Every snapshot asserts `keyboard_flags.is_empty()`
+and `modify_other_keys == 0` before it is used, so the run is the equivalence claim and not a
+sample.
+
+**The whole flag space is safe.** `verify_us0105.rs::the_whole_flag_space_is_safe`: 32 flag values
+x 2 `app_cursor` values x 75 keys x 8 modifier sets x 3 event kinds = **115 200 cases, 93 808 of
+them producing bytes**, no panic, and every non-`None` result parsed back by a round-trip parser
+living in the test file. The parser accepts a legacy byte string, `SS3`, and a CSI whose final byte
+is `u`, `~` or a letter and whose parameters are digits, `;` and `:` with no trailing empty
+sub-field.
+
+**The flags matrix covered**, by name:
+
+| Flag | Where it is proved |
+| --- | --- |
+| `DISAMBIGUATE_ESC_CODES` | `specification_worked_examples` rows 1, 5-9; `disambiguate_covers_only_the_keys_that_produce_no_text`; `enter_tab_and_backspace_survive_a_crashed_program` |
+| `REPORT_EVENT_TYPES` | the repeat and release rows; `the_three_legacy_keys_have_no_release_without_report_all`; `a_release_is_silent_until_it_is_asked_for` |
+| `REPORT_ALTERNATE_KEYS` | the three alternate-key rows, including the empty sub-field and the shift-only rule; `alternate_keys_and_text_are_inert_on_their_own` |
+| `REPORT_ALL_KEYS_AS_ESC` | rows 2-4 and 10-13; `an_empty_character_has_no_kitty_encoding` |
+| `REPORT_ASSOCIATED_TEXT` | the `CSI 97 ; 2 ; 65 u` row; `the_text_field_is_dropped_rather_than_sent_unsafely`; the inert-without-`ALL_ESC` case |
+| all 32 combinations | `the_whole_flag_space_is_safe`, and `kitty_flags_swap_with_alt_screen_and_reach_the_bytes` over a real `Terminal` |
+| `modifyOtherKeys` 0 / 1 / 2 | `modify_other_keys_levels`; `modify_other_keys_reaches_the_bytes` (the inverted `US-0099` test, same four chords); `kitty_wins_over_modify_other_keys` |
+
+**`Enter`, `Tab` and `Backspace` after a crash.** `enter_tab_and_backspace_survive_a_crashed_program`
+asserts `0x0d`, `0x09` and `0x7f` under three flag sets that include `DISAMBIGUATE_ESC_CODES`;
+`the_three_legacy_keys_have_no_release_without_report_all` asserts the release half.
+
+**Hostile input.** `verify_us0105.rs::hostile_input_does_not_panic` runs the `US-0099` payloads --
+a 4-byte scalar, `U+10FFFF`, `U+FEFF`, a combining pair, `NUL`, the empty string and a
+100 000-character payload -- through all 32 flag values and three `modifyOtherKeys` levels, each
+with a text field carrying a C0 byte. The text field is dropped in every case, and any escape
+sequence the encoder *builds* stays under 1 KiB. A `Character` payload the embedder hands over on
+the legacy rung is still written through unchanged, which is pre-existing and unchanged.
+
+**The corpus does not move.** `cargo test -p oneterm-tools --test corpus_check`: 2 passed.
+
+**The surface diff is exactly the planned additions**, nothing removed: two `ModeSnapshot` fields,
+`Terminal::encode_key_event`, `input::KeyEvent` with its seven items, `input::KeyEventKind` with
+three variants, and `input::encode_key_event`. Sixteen lines added to each snapshot; the Unix file
+was derived from the Windows one by replaying the same insertions at the mapped line numbers, and
+`--diff-platforms` reports **"the delta is 6 lines, all inside `oneterm_vt::pty`"**.
+
+**The documentation greps.** `grep -rn "does not yet honour" crates/vt/` returns nothing. Guide
+chapter 11's "Known gaps" table never listed kitty keyboard -- checked, four rows, all about
+`DECRQCRA`, `DECRQSS`, `XTGETTCAP` and `? 2027` -- so it lost nothing; chapter 11's "Supported"
+section gained one sentence saying the two keyboard protocols are encoded and not only tracked, so
+the two chapters cannot drift apart silently.
+
+**The budget did not hold, and the overrun is reported rather than absorbed.** `git diff --numstat`
+against `main`:
+
+| | Insertions | Deletions | Net | Budget |
+| --- | --- | --- | --- | --- |
+| `crates/vt` production | 523 | 9 | **+514** | +430 |
+| `crates/vt` tests | 830 | 40 | **+790** | +400 |
+
+Production is 84 lines over. `crates/vt/src/input/kitty.rs` is 348 lines of which **104 are
+comment lines and 22 blank**, so the executable half is about 222; the thirty-eight-arm
+`named_form` table is 45 of those and is irreducible. The overrun is documentation and the key
+table, and cutting either to reach a number would be the wrong trade. Tests are 390 over because
+the acceptance criteria ask for three separate exhaustive runs (the specification table, the
+115 200-case flag cross-product and the hostile matrix) plus the round-trip parser those runs
+need; the estimate was low, not the tests excessive.
 
 Gaps to state rather than discover:
 
@@ -238,9 +330,105 @@ Gaps to state rather than discover:
   weakest link in the proof and it should be said so.
 - **The legacy-versus-kitty disagreement on `Alt+Insert`, `Alt+Tab` and `Alt+F5`** is deliberate
   and recorded, and it will look like a bug to the next reader who finds it without this note.
+  Guide chapter 6 names it with `Alt+F5` as the worked case.
+
+- **`F13`-`F24` deviate from the specification.** The design's own table keeps them on xterm's
+  shifted `F1`-`F12` forms (`CSI 1 ; 2 P`, `CSI 15 ; 2 ~`, ...), while the specification gives them
+  private-use codes `57376`-`57387`. A kitty-protocol program will read `CSI 15 ; 2 ~` as
+  `shift+F5` rather than `F17`. This matches what the legacy path already sends, so it is not a
+  regression, but it is a real deviation and guide chapter 6 names it. Discovered while reading the
+  specification's functional key table, which also shows `F3` has no letter form there
+  (`13 ~` only) while this encoder emits `CSI 1 ; <mod> R`, as the design's table specifies.
+
+- **The un-shifted key code is the lower-cased payload.** The protocol wants the un-shifted code
+  point; for letters lower-casing gives it, for shifted punctuation nothing can without a platform
+  key map, so `shift+4` reports `$` rather than `4`. An embedder that knows better supplies
+  `base_layout`. Named in the guide.
+
+- **The manual Windows walk was not run, so `Platform proof` and `E2E proof` stay unticked.**
+  A GUI walk means launching `oneterm.exe`, and the maintainer runs their coding agent inside this
+  application; a second instance is not something to start unasked. The closest evidence that does
+  exist is `a_negotiated_protocol_is_actually_spoken`, which drives a real `Terminal` end to end
+  but not a real pseudo-console and not the view. **This is the weakest link in the proof after the
+  reference-implementation gap, and the packet should not be accepted without the walk.**
+
+- **`crates/terminal-view` does not yet deliver release or repeat events**, which was out of scope
+  and is confirmed rather than assumed: GPUI *can* supply both -- `gpui::KeyDownEvent` carries
+  `is_held` (the repeat) and `gpui::KeyUpEvent` exists -- but `TerminalView` registers only
+  `on_key_down`, and `crates/terminal-view/src/input/keys.rs` maps a `Keystroke` to
+  `(KeySpec, KeyMods)` with no event kind. So today every event the application delivers is a
+  press, `REPORT_EVENT_TYPES` never produces a repeat or release byte in OneTerm itself, and
+  `REPORT_ALTERNATE_KEYS` and `REPORT_ASSOCIATED_TEXT` get no platform values either. The engine
+  side is complete and tested; adopting it in the view is a separate packet with a separate claim.
 
 ## Handoff
 
 Independent of `US-0106` and `US-0107`; all three sit behind `BUG-0059` only. Next owner: whoever
 takes the remaining two. If `US-0106` lands first, both regenerate the surface files and the second
 one rebases its snapshot -- a mechanical conflict, not a semantic one.
+
+`BUG-0059` touches `crates/vt/src/lib.rs` and both surface snapshots as well, so the snapshot
+conflict is the same shape there and is resolved by regenerating on Windows and re-running the
+mirror step in the Evidence section above.
+
+Two things a next owner should pick up, neither of which belongs in this packet:
+
+1. the manual Windows walk, which is the one unticked acceptance item that is not a measurement;
+2. `crates/terminal-view` delivering release and repeat events, so OneTerm itself can use
+   `REPORT_EVENT_TYPES` -- the engine is ready and the platform has the data.
+
+### Harness row
+
+This worktree has no harness binary, so the `story` row is written here rather than inserted.
+The schema is the real one in `harness.db` (`intake` for `IN-0039` is `id = 44`).
+
+```python
+#!/usr/bin/env python3
+"""Insert the US-0105 story row. Point DB at the harness database and run once."""
+import sqlite3
+from datetime import datetime, timezone
+
+DB = "<path to harness.db>"
+
+ROW = dict(
+    id="US-0105",
+    title="The key encoder honours the kitty keyboard flags it already answers",
+    created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    risk_lane="high_risk",
+    contract_doc=(
+        "docs/spec-intakes/IN-0039-vt-gaps-and-publish/"
+        "low-level-design/kitty-keyboard.md"
+    ),
+    packet_doc=(
+        "docs/spec-intakes/IN-0039-vt-gaps-and-publish/"
+        "US-0105-kitty-keyboard-encoder.md"
+    ),
+    status="implemented",
+    unit_proof=1,
+    integration_proof=1,
+    e2e_proof=0,
+    platform_proof=0,
+    evidence=(
+        "3072000 frozen-copy comparisons, 0 mismatches; 115200-case flag "
+        "cross-product, no panic and nothing malformed; 17 specification rows; "
+        "corpus_check 2 passed; surface +16 lines per platform, delta between "
+        "the two files still 6 pty lines."
+    ),
+    verify_command="pwsh scripts/ci-local.ps1 -Full",
+    last_verified_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    last_verified_result="pass",
+    notes=(
+        "Platform and E2E proof are 0 on purpose: the manual Windows walk was "
+        "not run, because it means launching a second oneterm.exe on a machine "
+        "whose owner runs their agent inside the first. Budget overrun reported "
+        "in the packet: production +514 against +430, tests +790 against +400."
+    ),
+    intake_id=44,
+)
+
+with sqlite3.connect(DB) as db:
+    columns = ", ".join(ROW)
+    placeholders = ", ".join("?" for _ in ROW)
+    db.execute(f"INSERT INTO story ({columns}) VALUES ({placeholders})", tuple(ROW.values()))
+print("inserted US-0105")
+```

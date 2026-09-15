@@ -219,8 +219,17 @@ keeps it (rule 4 above) and only the code-point form is used for keys that have 
 | `PageUp` / `PageDown` | `CSI 5 ; <mod> ~` / `CSI 6 ; <mod> ~` | `CSI 5 ~` / `CSI 6 ~` |
 | `F1`-`F4` | `CSI 1 ; <mod> P` / `Q` / `R` / `S` | `SS3 P` / `Q` / `R` / `S` |
 | `F5`-`F12` | `CSI 15 ; <mod> ~`, `17`, `18`, `19`, `20`, `21`, `23`, `24` | the same without the modifier |
-| `F13`-`F24` | the same `~` numbers with the shift modifier, as today | as today |
+| `F13`-`F24` | the same `~` and letter forms with the shift modifier, as today | as today |
 | `KeySpec::Character(s)` | `CSI <code point of the first scalar> u` | the character itself, or the ctrl table |
+
+**Two deviations from the specification's own table, found while implementing and recorded here
+rather than quietly shipped.** The specification gives `F13`-`F24` the private-use codes
+`57376`-`57387`, and gives `F3` only the `13 ~` form where `F1`, `F2` and `F4` also have letter
+forms. This design keeps `F13`-`F24` on xterm's shifted `F1`-`F12` forms and gives `F3` the
+`CSI 1 ; <mod> R` form, in both cases because that is what the legacy path already sends and the
+two rungs agreeing matters more here than the private-use spelling. A kitty-protocol program will
+therefore read `CSI 15 ; 2 ~` as `shift+F5` rather than `F17` -- which is exactly what it reads
+today, so nothing regresses. Guide chapter 6 names it.
 
 **Not representable, and therefore never emitted:** the keypad keys (`57399`-`57415`), the lock and
 system keys (`57358`-`57363`), the media keys (`57428`+) and the modifier keys themselves
@@ -309,7 +318,7 @@ becomes the assertion that the level *does* reach the bytes, with the four chord
       | Input | Expected | Source |
       | --- | --- | --- |
       | `shift+a`, `REPORT_ALL_KEYS_AS_ESC` and `REPORT_ASSOCIATED_TEXT` | `CSI 97 ; 2 ; 65 u` | "Legacy text keys" |
-      | `alt+a`, same flags, text `a-ring` | `CSI 0 ; ; 229 u` | same |
+      | `alt+a`, same flags, text `a-ring` | `CSI 0 ; ; 229 u` | same. **Not reachable, recorded as a finding in `US-0105`:** the specification's prose for this row says the OS consumed the modifier and the terminal got a pure text event with *no key information*, which is why the code is `0`. `KeySpec` cannot say "text with no key"; it is `#[non_exhaustive]`, so a `Text` variant is a patch release the day an embedder produces one |
       | `ctrl+space`, legacy | `0x00` | "Legacy ctrl mapping" |
       | `Escape`, `DISAMBIGUATE_ESC_CODES` | `CSI 27 u` | "Functional key definitions" |
       | `Enter` / `Tab` / `Backspace`, `DISAMBIGUATE_ESC_CODES` | `0x0d` / `0x09` / `0x7f` -- unchanged | the explicit exception in "Disambiguate escape codes" |

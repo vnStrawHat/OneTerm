@@ -64,7 +64,9 @@ dance from `crates/terminal-view/src/input/keys.rs`.
 
 `KeyboardFlags` (Kitty keyboard protocol state) already lives in `crates/vt/src/terminal/mode.rs`
 and is *not* consumed by `encode_key` today. It stays where it is; wiring the two together is a
-future packet and is called out as out of scope in `US-0099` so it does not sprawl.
+future packet and is called out as out of scope in `US-0099` so it does not sprawl. **That future
+packet arrived:** `IN-0039`/`US-0105` wired the two together, and the flags now reach the bytes
+through two new `ModeSnapshot` fields.
 
 ### `search` module
 

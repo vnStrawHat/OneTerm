@@ -44,7 +44,8 @@ assert_eq!(
 non-ASCII character, or multi-codepoint text -- and the event should be dropped
 rather than sent as something else.
 
-The rules the encoder follows, in full:
+The legacy rules the encoder follows when no program has asked for anything
+richer -- which is the common case, and the one the section below extends:
 
 - a character with `ctrl` goes through the xterm control table; with `alt` it is
   prefixed by `ESC`, and `Ctrl+Alt+a` is the `ESC` prefix on the control byte;
@@ -55,9 +56,10 @@ The rules the encoder follows, in full:
   <final>` otherwise;
 - `Home` and `End` follow the same split, with finals `H` and `F`.
 
-The only mode the key encoder reads is `app_cursor`, the terminal's `DECCKM`
-state. Programs such as vim, less and man set it, and sending `CSI A` to one of
-them when it asked for `ESC O A` is the classic "arrow keys do nothing" bug.
+On that path the only mode the key encoder reads is `app_cursor`, the terminal's
+`DECCKM` state. Programs such as vim, less and man set it, and sending `CSI A`
+to one of them when it asked for `ESC O A` is the classic "arrow keys do
+nothing" bug.
 
 ## The by-reference and by-value asymmetry
 
@@ -157,8 +159,10 @@ encoding is a terminal that breaks the program that chose it.
 
 ## Kitty keyboard flags and modifyOtherKeys
 
-The engine tracks the two protocols that let a program ask for unambiguous key
-reporting, and reports their state:
+Two protocols let a program ask for unambiguous key reporting, and the engine
+both tracks them and **encodes them**. A program that negotiates one and is told
+"yes" gets the bytes that protocol defines; there is nothing for you to
+implement on top.
 
 - `Terminal::keyboard_flags()` is the live kitty keyboard flag set, which the
   program pushes and pops with `CSI > flags u` and `CSI < u`. The flags are
@@ -166,12 +170,112 @@ reporting, and reports their state:
   `REPORT_ALL_KEYS_AS_ESC` and `REPORT_ASSOCIATED_TEXT`;
 - `Terminal::modify_other_keys()` is the `CSI > 4 ; Ps m` level, `0`, `1` or `2`.
 
-**`encode_key` does not yet honour either.** It reads `app_cursor` and nothing
-else, so the bytes it returns are the legacy encoding regardless of what the
-program asked for. The state is published so that an embedder who needs the
-richer protocols can encode them itself from the flags; folding them into
-`encode_key` is a change to what the function returns for a given input, and
-that is a versioned change rather than a silent one.
+Both reach the bytes through `ModeSnapshot`, so `encode_key` already honours
+them. **The bytes it returns therefore change once a program has negotiated
+either protocol** -- that is the point -- and with both at their defaults they
+are the legacy encoding above, byte for byte.
 
-Read the two accessors, and if both report their default -- empty flags and
-level `0` -- `encode_key` is the whole answer.
+```rust
+use oneterm_vt::input::{KeyEvent, KeyMods, KeySpec, NamedKey};
+use oneterm_vt::{Config, EventBatch, Size, Terminal};
+use std::time::Instant;
+
+let mut term = Terminal::new(Size { rows: 24, cols: 80 }, Config::default());
+let mut batch = EventBatch::new();
+let escape = KeySpec::Named(NamedKey::Escape);
+
+assert_eq!(term.encode_key(&escape, KeyMods::default()).as_deref(), Some(b"\x1b".as_slice()));
+
+// The program pushes `DISAMBIGUATE_ESC_CODES` and Escape stops being ambiguous
+// with the start of an escape sequence.
+term.feed(b"\x1b[>1u", &mut batch, Instant::now());
+assert_eq!(
+    term.encode_key(&escape, KeyMods::default()).as_deref(),
+    Some(b"\x1b[27u".as_slice())
+);
+```
+
+### The decision ladder
+
+`encode_key_event` picks exactly one encoding, and the first rung that applies
+wins:
+
+1. a release event with no `REPORT_EVENT_TYPES` to ask for it → `None`;
+2. any kitty flag that applies to this key → the kitty form;
+3. a non-zero `modifyOtherKeys` level and a modified "other" key →
+   `CSI 27 ; modifier ; code ~`;
+4. otherwise the legacy table.
+
+Rung 2 comes before rung 3 because the kitty flags are the superseding
+negotiation: a program that pushed flags *and* set `modifyOtherKeys` gets kitty.
+Once rung 2 applies, `app_cursor` is not read at all -- an unmodified arrow
+under `DISAMBIGUATE_ESC_CODES` is `CSI A` and never `ESC O A`, even in
+application cursor key mode, because the kitty form is not the cursor-key form.
+
+Which flag makes rung 2 apply:
+
+| Flag | Applies to | Does not apply to |
+| --- | --- | --- |
+| `DISAMBIGUATE_ESC_CODES` | `Escape`, every named key, and any character chord with ctrl or alt -- every event that generates no text | **`Enter`, `Tab`, `Backspace`**, the specification's own exception, so that you can still type `reset` after a program crashes with the flags set |
+| `REPORT_EVENT_TYPES` | nothing on its own; it adds the `:event-type` sub-field and turns a release from "no bytes" into bytes | `Enter`, `Tab` and `Backspace` still send no release unless `REPORT_ALL_KEYS_AS_ESC` is set too |
+| `REPORT_ALTERNATE_KEYS` | nothing on its own; it adds the `:shifted:base` sub-fields to a form another flag already chose | -- |
+| `REPORT_ALL_KEYS_AS_ESC` | **every** key, `Enter`, `Tab` and `Backspace` included. Text is no longer sent as text | -- |
+| `REPORT_ASSOCIATED_TEXT` | nothing on its own; it adds the trailing `;text-codepoints` field. The specification calls it undefined without `REPORT_ALL_KEYS_AS_ESC`, and this engine treats it as inert there rather than guessing | -- |
+
+### The richer entry point
+
+`KeyEvent` carries what the flags can report and `encode_key` cannot express: a
+release, a repeat, the shifted and base-layout keys, and the text the event
+would insert. Build it with `KeyEvent::new` and fill in what your platform
+knows; a field left `None` omits its sub-field, which the protocol allows.
+
+```rust
+use oneterm_vt::input::{KeyEvent, KeyEventKind, KeyMods, KeySpec, encode_key_event};
+use oneterm_vt::{Config, EventBatch, Size, Terminal};
+use std::time::Instant;
+
+let mut term = Terminal::new(Size { rows: 24, cols: 80 }, Config::default());
+let mut batch = EventBatch::new();
+// Report event types, and report every key as an escape code.
+term.feed(b"\x1b[>10u", &mut batch, Instant::now());
+
+let mut event = KeyEvent::new(KeySpec::Character("a".into()), KeyMods::default());
+event.kind = KeyEventKind::Release;
+assert_eq!(
+    encode_key_event(&event, &term.mode_snapshot()).as_deref(),
+    Some(b"\x1b[97;1:3u".as_slice())
+);
+```
+
+`None` from either function means the event sends nothing, and you drop it: a
+release nobody asked to hear about, a key with no code point, or a chord with no
+encoding at all.
+
+### What this engine does not encode
+
+Four ceilings, stated rather than discovered:
+
+- **Modifier values `1` through `8` only.** `KeyMods` has shift, ctrl and alt.
+  The protocol also defines super, hyper, meta, caps lock and num lock, and
+  nothing here can supply them. `KeyMods` stays exhaustive, so the compiler
+  will tell you the day it grows.
+- **The private-use functional keys are not emitted.** `NamedKey` cannot name
+  the keypad (`57399`-`57415`), the lock and system keys (`57358`-`57363`), the
+  media keys (`57428`+) or the modifier keys themselves (`57441`+), so under
+  `REPORT_ALL_KEYS_AS_ESC` a `Super` press has nothing to be delivered as.
+  `NamedKey` is `#[non_exhaustive]`, so adding them is a patch release.
+- **`F13`-`F24` keep xterm's shifted `F1`-`F12` forms** (`CSI 1 ; 2 P`,
+  `CSI 15 ; 2 ~`, ...) rather than the specification's `57376`-`57387`, because
+  that is what the legacy path already sends and the two paths agreeing matters
+  more here than the private-use spelling.
+- **The un-shifted key code is the lower-cased text.** The protocol wants the
+  un-shifted code point (`ctrl+shift+a` is `97`, never `65`) and gets it for
+  letters; shifted punctuation cannot be un-shifted without a platform key map,
+  so `shift+4` reports `$`. Supply `base_layout` when your platform knows
+  better.
+
+And one disagreement between the two rungs, deliberate and recorded: the legacy
+encoder ignores `alt` on `Insert`, `Tab` and `F1`-`F24`, which is a defect
+predating this. The legacy rung keeps that behaviour byte for byte; the kitty
+rung does not have it, because there the modifier is a field rather than a table
+lookup. So `Alt+F5` is `CSI 15 ~` on rung 4 and `CSI 15 ; 3 ~` on rung 2.
