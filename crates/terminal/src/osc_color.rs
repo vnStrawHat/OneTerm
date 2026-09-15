@@ -89,6 +89,11 @@ pub(crate) fn default_color_for_key(key: ColorKey, defaults: &DefaultColors) -> 
         // rather than falling through to "no reply".
         ColorKey::DimForeground => defaults.foreground,
         ColorKey::Dim(index) => defaults.ansi.map(|ansi| ansi[usize::from(index & 7)]),
+        // The theme owns no selection pair the engine can see, so `OSC 17 ?`
+        // and `OSC 19 ?` answer with the colours a selection is drawn from
+        // rather than falling through to "no reply".
+        ColorKey::SelectionBackground => defaults.background,
+        ColorKey::SelectionForeground => defaults.foreground,
     }
 }
 

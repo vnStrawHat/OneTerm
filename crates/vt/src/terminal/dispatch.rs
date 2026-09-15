@@ -484,6 +484,10 @@ impl Handler<'_> {
                 let version = self.product_version_number();
                 self.reply(&format!("\x1b[>0;{version};1c"));
             }
+            // DA3 answers DECRPTUI: a two-hex-digit manufacturing site and a
+            // six-hex-digit unit number. The engine has neither, and xterm
+            // reports all zeroes in exactly that case, so it does too.
+            Some(b'=') => self.reply(DEVICE_UNIT_ID),
             _ => self.unhandled(),
         }
     }
@@ -785,6 +789,16 @@ const ENGINE_PRODUCT_NAME: &str = concat!("oneterm-vt(", env!("CARGO_PKG_VERSION
 
 /// The longest product name the terminal will report, in bytes.
 pub(super) const PRODUCT_NAME_MAX: usize = 64;
+
+/// What `DA3` (`CSI = c`) answers: `DCS ! | <8 hex digits> ST`.
+///
+/// The eight digits are DECRPTUI's two-digit manufacturing site and six-digit
+/// unit number. A software terminal has neither; xterm reports all zeroes and
+/// programs that ask only ever check that *an* answer arrived, so the engine
+/// reports the same fixed id rather than inventing one per embedder — a serial
+/// number derived from the product name would be a fingerprint, not an
+/// identity.
+const DEVICE_UNIT_ID: &str = "\x1bP!|00000000\x1b\\";
 
 /// The embedder's product name, made safe to splice into a reply.
 ///
@@ -1409,6 +1423,8 @@ impl Handler<'_> {
             }
             9 => self.osc_progress_or_notification(params, truncated),
             10..=12 => self.osc_dynamic_color(code, params, term),
+            17 => self.osc_selection_color(ColorKey::SelectionBackground, params, term),
+            19 => self.osc_selection_color(ColorKey::SelectionForeground, params, term),
             22 => {
                 // The engine has no pointer, so the name is reported verbatim
                 // and the embedder decides what a "text" or "wait" cursor is.
@@ -1684,6 +1700,29 @@ impl Handler<'_> {
                 self.unhandled();
             }
             dynamic += 1;
+        }
+    }
+
+    /// `OSC 17` / `OSC 19`: the selection background and foreground, set and
+    /// queried the way `OSC 10` / `OSC 11` are.
+    ///
+    /// One key each, **not** xterm's advancing multi-parameter form: advancing
+    /// from 17 lands on `OSC 18` (the Tektronix cursor), which this engine does
+    /// not have, so a trailing parameter is counted rather than misfiled.
+    fn osc_selection_color(&mut self, key: ColorKey, params: &OscParams<'_>, term: StringTerm) {
+        let Some(param) = params.get(1).filter(|param| !param.is_empty()) else {
+            self.unhandled();
+            return;
+        };
+        if let Some(color) = parse_color(param) {
+            self.set_color(key, color);
+        } else if param == b"?" {
+            self.query_color(key, term);
+        } else {
+            self.unhandled();
+        }
+        if params.len() > 2 {
+            self.unhandled();
         }
     }
 

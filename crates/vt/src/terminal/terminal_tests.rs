@@ -828,6 +828,25 @@ fn da1_da2_dsr_xtversion_answers() {
 }
 
 #[test]
+fn da3_answers_a_decrptui_unit_id() {
+    let mut session = Session::new(80, 24);
+    session.feed(b"\x1b[=c");
+    assert_eq!(session.replies(), "\x1bP!|00000000\x1b\\");
+
+    // Only `Ps == 0` answers, exactly as DA1 and DA2 do.
+    let stats = session.feed(b"\x1b[=1c");
+    assert_eq!(session.replies(), "");
+    assert!(stats.unhandled_sequences > 0);
+
+    // Regression: the other two attribute replies are untouched.
+    session.feed(b"\x1b[c");
+    assert_eq!(session.replies(), "\x1b[?62;4;22c");
+    let version = super::dispatch_version_for_tests();
+    session.feed(b"\x1b[>c");
+    assert_eq!(session.replies(), format!("\x1b[>0;{version};1c"));
+}
+
+#[test]
 fn cpr_honours_origin_mode() {
     // Correction C5, trap 38: region-relative while `DECOM` is set, absolute
     // otherwise. Conhost never sets origin mode, so its handshake is unaffected.
@@ -1199,6 +1218,64 @@ fn osc_10_11_12_set_query_and_advance() {
             terminator: crate::event::StringTerm::St,
         }
     )));
+}
+
+#[test]
+fn osc_17_and_19_set_and_query_the_selection_colours() {
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b]17;rgb:ff/00/00\x07");
+    assert_eq!(
+        session.term.color(ColorKey::SelectionBackground),
+        Some(Rgb {
+            r: 0xff,
+            g: 0,
+            b: 0
+        })
+    );
+
+    session.feed(b"\x1b]19;#0000ff\x07");
+    assert_eq!(
+        session.term.color(ColorKey::SelectionForeground),
+        Some(Rgb {
+            r: 0,
+            g: 0,
+            b: 0xff
+        })
+    );
+
+    // A query is the embedder's to answer, terminated the way it was asked.
+    session.feed(b"\x1b]17;?\x07");
+    assert!(session.batch.iter().any(|event| matches!(
+        event,
+        VtEvent::ColorQuery {
+            key: ColorKey::SelectionBackground,
+            terminator: crate::event::StringTerm::Bel,
+        }
+    )));
+    session.feed(b"\x1b]19;?\x1b\\");
+    assert!(session.batch.iter().any(|event| matches!(
+        event,
+        VtEvent::ColorQuery {
+            key: ColorKey::SelectionForeground,
+            terminator: crate::event::StringTerm::St,
+        }
+    )));
+    assert_eq!(
+        ColorKey::SelectionBackground.query_prefix(),
+        "17",
+        "the query echoes its own number back"
+    );
+    assert_eq!(ColorKey::SelectionForeground.query_prefix(), "19");
+
+    // No advancing multi-parameter form: `OSC 18` is not implemented, so a
+    // second parameter is counted rather than silently misfiled.
+    let mut session = Session::new(10, 3);
+    let stats = session.feed(b"\x1b]17;#010101;#020202\x07");
+    assert_eq!(
+        session.term.color(ColorKey::SelectionBackground),
+        Some(Rgb { r: 1, g: 1, b: 1 })
+    );
+    assert!(stats.unhandled_sequences > 0);
 }
 
 #[test]

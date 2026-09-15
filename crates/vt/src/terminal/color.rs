@@ -1,7 +1,7 @@
 //! The OSC colour-override table and its typed keys.
 //!
 //! [`ColorKey`] is a typed name for a slot, so a caller never writes the bare
-//! index 256, 257 or 258. The storage underneath is still a flat 269-slot
+//! index 256, 257 or 258. The storage underneath is still a flat 271-slot
 //! table.
 //!
 //! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md>.
@@ -9,9 +9,9 @@
 use crate::cell::Rgb;
 
 /// Slots in the override table: 256 indexed colours, then foreground,
-/// background, cursor, the eight dim variants, bright foreground and dim
-/// foreground.
-pub(crate) const COLOR_COUNT: usize = 269;
+/// background, cursor, the eight dim variants, bright foreground, dim
+/// foreground and the two selection colours.
+pub(crate) const COLOR_COUNT: usize = 271;
 
 const FOREGROUND: usize = 256;
 const BACKGROUND: usize = 257;
@@ -19,6 +19,8 @@ const CURSOR: usize = 258;
 const DIM_BASE: usize = 259;
 const BRIGHT_FOREGROUND: usize = 267;
 const DIM_FOREGROUND: usize = 268;
+const SELECTION_BACKGROUND: usize = 269;
+const SELECTION_FOREGROUND: usize = 270;
 
 /// What an OSC colour sequence names.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -37,6 +39,10 @@ pub enum ColorKey {
     DimForeground,
     /// One of the eight dim ANSI colours, `0..8`.
     Dim(u8),
+    /// The selection highlight background, `OSC 17`.
+    SelectionBackground,
+    /// The selection highlight foreground, `OSC 19`.
+    SelectionForeground,
 }
 
 impl ColorKey {
@@ -50,6 +56,8 @@ impl ColorKey {
             ColorKey::BrightForeground => BRIGHT_FOREGROUND,
             ColorKey::DimForeground => DIM_FOREGROUND,
             ColorKey::Dim(index) => DIM_BASE + (index as usize & 7),
+            ColorKey::SelectionBackground => SELECTION_BACKGROUND,
+            ColorKey::SelectionForeground => SELECTION_FOREGROUND,
         }
     }
 
@@ -63,18 +71,23 @@ impl ColorKey {
             DIM_BASE..=266 => ColorKey::Dim((index - DIM_BASE) as u8),
             BRIGHT_FOREGROUND => ColorKey::BrightForeground,
             DIM_FOREGROUND => ColorKey::DimForeground,
+            SELECTION_BACKGROUND => ColorKey::SelectionBackground,
+            SELECTION_FOREGROUND => ColorKey::SelectionForeground,
             _ => return None,
         })
     }
 
     /// The number an OSC query echoes back: `4;{index}` for a palette entry,
-    /// `10` / `11` / `12` for the three dynamic colours.
+    /// `10` / `11` / `12` for the three dynamic colours, `17` / `19` for the
+    /// two selection colours.
     pub fn query_prefix(self) -> String {
         match self {
             ColorKey::Palette(index) => format!("4;{index}"),
             ColorKey::Foreground => "10".to_owned(),
             ColorKey::Background => "11".to_owned(),
             ColorKey::Cursor => "12".to_owned(),
+            ColorKey::SelectionBackground => "17".to_owned(),
+            ColorKey::SelectionForeground => "19".to_owned(),
             // Not reachable from any sequence the engine accepts; the index is
             // the honest answer if one ever becomes queryable.
             other => other.index().to_string(),
@@ -83,7 +96,7 @@ impl ColorKey {
 }
 
 /// The OSC-override layer only. `None` means "use the theme", exactly as the
-/// 269-slot table works today.
+/// 271-slot table works today.
 #[derive(Clone, Debug)]
 pub struct ColorOverrides {
     slots: Box<[Option<Rgb>; COLOR_COUNT]>,
