@@ -197,7 +197,7 @@ package in the Cargo registry / git checkout.
 | `cfg-if` | 1.0.4 | MIT OR Apache-2.0 | crates.io |
 | `cfg_aliases` | 0.2.1 | MIT | crates.io |
 | `cgl` | 0.3.2 | MIT / Apache-2.0 | crates.io |
-| `chacha20` | 0.10.1 | MIT OR Apache-2.0 | crates.io |
+| `chacha20` | 0.10.2 | MIT OR Apache-2.0 | crates.io |
 | `chrono` | 0.4.45 | MIT OR Apache-2.0 | crates.io |
 | `cipher` | 0.4.4 | MIT OR Apache-2.0 | crates.io |
 | `cipher` | 0.5.2 | MIT OR Apache-2.0 | crates.io |
@@ -258,7 +258,7 @@ package in the Cargo registry / git checkout.
 | `defmt-macros` | 1.1.0 | MIT OR Apache-2.0 | crates.io |
 | `defmt-parser` | 1.0.0 | MIT OR Apache-2.0 | crates.io |
 | `delegate` | 0.13.5 | MIT OR Apache-2.0 | crates.io |
-| `der` | 0.8.0 | Apache-2.0 OR MIT | crates.io |
+| `der` | 0.8.2 | Apache-2.0 OR MIT | crates.io |
 | `deranged` | 0.5.8 | MIT OR Apache-2.0 | crates.io |
 | `derive_more` | 2.1.1 | MIT | crates.io |
 | `derive_more-impl` | 2.1.1 | MIT | crates.io |
