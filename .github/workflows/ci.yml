@@ -133,6 +133,10 @@ jobs:
       # is where the unbounded invariants are gated.
       - name: Test the VT engine with the full integrity walk
         run: cargo test -p oneterm-vt --features vt-paranoid
+      # `regex` gates a whole matcher, so the suite runs under it too: the
+      # literal half must answer identically with the feature on.
+      - name: Test the VT engine with regex search
+        run: cargo test -p oneterm-vt --features regex
 
   vt-package:
     # `oneterm-vt` is not published (owner ruling 2026-09-15), but other projects

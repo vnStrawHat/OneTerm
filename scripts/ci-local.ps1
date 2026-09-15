@@ -36,10 +36,13 @@ Invoke-Step @("cargo", "test", "--workspace")
 # operation touched unless `vt-paranoid` is on. This is where the unbounded
 # whole-history invariants are gated.
 Invoke-Step @("cargo", "test", "-p", "oneterm-vt", "--features", "vt-paranoid")
+# `regex` gates a whole matcher, so the suite runs under it too: the literal
+# half must answer identically with the feature on.
+Invoke-Step @("cargo", "test", "-p", "oneterm-vt", "--features", "regex")
 
 # Other projects consume `oneterm-vt` as a git dependency, so its package, its
 # feature matrix and its documentation are part of the gate. Its default
-# feature set is empty, so the two builds below are the whole matrix.
+# feature set is empty, so the two builds below are the ends of the matrix.
 Invoke-Step @("cargo", "build", "-p", "oneterm-vt", "--no-default-features", "--examples")
 Invoke-Step @("cargo", "build", "-p", "oneterm-vt", "--all-features", "--examples")
 Invoke-Step @("cargo", "run", "-p", "oneterm-vt", "--example", "headless")

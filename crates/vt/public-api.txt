@@ -686,3 +686,20 @@ enum oneterm_vt::parser::StringTerm
     variant Bel
     variant St
 fn oneterm_vt::scalar_width
+struct oneterm_vt::search::GridText
+    method from_terminal
+    method oldest
+    method rows
+struct oneterm_vt::search::SearchMatch
+    method display_row
+    method grid_line
+    structfield end_col
+    structfield row
+    structfield start_col
+struct oneterm_vt::search::SearchOptions
+    structfield case_sensitive
+    structfield whole_word
+enum oneterm_vt::search::SearchPattern
+    variant Literal
+    variant Regex
+fn oneterm_vt::search::search_grid_text

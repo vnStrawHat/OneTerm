@@ -43,7 +43,9 @@
 > 5.3 (`OscRouter`), section 4 (dependencies) and the adapter file layout below change; the target
 > shape is in
 > [`spec-intakes/IN-0038-embeddable-vt-core/high-level-design.md`](spec-intakes/IN-0038-embeddable-vt-core/high-level-design.md).
-> Nothing in this document is stale yet.
+> The search half has landed (`US-0100`): `oneterm_vt::search` is where the matcher lives, and
+> `crates/terminal` re-exports `SearchMatch` and `SearchOptions` from it. The rest of this document
+> is not stale yet.
 
 ---
 
@@ -830,10 +832,13 @@ feature crates read those handles from their GPUI application context.
 undeliverable write is returned to the view, which shows a warning notification
 (ERR-04) instead of dropping the paste silently.
 
-`search` copies the grid text under the engine lock (`search::GridText::from_terminal`,
-keyed by `RowId`) and matches after releasing it (`search_grid_text`), so a long
-scrollback search never stalls the pump (PERF-04). The signed grid line a `SearchMatch`
-publishes is derived from the copy's `RowId`s once, where the match is produced.
+`search` copies the grid text under the engine lock
+(`oneterm_vt::search::GridText::from_terminal`, keyed by `RowId`) and matches after
+releasing it (`search_grid_text`), so a long scrollback search never stalls the pump
+(PERF-04). The signed grid line a `SearchMatch` publishes is derived from the copy's
+`RowId`s once, where the match is produced. The matcher itself is the engine's since
+`US-0100`; the adapter passes `SearchPattern::Literal` and `crates/terminal` does not
+enable the engine's optional `regex` feature, so OneTerm's search stays literal.
 
 `SessionEvent`: `Output | Title | Cwd | Clipboard | ClipboardRead | ShellIntegration |
 Notification | Progress | AgentStatus | Exited(Option<i32>) | Closed |
@@ -893,7 +898,7 @@ crates/
 │   ├── model.rs              # TerminalModel: snapshot / snapshot_into / query_state / input
 │   ├── content.rs            # TerminalContent: the RenderState it owns, in the engine's own vocabulary
 │   ├── palette.rs / color_classification.rs / osc_color.rs
-│   ├── key_encode.rs / mouse_encode.rs / paste.rs / search.rs
+│   ├── key_encode.rs / mouse_encode.rs / paste.rs
 │   ├── osc.rs / osc_agent/ / url_policy.rs / security_policy.rs
 │   ├── factory.rs            # PtySize + SessionFactory
 │   └── backend/              # shared pump layer (§5.3)
