@@ -34,6 +34,14 @@ REQUIRED_PACKAGE_FILES = (
     "examples/headless.rs",
 )
 
+# A git dependency makes cargo check out the **whole** repository, `docs/`
+# included, under `CARGO_HOME`. libgit2 honours neither `core.longpaths` nor the
+# Windows `LongPathsEnabled` policy, so a long path in here is a build failure
+# for a consumer on Windows and nothing at all for anybody in this repository.
+# The default `C:/Users/<name>/.cargo/git/checkouts/<repo>-<hash>/<short sha>/`
+# prefix is about 70 characters, so 150 leaves the usual headroom under 260.
+MAX_TRACKED_PATH = 150
+
 
 def fail(messages: list[str]) -> None:
     for message in messages:
@@ -67,6 +75,17 @@ def package_list_errors(source: str) -> list[str]:
     if outside:
         errors.append(f"the oneterm-vt package reaches outside crates/vt: {outside}")
     return errors
+
+
+def long_path_errors() -> list[str]:
+    """Tracked paths a Windows consumer's `cargo` checkout could not create."""
+    listing = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT, text=True)
+    too_long = sorted(path for path in listing.split("\0") if len(path) > MAX_TRACKED_PATH)
+    return [
+        f"tracked path is {len(path)} characters, over the {MAX_TRACKED_PATH} limit "
+        f"(a Windows git-dependency checkout fails on it): {path}"
+        for path in too_long
+    ]
 
 
 def main() -> None:
@@ -194,6 +213,8 @@ def main() -> None:
         if package_name == "oneterm-core" and forbidden_ui:
             errors.append(f"oneterm-core must remain a leaf; found {forbidden_ui}")
 
+    errors.extend(long_path_errors())
+
     checked_package_list = False
     if args.package_list:
         errors.extend(package_list_errors(args.package_list))
@@ -204,7 +225,8 @@ def main() -> None:
 
     print(
         f"Dependency graph policy passed for {len(packages)} workspace packages "
-        f"and {len(declared_members)} explicit members."
+        f"and {len(declared_members)} explicit members, and no tracked path is over "
+        f"{MAX_TRACKED_PATH} characters."
     )
     if checked_package_list:
         print(
