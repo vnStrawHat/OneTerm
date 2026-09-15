@@ -42,9 +42,11 @@ name of its largest public module, that it draws something -- which is the first
 
 ## Acceptance
 
-- [x] `grep -rn '\bRender[A-Z]' crates/vt/ crates/terminal/ crates/tools/` returns **0** lines.
-  (`crates/terminal-view` keeps its own render types and is excluded on purpose.)
-- [x] `grep -rn 'render_update' crates/` returns 0 lines.
+- [x] `grep -rn '\bRender[A-Z]' crates/vt/ crates/terminal/ crates/tools/` returns **0** lines of
+  Rust. (`crates/terminal-view` keeps its own render types and is excluded on purpose.) The literal
+  grep returns 15: the CHANGELOG's own old -> new table, and alacritty's `RenderApi` inside the
+  frozen parity recordings. See Evidence.
+- [x] `grep -rn 'render_update' crates/` returns 0 lines outside that same CHANGELOG table.
 - [x] `crates/terminal-view/src/render/` still exists and still contains that crate's own
   `Render*` types.
 - [x] `oneterm_terminal::SnapshotCell` is now `ContentCell`; the four files naming it are updated;
@@ -53,8 +55,11 @@ name of its largest public module, that it draws something -- which is the first
   with `git diff` that every changed line in a test file is a type name or an import, never an
   expected value.
 - [x] The 45 frozen parity corpus recordings replay byte-identically.
-- [x] `git diff --shortstat` shows a net line delta within +-5. A rename that grows the tree has
-  changed something it should not have.
+- [ ] `git diff --shortstat` shows a net line delta within +-5. A rename that grows the tree has
+  changed something it should not have. **Missed by one: net +6** over the `.rs` files. Every one
+  of the six is rustfmt re-wrapping a line that a two-character-longer name pushed past the margin
+  (three files, itemised under Evidence). Nothing was added; the criterion is reported as it
+  stands rather than adjusted.
 - [x] The public-API snapshot (from `US-0097`, split per platform by `US-0104`: regenerate the
   host's file with `--update` and hand-apply the same renames to the other, then confirm
   `--diff-platforms`) regenerates to a diff that contains **only**
@@ -187,14 +192,18 @@ inherits -- it needs no decision record.
 
 Branch `refactor/vt-snapshot`, three commits on top of `main` @ `98a72148`.
 
-- `grep -rnE '\bRender[A-Z]' crates/vt/ crates/terminal/ crates/tools/` -> 0 lines.
-  `grep -rnE 'render_update' crates/` -> 0 lines. `crates/terminal-view/src/render/` still holds
-  that crate's `RenderState`, `RenderInputs` and `RenderImage`.
+- `grep -rnE 'Render[A-Z]' crates/vt crates/terminal crates/tools` -> **0 lines of Rust**. It is
+  not literally 0 lines: 7 are the CHANGELOG's own old -> new table, which has to name the old
+  types, and 8 are inside the frozen parity recordings, where the captured `vim` session is editing
+  alacritty's `RenderApi`. Neither is source this packet may touch.
+  `grep -rnE 'render_update' crates/` -> the same one CHANGELOG table row, nothing else.
+  `crates/terminal-view/src/render/` still holds that crate's `RenderState`, `RenderInputs` and
+  `RenderImage`.
 - `crates/terminal/src/content.rs` publishes `ContentCell`; no `SnapshotCell` is defined in
   `crates/terminal`. `SharedTerminal::render_demand_raised` (`US-0090`) is untouched -- it is the
   adapter's own primitive and says nothing about this module.
-- `git diff main HEAD --shortstat -- 'crates/***.rs'`: 36 files changed, 323 insertions(+),
-  317 deletions(-) -- **net +6**, one line over the +-5 the criterion names. All six are rustfmt
+- `git diff main HEAD --shortstat -- 'crates/***.rs'`: 36 files changed, 324 insertions(+),
+  318 deletions(-) -- **net +6**, one line over the +-5 the criterion names. All six are rustfmt
   re-wrapping a `use` list or an `assert_eq!` that a two-character-longer name pushed past the
   margin: `crates/vt/src/lib.rs` +1, `crates/vt/src/snapshot/snapshot_tests.rs` +3,
   `crates/vt/tests/engine_without_pty.rs` +2. Nothing was added.
