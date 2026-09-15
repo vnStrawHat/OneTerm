@@ -355,29 +355,102 @@ the defects now assert the fixes and say so in their doc comments. The probe fil
 the verification document's tables, and every behaviour it probed is covered by a test that
 asserts.
 
+**Final re-check: PASS**, all eleven closed, recorded in the same evidence document under "Final
+re-check at `6394f5b9`". Its 21 further tests are adopted as
+`crates/vt/tests/verify_us0102_final.rs`; its probe file is **not**, for the same reason as the
+first one — it prints and does not assert, and the carry cap, the alternate-screen charset round
+trip and `REP` after a cluster all have tests that do. The re-check raised two low observations,
+both closed here:
+
+- **N1.** Correction C12 covers `DECSC` / `DECRC`, `CSI s` / `CSI u` and `? 1048`, and **not** the
+  alternate-screen modes: `? 47`, `? 1047` and `? 1049` use the grid's own cursor save and do not
+  carry the locking set, where xterm's `1049` does. That is this engine's choice — the invocation
+  lives on the terminal rather than on the cursor — and the corrections table now says so next to
+  C12.
+- **N2.** The Harness Row snippet was raw `SQL` with placeholders where every sibling packet
+  carries a runnable Python one; it is now in that form, with the real values. The nit that came
+  with it is closed too: `FeedStats::dropped_cluster_carries` counts **once per over-long
+  cluster**, not once per dropped scalar, and its rustdoc says so.
+
 ## Harness Row
 
-```sql
-INSERT INTO story (
-  id, title, created_at, risk_lane, contract_doc, packet_doc, status,
-  unit_proof, integration_proof, e2e_proof, platform_proof,
-  evidence, verify_command, last_verified_at, last_verified_result, notes, intake_id
-) VALUES (
-  'US-0102',
-  'close the known conformance gaps, and get an esctest report',
-  '2026-09-15T00:00:00',
-  'normal',
-  'docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md',
-  'docs/spec-intakes/IN-0038-embeddable-vt-core/US-0102-conformance-gaps.md',
-  'implemented',
-  1, 1, 0, 1,
-  '...see Evidence...',
-  'pwsh scripts/ci-local.ps1 -Full',
-  '...set on the verified run...',
-  'pass',
-  '...see Gaps carried forward...',
-  43
-);
+`harness.db` was **not** written by this task: no harness binary is available in this worktree and
+the task forbids editing the database. The schema is
+`story(id, title, created_at, risk_lane, contract_doc, packet_doc, status, unit_proof,
+integration_proof, e2e_proof, platform_proof, evidence, verify_command, last_verified_at,
+last_verified_result, notes, intake_id)`, with the four `*_proof` columns as `0`/`1`.
+
+```python
+#!/usr/bin/env python3
+"""Insert the US-0102 story row. Point DB at the harness database and run once."""
+import sqlite3
+from datetime import datetime, timezone
+
+DB = "<path to harness.db>"
+
+ROW = dict(
+    id="US-0102",
+    title="close the known conformance gaps, and get an esctest report",
+    created_at="2026-09-15T00:00:00",
+    risk_lane="normal",
+    contract_doc=(
+        "docs/spec-intakes/IN-0029-vt-engine/"
+        "low-level-design/dispatch-and-modes.md"
+    ),
+    packet_doc=(
+        "docs/spec-intakes/IN-0038-embeddable-vt-core/"
+        "US-0102-conformance-gaps.md"
+    ),
+    status="implemented",
+    unit_proof=1,
+    integration_proof=1,
+    e2e_proof=0,
+    platform_proof=1,
+    evidence=(
+        "Seven of the eight items shipped here; OSC 1 had already landed in "
+        "US-0098. ? 5 DECSCNM, ? 9 X10 mouse, ? 1015 urxvt mouse, LS2/LS3/SS2/SS3, "
+        "? 2027 wired to width::cluster_width, OSC 17/19, DA3 (unit id 00000000, "
+        "xterm's). Parity corpus byte-identical across all 46 recordings. "
+        "vt-bench grid --mib 32 interleaved with main three times found a real 10 "
+        "percent print-path regression and it was fixed (inline(always) on "
+        "Screen::print_with_width, inline(never) on print_clusters); final medians "
+        "plain_ascii 77.7->77.5, cjk_wide 117.1->119.8, dense_cells 196.9->198.0 "
+        "MiB/s. Independent verification PASS-WITH-NOTES then PASS "
+        "(docs/spec-intakes/IN-0038-embeddable-vt-core/evidence/US-0102-verify.md); "
+        "all eleven findings closed, including the cross-chunk cluster carry (F1, "
+        "HIGH), the cluster_width base guard (F11), DECSC saving the shifts "
+        "(F4, correction C12) and the DECSCNM renderer wiring (F6). The verifier's "
+        "57 + 21 tests are adopted as crates/vt/tests/verify_us0102.rs and "
+        "verify_us0102_final.rs."
+    ),
+    verify_command="pwsh scripts/ci-local.ps1 -Full",
+    last_verified_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    last_verified_result="pass",
+    notes=(
+        "esctest NOT run, and not because of the platform: it reads the screen back "
+        "with DECRQCRA (CSI * y), which this engine does not implement, so every "
+        "rectangle assertion would time out and both counts would be about zero "
+        "(evidence/US-0102-esctest.md). No cfg(unix) harness was written for it: it "
+        "could not be compiled on this host and could not be exercised anywhere "
+        "until DECRQCRA lands. e2e_proof=0 because the manual Windows walk (htop "
+        "under ? 9 and ? 1015, a DECSCNM program, a G2 TUI, emoji under ? 2027) was "
+        "not performed. platform_proof=1 because ci-local -Full passed on Windows, "
+        "the only platform exercised. Carried gaps: ? 2027 and a WcsWidth-spawned "
+        "ConPTY disagree and the engine cannot check, recorded in pty.md; no OSC "
+        "117/119 reset; REP and ? 2027 disagree about the preceding character; VS16 "
+        "still widens a base without the Emoji property; the alternate-screen modes "
+        "are outside correction C12."
+    ),
+    intake_id=43,
+)
+
+with sqlite3.connect(DB) as db:
+    db.execute(
+        "INSERT INTO story ({}) VALUES ({})".format(
+            ", ".join(ROW), ", ".join("?" * len(ROW))
+        ),
+        tuple(ROW.values()),
+    )
 ```
 
 `e2e_proof` is `0` and stays `0`: the manual Windows walk was not performed. `intake_id = 43` is

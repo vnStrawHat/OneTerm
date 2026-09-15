@@ -550,3 +550,222 @@ The `ci-local -Full` log is kept in the verifier's scratchpad, not in the reposi
 3. **Text corrections**, none of which need code: F2 (three places), F3 (two sentences in
    `cell-and-style.md`, one in `dispatch-and-modes.md`), F4 (a deviation id), F5 (the corpus
    sentence), F8 (one acceptance box).
+
+---
+
+# Final re-check at `6394f5b9`
+
+Re-verified: 2026-09-15
+Branch: `feat/vt-conformance-gaps` @ `6394f5b9` (base `main` @ `af5df2e7`)
+Rework under test: `8145d2ab` (the carry), `e02d96aa` (the shifts and the mouse guard),
+`c5fc49fa` (`terminal-view`), `303ced99` and `6394f5b9` (records)
+
+## Verdict: **PASS**
+
+All eleven findings above are closed. The four that needed code were fixed at the level they were
+wrong at, not papered over: the carry lives in the engine, the mouse guard lives in the encoder
+rather than in a caller's checklist, the `cluster_width` guard is one `let ... else`, and `DECSCNM`
+reaches pixels through `resolve_style`. Nothing regressed; the benches are within noise. Two new
+observations follow, both `LOW`, neither a reason to hold anything.
+
+The report above is left exactly as it was written, so the two documents read as a before and after.
+
+## How this was re-checked
+
+New tests, written against the public API and deliberately separate from the suite the implementer
+adopted:
+
+- `crates/vt/tests/verify_us0102_final.rs` — **21 tests, all green**.
+- `crates/vt/tests/verify_us0102_final_probe.rs` — diagnostics behind the tables below.
+
+Both are in the verifier's worktree and are **not committed**. The adopted
+`crates/vt/tests/verify_us0102.rs` was compared against the verifier's original: it differs only
+where a test that asserted a defect now asserts the fix, each with a doc comment saying so, and the
+adopted `US-0102-verify.md` is byte-identical to what was written (line endings aside).
+
+## F1, the cross-chunk carry
+
+`State::cluster_carry` holds the last printed cluster as `RowId` + column + scalars + charset;
+`print_clusters` re-segments `carry.text + text` and re-places the head only when the joined text's
+first cluster is longer than the carry.
+
+Attacked, all green:
+
+| Attack | Result |
+| --- | --- |
+| Every interior split, **two** `feed` calls: family (24), skin tone (7), keycap (6), flag (7), `e`+acute (2) | every one measures what the unsplit sequence measures |
+| Every interior split pair, **three** `feed` calls: 276 + 21 + 15 + 21 combinations | same |
+| One scalar per `feed`, family and keycap | 2 columns, cluster whole |
+| Breakers that do not move the cursor: `BEL`, `CSI SGR`, `ESC 7`, `OSC`, `DCS`, `APC`, a mode change, a `? 1049` round trip | carry broken, tail takes its own cells (column 4, not 2) |
+| Breakers that move the cursor: `CR`, `CUP` | tail starts its own cluster at column 0 and overwrites the head rather than joining it |
+| `LF` | tail lands on the next row |
+| `Terminal::resize` | carry broken |
+| Next chunk starts with a base that does not continue (`emoji` then `abc`; `e`+acute then `o`+diaeresis) | nothing reprinted, nothing lost |
+| Head wrapped to the next row before the tail arrived | the replacement follows the head to the row it landed on |
+| Growing 1 -> 2 in the **last** column, DECAWM on and off | no stray head; the grown cluster wraps as a unit |
+| Shrinking 2 -> 1 (wide base + `VS15`), at the margin and mid-row | the orphaned half of the wide pair is repaired |
+| Carry across a scrollback-limit change between the halves | no panic, head intact |
+| Charset: head mapped through `G0` DEC graphics, tail joins | head keeps its mapping |
+| Charset: `SS2` covers the head, tail must not consume a second shift | correct — the next `q` is plain ASCII |
+| Mode reset, and set-then-cleared mid-cluster | per-scalar behaviour, no stale carry |
+
+Cap and cost, measured by feeding one base then N combining marks **one scalar per `feed`**:
+
+| marks | `dropped_cluster_carries` | cursor column |
+| ---: | ---: | ---: |
+| 30 | 0 | 1 |
+| 31 | 0 | 1 |
+| 32 | 1 | 1 |
+| 33 | 1 | 1 |
+| 40 | 1 | 1 |
+| 10 000 | 1 | 1 |
+| 20 000 | 1 | 1 |
+
+So the first drop is at 33 scalars (base + 32), which is `CLUSTER_CARRY_MAX` read as the coordinator
+describes it. 10 000 and 20 000 marks finish in well under the linearity guard (20k/10k ratio far
+below 8x), and the cell itself stays capped by the grapheme arena at 16 scalars.
+
+**The `index_of == None` fallback in `replace_carried` is genuinely unreachable, and cannot panic
+if it were not.** Every route that moves the carried row off the screen — a control, an escape, a
+`CSI`, an `OSC`, a `DCS`, an `APC`, a resize — breaks the carry first, and `replace_carried` runs
+before any printing inside `print_clusters`, so nothing in the same run can scroll the row out from
+under it. `index_of` returns an `Option` and the `None` arm prints where the cursor is; there is no
+indexing and no unwrap on that path. The comment calling it unreachable is right.
+
+## F11, F2, F4, F6
+
+- **F11.** A bare `U+FE0F`, `U+FE0E`, `U+0301`, `U+200D`, `U+20E3` and a bare `FE0F U+20E3` pair are
+  all zero-width under `? 2027` now and join the cell on their left, matching the mode-reset
+  behaviour. A selector still decides for a base it follows: `U+2714` + `VS16` is 2 columns,
+  `U+231A` + `VS15` is 1. The recorded limitation holds and is recorded: `a` + `VS16` is still 2.
+- **F2.** With `ModeSnapshot::mouse == None` — no mode at all, after `? 9 l`, after `? 1003 l`, and
+  in the "encoding set without a reporting mode" cases `? 1006 h` and `? 1015 h` — press, release,
+  hover, drag and both wheel directions all encode to an empty `Vec`, with and without modifiers.
+  `? 9` still reports the press (`ESC [ M SP ! !`) and nothing else, and `? 1000` still encodes a
+  release, so the new guard silenced only what it should.
+- **F4.** `ESC 7` / `ESC 8`, `CSI s` / `CSI u` and `? 1048 h` / `l` all save and restore the
+  locking-set invocation; a pending single shift is saved and restored too, and saving with none
+  pending restores none. The slot is per screen (a `DECSC` on the alternate screen does not
+  overwrite the primary's), `DECRC` with no prior `DECSC` falls back to `G0` / ASCII, and `RIS`
+  clears both slots. Correction C12 is registered in `dispatch-and-modes.md`'s corrections table
+  with "measured free" and the reason.
+- **F6.** Read rather than re-tested at the `gpui` layer: `resolve_style` swaps `Color::Foreground`
+  and `Color::Background` and returns every other colour untouched, after the `INVERSE` swap — so
+  `INVERSE` under `DECSCNM` composes to the correct double negation on default-coloured cells.
+  `StyleKey` carries `reverse_video` and `PlanCache::update` sets `restyled` from
+  `self.style != Some(style_key)`, so the cached plans really are invalidated when the mode flips.
+  The named test `decscnm_swaps_the_two_defaults_and_nothing_else` asserts the default pair swaps,
+  that an `Ansi(1)`-on-`Ansi(4)` cell is byte-identical, and that contrast enforcement still runs.
+
+## Records
+
+Every one closed as claimed, checked against the files:
+
+- The cross-chunk buffer sentence is **restored** in `cell-and-style.md` and now describes what
+  shipped, including the cap and the counter; the two false statements (`unconditionally` / "there
+  is no mode change", and "width today is therefore per scalar") are rewritten, and the ConPTY
+  disagreement is stated as a live carried gap rather than an impossibility.
+- The `? 2027` mode-table row says the same thing; R-56's wording is truthful.
+- The corpus claim now names nine occurrences across six recordings and says exactly what the
+  grid-only `.expect` format can and cannot prove.
+- `Mode::MouseX10`'s rustdoc documents that `? 9` outranks `? 1006`, with the reason.
+- The `REP` + `? 2027` disagreement and the residual `VS16`-widens-any-base limitation are carried
+  forward as gaps.
+- The OSC 1 acceptance line is unticked and explained.
+- A `## Harness Row` section exists, with the right column list and order, `*_proof` as `0`/`1`
+  (`1,1,0,1`) and `intake_id = 43`.
+- `crates/vt/public-api.unix.txt` and `public-api.windows.txt` each gain exactly one line,
+  `FeedStats::dropped_cluster_carries`; `scripts/vt-public-api.py --diff-platforms` still reports
+  "the delta is 6 lines, all inside `oneterm_vt::pty`".
+- `verify_us0099_equiv.rs` pins the one case F2's fix changes, one case wide, rather than skipping
+  the comparison.
+
+## Two new observations
+
+### N1. `? 1049` / `? 47` / `? 1047` still do not carry the locking set — LOW
+
+Correction C12 covers `DECSC` / `DECRC`, `CSI s` / `CSI u` and `? 1048`. The alternate-screen modes
+use the grid's own cursor save, which does not touch `State::active_charset`. Measured: with `G2`
+designated as line drawing and `LS2` locked, `? 1049 h`, `SI` on the alternate screen, `? 1049 l` —
+back on the primary the locking set is `G0`, where xterm's `1049` restores the cursor it saved and
+its `CursorSave` carries `curgl` and `gsets[]`.
+
+Defensible as it stands: this engine deliberately keeps the invocation on the terminal rather than
+on the cursor, and C12's per-screen slot is the `DECSC` half of that choice. No recording sends any
+of the four shifts, so nothing in the corpus reaches it. Worth one line in the corrections table
+next to C12, saying the alternate-screen modes are out of its scope.
+
+### N2. The Harness Row snippet is not runnable — LOW
+
+The schema half of F7 is closed: the column list, its order, the `*_proof` flags and `intake_id`
+are all correct. But the snippet is raw `SQL` with placeholders — `'...see Evidence...'`,
+`'...set on the verified run...'`, `'...see Gaps carried forward...'` — where every sibling packet
+in this intake (`BUG-0058`, `US-0097` .. `US-0100`, `US-0104`) carries a runnable Python snippet
+with the real values. As written it cannot be pasted and run.
+
+One more nit, not worth a number: `FeedStats::dropped_cluster_carries`'s rustdoc says "a rising
+count means something is feeding one unbounded cluster". True, but the count rises **once per
+over-long cluster**, not once per dropped scalar — the table above shows 1 for 33 marks and 1 for
+20 000 — so it should not be read as a rate.
+
+## Performance
+
+Same method as before: two release binaries built in this worktree from `af5df2e7` and `6394f5b9`,
+`vt-bench grid --mib 32`, interleaved. Three cycles were ambiguous on the `CSI`-heavy fixtures
+(`tui_redraw` 0.93, `heavy_sgr` 0.94) — `break_cluster()` now runs on every `csi`, `esc`, `execute`,
+`osc_dispatch`, `dcs_hook` and `apc_start`, so that is exactly where an always-on cost would land
+and it was worth resolving. Two further cycles settled it as noise. Medians of **five** interleaved
+cycles, MiB/s:
+
+| Fixture | base `af5df2e7` | `6394f5b9` | ratio |
+| --- | ---: | ---: | ---: |
+| `plain_ascii` | 78.3 | 76.9 | 0.98 |
+| `long_lines` | 81.7 | 81.5 | 1.00 |
+| `heavy_sgr` | 226.7 | 223.5 | 0.99 |
+| `tui_redraw` | 126.9 | 123.9 | 0.98 |
+| `scroll_region` | 60.9 | 61.3 | 1.01 |
+| `cjk_wide` | 118.4 | 119.0 | 1.01 |
+| `dense_cells` | 185.0 | 193.9 | 1.05 |
+| `scrolling` | 82.3 | 81.8 | 0.99 |
+| `sixel` | 48.0 | 47.8 | 1.00 |
+| `osc_9_7` | 111.8 | 113.3 | 1.01 |
+
+**Every fixture is inside +/- 5 per cent**, the packet's own threshold, and the three the packet
+names are within 2. The carry costs a single `Option` store per non-print dispatch and an
+allocation only when a carry is live under `? 2027`, which is what the numbers say.
+
+## Gates
+
+At `6394f5b9`, `CARGO_BUILD_JOBS=3`, with the two untracked verifier files present.
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p oneterm-vt` | PASS |
+| `cargo test -p oneterm-vt --no-default-features` | PASS |
+| `cargo test -p oneterm-vt --features vt-paranoid` | PASS |
+| `cargo test -p oneterm-vt --features regex` | PASS |
+| `cargo test -p oneterm-terminal` | PASS |
+| `cargo test -p oneterm-terminal-view` | PASS |
+| `cargo test --workspace` | PASS |
+| `cargo test -p oneterm-tools --test corpus_check` | PASS — all 46 recordings byte-identical |
+| `python scripts/vt-public-api.py --check --no-doc` | PASS |
+| `python scripts/vt-public-api.py --diff-platforms` | PASS — 6 lines, all in `oneterm_vt::pty` |
+| `python scripts/check-english.py` | PASS |
+| `python scripts/check-doc-paths.py` | PASS |
+| `pwsh scripts/ci-local.ps1 -Full` | PASS — `ci-local: all checks passed` |
+| `cargo test -p oneterm-vt --test verify_us0102_final` | PASS — 21 tests, this verifier's |
+
+Every row except the last is a step of the one `ci-local -Full` run. Its log is in the verifier's
+scratchpad, not in the repository.
+
+## Still not verified
+
+- **The E2E walk**, for the same reason as before: it needs a real Windows session and the owner
+  runs their editor inside this terminal. `? 5` now has a renderer-layer test, which is the half
+  that walk would most likely have caught; `? 9`, `? 1015` and `? 2027` against real programs remain
+  untried.
+- **`esctest`**, still blocked on `DECRQCRA` and still correctly diagnosed.
+- **Whether xterm prefers SGR over the X10 report when both are set.** The rework documents the
+  engine's answer and its reasoning, which is a fair reading; I still did not read xterm's
+  `button.c` to settle it.
+- **`harness.db`.** Not opened. N2 is "the snippet is not runnable", not "the row is wrong".
