@@ -12,6 +12,7 @@ use super::*;
 use crate::cell::{Attrs, Color, NamedColor, Rgb, Semantic};
 use crate::event::VtEvent;
 use crate::grid::{RowFlags, Size};
+use crate::input::NamedKey;
 use crate::intern::HYPERLINK_TABLE_LIMIT;
 use crate::render::{MouseEncoding, MouseReporting};
 use crate::terminal::mode::{KEYBOARD_STACK_MAX, ModeState, TITLE_STACK_MAX};
@@ -665,8 +666,24 @@ fn mode_2027_is_recognised_and_inert() {
 }
 
 #[test]
+fn encode_key_reads_the_terminals_own_decckm() {
+    // The convenience form: the embedder does not fetch a snapshot, so this is
+    // the only thing that pins the mode table to the encoder.
+    let mut session = Session::new(10, 3);
+    let up = KeySpec::Named(NamedKey::ArrowUp);
+    let none = KeyMods::default();
+    assert_eq!(session.term.encode_key(&up, none).unwrap(), b"\x1b[A");
+
+    session.feed(b"\x1b[?1h");
+    assert_eq!(session.term.encode_key(&up, none).unwrap(), b"\x1bOA");
+
+    session.feed(b"\x1b[?1l");
+    assert_eq!(session.term.encode_key(&up, none).unwrap(), b"\x1b[A");
+}
+
+#[test]
 fn app_keypad_mode_is_reported() {
-    // R-64: the keypad state `crates/terminal/src/key_encode.rs` needs.
+    // R-64: the keypad state `crate::input::key` needs.
     let mut session = Session::new(10, 3);
     assert!(!session.term.mode_snapshot().app_keypad);
 

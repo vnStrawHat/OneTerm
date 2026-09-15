@@ -71,7 +71,7 @@ OneTerm/
 │   │       ├── backend/            # Shared backend pump used by ssh + local-shell:
 │   │       │                       #   PtyTransport trait, OscRouter<T> (the EventBatch drain),
 │   │       │                       #   SessionState (title/cwd/clipboard/exit), event_sink, pump
-│   │       ├── content.rs / model.rs / palette.rs / key_encode.rs / mouse_encode.rs
+│   │       ├── content.rs / model.rs / palette.rs
 │   │       ├── osc.rs / osc_color.rs / osc_agent/ / url_policy.rs / paste.rs / security_policy.rs …
 │   │       └── test_support.rs     # FakeTerminalSession + FakePtyTransport (feature "test-support")
 │   │
@@ -190,11 +190,13 @@ OneTerm/
 │       ├── public-api.txt          # the public surface; `scripts/vt-public-api.py` gates it
 │       ├── examples/headless.rs    # feed bytes, read events, print the screen — no dependencies
 │       ├── src/
-│       │   ├── lib.rs              # module declarations + public re-exports only; `grid`, `intern`,
-│       │   │                       #   `parser` and `search` are the only modules named by path
+│       │   ├── lib.rs              # module declarations + public re-exports only; `grid`, `input`,
+│       │   │                       #   `intern`, `parser` and `search` are the only modules named by path
 │       │   ├── cell.rs             # 8-byte packed Cell, CellWidth, Semantic, Style, Attrs, Color
 │       │   ├── intern.rs           # per-terminal style / extras / grapheme / hyperlink tables
 │       │   ├── width.rs            # scalar_width + cluster_width (mode 2027 storage, not the mode)
+│       │   ├── input/              # key + mouse encoders: KeySpec / KeyMods / TerminalMouseButton
+│       │   │                       #   → bytes, X10 / 1005 / SGR-1006 (US-0099, from crates/terminal)
 │       │   ├── parser/             # the VT state machine: CSI / OSC / DCS, params, memory limits
 │       │   ├── terminal/           # Terminal (the one public object) + dispatch, modes, colors, OSC claims
 │       │   ├── grid/               # Screen, TerminalGrid, Row, anchors — absolute RowId space (DEC-0015)
@@ -236,7 +238,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `core` (`oneterm-core`) | _(leaf)_ | domain | Error type, `SftpBackend`, `LocalShellConfig`/`ShellKind`, `SshConfig`/`SshAuthMethod`. No gpui, **no terminal engine**. |
 | `highlight` (`oneterm-highlight`) | _(leaf)_ | engine | Semantic syntax-highlighting engine. |
 | `completion` (`oneterm-completion`) | `core` | engine | Terminal auto-completion engine (gpui-free, engine-free): catalog model + embedded `assets/**/*.json` catalogs, line parsing + subcommand resolution, matching/ranking, in-session `CompletionHistory`, and secret redaction. See [`../auto-completion.md`](../auto-completion.md). |
-| `terminal` (`oneterm-terminal`) | `core`, `vt` | engine | The adapter over `oneterm-vt` (no gpui): `TerminalSession`, `TerminalModel`, the `TerminalHandle` lock plus the render-demand handshake, the `EventBatch` drain and its delivery policy, the `TerminalContent` frame, palette/OSC/key/mouse helpers, and `SessionFactory`. |
+| `terminal` (`oneterm-terminal`) | `core`, `vt` | engine | The adapter over `oneterm-vt` (no gpui): `TerminalSession`, `TerminalModel`, the `TerminalHandle` lock plus the render-demand handshake, the `EventBatch` drain and its delivery policy, the `TerminalContent` frame, palette/OSC helpers, and `SessionFactory`. Key and mouse encoding moved to `oneterm_vt::input` at `US-0099`; this crate re-exports the names so a consumer keeps one `use`. |
 | `pty` (`oneterm-pty`) | _(leaf)_ | transport | Pseudo-console transport, no grid and no OneTerm dependency: `PseudoConsole` (ConPTY with the bundled `conpty.dll` preferred over `kernel32` — [`DEC-0013`](../decisions/DEC-0013-bundled-conpty-host-and-bump-script.md) — or `openpty`), the `EventedReadWrite` / `EventedPty` / `OnResize` traits the caller's own poll loop drives, and the two poll tokens. |
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
 | `settings` (`oneterm-settings`) | `core`, gpui, gpui-component | shared | `TerminalConfig`, live `TerminalSettings` (defaults single-sourced from the config), and `UiConfig` including the `Theme` observer that persists `ui_config.json`. |
@@ -252,7 +254,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal`, `pty` | backend | Local PTY; implements `TerminalSession` and owns the poll loop over `oneterm-pty`. |
 | `app` (`oneterm-app`) | shell + all five features + shared layers (incl. `update`) + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
-| `vt` (`oneterm-vt`) | `memchr`, `bitflags`, `rustc-hash`, `unicode-width`, `unicode-segmentation`, `log`; optional and default-off `regex` (the `regex` feature, for `search::SearchPattern::Regex`); dev-only `proptest` — **no OneTerm crate**, no gpui | engine | OneTerm's own VT engine (IN-0029), and since `US-0087` the only one: the byte-level parser (`src/parser/`, a Williams state machine behind a narrow `Dispatch` trait, with bounded OSC / DCS / APC payloads), the storage layer — the 8-byte packed `Cell`, the per-terminal interned style / extras / grapheme / hyperlink tables, the width rules — the grid with its scrollback and tracked anchors, reflow, selection, damage / render state, scrollback search and graphics. `crates/terminal` runs on it since `US-0081`. **Embeddable**: the crate other projects consume as a git dependency (`IN-0038`; **not** published to crates.io, owner ruling 2026-09-15), so its public API, its rustdoc and its `DA`/`DSR`/`XTVERSION` reply bytes are an external contract — see `crates/vt/CHANGELOG.md` for the semver promise, and keep `///` and `//!` text free of work-packet, decision and intake citations (CI's `vt-package` job greps for them). |
+| `vt` (`oneterm-vt`) | `memchr`, `bitflags`, `rustc-hash`, `unicode-width`, `unicode-segmentation`, `log`; optional and default-off `regex` (the `regex` feature, for `search::SearchPattern::Regex`); dev-only `proptest` — **no OneTerm crate**, no gpui | engine | OneTerm's own VT engine (IN-0029), and since `US-0087` the only one: the byte-level parser (`src/parser/`, a Williams state machine behind a narrow `Dispatch` trait, with bounded OSC / DCS / APC payloads), the storage layer — the 8-byte packed `Cell`, the per-terminal interned style / extras / grapheme / hyperlink tables, the width rules — the grid with its scrollback and tracked anchors, reflow, selection, damage / render state, scrollback search, graphics, and the key / mouse input encoders (`src/input/`, from `crates/terminal` at `US-0099` — the bytes a key or click sends depend on DECCKM and `? 1005` / `? 1006`, which only the engine knows). `crates/terminal` runs on it since `US-0081`. **Embeddable**: the crate other projects consume as a git dependency (`IN-0038`; **not** published to crates.io, owner ruling 2026-09-15), so its public API, its rustdoc and its `DA`/`DSR`/`XTVERSION` reply bytes are an external contract — see `crates/vt/CHANGELOG.md` for the semver promise, and keep `///` and `//!` text free of work-packet, decision and intake citations (CI's `vt-package` job greps for them). |
 | `tools` (`oneterm-tools`) | `oneterm-vt`, `oneterm-pty`, `russh`, `russh-sftp`, `tokio`, `polling`, `rand`, `anyhow`, `serde`, `serde_json` | diagnostics | Outside the L0-L4 layering, never a dependency of the app; it may only reach down to L0 leaves. Binaries: `doom-fire`, `pty-throughput`, `sftp-dev-server`, and (IN-0029) `vt-corpus` — the VT parity corpus: check and deviation grep — plus `vt-bench`, the five benchmark tiers. `tests/corpus_check.rs` is the parity drift gate that runs in `cargo test --workspace`. |
 
 ## 3.1 Crate & dependency rules

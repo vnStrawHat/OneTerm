@@ -15,12 +15,12 @@ use oneterm_vt::{ExtrasId, ModeSnapshot, MouseReporting, SelectionKind, Size, Te
 
 use crate::content::{LineRangeCells, SnapshotCell, TerminalContent};
 use crate::handle::SharedTerminal;
-use crate::mouse_encode::{
+use crate::osc_color::DynamicColors;
+use crate::{SearchMatch, SearchOptions, TerminalInfo, TerminalQueryState};
+use oneterm_vt::input::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
     encode_mouse_release, encode_wheel_event,
 };
-use crate::osc_color::DynamicColors;
-use crate::{SearchMatch, SearchOptions, TerminalInfo, TerminalQueryState};
 use oneterm_vt::search::{GridText, SearchPattern, search_grid_text};
 
 /// Shared terminal-model operations backed by the engine.

@@ -19,13 +19,12 @@ use oneterm_vt::{
 };
 
 use crate::content::{LineRangeCells, TerminalContent};
-use crate::mouse_encode::MouseModifiers;
-use crate::mouse_encode::TerminalMouseButton;
 use crate::osc_color::DynamicColors;
 use crate::session::{
     SessionEvent, SessionKind, TerminalError, TerminalIme, TerminalInfo, TerminalInput,
     TerminalLifecycle, TerminalQueryState, TerminalRender, TerminalSession,
 };
+use oneterm_vt::input::{MouseModifiers, TerminalMouseButton};
 use oneterm_vt::search::{SearchMatch, SearchOptions};
 
 // ─────────────────────────── the grid fixture ───────────────────────────

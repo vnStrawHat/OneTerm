@@ -8,7 +8,7 @@
 
 use gpui::{App, Entity, Keystroke, Modifiers};
 use oneterm_terminal::{
-    KeyMods, KeySpec, NamedKey, TerminalSession, encode_key, report_generated_input,
+    KeyMods, KeySpec, ModeSnapshot, NamedKey, TerminalSession, encode_key, report_generated_input,
 };
 
 /// What a key-down does. The order of the variants mirrors the classification
@@ -300,10 +300,10 @@ pub(crate) fn send_key(
     session: &Entity<Box<dyn TerminalSession>>,
     spec: &KeySpec,
     mods: KeyMods,
-    app_cursor: bool,
+    modes: &ModeSnapshot,
     cx: &mut App,
 ) -> Option<Vec<u8>> {
-    let bytes = encode_key(spec, mods, app_cursor)?;
+    let bytes = encode_key(spec, mods, modes)?;
     session.update(cx, |s, _| {
         s.scroll_to_bottom();
         report_generated_input("key", s.write(&bytes));

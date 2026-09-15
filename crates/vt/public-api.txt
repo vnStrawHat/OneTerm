@@ -359,6 +359,7 @@ struct oneterm_vt::Terminal
     method colors
     method config
     method cursor_style
+    method encode_key
     method feed
     method grid
     method grid_mut
@@ -592,6 +593,65 @@ struct oneterm_vt::grid::Viewport
     structfield cols
     structfield rows
     structfield top
+struct oneterm_vt::input::KeyMods
+    structfield alt
+    structfield ctrl
+    structfield shift
+enum oneterm_vt::input::KeySpec
+    variant Character
+    variant Named
+struct oneterm_vt::input::MouseModifiers
+    structfield alt
+    structfield ctrl
+    structfield shift
+enum oneterm_vt::input::NamedKey
+    variant ArrowDown
+    variant ArrowLeft
+    variant ArrowRight
+    variant ArrowUp
+    variant Backspace
+    variant Delete
+    variant End
+    variant Enter
+    variant Escape
+    variant F1
+    variant F10
+    variant F11
+    variant F12
+    variant F13
+    variant F14
+    variant F15
+    variant F16
+    variant F17
+    variant F18
+    variant F19
+    variant F2
+    variant F20
+    variant F21
+    variant F22
+    variant F23
+    variant F24
+    variant F3
+    variant F4
+    variant F5
+    variant F6
+    variant F7
+    variant F8
+    variant F9
+    variant Home
+    variant Insert
+    variant PageDown
+    variant PageUp
+    variant Tab
+enum oneterm_vt::input::TerminalMouseButton
+    variant Left
+    variant Middle
+    variant Right
+fn oneterm_vt::input::encode_key
+fn oneterm_vt::input::encode_mouse_move
+fn oneterm_vt::input::encode_mouse_press
+fn oneterm_vt::input::encode_mouse_release
+fn oneterm_vt::input::encode_wheel_event
 struct oneterm_vt::intern::Extras
     associatedconstant NONE
     structfield graphic

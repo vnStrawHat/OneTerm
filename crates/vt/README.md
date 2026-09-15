@@ -31,7 +31,9 @@ first build to fetch a few tens of megabytes.
 
 - **Not a renderer.** It produces a snapshot of cells, styles and runs. Nothing here draws.
 - **Not a PTY.** It never spawns a process and never reads a file descriptor. You feed it bytes.
-- **Not a window.** No event loop, no input handling, no clipboard, no window title bar.
+- **Not a window.** No event loop, no platform event handling, no clipboard, no window title bar.
+  `input` will turn a key press or a mouse click into the bytes the program expects, but you
+  deliver the event and you own every side effect it has on your own view.
 - **Not a policy.** Whether a program may write your clipboard, open a URL or set your window
   title is your decision; the engine hands you the request and stays out of it.
 

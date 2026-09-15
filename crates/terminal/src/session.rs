@@ -21,11 +21,11 @@ use crate::content::{LineRangeCells, TerminalContent};
 use crate::handle::SharedTerminal;
 use crate::logging::TerminalLogController;
 use crate::model::TerminalModel;
-use crate::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use crate::osc::{Osc133Kind, TerminalProgress};
 use crate::osc_agent::AgentStatusEvent;
 use crate::osc_color::DynamicColors;
 use crate::paste::{PasteMode, PastePolicy, PasteResult, encode_paste};
+use oneterm_vt::input::{MouseModifiers, TerminalMouseButton};
 use oneterm_vt::search::{SearchMatch, SearchOptions};
 
 /// Error from a terminal input/control operation (write, resize, close).

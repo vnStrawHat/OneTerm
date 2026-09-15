@@ -35,6 +35,9 @@ pub(crate) mod cell;
 pub(crate) mod event;
 pub(crate) mod graphics;
 pub mod grid;
+// `input` is a fourth path-reachable module: the encoders are a family, and an
+// embedder that writes one `use` for them all reads better than six root names.
+pub mod input;
 pub mod intern;
 pub mod parser;
 pub(crate) mod reflow;
