@@ -103,7 +103,7 @@ what the manifest names. It is rule R7 either way, and it is now checked either 
 
 ## README
 
-`crates/vt/README.md`, about 140 lines, in this order:
+`crates/vt/README.md`, about 160 lines, in this order:
 
 1. One-line description of what the crate is. **No crates.io or docs.rs badges** (owner ruling
    2026-09-15): both would link a page that does not exist, which is the same dead-claim failure as

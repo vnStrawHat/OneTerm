@@ -219,7 +219,7 @@ embedder's caches are keyed by it.
 ## Verification
 
 - [x] **The surface is enumerated, not asserted by eye.** `cargo public-api` is not a dependency
-  this repository has; instead `US-0097` adds `scripts/vt-public-api.py` (about 140 lines). It reads
+  this repository has; instead `US-0097` adds `scripts/vt-public-api.py` (about 160 lines). It reads
   the **HTML** rustdoc emits, not `cargo doc --output-format json` as this document first proposed:
   the JSON format is nightly-only and `rust-toolchain.toml` pins stable `1.96.0`. It prints every
   public item, sorted, with its fields, variants, associated constants and inherent methods under
