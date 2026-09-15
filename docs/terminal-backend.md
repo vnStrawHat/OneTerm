@@ -47,6 +47,15 @@
 > The search half has landed (`US-0100`): `oneterm_vt::search` is where the matcher lives, and
 > `crates/terminal` re-exports `SearchMatch` and `SearchOptions` from it. The rest of this document
 > is not stale yet.
+>
+> **Forward pointer (2026-09, records only):** `IN-0039` follows `IN-0038` and closes the four gaps
+> an outside evaluation found in the engine -- four unnameable public return types, a kitty
+> keyboard protocol that is answered but not encoded, `DECRQCRA` / `DECRQSS` / `XTGETTCAP`, and
+> published performance evidence. Nothing in it changes this document's adapter, pump, lock or
+> transport story; the one packet with a user-observable effect (`US-0105`) changes the bytes the
+> **key encoder** returns for a program that negotiated the kitty protocol. The engine is still
+> consumed as a git dependency and is not published to crates.io. Target shape in
+> [`spec-intakes/IN-0039-vt-gaps-and-publish/high-level-design.md`](spec-intakes/IN-0039-vt-gaps-and-publish/high-level-design.md).
 
 ---
 
