@@ -315,6 +315,15 @@ choice is `max_concurrent_reads: 1`. Dropping the striping instead would delete 
 cancellation behaviour that this dependency-bump packet has no mandate to change — a larger diff
 for the same measured result.
 
+> **Closed by `IN-0037` (2026-09-15).** The owner ordered the other candidate. The striping,
+> `read_handles_for` and `REORDER_WINDOW` are deleted and `max_concurrent_reads` is back at
+> russh-sftp 3.0's 16, which is what this table's third row measured. Both rows still serve the
+> file exactly once; row 3 wins on the in-flight budget (4.2 MB against 1.04 MB), which is what
+> throughput is made of on a link with RTT. Progress, cancellation and the shrinking-file clamp
+> are each preserved under a test — see
+> [`../../IN-0037-sftp-library-read-ahead/US-0096-library-read-ahead.md`](../../IN-0037-sftp-library-read-ahead/US-0096-library-read-ahead.md).
+> The write budget (Change F) is untouched by that change.
+
 ### Change E — new coverage for key-file parsing (new file)
 
 The bump moves `ssh-key` `rc.10 -> rc.11` and takes `ecdsa`, `ed25519-dalek`, `p256/384/521`,

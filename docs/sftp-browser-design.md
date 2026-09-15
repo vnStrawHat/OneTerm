@@ -1586,25 +1586,48 @@ closes itself once the backend confirms (`actions.rs::run_mutation`).
 
 **Pipelined transfers** (PERF-18, `crates/ssh/src/sftp_task/transfer/pipeline.rs`):
 
-- Every request moves `CHUNK_LEN = 255 KiB` — the largest payload that fits one
+- Every **write** moves `CHUNK_LEN = 255 KiB` — the largest payload that fits one
   256 KiB SFTP packet under OpenSSH's `limits@openssh.com` read/write caps
-  (261 120 bytes) — instead of 32 KiB.
-- Downloads open up to `READ_PIPELINE_DEPTH = 4` handles onto the same remote
-  file (`read_handles_for(total)` ramps 1 → 4 with the number of chunks, so small
-  files pay no extra `open` round trip) and `copy_striped` keeps one read
-  outstanding per handle; chunks are re-ordered through a bounded buffer
-  (`REORDER_WINDOW = 8` chunks ahead of the oldest unwritten one) before they reach
-  the local temporary file. A file that shrinks mid-transfer ends early without
-  error; bytes beyond the announced size are not read; size-less files fall back to
-  one sequential handle read to EOF.
-- Uploads use `copy_sequential` with the same chunk size; the `russh-sftp` `File`
-  keeps up to `Config::max_concurrent_writes` (8) writes unacknowledged.
-- Both helpers observe the `CancellationToken` between chunks (`tokio::select!`),
-  report a running byte count to the caller, and the callers map it onto
-  `TransferEvent::Progress` exactly as before (file: bytes/total; directory:
-  monotonic bytes/discovered). `TransferEvent::Cancelled` and
-  `Err(AppError::Cancelled)` semantics are unchanged; the four former copy loops are
-  one `download_file_contents` / `upload_file_contents` each.
+  (261 120 bytes) — instead of 32 KiB. `CHUNK_LEN` is also the progress-reporting
+  unit. Read request size is russh-sftp's (`max_packet_len - 13` = 262 131 B,
+  further clamped by the server's advertised `read_len`) and is not separately
+  configurable in 3.0.
+- **Both directions are pipelined by `russh-sftp`, not by OneTerm** (`IN-0037`).
+  `copy_sequential` is the only copy loop: it feeds the `russh-sftp` `File` whole
+  chunks and the library keeps the wire busy — up to
+  `Config::max_concurrent_writes` (8) unacknowledged writes, and
+  `Config::max_concurrent_reads` (16) `SSH_FXP_READ` packets issued as soon as a
+  read is polled. `crates/ssh/src/session.rs::sftp_config` pins both.
+- Downloads open **one** handle and read it straight through. `take(total)` stops
+  at the size `stat` announced, so bytes beyond it are never requested; a file
+  that shrank mid-transfer ends early at EOF without error, with the real final
+  size reported; a size-less or empty file reads to EOF.
+  Read budget: `16 × ~256 KiB ≈ 4.2 MB` in flight, against `1.04 MB` for the
+  striped multi-handle download `IN-0037` retired.
+- **Never seek per chunk.** `File::poll_seek` calls `ReadState::reset`, which
+  discards queued read-ahead *locally* after the server has already served it.
+  OneTerm's retired striping did exactly that and cost 9.3× the file size on the
+  wire (`US-0095` Change G). The measurement is kept as a test
+  (`pipeline_budget_tests::seeking_per_chunk_still_throws_the_read_ahead_away`).
+- `copy_sequential` observes the `CancellationToken` between reads
+  (`tokio::select!`, `biased`), so a cancel lands within one chunk. Teardown is
+  just dropping the reader: russh-sftp de-registers each pending request on drop,
+  ignores a reply that arrives for a dropped one, and closes the handle without
+  awaiting. Up to the in-flight budget's worth of bytes still crosses the wire
+  after a cancel and is discarded — that is the price of the budget, and it
+  never reaches the local file.
+- Progress is a running byte count reported **once per `CHUNK_LEN` of bytes
+  copied**, plus once at EOF. Thresholding on bytes rather than on reads keeps the
+  cadence stable: russh-sftp serves 262 131 B per response against the 261 120 B
+  chunk, so per-read reporting would emit twice the samples, half of them 0.4 %
+  apart. The callers map the count onto `TransferEvent::Progress` unchanged (file:
+  bytes/total; directory: monotonic bytes/discovered).
+  `TransferEvent::Cancelled` and `Err(AppError::Cancelled)` semantics are
+  unchanged.
+- **There is no resume.** A download writes into a `.part` local sibling that
+  replaces the target only once complete (`staging::finalize_local_file`); a
+  cancelled or failed one deletes the sibling and the next attempt starts at byte
+  0.
 
 ### 5.4. Final file layout
 

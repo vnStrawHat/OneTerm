@@ -63,6 +63,47 @@ behave exactly as they did, each under a test that fails if they do not.
 - [x] `copy_striped`, `read_chunk`, `read_handles_for`, `REORDER_WINDOW`, `READ_PIPELINE_DEPTH`
   are absent from the tree.
 
+### Measured
+
+Same file, same process, back to back. Full tables and method in
+[`evidence/US-0096-measurements.md`](evidence/US-0096-measurements.md).
+
+| | READs | bytes served | ratio | in flight | wall |
+|---|---:|---:|---:|---:|---:|
+| **5 MiB** striping (before) | 21 | 5 263 100 | 1.00x | 1 044 480 | 10.26 ms |
+| **5 MiB** read-ahead 16 (after) | 21 | 5 242 880 | 1.00x | **4 194 096** | **9.66 ms** |
+| **50 MiB** striping (before) | 201 | 52 631 000 | 1.00x | 1 044 480 | 107.56 ms |
+| **50 MiB** read-ahead 16 (after) | 201 | 52 428 800 | 1.00x | **4 194 096** | **77.71 ms** |
+
+Cancel at 50 % of 50 MiB — bytes served past what the copy wrote:
+
+| | wrote | served | discarded | latency |
+|---|---:|---:|---:|---:|
+| striping (before) | 26 373 120 | 27 261 624 | 888 504 | 58.79 ms |
+| read-ahead 16 (after) | 26 474 220 | 30 407 196 | **3 932 976** | 48.06 ms |
+
+Also: one `SSH_FXP_OPEN` per file instead of up to four; the after rows are
+byte-exact where the striped rows carried the per-seek 1 011-byte remainder.
+The larger cancel discard tracks the in-flight budget and is accepted — it is
+bandwidth after a cancel, never a wrong byte in the file.
+
+LOC in `crates/ssh` (+495 / -388 overall across five files):
+
+| | before | after | delta |
+|---|---:|---:|---:|
+| `pipeline.rs` production (above `mod tests`) | 218 | 99 | **-119** |
+| `download.rs` | 260 | 259 | -1 |
+| `session.rs` (`sftp_config` comment) | | | +2 |
+| **production total** | | | **-118** |
+| `pipeline.rs` tests | 180 | 173 | -7 |
+| `pipeline_budget_tests.rs` | 384 | 615 | +231 |
+| `us0095_verify_tests.rs` (comments only) | | | +6 |
+| **test total** | | | **+230** |
+
+Deleting 119 lines of re-order buffer, `JoinSet` lifecycle and multi-handle
+bookkeeping, and spending 230 on tests that assert the contract those lines used
+to carry implicitly, is the trade this packet makes deliberately.
+
 ## Documentation
 
 ### Owning Docs Reviewed
@@ -143,8 +184,32 @@ executes it and the HLD carries the rationale.
 
 ## Evidence and Gaps
 
-See `evidence/US-0096-measurements.md` for the full before/after tables and the harness that
-produced them.
+Full tables, the library-source findings behind the cancellation claim, the test inventory and
+the `harness.db` rows are in
+[`evidence/US-0096-measurements.md`](evidence/US-0096-measurements.md).
+
+Commands run:
+
+| Command | Result |
+|---|---|
+| `cargo test -p oneterm-ssh -p oneterm-sftp-ui -p oneterm-tools` | **91 / 49 / 16** (baseline 86 / 49 / 16; -5 striping tests, +10 new) |
+| `cargo fmt --all` | clean |
+| `pwsh scripts/ci-local.ps1 -Full` | pass |
+
+### Gaps
+
+- **No real-host run.** Everything is an in-process duplex against an in-process SFTP server:
+  no TCP, no SSH encryption, no RTT, no OpenSSH `limits@openssh.com` reply. Correctness is as
+  strong as the harness; throughput is not measured end to end.
+- **The RTT benefit is extrapolated.** It follows from `throughput = in-flight bytes / RTT`, a
+  measured 4.0x in-flight ratio and an identical request count. The only wall-clock evidence is
+  the 50 MiB loopback run (28 % faster), which is a floor, not the expected figure on a real link.
+- **No GUI walk.** `crates/sftp-ui` has no code change and its 49 tests pass unchanged, but the
+  transfer queue was not exercised in the running app.
+- **`max_concurrent_writes` stays at 8** against russh-sftp 3.0's 16 — `US-0095`'s decision,
+  deliberately not revisited here. Available as separate measurable work.
+- **Resume is still unimplemented** — not a regression, it never existed. The sequential reader
+  makes it a one-`seek` change if the owner wants it. Owner decision.
 
 ## Handoff
 
