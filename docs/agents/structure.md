@@ -184,6 +184,10 @@ OneTerm/
 │   │       └── bin/                # doom-fire, pty-throughput, sftp-dev-server, vt-corpus, vt-bench
 │   │
 │   └── vt/                         # `oneterm-vt` (IN-0029) — OneTerm's own VT engine, the only one
+│       ├── README.md               # the crates.io front page; its Rust blocks are doctests
+│       ├── CHANGELOG.md            # the crate's API changelog and its semver promise
+│       ├── public-api.txt          # the published surface; `scripts/vt-public-api.py` gates it
+│       ├── examples/headless.rs    # feed bytes, read events, print the screen — no dependencies
 │       ├── src/
 │       │   ├── lib.rs              # module declarations + public re-exports only; `grid`, `intern`
 │       │   │                       #   and `parser` are the only modules another crate names by path
@@ -246,7 +250,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal`, `pty` | backend | Local PTY; implements `TerminalSession` and owns the poll loop over `oneterm-pty`. |
 | `app` (`oneterm-app`) | shell + all five features + shared layers (incl. `update`) + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
-| `vt` (`oneterm-vt`) | `memchr`, `bitflags`, `rustc-hash`, `unicode-width`, `unicode-segmentation`, `log`; dev-only `proptest` — **no OneTerm crate**, no gpui | engine | OneTerm's own VT engine (IN-0029), and since `US-0087` the only one: the byte-level parser (`src/parser/`, a Williams state machine behind a narrow `Dispatch` trait, with bounded OSC / DCS / APC payloads), the storage layer — the 8-byte packed `Cell`, the per-terminal interned style / extras / grapheme / hyperlink tables, the width rules — the grid with its scrollback and tracked anchors, reflow, selection, damage / render state and graphics. `crates/terminal` runs on it since `US-0081`. |
+| `vt` (`oneterm-vt`) | `memchr`, `bitflags`, `rustc-hash`, `unicode-width`, `unicode-segmentation`, `log`; dev-only `proptest` — **no OneTerm crate**, no gpui | engine | OneTerm's own VT engine (IN-0029), and since `US-0087` the only one: the byte-level parser (`src/parser/`, a Williams state machine behind a narrow `Dispatch` trait, with bounded OSC / DCS / APC payloads), the storage layer — the 8-byte packed `Cell`, the per-terminal interned style / extras / grapheme / hyperlink tables, the width rules — the grid with its scrollback and tracked anchors, reflow, selection, damage / render state and graphics. `crates/terminal` runs on it since `US-0081`. **Published**: the only crate in the workspace with `publish = true` (`IN-0038`), so its public API, its rustdoc and its `DA`/`DSR`/`XTVERSION` reply bytes are an external contract — see `crates/vt/CHANGELOG.md` for the semver promise, and keep `///` and `//!` text free of work-packet, decision and intake citations (CI's `vt-package` job greps for them). |
 | `tools` (`oneterm-tools`) | `oneterm-vt`, `oneterm-pty`, `russh`, `russh-sftp`, `tokio`, `polling`, `rand`, `anyhow`, `serde`, `serde_json` | diagnostics | Outside the L0-L4 layering, never a dependency of the app; it may only reach down to L0 leaves. Binaries: `doom-fire`, `pty-throughput`, `sftp-dev-server`, and (IN-0029) `vt-corpus` — the VT parity corpus: check and deviation grep — plus `vt-bench`, the five benchmark tiers. `tests/corpus_check.rs` is the parity drift gate that runs in `cargo test --workspace`. |
 
 ## 3.1 Crate & dependency rules

@@ -32,7 +32,7 @@ oneterm-vt
 `-- unicode-width
 ```
 
-Six leaf crates, no build script, no proc macro, no `unsafe` beyond what those six use.
+Six leaf crates, no build script, no proc macro, and no `unsafe` block in the library itself.
 
 ## Quick start
 

@@ -10,8 +10,8 @@ use bitflags::bitflags;
 
 use crate::render::{MouseEncoding, MouseProtocol, MouseReporting};
 
-/// Title-stack depth (deviation D14). The reference caps at 4096, which no
-/// program approaches and which is a cheap memory sink.
+// Title-stack depth. xterm caps at 4096, which no program approaches and
+// which is a cheap memory sink.
 pub(crate) const TITLE_STACK_MAX: usize = 16;
 
 /// Kitty keyboard flag-stack depth, Ghostty's shape: fixed size, no heap.
@@ -20,7 +20,7 @@ pub(crate) const KEYBOARD_STACK_MAX: usize = 8;
 /// One terminal mode.
 ///
 /// Every variant that carries state has a bit in `Modes`; `DecCoLm` is listed
-/// because both `h` and `l` act (trap 40) even though nothing is stored.
+/// because both `h` and `l` act on it even though nothing is stored.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Mode {
     /// `? 1`, DECCKM.
@@ -55,26 +55,26 @@ pub enum Mode {
     AlternateScroll,
     /// `? 1042`.
     UrgencyHints,
-    /// `? 47` (correction C8).
+    /// `? 47`, the original alternate screen.
     AltScreen47,
-    /// `? 1047` (correction C8).
+    /// `? 1047`, the alternate screen without the cursor save.
     AltScreen1047,
-    /// `? 1048` (correction C8): save / restore the cursor, no screen swap.
+    /// `? 1048`: save / restore the cursor, no screen swap.
     SaveCursor1048,
     /// `? 1049`.
     AltScreen,
     /// `? 2004`.
     BracketedPaste,
     /// `? 2026`. The bit is not stored: the real state lives in
-    /// `crate::render::SyncState` (deviation D4).
+    /// `crate::render::SyncState`, which also holds its timeout.
     SyncUpdate,
-    /// `? 2027`. Recognised and inert (R-56).
+    /// `? 2027`, grapheme clustering. Recognised and inert.
     GraphemeClusters,
-    /// `? 9001`. Recognised and inert (R-36).
+    /// `? 9001`, win32 input mode. Recognised and inert.
     Win32Input,
     /// `4`, IRM.
     Insert,
-    /// `20`, LNM. Tracked, inert (deviation D9), and answered through
+    /// `20`, LNM. Tracked, inert, and answered through
     /// [`Mode::inert_state`] for that reason.
     LineFeedNewLine,
 }
@@ -398,7 +398,7 @@ pub(crate) struct FlagStack {
     flags: [KeyboardFlags; KEYBOARD_STACK_MAX],
     len: u8,
     /// The live flags, which can legitimately differ from the stack top after
-    /// `CSI = Ps u` (trap 42).
+    /// `CSI = Ps u`.
     live: KeyboardFlags,
 }
 
@@ -423,9 +423,7 @@ impl FlagStack {
         };
     }
 
-    /// `CSI > Ps u`. A full stack drops the oldest entry, which is the fix for
-    /// the reference's overflow bug — it pops the *title* stack here
-    /// (deviation D15).
+    /// `CSI > Ps u`. A full stack drops the oldest entry.
     pub(crate) fn push(&mut self, flags: KeyboardFlags) {
         if self.len as usize == KEYBOARD_STACK_MAX {
             self.flags.rotate_left(1);
@@ -473,7 +471,7 @@ pub(crate) struct TitleState {
 }
 
 impl TitleState {
-    /// `CSI 22 t`. Overflow drops the oldest entry (deviation D14).
+    /// `CSI 22 t`. Overflow drops the oldest entry.
     pub(crate) fn push(&mut self) {
         if self.stack.len() >= TITLE_STACK_MAX {
             self.stack.remove(0);

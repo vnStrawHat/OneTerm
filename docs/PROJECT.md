@@ -25,7 +25,10 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
 - UI: published `gpui-pre` / GPUI Kit 0.6 crates (`docs/agents/dependencies.md`). There is no
   `[patch]` section and no vendored third-party source.
 - Terminal engine: `oneterm-vt` (`crates/vt`), OneTerm's own — parser, grid, reflow, selection,
-  damage and graphics, no third-party engine behind it (`IN-0029`, `DEC-0014`); local PTY via `oneterm-pty` (`crates/pty`, OneTerm's
+  damage and graphics, no third-party engine behind it (`IN-0029`, `DEC-0014`). It is also the
+  workspace's **only publishable crate** (`IN-0038`): it depends on no OneTerm crate, ships its own
+  `README.md`, `CHANGELOG.md` and `examples/`, and its public API, its rustdoc and its reply bytes
+  are an external contract. Local PTY via `oneterm-pty` (`crates/pty`, OneTerm's
   own transport: Windows ConPTY with the bundled `conpty.dll` / `OpenConsole.exe` preferred over
   `kernel32`, `openpty` on Unix); SSH/SFTP via `russh` + `russh-sftp` on a tokio runtime hidden
   inside `crates/ssh`.
