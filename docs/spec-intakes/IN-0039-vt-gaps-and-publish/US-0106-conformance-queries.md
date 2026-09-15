@@ -368,7 +368,20 @@ digits are echoed; anything else echoes empty (`hex_echo`, with
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | `python scripts/vt-public-api.py --check --no-doc` | unchanged after `--update` |
 | `python scripts/vt-public-api.py --diff-platforms` | 6 lines, all inside `oneterm_vt::pty` |
-| `pwsh scripts/ci-local.ps1 -Full` | see the run log referenced below |
+| `pwsh scripts/ci-local.ps1 -Full` | **`ci-local: all checks passed.`** (exit 0) |
+
+`ci-local -Full` ran all 21 steps green, including the two that this packet was most at risk of
+breaking: **rustdoc self-containment** over `crates/vt/src` and `crates/vt/docs/guide` (it caught
+four `///` citations and a bare `docs/` path in the first draft, now fixed), and
+`cargo package -p oneterm-vt --list` against the dependency-graph policy. `cargo deny check
+licenses bans advisories` is included and reports `advisories ok, bans ok, licenses ok` -- no new
+dependency was added by this packet, in `crates/vt` or in `crates/tools`.
+
+One honesty note about that run: the rustdoc fixups landed while the run was in its
+`cargo test --workspace` stage, so `cargo fmt --all -- --check` and the first `clippy` step
+executed against the pre-fixup tree. Both were re-run by hand afterwards against the final tree and
+are clean; every step from `rustdoc self-containment` onwards ran against the final tree. The
+fixups were comment text only.
 
 ### Budget: over, on every line
 
