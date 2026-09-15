@@ -1422,7 +1422,7 @@ fn osc_events(session: &Session) -> usize {
 fn the_routing_table_answers_every_row() {
     const BUILTIN: u32 = 7;
     const PRIVATE: u32 = 633;
-    const SPILL: u32 = 20308;
+    const SPILL: u32 = 31337;
 
     // Rows 1 and 2: nothing said about the number.
     let routes = OscRoutes::new();
@@ -1474,7 +1474,7 @@ fn the_routing_table_answers_every_row() {
     for code in OscRoutes::BUILTIN {
         assert!(OscRoutes::has_builtin(code), "OSC {code}");
     }
-    for code in [3, 6, 13, 633, 777, 1337, 20308] {
+    for code in [3, 6, 13, 633, 777, 1337, 31337] {
         assert!(!OscRoutes::has_builtin(code), "OSC {code}");
     }
 }
@@ -1560,15 +1560,15 @@ fn a_large_ceiling_is_opt_in_per_number() {
     let payload = "x".repeat(3 * 1024 * 1024);
 
     let mut routes = OscRoutes::new();
-    routes.route(20308, OscRoute::Forward).large(20308, true);
+    routes.route(31337, OscRoute::Forward).large(31337, true);
     let mut session = Session::with(with_routes(20, 4, routes));
-    session.feed(format!("\x1b]20308;1;{payload}\x07").as_bytes());
+    session.feed(format!("\x1b]31337;1;{payload}\x07").as_bytes());
     let event = session
         .batch
         .iter()
         .find_map(|event| match event {
             VtEvent::Osc {
-                code: 20308,
+                code: 31337,
                 params,
                 truncated,
                 ..
@@ -1588,15 +1588,15 @@ fn a_large_ceiling_is_opt_in_per_number() {
     );
 
     // The same input without the ceiling stops at `OSC_INLINE`.
-    let mut session = Session::with(routing(20, 4, &[20308], OscRoute::Forward));
-    let stats = session.feed(format!("\x1b]20308;1;{payload}\x07").as_bytes());
+    let mut session = Session::with(routing(20, 4, &[31337], OscRoute::Forward));
+    let stats = session.feed(format!("\x1b]31337;1;{payload}\x07").as_bytes());
     assert_eq!(stats.truncated_osc, 1);
     let (params, truncated) = session
         .batch
         .iter()
         .find_map(|event| match event {
             VtEvent::Osc {
-                code: 20308,
+                code: 31337,
                 params,
                 truncated,
                 ..
@@ -1806,14 +1806,18 @@ fn osc_50_reports_that_the_cursor_shape_changed() {
     );
 }
 
-/// The worked example, and the packet's real proof: OneTerm's agent channel and
-/// its deprecated `OSC 9;7` alias both work through the routing table alone,
-/// with **no** knowledge of either number in this crate.
+/// The worked example: an embedder's own OSC number, and a built-in it wants
+/// to keep *and* discriminate by sub-code. Both work through the table alone,
+/// and this crate knows neither the number nor the sub-code.
+///
+/// Routing is per number because sub-codes are payload. An embedder whose
+/// private protocol once shared a built-in's number takes the wrap route and
+/// recognises its own sub-code in its own code — which is exactly what the two
+/// halves below are.
 #[test]
 fn an_embedder_private_osc_number_and_a_wrapped_builtin_both_work() {
-    // What `crates/terminal`'s `adapter_config` builds, spelled out.
     let mut routes = OscRoutes::new();
-    routes.route(20308, OscRoute::Forward).large(20308, true);
+    routes.route(31337, OscRoute::Forward).large(31337, true);
     routes.route(9, OscRoute::BuiltinAndForward).large(9, true);
     let config = Config {
         osc_routes: routes,
@@ -1822,26 +1826,30 @@ fn an_embedder_private_osc_number_and_a_wrapped_builtin_both_work() {
 
     // The private number: forwarded raw, sub-code and all, and never parsed.
     let mut session = Session::with(Terminal::new(Size { rows: 4, cols: 20 }, config.clone()));
-    session.feed(b"\x1b]20308;1;agent-status\x07");
+    session.feed(b"\x1b]31337;1;private-payload\x07");
     assert_eq!(
-        forwarded_osc(&session, 20308).expect("a forwarded OSC reaches the batch"),
-        vec![b"20308".to_vec(), b"1".to_vec(), b"agent-status".to_vec()]
+        forwarded_osc(&session, 31337).expect("a forwarded OSC reaches the batch"),
+        vec![
+            b"31337".to_vec(),
+            b"1".to_vec(),
+            b"private-payload".to_vec()
+        ]
     );
     let mut session = Session::with(Terminal::new(Size { rows: 4, cols: 20 }, config.clone()));
-    session.feed(b"\x1b]20308;0\x07");
+    session.feed(b"\x1b]31337;0\x07");
     assert_eq!(
-        forwarded_osc(&session, 20308).expect("the support query reaches the batch"),
-        vec![b"20308".to_vec(), b"0".to_vec()]
+        forwarded_osc(&session, 31337).expect("a sub-code carrying no payload"),
+        vec![b"31337".to_vec(), b"0".to_vec()]
     );
 
     // The wrapped built-in: the engine parses `9;7` as the notification it
     // looks like *and* hands over the bytes, so the embedder can recognise its
-    // own alias and discard the notification. The engine has no opinion.
+    // own sub-code and discard the notification. The engine has no opinion.
     let mut session = Session::with(Terminal::new(Size { rows: 4, cols: 20 }, config));
-    session.feed(b"\x1b]9;7;agent-status\x07");
+    session.feed(b"\x1b]9;7;private-payload\x07");
     assert_eq!(
         forwarded_osc(&session, 9).expect("the wrapped sequence reaches the batch"),
-        vec![b"9".to_vec(), b"7".to_vec(), b"agent-status".to_vec()]
+        vec![b"9".to_vec(), b"7".to_vec(), b"private-payload".to_vec()]
     );
     let kinds: Vec<&VtEvent> = session
         .batch
@@ -1874,7 +1882,7 @@ fn arbitrary_bytes_and_an_arbitrary_table_never_panic() {
 
     for round in 0..64 {
         let mut routes = OscRoutes::new();
-        for &code in OscRoutes::BUILTIN.iter().chain([633, 1337, 20308].iter()) {
+        for &code in OscRoutes::BUILTIN.iter().chain([633, 1337, 31337].iter()) {
             let mut route = ROUTES[(next() % 4) as usize];
             // `Builtin` on a number with no built-in is the documented debug
             // assertion, not a table an embedder can build by accident.

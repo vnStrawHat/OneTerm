@@ -123,7 +123,7 @@ use oneterm_vt::{Config, OscRoute, OscRoutes, Size, Terminal};
 let mut routes = OscRoutes::new();
 // An application protocol of your own, delivered raw and allowed to spill
 // past the 2 KiB inline cap to 8 MiB.
-routes.route(20308, OscRoute::Forward).large(20308, true);
+routes.route(31337, OscRoute::Forward).large(31337, true);
 // Keep the engine's OSC 9 handling and see the bytes as well.
 routes.route(9, OscRoute::BuiltinAndForward);
 
@@ -131,7 +131,7 @@ let term = Terminal::new(
     Size { rows: 24, cols: 80 },
     Config { osc_routes: routes, ..Config::default() },
 );
-assert_eq!(term.config().osc_routes.get(20308), OscRoute::Forward);
+assert_eq!(term.config().osc_routes.get(31337), OscRoute::Forward);
 ```
 
 Supporting a new OSC number is that one call plus a `match` arm on the event. This crate needs no

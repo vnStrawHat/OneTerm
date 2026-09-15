@@ -53,7 +53,7 @@ fuzz_target!(|data: &[u8]| {
     // payload ceiling for a handful of numbers, so every combination is fuzzed
     // rather than only the default one.
     let mut routes = OscRoutes::new();
-    for (index, &code) in [0u32, 4, 7, 8, 9, 52, 133, 1337, 20308].iter().enumerate() {
+    for (index, &code) in [0u32, 4, 7, 8, 9, 52, 133, 1337, 31337].iter().enumerate() {
         let seed = data.get(index).copied().unwrap_or(0);
         let route = match seed % 4 {
             0 if OscRoutes::has_builtin(code) => OscRoute::Builtin,
