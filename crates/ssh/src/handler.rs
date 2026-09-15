@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use oneterm_core::{AppError, ConnectPhase, HostKeyPolicy, report_best_effort};
+use oneterm_core::{AppError, ConnectPhase, HostKeyPolicy};
 use russh::client;
 use russh::keys::{Algorithm, HashAlg, PublicKey};
 use tokio_util::sync::CancellationToken;
@@ -314,12 +314,32 @@ impl client::Handler for SshClientHandler {
 
     /// known_hosts is read (and possibly appended) on the blocking pool so
     /// the two shared SSH runtime workers never stall on disk I/O (CORR-17).
+    ///
+    /// russh 0.63 can present an OpenSSH host *certificate* here instead of a
+    /// bare key. OneTerm refuses one: it advertises no `*-cert-v01@openssh.com`
+    /// host-key algorithm (`Preferred::host_key_certificates` is empty in
+    /// `Preferred::DEFAULT`, and OneTerm builds no custom `Preferred`), so a
+    /// conforming server never sends one — and there is no certificate-authority
+    /// trust store to check one against, because known_hosts records bare keys.
     async fn check_server_key(
         &mut self,
-        server_key: &russh::keys::PublicKey,
+        server_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        let server_key = match server_key {
+            russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
+            russh::keys::PublicKeyOrCertificate::Certificate(certificate) => {
+                return Err(SshHandlerError::UnknownHostKey {
+                    host: self.host.clone(),
+                    port: self.port,
+                    algorithm: certificate.algorithm().to_string(),
+                    fingerprint: format!(
+                        "cert:{}",
+                        certificate.public_key().fingerprint(HashAlg::Sha256)
+                    ),
+                });
+            }
+        };
         let handler = self.clone();
-        let server_key = server_key.clone();
         tokio::task::spawn_blocking(move || handler.verify_server_key(&server_key))
             .await
             .unwrap_or_else(|join_error| {
@@ -330,28 +350,33 @@ impl client::Handler for SshClientHandler {
     }
 
     /// The server wants the local agent. Bridged only when this session turned
-    /// forwarding on; otherwise the channel is dropped, never answered.
+    /// forwarding on; otherwise `reply` is dropped, which refuses the channel
+    /// with `AdministrativelyProhibited` (russh 0.63 no longer confirms a
+    /// server-initiated channel before calling the handler).
     async fn server_channel_open_agent_forward(
         &mut self,
         channel: russh::Channel<client::Msg>,
+        reply: russh::client::ChannelOpenHandle,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
         match &self.agent_bridge {
             Some((connector, shutdown)) => {
+                // Confirm before the bridge writes anything to the channel.
+                reply.accept().await;
                 spawn_agent_bridge(channel, connector.clone(), shutdown.clone());
             }
             None => {
                 log::warn!(
                     "SshClientHandler: the server opened an agent channel but forwarding is off for this session"
                 );
-                report_best_effort("close unrequested agent channel", channel.close().await);
             }
         }
         Ok(())
     }
 
     /// A connection to one of this session's remote forwards. Channels for
-    /// listeners OneTerm never asked for are dropped, never bridged.
+    /// listeners OneTerm never asked for are refused, never bridged: dropping
+    /// `reply` sends `AdministrativelyProhibited` (`DEC-0011`).
     async fn server_channel_open_forwarded_tcpip(
         &mut self,
         channel: russh::Channel<client::Msg>,
@@ -359,6 +384,7 @@ impl client::Handler for SshClientHandler {
         connected_port: u32,
         originator_address: &str,
         originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
         let target = self
@@ -372,13 +398,14 @@ impl client::Handler for SshClientHandler {
                     target.0,
                     target.1
                 );
+                // Confirm before the bridge writes anything to the channel.
+                reply.accept().await;
                 spawn_forwarded_tcpip(channel, target, shutdown.clone());
             }
             _ => {
                 log::warn!(
-                    "SshClientHandler: closing a forwarded-tcpip channel for {connected_address}:{connected_port} that was never requested"
+                    "SshClientHandler: refusing a forwarded-tcpip channel for {connected_address}:{connected_port} that was never requested"
                 );
-                report_best_effort("close unrequested forwarded channel", channel.close().await);
             }
         }
         Ok(())

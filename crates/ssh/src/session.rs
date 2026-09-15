@@ -994,9 +994,11 @@ mod tests {
         async fn channel_open_session(
             &mut self,
             _channel: russh::Channel<russh::server::Msg>,
+            reply: russh::server::ChannelOpenHandle,
             _session: &mut russh::server::Session,
-        ) -> Result<bool, Self::Error> {
-            Ok(true)
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
         }
 
         async fn auth_password(
@@ -1162,3 +1164,8 @@ mod tests {
         assert_eq!(phases.current(), ConnectPhase::ShellRequest);
     }
 }
+
+// Key-file parsing lives in a sibling `keyfile_tests.rs` (see code-style.md).
+#[cfg(test)]
+#[path = "keyfile_tests.rs"]
+mod keyfile_tests;

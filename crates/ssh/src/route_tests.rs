@@ -34,9 +34,11 @@ impl russh::server::Handler for RelayServer {
     async fn channel_open_session(
         &mut self,
         _channel: russh::Channel<russh::server::Msg>,
+        reply: russh::server::ChannelOpenHandle,
         _session: &mut russh::server::Session,
-    ) -> Result<bool, Self::Error> {
-        Ok(true)
+    ) -> Result<(), Self::Error> {
+        reply.accept().await;
+        Ok(())
     }
 
     async fn channel_open_direct_tcpip(
@@ -46,20 +48,25 @@ impl russh::server::Handler for RelayServer {
         port_to_connect: u32,
         _originator_address: &str,
         _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
         _session: &mut russh::server::Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
         if !self.relay {
-            return Ok(false);
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
         }
         let mut tcp =
             tokio::net::TcpStream::connect((host_to_connect, port_to_connect as u16)).await?;
+        reply.accept().await;
         tokio::spawn(async move {
             let mut remote = channel.into_stream();
             if let Err(error) = tokio::io::copy_bidirectional(&mut remote, &mut tcp).await {
                 eprintln!("test relay ended: {error}");
             }
         });
-        Ok(true)
+        Ok(())
     }
 }
 
