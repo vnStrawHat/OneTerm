@@ -111,3 +111,10 @@ async fn apply_local_metadata_to_remote(
         log::warn!("sftp upload: could not apply local permissions/times to {remote}: {error}");
     }
 }
+
+// `IN-0037`'s independent verification, adopted from the verifying session: the
+// download contract measured on the wire and through the real `sftp_download`
+// entry point, plus the transport-death and destination-failure paths.
+#[cfg(test)]
+#[path = "transfer/in0037_verify_tests.rs"]
+mod in0037_verify_tests;

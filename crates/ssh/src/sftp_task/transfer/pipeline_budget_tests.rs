@@ -282,6 +282,72 @@ async fn an_upload_keeps_the_2_3_0_write_budget_in_flight() {
     );
 }
 
+/// `IN-0037` changed `copy_sequential`'s progress cadence from once-per-read to
+/// once per `CHUNK_LEN` of bytes, and **uploads share that function**. The write
+/// budget test above proves the bytes and the packets are untouched; it says
+/// nothing about the samples. This pins the sample sequence of a real upload - a
+/// real local file into a real `SftpSession`, the exact composition
+/// `upload::upload_file_contents` uses - so "uploads are unchanged" covers
+/// progress too, measured rather than inferred.
+///
+/// The sequence asserted here is the one the pre-`IN-0037` per-read cadence
+/// produced, because `tokio::fs::File` fills the whole `CHUNK_LEN` buffer from a
+/// regular file on every read but the last. A source that short-read would
+/// coalesce two former samples into one; that is harmless - `send_progress`
+/// drops samples on a full channel by design and `sftp-ui::run_transfer` keeps
+/// only the latest fraction - but it is why this test uses a real file rather
+/// than a `Cursor`.
+#[tokio::test]
+async fn an_upload_reports_the_same_progress_samples_it_did_before_in0037() {
+    const SIZE: usize = 5 * 1024 * 1024 + 99;
+    let source = temp_path("upload-cadence-src");
+    std::fs::write(&source.0, payload(SIZE)).expect("write local source file");
+    let remote = temp_path("upload-cadence-dst");
+    std::fs::write(&remote.0, b"").expect("create remote file");
+
+    let (sftp, _counters) = counting_session(&remote.0, sftp_config()).await;
+    let mut local_file = tokio::fs::File::open(&source.0)
+        .await
+        .expect("open local source");
+    let mut remote_file = sftp
+        .open_with_flags(
+            "payload",
+            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+        )
+        .await
+        .expect("open for write");
+
+    let mut progress = Vec::new();
+    copy_sequential(
+        &mut local_file,
+        &mut remote_file,
+        &CancellationToken::new(),
+        &mut |done| progress.push(done),
+    )
+    .await
+    .expect("upload");
+    remote_file.shutdown().await.expect("flush and close");
+
+    assert_eq!(
+        std::fs::read(&remote.0).expect("read back"),
+        payload(SIZE),
+        "the upload must be byte-identical"
+    );
+
+    // One sample at every CHUNK_LEN boundary, then the 99-byte tail at EOF.
+    let expected: Vec<u64> = (1..=SIZE / CHUNK_LEN)
+        .map(|n| (n * CHUNK_LEN) as u64)
+        .chain(std::iter::once(SIZE as u64))
+        .collect();
+    assert_eq!(
+        progress,
+        expected,
+        "an upload's progress samples changed: {} samples, expected {}",
+        progress.len(),
+        expected.len()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // IN-0037 — the read budget, now owned entirely by the library
 // ---------------------------------------------------------------------------
