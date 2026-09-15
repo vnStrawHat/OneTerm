@@ -54,9 +54,9 @@ decides otherwise.
 ## Acceptance
 
 - [x] `cargo package -p oneterm-vt` exits 0, and the file list it prints contains `README.md`,
-  `CHANGELOG.md`, `LICENSE`, `NOTICE` and `examples/headless.rs`. 67 files, 876.3 KiB (226.4 KiB
+  `CHANGELOG.md`, `LICENSE`, `NOTICE` and `examples/headless.rs`. 68 files, 883.5 KiB (228.4 KiB
   compressed); `fuzz/` is excluded on its own (it declares its own `[workspace]`), so no `exclude`
-  key was needed. `public-api.txt` ships too, at 20 KiB: it describes the crate a reader is holding,
+  key was needed. `public-api.txt` ships too, at 16 KiB: it describes the crate a reader is holding,
   and an `exclude` key is one more thing to keep in step for no gain. **The criterion said
   `cargo publish --dry-run`**; owner ruling 2026-09-15 makes that command unavailable
   (`publish = false`), and `cargo package` is what it becomes. `cargo package` works unchanged with
@@ -141,7 +141,11 @@ Changed:
 - `.github/workflows/ci.yml`, `scripts/ci-local.sh`, `scripts/ci-local.ps1` -- the new gate.
 - `AGENTS.md` section 4 -- the same steps, because that list is what an agent runs before reporting
   a task done and it is supposed to match `ci.yml`.
-- `IN-0038.md` -- Open Decisions 2, 3, 5 and 6 ticked with their ruling text and provenance.
+- `IN-0038.md` -- Open Decisions 2, 3, 5 and 6 ticked with their ruling text and provenance, and six
+  places in the body above them aligned with Open Decision 2.
+- `docs/spec-intakes/IN-0009-.../` renamed to `IN-0009-completion-utf8-prefix-slicing/`, because its
+  118-character directory name broke a git dependency's checkout on Windows. No document referenced
+  the old path; `harness.db` does, and the Harness note below names both rows.
 - `low-level-design/packaging.md` and `low-level-design/api-surface.md` -- reconciled with what was
   built: the manifest as it is, the README's whole-file doctest route, and the HTML-reading
   public-API script.
@@ -238,8 +242,8 @@ The full design is in [`low-level-design/packaging.md`](low-level-design/packagi
 
 ## Evidence and Gaps
 
-**Package.** `cargo package -p oneterm-vt` on a clean tree: `Packaged 67 files, 876.3KiB (226.4KiB
-compressed)`, verified build clean, exit 0. The exact command the gate runs is
+**Package.** `cargo package -p oneterm-vt`: `Packaged 68 files, 883.5KiB (228.4KiB compressed)`,
+verified build clean, exit 0. The exact command the gate runs is
 
 ```console
 $ cargo package -p oneterm-vt --list |
@@ -252,16 +256,16 @@ examples/headless.rs, and reaches nothing outside crates/vt.
 The local scripts add `--allow-dirty` so the gate runs with uncommitted work; a doctored list
 missing `LICENSE` fails with exit 1. `fuzz/` is excluded on its own (it declares its own
 `[workspace]`), and no
-directory approaches 1 MB, so no `exclude` key was added; `public-api.txt` ships at 19 KiB, which is
+directory approaches 1 MB, so no `exclude` key was added; `public-api.txt` ships at 16 KiB, which is
 fine -- it describes the crate the reader is holding. Two file names carried internal record ids and
 would have shipped: `tests/us0087_cleanup_rows.rs` and `src/terminal/verify_bug0058_tests.rs`,
 renamed to `tests/cleanup_rows.rs` and `src/terminal/dcs_routing_tests.rs`; every `tests/*.rs` header
 was rewritten too.
 
-**Citations.** 106 rustdoc lines in 44 files before, 0 after. **23** module headers keep their
-design document as an absolute `https://github.com/vnStrawHat/OneTerm/...` link -- one per file,
-which is the form the HLD allows; everything else became a plain `//` comment or plain English. (An
-earlier draft of this section said "six", counting the forks' reports rather than the files.) The CI
+**Citations.** 106 rustdoc lines in 44 files before, 0 after. **23** rustdoc lines across 23 files
+keep their design document as an absolute `https://github.com/vnStrawHat/OneTerm/...` link, which is
+the form the HLD allows; everything else became a plain `//` comment or plain English. (An earlier
+draft of this section said "six", counting the forks' reports rather than the files.) The CI
 grep also covers `BUG-NNNN`, which the criterion's pattern omits: it caught four more rustdoc lines,
 all `BUG-0058`. Two `BUG-0051` mentions survive in `reflow/reflow_tests.rs` as plain `//` comments,
 which is what the rule asks for. Internal vocabulary with no id at all (`trap 40`, `correction C8`,
@@ -307,18 +311,22 @@ both run: renaming the private `parser::params` module leaves the file unchanged
 "public API surface unchanged"), and renaming the public `cluster_width` fails it with the expected
 two-line diff (exit 1).
 
-**Gate.** `cargo test -p oneterm-vt` 374 + 8 + 6 + 3 doctests; `pwsh scripts/ci-local.ps1 -Full`
-green, run once with an untracked file under `crates/vt/` present to prove the local gate no longer
-needs a clean tree.
+**Gate.** `cargo test -p oneterm-vt` 374 + 6 + 8 + 7 + 3 doctests (two ignored in the lib suite,
+one in `parser_limits`); `pwsh scripts/ci-local.ps1 -Full` green, run once with an untracked file
+under `crates/vt/` present to prove the local gate no longer needs a clean tree.
 
 Known gaps to carry forward:
 
 - CI does not build at the MSRV, so `rust-version = 1.96.0` is a claim rather than a proof. The
   README says so in as many words rather than implying a check that does not exist.
 - The crate is not published, and will not be: **owner ruling 2026-09-15** on Open Decision 2.
-  Other projects consume it as a git dependency pinned to a tag. Nobody has yet done so, so the
-  git-dependency form in the README is written from the manifest rather than measured against a real
-  consumer.
+  Other projects consume it as a git dependency. The `rev` form is measured -- a scratch consumer
+  outside the workspace built and ran against this branch on the default `CARGO_HOME` -- but the
+  `tag` form cannot be until the application releases `v0.5.3`, because every existing tag predates
+  the crate.
+- **No project actually depends on it yet.** The consumer that proved the README was written for
+  that purpose and deleted. The first real embedder will find whatever a five-minute scratch crate
+  did not.
 - `product_name`'s default string is Open Decision 5, ruled `oneterm-vt(<crate version>)`. All four
   decisions this packet leans on (2, 3, 5, 6) are recorded in `IN-0038.md` as owner rulings dated
   2026-09-15.
@@ -338,6 +346,12 @@ Known gaps to carry forward:
   docs. Found during the doc pass, out of scope here, and it belongs on `US-0098`'s api-surface list.
 - `FeedStats::grapheme_truncated` and `FeedStats::style_table_exhausted` are never written. They are
   documented as reserved rather than as working counters; wiring them is a separate change.
+- **Out of scope, for a later BUG:** `oneterm-terminal`'s
+  `handle::tests::a_pump_yields_to_the_demand_within_a_bounded_number_of_chunks` failed once under
+  load during the verification and passed 3/3 in isolation and inside the green gate. It is a
+  two-thread scheduling test with a hard-coded 250 us sleep (`crates/terminal/src/handle.rs`), and
+  nothing in this packet's production diff reaches it. Recorded so the next person to see it red
+  does not chase `US-0097`.
 
 ## Verification notes closed
 
@@ -349,10 +363,10 @@ closed; the rulings on the seven mediums are the coordinator's.
 | --- | --- |
 | F1 dead guide link | The README's **Documentation** section names the guide as planned and carries no URL. `US-0103` adds the link with the guide. |
 | F2 no licence in the tarball | `LICENSE` and `NOTICE` copied into `crates/vt/`, so `cargo package` ships them. `scripts/verify-dependency-graph.py --package-list -` asserts both, plus `README.md`, `CHANGELOG.md` and `examples/headless.rs`, from a `cargo package --list` on stdin; CI and both `ci-local` scripts pipe it. A doctored list missing one fails with exit 1. |
-| F3 unvalidated `product_name` spliced into a DCS | Sanitised once at the reply site: every C0, `DEL` and C1 control dropped, cut to 64 bytes on a character boundary, empty result falls back to `oneterm-vt(<version>)`. Documented on the field, which is what an embedder reads. Pinned by five tests, including the verifier's `ESC \`, `0x9c`, `BEL` and 64 KiB cases. |
+| F3 unvalidated `product_name` spliced into a DCS | Sanitised in `Terminal::new` (see R4): every C0, `DEL` and C1 control dropped, cut to 64 bytes on a character boundary, empty result falls back to `oneterm-vt(<version>)`. Documented on the field, which is what an embedder reads. Pinned by `tests/product_name.rs` (8 tests), including the verifier's `ESC \`, `0x9c`, `BEL` and 64 KiB cases. |
 | F4 `DA2` overflow and collision | Each version component saturates at 99 before packing, so the answer is at most `999999` and no name can overflow it. The collision it buys (`1.0.100` reports what `1.0.99` reports) is documented on the field and on `version_number`, and pinned by a test. `P(429497.0.0)` now answers `999999`-shaped bytes instead of panicking in a debug build. |
 | F5 `public-api.txt` is not the public API | The script keeps only paths whose module is the crate root or one of the crate's `pub mod`s, read from `lib.rs` so a future `pub mod` needs no edit. 764 lines to 688; 164 item lines to 100. Both break tests run: a private-module rename passes, a public-item rename fails. |
-| F6 rulings claimed but not recorded | `IN-0038.md` Open Decisions 2, 3, 5 and 6 are ticked with their ruling text and the provenance "Coordinator default 2026-09-15, presented to the owner, no objection recorded". The packet no longer calls them owner rulings. |
+| F6 rulings claimed but not recorded | `IN-0038.md` Open Decisions 2, 3, 5 and 6 are ticked with their ruling text and the provenance "Owner ruling 2026-09-15" -- the owner ruled in the coordination session that day and the coordinator relayed it. (This row said something else in an earlier draft; see "The provenance, corrected" below.) |
 | F7 `ci-local` unrunnable with uncommitted work | Every gate runs `cargo package -p oneterm-vt --list` into the file-set check: offline, and with `--allow-dirty` locally it works with a dirty tree, which is the state `AGENTS.md` tells every agent to run the gate in. `cargo publish --dry-run` is gone from `ci.yml` too, because owner ruling 2026-09-15 made it unavailable. Proven by a green `-Full` run with an untracked file under `crates/vt/`. |
 | F8 evidence over-claims | Every number in Evidence re-measured: 23 repository links in 23 files (not six), 67 files and 875.6 KiB (not 63/64 and 857.7 KiB), the `BUG-0051` lines identified as plain `//` comments, `tests/parser_limits.rs` cleaned, `src/terminal/verify_bug0058_tests.rs` renamed, and the harness snippet's file count corrected. |
 | F9 dangling doc fragment | `grid/row.rs` fixed, and the whole file re-read for the same accident. |
@@ -364,6 +378,69 @@ closed; the rulings on the seven mediums are the coordinator's.
 
 Two findings the verification recorded as correct-but-unproven stay open and are in Gaps: the E2E
 walk, and the MSRV.
+
+## Verification notes closed, second round
+
+Re-verification at `2e1495c`'s successor `3fd76f7`: **PASS-WITH-NOTES**, 13 of the 14 first-round
+findings closed, two mediums and six smaller notes raised. The report is the same file,
+[`evidence/US-0097-verify.md`](evidence/US-0097-verify.md), section "Re-verification at `3fd76f7`".
+
+| Finding | Closed by |
+| --- | --- |
+| R1(a) the Install block names a tag with no crate in it | `v0.5.2` predates `crates/vt`, and the crate inherits the application's version, so no existing tag can carry it. The README now pins a `rev`, names `branch = "main"` as the tracking form, and says tags work from the next release (`v0.5.3`) onward. |
+| R1(b) a git dependency fails on Windows under the default `CARGO_HOME` | The cause was ours: `docs/spec-intakes/IN-0009-prevent-terminal-completion-.../` is a 118-character directory name, which put three files at 161 to 197 characters, and libgit2 honours neither `core.longpaths` nor `LongPathsEnabled`. Renamed to `IN-0009-completion-utf8-prefix-slicing/`, and `verify-dependency-graph.py` now fails any tracked path over 150 characters. Proven by a scratch consumer outside the repository, on the **default** `CARGO_HOME`: it builds and runs. |
+| R2 the close-note's provenance | Corrected below: the owner ruled, the coordinator relayed. |
+| R3 the API gate misses a nested `pub mod` | `vt-public-api.py` walks the module links rustdoc puts in each module's own index, so it reaches every publicly nameable module at any depth. The verifier's probe (`pub mod probe` inside `grid`) now fails the gate with `+struct oneterm_vt::grid::probe::Probe`; the private-module rename still passes. |
+| R4 the sanitiser ran per query | It runs once, in `Terminal::new`, which stores the sanitised name. 2 000 queries against a 1 MiB control-only name: **11.64 s before, 5.8 ms after**. Seven hostile cases adopted as `tests/product_name_hostile.rs`. |
+| R5 `IN-0038.md`'s body still described the pre-ruling plan | Six places aligned with Open Decision 2. |
+| R6 residual numbers | Re-measured, not re-asserted: 68 files and 883.5 KiB packaged, `public-api.txt` at 16 KiB, 374 + 6 + 8 + 7 + 3 tests, 23 repository links in 23 files, and `tests/product_name.rs` named as 8 tests. |
+| R7 the package gate's exit status | PowerShell captures the list and checks both statuses; the workflow step sets `pipefail`; the bash script already had it. Proven in both shells by pointing them at a package name that does not exist: each stops. |
+| R8 a load-sensitive workspace test | Not this packet's; recorded in Gaps. |
+
+### The provenance, corrected
+
+An earlier draft of this packet said the four Open Decisions were recorded as "Coordinator default
+2026-09-15, presented to the owner, no objection recorded". That is not what happened and not what
+the record says. **The owner ruled on Open Decisions 2, 3, 5 and 6 in the coordination session on
+2026-09-15**; the coordinator relayed those rulings, and `IN-0038.md` records them as
+"Owner ruling 2026-09-15", which is correct. The verification was right to ask: the phrase had been
+copied into seven documents including a shipped source comment, and the packet's own note
+contradicted it.
+
+### The consumer build, on the default `CARGO_HOME`
+
+```console
+$ cargo run                       # scratch crate outside the workspace, deleted afterwards
+   Compiling memchr v2.8.3
+   Compiling unicode-segmentation v1.13.3
+   Compiling rustc-hash v2.1.3
+   Compiling bitflags v2.13.2
+   Compiling unicode-width v0.2.2
+   Compiling oneterm-vt v0.5.2 (file:///D:/TrungKFC-Research/Rust/myTerm2?branch=feat%2Fvt-publishable#bf292660)
+   Compiling vtconsumer v0.1.0 (...)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.25s
+     Running `target\debug\vtconsumer.exe`
+title: "a title"
+identity replies: "\u{1b}P>|vtconsumer(9.9.9)\u{1b}\\\u{1b}[>0;90909;1c"
+rows: 24
+```
+
+Six leaf dependencies compiled and nothing else, `Config::product_name` reachable and answering the
+consumer's own identity in both replies, and the README's first block compiling unmodified outside
+the workspace.
+
+### Harness note
+
+The `IN-0009` rename moves two rows' paths. The coordinator updates `harness.db`; this session does
+not write it.
+
+- `doc_path` / `packet_doc` old:
+  `docs/spec-intakes/IN-0009-prevent-terminal-completion-from-slicing-strings-at-invalid-utf-8-boundaries-when-matching-prefixes-from-history-or-catalogs/IN-0009.md`
+  and `.../BUG-0011-prevent-unicode-prefix-match-crash.md`
+- new: `docs/spec-intakes/IN-0009-completion-utf8-prefix-slicing/IN-0009.md` and
+  `docs/spec-intakes/IN-0009-completion-utf8-prefix-slicing/BUG-0011-prevent-unicode-prefix-match-crash.md`
+
+The third file, `high-level-design.md`, moves with them and is not referenced by the database.
 
 ## Harness row
 
