@@ -17,8 +17,9 @@ workspace = true
 [dependencies]
 oneterm-core.workspace = true
 oneterm-terminal.workspace = true
-# The pseudo-console transport, `oneterm-vt`'s default-on `pty` feature.
-oneterm-vt.workspace = true
+# The pseudo-console transport. `pty` is `oneterm-vt`'s default-on feature, and
+# this is the crate that asks the workspace for it.
+oneterm-vt = { workspace = true, features = ["pty"] }
 async-channel.workspace = true
 polling.workspace = true
 log.workspace = true

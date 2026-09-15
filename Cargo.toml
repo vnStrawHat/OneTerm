@@ -62,7 +62,11 @@ oneterm-local-shell = { path = "crates/local-shell" }
 oneterm-update = { path = "crates/update" }
 oneterm-ssh = { path = "crates/ssh" }
 oneterm-completion = { path = "crates/completion" }
-oneterm-vt = { path = "crates/vt" }
+# `default-features = false` turns the engine's default-on `pty` feature off
+# for the workspace; `local-shell` and `tools` are the only members that name
+# `oneterm_vt::pty`, and each asks for it with `features = ["pty"]`. An
+# outside embedder still gets the transport by default.
+oneterm-vt = { path = "crates/vt", default-features = false }
 
 # SIMD byte scan for the VT parser's ground state (oneterm-vt).
 memchr = "2"

@@ -61,7 +61,8 @@ rand.workspace = true
 # The engine under test. `vt-corpus check` replays each recording through it and
 # compares the result with the expectations the fork froze at US-0072; `vt-bench`
 # measures the same engine across its five tiers.
-oneterm-vt.workspace = true
+# `pty` for `pty-throughput`; the other binaries use the engine alone.
+oneterm-vt = { workspace = true, features = ["pty"] }
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 # Reads size.json / config.json, writes the bench JSON table, and parses
