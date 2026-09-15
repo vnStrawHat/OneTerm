@@ -114,6 +114,18 @@ def main() -> None:
                 f"workspace version {workspace_version!r} (use version.workspace = true)"
             )
 
+    # `oneterm-vt` is the workspace's only published crate. Everything else
+    # inherits `publish = false`, and a stray override would put an internal
+    # crate on crates.io by accident. In `cargo metadata`, a publishable package
+    # has `publish: null` and a blocked one has `publish: []`.
+    publishable = sorted(
+        name for name, package in packages.items() if package["publish"] is None
+    )
+    if publishable != ["oneterm-vt"]:
+        errors.append(
+            f"oneterm-vt must be the only publishable crate; found {publishable}"
+        )
+
     for package_name in ("oneterm-core", "oneterm-terminal"):
         dependencies = normal_workspace_dependencies(packages[package_name], workspace_names)
         forbidden_ui = sorted(

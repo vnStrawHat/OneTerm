@@ -1,0 +1,764 @@
+struct oneterm_vt::Attrs
+    associatedconstant ALL_UNDERLINES
+    associatedconstant BLINK_FAST
+    associatedconstant BLINK_SLOW
+    associatedconstant BOLD
+    associatedconstant DASHED_UNDERLINE
+    associatedconstant DIM
+    associatedconstant DOTTED_UNDERLINE
+    associatedconstant DOUBLE_UNDERLINE
+    associatedconstant HIDDEN
+    associatedconstant INVERSE
+    associatedconstant ITALIC
+    associatedconstant OVERLINE
+    associatedconstant STRIKEOUT
+    associatedconstant UNDERCURL
+    associatedconstant UNDERLINE
+    method all
+    method bits
+    method complement
+    method contains
+    method difference
+    method empty
+    method from_bits
+    method from_bits_retain
+    method from_bits_truncate
+    method from_name
+    method insert
+    method intersection
+    method intersects
+    method is_all
+    method is_empty
+    method iter
+    method iter_names
+    method remove
+    method set
+    method symmetric_difference
+    method toggle
+    method union
+struct oneterm_vt::Cell
+    associatedconstant EMPTY
+    method content
+    method extras_id
+    method style_id
+    method text_char
+    method to_bits
+    method width
+    method with_content
+    method with_extras
+    method with_protected
+    method with_semantic
+    method with_style
+    method with_width
+enum oneterm_vt::CellContent
+    variant Grapheme
+    variant Scalar
+enum oneterm_vt::CellWidth
+    method is_spacer
+    variant LeadingWideSpacer
+    variant Narrow
+    variant Wide
+    variant WideSpacer
+enum oneterm_vt::ClipboardKind
+    variant Clipboard
+    variant Primary
+    variant Secondary
+enum oneterm_vt::Color
+    variant Named
+    variant Palette
+    variant Rgb
+enum oneterm_vt::ColorKey
+    method from_index
+    method index
+    method query_prefix
+    variant Background
+    variant BrightForeground
+    variant Cursor
+    variant Dim
+    variant DimForeground
+    variant Foreground
+    variant Palette
+struct oneterm_vt::Config
+    structfield default_cursor_style
+    structfield osc_claims
+    structfield product_name
+    structfield scrollback_limit
+    structfield semantic_escape_chars
+enum oneterm_vt::CursorShape
+    variant Beam
+    variant Block
+    variant Hidden
+    variant HollowBlock
+    variant Underline
+struct oneterm_vt::EventBatch
+    method arena_capacity
+    method bytes
+    method clear
+    method event_capacity
+    method events
+    method is_empty
+    method iter
+    method len
+    method new
+    method param_capacity
+    method params
+    method push
+    method push_clipboard_store
+    method push_osc
+    method push_repaint
+    method push_reply
+    method push_title
+    method str
+struct oneterm_vt::FeedStats
+    structfield aborted_dcs
+    structfield bytes
+    structfield grapheme_truncated
+    structfield hyperlink_table_exhausted
+    structfield malformed_sequences
+    structfield rows_scrolled
+    structfield style_table_exhausted
+    structfield truncated_osc
+    structfield unhandled_sequences
+struct oneterm_vt::GraphicData
+    structfield height
+    structfield id
+    structfield rgba
+    structfield width
+struct oneterm_vt::KeyboardFlags
+    associatedconstant DISAMBIGUATE_ESC_CODES
+    associatedconstant REPORT_ALL_KEYS_AS_ESC
+    associatedconstant REPORT_ALTERNATE_KEYS
+    associatedconstant REPORT_ASSOCIATED_TEXT
+    associatedconstant REPORT_EVENT_TYPES
+    method all
+    method bits
+    method complement
+    method contains
+    method difference
+    method empty
+    method from_bits
+    method from_bits_retain
+    method from_bits_truncate
+    method from_name
+    method insert
+    method intersection
+    method intersects
+    method is_all
+    method is_empty
+    method iter
+    method iter_names
+    method remove
+    method set
+    method symmetric_difference
+    method toggle
+    method union
+enum oneterm_vt::Mode
+    associatedconstant ANSI
+    associatedconstant PRIVATE
+    method from_ansi
+    method from_private
+    method inert_state
+    method private_code
+    variant AltScreen
+    variant AltScreen1047
+    variant AltScreen47
+    variant AlternateScroll
+    variant AppCursor
+    variant AppKeypad
+    variant BracketedPaste
+    variant CursorBlink
+    variant DecCoLm
+    variant FocusInOut
+    variant GraphemeClusters
+    variant Insert
+    variant LineFeedNewLine
+    variant LineWrap
+    variant MouseClick
+    variant MouseDrag
+    variant MouseMotion
+    variant Origin
+    variant ReverseWrap
+    variant SaveCursor1048
+    variant SgrMouse
+    variant ShowCursor
+    variant SyncUpdate
+    variant UrgencyHints
+    variant Utf8Mouse
+    variant Win32Input
+struct oneterm_vt::ModeSnapshot
+    structfield alt_screen
+    structfield alternate_scroll
+    structfield app_cursor
+    structfield app_keypad
+    structfield bracketed_paste
+    structfield insert
+    structfield mouse
+    structfield show_cursor
+enum oneterm_vt::MouseEncoding
+    variant Default
+    variant Sgr
+    variant Utf8
+struct oneterm_vt::MouseProtocol
+    structfield encoding
+    structfield reporting
+enum oneterm_vt::MouseReporting
+    variant AnyEvent
+    variant ButtonEvent
+    variant Normal
+enum oneterm_vt::NamedColor
+    variant Background
+    variant Black
+    variant Blue
+    variant BrightBlack
+    variant BrightBlue
+    variant BrightCyan
+    variant BrightForeground
+    variant BrightGreen
+    variant BrightMagenta
+    variant BrightRed
+    variant BrightWhite
+    variant BrightYellow
+    variant Cursor
+    variant Cyan
+    variant DimBlack
+    variant DimBlue
+    variant DimCyan
+    variant DimForeground
+    variant DimGreen
+    variant DimMagenta
+    variant DimRed
+    variant DimWhite
+    variant DimYellow
+    variant Foreground
+    variant Green
+    variant Magenta
+    variant Red
+    variant White
+    variant Yellow
+struct oneterm_vt::OscClaims
+    associatedconstant NATIVE
+    method allows_large
+    method claim
+    method claim_large
+    method is_claimed
+    method is_native
+    method new
+struct oneterm_vt::Palette
+    method dim
+    method new
+    method resolve
+    structfield background
+    structfield bright_foreground
+    structfield cursor
+    structfield dim_foreground
+    structfield foreground
+    structfield indexed
+struct oneterm_vt::RenderCell
+    structfield content
+    structfield graphic
+    structfield hyperlink
+    structfield run
+    structfield semantic
+    structfield width
+enum oneterm_vt::RenderContent
+    variant Cluster
+    variant Scalar
+struct oneterm_vt::RenderCursor
+    structfield col
+    structfield id
+    structfield row
+    structfield visible
+struct oneterm_vt::RenderPlacement
+    structfield col
+    structfield cols
+    structfield id
+    structfield pixel_size
+    structfield row
+    structfield rows
+struct oneterm_vt::RenderRow
+    method cluster
+    method map_colors
+    method style_of
+    structfield cells
+    structfield clusters
+    structfield id
+    structfield runs
+    structfield seq
+    structfield wrapped
+struct oneterm_vt::RenderState
+    method changed
+    method cursor
+    method graphic_offset
+    method hyperlink
+    method invalidate
+    method map_colors
+    method modes
+    method new
+    method placement
+    method placements
+    method rows
+    method rows_copied
+    method scroll_offset
+    method selection
+    method size
+    method viewport_top
+    method watermark
+enum oneterm_vt::RenderUpdate
+    variant Full
+    variant Partial
+    variant Unchanged
+enum oneterm_vt::ResizePolicy
+    variant BottomAnchor
+    variant KeepViewportTop
+struct oneterm_vt::Rgb
+    structfield b
+    structfield g
+    structfield r
+struct oneterm_vt::Selection
+    method all
+    method invalidated_by
+    method new
+    method release
+    method text
+    method to_range
+    method update
+enum oneterm_vt::SelectionKind
+    variant Block
+    variant Lines
+    variant Semantic
+    variant Simple
+struct oneterm_vt::SelectionRange
+    method contains
+    method contains_cell
+    structfield end
+    structfield is_block
+    structfield start
+enum oneterm_vt::Semantic
+    variant Input
+    variant None
+    variant Output
+    variant Prompt
+enum oneterm_vt::Side
+    variant Left
+    variant Right
+enum oneterm_vt::StringTerm
+    variant Bel
+    variant St
+struct oneterm_vt::Style
+    associatedconstant DEFAULT
+    structfield attrs
+    structfield bg
+    structfield fg
+    structfield underline_color
+struct oneterm_vt::StyleRun
+    structfield cols
+    structfield style
+struct oneterm_vt::Terminal
+    method active_charset
+    method color
+    method colors
+    method config
+    method cursor_style
+    method feed
+    method grid
+    method grid_mut
+    method has_selection
+    method hit_test
+    method interner
+    method keyboard_flags
+    method lines_produced
+    method mode
+    method mode_snapshot
+    method modify_other_keys
+    method mouse_reporting
+    method new
+    method placements
+    method render_update
+    method resize
+    method row_text
+    method screen
+    method select_all
+    method selection_clear
+    method selection_range
+    method selection_start
+    method selection_text
+    method selection_update
+    method set_cell_pixels
+    method set_scrollback_limit
+    method set_theme_colors
+    method size
+    method stats
+    method style
+    method sync
+    method take_graphics
+    method template
+    method title
+    method title_depth
+    method viewport
+constant oneterm_vt::VIRTUAL_CELL
+enum oneterm_vt::VtEvent
+    variant Bell
+    variant ClipboardLoad
+    variant ClipboardStore
+    variant ColorQuery
+    variant GraphicReleased
+    variant Osc
+    variant Repaint
+    variant Reply
+    variant RowsScrolled
+    variant RowsTrimmed
+    variant ScreenCleared
+    variant Title
+    variant TitleReset
+struct oneterm_vt::cell::Attrs
+struct oneterm_vt::cell::Cell
+enum oneterm_vt::cell::CellContent
+enum oneterm_vt::cell::CellWidth
+enum oneterm_vt::cell::Color
+enum oneterm_vt::cell::NamedColor
+struct oneterm_vt::cell::Rgb
+enum oneterm_vt::cell::Semantic
+struct oneterm_vt::cell::Style
+fn oneterm_vt::cluster_width
+struct oneterm_vt::event::batch::EventBatch
+enum oneterm_vt::event::vt_event::ClipboardKind
+struct oneterm_vt::event::vt_event::FeedStats
+enum oneterm_vt::event::vt_event::StringTerm
+enum oneterm_vt::event::vt_event::VtEvent
+struct oneterm_vt::graphics::GraphicData
+constant oneterm_vt::graphics::VIRTUAL_CELL
+struct oneterm_vt::grid::Anchor
+    structfield alive
+    structfield kind
+    structfield pos
+struct oneterm_vt::grid::AnchorId
+enum oneterm_vt::grid::AnchorKind
+    variant Cursor
+    variant Graphic
+    variant Mark
+    variant SavedCursor
+    variant SelectionEnd
+    variant SelectionStart
+    variant ViewportTop
+struct oneterm_vt::grid::Anchors
+    method get
+    method iter
+    method kind
+    method live
+    method live_in
+    method new
+enum oneterm_vt::grid::Charset
+    variant Ascii
+    variant SpecialCharacterAndLineDrawing
+struct oneterm_vt::grid::Cursor
+    method erase
+    structfield charsets
+    structfield pending_wrap
+    structfield pos
+enum oneterm_vt::grid::CursorOrigin
+    variant Region
+    variant Screen
+constant oneterm_vt::grid::DEFAULT_SCROLLBACK
+enum oneterm_vt::grid::DisplayClear
+    variant Above
+    variant All
+    variant Below
+    variant Saved
+enum oneterm_vt::grid::LineClear
+    variant All
+    variant Left
+    variant Right
+struct oneterm_vt::grid::Pos
+    structfield col
+    structfield row
+struct oneterm_vt::grid::PrintMode
+    structfield autowrap
+    structfield insert
+struct oneterm_vt::grid::Row
+    method bytes
+    method cells
+    method id
+    method new
+    method reset
+struct oneterm_vt::grid::RowFlags
+    associatedconstant CONTENT_HINTS
+    associatedconstant DIRTY
+    associatedconstant HAS_EXTRAS
+    associatedconstant HAS_GRAPHEME
+    associatedconstant HAS_GRAPHIC
+    associatedconstant STYLED
+    associatedconstant WRAPPED
+    method all
+    method bits
+    method complement
+    method contains
+    method difference
+    method empty
+    method from_bits
+    method from_bits_retain
+    method from_bits_truncate
+    method from_name
+    method insert
+    method intersection
+    method intersects
+    method is_all
+    method is_empty
+    method iter
+    method iter_names
+    method remove
+    method set
+    method symmetric_difference
+    method toggle
+    method union
+struct oneterm_vt::grid::RowHeader
+    structfield flags
+    structfield id
+    structfield occ
+    structfield seq
+struct oneterm_vt::grid::RowId
+    associatedconstant ALT_ORIGIN
+    associatedconstant PRIMARY_ORIGIN
+    method distance
+    structfield 0
+struct oneterm_vt::grid::RowMut
+    method cells
+    method id
+    method new
+    method reset
+    method set
+    method set_wrapped
+struct oneterm_vt::grid::RowRef
+    method cell
+    method cells
+    method flags
+    method id
+    method is_allocated
+    method occ
+    method wrapped
+struct oneterm_vt::grid::RowsScrolled
+    structfield bottom
+    structfield delta
+    structfield top
+constant oneterm_vt::grid::SCROLLBACK_MAX
+struct oneterm_vt::grid::Screen
+    method cols
+    method cursor
+    method cursor_anchor
+    method cursor_row_index
+    method dropped_wide
+    method goto_origin
+    method heap_bytes
+    method history_len
+    method kind
+    method new
+    method newest
+    method oldest
+    method reset
+    method ring_len
+    method ring_mask
+    method row
+    method row_mut
+    method row_of_index
+    method row_range
+    method row_text
+    method rows
+    method saved_cursor
+    method screen_top
+    method scroll_offset
+    method scroll_to_bottom
+    method scroll_viewport
+    method set_region
+    method size
+    method visible_top
+    method wrapline
+enum oneterm_vt::grid::ScreenKind
+    variant Alternate
+    variant Primary
+struct oneterm_vt::grid::ScrollRegion
+    method contains
+    method full
+    method height
+    structfield bottom
+    structfield top
+struct oneterm_vt::grid::ScrollReport
+    structfield history_rows
+    structfield scrolled
+    structfield trimmed
+struct oneterm_vt::grid::SeqNo
+    structfield 0
+struct oneterm_vt::grid::Size
+    method clamped
+    structfield cols
+    structfield rows
+struct oneterm_vt::grid::TabStops
+    method clear
+    method new
+struct oneterm_vt::grid::TerminalGrid
+    method alt
+    method alt_active
+    method begin_batch
+    method heap_bytes
+    method new
+    method primary
+    method reset
+    method screen_mut
+    method sync_anchors
+    method wrapline
+struct oneterm_vt::grid::Viewport
+    structfield cols
+    structfield rows
+    structfield top
+struct oneterm_vt::grid::anchor::Anchor
+struct oneterm_vt::grid::anchor::AnchorId
+enum oneterm_vt::grid::anchor::AnchorKind
+struct oneterm_vt::grid::anchor::Anchors
+struct oneterm_vt::grid::row::Row
+struct oneterm_vt::grid::row::RowFlags
+struct oneterm_vt::grid::row::RowHeader
+struct oneterm_vt::grid::row::RowMut
+struct oneterm_vt::grid::row::RowRef
+struct oneterm_vt::grid::row::SeqNo
+enum oneterm_vt::grid::screen::Charset
+struct oneterm_vt::grid::screen::Cursor
+enum oneterm_vt::grid::screen::CursorOrigin
+enum oneterm_vt::grid::screen::DisplayClear
+enum oneterm_vt::grid::screen::LineClear
+struct oneterm_vt::grid::screen::PrintMode
+struct oneterm_vt::grid::screen::RowsScrolled
+struct oneterm_vt::grid::screen::Screen
+enum oneterm_vt::grid::screen::ScreenKind
+struct oneterm_vt::grid::screen::ScrollReport
+struct oneterm_vt::grid::screen::TabStops
+struct oneterm_vt::grid::terminal_grid::TerminalGrid
+struct oneterm_vt::intern::Extras
+    associatedconstant NONE
+    structfield graphic
+    structfield hyperlink
+struct oneterm_vt::intern::ExtrasId
+    associatedconstant NONE
+    structfield 0
+constant oneterm_vt::intern::GRAPHEME_SWEEP_CHARS
+constant oneterm_vt::intern::GRAPHEME_SWEEP_ENTRIES
+struct oneterm_vt::intern::GraphemeArena
+    method chars
+    method entries
+    method exhausted
+    method intern
+    method needs_sweep
+    method resolve
+    method sweep
+    method truncated
+struct oneterm_vt::intern::GraphemeId
+    structfield 0
+struct oneterm_vt::intern::GraphemeRemap
+    method get
+    method kept
+struct oneterm_vt::intern::GraphicId
+    structfield 0
+struct oneterm_vt::intern::Hyperlink
+    structfield id
+    structfield implicit
+    structfield uri
+struct oneterm_vt::intern::HyperlinkId
+    structfield 0
+struct oneterm_vt::intern::HyperlinkTable
+    method clear
+    method exhausted
+    method intern
+    method is_empty
+    method len
+    method resolve
+struct oneterm_vt::intern::InternTable
+    method entries
+    method exhausted
+    method intern
+    method resolve
+struct oneterm_vt::intern::Interner
+    method extras
+    method grapheme
+    method needs_grapheme_sweep
+    method resolve_extras
+    method resolve_grapheme
+    method resolve_style
+    method style
+    structfield extras
+    structfield graphemes
+    structfield hyperlinks
+    structfield styles
+struct oneterm_vt::intern::StyleId
+    associatedconstant DEFAULT
+    structfield 0
+constant oneterm_vt::parser::DCS_MAX_BYTES
+trait oneterm_vt::parser::Dispatch
+    method osc_allows_large
+    method print
+struct oneterm_vt::parser::Intermediates
+    method as_slice
+constant oneterm_vt::parser::MAX_INTERMEDIATES
+constant oneterm_vt::parser::MAX_OSC_PARAMS
+constant oneterm_vt::parser::MAX_PARAMS
+constant oneterm_vt::parser::OSC_INLINE
+constant oneterm_vt::parser::OSC_LARGE
+struct oneterm_vt::parser::OscParams
+    method get
+    method is_empty
+    method iter
+    method len
+struct oneterm_vt::parser::ParamGroups
+enum oneterm_vt::parser::ParamSep
+    variant Colon
+    variant Semicolon
+struct oneterm_vt::parser::Params
+    method get
+    method groups
+    method ignored
+    method is_empty
+    method len
+    method sep
+    method values
+struct oneterm_vt::parser::Parser
+    method advance
+    method new
+    method reset
+enum oneterm_vt::parser::StringTerm
+    variant Bel
+    variant St
+constant oneterm_vt::parser::osc::MAX_OSC_PARAMS
+constant oneterm_vt::parser::osc::OSC_INLINE
+constant oneterm_vt::parser::osc::OSC_LARGE
+struct oneterm_vt::parser::osc::OscParams
+enum oneterm_vt::parser::osc::StringTerm
+struct oneterm_vt::parser::params::Intermediates
+constant oneterm_vt::parser::params::MAX_INTERMEDIATES
+constant oneterm_vt::parser::params::MAX_PARAMS
+struct oneterm_vt::parser::params::ParamGroups
+enum oneterm_vt::parser::params::ParamSep
+struct oneterm_vt::parser::params::Params
+enum oneterm_vt::reflow::ResizePolicy
+struct oneterm_vt::render::modes::ModeSnapshot
+enum oneterm_vt::render::modes::MouseEncoding
+struct oneterm_vt::render::modes::MouseProtocol
+enum oneterm_vt::render::modes::MouseReporting
+struct oneterm_vt::render::palette::Palette
+struct oneterm_vt::render::row::RenderCell
+enum oneterm_vt::render::row::RenderContent
+struct oneterm_vt::render::row::RenderRow
+struct oneterm_vt::render::row::StyleRun
+struct oneterm_vt::render::state::RenderCursor
+struct oneterm_vt::render::state::RenderPlacement
+struct oneterm_vt::render::state::RenderState
+enum oneterm_vt::render::state::RenderUpdate
+fn oneterm_vt::scalar_width
+struct oneterm_vt::selection::Selection
+enum oneterm_vt::selection::SelectionKind
+struct oneterm_vt::selection::SelectionRange
+enum oneterm_vt::selection::Side
+struct oneterm_vt::terminal::Config
+struct oneterm_vt::terminal::Terminal
+enum oneterm_vt::terminal::color::ColorKey
+enum oneterm_vt::terminal::mode::CursorShape
+struct oneterm_vt::terminal::mode::KeyboardFlags
+enum oneterm_vt::terminal::mode::Mode
+struct oneterm_vt::terminal::osc::OscClaims
+fn oneterm_vt::width::cluster_width
+fn oneterm_vt::width::scalar_width

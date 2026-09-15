@@ -1,7 +1,6 @@
-//! `US-0087`'s two cleanup rows, driven from the wire.
+//! Scroll-region and mode cleanup, driven from the wire.
 //!
-//! Written by the packet's independent verifier and adopted on their finding:
-//! every case here goes through the public API with real bytes, so none of it
+//! Every case here goes through the public API with real bytes, so none of it
 //! reuses the unit suites' fixtures, and the cases the unit tests reach only
 //! indirectly — a `DECSTBM` top that is not row 0, a cursor parked *above* the
 //! region, `DECRQM` consistency across `h` and `l`, and that `LNM` really is

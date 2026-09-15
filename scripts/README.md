@@ -1,7 +1,7 @@
 # `scripts/` — OneTerm developer and CI scripts
 
 Every script is runnable from the repository root. "CI" marks the scripts the
-`.github/workflows/ci.yml` (`dependency-graph` job) or `release.yml` pipelines run;
+`.github/workflows/ci.yml` (`dependency-graph` and `vt-package` jobs) or `release.yml` pipelines run;
 `scripts/ci-local.{sh,ps1}` runs the same CI set locally (`--full` / `-Full` adds the
 network / extra-tool checks).
 
@@ -10,7 +10,8 @@ network / extra-tool checks).
 | Script | Purpose | Runs in |
 |---|---|---|
 | `ci-local.sh` / `ci-local.ps1` | Run the whole CI quality gate locally, stop at the first failure. Keep both in sync with `ci.yml` and `AGENTS.md` §4. | local (mirrors CI) |
-| `verify-dependency-graph.py` | Enforce `dependency-graph-policy.json` (workspace members, internal edges, backend/feature rules) and that every crate inherits `[workspace.package] version`. | CI |
+| `verify-dependency-graph.py` | Enforce `dependency-graph-policy.json` (workspace members, internal edges, backend/feature rules), that every crate inherits `[workspace.package] version`, and that `oneterm-vt` is the only publishable crate. | CI |
+| `vt-public-api.py` | Enumerate `oneterm-vt`'s public API from its rustdoc output and diff it against the committed `crates/vt/public-api.txt`, so a change to the published surface is a line in a review. `--write` regenerates, `--check` gates, `--no-doc` reuses an existing `target/doc`. | CI (`vt-package` job) |
 | `check-doc-paths.py` | Every back-ticked `crates/`, `docs/`, `scripts/` path in the current-state docs (`docs/architecture.md`, `docs/agents/*.md`, `docs/README.md`, `README.md`, `AGENTS.md`) must exist. | CI |
 | `check-english.py` (+ `test_check_english.py`) | English-only contributor text (code comments, docs); the unittest file tests the checker itself. | CI |
 | `completion-catalog.py validate` | Validate the completion catalogs under `crates/completion/assets/` against the schema. Other subcommands (`download`, `generate`, `update`) fetch/parse upstream docs (network) — see `docs/auto-completion/07-external-assets-script.md`. `completion-commands.json` is its curated command whitelist. | CI (validate only) |

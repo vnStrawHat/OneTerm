@@ -1,7 +1,7 @@
 //! The parser's memory bounds, measured rather than argued.
 //!
-//! This is what survives the differential oracle `US-0073`'s verifier ran once
-//! against the fork. That oracle retired with the fork at `US-0087`; the
+//! This is what survives a differential oracle that once ran this parser
+//! against the implementation it replaced. That oracle is gone; the
 //! chunking invariant it proved is pinned by
 //! `parser::props::arbitrary_bytes_never_panic_and_chunking_is_invariant`, and
 //! nothing in the workspace depends on a second parser any more.
