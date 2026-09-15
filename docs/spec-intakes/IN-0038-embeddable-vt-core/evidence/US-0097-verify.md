@@ -827,3 +827,85 @@ and the `DA2` clamp holds.
 The scratch consumer was deleted. One artefact could not be removed by this session: `C:\ch`, a
 throwaway `CARGO_HOME` created to isolate R1(b); the tool guard refuses to delete a path at a drive
 root. It holds only a cargo registry cache and is safe to delete by hand.
+
+---
+
+# Final re-check at `848c02a`
+
+Branch `feat/vt-publishable` @ `848c02a`, base `main` @ `92ae9a6`. Same rules, plus: nothing was
+created outside the repository except inside the session scratchpad, and the scratch consumer was
+deleted. `C:\ch` from the previous pass is gone (the owner removed it); nothing replaced it.
+
+## Final verdict
+
+**PASS.**
+
+Every item from both earlier passes is closed. The two mediums that were open at `3fd76f7` are
+closed with code and with a gate behind each: the README now names an install form that works, the
+118-character directory that broke a Windows consumer is renamed and a CI gate stops the next one,
+and the consumer builds and runs under the **default** `CARGO_HOME`. R3 to R7 are closed and each
+was re-broken to confirm the gate still fires.
+
+One thing is not a finding but is worth stating plainly, below: the provenance of the owner rulings
+is an assertion this verification is not able to confirm or refute.
+
+## Item by item
+
+| Item | State | Evidence at `848c02a` |
+| --- | --- | --- |
+| R1(a) README Install | **closed** | `README.md:8-27`: `rev = "<commit sha>"` is the primary form, `branch = "main"` is named for tracking the tip with its reproducibility warning, and "**Tags do not work yet.** Every existing tag predates this crate ... the first tag that can carry it is the next release, `v0.5.3` or later." No non-existent tag is offered as usable. The section also warns that a git dependency checks out the whole repository. |
+| R1(b) long path | **closed** | Directory renamed to `docs/spec-intakes/IN-0009-completion-utf8-prefix-slicing/`. `grep -rn 'IN-0009-prevent-terminal-completion' docs/ crates/ scripts/ .github/ AGENTS.md README.md` finds only historical narrative: two rows in this packet explaining the rename, and one line in my own report above. No link, path or include points at the old name. |
+| R1(b) path gate | **closed** | `scripts/verify-dependency-graph.py:42-43` `MAX_TRACKED_PATH = 150`, checked over `git ls-files -z`. On the tree: `no tracked path is over 150 characters`. Synthetic break test: a 177-character tracked path made it exit 1 with `tracked path is 177 characters, over the 150 limit (a Windows git-dependency checkout fails on it)`. Reverted; passes again. |
+| R1(b) consumer, default `CARGO_HOME` | **closed** | Scratch crate in the scratchpad, `branch = "feat/vt-publishable"`, `CARGO_HOME` unset so it resolved to `C:\Users\trunglt\.cargo`. **First build 8.4 s, exit 0.** `cargo run` printed `rows: 24`, `title: Some("a title")` and `identity replies: "\u{1b}P>|vtconsumer(9.9.9)\u{1b}\\\u{1b}[>0;90909;1c"`. Deleted afterwards. |
+| R3 nested `pub mod` | **closed** | Adding `pub mod probe { pub struct Probe; }` to `crates/vt/src/grid/mod.rs` now fails `python scripts/vt-public-api.py --check` with `+struct oneterm_vt::grid::probe::Probe`, exit 1. Reverted. |
+| R4 sanitise once | **closed** | `crates/vt/src/terminal/mod.rs:176-182` sanitises in `Terminal::new` and stores `None` when the result is empty; `dispatch.rs:461-469` returns `&str` with no allocation and no walk. Timing: the same 2 000-query hostile case took **11.65 s** at `3fd76f7` and the whole `product_name_hostile` suite now finishes in **0.01 s**. A side effect worth knowing: `Terminal::config().product_name` is now the sanitised value, which the adopted test pins. |
+| R5 `IN-0038.md` body | **closed** | `IN-0038.md:40-43` now reads "a crate another project can depend on by git (Open Decision 2: **not** published to crates.io)"; the `US-0103` row at `:238` says "there is no docs.rs page; Open Decision 2". Cosmetic leftover: the roadmap row at `:232` still titles `US-0097` "the crate is publishable". |
+| R6 numbers | **closed**, two nits | 68 files and 883.5 KiB now agree at `:57` and `:245`; `public-api.txt` is "16 KiB" in both places and is 16.6 KiB; `tests/product_name.rs` is named as 8 tests and has 8. Nits: the historical F8 row at `:371` still quotes the superseded 67 files / 875.6 KiB, and "23 repository links in 23 files" is 24 rustdoc lines across 23 files, because one file carries two. |
+| R7 both pipeline halves | **closed** | `ci-local.sh:49-55` has `set -o pipefail` at the top and an `if !` around the pipeline; `ci-local.ps1:61-70` splits it into two explicit `$LASTEXITCODE` checks. Break test with `-p oneterm-vt-nope`: cargo exits **101** (caught by the PowerShell script's first check), and under `set -euo pipefail` the bash pipeline aborts rather than reporting python's status. |
+| R2 provenance | **resolved, see below** | The self-contradiction is gone. |
+| My 7 tests adopted | **confirmed** | `crates/vt/tests/product_name_hostile.rs`, 7 tests, all passing, alongside `tests/product_name.rs`, 8 tests, all passing. |
+
+## R2, stated precisely
+
+The packet no longer contradicts itself. `US-0097-publishable-crate.md:400-408` carries a section
+"The provenance, corrected" which says the earlier draft's "Coordinator default 2026-09-15" wording
+"is not what happened and not what the record says", and that the owner ruled on Open Decisions 2,
+3, 5 and 6 in the coordination session on 2026-09-15 with the coordinator relaying. The F6 row at
+`:369` matches, and `IN-0038.md`, `high-level-design.md`, `packaging.md`, `docs/PROJECT.md`,
+`docs/agents/structure.md` and `crates/vt/Cargo.toml` all say "Owner ruling 2026-09-15" consistently.
+That phrasing is also this repository's house style for a ruling (`IN-0029.md:392`,
+`DEC-0016-...md:7`, `US-0091-concrete-pty-session.md:496`).
+
+What this verification can attest to is internal consistency: the rulings are recorded, the wording
+is uniform, the code implements each one, and no document disagrees with another. What it cannot
+attest to is what was said in a coordination session it was not part of. That is recorded here as a
+limit of the verification, not as a finding against the packet.
+
+## Gates re-run at `848c02a`
+
+| Command | Result |
+| --- | --- |
+| `python scripts/verify-dependency-graph.py` | `...21 workspace packages and 21 explicit members, and no tracked path is over 150 characters.` |
+| the same, with a 177-character tracked path | exit 1, correct message |
+| the same, with `publish = true` on `crates/vt` | exit 1 (re-confirmed at the previous head; the assertion is unchanged) |
+| `python scripts/vt-public-api.py --check` | `public API surface unchanged`; nested `pub mod` break test fails it |
+| acceptance grep over `crates/vt/src` | 0 |
+| repository-link rustdoc lines | 24 lines in 23 files, the allowed form |
+| `cargo test -p oneterm-vt --test product_name --test product_name_hostile` | 8 + 7, all green, 0.01 s |
+| `pwsh scripts/ci-local.ps1 -Full` | **green**, exit 0: `advisories ok, bans ok, licenses ok` then `ci-local: all checks passed.` |
+
+## Still open
+
+Nothing that blocks. Carried forward, all previously disclosed by the packet itself:
+
+1. No E2E walk: the owner runs this session inside OneTerm, so the manual `XTVERSION` probe was
+   never driven. The reply is pinned by unit tests and by the scratch consumer's output, which is as
+   close as this can get without the GUI.
+2. No MSRV job; `rust-version = 1.96.0` is a claim. Intake Open Decision 4 is still `[ ]`, and the
+   intake says it blocks nothing.
+3. `vt-public-api.py` reads rustdoc HTML, so it sees items, fields, variants and methods appear,
+   disappear or change name, but not a signature change.
+4. Cosmetic: the roadmap row `IN-0038.md:232`, the historical numbers in the F8 row, and the
+   "23 links" count that is really 24 lines in 23 files.
+5. Not this packet: `oneterm-terminal handle::tests::a_pump_yields_to_the_demand_within_a_bounded_number_of_chunks`
+   is load-sensitive.
