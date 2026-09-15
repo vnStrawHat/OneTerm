@@ -211,8 +211,9 @@ pub trait EventedPty: EventedReadWrite {
 
 /// Tell the child its window changed.
 pub trait OnResize {
+    // The repository rule behind this is `docs/agents/error-policy.md`.
     /// A failing resize returns an error instead of panicking: the session is
-    /// still usable at the old size (`docs/agents/error-policy.md`).
+    /// still usable at the old size.
     fn on_resize(&mut self, size: WindowSize) -> io::Result<()>;
 }
 

@@ -1,9 +1,9 @@
 //! Sixel through a real [`Terminal`]: decoder, placement, cursor, liveness, the
 //! release signal and the painter's offset.
 //!
-//! The first block reproduces the eleven expectations
-//! `crates/terminal/src/sixel_tests.rs:46-271` pins against the engine being
-//! replaced — same bytes, same expected cells and cursor — under the names
+//! The first block reproduces the eleven expectations the adapter's own Sixel
+//! tests pinned against the engine being replaced — same bytes, same expected
+//! cells and cursor — under the names
 //! `graphics.md` § Verification gives them. The second block is what this
 //! engine adds: one extras entry per image, placements that move with their
 //! content, and a release event.

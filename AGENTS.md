@@ -121,7 +121,8 @@ python scripts/vt-public-api.py --diff-platforms # ...and the other platform's d
 # that it reaches nothing outside `crates/vt`. Offline, and works with
 # uncommitted files.
 cargo package -p oneterm-vt --allow-dirty --list | python scripts/verify-dependency-graph.py --package-list -
-# ...plus a grep: no US-/BUG-/DEC-/IN- or docs/spec-intakes citation in the crate's rustdoc
+# ...plus a grep: no US-/BUG-/DEC-/IN- citation and no bare crates/ or docs/ path
+# in the crate's rustdoc (a consumer's vendored copy has neither)
 python scripts/verify-dependency-graph.py     # crate graph policy + workspace version inheritance
 python scripts/check-doc-paths.py             # architecture doc paths
 python -m unittest scripts/test_check_english.py

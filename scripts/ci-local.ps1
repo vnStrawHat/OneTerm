@@ -97,12 +97,13 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Published rustdoc must read for somebody who does not have this repository:
-# no work-packet, decision or intake citations in `///` or `//!` text. A link to
-# the public repository is the one allowed form.
+# no work-packet, decision or intake citations in `///` or `//!` text, and no
+# bare `crates/...` or `docs/...` path either -- a consumer's vendored copy has
+# neither. A link to the public repository is the one allowed form.
 Write-Host ""
 Write-Host "==> rustdoc self-containment (crates/vt/src)"
 $citations = Get-ChildItem -Path "crates/vt/src" -Recurse -Filter "*.rs" |
-    Select-String -Pattern '^\s*//[/!].*(US-0\d{3}|BUG-0\d{3}|DEC-0\d{3}|IN-0\d{3}|docs/spec-intakes)' |
+    Select-String -Pattern '^\s*//[/!].*(US-0\d{3}|BUG-0\d{3}|DEC-0\d{3}|IN-0\d{3}|crates/|docs/)' |
     Where-Object { $_.Line -notmatch 'https://github\.com/' }
 if ($citations) {
     $citations | ForEach-Object { Write-Host $_ }

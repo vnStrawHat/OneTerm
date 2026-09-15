@@ -14,7 +14,7 @@
 //! the caller is not already looking at it, and `read`/`write` re-post when they
 //! leave the ring usable. A caller may therefore stop reading with bytes still
 //! buffered and be woken again, which is what [`PollMode::Level`] promises and
-//! what `crates/local-shell`'s loop relies on.
+//! what an embedder's read loop relies on.
 //!
 //! The registration semantics — readable/writable gating, clearing a one-shot
 //! interest after posting, and the priming packet on first registration — follow
@@ -356,9 +356,10 @@ impl Drop for PipeWriter {
 /// A pipe thread that cannot be joined: it is parked in a blocking `ReadFile` or
 /// `WriteFile` and only returns when the pipe breaks.
 ///
+// `docs/agents/error-policy.md`, transport row.
 /// A failure to spawn is fatal to the session — without this thread the
 /// pseudo-console can never move a byte in that direction — so it is reported
-/// rather than logged (`docs/agents/error-policy.md`, transport row).
+/// rather than logged.
 fn spawn_pipe_thread(name: &str, body: impl FnOnce() + Send + 'static) -> io::Result<()> {
     std::thread::Builder::new()
         .name(name.to_owned())

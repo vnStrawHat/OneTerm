@@ -73,10 +73,11 @@ if ! cargo package -p oneterm-vt --allow-dirty --list |
   exit 1
 fi
 # Published rustdoc must read for somebody who does not have this repository:
-# no work-packet, decision or intake citations in `///` or `//!` text. A link to
-# the public repository is the one allowed form.
+# no work-packet, decision or intake citations in `///` or `//!` text, and no
+# bare `crates/...` or `docs/...` path either -- a consumer's vendored copy has
+# neither. A link to the public repository is the one allowed form.
 printf '\n==> rustdoc self-containment (crates/vt/src)\n'
-if grep -rn '^[[:space:]]*//[/!].*\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|docs/spec-intakes\)' \
+if grep -rn '^[[:space:]]*//[/!].*\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|crates/\|docs/\)' \
     crates/vt/src --include='*.rs' | grep -v 'https://github.com/'; then
   printf '\nci-local: FAILED: the crate rustdoc cites a document only this repository has\n' >&2
   exit 1

@@ -160,8 +160,10 @@ impl ConptyApi {
     }
 }
 
-/// The directory OneTerm's executable lives in, where the bundled pair is
-/// installed (`crates/app/build.rs` copies it there).
+// OneTerm stages the pair from `crates/app/build.rs`; an embedder's own build
+// script is what puts it there for them.
+/// The directory the running executable lives in, where a bundled ConPTY pair
+/// is looked for.
 fn executable_directory() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()?

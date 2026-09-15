@@ -1516,7 +1516,7 @@ impl Handler<'_> {
 
     /// `OSC 52`. Trap 25: the selection byte must be `c`, `p` or `s`, and
     /// undecodable base64 or invalid UTF-8 is dropped silently. The engine
-    /// reports; the **policy** stays in `crates/terminal/src/security_policy.rs`.
+    /// reports; whether a program may write the clipboard is the embedder's.
     fn osc_clipboard(&mut self, params: &OscParams<'_>) {
         if params.len() < 3 {
             self.unhandled();

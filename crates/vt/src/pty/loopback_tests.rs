@@ -2,8 +2,8 @@
 //!
 //! This is the proof that [`EventedReadWrite`], [`EventedPty`] and [`OnResize`]
 //! describe a shape a caller can implement, not just a description of the two
-//! platform backends: `crates/local-shell` drives its whole event loop against
-//! exactly this fake instead of a real shell.
+//! platform backends. OneTerm's own local-shell adapter drives its whole event
+//! loop against exactly this fake instead of a real shell.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
