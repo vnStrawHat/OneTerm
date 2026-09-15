@@ -35,6 +35,15 @@
 > 5. **Concurrency model**: `Arc<FairMutex<Terminal>>` + snapshot. The engine owns no lock;
 >    the adapter in `crates/terminal` does.
 > 6. **The pure kit** (`core`) does not depend on GPUI.
+>
+> **Forward pointer (2026-09, records only):** `IN-0038` proposes making `oneterm-vt` an
+> embeddable, published terminal core. It moves OSC parsing, key/mouse encoding and scrollback
+> search out of `crates/terminal` and into the engine, replaces `OscClaims` with a route/override
+> table, and renames the engine's `render` module to `snapshot`. When those packets land, section
+> 5.3 (`OscRouter`), section 4 (dependencies) and the adapter file layout below change; the target
+> shape is in
+> [`spec-intakes/IN-0038-embeddable-vt-core/high-level-design.md`](spec-intakes/IN-0038-embeddable-vt-core/high-level-design.md).
+> Nothing in this document is stale yet.
 
 ---
 

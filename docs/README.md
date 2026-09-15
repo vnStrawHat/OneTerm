@@ -37,6 +37,7 @@ Status is stated in each file's header. "Current" = kept in step with the code;
 | Document | Area | Status |
 |---|---|---|
 | [`spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md) + its `low-level-design/` | Terminal render engine, input layer, terminal view, Spaces and panel — module map, interfaces, parity and performance budget | **current owning design** for `crates/terminal-view/` |
+| [`spec-intakes/IN-0038-embeddable-vt-core/high-level-design.md`](spec-intakes/IN-0038-embeddable-vt-core/high-level-design.md) + its `low-level-design/` | `oneterm-vt` as an embeddable, published terminal core: target module map, OSC route/override mechanism, public API and semver promise, packaging | **proposed owning design** for `crates/vt`'s outward contract (records only; not yet implemented) |
 | [`terminal-backend.md`](terminal-backend.md) | Terminal backend: sessions, shared pump, event delivery, locking, SSH/local transports | current (2026-08 refresh) |
 | [`terminal-logging.md`](terminal-logging.md) | Printable terminal-output logging: policy, SSH override precedence, file lifecycle, controls, and indicators | current |
 | [`terminal-split.md`](terminal-split.md) + [`terminal-split/`](terminal-split/) | Split Spaces (right/left/up/down, drag tab into Space) | historical — behavior current, mechanism superseded by IN-0018 |
