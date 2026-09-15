@@ -890,6 +890,19 @@ fn encode_mouse_is_byte_identical_to_main() {
     let mut n = 0u64;
     let mut bad = 0u64;
     for snap in &snaps {
+        // `US-0102` deliberately changed one case the `US-0099` move had frozen:
+        // with no mouse protocol on, the encoders now return an empty `Vec`
+        // instead of the legacy report, so that a caller which forgets to check
+        // its own modes cannot write mouse bytes into a program that never asked
+        // for them. Pinned here rather than skipped, so the exception is exactly
+        // one case wide.
+        if snap.mouse.is_none() {
+            assert!(
+                encode_mouse_press(0, 0, MBUTTONS[0], *snap, MMODS[0]).is_empty(),
+                "US-0102: no protocol means no report"
+            );
+            continue;
+        }
         for mods in MMODS {
             let om = orig_mmods(mods);
             for row in coords {

@@ -664,11 +664,31 @@ fn locking_and_single_shifts_reach_g2_and_g3() {
     session.feed(b"\x1b*0\x1bN\x1b[1mq\x1b[0mq");
     assert_eq!(session.row(0), "─q        ");
 
-    // `DECSC` / `DECRC` save the designations but not the locking set, which is
-    // reference behaviour: the active set lives on the terminal, not the cursor.
+    // Correction C12: `DECSC` saves the locking-set invocation and a pending
+    // single shift as well as the designations, which is what VT510 specifies
+    // and what xterm does; the engine being replaced saves neither.
     let mut session = Session::new(10, 3);
     session.feed(b"\x1b*0\x1b7\x1bn\x1b8q");
+    assert_eq!(
+        session.row(0),
+        "q         ",
+        "DECRC puts the locking set back"
+    );
+
+    // The other direction: a set invoked before the save survives the restore.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1bn\x1b7\x1bO\x1b8q");
     assert_eq!(session.row(0), "─         ");
+
+    // A pending single shift is saved and restored too.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1bN\x1b7\x1b8qq");
+    assert_eq!(session.row(0), "─q        ");
+
+    // `CSI s` / `CSI u` are the same pair and behave the same way.
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b*0\x1b[s\x1bn\x1b[uq");
+    assert_eq!(session.row(0), "q         ");
 
     // `RIS` puts the locking set and any pending single shift back to `G0`.
     let mut session = Session::new(10, 3);
@@ -796,9 +816,6 @@ fn win32_input_mode_is_accepted_silently() {
 
 #[test]
 fn mode_2027_measures_grapheme_clusters() {
-    // A ZWJ family: four people joined, each two columns wide on its own.
-    const FAMILY: &str = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
-
     // Reset -- the power-on state, and what the parity corpus pins -- width is
     // per scalar, so the cursor advances by the sum: four wide glyphs.
     let mut session = Session::new(20, 3);
@@ -1381,6 +1398,136 @@ fn osc_10_11_12_set_query_and_advance() {
             terminator: crate::event::StringTerm::St,
         }
     )));
+}
+
+/// A ZWJ family: four people joined, each two columns wide on its own.
+const FAMILY: &str = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+
+/// Feed `text` under `? 2027` as two `feed` calls split at `at` bytes, and
+/// report the cursor column the whole thing left behind.
+fn columns_split_at(text: &str, at: usize) -> u16 {
+    let mut session = Session::new(20, 3);
+    session.feed(b"\x1b[?2027h");
+    session.feed(&text.as_bytes()[..at]);
+    session.feed(&text.as_bytes()[at..]);
+    session.cursor().1
+}
+
+#[test]
+fn a_cluster_split_across_two_feeds_is_measured_whole() {
+    // A pty read ends where it ends. Every interior split of each of these has
+    // to measure what the unsplit sequence measures, or an emoji at a chunk
+    // boundary takes cells it should have joined.
+    for (what, text, want) in [
+        ("ZWJ family", FAMILY, 2u16),
+        ("skin tone", "\u{1f44d}\u{1f3fd}", 2),
+        ("keycap", "1\u{fe0f}\u{20e3}", 2),
+        ("flag", "\u{1f1e9}\u{1f1ea}", 2),
+        ("combining mark", "e\u{301}", 1),
+    ] {
+        for at in 1..text.len() {
+            if !text.is_char_boundary(at) {
+                continue;
+            }
+            assert_eq!(
+                columns_split_at(text, at),
+                want,
+                "{what} split at byte {at}"
+            );
+        }
+        // And the unsplit form still measures the same.
+        assert_eq!(columns_split_at(text, text.len()), want, "{what} unsplit");
+    }
+}
+
+#[test]
+fn a_split_cluster_lands_in_one_cell() {
+    // Not just the column count: the whole cluster has to end up in the cell the
+    // head took, so the row reads back as one grapheme.
+    let split = FAMILY.char_indices().nth(2).expect("a ZWJ family has 7").0;
+    let mut session = Session::new(20, 3);
+    session.feed(b"\x1b[?2027h");
+    session.feed(&FAMILY.as_bytes()[..split]);
+    session.feed(&FAMILY.as_bytes()[split..]);
+    session.feed(b"X");
+    assert_eq!(session.row(0), format!("{FAMILY}X{}", " ".repeat(17)));
+}
+
+#[test]
+fn a_control_between_the_halves_breaks_the_cluster() {
+    // A control is not a graphic character, so what follows it starts a cluster
+    // of its own — which is what the segmentation algorithm says too.
+    let split = FAMILY.char_indices().nth(2).expect("a ZWJ family has 7").0;
+    let broken = |breaker: &[u8]| -> Session {
+        let mut session = Session::new(20, 4);
+        session.feed(b"\x1b[?2027h");
+        session.feed(&FAMILY.as_bytes()[..split]);
+        session.feed(breaker);
+        session.feed(&FAMILY.as_bytes()[split..]);
+        session
+    };
+
+    // A breaker that leaves the cursor alone: the head keeps its two columns
+    // and the tail takes two of its own, where a joined cluster would have
+    // taken two in total.
+    for breaker in [&b"\x1b[m"[..], b"\x1b[?2027h", b"\x07"] {
+        assert_eq!(broken(breaker).cursor(), (0, 4), "{breaker:?}");
+    }
+    // `LF` moves the tail to the next row, which the head's cell cannot reach.
+    // The column is unchanged, because `LNM` is inert here and `LF` is not a
+    // carriage return.
+    assert_eq!(broken(b"\n").cursor(), (1, 4));
+    // `CR` sends the tail back over the head rather than joining it, so the row
+    // holds the tail alone.
+    assert_eq!(
+        broken(b"\r").row(0),
+        format!("{}{}", &FAMILY[split..], " ".repeat(18))
+    );
+}
+
+#[test]
+fn a_carried_cluster_is_bounded() {
+    // A hostile stream can feed one unbounded cluster a scalar at a time. Past
+    // the cap the carry is dropped and counted, so re-placing a growing cluster
+    // can never become quadratic.
+    let mut session = Session::new(20, 3);
+    session.feed(b"\x1b[?2027h");
+    session.feed("e".as_bytes());
+    let mut dropped = 0;
+    for _ in 0..80 {
+        // `FeedStats` is per call, so the drop has to be caught as it happens.
+        dropped += session.feed("\u{301}".as_bytes()).dropped_cluster_carries;
+    }
+    assert_eq!(
+        dropped, 1,
+        "the carry stops growing once, at the cap, and is not re-taken"
+    );
+    // And the cell is still one column wide: the marks attach either way.
+    assert_eq!(session.cursor().1, 1);
+}
+
+#[test]
+fn a_bare_presentation_selector_is_zero_width() {
+    // A presentation selector decides the width of the base it follows; with no
+    // base there is nothing to decide, and the scalar joins the cell on its
+    // left exactly as it does with the mode reset. Splitting a keycap in front
+    // of its selector is what manufactures one.
+    for scalar in ["\u{fe0f}", "\u{fe0e}", "\u{20e3}", "\u{200d}", "\u{301}"] {
+        let mut set = Session::new(10, 3);
+        set.feed(b"\x1b[?2027h");
+        set.feed(scalar.as_bytes());
+        set.feed(b"a");
+
+        let mut reset = Session::new(10, 3);
+        reset.feed(scalar.as_bytes());
+        reset.feed(b"a");
+
+        assert_eq!(
+            set.cursor(),
+            reset.cursor(),
+            "a leading {scalar:?} must cost the same with the mode set and reset"
+        );
+    }
 }
 
 #[test]

@@ -68,18 +68,14 @@ fn x10_reports_a_press_and_nothing_else() {
         b"\x1b[M\x20\x21\x21"
     );
 
-    // And with no mode at all nothing is suppressed: the default snapshot is
-    // still the X11 encoding.
-    assert_eq!(
-        encode_mouse_press(
-            0,
-            0,
-            TerminalMouseButton::Left,
-            ModeSnapshot::default(),
-            none
-        ),
-        b"\x1b[M\x20\x21\x21"
-    );
+    // And with no protocol at all — which is what `? 9 l` leaves behind — every
+    // event encodes to nothing, so a caller that forgets to check its own modes
+    // still cannot write mouse bytes into a program that never asked for them.
+    let off = ModeSnapshot::default();
+    assert!(encode_mouse_press(0, 0, TerminalMouseButton::Left, off, none).is_empty());
+    assert!(encode_mouse_release(0, 0, TerminalMouseButton::Left, off, none).is_empty());
+    assert!(encode_mouse_move(0, 0, None, off, none).is_empty());
+    assert!(encode_wheel_event(0, 0, 1.0, off, none).is_empty());
 }
 
 #[test]

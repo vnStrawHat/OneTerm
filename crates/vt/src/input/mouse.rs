@@ -7,7 +7,8 @@
 //! suppresses whole events rather than changing how they look.
 //!
 //! An encoder returns an **empty** `Vec` for an event the current mode does not
-//! report, so the caller writes nothing.
+//! report — every event when no protocol is on at all, and everything but a
+//! press under `? 9` — so the caller writes nothing.
 
 use crate::snapshot::{ModeSnapshot, MouseEncoding, MouseReporting};
 
@@ -90,12 +91,18 @@ fn encode(
     // row/col are 0-indexed from the caller → terminal is 1-indexed.
     let row = row.saturating_add(1);
     let col = col.saturating_add(1);
+    // No protocol at all: the host asked for no reports, so there is nothing to
+    // send. The engine is the one place that knows, so a caller that forgets to
+    // check cannot write mouse bytes into a program that never asked for them.
+    let Some(protocol) = modes.mouse else {
+        return Vec::new();
+    };
     // `? 9` is the X10 protocol, which predates both the modifier bits and the
     // release report: a button press is sent bare, in the legacy encoding, and
     // nothing else is sent at all. A release arrives with the release
     // terminator; motion and wheel arrive with the motion bit (32) already in
     // the code, which is what separates them from the three press codes.
-    if modes.mouse.map(|mouse| mouse.reporting) == Some(MouseReporting::X10) {
+    if protocol.reporting == MouseReporting::X10 {
         if terminator == SgrTerminator::Release || x11_code >= 32 {
             return Vec::new();
         }
@@ -105,7 +112,7 @@ fn encode(
         return bytes;
     }
     let mod_mask = mods.mask();
-    let encoding = modes.mouse.map(|mouse| mouse.encoding).unwrap_or_default();
+    let encoding = protocol.encoding;
     if encoding == MouseEncoding::Sgr {
         let action = match terminator {
             SgrTerminator::Release => 'm',
