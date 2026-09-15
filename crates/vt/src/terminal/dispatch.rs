@@ -166,14 +166,18 @@ impl Handler<'_> {
     // ── Printing ────────────────────────────────────────────────────────────
 
     fn input(&mut self, c: char) {
-        // `SS2` / `SS3` shift exactly one printed character, so the take is
+        // `SS2` / `SS3` shift exactly one printed character, so the clear is
         // here and nowhere else: an escape sequence between the shift and the
-        // character must not eat it.
-        let index = self
-            .state
-            .single_shift
-            .take()
-            .unwrap_or(self.state.active_charset);
+        // character must not eat it. Written as a match rather than `take()` so
+        // that the overwhelmingly common `None` costs a predictable branch and
+        // **no store** — this is the per-character print path.
+        let index = match self.state.single_shift {
+            Some(index) => {
+                self.state.single_shift = None;
+                index
+            }
+            None => self.state.active_charset,
+        };
         let charset = {
             let cursor = self.state.grid.screen().cursor();
             cursor.charsets[index]
@@ -183,7 +187,27 @@ impl Handler<'_> {
         grid.print(map_charset(charset, c), mode, interner);
     }
 
-    /// The `? 2027` print path: one grapheme cluster, one cell.
+    /// The `? 2027` print path, kept **out of line** from `print_str`.
+    ///
+    /// `print_str` is the hottest function in the engine and is inlined into
+    /// the parser's ground state; putting the segmentation machinery in its
+    /// body stopped that happening and cost ten per cent on every fixture, mode
+    /// set or not. Measured, not assumed (`US-0102`).
+    #[inline(never)]
+    fn print_clusters(&mut self, text: &str) {
+        // One `Vec` for the whole run, cleared per cluster: `cluster_width`
+        // reads scalars, and the mode is rare enough that a reusable buffer is
+        // not worth a field on `State`.
+        let mut scalars: Vec<char> = Vec::new();
+        for cluster in UnicodeSegmentation::graphemes(text, true) {
+            scalars.clear();
+            scalars.extend(cluster.chars());
+            self.input_cluster(&scalars);
+            self.state.preceding_char = scalars.last().copied();
+        }
+    }
+
+    /// One grapheme cluster, one cell.
     ///
     /// The charset map is applied to the leading scalar only, exactly as the
     /// per-scalar path applies it to every scalar: a cluster whose base is a
@@ -946,16 +970,7 @@ impl Dispatch for Handler<'_> {
     fn print_str(&mut self, text: &str) {
         self.state.dispatched = true;
         if self.state.modes.contains(Mode::GraphemeClusters) {
-            // One `Vec` for the whole run, cleared per cluster: `cluster_width`
-            // reads scalars, and the mode is rare enough that a reusable buffer
-            // is not worth a field on `State`.
-            let mut scalars: Vec<char> = Vec::new();
-            for cluster in UnicodeSegmentation::graphemes(text, true) {
-                scalars.clear();
-                scalars.extend(cluster.chars());
-                self.input_cluster(&scalars);
-                self.state.preceding_char = scalars.last().copied();
-            }
+            self.print_clusters(text);
             return;
         }
         for c in text.chars() {
