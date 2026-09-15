@@ -3,10 +3,9 @@
 //! Thirteen chapters, in reading order. The API reference beside them says what
 //! an item is; these say why you would reach for it and what you owe it back.
 //!
-//! Each chapter is one Markdown file under `docs/guide/` in this crate, included
-//! here so `cargo doc` renders it and `cargo test --doc` compiles every Rust
-//! block in it. A chapter that describes an API it no longer has fails the
-//! build.
+//! Each chapter is one Markdown file, included below so `cargo doc` renders it
+//! and `cargo test --doc` compiles every Rust block in it. A chapter that
+//! describes an API the crate no longer has fails the build.
 //!
 //! The module names carry a numeric prefix because rustdoc sorts a module list
 //! alphabetically and that is the only way to impose a reading order.
