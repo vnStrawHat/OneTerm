@@ -7,11 +7,21 @@
 //!   chunk fits a single 256 KiB SFTP packet even on OpenSSH, whose
 //!   `limits@openssh.com` extension caps `read`/`write` payloads at 261 120 bytes.
 //! - **Concurrent requests.** Writes are pipelined by the `russh-sftp` `File`
-//!   itself (up to `Config::max_concurrent_writes` unacknowledged writes, 8 by
-//!   default), so [`copy_sequential`] only needs to feed it big chunks. Reads are
-//!   one-request-per-`poll_read`, so [`copy_striped`] opens several handles onto
-//!   the same remote file and keeps [`READ_PIPELINE_DEPTH`] reads outstanding,
-//!   re-ordering the chunks before they reach the local file.
+//!   itself — up to `Config::max_concurrent_writes` unacknowledged writes, which
+//!   [`crate::session::sftp_config`] pins at 8 — so [`copy_sequential`] only
+//!   needs to feed it big chunks. Reads are one request at a time per handle, so
+//!   [`copy_striped`] opens several handles onto the same remote file and keeps
+//!   [`READ_PIPELINE_DEPTH`] reads outstanding, re-ordering the chunks before
+//!   they reach the local file.
+//!
+//! Both numbers are OneTerm's, not russh-sftp's defaults. russh-sftp 3.0 ships
+//! `max_concurrent_writes = 16` and a 16-deep read-ahead, and would cap every
+//! write at 32 KiB; `sftp_config` overrides all three (`IN-0036`, `US-0095`
+//! Changes F and G). The read-ahead in particular is wasted here: [`read_chunk`]
+//! seeks before every chunk, and a seek discards read-ahead that is already on
+//! the wire — measured at 9.3x the file size on a 5 MiB download before the
+//! override. If [`copy_striped`] is ever retired, raise `max_concurrent_reads`
+//! in the same change, or downloads lose their pipelining entirely.
 //!
 //! Both helpers observe the [`CancellationToken`] between chunks and report
 //! progress as a running byte count through a caller-supplied closure; the
@@ -386,3 +396,9 @@ mod tests {
         assert_eq!(read_handles_for(u64::MAX), READ_PIPELINE_DEPTH);
     }
 }
+
+// The SFTP transfer budget `session::sftp_config()` pins, measured against a
+// counting in-process server (see code-style.md on sibling test modules).
+#[cfg(test)]
+#[path = "pipeline_budget_tests.rs"]
+mod pipeline_budget_tests;
