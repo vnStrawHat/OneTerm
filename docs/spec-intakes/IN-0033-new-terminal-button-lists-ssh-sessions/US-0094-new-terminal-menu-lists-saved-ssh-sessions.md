@@ -718,7 +718,7 @@ cur.execute(
         "2026-09-15T09:30:00",
         "pass",
         " Acceptance rework implemented on worktree agent-a580e6e3c74ab401d off main @621e4c9 "
-        "in three commits (records, implementation, evidence). NOT merged, NOT pushed. Docs "
+        "in four commits (reopen record, implementation, the owner tweaks, evidence). NOT merged, NOT pushed. Docs "
         "changed: docs/gui-layout.md, the intake's high-level-design.md and IN-0033.md. Safety: "
         "Get-Process oneterm recorded before every launch (owner pid 14804 alive before and "
         "after every walk), Start-Process -PassThru, and only the launched pids (20772, 19436, "
