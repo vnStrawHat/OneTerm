@@ -28,3 +28,7 @@ harness.db*
 harness.db
 harness.db-wal
 harness.db-shm
+
+# `cargo run -p oneterm-tools --bin pty-throughput` writes its capture into the
+# current directory, which is usually the repository root.
+/firecap.bin
