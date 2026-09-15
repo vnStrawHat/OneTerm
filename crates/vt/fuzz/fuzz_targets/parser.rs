@@ -7,7 +7,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use oneterm_vt::{Config, EventBatch, OscRoute, OscRoutes, Size, Terminal};
+use oneterm_vt::{Config, EventBatch, OscRoute, OscRoutes, Size, Terminal, VtEvent};
 use std::time::Instant;
 
 /// The numbers whose route the input picks: every kind of number the table
@@ -59,10 +59,39 @@ fuzz_target!(|data: &[u8]| {
     let split = data.len() / 3;
     for chunk in [&data[..split], &data[split..]] {
         term.feed(chunk, &mut batch, now);
-        // Drain the way an embedder does, so every payload span is resolved
-        // against the arena that produced it.
+        // Drain the way an embedder does, and **read** every payload rather
+        // than merely looking at the event. A span is an index, so a bound that
+        // fell off a character boundary — `StrSpan::skip` cutting the drive
+        // slash, or a `finish_lossy` repair — only shows up when somebody
+        // resolves it.
         for event in batch.iter() {
-            std::hint::black_box(event);
+            match event {
+                VtEvent::Title(span) | VtEvent::IconName(span) | VtEvent::Pointer(span) => {
+                    std::hint::black_box(batch.str(*span));
+                }
+                VtEvent::ClipboardStore { text, .. } => {
+                    std::hint::black_box(batch.str(*text));
+                }
+                VtEvent::Cwd { host, path } => {
+                    std::hint::black_box(batch.str(*host));
+                    std::hint::black_box(batch.str(*path));
+                }
+                VtEvent::Notification { title, body } => {
+                    std::hint::black_box(batch.str(*title));
+                    std::hint::black_box(batch.str(*body));
+                }
+                VtEvent::Reply(span) => {
+                    std::hint::black_box(batch.bytes(*span));
+                }
+                VtEvent::Osc { params, .. } => {
+                    for param in batch.params(*params) {
+                        std::hint::black_box(param);
+                    }
+                }
+                other => {
+                    std::hint::black_box(other);
+                }
+            }
         }
     }
 });

@@ -1471,7 +1471,14 @@ impl Handler<'_> {
             first = false;
             self.out.extend(part.as_bytes());
         }
-        self.out.finish_trimmed(mark)
+        // Unreachable while every piece appended above has already passed
+        // `from_utf8`, but a dropped sequence is a counted sequence whatever
+        // dropped it.
+        let span = self.out.finish_trimmed(mark);
+        if span.is_none() {
+            self.unhandled();
+        }
+        span
     }
 
     /// `OSC 7`: `file://host/path`, or a bare path. The host and the path are

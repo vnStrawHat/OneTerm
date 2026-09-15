@@ -177,7 +177,13 @@ impl EventBatch {
     /// when what was assembled is not valid UTF-8.
     pub(crate) fn finish_trimmed(&mut self, mark: usize) -> Option<StrSpan> {
         let (offset, len) = {
-            let text = std::str::from_utf8(&self.arena[mark..]).ok()?;
+            let Ok(text) = std::str::from_utf8(&self.arena[mark..]) else {
+                // The rewind is the point: the caller is dropping the payload,
+                // and half of it must not stay in the arena for the rest of the
+                // batch.
+                self.arena.truncate(mark);
+                return None;
+            };
             let trimmed = text.trim();
             (
                 trimmed.as_ptr() as usize - text.as_ptr() as usize,

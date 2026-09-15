@@ -313,8 +313,10 @@ returns **0 lines**; `adapter_config` is three calls and names no OSC 7, 9 or 13
 **Line counts.** `crates/vt/src` +527 production lines, `crates/terminal/src` -151 (the criterion
 above records why that is short of the estimate, and what was measured instead).
 
-**Independent verification.** [`evidence/US-0098-verify.md`](evidence/US-0098-verify.md),
-**PASS-WITH-NOTES** at `82680ce`, no functional defect: 20 behaviour claims attacked with tests
+**Independent verification.** [`evidence/US-0098-verify.md`](evidence/US-0098-verify.md) --
+**PASS-WITH-NOTES** at `82680ce`, then **PASS** on the re-check after the rework, whose 11 further
+tests are adopted as `crates/vt/tests/us0098_recheck.rs`. The first pass found no functional
+defect: 20 behaviour claims attacked with tests
 written against the public API by somebody who had not read the in-crate module, and all 20 upheld
 on the first run. Its 27 tests are adopted as `crates/vt/tests/us0098_verify.rs` and its 3 adapter
 tests as the `legacy_alias_drops_the_notification_and_dispatches_the_payload`,
@@ -371,6 +373,8 @@ Every note in [`evidence/US-0098-verify.md`](evidence/US-0098-verify.md), and wh
 | 14 | The arm table's "clamped to 100" was not what the code did | **Closed, by fixing the code.** Both `9;4` fields are read as `u32` and the percentage clamps. The LLD's table records what the adapter did and why it changed. |
 | 15 | `crates/terminal` lost compile-time exhaustiveness on `VtEvent` | **Closed as recorded.** Noted in Gaps below; it is the documented price of `#[non_exhaustive]` and the three wildcard arms each chose a defensible default. |
 | 16 | An unrelated flake in `render_bench` | **Acknowledged, not acted on.** Pre-existing and timing-sensitive. Seen once here too, in `handle::tests::a_pump_yields_to_the_demand_within_a_bounded_number_of_chunks`, under a parallel build; green in isolation and in `ci-local -Full`. |
+| A | `EventBatch::finish_trimmed` promised to rewind the arena on invalid UTF-8 and returned through `from_utf8(..).ok()?` before it could | **Closed, by fixing the code.** The refusal path truncates to `mark` first, and `osc_text` now counts `unhandled()` when it drops a payload, so such a sequence would be neither silent nor leaky. Unreachable from any arm today -- `osc_text` only appends pieces that already passed `from_utf8` -- so it is pinned on the helper directly by `finish_trimmed_rewinds_what_it_refuses`, which also asserts the next payload lands where the refused one would have. |
+| B | The fuzz target's drain looked at each event without reading its payload, so an off-boundary span bound could not panic | **Closed, by fixing the target.** It resolves every `StrSpan` and `ByteSpan` in every drained event, parameters included, which is the only way a bad bound from `StrSpan::skip` (the drive-slash cut) or a `finish_lossy` repair shows up. `cargo check` inside `crates/vt/fuzz` still passes on stable. |
 
 ## Harness Row
 

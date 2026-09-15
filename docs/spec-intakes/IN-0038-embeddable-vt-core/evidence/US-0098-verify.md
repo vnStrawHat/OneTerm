@@ -304,3 +304,106 @@ pre-existing, unrelated to this packet.
   every sibling row on this intake. `US-0098` has no row yet.
 * **Rebase.** The branch is on `0558fa2`; `main` has since moved to `a13002a`. Verified as branched,
   not as rebased.
+
+---
+
+## Final re-check at `e62da2d`
+
+Rebased onto `main` `072560a` (`DEC-0017` accepted, `US-0100` search merged). Re-verified by the
+same verifier, in the same worktree, nothing committed.
+
+**Verdict: PASS.** Every note from the first pass is closed truthfully, four of them by fixing the
+code rather than the prose. Two new informational notes below; neither blocks the merge.
+
+### The adopted suite was not weakened
+
+`crates/vt/tests/us0098_verify.rs` differs from the verifier's original by **109 diff lines**, all
+of them the module doc plus the three cases the verification itself invalidated. Every other test is
+byte-identical, and each change makes the assertion **stronger**:
+
+| Was | Is |
+| --- | --- |
+| `v_table_equality_is_structural_not_semantic` -- `assert_ne!` | `v_table_equality_is_semantic` -- `assert_eq!`, plus the `BuiltinAndForward`-on-a-non-built-in normalisation |
+| non-UTF-8 `OSC 7` -> a lossy `Cwd` | dropped and counted, plus a new case for the percent-escape path that stays lenient |
+| `9;4;1;1000` -> `Set(0)`, "pinned as observed" | `Set(100)`, plus a new `9;4;300` case |
+
+The three adapter tests in `backend_tests.rs` were adopted verbatim; only the `v0098_` prefix and
+one doc sentence changed. Bodies identical.
+
+### New attacks, all passing
+
+`crates/vt/tests/us0098_recheck.rs`, 11 tests, debug and release, written against the reworked
+pieces only:
+
+| Note | Attack | Result |
+| --- | --- | --- |
+| 3 | `has_builtin` vs `BUILTIN` for **every** number `0..4096` plus five above it; `BUILTIN.len() == 18`; every built-in inside the bitmap | PASS. `BUILTIN_BITS` is a `const` block with a compile-time `assert!(code < BITMAP_BITS)`; `git grep BUILTIN.contains -- crates/vt/src` is empty. `get()` is at most three bit tests (two `CodeSet::contains` plus `has_builtin`, and the `(true, _)` / `(false, _)` arms skip the third); `allows_large` is the fourth, asked once by the parser |
+| 3 | `get()` is order-independent and repeatable across 2100 numbers | PASS |
+| 6 | `Drop` on a non-built-in writes nothing (bitmap **and** spill); `BuiltinAndForward` on a non-built-in equals `Forward`; a spilled number routed away and back equals a fresh table; `Drop` on a built-in stays visible | PASS |
+| 6 | Brute force: for six numbers x every legal route, equal `get()` implies equal table and unequal `get()` implies unequal table | PASS |
+| 4 | `OSC 7` with `%C3%A9%C3` (the documented single repair), 256 warm + 4096 feeds | PASS, capacities flat |
+| 4 | `OSC 0/2` titles (the documented owned `String`), 256 warm + 2048 feeds | PASS, capacities flat |
+| 4 | 14 alternating kinds x 64 warm + 512 feeds | PASS, capacities flat |
+| 4 | 2 MiB `OSC 9` body under `BuiltinAndForward` + `large` | PASS: `truncated_osc == 0`, both events, body intact, arena settles at one payload |
+| 10 | `OSC 7` URLs ending in a lone lead byte, a lone continuation byte, `FF FE`, and a surrogate | PASS: all four dropped and counted, matching `main`. Percent escapes (`%FF`, `%80`) stay lenient, `%C3%A9` still decodes, and the drive-slash rule survives the span-cut rewrite including the decoded form `file:///C%3A/x` -> `C:/x` |
+| 14 | `9;4;1;1000` / `;250` / `;101` / `;4294967295` all clamp to 100; `9;4;5`, `;255`, `;256`, `;300`, `;4294967295` (state) are all counted, never `Remove`; `9;4;x;1` and `9;4` still `Remove` | PASS |
+| -- | 64 random tables x 8 KiB biased random bytes x 64 chunk sizes against the reworked arms | PASS, no panic, counters bounded |
+
+The in-tree guard `the_builtin_arms_do_not_grow_the_batch_once_warm`
+(`crates/vt/src/terminal/terminal_tests.rs`) is genuine, not vacuous: eight real OSC kinds in one
+buffer, 64 warm-up feeds, then 1000, with all three capacities asserted.
+
+### Records
+
+* `DEC-0017:7` reads `Accepted (owner ruling, 2026-09-15: ...)`. Line 48 now says "three bit tests
+  ... plus a fourth for the payload ceiling"; line 67 says "keeps `Config` `Clone`, and makes the
+  table itself `Clone + PartialEq`"; lines 76-79 record the `PartialEq` claim as false and why the
+  conclusion survives. The `20308` consequence is ticked `[x]` as independently confirmed.
+* The packet's "Verification Notes Closed" table covers all sixteen notes (5 as `5a` / `5b`), the
+  precondition sentence at lines 251-252 records that the decision was accepted before the packet
+  merged, `events-and-api.md:280` carries an "`OscClaims` until `US-0098`" marker, and
+  `IN-0038.md:278` records "estimated ... **measured +527 and -151**".
+* LOC re-measured against the rebase base with the verifier's own script:
+  `crates/vt/src` 13846 -> 14373 (**+527**), `crates/terminal/src` 6442 -> 6291 (**-151**). Exact.
+* No public surface change from the rework: `python scripts/vt-public-api.py --check` (fresh
+  rustdoc) says "public API surface unchanged". `mark`, `extend`, `finish_trimmed`, `finish_lossy`
+  and `StrSpan::skip` are `pub(crate)`, and `mod batch` is `pub(crate)`.
+
+### Gates
+
+```
+cargo test -p oneterm-tools --test corpus_check    2 passed
+cargo test -p oneterm-vt                          400 + 6 + 8 + 7 + 11 + 27 + 5 + 6 passed
+cargo test -p oneterm-vt --features vt-paranoid   green
+cargo test -p oneterm-vt --no-default-features    green
+cargo test -p oneterm-vt --features regex         405 passed
+cargo test -p oneterm-terminal                    267 passed
+cargo test -p oneterm-terminal-view               304 passed, 3 ignored
+cargo check   (inside crates/vt/fuzz, stable)     exit 0
+pwsh scripts/ci-local.ps1 -Full                   "ci-local: all checks passed."
+```
+
+`ci-local -Full` was again run on the pristine tree, the verifier's re-check file parked in the
+scratchpad for that run.
+
+### New notes
+
+**A. `EventBatch::finish_trimmed` does not rewind on invalid UTF-8, though its doc says it does --
+LOW (latent).** `crates/vt/src/events/batch.rs`: the doc reads "`None`, **and the arena rewound**,
+when what was assembled is not valid UTF-8", but the body returns through
+`std::str::from_utf8(..).ok()?` **before** any `truncate`, so the partial bytes stay in the arena.
+Unreachable today: its only caller, `osc_text`, appends `str::from_utf8(part).ok()` pieces joined
+with `;`, which is always valid UTF-8, so the `None` arm cannot fire. It is a trap for the next
+caller -- and that `None` also returns from `osc_text` without calling `unhandled()`, so such a
+sequence would be silent as well as leaky. One `self.arena.truncate(mark);` before the `?` closes
+both.
+
+**B. The fuzz target does not resolve the payload spans it says it resolves -- LOW (coverage).**
+`crates/vt/fuzz/fuzz_targets/parser.rs` drains with `std::hint::black_box(event)` under the comment
+"so every payload span is resolved against the arena that produced it". `black_box` only stops the
+loop being optimised away; it never calls `batch.str(span)`, which is what would catch a span whose
+bounds landed off a character boundary -- precisely the new risk that `StrSpan::skip` and
+`finish_lossy` introduce. Matching on the event and reading each `StrSpan` would make the claim
+true. The target is otherwise correct and now drives a real `Terminal`, which was the point of
+note 7.
+

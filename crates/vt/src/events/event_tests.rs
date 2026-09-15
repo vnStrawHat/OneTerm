@@ -216,3 +216,37 @@ fn rows_trimmed_is_emitted_when_history_is_trimmed() {
         .count();
     assert!(trimmed > 0, "history was trimmed without an event");
 }
+
+/// `finish_trimmed` rewinds on invalid UTF-8, which is what its doc promises
+/// and what keeps a refused payload from sitting in the arena for the rest of
+/// the batch.
+///
+/// No dispatch arm can reach this today -- `osc_text` only appends pieces that
+/// already passed `from_utf8` -- so it is asserted on the helper directly. It
+/// is a trap for the next caller rather than dead weight: the whole point of an
+/// arena is that half a payload nobody claimed is indistinguishable from the
+/// bytes of the next one.
+#[test]
+fn finish_trimmed_rewinds_what_it_refuses() {
+    let mut batch = EventBatch::new();
+
+    let mark = batch.mark();
+    batch.extend(b"  kept  ");
+    let kept = batch.finish_trimmed(mark).expect("valid UTF-8");
+    assert_eq!(batch.str(kept), "kept");
+    let after_kept = batch.mark();
+
+    // A lone continuation byte is never valid UTF-8.
+    let mark = batch.mark();
+    batch.extend(b"refused");
+    batch.extend(&[0x80]);
+    assert_eq!(batch.finish_trimmed(mark), None);
+    assert_eq!(batch.mark(), after_kept, "the refused bytes left the arena");
+
+    // And the next payload lands exactly where the refused one would have.
+    let mark = batch.mark();
+    batch.extend(b"next");
+    let next = batch.finish_trimmed(mark).expect("valid UTF-8");
+    assert_eq!(batch.str(next), "next");
+    assert_eq!(batch.str(kept), "kept", "the earlier span still reads");
+}
