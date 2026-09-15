@@ -46,6 +46,8 @@ step python scripts/vt-public-api.py --check --no-doc
 # `--allow-dirty` because an agent runs this gate with uncommitted work; the
 # workflow packages a clean checkout without it.
 printf '\n==> cargo package -p oneterm-vt --list | verify-dependency-graph.py --package-list -\n'
+# `set -o pipefail` is on at the top of this script, so a `cargo package`
+# failure fails the pipeline rather than being masked by python's status.
 if ! cargo package -p oneterm-vt --allow-dirty --list |
     python scripts/verify-dependency-graph.py --package-list -; then
   printf '\nci-local: FAILED: the oneterm-vt package is missing a required file\n' >&2

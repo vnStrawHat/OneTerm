@@ -183,7 +183,10 @@ jobs:
       - name: Package the crate
         run: cargo package -p oneterm-vt
       - name: Check what the package carries
+        # pipefail: without it the step reports python's status for a
+        # `cargo package` that failed.
         run: |
+          set -o pipefail
           cargo package -p oneterm-vt --list |
             python scripts/verify-dependency-graph.py --package-list -
       # Published rustdoc must read for somebody who does not have this

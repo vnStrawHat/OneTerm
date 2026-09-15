@@ -57,7 +57,15 @@ Invoke-Step @("python", "scripts/vt-public-api.py", "--check", "--no-doc")
 # workflow packages a clean checkout without it.
 Write-Host ""
 Write-Host "==> cargo package -p oneterm-vt --list | verify-dependency-graph.py --package-list -"
-cargo package -p oneterm-vt --allow-dirty --list | python scripts/verify-dependency-graph.py --package-list -
+# Both halves are checked: a pipeline's `$LASTEXITCODE` is the last command's,
+# so piping straight into python would report python's status for a `cargo
+# package` that failed.
+$packageList = cargo package -p oneterm-vt --allow-dirty --list
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "ci-local: FAILED: cargo package -p oneterm-vt --list"
+    exit 1
+}
+$packageList | python scripts/verify-dependency-graph.py --package-list -
 if ($LASTEXITCODE -ne 0) {
     Write-Error "ci-local: FAILED: the oneterm-vt package is missing a required file"
     exit 1
