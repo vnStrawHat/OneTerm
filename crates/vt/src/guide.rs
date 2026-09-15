@@ -46,5 +46,26 @@ pub mod ch11_conformance {}
 #[doc = include_str!("../docs/guide/12-versioning.md")]
 pub mod ch12_versioning {}
 
+// The transport chapter is the one chapter whose subject can be compiled away,
+// and its poll loop is the block an embedder copies, so it must be compiled
+// rather than merely `ignore`d. Gating the module is what lets that block name
+// `pty` types without breaking the doctest run of a build that has no `pty`
+// module; the other arm keeps the chapter in the sidebar in that build, rather
+// than leaving a hole between 12 and nothing.
+#[cfg(feature = "pty")]
 #[doc = include_str!("../docs/guide/13-pty.md")]
+pub mod ch13_pty {}
+
+/// # 13. The pseudo-console
+///
+/// This chapter documents the `pty` feature, which is **off** in this build:
+/// there is no transport module to write about, and its code examples name
+/// types that do not exist here.
+///
+/// Turn the feature on -- it is on by default -- and this chapter is the
+/// transport: three ways to have one, the evented poll loop, thread lifetimes,
+/// and the console host a Windows embedder has to ship for itself.
+///
+/// Chapters 1 to 12 are true at every feature setting.
+#[cfg(not(feature = "pty"))]
 pub mod ch13_pty {}

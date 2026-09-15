@@ -46,61 +46,96 @@ let top = term.viewport().top;
 assert_eq!(term.row_text(top).trim_end(), "from a socket, a file, or a fixture");
 ```
 
+## You bring `polling`
+
+The transport is registered with a `polling::Poller` that **you** construct, and
+this crate does not re-export `polling`. Add it to your own manifest at the same
+major version:
+
+```toml
+[dependencies]
+polling = "3"
+```
+
+It has to be the same major, because `Poller`, `Event` and `PollMode` appear in
+the `EventedReadWrite` signatures: two different majors are two different types
+and they will not unify. That is what chapter 12 means when it calls `polling`
+this crate's only public dependency.
+
+A `pub use polling;` here would save you the line, and it is deliberately not
+offered: it would be a new public item in this crate's surface, permanently,
+carrying a semver promise about somebody else's crate. Naming the version in
+your own manifest is one line and leaves you in control of it.
+
 ## The shape of a session
 
-```rust,ignore
-// `ignore`: this block names `oneterm_vt::pty`, which does not exist in a
-// `--no-default-features` build, and spawning a real child process is not
-// something a doctest should do.
+```rust,no_run
+// `no_run`: compiled on every build that has the `pty` feature, so it cannot
+// drift from the API, but never executed -- it spawns a child process and then
+// loops forever.
 use std::io::Read;
 use std::sync::Arc;
+
 use oneterm_vt::pty::{
-    ChildEvent, EventedPty, EventedReadWrite, Options, PseudoConsole, WindowSize,
-    PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN,
+    ChildEvent, EventedPty, EventedReadWrite, Options, PseudoConsole,
+    PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN, WindowSize,
 };
+use polling::{Event, Events, PollMode, Poller};
 
-let mut options = Options::default();
-// TERM and COLORTERM belong here. This crate never touches the calling
-// process's own environment.
-options.env.insert("TERM".into(), "xterm-256color".into());
+fn run() -> std::io::Result<()> {
+    let mut options = Options::default();
+    // TERM and COLORTERM belong here. This crate never touches the calling
+    // process's own environment.
+    options.env.insert("TERM".into(), "xterm-256color".into());
 
-let size = WindowSize { rows: 24, cols: 80, cell_width: 8, cell_height: 17 };
-let mut pty = PseudoConsole::spawn(&options, size)?;
+    let size = WindowSize { rows: 24, cols: 80, cell_width: 8, cell_height: 17 };
+    let mut pty = PseudoConsole::spawn(&options, size)?;
 
-let poller = Arc::new(polling::Poller::new()?);
-// Safety: the sources must outlive their registration, which the owner thread
-// guarantees by dropping the console before the poller.
-unsafe {
-    pty.register(&poller, polling::Event::readable(PTY_READ_WRITE_TOKEN), polling::PollMode::Level)?;
-}
+    let poller = Arc::new(Poller::new()?);
+    // SAFETY: the registered sources must outlive their registration, which
+    // this thread guarantees by deregistering before it drops either.
+    unsafe {
+        pty.register(
+            &poller,
+            Event::readable(PTY_READ_WRITE_TOKEN),
+            PollMode::Level,
+        )?;
+    }
 
-let mut events = Vec::new();
-let mut buf = [0u8; 8192];
-loop {
-    events.clear();
-    poller.wait(&mut events, None)?;
-    for event in &events {
-        match event.key {
-            PTY_READ_WRITE_TOKEN => {
-                let read = pty.reader().read(&mut buf)?;
-                // ... term.feed(&buf[..read], &mut batch, Instant::now())
-                let _ = read;
-            }
-            PTY_CHILD_EVENT_TOKEN => {
-                if let Some(ChildEvent::Exited(status)) = pty.next_child_event() {
-                    let _ = status;
-                    return Ok(());
+    let mut events = Events::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        events.clear();
+        poller.wait(&mut events, None)?;
+        for event in events.iter() {
+            match event.key {
+                PTY_READ_WRITE_TOKEN => {
+                    let read = pty.reader().read(&mut buf)?;
+                    // ... term.feed(&buf[..read], &mut batch, Instant::now())
+                    let _ = read;
                 }
+                PTY_CHILD_EVENT_TOKEN => {
+                    if let Some(ChildEvent::Exited(status)) = pty.next_child_event() {
+                        let _ = status;
+                        pty.deregister(&poller)?;
+                        return Ok(());
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 }
+# let _ = run;
 ```
 
 Two tokens, because child exit must be observable without reading: on Unix that
 is race-free `SIGCHLD` handling, on Windows a wait callback. A child that exits
 while you are blocked on a read would otherwise never be noticed.
+
+Writing to the child is the same object: `EventedReadWrite::writer` is where
+every `VtEvent::Reply` goes, and where you send the bytes `input::encode_key`
+returns and any answer you choose to give a `ClipboardLoad` or a `ColorQuery`.
 
 Resizing is the other half, and it is one call: `OnResize::on_resize` with the
 same numbers you gave `Terminal::resize`. It returns an error rather than
@@ -115,17 +150,30 @@ The transport is evented, not async. There is no runtime, no executor and no
 says there is something to read.
 
 Internally it runs two threads on Windows (a pipe reader and a pipe writer) and
-one on Unix (a reaper that turns child exit into a pollable event). All are
-joined on drop and none of them calls into your code. They are the only threads
-this crate spawns, which is why turning the feature off makes the engine's "no
-threads, no locks, no interior mutability" claim literally true rather than
-nearly true.
+one on Unix (a reaper that turns child exit into a pollable event). None of them
+calls into your code, and they are the only threads this crate spawns, which is
+why turning the feature off makes the engine's "no threads, no locks, no
+interior mutability" claim literally true rather than nearly true.
+
+**None of them is joined, and drop does not wait for them.** Be exact about
+this, because shutdown ordering gets built on it:
+
+- the Windows pipe threads are parked in a blocking read or write and return
+  only when the pipe breaks, so there is no join to perform -- the handle is
+  dropped at spawn;
+- the Unix reaper owns the child handle and deliberately outlives the drop,
+  which is how a child exit stays observable while the owner is tearing down.
+
+Each thread holds only what it was given and none of it is yours, so a thread
+still running after `drop` returns cannot touch your memory. But do not write
+code that assumes the process has no more threads of this crate in it the
+instant `drop` returns, because it does.
 
 **Dropping a pseudo-console is an action, not a release.** It closes the
-console, waits a bounded grace period for the child to exit, and terminates that
-child if it never does. The drop therefore blocks, and it belongs on an owner
-thread rather than on a UI thread. Deregister the sources from the poller before
-dropping the poller, not after.
+console, waits a bounded grace period for the *child* to exit -- not for those
+threads -- and terminates the child if it never does. The drop therefore blocks,
+and it belongs on an owner thread rather than on a UI thread. Deregister the
+sources from the poller before dropping the poller, not after.
 
 ## Windows: the console host you have to ship
 
