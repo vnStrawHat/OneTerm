@@ -41,6 +41,7 @@ use crate::graphics::{self, GraphicData, GraphicsState};
 use crate::grid::{
     AnchorId, Charset, DEFAULT_SCROLLBACK, Pos, RowId, Screen, Size, TerminalGrid, Viewport,
 };
+use crate::input::{KeyMods, KeySpec};
 use crate::intern::Interner;
 use crate::parser::Parser;
 use crate::reflow::{ResizeOutcome, ResizePolicy};
@@ -357,6 +358,15 @@ impl Terminal {
     /// there is one implementation of the rule, not two.
     pub fn hit_test(&self, viewport_row: f32, col: f32) -> (Pos, Side) {
         crate::selection::hit_test(&self.state.grid, viewport_row, col)
+    }
+
+    /// The bytes a key press sends to this terminal.
+    ///
+    /// [`crate::input::encode_key`] with this terminal's own modes, so the
+    /// embedder does not have to fetch a snapshot to encode one key. `None`
+    /// means the chord has no terminal encoding and the event is dropped.
+    pub fn encode_key(&self, key: &KeySpec, mods: KeyMods) -> Option<Vec<u8>> {
+        crate::input::encode_key(key, mods, &self.mode_snapshot())
     }
 
     /// The modes the view reads at paint time.

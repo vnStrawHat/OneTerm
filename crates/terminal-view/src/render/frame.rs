@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use oneterm_terminal::{
     Attrs, CellWidth, Color as EngineColor, CursorShape as EngineCursorShape, GraphicData,
-    GraphicId, HyperlinkId, NamedColor, RenderContent, RenderRow, RenderUpdate, RowId, SeqNo,
-    Style, TerminalContent, TerminalSession,
+    GraphicId, HyperlinkId, ModeSnapshot, NamedColor, RenderContent, RenderRow, RenderUpdate,
+    RowId, SeqNo, Style, TerminalContent, TerminalSession,
 };
 
 /// FNV-1a, the hash used for shaped-run keys and the style key.
@@ -557,9 +557,10 @@ impl Frame {
         })
     }
 
-    /// DECCKM: arrows send `ESC O x` instead of `ESC [ x`.
-    pub(crate) fn app_cursor(&self) -> bool {
-        self.content.modes().app_cursor
+    /// The engine modes as of the last paint; `send_key` reads DECCKM from
+    /// it (arrows send `ESC O x` instead of `ESC [ x`).
+    pub(crate) fn modes(&self) -> ModeSnapshot {
+        self.content.modes()
     }
 }
 
@@ -962,7 +963,7 @@ mod tests {
             (4, 2, CursorShape::Beam)
         );
         assert_eq!(frame.display_offset(), 0);
-        assert!(!frame.app_cursor());
+        assert!(!frame.modes().app_cursor);
     }
 
     #[test]

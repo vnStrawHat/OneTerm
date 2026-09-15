@@ -4,7 +4,7 @@
 
 use gpui::{AppContext as _, Keystroke, Modifiers, TestAppContext};
 use oneterm_terminal::test_support::FakeTerminalSession;
-use oneterm_terminal::{KeyMods, KeySpec, NamedKey, encode_key};
+use oneterm_terminal::{KeyMods, KeySpec, ModeSnapshot, NamedKey, encode_key};
 
 use super::keys::{
     CompletionKey, KeyAction, KeyContext, classify_key, interrupt, map_key, send_key,
@@ -240,7 +240,7 @@ fn ctrl_space_encodes_nul(cx: &mut TestAppContext) {
     let (session, probe) = FakeTerminalSession::boxed(4, 8, "");
     cx.update(|cx| {
         let session = cx.new(|_| session);
-        assert!(send_key(&session, &spec, mods, false, cx).is_some());
+        assert!(send_key(&session, &spec, mods, &ModeSnapshot::default(), cx).is_some());
     });
     assert_eq!(probe.writes(), vec![vec![0u8]]);
 }
@@ -253,11 +253,11 @@ fn unmapped_chord_writes_nothing(cx: &mut TestAppContext) {
         ctrl: true,
         ..Default::default()
     };
-    assert!(encode_key(&spec, mods, false).is_none());
+    assert!(encode_key(&spec, mods, &ModeSnapshot::default()).is_none());
     let (session, probe) = FakeTerminalSession::boxed(4, 8, "");
     cx.update(|cx| {
         let session = cx.new(|_| session);
-        assert!(send_key(&session, &spec, mods, false, cx).is_none());
+        assert!(send_key(&session, &spec, mods, &ModeSnapshot::default(), cx).is_none());
     });
     assert!(probe.writes().is_empty());
 }
@@ -284,7 +284,10 @@ fn alt_c_sends_escape_prefix() {
     };
     assert_eq!(spec, KeySpec::Character("c".into()));
     assert!(mods.alt);
-    assert_eq!(encode_key(&spec, mods, false), Some(b"\x1bc".to_vec()));
+    assert_eq!(
+        encode_key(&spec, mods, &ModeSnapshot::default()),
+        Some(b"\x1bc".to_vec())
+    );
 }
 
 #[test]

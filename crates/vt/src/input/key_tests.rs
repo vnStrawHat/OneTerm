@@ -1,5 +1,59 @@
 use super::*;
 
+/// The signature `encode_key` had while it lived in the adapter, expressed in
+/// the one the engine publishes. Every case below is written against the old
+/// three-argument form and runs against the new one through this line, which
+/// is what pins "the boolean was `ModeSnapshot::app_cursor` and nothing else".
+/// It shadows the glob-imported `encode_key`; `only_app_cursor_is_read` is the
+/// test that holds the other half of the claim.
+fn encode_key(key: &KeySpec, mods: KeyMods, app_cursor: bool) -> Option<Vec<u8>> {
+    super::encode_key(
+        key,
+        mods,
+        &ModeSnapshot {
+            app_cursor,
+            ..ModeSnapshot::default()
+        },
+    )
+}
+
+/// Every other field of the snapshot is noise to the encoder: flip them all and
+/// the bytes do not move.
+#[test]
+fn only_app_cursor_is_read() {
+    let loud = ModeSnapshot {
+        app_cursor: true,
+        alt_screen: true,
+        app_keypad: true,
+        bracketed_paste: true,
+        show_cursor: false,
+        insert: true,
+        alternate_scroll: true,
+        mouse: Some(crate::render::MouseProtocol {
+            reporting: crate::render::MouseReporting::AnyEvent,
+            encoding: crate::render::MouseEncoding::Sgr,
+        }),
+    };
+    let quiet = ModeSnapshot {
+        app_cursor: true,
+        ..ModeSnapshot::default()
+    };
+    for key in [
+        KeySpec::Named(NamedKey::ArrowUp),
+        KeySpec::Named(NamedKey::Home),
+        KeySpec::Named(NamedKey::F5),
+        KeySpec::Character("a".into()),
+    ] {
+        for mods in [m(false, false, false), m(true, true, true)] {
+            assert_eq!(
+                super::encode_key(&key, mods, &loud),
+                super::encode_key(&key, mods, &quiet),
+                "{key:?} {mods:?}"
+            );
+        }
+    }
+}
+
 fn m(shift: bool, ctrl: bool, alt: bool) -> KeyMods {
     KeyMods { shift, ctrl, alt }
 }

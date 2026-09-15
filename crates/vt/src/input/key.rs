@@ -9,6 +9,8 @@
 //! - Returns `None` only when the combination has no terminal encoding
 //!   (Ctrl + non-ASCII / multi-codepoint text) → the caller ignores it.
 
+use crate::render::ModeSnapshot;
+
 /// Modifier state when encoding a key (bit-agnostic, uses bool for clarity).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct KeyMods {
@@ -148,10 +150,12 @@ fn ctrl_bytes(text: &str) -> Option<Vec<u8>> {
 /// that is Ctrl + a non-ASCII or multi-codepoint `Character` (there is no
 /// control byte for `Ctrl+é`); the caller drops the event.
 ///
-/// `app_cursor` mirrors the terminal's DECCKM state (`TermMode::APP_CURSOR`):
-/// when the program has enabled Application Cursor Keys (e.g. vim/less/man
-/// send `CSI ?1h`), the plain cursor keys (arrows, Home, End) must use the
-/// `ESC O{ch}` form instead of `ESC [{ch}` so the program recognizes them.
+/// The only field read from `modes` is [`ModeSnapshot::app_cursor`], the
+/// terminal's DECCKM state: when the program has enabled Application Cursor
+/// Keys (e.g. vim/less/man send `CSI ?1h`), the plain cursor keys (arrows,
+/// Home, End) must use the `ESC O{ch}` form instead of `ESC [{ch}` so the
+/// program recognizes them. [`crate::Terminal::encode_key`] passes the
+/// terminal's own snapshot, so an embedder that has one needs nothing else.
 ///
 /// Conventions:
 /// - `Character` + `ctrl` → xterm control table (see `ctrl_bytes`).
@@ -163,10 +167,11 @@ fn ctrl_bytes(text: &str) -> Option<Vec<u8>> {
 ///   `app_cursor`, else `ESC [{ch}`.
 /// - `Home`/`End` + (shift|ctrl) → `CSI 1;{mod}H/F`; plain → `ESC OH/F`
 ///   when `app_cursor`, else `ESC [H/F`.
-pub fn encode_key(key: &KeySpec, mods: KeyMods, app_cursor: bool) -> Option<Vec<u8>> {
+pub fn encode_key(key: &KeySpec, mods: KeyMods, modes: &ModeSnapshot) -> Option<Vec<u8>> {
     let shift = mods.shift;
     let ctrl = mods.ctrl;
     let alt = mods.alt;
+    let app_cursor = modes.app_cursor;
 
     let seq: Vec<u8> = match key {
         KeySpec::Character(ch) => {

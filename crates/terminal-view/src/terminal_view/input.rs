@@ -108,9 +108,9 @@ impl TerminalView {
                 if matches!(key, "enter" | "return") {
                     self.completion_capture_current(cx);
                 }
-                // The frame's DECCKM flag is at most one paint old.
-                let app_cursor = self.render_state.borrow().frame.app_cursor();
-                let Some(bytes) = send_key(&session, &spec, mods, app_cursor, cx) else {
+                // The frame's modes are at most one paint old.
+                let modes = self.render_state.borrow().frame.modes();
+                let Some(bytes) = send_key(&session, &spec, mods, &modes, cx) else {
                     return;
                 };
                 self.deps
