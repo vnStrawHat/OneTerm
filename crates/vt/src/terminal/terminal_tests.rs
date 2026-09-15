@@ -721,6 +721,43 @@ fn an_invalid_scrolling_region_is_a_noop() {
 
 // ── Answers ─────────────────────────────────────────────────────────────────
 
+/// `product_name` owns both halves of the terminal's identity: the string
+/// `XTVERSION` returns and the number `DA2` returns. The literals below are the
+/// bytes an embedder shipping "OneTerm(0.5.2)" gets.
+#[test]
+fn product_name_owns_xtversion_and_da2() {
+    let mut session = Session::with(Terminal::new(
+        Size { rows: 24, cols: 80 },
+        Config {
+            product_name: Some("OneTerm(0.5.2)".into()),
+            ..Config::default()
+        },
+    ));
+
+    session.feed(b"\x1b[>0q");
+    assert_eq!(session.replies(), "\x1bP>|OneTerm(0.5.2)\x1b\\");
+
+    session.feed(b"\x1b[>c");
+    assert_eq!(session.replies(), "\x1b[>0;502;1c");
+
+    // A name with no version in it leaves `DA2` on the engine's own number, so
+    // the reply stays a version rather than becoming zero.
+    let mut plain = Session::with(Terminal::new(
+        Size { rows: 24, cols: 80 },
+        Config {
+            product_name: Some("MyTerm".into()),
+            ..Config::default()
+        },
+    ));
+    plain.feed(b"\x1b[>0q");
+    assert_eq!(plain.replies(), "\x1bP>|MyTerm\x1b\\");
+    plain.feed(b"\x1b[>c");
+    assert_eq!(
+        plain.replies(),
+        format!("\x1b[>0;{};1c", super::dispatch_version_for_tests())
+    );
+}
+
 #[test]
 fn da1_da2_dsr_xtversion_answers() {
     let mut session = Session::new(80, 24);
@@ -748,11 +785,11 @@ fn da1_da2_dsr_xtversion_answers() {
     session.feed(b"\x1b[?6n");
     assert_eq!(session.replies(), "\x1b[?3;7;1R");
 
-    // Deviation D8.
+    // Deviation D8. With no `product_name`, the engine answers for itself.
     session.feed(b"\x1b[>0q");
     assert_eq!(
         session.replies(),
-        format!("\x1bP>|OneTerm({})\x1b\\", env!("CARGO_PKG_VERSION"))
+        format!("\x1bP>|oneterm-vt({})\x1b\\", env!("CARGO_PKG_VERSION"))
     );
 
     session.feed(b"\x1b[18t");
@@ -1641,12 +1678,12 @@ fn unhandled_sequences_are_counted_not_echoed() {
     assert_eq!(stats.unhandled_sequences, 0);
 }
 
-/// `BUG-0058`: the intermediates are part of the DCS routing key. DECRQSS
-/// (`DCS $ q`) and XTGETTCAP (`DCS + q`) share the final byte `q` with Sixel,
-/// and clients such as tmux, neovim and kitty are documented to send the
-/// latter — routing on the final byte alone fed their payloads to the image
-/// decoder. This asserts the event batch as well; the wider routing suite is
-/// `verify_bug0058_tests.rs`.
+// `BUG-0058`: the intermediates are part of the DCS routing key. DECRQSS
+// (`DCS $ q`) and XTGETTCAP (`DCS + q`) share the final byte `q` with Sixel,
+// and clients such as tmux, neovim and kitty are documented to send the
+// latter — routing on the final byte alone fed their payloads to the image
+// decoder. This asserts the event batch as well; the wider routing suite is
+// `verify_bug0058_tests.rs`.
 #[test]
 fn an_intermediate_dcs_q_is_not_sixel() {
     for bytes in [&b"\x1bP$qm\x1b\\"[..], &b"\x1bP+q544e\x1b\\"[..]] {

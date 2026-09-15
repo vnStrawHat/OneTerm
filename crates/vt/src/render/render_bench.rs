@@ -1,14 +1,14 @@
-//! What one frame's render state costs, recorded and never gated.
-//!
-//! Benchmark tier 3 of
-//! `docs/spec-intakes/IN-0029-vt-engine/low-level-design/testing-and-bench.md`,
-//! measured against the engine being replaced: a full 200x50 viewport copy per
-//! painted frame costs **29.9 us**
-//! (`docs/spec-intakes/IN-0029-vt-engine/research/perf-baseline.md` § 4).
-//!
-//! Only the hand-off is timed — the grid mutation that makes a row dirty sits
-//! outside the clock, so these numbers answer the same question the baseline
-//! did: what does the renderer pay per frame?
+// What one frame's render state costs, recorded and never gated.
+//
+// Benchmark tier 3 of
+// `docs/spec-intakes/IN-0029-vt-engine/low-level-design/testing-and-bench.md`,
+// measured against the engine being replaced: a full 200x50 viewport copy per
+// painted frame costs 29.9 us
+// (`docs/spec-intakes/IN-0029-vt-engine/research/perf-baseline.md` section 4).
+//
+// Only the hand-off is timed - the grid mutation that makes a row dirty sits
+// outside the clock, so these numbers answer the same question the baseline
+// did: what does the renderer pay per frame?
 
 use std::time::{Duration, Instant};
 
@@ -16,7 +16,8 @@ use crate::render::tests::Engine;
 use crate::render::{Palette, RenderState};
 use crate::{Config, EventBatch, Size, Terminal};
 
-/// `docs/spec-intakes/IN-0029-vt-engine/research/perf-baseline.md` § 4, scenario h.
+// `docs/spec-intakes/IN-0029-vt-engine/research/perf-baseline.md` section 4,
+// scenario h.
 const OLD_SNAPSHOT_US: f64 = 29.9;
 const FRAMES: u32 = 2_000;
 
@@ -67,12 +68,12 @@ fn render_state_build_cost_per_frame() {
     );
 }
 
-/// What the debug integrity walk costs per `feed` and per `render_update` over
-/// a full 100 000-row history (R-28, the `US-0075` / `US-0079` rework).
-///
-/// Recorded, not a benchmark gate — but the R-28 budget itself is asserted
-/// without the feature, with a margin of two orders of magnitude, so a walk
-/// that goes back to O(history) fails here instead of in a user's session.
+// What the debug integrity walk costs per `feed` and per `render_update` over a
+// full 100 000-row history (R-28, the `US-0075` / `US-0079` rework).
+//
+// Recorded, not a benchmark gate - but the R-28 budget itself is asserted
+// without the feature, with a margin of two orders of magnitude, so a walk that
+// goes back to O(history) fails here instead of in a user's session.
 /// Run it both ways: `--features vt-paranoid` is the "before" number.
 #[test]
 #[cfg_attr(

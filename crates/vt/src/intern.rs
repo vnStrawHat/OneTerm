@@ -1,6 +1,7 @@
 //! The tables a [`Cell`](crate::cell::Cell) points into.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/cell-and-style.md`.
+//! Design:
+//! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/cell-and-style.md>
 //!
 //! One [`Interner`] per terminal, shared by the primary and the alternate
 //! screen, so a sweep is a method on the terminal that destructures its own
@@ -24,13 +25,14 @@ use rustc_hash::FxHashMap;
 
 use crate::cell::{CONTENT_LIMIT, Style};
 
-/// Codepoints kept per cell. Longer clusters are truncated, not rejected: the
-/// pinned fork stores an unbounded `Vec<char>` per cell instead.
+/// Codepoints kept per cell. Longer clusters are truncated, not rejected.
 pub(crate) const GRAPHEME_MAX_LEN: usize = 16;
-/// Absolute sweep trigger, not a fraction of an id space (R-27): the id space
-/// is the cell's 21 content bits, and these constants keep the arena inside a
-/// few megabytes while making a sweep rare.
+// An absolute sweep trigger rather than a fraction of the id space: the id
+// space is the cell's 21 content bits, and these two constants keep the arena
+// inside a few megabytes while making a sweep rare.
+/// Entries in the grapheme arena above which a sweep is due.
 pub const GRAPHEME_SWEEP_ENTRIES: usize = 65_536;
+/// Codepoints in the grapheme arena above which a sweep is due.
 pub const GRAPHEME_SWEEP_CHARS: usize = 1 << 20;
 
 /// Id 0 is reserved in both tables, so `65_535` distinct values fit.
@@ -43,6 +45,7 @@ const TABLE_LIMIT: usize = 65_535;
 pub struct StyleId(pub u16);
 
 impl StyleId {
+    /// The default style. Always resolves, and is never evicted.
     pub const DEFAULT: StyleId = StyleId(0);
 }
 
@@ -51,6 +54,7 @@ impl StyleId {
 pub struct ExtrasId(pub u16);
 
 impl ExtrasId {
+    /// No hyperlink and no graphic.
     pub const NONE: ExtrasId = ExtrasId(0);
 }
 
@@ -75,11 +79,14 @@ pub struct GraphicId(pub u64);
 /// 4096x4096 Sixel covers more cells than the entire `u16` id space.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct Extras {
+    /// The `OSC 8` link this cell belongs to, if any.
     pub hyperlink: Option<HyperlinkId>,
+    /// The image covering this cell, if any.
     pub graphic: Option<GraphicId>,
 }
 
 impl Extras {
+    /// Neither a hyperlink nor a graphic; interned at [`ExtrasId::NONE`].
     pub const NONE: Extras = Extras {
         hyperlink: None,
         graphic: None,
@@ -354,6 +361,7 @@ impl GraphemeRemap {
         GraphemeId(self.0.get(&id.0).copied().unwrap_or(0))
     }
 
+    /// How many ids the sweep kept.
     pub fn kept(&self) -> usize {
         self.0.len()
     }
@@ -363,8 +371,7 @@ impl GraphemeRemap {
 ///
 /// A link **without** an explicit `id=` gets a fresh implicit id on every
 /// occurrence, so a stream of un-`id=`-ed `OSC 8` links would otherwise grow the
-/// table and its index map without limit — attacker-reachable from any SSH
-/// session (`US-0076` owns this bound).
+/// table and its index map without limit, which any hostile stream can reach.
 pub(crate) const HYPERLINK_TABLE_LIMIT: usize = 65_535;
 
 /// One OSC 8 hyperlink.
@@ -373,20 +380,19 @@ pub struct Hyperlink {
     /// The stream's `id=` parameter, or a per-terminal counter rendered as
     /// decimal when the stream gave none.
     pub id: Box<str>,
+    /// The link target, as the stream gave it. Never resolved or validated
+    /// here.
     pub uri: Box<str>,
-    /// Whether `id` was generated rather than given. The two spaces overlap —
-    /// `OSC 8 ; id=42 ; …` and the forty-second implicit link both spell their
-    /// id `42` — so only this flag distinguishes them, which the parity encoder
-    /// needs in order to renumber generated ids the way the reference's
-    /// `_alacritty` suffix is renumbered.
+    /// Whether `id` was generated rather than given. The two spaces overlap:
+    /// `OSC 8 ; id=42 ; ...` and the forty-second implicit link both spell
+    /// their id `42`, so only this flag distinguishes them.
     pub implicit: bool,
 }
 
 /// Interned hyperlinks.
 ///
-/// The implicit id counter is **per terminal**, not the reference's
-/// process-global atomic, so two sessions cannot collide and a test is
-/// deterministic.
+/// The implicit id counter is **per terminal**, not process-global, so two
+/// sessions cannot collide and a test is deterministic.
 #[derive(Debug, Default)]
 pub struct HyperlinkTable {
     entries: Vec<Hyperlink>,
@@ -404,7 +410,7 @@ impl HyperlinkTable {
         let (id, implicit): (Box<str>, bool) = match id {
             // Explicit ids identify a link run across cells and rows, so they
             // deduplicate; an implicit link is one occurrence and gets a fresh
-            // identity, exactly as the reference produces.
+            // identity.
             Some(id) => {
                 let key = (Box::from(id), Box::from(uri));
                 if let Some(&existing) = self.index.get(&key) {
@@ -429,14 +435,17 @@ impl HyperlinkTable {
         Some(HyperlinkId(new_id))
     }
 
+    /// The link behind an id, or `None` if the id is not from this terminal.
     pub fn resolve(&self, id: HyperlinkId) -> Option<&Hyperlink> {
         self.entries.get(id.0 as usize)
     }
 
+    /// Links interned so far.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Whether no link has been interned yet.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -460,9 +469,13 @@ impl HyperlinkTable {
 /// screen: one pair shared by the primary and the alternate screen.
 #[derive(Debug, Default)]
 pub struct Interner {
+    /// Distinct [`Style`] values, addressed by [`StyleId`].
     pub styles: StyleSet,
+    /// Distinct [`Extras`] values, addressed by [`ExtrasId`].
     pub extras: ExtrasTable,
+    /// Grapheme clusters, addressed by [`GraphemeId`].
     pub graphemes: GraphemeArena,
+    /// `OSC 8` links, addressed by [`HyperlinkId`].
     pub hyperlinks: HyperlinkTable,
 }
 
@@ -482,25 +495,30 @@ impl Interner {
         ExtrasId(self.extras.intern(extras))
     }
 
+    /// [`ExtrasId::NONE`] always resolves.
     pub fn resolve_extras(&self, id: ExtrasId) -> &Extras {
         self.extras.resolve(id.0)
     }
 
+    /// Interns a cluster, truncated to 16 codepoints.
     pub fn grapheme(&mut self, cluster: &[char]) -> GraphemeId {
         self.graphemes.intern(cluster)
     }
 
+    /// The codepoints behind a grapheme id. Unknown ids resolve to a space.
     pub fn resolve_grapheme(&self, id: GraphemeId) -> &[char] {
         self.graphemes.resolve(id)
     }
 
+    /// Whether the grapheme arena has passed [`GRAPHEME_SWEEP_ENTRIES`] or
+    /// [`GRAPHEME_SWEEP_CHARS`].
     pub fn needs_grapheme_sweep(&self) -> bool {
         self.graphemes.needs_sweep()
     }
 }
 
 // Kept in a sibling file (the suite is substantial) while staying
-// `intern::tests`, which is the path the design's verification list names.
+// `intern::tests`.
 #[cfg(test)]
 #[path = "intern_tests.rs"]
 mod tests;

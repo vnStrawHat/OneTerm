@@ -1,7 +1,7 @@
 //! Placing a finished image on the grid, and the row-derived release sweep.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/graphics.md`
-//! sections "Liveness and the release signal" and "Placement".
+//! Design:
+//! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/graphics.md>
 
 use std::sync::Arc;
 
@@ -26,8 +26,8 @@ use super::{GraphicData, MAX_PLACEMENTS, Placement, VIRTUAL_CELL};
 ///
 /// The 10x20 virtual cell and the `bands * 6 / 20` rule are the conhost
 /// agreement: they are why the prompt lands below the image rather than inside
-/// it when conhost issues its absolute `CUP` (IN-0028's acceptance rework). Do
-/// not "improve" either without a fresh ConPTY capture.
+/// it when conhost issues its absolute `CUP`. Do not "improve" either without a
+/// fresh ConPTY capture.
 ///
 /// Returns the scroll reports the line feeds produced, for the caller to turn
 /// into events — the engine's one reporting path lives on the dispatch handler.
@@ -125,7 +125,7 @@ fn stamp(state: &mut State, line: RowId, col: u16, cols: u16, id: GraphicId, onl
     row.mark_graphic();
 }
 
-/// Release placements whose content is gone (R-22).
+/// Release placements whose content is gone.
 ///
 /// A placement dies when its anchor died — a scroll blanked its row, a trim
 /// dropped it out of history, or a reflow could not carry it — or when **no**
@@ -134,8 +134,9 @@ fn stamp(state: &mut State, line: RowId, col: u16, cols: u16, id: GraphicId, onl
 /// screen wipe and every TUI repaint reach.
 ///
 /// A row that was overwritten with text keeps the flag until it is reset, which
-/// is a false positive the design allows: the renderer still paints the whole
-/// image from its placement (`DEC-0012`, the documented v1 limitation).
+/// is a false positive the design allows: the image is anchored to its cell, so
+/// the renderer still paints all of it from its placement. That is the known
+/// limitation of cell-anchored placement, not an oversight.
 pub(crate) fn sweep(state: &mut State) {
     let mut index = 0;
     while index < state.graphics.placements.len() {

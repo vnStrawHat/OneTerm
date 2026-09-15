@@ -9,7 +9,7 @@ Date: 2026-09-15
 
 The exact set of `pub` items `oneterm-vt` exposes before and after this intake, the `render` ->
 `snapshot` rename, which types become `#[non_exhaustive]`, what is sealed, and what the crate
-promises about all of it once it is on crates.io.
+promises about all of it once anything outside this repository depends on it.
 
 ## Before
 
@@ -60,8 +60,11 @@ Nothing is `#[non_exhaustive]`. Nothing is sealed.
 | `Config::osc_claims` | `US-0098` | `Config::osc_routes` |
 | `Render*` names | `US-0101` | `Snapshot*` (below) |
 
-No deprecation shims anywhere. The crate has never been published, so `US-0097` is the last moment
-these renames are free; after it they cost a minor bump each.
+No deprecation shims anywhere. Nothing outside this repository depends on the crate yet, so
+`US-0097` is the last moment these renames are free; after it they cost a minor bump each. The
+owner ruling of 2026-09-15 -- consumed by git tag rather than published to crates.io -- does not
+buy any more time here. A consumer pinning a tag is as broken by a rename as one pinning a version,
+and the first outside pin is the deadline either way.
 
 ### Renamed: `render` -> `snapshot`
 
@@ -171,7 +174,11 @@ pub use width::{cluster_width, scalar_width};
 
 ## The semver promise
 
-Stated in the README and the CHANGELOG, and binding from the first published version:
+Stated in the README and the CHANGELOG, and binding from the first tag anything outside this
+repository pins. The crate is consumed as a git dependency rather than from crates.io (owner ruling
+2026-09-15), so **the promise below applies to tags exactly as it would to releases**: the version
+in a tag's `Cargo.toml` is the number these rules are about, and a consumer reads it the same way.
+The rules themselves are unchanged:
 
 1. The crate is `0.x`. Cargo treats a **minor** bump as breaking, and so does this crate: every
    removal, signature change, or new variant on an exhaustive enum is a minor bump with a CHANGELOG
@@ -211,11 +218,19 @@ embedder's caches are keyed by it.
 
 ## Verification
 
-- [ ] **The surface is enumerated, not asserted by eye.** `cargo public-api` is not a dependency
-  this repository has; instead `US-0097` adds `scripts/vt-public-api.py` (about 40 lines) that runs
-  `cargo doc -p oneterm-vt --no-deps --output-format json` and prints every public path, sorted. The
-  output is committed as `crates/vt/public-api.txt` and a CI step diffs it, so any change to the
-  public surface has to be an intentional line in a diff.
+- [x] **The surface is enumerated, not asserted by eye.** `cargo public-api` is not a dependency
+  this repository has; instead `US-0097` adds `scripts/vt-public-api.py` (about 160 lines). It reads
+  the **HTML** rustdoc emits, not `cargo doc --output-format json` as this document first proposed:
+  the JSON format is nightly-only and `rust-toolchain.toml` pins stable `1.96.0`. It prints every
+  public item, sorted, with its fields, variants, associated constants and inherent methods under
+  it, and it keeps only items reachable through the crate's public module paths, so renaming a
+  private module is not a public-API change. The output is committed as `crates/vt/public-api.txt`
+  and a CI step diffs it, so any change to the public surface has to be an intentional line in a
+  diff.
+
+  What that costs: an item, field, variant or method that is **added, removed or renamed** is
+  caught; a **signature change is not**. Rustdoc JSON is the upgrade, and the script switches to it
+  the day the pinned toolchain can produce it.
 - [ ] `cargo doc -p oneterm-vt --no-deps` is warning-free with `#![warn(missing_docs)]` and the
   workspace lint table (which denies warnings in CI).
 - [ ] `cargo build -p oneterm-vt --no-default-features` and `--all-features` both clean.

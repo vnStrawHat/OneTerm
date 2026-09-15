@@ -1072,14 +1072,13 @@ fn first_visible_cell_is_viewport_top_column_zero() {
     f.integrity();
 }
 
-/// The `US-0075` rework: a blanked row is a **changed** row, over both the
-/// `place_row` path (an in-region scroll pulling an unwritten row over a written
-/// one) and the `reset_row` empty-template path.
-///
-/// This is the grid half of `DEC-0015`'s "a second consumer becomes possible
-/// without an engine change": everything here is read through the public
-/// `row.seq()` / `row.flags()`, the way a consumer that is not `RenderState`
-/// would have to.
+// A blanked row is a **changed** row, over both the `place_row` path (an
+// in-region scroll pulling an unwritten row over a written one) and the
+// `reset_row` empty-template path.
+//
+// This is the grid half of "a second consumer becomes possible without an engine
+// change": everything here is read through the public `row.seq()` /
+// `row.flags()`, the way a consumer that is not `RenderState` would have to.
 #[test]
 fn blanking_a_row_stamps_it_dirty_with_the_batch_seq() {
     for blank_with_a_scroll in [true, false] {
@@ -1330,11 +1329,11 @@ fn wide_char_dropped_when_cols_is_one() {
 
 // ── Memory ──────────────────────────────────────────────────────────────────
 
-/// The physical half of the design's memory claim: a 100 000-row scrollback of
-/// rows that were never written costs its ring slots and nothing else.
-///
-/// The old engine measured 4138 bytes per 160-column row for every content kind,
-/// because it materialised every row (`evidence/US-0072-bench-baseline.md`).
+// The physical half of the design's memory claim: a 100 000-row scrollback of
+// rows that were never written costs its ring slots and nothing else.
+//
+// The old engine measured 4138 bytes per 160-column row for every content kind,
+// because it materialised every row.
 #[test]
 fn empty_scrollback_costs_only_its_ring_slots() {
     const SCROLLBACK: u32 = 100_000;

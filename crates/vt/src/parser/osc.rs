@@ -1,8 +1,8 @@
 //! The OSC payload accumulator: bounded, and truncating rather than erroring.
 //!
-//! The reference accumulates into an unbounded `Vec<u8>` under `std`, which is a
-//! remote memory-exhaustion vector reachable from any SSH session (IN-0029 P1).
-//! This one is bounded in two tiers — [`OSC_INLINE`] for everything, and
+//! Accumulating into an unbounded buffer would be a remote memory-exhaustion
+//! vector reachable from any hostile stream, so this one is bounded in two
+//! tiers — [`OSC_INLINE`] for everything, and
 //! [`OSC_LARGE`] only for a number the embedder claimed large — and it
 //! **truncates**, because rejecting a long OSC would break OSC 52 for legitimate
 //! large clipboard writes.
@@ -23,7 +23,7 @@ pub const MAX_OSC_PARAMS: usize = 16;
 pub enum StringTerm {
     /// `BEL` (`0x07`).
     Bel,
-    /// `ESC \` (ST). C1 `ST` (`0x9C`) is payload, not a terminator (trap 24).
+    /// `ESC \` (ST). The C1 `ST` byte (`0x9C`) is payload, not a terminator.
     St,
 }
 
@@ -158,11 +158,10 @@ impl OscAccumulator {
     ///
     /// The boundary is one slot *before* the limit, not at it. Closing the last
     /// slot would consume the separator that ends it, and that one byte is
-    /// exactly what a re-split needs: `US-0076`'s `OSC 4` handler splits this
-    /// parameter back on `;` to recover a bulk palette set, which passes sixteen
-    /// at nine colours, and it cannot invent a separator the parser ate. Joining
-    /// is information-preserving only if *every* separator inside the join
-    /// survives.
+    /// exactly what a re-split needs: the `OSC 4` handler splits this parameter
+    /// back on `;` to recover a bulk palette set, and it cannot invent a
+    /// separator the parser ate. Joining is information-preserving only if
+    /// *every* separator inside the join survives.
     pub(crate) fn params_full(&self) -> bool {
         self.nparams + 1 >= MAX_OSC_PARAMS
     }

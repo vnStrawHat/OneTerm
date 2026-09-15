@@ -1,11 +1,10 @@
-//! `reflow::tests::` — the reference's own reflow cases, the ten
-//! `keep_viewport_top_*` scenarios the ConPTY policy is pinned by, and one test
-//! per trap the design's Verification section names.
-//!
-//! The `keep_viewport_top_*` scenarios are `crates/terminal/src/model.rs`'s,
-//! with the same inputs and the same expected grids: they are the exit criterion
-//! for replacing `resize_keeping_viewport_top`. The old suite keeps running
-//! against the old engine until the adapter packet (R-44).
+// `reflow::tests::` — the reference's own reflow cases, the ten
+// `keep_viewport_top_*` scenarios the ConPTY policy is pinned by, and one test
+// per hazard the design's Verification section names.
+//
+// The `keep_viewport_top_*` scenarios came from the adapter's own resize code,
+// with the same inputs and the same expected grids: they were the exit
+// criterion for replacing it.
 
 use super::*;
 use crate::cell::{Attrs, Cell, CellContent, CellWidth, Style};
@@ -534,7 +533,7 @@ fn default_grow_during_alt_screen_pulls_the_primary_history() {
     assert_eq!(f.history(), 13);
 }
 
-/// The `ls -lath` case (BUG-0051 rework): a wrapped line inside the viewport
+/// The `ls -lath` case: a wrapped line inside the viewport
 /// joins on a widen; conhost keeps the top row and moves the cursor up by the
 /// rows that vanished, so must the grid.
 #[test]
@@ -717,15 +716,15 @@ fn measured_viewport(cols: u16, lengths: &[usize]) -> Fixture {
     f
 }
 
-/// The three rows measured from conhost behind ConPTY in BUG-0051
-/// § Measurements (b), reproduced from the geometry that document records.
-///
-/// **Host version (R-39).** The numbers are a property of a specific conhost
-/// build: measured on Windows 11 on 2026-09-09 against the then-bundled ConPTY
-/// pair. `crates/app/assets/conpty-manifest.json` records the pair the tree
-/// carries today (`1.24.260710001`, file version `1.24.2607.10001`); BUG-0051
-/// does not record the version it measured, which is the gap
-/// `IN-0030`'s bump checklist has to close by re-capturing these.
+// The three rows measured from conhost behind ConPTY in BUG-0051
+// § Measurements (b), reproduced from the geometry that document records.
+//
+// **Host version (R-39).** The numbers are a property of a specific conhost
+// build: measured on Windows 11 on 2026-09-09 against the then-bundled ConPTY
+// pair. `crates/app/assets/conpty-manifest.json` records the pair the tree
+// carries today (`1.24.260710001`, file version `1.24.2607.10001`); BUG-0051
+// does not record the version it measured, which is the gap
+// `IN-0030`'s bump checklist has to close by re-capturing these.
 #[test]
 fn measure_rows_matches_the_recorded_conhost_rows() {
     // `ls -lath` at 33x43: eleven logical lines over the 32 rows above the
@@ -832,21 +831,21 @@ fn an_anchor_on_trimmed_whitespace_lands_at_the_end_of_its_line() {
 
 // ── Declared corrections over the engine being replaced ─────────────────────
 
-/// **Correction C13.** The reference loses the tail of a wrapped logical line
-/// when the cursor sits above that tail, and leaves the wrap flag dangling on
-/// the bottom row; this engine keeps the text and the flags consistent.
-///
-/// Alacritty's `alacritty_terminal/src/grid/resize.rs:101-242` (`grow_columns`)
-/// decides where rows land from `cursor_line_delta`, and its final
-/// `reversed.truncate(reversed.len() + overflow - cursor_line_delta)`
-/// (`:216-222`) drops rows off the **newest** end when the cursor did not move
-/// as far as the join did. Here the layout is driven by the logical lines alone
-/// and the cursor is carried as one more tracked point, so nothing below it can
-/// be truncated away.
-///
-/// Reachable in one keystroke: any `CUP` or arrow-key move inside a wrapped
-/// command line before a window resize. Declared for `US-0076`'s parity gate —
-/// see the packet's reading 9 for why no recording can reach it.
+// **Correction C13.** The reference loses the tail of a wrapped logical line
+// when the cursor sits above that tail, and leaves the wrap flag dangling on
+// the bottom row; this engine keeps the text and the flags consistent.
+//
+// Alacritty's `alacritty_terminal/src/grid/resize.rs:101-242` (`grow_columns`)
+// decides where rows land from `cursor_line_delta`, and its final
+// `reversed.truncate(reversed.len() + overflow - cursor_line_delta)`
+// (`:216-222`) drops rows off the **newest** end when the cursor did not move
+// as far as the join did. Here the layout is driven by the logical lines alone
+// and the cursor is carried as one more tracked point, so nothing below it can
+// be truncated away.
+//
+// Reachable in one keystroke: any `CUP` or arrow-key move inside a wrapped
+// command line before a window resize. Declared for `US-0076`'s parity gate —
+// see the packet's reading 9 for why no recording can reach it.
 #[test]
 fn a_widen_keeps_the_tail_below_the_cursor_where_the_reference_drops_it() {
     let mut f = fixture(5, 10, 100);

@@ -1,8 +1,8 @@
-//! The render state's contract: the tri-state, watermarks, resolved values and
-//! the fairness hand-off.
-//!
-//! Named for the verification list in
-//! `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`.
+// The render state's contract: the tri-state, watermarks, resolved values and
+// the fairness hand-off.
+//
+// Named for the verification list in
+// `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`.
 
 use std::time::Instant;
 
@@ -15,7 +15,7 @@ use crate::render::{
 };
 use crate::selection::SelectionRange;
 
-/// The fields `US-0076`'s `Terminal` will own, in the shape `EngineView` wants.
+/// The fields a `Terminal` owns, in the shape `EngineView` wants.
 ///
 /// Shared with the sync tests and the bench, because every one of them needs a
 /// grid, an interner and a clock that does not tick on its own.
@@ -283,8 +283,8 @@ fn cursor_only_movement_returns_partial_with_no_changed_rows() {
     assert_eq!(state.cursor().col, 7);
 }
 
-/// `US-0078`: a drag over static content changes no row, so only the selection
-/// field can tell the renderer it must paint again.
+/// A drag over static content changes no row, so only the selection field can
+/// tell the renderer it must paint again.
 #[test]
 fn selection_change_only_returns_partial_and_refreshes_the_range() {
     let mut engine = Engine::new(10, 20);
@@ -701,14 +701,14 @@ fn scroll_damage_is_consumed_as_a_move_instruction() {
     assert_eq!(state.changed(), &[6, 7]);
 }
 
-/// The `US-0075` rework at the render seam: write row 3, consume it, blank it
-/// back to what used to be an unwritten slot, consume again — the row must come
-/// back as changed, **from the sequence number alone**.
-///
-/// The render state used to carry a private `allocated` flag for this, which
-/// made `DEC-0015`'s "a second consumer becomes possible without an engine
-/// change" false. The plain watermark reader at the end is that second
-/// consumer, holding nothing but a `SeqNo` and the public row API.
+// The rework at the render seam: write row 3, consume it, blank it back to what
+// used to be an unwritten slot, consume again - the row must come back as
+// changed, from the sequence number alone.
+//
+// The render state used to carry a private `allocated` flag for this, which made
+// "a second consumer becomes possible without an engine change" (`DEC-0015`)
+// false. The plain watermark reader at the end is that second consumer, holding
+// nothing but a `SeqNo` and the public row API.
 #[test]
 fn a_blanked_row_reaches_a_consumer_holding_only_a_watermark() {
     let mut engine = Engine::new(6, 20);

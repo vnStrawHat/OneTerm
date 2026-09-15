@@ -1,12 +1,10 @@
 //! The OSC colour-override table and its typed keys.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md`
-//! section "Colour model".
+//! [`ColorKey`] is a typed name for a slot, so a caller never writes the bare
+//! index 256, 257 or 258. The storage underneath is still a flat 269-slot
+//! table.
 //!
-//! [`ColorKey`] replaces the magic indices 256 / 257 / 258 that appear in three
-//! files today (deviation D1). The *storage* is still the reference's 269-slot
-//! index space, because that is the space the frozen parity expectations are
-//! written in and a translation table would buy nothing.
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md>.
 
 use crate::cell::Rgb;
 
@@ -25,17 +23,24 @@ const DIM_FOREGROUND: usize = 268;
 /// What an OSC colour sequence names.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ColorKey {
+    /// One of the 256 indexed colours, as `OSC 4 ; <n>` names it.
     Palette(u8),
+    /// The default foreground, `OSC 10`.
     Foreground,
+    /// The default background, `OSC 11`.
     Background,
+    /// The cursor colour, `OSC 12`.
     Cursor,
+    /// The colour bold text brightens to.
     BrightForeground,
+    /// The colour dim (`SGR 2`) text fades to.
     DimForeground,
     /// One of the eight dim ANSI colours, `0..8`.
     Dim(u8),
 }
 
 impl ColorKey {
+    /// The slot this key names in the flat override table.
     pub const fn index(self) -> usize {
         match self {
             ColorKey::Palette(index) => index as usize,

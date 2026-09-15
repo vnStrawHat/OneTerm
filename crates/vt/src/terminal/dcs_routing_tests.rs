@@ -1,10 +1,11 @@
-//! Independent verification tests for `BUG-0058` (DCS intermediates routing).
-//!
-//! Written by the verifier, not by the implementer, and kept in their own file
-//! so the two suites stay independently readable. Six of the eight fail against
-//! the pre-fix `dcs_hook`; the other two are the non-regression guards for the
-//! Sixel half of the routing key. The verification report they come from is
-//! `docs/spec-intakes/IN-0038-embeddable-vt-core/evidence/BUG-0058-verify.md`.
+// Independent verification tests for `BUG-0058` (DCS intermediates routing).
+//
+// Written by the verifier, not by the implementer, and kept in their own file
+// so the two suites stay independently readable. Six of the eight fail against
+// the pre-fix `dcs_hook`; the other two are the non-regression guards for the
+// Sixel half of the routing key. The verification report they come from is
+// Evidence:
+// `docs/spec-intakes/IN-0038-embeddable-vt-core/evidence/BUG-0058-verify.md`.
 
 use std::time::Instant;
 
@@ -121,15 +122,15 @@ fn verify_intermediate_dcs_aborts_an_empty_unterminated_sixel() {
     assert!(vs.term.placements().is_empty());
 }
 
-/// The same shape with a **non-empty** Sixel payload, which pins what the
-/// engine actually does: the `ESC` that introduces the next DCS ends the prior
-/// one *normally* (`crates/vt/src/parser/state.rs:247` calls
-/// `dcs_unhook(false)`), so the partial image is finished and placed -- it is
-/// not aborted, and `dcs_hook` never sees a live parser. What matters for
-/// `BUG-0058` is that the DECRQSS behind it adds **no second** graphic and
-/// leaves no decoder. Behaviour is identical on `main`; this test is what
-/// retired the older claim that a non-Sixel DCS "aborts the prior unterminated
-/// one", and what lets `dcs_hook` drop the dead `parser = None` store.
+// The same shape with a **non-empty** Sixel payload, which pins what the
+// engine actually does: the `ESC` that introduces the next DCS ends the prior
+// one *normally* (`crates/vt/src/parser/state.rs:247` calls
+// `dcs_unhook(false)`), so the partial image is finished and placed -- it is
+// not aborted, and `dcs_hook` never sees a live parser. What matters for
+// `BUG-0058` is that the DECRQSS behind it adds **no second** graphic and
+// leaves no decoder. Behaviour is identical on `main`; this test is what
+// retired the older claim that a non-Sixel DCS "aborts the prior unterminated
+// one", and what lets `dcs_hook` drop the dead `parser = None` store.
 #[test]
 fn verify_intermediate_dcs_after_a_nonempty_unterminated_sixel() {
     let mut vs = Vs::new();

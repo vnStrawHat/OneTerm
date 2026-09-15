@@ -1,12 +1,12 @@
 //! Images: decoding them, anchoring them to cells, and telling the embedder
 //! when one dies.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/graphics.md`,
-//! contract: `docs/decisions/DEC-0012-sixel-graphics-cell-anchored.md`.
+//! Design:
+//! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/graphics.md>
 //!
 //! Three rules carry the whole module:
 //!
-//! * **A cell stores *which* image, never *where inside it* (R-21).** The
+//! * **A cell stores *which* image, never *where inside it*.** The
 //!   covered cells share **one** interned [`Extras`](crate::intern::Extras)
 //!   entry; the painter derives its offset from the [`Placement`], because a
 //!   4096x4096 Sixel covers about 84 000 cells — more than the whole `u16`
@@ -15,7 +15,7 @@
 //! * **A placement is a tracked anchor.** It therefore moves with its content
 //!   through `IL`, `DL`, `SU`, `SD`, a region scroll and reflow, by the one
 //!   mechanism that also moves the cursor and the selection.
-//! * **Liveness is derived from rows, not from a counter (R-22).** A counter
+//! * **Liveness is derived from rows, not from a counter.** A counter
 //!   decremented by the cell writer misses `Row::reset`, scroll blanking,
 //!   `clear_viewport`, the alternate-screen wipe and reflow — that is, `CSI 2 J`,
 //!   `clear` and every TUI repaint, which is the common case and precisely the
@@ -62,9 +62,15 @@ pub(crate) const MAX_PLACEMENTS: usize = 256;
 /// (non-premultiplied) alpha**.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct GraphicData {
+    /// The engine's handle for this image. A cell that shows the image stores
+    /// this id, and [`VtEvent::GraphicReleased`](crate::VtEvent::GraphicReleased)
+    /// reports it when the last such cell is gone.
     pub id: GraphicId,
+    /// Width in pixels, at most 4096.
     pub width: u32,
+    /// Height in pixels, at most 4096.
     pub height: u32,
+    /// `width * height * 4` bytes of RGBA8.
     pub rgba: Vec<u8>,
 }
 
@@ -88,7 +94,7 @@ pub struct Placement {
 pub(crate) struct GraphicsState {
     next_id: u64,
     /// Images decoded since the embedder last took them. `Terminal::take_graphics`
-    /// is the **only** drain (R-16).
+    /// is the **only** drain.
     pub(crate) pending: Vec<Arc<GraphicData>>,
     pub(crate) placements: Vec<Placement>,
     /// Ids released since the last batch handed them over, so a release caused

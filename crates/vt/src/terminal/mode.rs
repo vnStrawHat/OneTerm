@@ -1,20 +1,17 @@
 //! The mode table, the cursor style, the title stack and the kitty flag stack.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md`
-//! sections "Modes", "Title stack" and "Kitty keyboard flag stack".
-//!
 //! [`Mode`] is a typed enum rather than a bitflags dump the caller has to know
-//! how to mask (deviation D1): `Terminal::mode(Mode::AltScreen)` instead of
-//! `term.mode().contains(TermMode::ALT_SCREEN)`, and one
-//! `Terminal::mouse_reporting()` accessor instead of the `MOUSE_MODE` bit union
-//! the current code recombines in seven places.
+//! how to mask: `Terminal::mode(Mode::AltScreen)`, and one
+//! `Terminal::mouse_reporting()` accessor rather than a bit union to recombine.
+//!
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md>.
 
 use bitflags::bitflags;
 
 use crate::render::{MouseEncoding, MouseProtocol, MouseReporting};
 
-/// Title-stack depth (deviation D14). The reference caps at 4096, which no
-/// program approaches and which is a cheap memory sink.
+// Title-stack depth. xterm caps at 4096, which no program approaches and
+// which is a cheap memory sink.
 pub(crate) const TITLE_STACK_MAX: usize = 16;
 
 /// Kitty keyboard flag-stack depth, Ghostty's shape: fixed size, no heap.
@@ -23,7 +20,7 @@ pub(crate) const KEYBOARD_STACK_MAX: usize = 8;
 /// One terminal mode.
 ///
 /// Every variant that carries state has a bit in `Modes`; `DecCoLm` is listed
-/// because both `h` and `l` act (trap 40) even though nothing is stored.
+/// because both `h` and `l` act on it even though nothing is stored.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Mode {
     /// `? 1`, DECCKM.
@@ -58,26 +55,26 @@ pub enum Mode {
     AlternateScroll,
     /// `? 1042`.
     UrgencyHints,
-    /// `? 47` (correction C8).
+    /// `? 47`, the original alternate screen.
     AltScreen47,
-    /// `? 1047` (correction C8).
+    /// `? 1047`, the alternate screen without the cursor save.
     AltScreen1047,
-    /// `? 1048` (correction C8): save / restore the cursor, no screen swap.
+    /// `? 1048`: save / restore the cursor, no screen swap.
     SaveCursor1048,
     /// `? 1049`.
     AltScreen,
     /// `? 2004`.
     BracketedPaste,
     /// `? 2026`. The bit is not stored: the real state lives in
-    /// `crate::render::SyncState` (deviation D4).
+    /// `crate::render::SyncState`, which also holds its timeout.
     SyncUpdate,
-    /// `? 2027`. Recognised and inert (R-56).
+    /// `? 2027`, grapheme clustering. Recognised and inert.
     GraphemeClusters,
-    /// `? 9001`. Recognised and inert (R-36).
+    /// `? 9001`, win32 input mode. Recognised and inert.
     Win32Input,
     /// `4`, IRM.
     Insert,
-    /// `20`, LNM. Tracked, inert (deviation D9), and answered through
+    /// `20`, LNM. Tracked, inert, and answered through
     /// [`Mode::inert_state`] for that reason.
     LineFeedNewLine,
 }
@@ -195,12 +192,11 @@ impl Mode {
     /// The fixed `DECRQM` answer for a mode the engine **recognises but nothing
     /// reads**, or `None` for a mode whose state is real.
     ///
-    /// This is the table behind the rule in `dispatch-and-modes.md`: *DECRQM
-    /// must never answer `Set` for a mode that does nothing.* Answering `Set`
-    /// tells a program a capability exists when it does not, so an inert mode
-    /// answers `NotSupported` when it is not even stored and `Reset` when it is
-    /// stored and simply unread. `? 45` was in this table until `US-0086` gave
-    /// it a reader (`Screen::backspace`), which is exactly when a row leaves.
+    /// The rule: `DECRQM` must never answer `Set` for a mode that does nothing.
+    /// Answering `Set` tells a program a capability exists when it does not, so
+    /// an inert mode answers `NotSupported` when it is not even stored and
+    /// `Reset` when it is stored and simply unread. A mode leaves this table on
+    /// the day something reads it.
     pub const fn inert_state(self) -> Option<ModeState> {
         Some(match self {
             // Trap 40: both `h` and `l` act, and the honest answer is still
@@ -346,9 +342,12 @@ impl Modes {
 /// `DECSCUSR` shapes, plus the two the engine derives.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum CursorShape {
+    /// `CSI 1 SP q` and `CSI 2 SP q`, and the power-on shape.
     #[default]
     Block,
+    /// `CSI 3 SP q` and `CSI 4 SP q`.
     Underline,
+    /// `CSI 5 SP q` and `CSI 6 SP q`.
     Beam,
     /// Reported when the window loses focus; the engine never sets it.
     HollowBlock,
@@ -359,7 +358,9 @@ pub enum CursorShape {
 /// Shape plus blink, which is what `DECSCUSR` sets as a pair.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub struct CursorStyle {
+    /// The shape to draw.
     pub shape: CursorShape,
+    /// Whether the shape blinks; the embedder owns the blink rate.
     pub blinking: bool,
 }
 
@@ -368,10 +369,15 @@ bitflags! {
     /// owns the encoding, so nothing here is gated behind a config flag.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
     pub struct KeyboardFlags: u8 {
+        /// Bit `0b1`: report every key as an unambiguous escape sequence.
         const DISAMBIGUATE_ESC_CODES = 1 << 0;
+        /// Bit `0b10`: report key release and repeat, not only press.
         const REPORT_EVENT_TYPES     = 1 << 1;
+        /// Bit `0b100`: report the shifted and base-layout keys as well.
         const REPORT_ALTERNATE_KEYS  = 1 << 2;
+        /// Bit `0b1000`: report text-producing keys as escape sequences too.
         const REPORT_ALL_KEYS_AS_ESC = 1 << 3;
+        /// Bit `0b10000`: attach the text a key would have produced.
         const REPORT_ASSOCIATED_TEXT = 1 << 4;
     }
 }
@@ -392,7 +398,7 @@ pub(crate) struct FlagStack {
     flags: [KeyboardFlags; KEYBOARD_STACK_MAX],
     len: u8,
     /// The live flags, which can legitimately differ from the stack top after
-    /// `CSI = Ps u` (trap 42).
+    /// `CSI = Ps u`.
     live: KeyboardFlags,
 }
 
@@ -417,9 +423,7 @@ impl FlagStack {
         };
     }
 
-    /// `CSI > Ps u`. A full stack drops the oldest entry, which is the fix for
-    /// the reference's overflow bug — it pops the *title* stack here
-    /// (deviation D15).
+    /// `CSI > Ps u`. A full stack drops the oldest entry.
     pub(crate) fn push(&mut self, flags: KeyboardFlags) {
         if self.len as usize == KEYBOARD_STACK_MAX {
             self.flags.rotate_left(1);
@@ -467,7 +471,7 @@ pub(crate) struct TitleState {
 }
 
 impl TitleState {
-    /// `CSI 22 t`. Overflow drops the oldest entry (deviation D14).
+    /// `CSI 22 t`. Overflow drops the oldest entry.
     pub(crate) fn push(&mut self) {
         if self.stack.len() >= TITLE_STACK_MAX {
             self.stack.remove(0);

@@ -202,6 +202,10 @@ fn adapter_config(scrollback: usize) -> Config {
     Config {
         scrollback_limit: scrollback.min(SCROLLBACK_MAX as usize) as u32,
         osc_claims: claims,
+        // The identity `XTVERSION` and `DA2` report is the product's, not the
+        // engine's: tmux and vim key capability detection off it. Left unset,
+        // the engine would answer `oneterm-vt(...)`.
+        product_name: Some(concat!("OneTerm(", env!("CARGO_PKG_VERSION"), ")").into()),
         ..Config::default()
     }
 }

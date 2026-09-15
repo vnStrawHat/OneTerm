@@ -1,11 +1,10 @@
 //! The ground state: the control-byte scan, UTF-8 validation and print runs.
 //!
-//! Ported from the reference because the parity recordings pin its replacement
-//! rules byte for byte, with one deliberate change (IN-0029 P1): a validated
-//! run is handed over whole as [`Dispatch::print_str`] instead of one call per
-//! character.
+//! The replacement rules for malformed UTF-8 follow the WHATWG Encoding
+//! Standard byte for byte. A validated run is handed over whole as
+//! [`Dispatch::print_str`] rather than one call per character.
 //!
-//! The scan is `memchr(ESC)`, as the reference's is. The design's P2 asked for
+//! The scan is `memchr(ESC)`. An earlier design asked for
 //! `memchr3(ESC, LF, CR)` so that line feeds leave the per-character loop, but
 //! there is no per-character loop to leave: [`print_run`] already splits the
 //! validated run at every byte below `0x20`, so `LF` and `CR` are handled

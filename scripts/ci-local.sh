@@ -33,6 +33,36 @@ step cargo test --workspace
 # operation touched unless `vt-paranoid` is on. This is where the unbounded
 # whole-history invariants are gated.
 step cargo test -p oneterm-vt --features vt-paranoid
+
+# Other projects consume `oneterm-vt` as a git dependency, so its package, its
+# feature matrix and its documentation are part of the gate. Its default
+# feature set is empty, so the two builds below are the whole matrix.
+step cargo build -p oneterm-vt --no-default-features --examples
+step cargo build -p oneterm-vt --all-features --examples
+step cargo run -p oneterm-vt --example headless
+step env RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
+step python scripts/vt-public-api.py --check --no-doc
+# What the package carries, and that it reaches nothing outside `crates/vt`.
+# `--allow-dirty` because an agent runs this gate with uncommitted work; the
+# workflow packages a clean checkout without it.
+printf '\n==> cargo package -p oneterm-vt --list | verify-dependency-graph.py --package-list -\n'
+# `set -o pipefail` is on at the top of this script, so a `cargo package`
+# failure fails the pipeline rather than being masked by python's status.
+if ! cargo package -p oneterm-vt --allow-dirty --list |
+    python scripts/verify-dependency-graph.py --package-list -; then
+  printf '\nci-local: FAILED: the oneterm-vt package is missing a required file\n' >&2
+  exit 1
+fi
+# Published rustdoc must read for somebody who does not have this repository:
+# no work-packet, decision or intake citations in `///` or `//!` text. A link to
+# the public repository is the one allowed form.
+printf '\n==> rustdoc self-containment (crates/vt/src)\n'
+if grep -rn '^[[:space:]]*//[/!].*\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|docs/spec-intakes\)' \
+    crates/vt/src --include='*.rs' | grep -v 'https://github.com/'; then
+  printf '\nci-local: FAILED: the crate rustdoc cites a document only this repository has\n' >&2
+  exit 1
+fi
+
 step python scripts/verify-dependency-graph.py
 step python scripts/check-doc-paths.py
 step python -m unittest scripts/test_check_english.py

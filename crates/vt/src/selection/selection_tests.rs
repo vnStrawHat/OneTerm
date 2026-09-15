@@ -1,11 +1,11 @@
-//! `selection::tests::` — the verification list in
-//! `docs/spec-intakes/IN-0029-vt-engine/low-level-design/selection.md`, plus the
-//! outcome list in `US-0078-selection.md`.
-//!
-//! The reference's own cases are in
-//! Alacritty's `alacritty_terminal/src/selection.rs:400-668`; they are reproduced
-//! here against OneTerm's types rather than copied, because the coordinates
-//! differ (absolute [`RowId`] rather than a viewport `Line`).
+// `selection::tests::` - the verification list in
+// `docs/spec-intakes/IN-0029-vt-engine/low-level-design/selection.md`, plus the
+// outcome list in `US-0078-selection.md`.
+//
+// The reference's own cases are in
+// Alacritty's `alacritty_terminal/src/selection.rs:400-668`; they are reproduced
+// here against OneTerm's types rather than copied, because the coordinates
+// differ (absolute `RowId` rather than a viewport `Line`).
 
 use super::*;
 use crate::cell::CellContent;

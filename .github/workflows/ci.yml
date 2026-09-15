@@ -134,6 +134,72 @@ jobs:
       - name: Test the VT engine with the full integrity walk
         run: cargo test -p oneterm-vt --features vt-paranoid
 
+  vt-package:
+    # `oneterm-vt` is not published (owner ruling 2026-09-15), but other projects
+    # depend on it by git, so what it packages, what it documents and what it
+    # exposes are still contracts with people outside this repository. This job
+    # is where they are gated.
+    name: Packaged crate (oneterm-vt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
+      # The default feature set is empty, so these two builds are the whole
+      # matrix, and `--examples` proves the example in the README still builds.
+      - name: Build the feature matrix
+        run: |
+          cargo build -p oneterm-vt --no-default-features --examples
+          cargo build -p oneterm-vt --all-features --examples
+      - name: Run the headless example
+        run: cargo run -p oneterm-vt --example headless
+      # `#![warn(missing_docs)]` plus denied rustdoc warnings: an undocumented
+      # public item or a broken intra-doc link fails here rather than on docs.rs.
+      - name: Document with warnings denied
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc -p oneterm-vt --no-deps --all-features
+      - name: Check the public API surface
+        run: python scripts/vt-public-api.py --check --no-doc
+      # The crate packages cleanly and carries what a consumer needs. Apache-2.0
+      # 4(a) and 4(d) are why `LICENSE` and `NOTICE` are in the required set: a
+      # git dependency is a distribution too.
+      - name: Package the crate
+        run: cargo package -p oneterm-vt
+      - name: Check what the package carries
+        # pipefail: without it the step reports python's status for a
+        # `cargo package` that failed.
+        run: |
+          set -o pipefail
+          cargo package -p oneterm-vt --list |
+            python scripts/verify-dependency-graph.py --package-list -
+      # Published rustdoc must read for somebody who does not have this
+      # repository: no work-packet, decision or intake citations in `///` or
+      # `//!` text. A link to the public repository is the one allowed form.
+      - name: Published rustdoc must stand alone
+        run: |
+          if grep -rn '^[[:space:]]*//[/!].*\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|docs/spec-intakes\)' \
+              crates/vt/src --include='*.rs' | grep -v 'https://github.com/'; then
+            echo "::error::published rustdoc cites a document only this repository has"
+            exit 1
+          fi
+
   windows-quality:
     # Windows is the primary platform, so lint and run the whole workspace
     # (including the GPUI-based UI crates) there as well.

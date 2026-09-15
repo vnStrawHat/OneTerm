@@ -1,14 +1,14 @@
 //! Phase 2 of the hand-off: named and indexed colours become pixels.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`
-//! section "Resolved values, never ids" (R-14).
-//!
 //! This is the one part of building a frame that genuinely needs no engine
 //! state, which is why it runs **outside the lock**
 //! ([`crate::render::RenderState::map_colors`]). The palette itself is the
 //! embedder's: the theme's sixteen, the OSC override table on top, versioned by
 //! the palette epoch the render state carries so a theme change forces a full
 //! rebuild rather than a half-mapped frame.
+
+// Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`
+// section "Resolved values, never ids" (R-14).
 
 use crate::cell::{Color, NamedColor, Rgb};
 
@@ -22,8 +22,11 @@ use crate::cell::{Color, NamedColor, Rgb};
 pub struct Palette {
     /// The 256-entry table: sixteen ANSI, the 6x6x6 cube, twenty-four greys.
     pub indexed: [Rgb; 256],
+    /// The default text colour.
     pub foreground: Rgb,
+    /// The default background, and the colour `SGR 2` dims towards.
     pub background: Rgb,
+    /// The cursor's colour.
     pub cursor: Rgb,
     /// `None` falls back to the plain foreground, which is what the current
     /// renderer does.

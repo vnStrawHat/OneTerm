@@ -1,9 +1,5 @@
 //! Selection: the four kinds, the range they resolve to, and the text they copy.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/selection.md`,
-//! contract: `docs/decisions/DEC-0015-absolute-row-ids-and-incremental-render-state.md`
-//! clause 1.
-//!
 //! Replaces Alacritty's `alacritty_terminal/src/selection.rs` and the four call
 //! sites of its `Selection::rotate`. **Both endpoints are tracked anchors**
 //! ([`crate::grid::Anchors`]), so a selection moves with its content through a
@@ -16,10 +12,12 @@
 //! * scrolling the viewport does not touch the selection at all, because the
 //!   range is in [`RowId`] space rather than in viewport space.
 //!
-//! `Terminal` does not exist yet (`US-0076`), so the design's
-//! `Terminal::selection_*` methods are written here against [`TerminalGrid`]
-//! and become one-line wrappers there. See `US-0078-selection.md` for the
-//! mapping.
+//! The operations are written against [`TerminalGrid`]; the `selection_*`
+//! methods on [`crate::Terminal`] are one-line wrappers around them.
+
+// Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/selection.md`,
+// contract: `docs/decisions/DEC-0015-absolute-row-ids-and-incremental-render-state.md`
+// clause 1.
 
 use crate::cell::CellWidth;
 use crate::grid::{AnchorId, AnchorKind, Anchors, Pos, RowId, Screen, TerminalGrid};
@@ -31,8 +29,8 @@ mod text;
 /// The reference's default escape set, preserved because word selection is
 /// user-visible behaviour and OneTerm never overrode it.
 ///
-/// It is a `Config` parameter since `US-0076`; this is what
-/// [`crate::Config::default`] sets it to.
+/// It is a [`crate::Config`] field; this is what [`crate::Config::default`]
+/// sets it to.
 pub(crate) const SEMANTIC_ESCAPE_CHARS: &str = ",│`|:\"' ()[]{}<>\t";
 
 /// How a drag expands into a range.
@@ -51,15 +49,20 @@ pub enum SelectionKind {
 /// Which half of a cell the pointer was on.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Side {
+    /// The left half: the selection starts at this cell.
     Left,
+    /// The right half: the selection starts after this cell.
     Right,
 }
 
 /// A resolved selection, **both ends inclusive**, in absolute row space.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SelectionRange {
+    /// The earlier end, in absolute row space.
     pub start: Pos,
+    /// The later end, in absolute row space. Inclusive.
     pub end: Pos,
+    /// Whether the range is a rectangle rather than a run of whole lines.
     pub is_block: bool,
 }
 
@@ -266,7 +269,7 @@ impl SelectionRange {
     /// from the spacer to the glyph, not the other way, so selecting only the
     /// `Wide` cell leaves its spacer unpainted. `block_cursor` is `Some(pos)`
     /// when a block-shaped cursor is at that position and `None` for every
-    /// other cursor shape — `CursorShape` itself is `US-0076`'s type.
+    /// other cursor shape.
     pub fn contains_cell(&self, screen: &Screen, pos: Pos, block_cursor: Option<Pos>) -> bool {
         if block_cursor == Some(pos) && self.is_corner(pos) {
             return false;

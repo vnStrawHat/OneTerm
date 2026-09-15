@@ -26,9 +26,16 @@ Created: 2026-09-15
 
 ## Outcome
 
+> **Owner ruling 2026-09-15.** `oneterm-vt` is not published to crates.io, so there is no docs.rs
+> page to render the guide. Everything below stands except its rendering host: the chapters are
+> rendered by `cargo doc -p oneterm-vt --no-deps --open`, which every consumer of the git dependency
+> can run, and read as Markdown on GitHub. GitHub Pages is the obvious public host if one is ever
+> wanted; nobody has asked. Where a criterion below names docs.rs or `cargo publish --dry-run`, read
+> `cargo doc` and `cargo package -p oneterm-vt --list` instead.
+
 `oneterm-vt` ships a twelve-chapter **embedder's guide** -- prose that teaches someone how to build a
-terminal on top of the crate -- rendered to HTML by `cargo doc`, published by docs.rs alongside the
-API reference, and reproducible locally with one command.
+terminal on top of the crate -- rendered to HTML by `cargo doc` alongside the API reference, and
+reproducible with one command.
 
 The guide is the answer to a question the API reference cannot answer: the reference says what
 `OscRoutes::route` takes; the guide says why you would call it and what OneTerm does with it.
@@ -36,7 +43,8 @@ The guide is the answer to a question the API reference cannot answer: the refer
 packet gives it the document you read after you have decided to use it.
 
 Source of truth is Markdown under `crates/vt/docs/guide/`, so `python scripts/check-english.py`
-covers every word of it and a reader on GitHub sees the same chapters as a reader on docs.rs.
+covers every word of it and a reader on GitHub sees the same chapters as a reader of the rendered
+HTML.
 
 ## Scope
 
@@ -46,9 +54,10 @@ covers every word of it and a reader on GitHub sees the same chapters as a reade
   `scripts/README.md`; the "Documentation" section of the README that `US-0097` writes.
 - [ ] Out of scope: the API reference itself -- `#![warn(missing_docs)]` and the per-item doc lines
   are `US-0097`'s, and this packet assumes they are done.
-- [ ] Out of scope: publishing the guide to GitHub Pages. docs.rs renders it for free at the URL the
-  README links. A `gh-pages` deployment is one workflow file and no source change; see
-  **Follow-up** below.
+- [ ] Out of scope: publishing the guide to GitHub Pages. With no docs.rs page (owner ruling
+  2026-09-15) that is the only candidate for a public rendered URL, and it is one workflow file and
+  no source change; see **Follow-up** below. Until somebody asks, `cargo doc` and the Markdown on
+  GitHub are the two ways to read it.
 - [ ] Out of scope: mdBook, or any second documentation toolchain. Evaluated and rejected below.
 - [ ] Out of scope: translating the guide. English only, per `scripts/check-english.py`.
 - [ ] Out of scope: a tutorial that builds a renderer. The crate has no renderer by decision (f);
@@ -168,8 +177,9 @@ Each criterion below is a command a verifier who distrusts this packet can run.
 - [ ] Deleting one character from any chapter code block makes `cargo test -p oneterm-vt --doc`
   fail. Spot-checked on three chapters and recorded in Evidence; this is the same cannot-rot check
   `US-0097` applies to the README.
-- [ ] docs.rs dry run: `RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo doc -p oneterm-vt --no-deps
-  --all-features` exits 0, which is what `[package.metadata.docs.rs]` in `packaging.md` sets.
+- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` exits 0. There
+  is no `[package.metadata.docs.rs]` table any more (owner ruling 2026-09-15), so this is the whole
+  render check.
 - [ ] Public-API coverage. If `US-0097` shipped `scripts/vt-public-api.py` and
   `crates/vt/public-api.txt`, a cross-check reads that file and asserts every entry is named in at
   least one chapter or in the API reference. Otherwise the same check by grep, run from the
@@ -193,9 +203,9 @@ Each criterion below is a command a verifier who distrusts this packet can run.
   ```
   returns 0 lines. An absolute link to the public repository is the allowed form.
 - [ ] `scripts/vt-docs.sh` and `pwsh scripts/vt-docs.ps1` each print a path that exists.
-- [ ] `cargo publish -p oneterm-vt --dry-run` still succeeds and its file list contains
-  `docs/guide/` -- the chapters must be **inside** the published package, or `include_str!` fails to
-  build on docs.rs.
+- [ ] `cargo package -p oneterm-vt --list` contains `docs/guide/` -- the chapters must be
+  **inside** the package, or `include_str!` fails to build for anybody who depends on the crate by
+  git (owner ruling 2026-09-15; this criterion said `cargo publish --dry-run` and docs.rs).
 - [ ] `pwsh scripts/ci-local.ps1` green.
 
 ## Documentation
@@ -220,7 +230,7 @@ Each criterion below is a command a verifier who distrusts this packet can run.
 
 **Update required**, in three places outside the new files:
 
-- `US-0097`'s README outline gains a **Documentation** section linking the guide's docs.rs URL and
+- `US-0097`'s README outline gains a **Documentation** section naming the guide and
   the local render script. Done in this packet's edit to `US-0097`.
 - `packaging.md` gains a short **Guide** subsection pointing here, and a row in its
   "Effect on the repository's existing checks" table for the tightened `cargo doc` step.
@@ -248,7 +258,8 @@ The guide's raw material already exists and should be moved, not invented:
 | 11 | `US-0102` Evidence; `IN-0029-vt-engine/low-level-design/testing-and-bench.md` for the corpus |
 | 12 | `api-surface.md` and `packaging.md` |
 
-Every one of those sources lives in `docs/spec-intakes/`, which a crates.io reader cannot open --
+Every one of those sources lives in `docs/spec-intakes/`, which a reader of the crate alone cannot
+open --
 which is exactly why the guide has to restate them rather than link them.
 
 ## Plan
@@ -288,8 +299,8 @@ switch to a static site is a new packet, not an amendment to this one.
 - Focused: `cargo test -p oneterm-vt --doc`, plus the three character-deletion spot checks.
 - Unit: `cargo test -p oneterm-vt` -- unchanged, and must stay so; this packet adds no runtime code.
 - Integration: `cargo test --workspace`.
-- Platform: `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features`; the same
-  with `--cfg docsrs`; `cargo publish -p oneterm-vt --dry-run`; `pwsh scripts/ci-local.ps1`;
+- Platform: `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features`;
+  `cargo package -p oneterm-vt --list`; `pwsh scripts/ci-local.ps1`;
   `python scripts/check-english.py`.
 - E2E: none. A guide has no runtime. The nearest thing is reading the rendered
   `target/doc/oneterm_vt/guide/index.html` in a browser and following every intra-doc link in
@@ -306,7 +317,7 @@ switch to a static site is a new packet, not an amendment to this one.
 ## Evidence and Gaps
 
 Record: the doctest list and count; the coverage-check output; the three deletion spot checks; the
-`cargo publish --dry-run` file list showing `docs/guide/`; the rendered index path from each script.
+`cargo package --list` file list showing `docs/guide/`; the rendered index path from each script.
 
 Known gaps to carry forward:
 
@@ -335,7 +346,8 @@ Known gaps to carry forward:
 - **`RUSTDOCFLAGS` invalidates the shared doc cache.** Setting it changes the fingerprint, so the
   first `cargo doc` after a plain build rebuilds. Costs CI seconds, not minutes; recorded so it is
   not mistaken for a broken cache.
-- **GitHub Pages is not set up.** docs.rs is the only rendered URL until someone asks for another.
+- **GitHub Pages is not set up.** With no docs.rs page (owner ruling 2026-09-15) there is no
+  public rendered URL at all: a reader runs `cargo doc` or reads the Markdown on GitHub.
 
 ## Handoff
 

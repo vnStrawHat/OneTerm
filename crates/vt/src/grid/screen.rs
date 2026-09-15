@@ -1,7 +1,8 @@
 //! One screen: the ring of rows, the viewport, the cursor and every primitive
 //! that moves or erases a row.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/grid-and-scrollback.md`.
+//! Design:
+//! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/grid-and-scrollback.md>
 //!
 //! Two coordinate notions live here and they are deliberately different:
 //!
@@ -28,7 +29,9 @@ use crate::width::scalar_width;
 /// Which run of the row-id space a screen draws from.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ScreenKind {
+    /// The main screen: the one that has scrollback.
     Primary,
+    /// The alternate screen (`CSI ? 1049 h`): no scrollback, restored on exit.
     Alternate,
 }
 
@@ -45,8 +48,10 @@ impl ScreenKind {
 /// the cursor, so `DECSC` / `DECRC` do not save it — reference behaviour.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum Charset {
+    /// US-ASCII (`ESC ( B`).
     #[default]
     Ascii,
+    /// The DEC special graphics and line-drawing set (`ESC ( 0`).
     SpecialCharacterAndLineDrawing,
 }
 
@@ -54,30 +59,33 @@ pub enum Charset {
 /// region (`DECOM`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum CursorOrigin {
+    /// Row 1 is the top of the screen. `DECOM` reset.
     #[default]
     Screen,
+    /// Row 1 is the top of the scroll region. `DECOM` set.
     Region,
 }
 
 /// Where the next glyph lands and what it will look like.
 ///
-/// Two cells, because the reference erases with less than it prints:
+/// Two cells, because an erase writes less than a print does:
 ///
-/// * `template` is the reference's `cursor.template` — a blank carrying the SGR
-///   style, the open hyperlink or image and the OSC 133 semantic. It is what a
-///   printed glyph inherits.
-/// * `erase` is the reference's `bg.into()` / `Cell::reset` — the **default**
-///   cell with only the template's background. It is what every erase and every
-///   row reset fills with, so an erase under an open underline or hyperlink
-///   leaves plain blanks rather than decorated ones.
+/// * `template` is a blank carrying the SGR style, the open hyperlink or image
+///   and the `OSC 133` semantic. It is what a printed glyph inherits.
+/// * `erase` is the **default** cell with only the template's background. It is
+///   what every erase and every row reset fills with, so an erase under an open
+///   underline or hyperlink leaves plain blanks rather than decorated ones.
 ///
 /// Keeping both on the cursor is what lets the erase paths stay off the
 /// interner: the pair is recomputed once, in `Screen::set_template`, whenever
 /// the SGR template changes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cursor {
+    /// Where the next glyph lands.
     pub pos: Pos,
+    /// Set when the last column is full, so the next glyph wraps first.
     pub pending_wrap: bool,
+    /// The G0-G3 designations; `SI` and `SO` choose which one is active.
     pub charsets: [Charset; 4],
     template: Cell,
     erase: Cell,
@@ -105,8 +113,10 @@ impl Cursor {
     }
 }
 
-/// The two modes the print path has to know about. Both are owned by the mode
-/// table (`US-0076`) and passed in, because the grid holds no mode state.
+/// The two modes the print path has to know about.
+///
+/// Both are passed in rather than read back, because the grid holds no mode
+/// state of its own.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PrintMode {
     /// `IRM`.
@@ -127,35 +137,44 @@ impl Default for PrintMode {
 /// `EL`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum LineClear {
+    /// `EL 0`: the cursor cell to the end of the line.
     Right,
+    /// `EL 1`: the start of the line to the cursor cell.
     Left,
+    /// `EL 2`: the whole line.
     All,
 }
 
 /// `ED`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum DisplayClear {
+    /// `ED 0`: the cursor cell to the end of the screen.
     Below,
+    /// `ED 1`: the top of the screen to the cursor cell.
     Above,
+    /// `ED 2`: the whole screen.
     All,
+    /// `ED 3`: the scrollback history.
     Saved,
 }
 
 /// Content moved from `top..=bottom` **onto other row ids** by `delta` rows.
 ///
-/// `damage-and-render-state.md` defines this as in-region motion, "because that
-/// moves content without moving the viewport": a consumer holding a `RowId`-keyed
-/// row cache shifts the named rows by `delta` instead of rebuilding them. A whole
-/// screen scroll therefore reports **nothing** — every row keeps its id and its
-/// content, and the viewport's own motion reaches the renderer as
-/// `RenderUpdate::Partial { scrolled }` instead.
+/// This is in-region motion: content moves without the viewport moving, so a
+/// consumer holding a `RowId`-keyed row cache shifts the named rows by `delta`
+/// instead of rebuilding them. A whole screen scroll therefore reports
+/// **nothing**: every row keeps its id and its content, and the viewport's own
+/// motion reaches the renderer as `RenderUpdate::Partial { scrolled }` instead.
 ///
-/// It is a notification, not how anchors move; but it always agrees with what the
-/// anchors did (R-02). `US-0079` wraps it in `VtEvent::RowsScrolled`.
+/// It is a notification, not how anchors move, but it always agrees with what
+/// the anchors did.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct RowsScrolled {
+    /// First row id whose content moved, inclusive.
     pub top: RowId,
+    /// Last row id whose content moved, inclusive.
     pub bottom: RowId,
+    /// The shift: what was at row `id` is now at `id + delta`.
     pub delta: i32,
 }
 
@@ -165,8 +184,7 @@ pub struct ScrollReport {
     /// `None` when no row's content changed id: a no-op, or a whole-screen
     /// scroll where the rows simply left the viewport into history.
     pub scrolled: Option<RowsScrolled>,
-    /// The new oldest row when history was trimmed. `US-0079` wraps it in
-    /// `VtEvent::RowsTrimmed`.
+    /// The new oldest row when history was trimmed.
     pub trimmed: Option<RowId>,
     /// Rows that entered scrollback, which is what `lines_produced` counts when
     /// the scroll was not itself caused by a line feed.
@@ -183,6 +201,7 @@ pub struct TabStops {
 const TAB_INTERVAL: u16 = 8;
 
 impl TabStops {
+    /// Default stops: every eighth column.
     pub fn new(cols: u16) -> TabStops {
         TabStops {
             stops: (0..cols).map(|col| col % TAB_INTERVAL == 0).collect(),
@@ -199,6 +218,7 @@ impl TabStops {
         }
     }
 
+    /// `TBC 0`: clear the stop at one column.
     pub fn clear(&mut self, col: u16) {
         if let Some(stop) = self.stops.get_mut(col as usize) {
             *stop = false;
@@ -209,7 +229,7 @@ impl TabStops {
         self.stops.fill(false);
     }
 
-    /// `CSI ? 5 W` (correction C10, wired up in `US-0076`).
+    /// `CSI ? 5 W`: restore the default stop at every eighth column.
     pub(crate) fn reset_defaults(&mut self) {
         for (col, stop) in self.stops.iter_mut().enumerate() {
             *stop = col as u16 % TAB_INTERVAL == 0;
@@ -263,8 +283,8 @@ pub struct Screen {
     /// The oldest row id a mutation since the last batch boundary can have
     /// reached: the screen top as it was when the batch opened. A row written
     /// and *then* scrolled into history inside the same batch is still at or
-    /// above it, which is what lets the full walk start here instead of at
-    /// `oldest` (R-28 as reworked; see [`Screen::integrity_lo`]).
+    /// above it, which is what lets the integrity walk start here instead of at
+    /// `oldest` (see [`Screen::integrity_lo`]).
     batch_lo: RowId,
 }
 
@@ -273,6 +293,10 @@ fn ring_len_for(scrollback_limit: u32) -> usize {
 }
 
 impl Screen {
+    /// A screen of `size` with room for `scrollback_limit` rows of history.
+    ///
+    /// Both arguments are clamped: `size` by [`Size::clamped`] and the limit by
+    /// [`SCROLLBACK_MAX`](crate::grid::SCROLLBACK_MAX).
     pub fn new(
         kind: ScreenKind,
         size: Size,
@@ -318,18 +342,22 @@ impl Screen {
 
     // ── Geometry ────────────────────────────────────────────────────────────
 
+    /// Which of the two screens this is.
     pub fn kind(&self) -> ScreenKind {
         self.kind
     }
 
+    /// Screen height, in rows.
     pub fn rows(&self) -> u16 {
         self.rows
     }
 
+    /// Screen width, in columns.
     pub fn cols(&self) -> u16 {
         self.cols
     }
 
+    /// Screen height and width together.
     pub fn size(&self) -> Size {
         Size {
             rows: self.rows,
@@ -337,10 +365,12 @@ impl Screen {
         }
     }
 
+    /// The highest live row id: the bottom row of the screen.
     pub fn newest(&self) -> RowId {
         self.newest
     }
 
+    /// The lowest live row id. Anything below it has been trimmed from history.
     pub fn oldest(&self) -> RowId {
         self.oldest
     }
@@ -350,6 +380,7 @@ impl Screen {
         self.oldest..self.newest + 1
     }
 
+    /// Rows of scrollback held above the screen.
     pub fn history_len(&self) -> u32 {
         (self.newest.distance(self.oldest) + 1).saturating_sub(self.rows as u64) as u32
     }
@@ -372,6 +403,7 @@ impl Screen {
         }
     }
 
+    /// How far the viewport sits above the screen, in rows. `0` is the bottom.
     pub fn scroll_offset(&self) -> u32 {
         self.offset
     }
@@ -390,6 +422,7 @@ impl Screen {
         Some(id.distance(top) as u16)
     }
 
+    /// The cursor's row as a screen index, `0` being the top of the screen.
     pub fn cursor_row_index(&self) -> u16 {
         self.index_of(self.cursor.pos.row).unwrap_or(0)
     }
@@ -438,8 +471,8 @@ impl Screen {
     /// every untouched column of the row the moment one glyph lands on it.
     /// Deliberate background-erase blanking is `Screen::blank_row` and
     /// `Screen::blank_slot`, which the scroll and reset paths call explicitly.
-    /// (Found by the `US-0076` parity gate: it is what made `sgr`'s trailing
-    /// blanks carry `48;5;1` where the reference leaves them default.)
+    // Found by a conformance gate: it is what made `sgr`'s trailing blanks carry
+    // `48;5;1` where xterm leaves them default.
     pub fn row_mut(&mut self, id: RowId) -> RowMut<'_> {
         let slot = self.slot_of(id);
         let (cols, seq) = (self.cols, self.seq);
@@ -473,8 +506,8 @@ impl Screen {
 
     /// Blank one live row, keeping its allocation and stamping it.
     ///
-    /// **A blanked row is a changed row.** The damage contract
-    /// (`damage-and-render-state.md`, `DEC-0015`) is a per-row `SeqNo` plus
+    /// **A blanked row is a changed row.** The damage contract is a per-row
+    /// `SeqNo` plus
     /// `RowFlags::DIRTY`, and an unwritten slot can carry neither: dropping the
     /// row back to `None` reads back as `SeqNo::default()`, below every
     /// watermark, so a consumer keeps painting the old content and the
@@ -566,6 +599,7 @@ impl Screen {
         self.debug_assert_integrity();
     }
 
+    /// Return the viewport to the bottom, where new output lands.
     pub fn scroll_to_bottom(&mut self) {
         self.offset = 0;
         self.debug_assert_integrity();
@@ -573,6 +607,7 @@ impl Screen {
 
     // ── Cursor ──────────────────────────────────────────────────────────────
 
+    /// The cursor: position, pending wrap and charset designations.
     pub fn cursor(&self) -> &Cursor {
         &self.cursor
     }
@@ -585,7 +620,7 @@ impl Screen {
     ///
     /// This is the only writer of either cell, so an erase can never pick up the
     /// foreground, the attributes, the hyperlink or the semantic that a printed
-    /// glyph would inherit — the reference's `bg.into()` rule — while the erase
+    /// glyph would inherit, which is the background-erase rule, while the erase
     /// paths themselves never touch the interner.
     pub(crate) fn set_template(&mut self, template: Cell, interner: &mut Interner) {
         let bg = interner.resolve_style(template.style_id()).bg;
@@ -597,6 +632,7 @@ impl Screen {
         self.cursor.erase = Cell::EMPTY.with_style(erase);
     }
 
+    /// The cursor saved by `DECSC`.
     pub fn saved_cursor(&self) -> &Cursor {
         &self.saved_cursor
     }
@@ -707,8 +743,8 @@ impl Screen {
         self.region
     }
 
-    /// `DECSTBM`. Trap 15: an invalid range leaves the previous region intact,
-    /// and every valid call homes the cursor.
+    /// `DECSTBM`. An invalid range leaves the previous region intact, and every
+    /// valid call homes the cursor.
     pub fn set_region(&mut self, top: u16, bottom: u16, origin: CursorOrigin) -> bool {
         let bottom = bottom.min(self.rows);
         let top = top.min(self.rows);
@@ -721,8 +757,8 @@ impl Screen {
         true
     }
 
-    /// `DECSTBM` with bounds the dispatch layer has already validated
-    /// (`US-0076`): the reference's one-based validity test can produce an
+    /// `DECSTBM` with bounds the dispatch layer has already validated: the
+    /// one-based validity test can produce an
     /// **empty** region, which [`Screen::set_region`]'s `top < bottom` contract
     /// cannot express, and it never homes the cursor itself.
     pub(crate) fn set_region_raw(&mut self, top: u16, bottom: u16) {
@@ -959,11 +995,9 @@ impl Screen {
 
     /// The implicit wrap at the end of a row.
     ///
-    /// Unconditional, because `DECAWM` is read by the caller: the reference's
-    /// `wrapline` returns immediately with the mode reset, which is the same
-    /// thing said one level down. Every caller here gates on `autowrap` and
-    /// leaves the pending-wrap flag armed when it does not wrap, exactly as the
-    /// reference leaves `input_needs_wrap` set.
+    /// Unconditional, because `DECAWM` is read by the caller. Every caller here
+    /// gates on `autowrap` and leaves the pending-wrap flag armed when it does
+    /// not wrap, so the flag always means "the last column is full".
     pub fn wrapline(&mut self, anchors: &mut Anchors) {
         let id = self.cursor.pos.row;
         self.row_mut(id).set_wrapped(true);
@@ -1127,18 +1161,16 @@ impl Screen {
         self.row_mut(id).write_repairing(col, cell);
     }
 
-    /// The pending-wrap flag is armed **unconditionally** at the last column,
-    /// exactly as the reference arms `input_needs_wrap`.
+    /// The pending-wrap flag is armed **unconditionally** at the last column.
     ///
-    /// It used to be gated on `DECAWM` (deviation G3), on the argument that the
-    /// printing result was identical and only `EL 0` and `HT` could see the
-    /// difference. Both halves were false, and the `US-0076` verification found
-    /// the case that proves it: `DECAWM` off, fill the row, `DECAWM` on, print
-    /// one glyph. The reference wraps — the flag it armed while the mode was off
-    /// is still there — and the gated version overwrote the last column instead,
-    /// **losing a line break**. `DECAWM` is now read where the reference reads
-    /// it, at the wrap itself, so the flag means "the last column is full" and
-    /// nothing more.
+    /// It used to be gated on `DECAWM`, on the argument that the printing result
+    /// was identical and only `EL 0` and `HT` could see the difference. Both
+    /// halves were false, and a conformance test found the case that proves it:
+    /// `DECAWM` off, fill the row, `DECAWM` on, print one glyph. xterm wraps,
+    /// because the flag it armed while the mode was off is still there, and the
+    /// gated version overwrote the last column instead, **losing a line break**.
+    /// `DECAWM` is now read at the wrap itself, so the flag means "the last
+    /// column is full" and nothing more.
     fn advance(&mut self, _mode: PrintMode) {
         if self.cursor.pos.col + 1 < self.cols {
             self.cursor.pos.col += 1;
@@ -1175,6 +1207,7 @@ impl Screen {
             .set(col, cell.with_content(CellContent::Grapheme(grapheme)));
     }
 
+    /// Glyphs dropped because a two-column cell had no room left on the row.
     pub fn dropped_wide(&self) -> u32 {
         self.dropped_wide
     }
@@ -1469,8 +1502,8 @@ impl Screen {
     /// Replace every live row with the reflow's output and adopt the new width.
     ///
     /// `rows` is oldest first and must not be empty; ids are allocated fresh
-    /// above the current newest, which is what `DEC-0015` means by "reflow: every
-    /// row gets a fresh id". The caller has already capped the count at
+    /// above the current newest, so every row that comes out of a reflow has a
+    /// new identity. The caller has already capped the count at
     /// `scrollback_limit + rows`, so the write always fits the ring.
     pub(crate) fn install_rows(&mut self, rows: Vec<Option<Row>>, cols: u16) {
         debug_assert!(!rows.is_empty(), "reflow produced no rows");
@@ -1496,7 +1529,7 @@ impl Screen {
     /// The rows already on the screen keep their ids, so lowering the screen
     /// window is exactly "scroll the whole screen up by `n`": the top rows
     /// return to history and every anchor, cursor included, loses `n` from its
-    /// screen index. `US-0077`'s positive `KeepViewportTop` shift.
+    /// screen index. This is the positive `KeepViewportTop` shift.
     pub(crate) fn append_blank_rows(&mut self, n: u16, anchors: &mut Anchors) {
         if n == 0 {
             return;
@@ -1620,10 +1653,12 @@ impl Screen {
         self.scrollback_limit
     }
 
+    /// Slots in the backing ring. A power of two, so the mask below works.
     pub fn ring_len(&self) -> usize {
         self.slots.len()
     }
 
+    /// `ring_len() - 1`: the mask that turns a row id into a ring slot.
     pub fn ring_mask(&self) -> usize {
         self.mask
     }
@@ -1661,6 +1696,7 @@ impl Screen {
         );
     }
 
+    /// The anchor that follows the cursor through scrolls and reflow.
     pub fn cursor_anchor(&self) -> AnchorId {
         self.cursor_anchor
     }
@@ -1742,8 +1778,7 @@ impl Screen {
 
     /// Where the row walk starts.
     ///
-    /// R-28 as reworked (`US-0075` / `US-0079`, 2026-09-13): starting at
-    /// `oldest` makes every walk O(history), and with a 100 000-row scrollback
+    /// Starting at `oldest` makes every walk O(history), and with a 100 000-row scrollback
     /// that is milliseconds per `feed` and per `render_update` in a debug
     /// build. Without `vt-paranoid` the walk therefore covers only what the
     /// operation can have touched — the rows written, scrolled or blanked since

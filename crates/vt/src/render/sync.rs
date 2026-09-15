@@ -1,15 +1,15 @@
 //! Synchronized output (mode 2026): frames are skipped, nothing is buffered.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`
-//! section "Synchronized output".
-//!
 //! The reference holds up to 2 MiB of **unapplied bytes** while an update is
 //! open, which is a memory amplifier a hostile stream can aim at us. Here the
 //! bytes are applied as they arrive and the renderer simply does not look:
 //! a program that opens an update and never closes it costs frames, not memory.
 //!
-//! Both deadlines are evaluated against the `now` the caller passes (R-11), so a
-//! replay with a synthetic clock is deterministic and these tests never flake.
+//! Both deadlines are evaluated against the `now` the caller passes, so a
+//! replay with a synthetic clock is deterministic and never flakes.
+
+// Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/damage-and-render-state.md`
+// section "Synchronized output" (R-11).
 
 use std::time::{Duration, Instant};
 
@@ -22,8 +22,8 @@ pub(crate) const SYNC_WATCHDOG: Duration = Duration::from_secs(1);
 
 /// The open synchronized update, if any.
 ///
-/// Owned by the terminal (`US-0076` puts it on `Terminal`), passed to the render
-/// state through [`crate::render::EngineView`].
+/// Owned by the terminal and passed to the render state through
+/// [`crate::render::EngineView`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct SyncState {
     /// When the current update stops holding frames back.

@@ -4,22 +4,29 @@
 //! no lock and no interior mutability. The embedder owns the lock and the event
 //! loop; this crate owns the bytes-to-grid semantics.
 //!
-//! There is no atomic here at all: the render-demand flag the pump tests at a
-//! chunk boundary is the **adapter's** primitive and lives with the lock policy
-//! that uses it, in `crates/terminal/src/handle.rs` (`US-0090`).
+//! There is no atomic here at all: a "something changed, come and draw"
+//! flag belongs with the lock policy that reads it, which is the embedder's.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/high-level-design.md`.
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/high-level-design.md>.
 //!
 //! Terminal input is untrusted. Nothing here returns an error to the embedder
 //! and nothing here panics on input: a malformed or hostile stream is dropped,
 //! truncated or degraded to a documented fallback, and counted.
+
+#![warn(missing_docs)]
+
+// Every Rust block in the README is compiled and run by `cargo test --doc`, so
+// the front page cannot drift away from the API it advertises.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
 
 // Three modules are reachable by path from outside, and only three: `grid`
 // (`crates/tools` replays a recording through `grid::Screen`, and the adapter
 // reads `grid::{DEFAULT_SCROLLBACK, SCROLLBACK_MAX}`), `intern` (the adapter
 // resolves `intern::Hyperlink`) and `parser` (the session logger drives its own
 // parser). Everything else an embedder names is re-exported below, so the
-// modules themselves are the crate's own business (`US-0090`).
+// modules themselves are the crate's own business.
 pub(crate) mod cell;
 // The module is `event` — the name the design and its test filters use — and
 // its files live in `events/`, one concept each.
@@ -51,6 +58,5 @@ pub use selection::{Selection, SelectionKind, SelectionRange, Side};
 pub use terminal::{ColorKey, Config, CursorShape, KeyboardFlags, Mode, OscClaims, Terminal};
 // `cluster_width` has no caller yet by design: it is the answer mode 2027 needs,
 // implemented and tested ahead of the mode so landing it is a print-path change
-// (see the module doc). It stays published for that reason, unlike the other 21
-// names `US-0090` dropped from this block.
+// (see the module doc). It stays published for that reason.
 pub use width::{cluster_width, scalar_width};

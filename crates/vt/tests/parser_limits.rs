@@ -1,16 +1,16 @@
 //! The parser's memory bounds, measured rather than argued.
 //!
-//! This is what survives the differential oracle `US-0073`'s verifier ran once
-//! against the fork. That oracle retired with the fork at `US-0087`; the
+//! This is what survives a differential oracle that once ran this parser
+//! against the implementation it replaced. That oracle is gone; the
 //! chunking invariant it proved is pinned by
 //! `parser::props::arbitrary_bytes_never_panic_and_chunking_is_invariant`, and
 //! nothing in the workspace depends on a second parser any more.
 //!
 //! What could not move into a unit test is this file: the counting allocator has
 //! to be a `#[global_allocator]`, which only an integration test can install.
-//! It is the measured form of the intake's headline defect (`IN-0029` P1 — the
-//! reference accumulates an OSC payload into an unbounded `Vec<u8>` reachable
-//! from any SSH session).
+//! It is the measured form of the defect this parser was written to close: an
+//! OSC payload accumulated into an unbounded `Vec<u8>`, which any session can
+//! grow without limit.
 //!
 //! `ext_memory_stays_bounded` is `#[ignore]`d because that allocator is
 //! process-wide, so anything running beside it pollutes the measurement. Run it

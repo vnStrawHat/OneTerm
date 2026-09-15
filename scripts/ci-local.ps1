@@ -36,6 +36,55 @@ Invoke-Step @("cargo", "test", "--workspace")
 # operation touched unless `vt-paranoid` is on. This is where the unbounded
 # whole-history invariants are gated.
 Invoke-Step @("cargo", "test", "-p", "oneterm-vt", "--features", "vt-paranoid")
+
+# Other projects consume `oneterm-vt` as a git dependency, so its package, its
+# feature matrix and its documentation are part of the gate. Its default
+# feature set is empty, so the two builds below are the whole matrix.
+Invoke-Step @("cargo", "build", "-p", "oneterm-vt", "--no-default-features", "--examples")
+Invoke-Step @("cargo", "build", "-p", "oneterm-vt", "--all-features", "--examples")
+Invoke-Step @("cargo", "run", "-p", "oneterm-vt", "--example", "headless")
+$previousRustdocFlags = $env:RUSTDOCFLAGS
+$env:RUSTDOCFLAGS = "-D warnings"
+try {
+    Invoke-Step @("cargo", "doc", "-p", "oneterm-vt", "--no-deps", "--all-features")
+} finally {
+    $env:RUSTDOCFLAGS = $previousRustdocFlags
+}
+Invoke-Step @("python", "scripts/vt-public-api.py", "--check", "--no-doc")
+
+# What the package carries, and that it reaches nothing outside `crates/vt`.
+# `--allow-dirty` because an agent runs this gate with uncommitted work; the
+# workflow packages a clean checkout without it.
+Write-Host ""
+Write-Host "==> cargo package -p oneterm-vt --list | verify-dependency-graph.py --package-list -"
+# Both halves are checked: a pipeline's `$LASTEXITCODE` is the last command's,
+# so piping straight into python would report python's status for a `cargo
+# package` that failed.
+$packageList = cargo package -p oneterm-vt --allow-dirty --list
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "ci-local: FAILED: cargo package -p oneterm-vt --list"
+    exit 1
+}
+$packageList | python scripts/verify-dependency-graph.py --package-list -
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "ci-local: FAILED: the oneterm-vt package is missing a required file"
+    exit 1
+}
+
+# Published rustdoc must read for somebody who does not have this repository:
+# no work-packet, decision or intake citations in `///` or `//!` text. A link to
+# the public repository is the one allowed form.
+Write-Host ""
+Write-Host "==> rustdoc self-containment (crates/vt/src)"
+$citations = Get-ChildItem -Path "crates/vt/src" -Recurse -Filter "*.rs" |
+    Select-String -Pattern '^\s*//[/!].*(US-0\d{3}|BUG-0\d{3}|DEC-0\d{3}|IN-0\d{3}|docs/spec-intakes)' |
+    Where-Object { $_.Line -notmatch 'https://github\.com/' }
+if ($citations) {
+    $citations | ForEach-Object { Write-Host $_ }
+    Write-Error "ci-local: FAILED: the crate rustdoc cites a document only this repository has"
+    exit 1
+}
+
 Invoke-Step @("python", "scripts/verify-dependency-graph.py")
 Invoke-Step @("python", "scripts/check-doc-paths.py")
 Invoke-Step @("python", "-m", "unittest", "scripts/test_check_english.py")
