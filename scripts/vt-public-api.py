@@ -14,6 +14,11 @@ The surface is read from the HTML rustdoc emits, not from `--output-format json`
 which is nightly-only and this repository pins a stable toolchain. That costs
 signature-level detail: a method whose arguments change is invisible here, while an
 item, field or variant that is added, removed or renamed is not.
+
+Only paths an embedder can actually write are listed. rustdoc also emits a page
+for an item at its defining path inside a private or `pub(crate)` module, and
+those are not API: renaming such a module is an internal refactor, and a gate
+that fires on one teaches people to regenerate without reading.
 """
 
 from __future__ import annotations
@@ -27,6 +32,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DOC_ROOT = ROOT / "target" / "doc" / "oneterm_vt"
 SURFACE = ROOT / "crates" / "vt" / "public-api.txt"
+LIB_RS = ROOT / "crates" / "vt" / "src" / "lib.rs"
+# The crate root's `pub mod` lines. Everything else an embedder can name is a
+# re-export and is listed at the crate root, where rustdoc also inlines it.
+PUB_MOD = re.compile(r"^pub mod ([a-z_][a-z0-9_]*);", re.MULTILINE)
 
 # One page per public item: `struct.Terminal.html`, `enum.VtEvent.html`, ...
 ITEM = re.compile(r"^(struct|enum|trait|fn|constant|type|union|macro)\.(.+)\.html$")
@@ -47,13 +56,21 @@ def members(page: Path) -> list[str]:
     return sorted({f"{kind} {name}" for kind, name in MEMBER.findall(html)})
 
 
+def public_modules() -> set[str]:
+    """The module paths an embedder can write: the crate root and its `pub mod`s."""
+    return {"."} | set(PUB_MOD.findall(LIB_RS.read_text(encoding="utf-8")))
+
+
 def surface() -> list[str]:
+    modules = public_modules()
     lines: list[str] = []
     for page in DOC_ROOT.rglob("*.html"):
         name = ITEM.match(page.name)
         if not name:
             continue
         module = page.parent.relative_to(DOC_ROOT).as_posix()
+        if module not in modules:
+            continue
         prefix = "oneterm_vt" + ("" if module == "." else "::" + module.replace("/", "::"))
         kind, item = name.groups()
         path = f"{prefix}::{item}"
