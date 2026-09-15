@@ -290,6 +290,11 @@ are exact permutations, and an external probe confirmed no deprecation shim. Its
    adds the variant. The gate only ever ran the `--all-features` half, so the no-feature `cargo doc`
    is now a step of its own in `scripts/ci-local.ps1`, `scripts/ci-local.sh` and
    `.github/workflows/ci.yml`. The "warning-free rustdoc" box is now true in **both** feature states.
+
+   The first attempt put the new step **after** `--all-features`, and the gate caught it: the next
+   step, `vt-public-api.py --check --no-doc`, reads whatever `target/doc` the last rustdoc left, so
+   the whole cfg-gated surface read as removed. `--all-features` therefore runs last, with a comment
+   in each of the three CI definitions saying the order is load-bearing.
 5. **The `snapshot_update` parameter was still called `render`**, and rustdoc prints it. It is
    `snapshot`, and the section banner above it says "Snapshot hand-off".
 
