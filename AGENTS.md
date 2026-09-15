@@ -111,9 +111,13 @@ cargo test -p oneterm-vt --features vt-paranoid # the VT engine's whole-history 
 # `oneterm-vt` is the only published crate, so its package is part of the gate:
 cargo build -p oneterm-vt --no-default-features --examples
 cargo build -p oneterm-vt --all-features --examples
+cargo run -p oneterm-vt --example headless
 RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
 python scripts/vt-public-api.py --check --no-doc # the published API surface has not drifted
-cargo publish -p oneterm-vt --dry-run
+# What the tarball carries (README, CHANGELOG, LICENSE, NOTICE, the example).
+# Offline, and works with uncommitted files — CI runs `cargo publish --dry-run`
+# instead, on its clean checkout.
+cargo package -p oneterm-vt --allow-dirty --list | python scripts/verify-dependency-graph.py --package-list -
 # ...plus a grep: no US-/BUG-/DEC-/IN- or docs/spec-intakes citation in the crate's rustdoc
 python scripts/verify-dependency-graph.py     # crate graph policy + workspace version inheritance
 python scripts/check-doc-paths.py             # architecture doc paths

@@ -42,6 +42,7 @@ Invoke-Step @("cargo", "test", "-p", "oneterm-vt", "--features", "vt-paranoid")
 # the two builds below are the whole matrix.
 Invoke-Step @("cargo", "build", "-p", "oneterm-vt", "--no-default-features", "--examples")
 Invoke-Step @("cargo", "build", "-p", "oneterm-vt", "--all-features", "--examples")
+Invoke-Step @("cargo", "run", "-p", "oneterm-vt", "--example", "headless")
 $previousRustdocFlags = $env:RUSTDOCFLAGS
 $env:RUSTDOCFLAGS = "-D warnings"
 try {
@@ -50,7 +51,17 @@ try {
     $env:RUSTDOCFLAGS = $previousRustdocFlags
 }
 Invoke-Step @("python", "scripts/vt-public-api.py", "--check", "--no-doc")
-Invoke-Step @("cargo", "publish", "-p", "oneterm-vt", "--dry-run")
+
+# The packaged file list, not `cargo publish --dry-run`: this runs offline and
+# with uncommitted work in the tree, which is the state an agent runs the gate
+# in. The workflow keeps the strict `--dry-run` on its clean checkout.
+Write-Host ""
+Write-Host "==> cargo package -p oneterm-vt --list | verify-dependency-graph.py --package-list -"
+cargo package -p oneterm-vt --allow-dirty --list | python scripts/verify-dependency-graph.py --package-list -
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "ci-local: FAILED: the oneterm-vt package is missing a required file"
+    exit 1
+}
 
 # Published rustdoc must read for somebody who does not have this repository:
 # no work-packet, decision or intake citations in `///` or `//!` text. A link to

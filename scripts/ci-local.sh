@@ -39,9 +39,18 @@ step cargo test -p oneterm-vt --features vt-paranoid
 # the two builds below are the whole matrix.
 step cargo build -p oneterm-vt --no-default-features --examples
 step cargo build -p oneterm-vt --all-features --examples
+step cargo run -p oneterm-vt --example headless
 step env RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
 step python scripts/vt-public-api.py --check --no-doc
-step cargo publish -p oneterm-vt --dry-run
+# The packaged file list, not `cargo publish --dry-run`: this runs offline and
+# with uncommitted work in the tree, which is the state an agent runs the gate
+# in. The workflow keeps the strict `--dry-run` on its clean checkout.
+printf '\n==> cargo package -p oneterm-vt --list | verify-dependency-graph.py --package-list -\n'
+if ! cargo package -p oneterm-vt --allow-dirty --list |
+    python scripts/verify-dependency-graph.py --package-list -; then
+  printf '\nci-local: FAILED: the oneterm-vt package is missing a required file\n' >&2
+  exit 1
+fi
 # Published rustdoc must read for somebody who does not have this repository:
 # no work-packet, decision or intake citations in `///` or `//!` text. A link to
 # the public repository is the one allowed form.

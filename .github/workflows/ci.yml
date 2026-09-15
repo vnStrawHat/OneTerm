@@ -176,6 +176,12 @@ jobs:
         run: cargo doc -p oneterm-vt --no-deps --all-features
       - name: Check the public API surface
         run: python scripts/vt-public-api.py --check --no-doc
+      # Apache-2.0 4(a) and 4(d): a distribution carries the licence and the
+      # NOTICE, and `cargo publish` will not say so on its own.
+      - name: Check what the package carries
+        run: |
+          cargo package -p oneterm-vt --list |
+            python scripts/verify-dependency-graph.py --package-list -
       - name: Package the crate
         run: cargo publish -p oneterm-vt --dry-run
       # Published rustdoc must read for somebody who does not have this
