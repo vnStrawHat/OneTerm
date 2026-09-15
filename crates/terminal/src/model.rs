@@ -20,8 +20,8 @@ use crate::mouse_encode::{
     encode_mouse_release, encode_wheel_event,
 };
 use crate::osc_color::DynamicColors;
-use crate::search::{GridText, search_grid_text};
 use crate::{SearchMatch, SearchOptions, TerminalInfo, TerminalQueryState};
+use oneterm_vt::search::{GridText, SearchPattern, search_grid_text};
 
 /// Shared terminal-model operations backed by the engine.
 ///
@@ -249,7 +249,7 @@ impl TerminalModel {
             let term = self.term.lock();
             GridText::from_terminal(&term)
         };
-        search_grid_text(&text, query, options)
+        search_grid_text(&text, SearchPattern::Literal(query), options)
     }
 
     // ── Mouse ──────────────────────────────────────────────────────

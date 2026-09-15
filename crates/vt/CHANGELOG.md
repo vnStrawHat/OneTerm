@@ -48,6 +48,20 @@ carry no API change at all. Such a release says so below rather than being omitt
 - `README.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE` and `examples/headless.rs`: the crate is
   packaged so another project can depend on it by git, and documented so somebody who has never
   seen the OneTerm repository can use it.
+- `search`: scrollback search, in two phases. `GridText::from_terminal` copies one `char` per
+  cell under the embedder's lock; `search_grid_text` matches against that copy without it, and
+  returns `SearchMatch`es keyed by `RowId`. `SearchOptions` carries `case_sensitive` and
+  `whole_word`. Neither form of match crosses a row boundary.
+- The `regex` feature, **off by default**: it adds `SearchPattern::Regex(&regex::Regex)` and makes
+  `regex` an optional dependency. With the feature off the crate still has no dependency beyond the
+  six it always had. `SearchOptions` is ignored for a regex — the pattern owns its own `(?i)` and
+  `\b` — in every build; a debug assertion fires when either field is non-default, but a
+  release build carries no such check and silently ignores them. `SearchPattern` is
+  `#[non_exhaustive]` so the same `match` compiles either way. A regular expression that can
+  match the empty string reports one zero-width `SearchMatch` per position, the position past
+  the last cell included, so `start_col` can be one past the last column.
+- `SearchOptions` is `#[non_exhaustive]`: a future option must not be a breaking change.
+  `SearchOptions::default()` plus field assignment is the construction form.
 
 ### Changed
 

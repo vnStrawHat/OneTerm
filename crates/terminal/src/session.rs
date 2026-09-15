@@ -26,7 +26,7 @@ use crate::osc::{Osc133Kind, TerminalProgress};
 use crate::osc_agent::AgentStatusEvent;
 use crate::osc_color::DynamicColors;
 use crate::paste::{PasteMode, PastePolicy, PasteResult, encode_paste};
-use crate::search::{SearchMatch, SearchOptions};
+use oneterm_vt::search::{SearchMatch, SearchOptions};
 
 /// Error from a terminal input/control operation (write, resize, close).
 ///

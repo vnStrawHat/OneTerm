@@ -21,12 +21,13 @@
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
-// Three modules are reachable by path from outside, and only three: `grid`
+// Four modules are reachable by path from outside, and only four: `grid`
 // (`crates/tools` replays a recording through `grid::Screen`, and the adapter
 // reads `grid::{DEFAULT_SCROLLBACK, SCROLLBACK_MAX}`), `intern` (the adapter
-// resolves `intern::Hyperlink`) and `parser` (the session logger drives its own
-// parser). Everything else an embedder names is re-exported below, so the
-// modules themselves are the crate's own business.
+// resolves `intern::Hyperlink`), `parser` (the session logger drives its own
+// parser) and `search` (a namespace of its own, because its two phases only
+// make sense together). Everything else an embedder names is re-exported
+// below, so the modules themselves are the crate's own business.
 pub(crate) mod cell;
 // The module is `event` — the name the design and its test filters use — and
 // its files live in `events/`, one concept each.
@@ -38,6 +39,7 @@ pub mod intern;
 pub mod parser;
 pub(crate) mod reflow;
 pub(crate) mod render;
+pub mod search;
 pub(crate) mod selection;
 pub(crate) mod terminal;
 pub(crate) mod width;

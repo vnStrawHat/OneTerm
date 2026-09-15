@@ -26,7 +26,6 @@ pub mod osc_agent;
 pub(crate) mod osc_color;
 pub(crate) mod palette;
 pub(crate) mod paste;
-pub(crate) mod search;
 pub mod security_policy;
 pub mod session;
 #[cfg(test)]
@@ -48,6 +47,7 @@ pub use logging::{
     TerminalLogController, TerminalLogError, TerminalLogState, local_log_identity, ssh_log_identity,
 };
 pub use mouse_encode::{MouseModifiers, TerminalMouseButton};
+pub use oneterm_vt::search::{SearchMatch, SearchOptions};
 /// The engine vocabulary this crate's own API speaks, re-exported so a consumer
 /// can name what [`TerminalContent`]'s native accessors return without taking a
 /// direct dependency on `oneterm-vt` first (`US-0085`).
@@ -66,7 +66,6 @@ pub use osc_agent::{
 };
 pub use osc_color::DynamicColors;
 pub use palette::{TerminalPalette, resolve_color};
-pub use search::{SearchMatch, SearchOptions};
 pub use security_policy::{ClipboardOrigin, TerminalSecurityPolicy};
 pub use session::{
     NetStats, PtyOwner, PtySession, SessionEvent, SessionKind, TerminalCapabilities, TerminalError,

@@ -108,6 +108,7 @@ cargo clippy --workspace --all-targets -- -D warnings   # also type-checks every
 cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings
 cargo test --workspace
 cargo test -p oneterm-vt --features vt-paranoid # the VT engine's whole-history integrity walk
+cargo test -p oneterm-vt --features regex # the optional regex matcher, and the literal half under it
 # `oneterm-vt` is consumed by other projects as a git dependency (it is not
 # published), so its package and its public API are part of the gate:
 cargo build -p oneterm-vt --no-default-features --examples

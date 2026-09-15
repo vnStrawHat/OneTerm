@@ -5626,6 +5626,7 @@ dependencies = [
  "log",
  "memchr",
  "proptest",
+ "regex",
  "rustc-hash 2.1.2",
  "unicode-segmentation",
  "unicode-width",

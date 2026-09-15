@@ -134,8 +134,11 @@ assert!(config.product_name.is_some());
 | Feature | Default | What it adds |
 | --- | --- | --- |
 | `vt-paranoid` | off | A whole-history integrity walk after every `feed` and `resize`. Milliseconds per call at a large scrollback: for tests and fuzzing, never for a release build. |
+| `regex` | off | `search::SearchPattern::Regex`, so scrollback search takes a compiled regular expression as well as a literal. |
 
-No feature adds a dependency today, and no feature changes behaviour -- only availability.
+No feature changes behaviour -- only availability. One adds dependencies: `regex` pulls in the
+`regex` crate, and with it `aho-corasick`, `regex-automata` and `regex-syntax`. Every other
+feature, and the default build, add nothing to the six the Dependencies section lists.
 
 ## Documentation
 
