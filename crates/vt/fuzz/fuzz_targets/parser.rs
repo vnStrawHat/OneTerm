@@ -1,5 +1,5 @@
-//! Fuzz the VT state machine: it must not panic, and it must not grow without
-//! a bound, whatever the remote sends.
+//! Fuzz the VT engine: it must not panic, and it must not grow without a
+//! bound, whatever the remote sends and whatever the embedder's OSC routes say.
 //!
 //! Run under a memory limit, which is where the value is:
 //! `cargo +nightly fuzz run parser -- -rss_limit_mb=512`.
@@ -7,53 +7,20 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use oneterm_vt::parser::{Dispatch, OscParams, Params, Parser, StringTerm};
-use oneterm_vt::{OscRoute, OscRoutes};
+use oneterm_vt::{Config, EventBatch, OscRoute, OscRoutes, Size, Terminal};
+use std::time::Instant;
 
-/// Consumes every action and keeps nothing, so the only memory in play is the
-/// parser's own.
-struct Sink {
-    routes: OscRoutes,
-}
+/// The numbers whose route the input picks: every kind of number the table
+/// distinguishes — built-ins with and without a payload ceiling, one below the
+/// bitmap that has no built-in, and two above it in the sorted spill.
+const ROUTED: [u32; 9] = [0, 4, 7, 8, 9, 52, 133, 1337, 31337];
 
-impl Dispatch for Sink {
-    fn print_str(&mut self, _text: &str) {}
-    fn execute(&mut self, _byte: u8) {}
-    fn esc(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
-    fn csi(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
-
-    fn osc(
-        &mut self,
-        _code: Option<u32>,
-        _params: &OscParams<'_>,
-        _term: StringTerm,
-        _truncated: bool,
-    ) {
-    }
-
-    /// The 8 MiB tier is opt-in per number, so the table the fuzzer derived
-    /// from its own input decides which numbers can reach it.
-    fn osc_allows_large(&self, code: u32) -> bool {
-        self.routes.allows_large(code)
-    }
-
-    fn dcs_hook(&mut self, _params: &Params, _intermediates: &[u8], _byte: u8) {}
-    fn dcs_put(&mut self, _byte: u8) {}
-    fn dcs_unhook(&mut self, _aborted: bool) {}
-    fn apc_start(&mut self, _introducer: u8) {}
-    fn apc_put(&mut self, _byte: u8) {}
-    fn apc_end(&mut self, _aborted: bool) {}
-}
-
-fuzz_target!(|data: &[u8]| {
-    // One parser fed in several chunks, because parser state, the OSC
-    // accumulator and the UTF-8 carry all have to survive a chunk boundary.
-    let mut parser = Parser::new();
-    // The route table is part of the input: the first bytes pick a route and a
-    // payload ceiling for a handful of numbers, so every combination is fuzzed
-    // rather than only the default one.
+/// Build the embedder's table out of the head of the input, so the route
+/// lookup, the six built-in arms and `forward_osc` are all fuzzed rather than
+/// only the parser under a fixed table.
+fn routes(data: &[u8]) -> OscRoutes {
     let mut routes = OscRoutes::new();
-    for (index, &code) in [0u32, 4, 7, 8, 9, 52, 133, 1337, 31337].iter().enumerate() {
+    for (index, &code) in ROUTED.iter().enumerate() {
         let seed = data.get(index).copied().unwrap_or(0);
         let route = match seed % 4 {
             0 if OscRoutes::has_builtin(code) => OscRoute::Builtin,
@@ -62,12 +29,40 @@ fuzz_target!(|data: &[u8]| {
             _ => OscRoute::Drop,
         };
         routes.route(code, route);
+        // The ceiling is bought after the route, which is the order `large`
+        // asserts on, and never for a number that is dropped.
         if seed & 0x80 != 0 && routes.get(code) != OscRoute::Drop {
             routes.large(code, true);
         }
     }
-    let mut sink = Sink { routes };
+    routes
+}
+
+fuzz_target!(|data: &[u8]| {
+    // A real terminal, not a sink: the mechanism this target exists to fuzz —
+    // the route lookup and the built-in arms — lives in the dispatch layer, and
+    // a `Dispatch` that ignores everything would never reach it. The grid is
+    // small and the batch is reused, so the only memory that can grow without
+    // a bound is the engine's own.
+    let mut term = Terminal::new(
+        Size { rows: 8, cols: 40 },
+        Config {
+            osc_routes: routes(data),
+            ..Config::default()
+        },
+    );
+    let mut batch = EventBatch::new();
+    let now = Instant::now();
+
+    // Fed in several chunks, because parser state, the OSC accumulator and the
+    // UTF-8 carry all have to survive a chunk boundary.
     let split = data.len() / 3;
-    parser.advance(&mut sink, &data[..split]);
-    parser.advance(&mut sink, &data[split..]);
+    for chunk in [&data[..split], &data[split..]] {
+        term.feed(chunk, &mut batch, now);
+        // Drain the way an embedder does, so every payload span is resolved
+        // against the arena that produced it.
+        for event in batch.iter() {
+            std::hint::black_box(event);
+        }
+    }
 });

@@ -1289,3 +1289,118 @@ fn verify_a_zero_padded_osc_number_reaches_the_same_handler() {
     let written = feed_bytes(&f, b"\x1b]020308;0\x07");
     assert!(!written.is_empty(), "OSC 020308;0 is still OSC 20308;0");
 }
+
+// ── Adopted from the independent verification of the OSC routing table ─────
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// End to end through the **real engine and the real `adapter_config`**: the
+/// deprecated `OSC 9;7` alias arrives as a bogus `Notification` *and* a raw
+/// `Osc`, and the adapter must drop the first and dispatch the second. The
+/// `agent_status_forwards_under_both_encodings` hand-builds the batch and never
+/// sees the notification, so this is the case it does not cover.
+#[test]
+fn legacy_alias_drops_the_notification_and_dispatches_the_payload() {
+    let json = stringify!(
+        {"v":1,"agent":"pi","type":"state","seq":1,"ts":1700000000000,"state":"working"}
+    );
+    let payload = b64(json.as_bytes());
+    for (bytes, label) in [
+        (format!("\x1b]20308;1;{payload}\x07"), "20308;1"),
+        (format!("\x1b]9;7;{payload}\x07"), "9;7"),
+    ] {
+        let f = local(16);
+        let events = feed(&f.router, bytes.as_bytes());
+        assert_eq!(
+            events.len(),
+            1,
+            "{label}: exactly one event, got {events:?}"
+        );
+        match &events[0] {
+            SessionEvent::AgentStatus(ev) => {
+                assert_eq!(ev.agent(), "pi");
+                assert_eq!(ev.seq(), 1);
+            }
+            other => panic!("{label}: unexpected {other:?}"),
+        }
+    }
+}
+
+/// A plain notification still becomes one, and `9;4` still becomes progress,
+/// even though both now also arrive raw on the wrapped route.
+#[test]
+fn the_wrap_route_does_not_break_the_rest_of_osc_9() {
+    let f = local(16);
+    assert_eq!(
+        feed(&f.router, b"\x1b]9;hello\x07"),
+        vec![SessionEvent::Notification("hello".into())]
+    );
+
+    let f = local(16);
+    assert_eq!(
+        feed(&f.router, b"\x1b]9;4;1;50\x07"),
+        vec![SessionEvent::Progress(crate::TerminalProgress::Set(50))]
+    );
+
+    // A message that merely starts with `7` is a message, not the alias.
+    let f = local(16);
+    assert_eq!(
+        feed(&f.router, b"\x1b]9;71 bottles\x07"),
+        vec![SessionEvent::Notification("71 bottles".into())]
+    );
+}
+
+/// The policy calls that used to sit behind `parse_osc` still gate the typed
+/// events, with the same limits.
+#[test]
+fn every_policy_call_still_happens() {
+    // sanitize_cwd still runs: a clean path is accepted and cached.
+    let f = local(16);
+    assert_eq!(
+        feed(&f.router, b"\x1b]7;file:///tmp\x07"),
+        vec![SessionEvent::Cwd(std::path::PathBuf::from("/tmp"))]
+    );
+
+    // The notification rate limiter still caps a burst.
+    let f = local(64);
+    let mut allowed = 0;
+    for index in 0..30 {
+        let seq = format!("\x1b]9;note {index}\x07");
+        allowed += feed(&f.router, seq.as_bytes()).len();
+    }
+    assert!(
+        allowed <= 10,
+        "the limiter still caps a burst, got {allowed}"
+    );
+    assert!(allowed > 0, "and does not cap at zero");
+
+    // sanitize_notification still truncates to 8 KiB.
+    let f = local(16);
+    let long = "x".repeat(64 * 1024);
+    let mut seen = false;
+    for event in feed(&f.router, format!("\x1b]9;{long}\x07").as_bytes()) {
+        if let SessionEvent::Notification(text) = event {
+            assert!(text.len() <= 8 * 1024, "{}", text.len());
+            seen = true;
+        }
+    }
+    assert!(seen, "a long notification still arrives, truncated");
+
+    // validate_clipboard_write still gates OSC 52, and the large ceiling is
+    // what lets a legitimate write through at all.
+    let f = local(16);
+    let big = b64("c".repeat(256 * 1024 + 1).as_bytes());
+    assert!(
+        feed(&f.router, format!("\x1b]52;c;{big}\x07").as_bytes()).is_empty(),
+        "an oversized clipboard write is still refused"
+    );
+    let f = local(16);
+    let ok = b64(b"hi");
+    assert_eq!(
+        feed(&f.router, format!("\x1b]52;c;{ok}\x07").as_bytes()),
+        vec![SessionEvent::Clipboard(Some("hi".into()))]
+    );
+}

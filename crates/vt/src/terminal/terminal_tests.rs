@@ -1479,6 +1479,49 @@ fn the_routing_table_answers_every_row() {
     }
 }
 
+/// Two tables that route every number the same way are the same table. The
+/// bits stored are the ones the number actually gets, so saying `Drop` about a
+/// number that was already dropped changes nothing -- including in the spill
+/// list, which a number put back to its default leaves.
+#[test]
+fn table_equality_is_semantic() {
+    let default = OscRoutes::new();
+
+    let mut redundant = OscRoutes::new();
+    redundant.route(633, OscRoute::Drop);
+    assert_eq!(redundant, default);
+    assert_eq!(redundant.overrides().count(), 0);
+
+    let mut spilled = OscRoutes::new();
+    spilled.route(31337, OscRoute::Drop);
+    assert_eq!(spilled, default);
+
+    // `BuiltinAndForward` on a number with no built-in *is* `Forward`, and
+    // compares equal to it.
+    let mut asked = OscRoutes::new();
+    asked.route(633, OscRoute::BuiltinAndForward);
+    let mut got = OscRoutes::new();
+    got.route(633, OscRoute::Forward);
+    assert_eq!(asked.get(633), OscRoute::Forward);
+    assert_eq!(asked, got);
+
+    // Routed away and back again is where it started, spill included.
+    let mut round_trip = OscRoutes::new();
+    round_trip
+        .route(31337, OscRoute::Forward)
+        .large(31337, true);
+    round_trip.large(31337, false);
+    round_trip.route(31337, OscRoute::Drop);
+    assert_eq!(round_trip, default);
+
+    // A ceiling is not a route, so it is not an override -- but it is part of
+    // the table's value.
+    let mut ceiling = OscRoutes::new();
+    ceiling.large(52, true);
+    assert_ne!(ceiling, default);
+    assert_eq!(ceiling.overrides().count(), 0);
+}
+
 /// One `feed` per row, so the table's answer and the engine's behaviour are
 /// asserted to be the same thing.
 #[test]
@@ -1659,6 +1702,51 @@ fn osc_7_reports_the_host_and_the_path_unresolved() {
     assert_eq!(cwd("/tmp/x"), (String::new(), "/tmp/x".into()));
 }
 
+/// An xterm-derived parser accepts a zero-padded number, and the engine routes
+/// and handles the number rather than its spelling, so `007` is `7`. Was the
+/// adapter's `a_zero_padded_number_reaches_the_same_arm`.
+#[test]
+fn a_zero_padded_osc_number_reaches_the_same_builtin() {
+    let mut session = Session::new(20, 4);
+    session.feed(b"\x1b]007;file:///tmp\x07");
+    assert_eq!(cwd_of(&session), Some((String::new(), "/tmp".into())));
+
+    let mut session = Session::new(20, 4);
+    session.feed(b"\x1b]0133;A\x07");
+    assert!(
+        session
+            .batch
+            .iter()
+            .any(|event| matches!(event, VtEvent::ShellMark(ShellMark::PromptStart)))
+    );
+
+    // Still not a number, still dropped and counted.
+    let mut session = Session::new(20, 4);
+    assert_eq!(
+        session.feed(b"\x1b]7x;file:///tmp\x07").unhandled_sequences,
+        1
+    );
+}
+
+/// A URL that is not valid UTF-8 is not a URL: dropped and counted, which is
+/// what the adapter's `str::from_utf8(..).ok()?` did. Percent escapes that
+/// decode to something that is not UTF-8 are still reported leniently, because
+/// a directory name is not required to be UTF-8 and by then the sequence has
+/// already been accepted.
+#[test]
+fn osc_7_refuses_a_url_that_is_not_utf8() {
+    let mut session = Session::new(20, 4);
+    let mut bytes = b"\x1b]7;file:///tmp/".to_vec();
+    bytes.extend_from_slice(&[0xC3, 0xA9, 0xC3]);
+    bytes.push(0x07);
+    let stats = session.feed(&bytes);
+    assert_eq!(cwd_of(&session), None);
+    assert_eq!(stats.unhandled_sequences, 1);
+
+    // The percent-decoded half stays lossy.
+    assert_eq!(cwd("file:///tmp/%C3%A9%C3").1, "/tmp/é\u{FFFD}");
+}
+
 /// Percent escapes are decoded and a Windows drive URL loses the URL's leading
 /// slash; a malformed escape stays verbatim.
 #[test]
@@ -1703,12 +1791,24 @@ fn osc_9_4_reports_every_progress_state() {
     assert_eq!(progress("9;4;2;80"), Some(Progress::Error(80)));
     assert_eq!(progress("9;4;3"), Some(Progress::Indeterminate));
     assert_eq!(progress("9;4;4;10"), Some(Progress::Paused(10)));
-    // The percentage is clamped, and an unknown state is dropped and counted.
+    // The percentage clamps at 100 whatever its size. The adapter read both
+    // fields as `u8`, so `1000` failed to parse and became `Set(0)` before the
+    // clamp could run; the sequence's own definition says "clamped", and the
+    // engine now does that.
     assert_eq!(progress("9;4;1;250"), Some(Progress::Set(100)));
-    let mut session = Session::new(20, 4);
-    let stats = session.feed(b"\x1b]9;4;9;50\x07");
-    assert_eq!(progress_of(&session), None);
-    assert_eq!(stats.unhandled_sequences, 1);
+    assert_eq!(progress("9;4;1;1000"), Some(Progress::Set(100)));
+    // An unknown state is dropped and counted, out of `u8` range included --
+    // where the adapter silently turned one into `Remove`, clearing a bar
+    // nobody asked to clear.
+    for sequence in ["9;4;9;50", "9;4;300;50"] {
+        let mut session = Session::new(20, 4);
+        let stats = session.feed(format!("\x1b]{sequence}\x07").as_bytes());
+        assert_eq!(progress_of(&session), None, "{sequence}");
+        assert_eq!(stats.unhandled_sequences, 1, "{sequence}");
+    }
+    // Faithful to the adapter: a missing or non-numeric state reads as 0.
+    assert_eq!(progress("9;4"), Some(Progress::Remove));
+    assert_eq!(progress("9;4;x;1"), Some(Progress::Remove));
 }
 
 fn notification(sequence: &str) -> Option<(String, String)> {
@@ -1916,6 +2016,41 @@ fn arbitrary_bytes_and_an_arbitrary_table_never_panic() {
             assert!(stats.aborted_dcs <= bytes);
         }
     }
+}
+
+/// The guard `claimed_osc_reaches_the_batch_without_allocating_per_osc` used to
+/// be: the OSC path must not grow the batch once it is warm. It matters more
+/// now than it did, because six numbers that used to be forwarded raw are
+/// parsed here, and a shell emits `OSC 7` and `OSC 133` on **every prompt**.
+///
+/// Measured through the batch's own capacities, because a `GlobalAlloc` is an
+/// `unsafe` trait and this crate has none. A payload assembled in the arena
+/// keeps these flat; a `String` per sequence would not show up here, so the
+/// companion assertion is that the arena high-water mark stays the size of one
+/// batch's payloads rather than growing with the number of sequences.
+#[test]
+fn the_builtin_arms_do_not_grow_the_batch_once_warm() {
+    let mut routes = OscRoutes::new();
+    routes.route(31337, OscRoute::Forward);
+    let mut session = Session::with(with_routes(20, 4, routes));
+    let warm = b"\x1b]7;file://host/home/me/My%20Docs\x07        \x1b]9;4;1;40\x07        \x1b]9;build finished; 3 tests\x07        \x1b]133;A\x07\x1b]133;D;0\x07        \x1b]0;title\x07\x1b]1;icon\x07\x1b]22;pointer\x07        \x1b]31337;1;private\x07";
+
+    for _ in 0..64 {
+        session.feed(warm);
+    }
+    let (arena, params, events) = (
+        session.batch.arena_capacity(),
+        session.batch.param_capacity(),
+        session.batch.event_capacity(),
+    );
+
+    for _ in 0..1000 {
+        session.feed(warm);
+    }
+
+    assert_eq!(session.batch.arena_capacity(), arena);
+    assert_eq!(session.batch.param_capacity(), params);
+    assert_eq!(session.batch.event_capacity(), events);
 }
 
 #[test]
