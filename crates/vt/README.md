@@ -5,17 +5,27 @@ damage-tracked snapshots and Sixel. You bring the pixels and the process.
 
 ## Install
 
-The crate is **not on crates.io**. Depend on it by git:
+The crate is **not on crates.io**. Depend on it by git, pinned to a commit:
 
 ```toml
 [dependencies]
-oneterm-vt = { git = "https://github.com/vnStrawHat/OneTerm", tag = "v0.5.2" }
+oneterm-vt = { git = "https://github.com/vnStrawHat/OneTerm", rev = "<commit sha>" }
 ```
 
-Pin a `tag` or a `rev`. `branch = "main"` builds whatever landed this morning, which is not what
-you want in a build you expect to reproduce. The semver promise and
+Use the sha of the merge commit you want; `git log --oneline -- crates/vt` on the repository lists
+the ones that changed the engine.
+
+To track the tip instead, `branch = "main"`. That builds whatever landed this morning, which is not
+what you want in a build you expect to reproduce.
+
+**Tags do not work yet.** Every existing tag predates this crate, and the crate inherits the
+application's version, so the first tag that can carry it is the next release, `v0.5.3` or later.
+From that release on, `tag = "v0.5.3"` is the form to prefer, and the semver promise and
 [`CHANGELOG.md`](CHANGELOG.md) apply to tags exactly as they would to published releases: a tag
 that changes what you compile against is a minor bump with an entry naming the item.
+
+The whole repository is checked out by a git dependency, not just this directory, so expect the
+first build to fetch a few tens of megabytes.
 
 ## What it is not
 
