@@ -1,17 +1,12 @@
 //! The semantic layer: which sequence calls which grid operation.
 //!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md`.
+//! The governing rule is **correctness first**: where the widely-copied
+//! implementations are wrong, this one is right from the start, and every such
+//! difference is declared and tested. Where they are right they are reproduced
+//! exactly, quirks included: `CUU` re-offsetting under `DECOM`, `CHA` moving
+//! the cursor down under `DECOM`, and `DECSTBM`'s one-based validity test.
 //!
-//! Replaces `vte`'s `src/ansi.rs` — the file every OneTerm fork patch lived in —
-//! and the control half of Alacritty's `alacritty_terminal/src/term/mod.rs`.
-//!
-//! The governing rule is **correctness first**: where the engine being replaced
-//! is wrong, this one is right from the start, and every such row is a `C`
-//! correction carried as a declared, cell-level expected difference in the
-//! parity corpus. Where the reference is right it is reproduced exactly,
-//! including the quirks the corpus pins — `CUU` re-offsetting under `DECOM`,
-//! `CHA` moving the cursor down under `DECOM`, and `DECSTBM`'s one-based
-//! validity test.
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md>.
 
 use std::time::Instant;
 
@@ -369,7 +364,8 @@ impl Handler<'_> {
 
     /// `ESC c`. Resets both grids, the region, tab stops, title and title stack,
     /// both keyboard stacks, the charset, the cursor style and the mode set;
-    /// keeps the row ids (`DEC-0015`) and `lines_produced`.
+    /// keeps the row ids, so a consumer's per-row cache survives, and keeps
+    /// `lines_produced`.
     ///
     /// Correction C6: the colour override table is reset too, where the
     /// reference leaves `OSC 4 / 10 / 11 / 12` overrides in place (trap 39).
@@ -459,13 +455,33 @@ impl Handler<'_> {
 
     // ── Answers ─────────────────────────────────────────────────────────────
 
+    /// What `XTVERSION` answers: the embedder's product, or the engine itself.
+    fn product_name(&self) -> &str {
+        self.state
+            .config
+            .product_name
+            .as_deref()
+            .unwrap_or(ENGINE_PRODUCT_NAME)
+    }
+
+    /// What `DA2` answers: the product's own version when its name carries one,
+    /// otherwise the engine's.
+    fn product_version_number(&self) -> u32 {
+        self.state
+            .config
+            .product_name
+            .as_deref()
+            .and_then(trailing_version)
+            .unwrap_or_else(|| version_number(env!("CARGO_PKG_VERSION")))
+    }
+
     fn identify_terminal(&mut self, intermediate: Option<u8>) {
         match intermediate {
             // Deviation D13: VT220, Sixel, ANSI colour. `4` is what tmux, lsix,
             // chafa and timg look for.
             None => self.reply("\x1b[?62;4;22c"),
             Some(b'>') => {
-                let version = version_number(env!("CARGO_PKG_VERSION"));
+                let version = self.product_version_number();
                 self.reply(&format!("\x1b[>0;{version};1c"));
             }
             _ => self.unhandled(),
@@ -768,7 +784,22 @@ fn colon_color(rest: &[u16]) -> Option<Color> {
     }
 }
 
-/// `CARGO_PKG_VERSION` as `major * 10000 + minor * 100 + patch`.
+/// What the terminal calls itself when the embedder set no `product_name`.
+const ENGINE_PRODUCT_NAME: &str = concat!("oneterm-vt(", env!("CARGO_PKG_VERSION"), ")");
+
+/// The `1.2.3` of a `Product(1.2.3)` name, as `DA2`'s single number.
+///
+/// A name that does not end in a parsable version answers `None`, and `DA2`
+/// falls back to the engine's own version rather than reporting zero.
+fn trailing_version(name: &str) -> Option<u32> {
+    let inner = name.strip_suffix(')')?.rsplit_once('(')?.1;
+    if inner.split('.').next()?.parse::<u32>().is_err() {
+        return None;
+    }
+    Some(version_number(inner))
+}
+
+/// A dotted version as `major * 10000 + minor * 100 + patch`.
 pub(super) fn version_number(version: &str) -> u32 {
     let mut parts = version
         .split('.')
@@ -1126,8 +1157,8 @@ impl Dispatch for Handler<'_> {
             // Deviation D8: XTVERSION.
             (b'q', [b'>']) => {
                 if args.next_or(0) == 0 {
-                    let version = env!("CARGO_PKG_VERSION");
-                    self.reply(&format!("\x1bP>|OneTerm({version})\x1b\\"));
+                    let name = self.product_name().to_owned();
+                    self.reply(&format!("\x1bP>|{name}\x1b\\"));
                 } else {
                     self.unhandled();
                 }
@@ -1306,7 +1337,7 @@ impl Dispatch for Handler<'_> {
     }
 
     /// Only Sixel — final byte `q` with **no** intermediate — is decoded
-    /// (`US-0080`). The intermediates are part of the routing key: `DCS $ q`
+    /// The intermediates are part of the routing key: `DCS $ q`
     /// (DECRQSS) and `DCS + q` (XTGETTCAP, which clients such as tmux, neovim
     /// and kitty are documented to send) share the final byte and are not
     /// images (`BUG-0058`). Every other DCS is counted unhandled.

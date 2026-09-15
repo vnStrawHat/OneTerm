@@ -1,17 +1,15 @@
-//! `Terminal` — parser + dispatch + grid + the render hand-off.
-//!
-//! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md`
-//! and `.../events-and-api.md`.
+//! `Terminal`: parser + dispatch + grid + the snapshot hand-off.
 //!
 //! This is the engine's one public object. It holds no lock, spawns no thread,
 //! returns no `Result` and never panics on input: a malformed or hostile stream
 //! is dropped, truncated or degraded to a documented fallback, and counted in
 //! [`FeedStats`].
 //!
-//! The field split the design asks for (R-32) is one indirection rather than
-//! fifteen borrows: [`Terminal`] owns the [`Parser`] and a [`State`], and
-//! `feed` builds a `Handler { state, out, now }` over the second while the
-//! first drives it.
+//! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/dispatch-and-modes.md>.
+
+// The field split is one indirection rather than fifteen borrows: `Terminal`
+// owns the `Parser` and a `State`, and `feed` builds a
+// `Handler { state, out, now }` over the second while the first drives it.
 
 mod color;
 mod dispatch;
@@ -26,6 +24,7 @@ mod tests;
 #[path = "verify_bug0058_tests.rs"]
 mod verify_bug0058_tests;
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
@@ -58,18 +57,36 @@ pub(crate) type ThemeColors = Palette;
 /// stream is otherwise unbounded anchor growth; the oldest is released.
 const MARK_MAX: usize = 1024;
 
-/// Everything a terminal is configured with. No dead knobs: the fork's
-/// `vi_mode_cursor_style`, `kitty_keyboard` and `osc52` are gone, the last
-/// because the engine never applies a clipboard policy.
+/// Everything a terminal is configured with.
+///
+/// Build one with [`Config::default`] and assign the fields you care about.
+/// Every knob here is read by the engine; one it could not honour is not
+/// offered.
+// No dead knobs: the fork's `vi_mode_cursor_style`, `kitty_keyboard` and
+// `osc52` are gone, the last because the engine never applies a clipboard
+// policy.
 #[derive(Clone, Debug)]
 pub struct Config {
+    /// Rows of scrollback kept above the screen, clamped to
+    /// [`SCROLLBACK_MAX`](crate::grid::SCROLLBACK_MAX).
     pub scrollback_limit: u32,
     /// Which OSC numbers reach the embedder, and which may spill.
     pub osc_claims: OscClaims,
+    /// The cursor shape and blink a fresh terminal starts with, before the
+    /// stream picks one with `CSI Ps SP q`.
     pub default_cursor_style: CursorStyle,
-    /// Word-selection characters (`selection.md`); carried here so the engine
-    /// has one configuration object.
+    /// The characters that end a word, for word and line selection.
     pub semantic_escape_chars: String,
+    /// What the terminal calls itself in `XTVERSION` (`CSI > 0 q`) and `DA2`
+    /// (`CSI > c`).
+    ///
+    /// `None` answers with the engine's own identity, `oneterm-vt(<version>)`.
+    /// An embedder shipping a product should set this, because programs such as
+    /// tmux and vim key capability detection off the `XTVERSION` string.
+    ///
+    /// A trailing `(<major>.<minor>.<patch>)` is also the version `DA2`
+    /// reports; with no parsable version there, `DA2` reports the engine's own.
+    pub product_name: Option<Cow<'static, str>>,
     // `accept_c1` (the `S8C1T` hook) is deliberately **absent**. The LLD
     // publishes it, but the parser hard-codes trap 48 — an 8-bit C1 byte is
     // executed, never treated as an introducer — so the field would be a knob
@@ -85,6 +102,7 @@ impl Default for Config {
             osc_claims: OscClaims::new(),
             default_cursor_style: CursorStyle::default(),
             semantic_escape_chars: crate::selection::SEMANTIC_ESCAPE_CHARS.to_owned(),
+            product_name: None,
         }
     }
 }
@@ -98,8 +116,8 @@ pub(crate) struct State {
     pub(crate) title: TitleState,
     pub(crate) keyboard: KeyboardStacks,
     pub(crate) sync: SyncState,
-    /// Decoded images, their placements and the in-flight Sixel decoder
-    /// (`US-0080`). Owns one anchor entry per live placement.
+    /// Decoded images, their placements and the in-flight Sixel decoder.
+    /// Owns one anchor entry per live placement.
     pub(crate) graphics: GraphicsState,
     /// Owns two entries in the anchor list while it lives, which is why every
     /// path that drops it goes through `Terminal::selection_clear`.
@@ -215,10 +233,11 @@ impl Terminal {
 
     /// Take the images decoded since the last call, oldest first.
     ///
-    /// **The only drain (R-16).** `DEC-0015` allows several render states, so a
-    /// drain inside `render_update` would hand an image to the first caller and
-    /// nothing to anybody else, the adapter included. A frame skipped by mode
-    /// 2026 therefore loses nothing: the pixels wait here.
+    /// This is the only drain. More than one consumer may hold its own
+    /// [`RenderState`], so draining inside `render_update` would hand an image
+    /// to whichever consumer asked first and nothing to the rest. A paint
+    /// skipped by synchronised output (`CSI ? 2026 h`) therefore loses nothing:
+    /// the pixels wait here until somebody takes them.
     pub fn take_graphics(&mut self) -> Vec<Arc<GraphicData>> {
         std::mem::take(&mut self.state.graphics.pending)
     }
@@ -231,8 +250,11 @@ impl Terminal {
 
     // ── Render hand-off ─────────────────────────────────────────────────────
 
-    /// Phase 1 of the hand-off, under the caller's lock. The three-line shim
-    /// `damage-and-render-state.md` names.
+    /// Take everything that changed since this [`RenderState`] last asked.
+    ///
+    /// Phase 1 of the hand-off, cheap enough to run under the caller's lock;
+    /// the returned [`RenderUpdate`] borrows the engine, so drawing happens
+    /// after it is dropped.
     pub fn render_update(&mut self, render: &mut RenderState, now: Instant) -> RenderUpdate {
         let modes = self.mode_snapshot();
         let selection = self.selection_range();
@@ -276,6 +298,7 @@ impl Terminal {
             .to_range(&self.state.grid, &self.state.config.semantic_escape_chars)
     }
 
+    /// Whether anything is selected right now.
     pub fn has_selection(&self) -> bool {
         self.selection_range().is_some()
     }
@@ -296,6 +319,7 @@ impl Terminal {
         }
     }
 
+    /// Select the whole grid, scrollback included.
     pub fn select_all(&mut self) {
         self.selection_clear();
         self.state.selection = Some(Selection::all(&mut self.state.grid));
@@ -304,10 +328,9 @@ impl Terminal {
     /// A pointer position in viewport coordinates to a grid position and the
     /// half of the cell it fell on.
     ///
-    /// Delegates rather than re-deriving: this had its own copy of the
-    /// arithmetic that disagreed with `selection::hit_test` off the right edge,
-    /// and each copy had a green test pinning the opposite answer
-    /// (`US-0076` verification, M5). The selection module owns the rule.
+    /// Off the right edge, off the bottom, and on a wide glyph's second half,
+    /// this answers exactly what a drag started at the same point would select:
+    /// there is one implementation of the rule, not two.
     pub fn hit_test(&self, viewport_row: f32, col: f32) -> (Pos, Side) {
         crate::selection::hit_test(&self.state.grid, viewport_row, col)
     }
@@ -328,7 +351,7 @@ impl Terminal {
 
     // ── Geometry ────────────────────────────────────────────────────────────
 
-    /// Resize both screens under one policy (`US-0077`), invalidating every row.
+    /// Resize both screens under one policy, invalidating every row.
     pub fn resize(&mut self, size: Size, policy: ResizePolicy) -> ResizeOutcome {
         let outcome = self.state.grid.resize(size, policy);
         self.state.generation = self.state.generation.wrapping_add(1);
@@ -341,9 +364,9 @@ impl Terminal {
 
     /// Give back the anchor entries of a selection whose content is gone.
     ///
-    /// A reflow kills selection anchors where it stands (trap 28) and a history
-    /// trim kills anything that fell off the oldest end, neither of which can
-    /// reach the `Selection` value that owns the entries. It already reads as
+    /// A reflow kills selection anchors where it stands and a history trim
+    /// kills anything that fell off the oldest end, neither of which can reach
+    /// the `Selection` value that owns the entries. It already reads as
     /// "no selection" through [`Terminal::selection_range`]; this is what stops
     /// the two entries leaking across a drag-resize.
     fn prune_selection(&mut self) {
@@ -352,72 +375,79 @@ impl Terminal {
         }
     }
 
-    /// Cell metrics have one owner (R-40, N-08): the embedder passes them when
-    /// the font changes and they answer `CSI 14 t`.
+    /// The cell's size in pixels, which only the embedder knows. Pass it
+    /// whenever the font changes; it is what `CSI 14 t` reports.
     pub fn set_cell_pixels(&mut self, width: u16, height: u16) {
         self.state.cell_pixels = (width, height);
     }
 
+    /// Change the scrollback ceiling; trims history at once and invalidates every row.
     pub fn set_scrollback_limit(&mut self, limit: u32) {
         self.state.config.scrollback_limit = limit;
         self.state.grid.set_scrollback_limit(limit);
         self.state.generation = self.state.generation.wrapping_add(1);
     }
 
+    /// Which rows the screen is currently showing, after any scrollback scroll.
     pub fn viewport(&self) -> Viewport {
         self.state.grid.screen().viewport()
     }
 
+    /// The screen's size in cells.
     pub fn size(&self) -> Size {
         self.state.grid.screen().size()
     }
 
     // ── Reading ─────────────────────────────────────────────────────────────
 
+    /// Both screens, for a consumer that reads the grid directly.
     pub fn grid(&self) -> &TerminalGrid {
         &self.state.grid
     }
 
+    /// Both screens, mutably. Writing here bypasses dispatch; tests are the intended caller.
     pub fn grid_mut(&mut self) -> &mut TerminalGrid {
         &mut self.state.grid
     }
 
+    /// The active screen: the alternate one while it is up, otherwise the primary.
     pub fn screen(&self) -> &Screen {
         self.state.grid.screen()
     }
 
+    /// The table that resolves the style, grapheme and hyperlink ids a `Cell` carries.
     pub fn interner(&self) -> &Interner {
         &self.state.interner
     }
 
     /// The interner, mutably. **Not a supported entry point.**
     ///
-    /// Additive at `US-0085`, and the only hook an embedder's **test** has for
-    /// writing a styled cell straight into the grid (`grid_mut`) instead of
-    /// driving an SGR stream: the style and extras ids a `Cell` carries are
-    /// meaningless without the table that minted them.
+    /// The only hook an embedder's **test** has for writing a styled cell
+    /// straight into the grid through [`Terminal::grid_mut`] instead of driving
+    /// an SGR stream: the style and extras ids a `Cell` carries are meaningless
+    /// without the table that minted them.
     ///
-    /// It has exactly one caller in the workspace —
-    /// `oneterm_terminal::test_support::GridFixture::write`, itself behind that
-    /// crate's `test-support` feature — and nothing on the engine's own paths
-    /// reads it. `#[doc(hidden)]` because handing a consumer mutable access to
-    /// the intern tables is not something this crate offers: an id minted
-    /// outside the engine's own write paths has no `assert_integrity` behind it.
-    /// A future caller that is not a test wants a real API instead.
+    /// `#[doc(hidden)]` because handing a consumer mutable access to the intern
+    /// tables is not something this crate offers: an id minted outside the
+    /// engine's own write paths has no integrity check behind it. A caller that
+    /// is not a test wants a real API instead.
     #[doc(hidden)]
     pub fn interner_mut(&mut self) -> &mut Interner {
         &mut self.state.interner
     }
 
+    /// The configuration this terminal was built with.
     pub fn config(&self) -> &Config {
         &self.state.config
     }
 
-    /// Output lines, not rows created (R-05): the number the gutter shows.
+    /// Output lines, not grid rows created: a wrapped line counts once, which
+    /// is the number a gutter shows.
     pub fn lines_produced(&self) -> u64 {
         self.state.grid.lines_produced()
     }
 
+    /// Whether one mode is set.
     pub fn mode(&self, mode: Mode) -> bool {
         match mode {
             Mode::AltScreen | Mode::AltScreen47 | Mode::AltScreen1047 => {
@@ -428,8 +458,7 @@ impl Terminal {
         }
     }
 
-    /// One accessor instead of the `MOUSE_MODE` bit union the current code
-    /// recombines in seven places.
+    /// Which mouse protocol the stream turned on, if any.
     pub fn mouse_reporting(&self) -> Option<MouseProtocol> {
         self.state.modes.mouse_reporting()
     }
@@ -439,6 +468,7 @@ impl Terminal {
         self.state.keyboard.active.live()
     }
 
+    /// The `CSI > 4 ; Ps m` level the stream asked for: `0`, `1` or `2`.
     pub fn modify_other_keys(&self) -> u8 {
         self.state.modify_other_keys
     }
@@ -459,10 +489,12 @@ impl Terminal {
         }
     }
 
+    /// The window title last set with `OSC 0` or `OSC 2`.
     pub fn title(&self) -> Option<&str> {
         self.state.title.title.as_deref()
     }
 
+    /// How many titles are on the `CSI 22 t` save stack.
     pub fn title_depth(&self) -> usize {
         self.state.title.depth()
     }
@@ -472,6 +504,7 @@ impl Terminal {
         self.state.colors.get(key)
     }
 
+    /// Every colour the stream overrode with `OSC 4`, `OSC 10` or `OSC 11`.
     pub fn colors(&self) -> &ColorOverrides {
         &self.state.colors
     }
@@ -482,15 +515,18 @@ impl Terminal {
         self.state.palette_epoch = self.state.palette_epoch.wrapping_add(1);
     }
 
+    /// The counters as they stand, without feeding anything.
     pub fn stats(&self) -> FeedStats {
         self.state.stats
     }
 
+    /// Synchronised output (`CSI ? 2026 h`) state, including its timeout.
     pub fn sync(&self) -> &SyncState {
         &self.state.sync
     }
 
-    /// The active `G0..G3` designation, for the parity snapshot and tests.
+    /// Which of `G0..G3` is currently mapped, as `SI`, `SO` and the locking
+    /// shifts left it.
     pub fn active_charset(&self) -> Charset {
         self.state.grid.screen().cursor().charsets[self.state.active_charset]
     }
