@@ -5,7 +5,7 @@ use std::path::Path;
 use async_channel::Sender;
 use russh_sftp::client::SftpSession as SftpChannel;
 use russh_sftp::protocol::FileAttributes;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
 use oneterm_core::{AppError, RemotePath, Result, TransferEvent, report_best_effort};
@@ -14,7 +14,7 @@ use crate::sftp_task::{
     create_safe_parent_dirs, map_sftp_err, safe_local_child, validate_remote_entry_name,
 };
 
-use super::pipeline::{copy_sequential, copy_striped, read_handles_for};
+use super::pipeline::copy_sequential;
 use super::staging::{finalize_local_file, temporary_local_sibling};
 use super::{
     MAX_TRAVERSAL_DEPTH, MAX_TRAVERSAL_ENTRIES, apply_remote_metadata_to_local,
@@ -23,8 +23,9 @@ use super::{
 
 /// Download a remote file or directory → local with progress reporting.
 ///
-/// - File: pipelined chunk reads (see [`super::pipeline`]) into a temporary
-///   sibling that replaces the target only once complete; progress 0.0–1.0.
+/// - File: one sequential pass over a single remote handle, pipelined by
+///   russh-sftp (see [`super::pipeline`]), into a temporary sibling that
+///   replaces the target only once complete; progress 0.0–1.0.
 /// - Directory: walk the remote tree recursively → create local dirs → download
 ///   each file, progress = cumulative bytes / bytes discovered so far.
 ///
@@ -71,9 +72,13 @@ pub(in crate::sftp_task) async fn sftp_download(
 ///
 /// The bytes land in a temporary sibling first and replace `local` atomically
 /// on success, then the remote permissions/times are applied (SEC-15).
-/// `on_bytes` receives the running byte count after every chunk. Files with a
-/// known size use striped, pipelined reads; size-less files fall back to one
-/// sequential handle read to EOF.
+/// `on_bytes` receives the running byte count roughly once per chunk.
+///
+/// One handle, read straight through: russh-sftp keeps `max_concurrent_reads`
+/// READ packets on the wire by itself, and seeking would throw that read-ahead
+/// away (`IN-0037`). `take(total)` stops at the size `stat` announced; a file
+/// that shrank in the meantime ends earlier at EOF, and a size-less file
+/// (`total == 0`, which a genuinely empty file also yields) reads to EOF.
 async fn download_file_contents(
     sftp: &SftpChannel,
     remote_str: &str,
@@ -89,10 +94,12 @@ async fn download_file_contents(
         }
     }
 
-    let mut readers = Vec::with_capacity(read_handles_for(total));
-    for _ in 0..read_handles_for(total) {
-        readers.push(sftp.open(remote_str).await.map_err(map_sftp_err)?);
-    }
+    let announced = if total > 0 { total } else { u64::MAX };
+    let mut reader = sftp
+        .open(remote_str)
+        .await
+        .map_err(map_sftp_err)?
+        .take(announced);
 
     let temporary = temporary_local_sibling(local, "part")?;
     let mut local_file = tokio::fs::File::create(&temporary)
@@ -100,15 +107,7 @@ async fn download_file_contents(
         .map_err(|e| AppError::msg(format!("create local temporary file: {e}")))?;
 
     let transfer_result: Result<()> = async {
-        if total > 0 {
-            copy_striped(readers, total, &mut local_file, cancel, on_bytes).await?;
-        } else {
-            let mut reader = readers
-                .into_iter()
-                .next()
-                .ok_or_else(|| AppError::msg("download opened no remote handle"))?;
-            copy_sequential(&mut reader, &mut local_file, cancel, on_bytes).await?;
-        }
+        copy_sequential(&mut reader, &mut local_file, cancel, on_bytes).await?;
         local_file
             .flush()
             .await

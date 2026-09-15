@@ -1,14 +1,18 @@
-//! The SFTP transfer budget `sftp_config()` pins, and the measurement behind it.
+//! The SFTP transfer budget `sftp_config()` pins, and the measurements behind it.
 //!
-//! russh-sftp 3.0's defaults are not a drop-in for 2.3.0's on either direction
-//! (`IN-0036`, `US-0095` Changes F and G):
+//! Two intakes meet here:
 //!
-//! - it added `max_write_packet_len` (32 KiB) as a third cap on every
-//!   `SSH_FXP_WRITE`, which with OneTerm's 255 KiB chunks cuts the in-flight
-//!   write budget 4x;
-//! - it answers a read by putting `max_concurrent_reads` `SSH_FXP_READ` packets
-//!   on the wire immediately, which OneTerm's seek-per-chunk striped download
-//!   discards after the server has already served them.
+//! - **`IN-0036` / `US-0095` Change F (writes).** russh-sftp 3.0 added
+//!   `max_write_packet_len` (32 KiB) as a third cap on every `SSH_FXP_WRITE`,
+//!   which with OneTerm's 255 KiB chunks cuts the in-flight write budget 4x.
+//!   `sftp_config()` raises it back. **Uploads are not otherwise touched by
+//!   `IN-0037`**, and that half of this file is unchanged by it.
+//! - **`IN-0037` (reads).** russh-sftp answers a read by putting
+//!   `max_concurrent_reads` `SSH_FXP_READ` packets on the wire immediately.
+//!   OneTerm used to throw that away by seeking per chunk across striped
+//!   handles; the striping is gone and the library's read-ahead is now the only
+//!   download pipeline, so `max_concurrent_reads` is back at 3.0's 16 and
+//!   **depth 1 is the regression** these tests guard.
 //!
 //! These tests run a counting SFTP server over an in-process duplex pipe and
 //! assert the budget, so a later russh-sftp bump that changes either default
@@ -23,13 +27,26 @@ use russh_sftp::protocol::{
     Attrs, Data, FileAttributes, Handle, OpenFlags, Status, StatusCode, Version,
 };
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio_util::sync::CancellationToken;
 
-use super::CHUNK_LEN;
+use oneterm_core::AppError;
+
+use super::{CHUNK_LEN, copy_sequential};
 use crate::session::sftp_config;
 
 /// 2.3.0's in-flight write budget: `max_concurrent_writes` 8 x a 255 KiB chunk
 /// in one packet. Change F exists to keep at least this much on the wire.
 const BASELINE_IN_FLIGHT_WRITE_BYTES: usize = 8 * 261_120;
+
+/// Bytes russh-sftp asks for per `SSH_FXP_READ`: `max_packet_len` minus its
+/// 13-byte read overhead (`fs/file.rs READ_OVERHEAD_LENGTH`). 3.0 has no
+/// `max_read_packet_len` to tune separately.
+const READ_PACKET_LEN: usize = 262_144 - 13;
+
+/// What the retired striped download kept on the wire: `read_handles_for`'s four
+/// handles, one 255 KiB request each. The library's read-ahead must beat it, or
+/// `IN-0037` traded throughput for a smaller diff.
+const RETIRED_STRIPED_IN_FLIGHT_BYTES: usize = 4 * CHUNK_LEN;
 
 // ---------------------------------------------------------------------------
 // A counting SFTP server over one real file
@@ -187,7 +204,7 @@ async fn counting_session(
     config: russh_sftp::client::Config,
 ) -> (russh_sftp::client::SftpSession, Arc<Counters>) {
     let counters = Arc::new(Counters::default());
-    let (client_side, server_side) = tokio::io::duplex(1024 * 1024);
+    let (client_side, server_side) = tokio::io::duplex(8 * 1024 * 1024);
     russh_sftp::server::run(
         server_side,
         CountingServer {
@@ -265,12 +282,94 @@ async fn an_upload_keeps_the_2_3_0_write_budget_in_flight() {
     );
 }
 
+/// `IN-0037` changed `copy_sequential`'s progress cadence from once-per-read to
+/// once per `CHUNK_LEN` of bytes, and **uploads share that function**. The write
+/// budget test above proves the bytes and the packets are untouched; it says
+/// nothing about the samples. This pins the sample sequence of a real upload - a
+/// real local file into a real `SftpSession`, the exact composition
+/// `upload::upload_file_contents` uses - so "uploads are unchanged" covers
+/// progress too, measured rather than inferred.
+///
+/// The sequence asserted here is the one the pre-`IN-0037` per-read cadence
+/// produced, because `tokio::fs::File` fills the whole `CHUNK_LEN` buffer from a
+/// regular file on every read but the last. A source that short-read would
+/// coalesce two former samples into one; that is harmless - `send_progress`
+/// drops samples on a full channel by design and `sftp-ui::run_transfer` keeps
+/// only the latest fraction - but it is why this test uses a real file rather
+/// than a `Cursor`.
+#[tokio::test]
+async fn an_upload_reports_the_same_progress_samples_it_did_before_in0037() {
+    const SIZE: usize = 5 * 1024 * 1024 + 99;
+    let source = temp_path("upload-cadence-src");
+    std::fs::write(&source.0, payload(SIZE)).expect("write local source file");
+    let remote = temp_path("upload-cadence-dst");
+    std::fs::write(&remote.0, b"").expect("create remote file");
+
+    let (sftp, _counters) = counting_session(&remote.0, sftp_config()).await;
+    let mut local_file = tokio::fs::File::open(&source.0)
+        .await
+        .expect("open local source");
+    let mut remote_file = sftp
+        .open_with_flags(
+            "payload",
+            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+        )
+        .await
+        .expect("open for write");
+
+    let mut progress = Vec::new();
+    copy_sequential(
+        &mut local_file,
+        &mut remote_file,
+        &CancellationToken::new(),
+        &mut |done| progress.push(done),
+    )
+    .await
+    .expect("upload");
+    remote_file.shutdown().await.expect("flush and close");
+
+    assert_eq!(
+        std::fs::read(&remote.0).expect("read back"),
+        payload(SIZE),
+        "the upload must be byte-identical"
+    );
+
+    // One sample at every CHUNK_LEN boundary, then the 99-byte tail at EOF.
+    let expected: Vec<u64> = (1..=SIZE / CHUNK_LEN)
+        .map(|n| (n * CHUNK_LEN) as u64)
+        .chain(std::iter::once(SIZE as u64))
+        .collect();
+    assert_eq!(
+        progress,
+        expected,
+        "an upload's progress samples changed: {} samples, expected {}",
+        progress.len(),
+        expected.len()
+    );
+}
+
 // ---------------------------------------------------------------------------
-// Change G — the read budget, both candidate fixes measured
+// IN-0037 — the read budget, now owned entirely by the library
 // ---------------------------------------------------------------------------
 
-/// Read a file the way `transfer::pipeline::read_chunk` does: seek, then read
-/// exactly one chunk. Returns the reassembled bytes.
+/// Exactly what `transfer::download::download_file_contents` composes: one
+/// handle, `take(announced)`, `copy_sequential`. Anything asserted below is
+/// therefore asserted about the shipped download path.
+async fn download(
+    sftp: &russh_sftp::client::SftpSession,
+    announced: u64,
+    cancel: &CancellationToken,
+    on_bytes: &mut impl FnMut(u64),
+) -> (Vec<u8>, oneterm_core::Result<()>) {
+    let reader = sftp.open("payload").await.expect("open for read");
+    let mut reader = reader.take(announced);
+    let mut sink = Vec::new();
+    let result = copy_sequential(&mut reader, &mut sink, cancel, on_bytes).await;
+    (sink, result)
+}
+
+/// Read the way the retired striped download did — seek, then read one chunk —
+/// so the access pattern that fought the read-ahead stays measurable.
 async fn read_seek_per_chunk(
     file: &mut russh_sftp::client::fs::File,
     total: usize,
@@ -293,92 +392,290 @@ async fn read_seek_per_chunk(
     (got, started.elapsed())
 }
 
-/// The measurement behind Change G: both candidate fixes on the same 5 MiB
-/// download, against the shipped defaults that motivated the change.
-///
-/// A: OneTerm's seek-per-chunk striping with `max_concurrent_reads: 1`.
-/// B: no striping (one sequential `read_to_end`) with 3.0's 16-deep read-ahead.
-/// Control: seek-per-chunk against 3.0's defaults — the 3.6x amplification the
-/// verification measured.
-///
-/// The assertion is on the chosen configuration: `sftp_config()` must make the
-/// server serve exactly the file, no more.
+/// The `IN-0037` contract: a download costs exactly one server READ per read
+/// packet, serves the file once, and keeps `max_concurrent_reads` packets on the
+/// wire. Depth 1 — what `US-0095` shipped while the striping supplied the
+/// concurrency — is measured alongside as the regression case.
 #[tokio::test]
-async fn a_download_serves_exactly_the_file_and_both_candidates_are_measured() {
+async fn a_download_costs_one_read_per_packet_and_keeps_the_read_ahead_in_flight() {
     const SIZE: usize = 5 * 1024 * 1024;
     let data = payload(SIZE);
     let remote = temp_path("read-budget");
     std::fs::write(&remote.0, &data).expect("write remote file");
+    let expected_reads = SIZE.div_ceil(READ_PACKET_LEN);
 
-    // Control: 3.0's defaults under OneTerm's access pattern.
-    let (sftp, counters) = counting_session(&remote.0, russh_sftp::client::Config::default()).await;
-    let mut file = sftp.open("payload").await.expect("open for read");
-    let (got, control_time) = read_seek_per_chunk(&mut file, SIZE).await;
-    assert_eq!(got, data, "the control read must still be correct");
-    let control_served = counters.bytes_read.load(Ordering::SeqCst);
-    let control_reads = counters.reads.load(Ordering::SeqCst);
-    drop(file);
+    // The shipped configuration.
+    let (sftp, counters) = counting_session(&remote.0, sftp_config()).await;
+    let started = std::time::Instant::now();
+    let (got, result) = download(&sftp, SIZE as u64, &CancellationToken::new(), &mut |_| {}).await;
+    let chosen_time = started.elapsed();
+    result.expect("download");
+    assert_eq!(got, data, "the download must be byte-identical");
+    let chosen_reads = counters.reads.load(Ordering::SeqCst);
+    let chosen_served = counters.bytes_read.load(Ordering::SeqCst);
     drop(sftp);
 
-    // Candidate A — keep the striping, turn the library's read-ahead off.
+    // The regression: the library's read-ahead turned off. Same bytes, but only
+    // one request on the wire at a time, so throughput collapses with RTT.
+    let depth_one = russh_sftp::client::Config {
+        max_concurrent_reads: 1,
+        ..sftp_config()
+    };
+    let (sftp, counters) = counting_session(&remote.0, depth_one).await;
+    let started = std::time::Instant::now();
+    let (got, result) = download(&sftp, SIZE as u64, &CancellationToken::new(), &mut |_| {}).await;
+    let depth_one_time = started.elapsed();
+    result.expect("download at depth 1");
+    assert_eq!(got, data, "depth 1 must still be correct, only slower");
+    let depth_one_reads = counters.reads.load(Ordering::SeqCst);
+    drop(sftp);
+
+    let in_flight = sftp_config().max_concurrent_reads * READ_PACKET_LEN;
+    eprintln!(
+        "IN-0037: 5 MiB download, {SIZE} bytes wanted\n\
+         \x20 shipped (read-ahead {}): {chosen_reads} READs, {chosen_served} B ({:.2}x), \
+         {in_flight} B in flight, {chosen_time:?}\n\
+         \x20 regression (read-ahead 1): {depth_one_reads} READs, {} B in flight, \
+         {depth_one_time:?}\n\
+         \x20 retired striping         : 21 READs, {RETIRED_STRIPED_IN_FLIGHT_BYTES} B in flight",
+        sftp_config().max_concurrent_reads,
+        chosen_served as f64 / SIZE as f64,
+        READ_PACKET_LEN,
+    );
+
+    // One server READ per read packet, and not one byte more than the file.
+    // Nothing seeks any more, so unlike the striped path there is no per-request
+    // slack to allow for: this is exact.
+    assert_eq!(
+        chosen_reads, expected_reads,
+        "a download must cost one READ per read packet, got {chosen_reads} for {expected_reads}"
+    );
+    assert_eq!(
+        chosen_served, SIZE,
+        "the server must serve exactly the file, got {chosen_served} B for {SIZE} B"
+    );
+
+    // The read-ahead is the only download pipeline OneTerm has left, so it must
+    // beat what the striping used to keep on the wire.
+    assert!(
+        in_flight > RETIRED_STRIPED_IN_FLIGHT_BYTES,
+        "the read budget regressed below the striping IN-0037 deleted: {in_flight} B <= \
+         {RETIRED_STRIPED_IN_FLIGHT_BYTES} B. russh-sftp's max_concurrent_reads default probably \
+         changed — see session::sftp_config."
+    );
+    assert!(
+        sftp_config().max_concurrent_reads >= 16,
+        "max_concurrent_reads is {}, not russh-sftp 3.0's 16. Since IN-0037 nothing seeks per \
+         chunk, so there is no reason to hold the read-ahead down — see session::sftp_config.",
+        sftp_config().max_concurrent_reads
+    );
+}
+
+/// Why the striping had to go rather than the read-ahead (`US-0095` D2): a seek
+/// calls `ReadState::reset`, which drops the queued requests *locally* after the
+/// server has already served them. Keep measuring it, so re-introducing a seek
+/// into the download loop fails here instead of on someone's bandwidth bill.
+#[tokio::test]
+async fn seeking_per_chunk_still_throws_the_read_ahead_away() {
+    const SIZE: usize = 5 * 1024 * 1024;
+    let data = payload(SIZE);
+    let remote = temp_path("seek-amplification");
+    std::fs::write(&remote.0, &data).expect("write remote file");
+
     let (sftp, counters) = counting_session(&remote.0, sftp_config()).await;
     let mut file = sftp.open("payload").await.expect("open for read");
-    let (got, a_time) = read_seek_per_chunk(&mut file, SIZE).await;
-    assert_eq!(got, data, "candidate A must be byte-identical");
-    let a_served = counters.bytes_read.load(Ordering::SeqCst);
-    let a_reads = counters.reads.load(Ordering::SeqCst);
-    drop(file);
+    let (got, elapsed) = read_seek_per_chunk(&mut file, SIZE).await;
+    assert_eq!(got, data, "the seek-per-chunk read must still be correct");
+    let served = counters.bytes_read.load(Ordering::SeqCst);
+    let reads = counters.reads.load(Ordering::SeqCst);
+
+    eprintln!(
+        "IN-0037 D2: seek-per-chunk against the shipped read-ahead: {reads} READs, {served} B \
+         ({:.2}x the file), {elapsed:?}",
+        served as f64 / SIZE as f64
+    );
+    assert!(
+        served > SIZE,
+        "expected seek-per-chunk to over-read against a read-ahead of {}, got {served} B for \
+         {SIZE} B. If this stopped amplifying, the read-ahead is off — see session::sftp_config.",
+        sftp_config().max_concurrent_reads
+    );
+}
+
+/// A cancel is observed within one chunk, and the teardown is clean: the same
+/// session serves a full download straight afterwards, so the reads left in
+/// flight neither leaked nor blocked.
+#[tokio::test]
+async fn a_cancelled_download_stops_within_one_chunk_and_the_session_survives() {
+    const SIZE: usize = 5 * 1024 * 1024;
+    let data = payload(SIZE);
+    let remote = temp_path("cancel");
+    std::fs::write(&remote.0, &data).expect("write remote file");
+
+    let (sftp, counters) = counting_session(&remote.0, sftp_config()).await;
+    let cancel = CancellationToken::new();
+    let mut at_cancel = 0u64;
+    // Cancel half way, so the read-ahead is warm and the discarded bytes below
+    // are the budget's real cost rather than the first probe request's.
+    let (partial, result) = download(&sftp, SIZE as u64, &cancel, &mut |done| {
+        if at_cancel == 0 && done >= (SIZE / 2) as u64 {
+            at_cancel = done;
+            cancel.cancel();
+        }
+    })
+    .await;
+
+    assert!(
+        matches!(result, Err(AppError::Cancelled)),
+        "a cancelled download must report Cancelled, not an error"
+    );
+    assert!(
+        at_cancel > 0,
+        "the cancel must have been driven by progress"
+    );
+    assert!(
+        (partial.len() as u64) < at_cancel + CHUNK_LEN as u64,
+        "the copy ran {} B past the cancel, more than one chunk",
+        partial.len() as u64 - at_cancel
+    );
+    assert_eq!(
+        partial,
+        data[..partial.len()],
+        "what was written before the cancel must still be the file's prefix"
+    );
+
+    // Up to `max_concurrent_reads` packets were already on the wire and are
+    // discarded by the dropped reader. That bandwidth is the price of the
+    // in-flight budget; it must never reach the caller's bytes.
+    let served_after_cancel = counters.bytes_read.load(Ordering::SeqCst) - partial.len();
+    eprintln!(
+        "IN-0037 cancel: stopped at {at_cancel} B, wrote {} B, {served_after_cancel} B served and \
+         discarded (budget {} B)",
+        partial.len(),
+        sftp_config().max_concurrent_reads * READ_PACKET_LEN
+    );
+
+    // The real assertion: nothing leaked or wedged the session.
+    let (whole, result) =
+        download(&sftp, SIZE as u64, &CancellationToken::new(), &mut |_| {}).await;
+    result.expect("a second download on the same session after a cancel");
+    assert_eq!(whole, data, "the session must still serve a whole file");
+}
+
+/// The shrinking-file clamp. A file shorter than the size `stat` announced —
+/// which is what a file that shrank mid-transfer looks like on the wire — ends
+/// at EOF without an error, and the last progress sample is the real size.
+#[tokio::test]
+async fn a_file_shorter_than_announced_ends_at_eof_with_the_real_size() {
+    let data = payload(CHUNK_LEN + 10);
+    let remote = temp_path("shrunk");
+    std::fs::write(&remote.0, &data).expect("write remote file");
+
+    let (sftp, _counters) = counting_session(&remote.0, sftp_config()).await;
+    let mut progress = Vec::new();
+    // `stat` said three chunks; only one and a bit is there.
+    let (got, result) = download(
+        &sftp,
+        (CHUNK_LEN * 3) as u64,
+        &CancellationToken::new(),
+        &mut |done| progress.push(done),
+    )
+    .await;
+
+    result.expect("a short file is not an error");
+    assert_eq!(got, data);
+    assert_eq!(
+        progress.last().copied(),
+        Some(data.len() as u64),
+        "the final size reported must be the real one"
+    );
+}
+
+/// A file *longer* than announced is cut at the announced size: `take` replaces
+/// the retired striped path's `total - index * CHUNK_LEN` arithmetic.
+#[tokio::test]
+async fn a_file_longer_than_announced_is_cut_at_the_announced_size() {
+    let data = payload(CHUNK_LEN * 2);
+    let remote = temp_path("grown");
+    std::fs::write(&remote.0, &data).expect("write remote file");
+
+    let (sftp, _counters) = counting_session(&remote.0, sftp_config()).await;
+    let announced = CHUNK_LEN as u64 + 7;
+    let (got, result) = download(&sftp, announced, &CancellationToken::new(), &mut |_| {}).await;
+
+    result.expect("download");
+    assert_eq!(got, data[..CHUNK_LEN + 7], "must not over-read");
+}
+
+/// The two sizes with no interior: nothing at all, and exactly one read packet.
+#[tokio::test]
+async fn a_zero_length_file_and_a_one_packet_file_download_exactly() {
+    let empty = temp_path("empty");
+    std::fs::write(&empty.0, b"").expect("write empty remote file");
+    let (sftp, counters) = counting_session(&empty.0, sftp_config()).await;
+    let mut progress = Vec::new();
+    // A size-less or empty file is announced as `u64::MAX` by
+    // `download_file_contents` and read to EOF.
+    let (got, result) = download(&sftp, u64::MAX, &CancellationToken::new(), &mut |done| {
+        progress.push(done)
+    })
+    .await;
+    result.expect("empty download");
+    assert!(got.is_empty());
+    assert!(progress.is_empty(), "no bytes, no progress samples");
+    assert_eq!(
+        counters.reads.load(Ordering::SeqCst),
+        0,
+        "an empty file costs no served READ (the one request answers Eof)"
+    );
     drop(sftp);
 
-    // Candidate B — drop the striping, keep the library's read-ahead.
-    let (sftp, counters) = counting_session(&remote.0, russh_sftp::client::Config::default()).await;
-    let mut file = sftp.open("payload").await.expect("open for read");
-    let started = std::time::Instant::now();
-    let mut got = Vec::with_capacity(SIZE);
-    file.read_to_end(&mut got).await.expect("sequential read");
-    let b_time = started.elapsed();
-    assert_eq!(got, data, "candidate B must be byte-identical");
-    let b_served = counters.bytes_read.load(Ordering::SeqCst);
-    let b_reads = counters.reads.load(Ordering::SeqCst);
-
-    let ratio = |served: usize| served as f64 / SIZE as f64;
-    eprintln!(
-        "US-0095 G: 5 MiB download, {SIZE} bytes wanted\n\
-         \x20 control (striping + read-ahead 16): {control_reads} READs, {control_served} B \
-         ({:.2}x), {control_time:?}\n\
-         \x20 A (striping + read-ahead 1)       : {a_reads} READs, {a_served} B ({:.2}x), {a_time:?}\n\
-         \x20 B (no striping + read-ahead 16)   : {b_reads} READs, {b_served} B ({:.2}x), {b_time:?}",
-        ratio(control_served),
-        ratio(a_served),
-        ratio(b_served),
-    );
-
-    // Exactly one server READ per chunk OneTerm asked for: no request is issued
-    // that a later seek throws away. That is the whole of Change G.
+    let data = payload(READ_PACKET_LEN);
+    let one_packet = temp_path("one-packet");
+    std::fs::write(&one_packet.0, &data).expect("write remote file");
+    let (sftp, counters) = counting_session(&one_packet.0, sftp_config()).await;
+    let (got, result) = download(
+        &sftp,
+        READ_PACKET_LEN as u64,
+        &CancellationToken::new(),
+        &mut |_| {},
+    )
+    .await;
+    result.expect("one-packet download");
+    assert_eq!(got, data);
     assert_eq!(
-        a_reads,
+        counters.reads.load(Ordering::SeqCst),
+        1,
+        "a file exactly one read packet long must cost exactly one READ"
+    );
+}
+
+/// The cadence `crates/sftp-ui` renders: monotonic samples, one per `CHUNK_LEN`
+/// of bytes, ending on the real size. Not one per read — russh-sftp's 262 131 B
+/// responses do not line up with the 261 120 B chunk, so a per-read callback
+/// would emit 41 samples here instead of 21.
+#[tokio::test]
+async fn a_download_reports_one_progress_sample_per_chunk() {
+    const SIZE: usize = 5 * 1024 * 1024;
+    let data = payload(SIZE);
+    let remote = temp_path("cadence");
+    std::fs::write(&remote.0, &data).expect("write remote file");
+
+    let (sftp, _counters) = counting_session(&remote.0, sftp_config()).await;
+    let mut progress = Vec::new();
+    let (got, result) = download(&sftp, SIZE as u64, &CancellationToken::new(), &mut |done| {
+        progress.push(done)
+    })
+    .await;
+
+    result.expect("download");
+    assert_eq!(got, data);
+    assert!(progress.windows(2).all(|w| w[0] < w[1]), "monotonic");
+    assert_eq!(progress.last().copied(), Some(SIZE as u64));
+    assert_eq!(
+        progress.len(),
         SIZE.div_ceil(CHUNK_LEN),
-        "the chosen config must cost one READ per chunk, got {a_reads} for {} chunks. \
-         russh-sftp's read-ahead is back on — see session::sftp_config.",
-        SIZE.div_ceil(CHUNK_LEN)
-    );
-    // russh-sftp asks for `max_packet_len - READ_OVERHEAD_LENGTH` = 262 131 B per
-    // request while OneTerm consumes CHUNK_LEN = 261 120 B, so the seek at the
-    // next chunk drops 1 011 B. That 0.4% is a chunk-size mismatch, not
-    // read-ahead, and russh-sftp 2.3.0 read the same way; the two overheads
-    // (13 for a read, 25 + handle for a write) cannot both be made exact by one
-    // `max_packet_len`. Bound it at one request's worth so a real regression
-    // still fails here.
-    let slack = 262_131 - CHUNK_LEN;
-    assert!(
-        a_served <= SIZE + slack * SIZE.div_ceil(CHUNK_LEN),
-        "the chosen config over-read beyond the known per-request slack: \
-         {a_served} B for {SIZE} B in {a_reads} READs"
-    );
-    // The control is the defect this change fixes: it must really amplify, or
-    // the measurement no longer means anything.
-    assert!(
-        control_served > SIZE,
-        "expected 3.0's defaults to over-read under seek-per-chunk, got {control_served} B"
+        "one sample per chunk of bytes: {} samples for {SIZE} B",
+        progress.len()
     );
 }

@@ -9,7 +9,12 @@
 //! 2. private-key file parsing cases the new `keyfile_tests.rs` omits
 //!    (`aes256-ctr` + bcrypt RSA, PKCS#8 PEM, CRLF, truncated input);
 //! 3. how russh-sftp 3.0's new read pipelining behaves under the
-//!    seek-per-chunk access pattern OneTerm's striped download uses.
+//!    seek-per-chunk access pattern OneTerm's striped download used.
+//!
+//! Point 3 is a dated record of what `US-0095` measured. `IN-0037` has since
+//! retired the striping, so nothing in OneTerm reads this way any more; the
+//! live guard against re-introducing it is
+//! `sftp_task::transfer::pipeline::pipeline_budget_tests`.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -496,12 +501,12 @@ impl russh_sftp::server::Handler for CountingSftpServer {
     }
 }
 
-/// OneTerm's striped download seeks to a stripe offset, reads one chunk, then
-/// seeks elsewhere. russh-sftp 3.0 answers each read by queueing
-/// `max_concurrent_reads` (16 by default) read requests ahead of the current
-/// offset; a seek clears the queue *locally*, but the requests are already on
-/// the wire, so the server serves — and the link carries — read-ahead the
-/// client throws away.
+/// OneTerm's striped download, retired by `IN-0037`, seeked to a stripe offset,
+/// read one chunk, then seeked elsewhere. russh-sftp 3.0 answers each read by
+/// queueing `max_concurrent_reads` (16 by default) read requests ahead of the
+/// current offset; a seek cleared the queue *locally*, but the requests were
+/// already on the wire, so the server served, and the link carried, read-ahead
+/// the client then threw away.
 ///
 /// The test asserts data integrity (which holds) and prints the measured
 /// amplification for the evidence record.
@@ -536,8 +541,8 @@ async fn seek_per_chunk_reads_measure_the_new_pipeline_read_ahead() {
         .expect("sftp handshake");
     let mut file = sftp.open("payload").await.expect("open remote");
 
-    // The access pattern of `transfer::pipeline::copy_striped` on one handle:
-    // seek to the chunk, read exactly one chunk.
+    // The access pattern the retired `copy_striped` used on one handle: seek to
+    // the chunk, read exactly one chunk.
     let mut got = Vec::with_capacity(total);
     let mut buffer = vec![0u8; ONETERM_CHUNK_LEN];
     for index in 0..CHUNKS {

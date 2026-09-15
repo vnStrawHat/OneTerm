@@ -490,13 +490,21 @@ pub fn connect(
     }
 }
 
-/// The russh-sftp client configuration, pinned to the transfer budget
-/// russh-sftp 2.3.0 gave OneTerm (`IN-0036`, `US-0095` Changes F and G).
+/// The russh-sftp client configuration OneTerm's transfer budget depends on.
 ///
-/// 3.0's defaults are not a drop-in: they cut the in-flight write budget 4x and
-/// add a read-ahead that OneTerm's own striped download throws away. Every field
-/// below restores measured 2.3.0 behaviour; none of them raises a limit past
-/// what the server allows.
+/// The two directions are pinned for opposite reasons, and neither field raises
+/// a limit past what the server allows:
+///
+/// - **Writes.** 3.0's defaults are not a drop-in: a new 32 KiB
+///   `max_write_packet_len` cuts the in-flight write budget 4x. Both write
+///   fields below restore the budget measured under russh-sftp 2.3.0
+///   (`IN-0036`, `US-0095` Change F).
+/// - **Reads.** `max_concurrent_reads` is 3.0's own default, deliberately, and
+///   is *not* a 2.3.0 value: 2.3.0 had no read-ahead at all. Since `IN-0037`
+///   retired OneTerm's striped download, that read-ahead is the transfer
+///   engine, so holding it down would be the regression rather than the fix.
+///
+/// `sftp_task::transfer::pipeline_budget_tests` measures every field here.
 pub(crate) fn sftp_config() -> russh_sftp::client::Config {
     russh_sftp::client::Config {
         // 3.0 added `max_write_packet_len` (32 KiB) as a *third* cap on every
@@ -513,14 +521,16 @@ pub(crate) fn sftp_config() -> russh_sftp::client::Config {
         // would double what OneTerm had; doubling it is a throughput change to
         // decide on its own evidence, not something to inherit from a bump.
         max_concurrent_writes: 8,
-        // OneTerm stripes its own downloads: `transfer::pipeline::read_chunk`
-        // seeks before every chunk. 3.0 answers a read by putting
-        // `max_concurrent_reads` READ packets on the wire immediately, and a
-        // seek clears only the *local* queue — the server has already served
-        // them. Running both pipelines made the server send 3.6x the file size.
-        // One request in flight per handle; `copy_striped`'s handles supply the
-        // concurrency.
-        max_concurrent_reads: 1,
+        // 3.0's default, and since `IN-0037` the *only* read pipeline OneTerm
+        // has: a download reads one handle straight through and russh-sftp keeps
+        // this many READ packets on the wire (~16 x 256 KiB = 4.2 MB in flight,
+        // against the retired striping's 4 x 255 KiB = 1.04 MB). Lowering it
+        // back to 1 is the throughput regression `pipeline_budget_tests` guards.
+        // It is only safe this high because nothing seeks per chunk any more:
+        // `File::poll_seek` resets the read queue locally after the server has
+        // already served it, which is how striping plus read-ahead cost 9.3x the
+        // file size (`US-0095` Change G).
+        max_concurrent_reads: 16,
         ..Default::default()
     }
 }
