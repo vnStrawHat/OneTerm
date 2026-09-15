@@ -62,7 +62,7 @@ Every third-party dependency is declared once in root `[workspace.dependencies]`
 
 | Purpose | Crate(s) |
 |---|---|
-| SSH and SFTP | `russh` (features `ring`, `flate2`, `rsa`), `russh-sftp` |
+| SSH and SFTP | `russh 0.63.x` (`default-features = false`, features `ring`, `flate2`, `rsa`), `russh-sftp 3.0.x`. They move together as one family (`IN-0036`): `russh-cryptovec` and `russh-util` follow transitively and are never declared. `russh 0.63` is what takes the crypto stack off RustCrypto release candidates; `ssh-key`, `rsa` and `pkcs1` are the three that stay on one, because no stable release of them exists yet. |
 | SSH runtime | `tokio`, `tokio-util`, `rand` |
 | Local shell PTY | `oneterm-pty` (OneTerm's own crate) over `polling` + `windows-sys` / `libc` (do not use `portable-pty`) |
 | Terminal parser / grid | `oneterm-vt` (OneTerm's own crate) — see the row below; there is no third-party terminal engine |
