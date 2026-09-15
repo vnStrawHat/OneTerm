@@ -190,13 +190,14 @@ pub struct GraphemeArena {
 `unicode-width` 0.2.x for scalar width, `unicode-segmentation` 1.x for cluster boundaries. Both
 are already in `Cargo.lock`; there is no `unicode-width` 2.x release (F7).
 
-**Mode 2027 is not implemented in this intake (R-56, R-38).** The research asks that the
-*storage* decision — intern, and cap the cluster length — be made early, and it is, above. The
-rest of 2027 (a `GraphemeCursor` print path, a cross-chunk pending-cluster buffer, and a ConPTY
-glyph-width flag that cannot follow a mode set after `CreatePseudoConsole`) is deferred:
+**Mode 2027 was not implemented in this intake (R-56, R-38); `US-0102` implemented the print
+path.** The research asks that the *storage* decision — intern, and cap the cluster length — be
+made early, and it is, above. What was deferred here, and what has since landed:
 
-- `CSI ? 2027 h/l` is recognised and inert; `DECRQM` answers `NotSupported`, which is the honest
-  answer and means "do not use it".
+- `CSI ? 2027 h/l` was recognised and inert, with `DECRQM` answering `NotSupported`. Since
+  `US-0102` the mode is live — while set, `Dispatch::print_str` segments its run with
+  `unicode-segmentation` and prints each cluster through `Screen::print_with_width` at
+  `cluster_width`'s answer — and `DECRQM` reports its real state.
 - `cluster_width(&[char]) -> u8` is implemented and unit-tested now, so the later packet is a
   print-path change, not a design change.
 - `oneterm-pty` spawns with `PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH`, matching the engine
@@ -271,7 +272,7 @@ impl Interner {
 impl Terminal { pub(crate) fn sweep_graphemes(&mut self) -> SweepStats; }
 
 pub fn scalar_width(c: char) -> Option<u8>;
-pub fn cluster_width(cluster: &[char]) -> u8;   // implemented now, used when 2027 lands
+pub fn cluster_width(cluster: &[char]) -> u8;   // the mode 2027 print path's measure (US-0102)
 ```
 
 ## Edge Cases and Failure Modes
@@ -338,5 +339,5 @@ pub fn cluster_width(cluster: &[char]) -> u8;   // implemented now, used when 20
   four (F5).
 - [ ] `width::tests::scalar_widths_cjk_emoji_combining`
 - [ ] `width::tests::zwj_family_splits_without_mode_2027` — pins today's behaviour.
-- [ ] `width::tests::cluster_width_is_correct_for_emoji_flags_and_skin_tones` — the function is
-  tested now even though nothing calls it until 2027 lands.
+- [ ] `width::tests::cluster_width_is_correct_for_emoji_flags_and_skin_tones` — the function,
+  now called by the mode 2027 print path (`US-0102`).

@@ -82,6 +82,8 @@ enum oneterm_vt::ColorKey
     variant DimForeground
     variant Foreground
     variant Palette
+    variant SelectionBackground
+    variant SelectionForeground
 struct oneterm_vt::Config
     structfield default_cursor_style
     structfield osc_routes
@@ -180,13 +182,16 @@ enum oneterm_vt::Mode
     variant MouseClick
     variant MouseDrag
     variant MouseMotion
+    variant MouseX10
     variant Origin
+    variant ReverseVideo
     variant ReverseWrap
     variant SaveCursor1048
     variant SgrMouse
     variant ShowCursor
     variant SyncUpdate
     variant UrgencyHints
+    variant UrxvtMouse
     variant Utf8Mouse
     variant Win32Input
 struct oneterm_vt::ModeSnapshot
@@ -197,10 +202,12 @@ struct oneterm_vt::ModeSnapshot
     structfield bracketed_paste
     structfield insert
     structfield mouse
+    structfield reverse_video
     structfield show_cursor
 enum oneterm_vt::MouseEncoding
     variant Default
     variant Sgr
+    variant Urxvt
     variant Utf8
 struct oneterm_vt::MouseProtocol
     structfield encoding
@@ -209,6 +216,7 @@ enum oneterm_vt::MouseReporting
     variant AnyEvent
     variant ButtonEvent
     variant Normal
+    variant X10
 enum oneterm_vt::NamedColor
     variant Background
     variant Black

@@ -100,13 +100,18 @@ Example: `ESC ] 10 ; ? BEL` → asks for the default foreground color.
 | ☑ | **12** | Text cursor color | `12;?` | **112** | ✅ |
 | ☐ | **13** | Mouse pointer fg color | `13;?` | **113** | ❌ |
 | ☐ | **14** | Mouse pointer bg color | `14;?` | **114** | ❌ |
-| ☐ | **17** | Selection (highlight) bg | `17;?` | **117** | ❌ |
-| ☐ | **19** | Selection (highlight) fg | `19;?` | **119** | ❌ |
+| ☑ | **17** | Selection (highlight) bg | `17;?` | **117** | ✅ set + query (`US-0102`) |
+| ☑ | **19** | Selection (highlight) fg | `19;?` | **119** | ✅ set + query (`US-0102`) |
 | ☑ | **110–112** | Reset fg/bg/cursor | — | — | ✅ |
-| ☐ | **117/119** | Reset selection bg/fg | — | — | ❌ |
+| ☐ | **117/119** | Reset selection bg/fg | — | — | ❌ — `RIS` clears them, nothing else does |
 | ☐ | **39** | Default fg (xterm alias for OSC 10) | — | — | ❌ |
 
-> ✅ **OneTerm**: OSC 10/11/12 **set + query (`?`)** and OSC 110/111/112 **reset**.
+> ✅ **OneTerm**: OSC 10/11/12 and OSC 17/19 **set + query (`?`)**, and OSC 110/111/112 **reset**.
+> OSC 17 / 19 are `ColorKey::SelectionBackground` / `SelectionForeground`, two slots in the same
+> override table, handled in `crates/vt/src/terminal/dispatch.rs` (`osc_selection_color`) with the
+> keys in `crates/vt/src/terminal/color.rs`. They take **one** parameter each, not xterm's advancing
+> multi-parameter form: advancing from 17 lands on OSC 18, the Tektronix cursor, which the engine
+> does not have. There is no OSC 117 / 119 reset yet, so `RIS` is the only thing that clears them.
 > `Event::ColorRequest` is enqueued in `LocalListener`/`SshListener` then answered after each parse batch
 > (reads `Term.colors()`, falls back to theme default via `set_default_colors`); set/reset rendered via `dynamic_colors()`.
 
@@ -284,7 +289,8 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 | 133 shell integration | ✅ | OK (A/B/C/D + exit code) |
 | 10/11/12 + 110–112 colors | ✅ | OK (set + query + reset fg/bg/cursor) |
 | 4 + 104 palette colors | ✅ | OK (set + query + reset index 0–255) |
-| 5/13–19/105/117–119 colors | ❌ | **Gap** — special/pointer/selection not mapped |
+| 17/19 selection colors | ✅ | OK (set + query; no 117/119 reset) |
+| 5/13–16/18/105/113–119 colors | ❌ | **Gap** — special/pointer/Tektronix not mapped |
 | 9 + 9;4 notification/progress | ✅ | OK (toast + progress bar) |
 | 99/777 notifications | ❌ | **Gap** |
 | 633 shell integration | ❌ | **Gap** (133 only) |
@@ -292,7 +298,8 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 
 > OneTerm currently **covers** the 5 core groups (title/CWD/hyperlink/clipboard/shell-integration) **+ default colors
 > (OSC 10/11/12/110-112) + color palette (OSC 4/104) + notification/progress (OSC 9, 9;4) + Sixel images (DCS)**, but **lacks**
-> special colors (5), pointer/selection (13–19), notification 99/777, 633, OSC 1337 / Kitty images.
+> special colors (5), the pointer pair (13–14), the 113–119 resets, notification 99/777, 633,
+> OSC 1337 / Kitty images.
 
 ---
 
@@ -335,7 +342,9 @@ ESC]133;D;exit ST ← Block end (exit code optional)
      + `default_color_for_index`).
    - OSC 9 → `SessionEvent::Notification` → toast `window.push_notification`; OSC 9;4 →
      `SessionEvent::Progress(TerminalProgress)` → thin progress bar at the top edge of the terminal view.
-   - **No** special colors (5/105), pointer/selection (13–19/113–119): not mapped yet.
+   - OSC 17/19 (selection bg/fg): parsed by the engine into `ColorKey::Selection*`, answered through
+     the same `queue_color_query` path as 10/11/12 (`US-0102`).
+   - **No** special colors (5/105), pointer colors (13–14), or any of the 113–119 resets.
    - **No** notification 99 / 777 / 9;1-3, font (50), 633, 1337.
    - Self-generates OSC 7 + 133 A via `PROMPT_COMMAND` (bash) / `PS1` (zsh) / `PROMPT` (cmd).
 

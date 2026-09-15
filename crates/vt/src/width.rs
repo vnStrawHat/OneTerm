@@ -11,10 +11,12 @@
 //! segments the run into grapheme clusters and measures each with
 //! [`cluster_width`], so a whole cluster takes one cell.
 //!
-//! The glyph-width axis is settled outside this module: the pseudo-console is
-//! spawned with `PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH`, which matches this module
-//! unconditionally. Because the engine never changes that mode mid-session, the
-//! column drift a mid-session change would cause cannot occur.
+//! The glyph-width axis is settled outside this module, and mode 2027 is the
+//! one thing that can disturb it: a Windows pseudo-console spawned with
+//! `PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH` measures scalars whatever the mode
+//! says. The engine cannot check, because it compiles with no transport at
+//! all, so an embedder that spawns a console host with a fixed width mode owns
+//! the decision of whether to let a program set `? 2027` at all.
 
 use unicode_width::UnicodeWidthChar;
 

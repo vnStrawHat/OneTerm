@@ -59,6 +59,8 @@ before any handler runs.
 | `ESC E` (NEL) | `linefeed()` then `carriage_return()` |
 | `ESC H` (HTS) | set a tab stop at the cursor column |
 | `ESC M` (RI) | `reverse_index()` |
+| `ESC n` (LS2) / `ESC o` (LS3) | select `G2` / `G3` as the locking set (`US-0102`) |
+| `ESC N` (SS2) / `ESC O` (SS3) | select `G2` / `G3` for **exactly one printed character**; the shift is taken by the print path and by nothing else, so an intervening escape sequence does not consume it (`US-0102`) |
 | `ESC Z` | DA1 (same answer as `CSI c`) |
 | `ESC c` (RIS) | full reset — see below |
 | `ESC 7` / `ESC 8` (DECSC / DECRC) | save / restore cursor, style template and charset designations |
@@ -159,17 +161,20 @@ accessor, `Terminal::mouse_reporting() -> Option<MouseProtocol>`, replacing the
 | `AppCursor` (DECCKM) | `? 1` | reset | real | reporting only; encoding is the app's |
 | `AppKeypad` (DECKPAM/DECKPNM) | `ESC =` / `ESC >` | reset | real | R-64: the keypad state `crates/terminal/src/key_encode.rs` needs; set by `ESC =`, cleared by `ESC >`, reported in `ModeSnapshot` |
 | `DecCoLm` | `? 3` | — | `NotSupported` | both `h` and `l` run DECCOLM: reset the region, wipe the grid, full damage; **the width does not change** (trap 40) |
+| `ReverseVideo` (DECSCNM) | `? 5` | reset | real | **shipped (`US-0102`)**: a screen-level flag in `ModeSnapshot`, never a cell attribute — the embedder swaps the two defaults when it resolves the palette, and not one cell's style changes, so `? 5 l` restores exactly what was there and a copied selection is unaffected. The generation bump is what tells a renderer its cached rows are stale. Shares only a number with `CSI ? 5 W` (DECST8C) |
 | `Origin` (DECOM) | `? 6` | reset | real | `goto` becomes region-relative and clamps; setting it homes the cursor |
 | `LineWrap` (DECAWM) | `? 7` | **set** | real | gates `wrapline()` and the wide-char-at-last-column path |
 | `CursorBlink` | `? 12` | reset | real | |
 | `ShowCursor` (DECTCEM) | `? 25` | **set** | real | clearing it makes the reported cursor shape `Hidden` |
 | `ReverseWrap` | `? 45` | reset | **real** | **shipped** (`US-0086`, region guard `US-0087`). `BS` at column 0 crosses into the previous row's last column when that row is `WRAPPED` and the mode is set (R-08 / trap 1), so DECRQM is real because the mode has a reader. The rule it used to illustrate stands and now has one home, `Mode::inert_state` (below): while reset (the default) `BS` at column 0 is a no-op, which is trap 1; while set it crosses into a `WRAPPED` row ([`grid-and-scrollback.md`](grid-and-scrollback.md), R-08) |
-| `MouseClick` | `? 1000` | reset | real | setting any mouse mode clears the other mouse modes first; unsetting clears only that one (the reference's asymmetry, reproduced) |
+| `MouseX10` | `? 9` | reset | real | **shipped (`US-0102`)**: the X10 protocol — a button **press** only, at `CSI M Cb Cx Cy`, with no modifier bits, no release and no motion. The one mode that suppresses whole events rather than changing how they look, so `input::mouse` reads the reporting half of the snapshot for it and for nothing else; an unreported event encodes to an empty `Vec` |
+| `MouseClick` | `? 1000` | reset | real | setting any mouse mode clears the other three first; unsetting clears only that one (the reference's asymmetry, reproduced) |
 | `MouseDrag` | `? 1002` | reset | real | |
 | `MouseMotion` | `? 1003` | reset | real | |
 | `FocusInOut` | `? 1004` | reset | real | conhost forces this on and re-injects it after any `l` ([`../research/prior-art.md`](../research/prior-art.md) § 5.2) |
 | `Utf8Mouse` | `? 1005` | reset | real | mutually exclusive with SGR mouse on set |
 | `SgrMouse` | `? 1006` | reset | real | |
+| `UrxvtMouse` | `? 1015` | reset | real | **shipped (`US-0102`)**: `CSI Cb ; Cx ; Cy M`, the legacy values as decimal parameters, which is what lifts the 223-column ceiling. `Cb` keeps the `+ 32` offset and a release is still the fixed button 3: 1015 changes the transport, not the semantics. The three encodings (`? 1005`, `? 1006`, `? 1015`) replace each other on set, exactly as the four reporting modes do |
 | `AlternateScroll` | `? 1007` | **set** | real | |
 | `UrgencyHints` | `? 1042` | **set** | real | |
 | `AltScreen47` | `? 47` | reset | real | correction C8, `US-0076` (trap 13) |
@@ -178,7 +183,7 @@ accessor, `Terminal::mouse_reporting() -> Option<MouseProtocol>`, replacing the
 | `AltScreen` | `? 1049` | reset | real | save cursor, switch, clear |
 | `BracketedPaste` | `? 2004` | reset | real | |
 | `SyncUpdate` | `? 2026` | reset | **real** | reference hardcodes `Reset`; here it reports `Set` while an update is open ([`damage-and-render-state.md`](damage-and-render-state.md)) |
-| `GraphemeClusters` | `? 2027` | reset | **`NotSupported`** | **deferred (R-56)**: recognised and inert. `cluster_width()` and the grapheme arena ship now; the print path and the ConPTY glyph-width axis do not ([`cell-and-style.md`](cell-and-style.md)) |
+| `GraphemeClusters` | `? 2027` | reset | real | **shipped (`US-0102`)**: while set, the print path segments its run into grapheme clusters and measures each with `width::cluster_width`; while reset it is per scalar, which is what the parity recordings pin. The ConPTY glyph-width axis is unchanged — the pseudo-console is spawned with `PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH` and never changes mid-session ([`cell-and-style.md`](cell-and-style.md)) |
 | `Insert` (IRM) | `4` | reset | real | does **not** force full damage (trap 34, deviation D2) |
 | `LineFeedNewLine` (LNM) | `20` | reset | real | tracked, inert (deviation D9) |
 | `Win32Input` | `? 9001` | reset | **`Reset`** | **recognised and inert (R-36)**: conhost sends `ESC [ ? 9001 h` unprompted at session start and re-injects it after any DECRST, so on every local Windows session this arrives repeatedly. It is accepted silently and never counted as unhandled; `Reset` is the honest DECRQM answer because the encoding is not implemented. Half-adopting win32-input-mode corrupts F3 ([`../research/prior-art.md`](../research/prior-art.md) § 5.5), so "recognised and off" is the correct v1 state |
@@ -197,7 +202,7 @@ reader answers `Reset` to `DECRQM` however many times a program sets it — answ
 program a capability exists when it does not. The rule used to live in hand-written match arms, one
 per inert mode; it is now a single table on `Mode`, and a test walks **every** `Mode::PRIVATE`
 variant against it, so a mode added without a reader cannot quietly start claiming `Set`. `? 9001`
-is the standing example; `? 45` left the list when it got its reader.
+is the standing example; `? 45` and `? 2027` both left the list when they got their readers.
 
 ### Answers
 
@@ -205,6 +210,7 @@ is the standing example; `? 45` left the list when it got its reader.
 | --- | --- | --- |
 | DA1 `CSI c`, `ESC Z` | `CSI ? 62 ; 4 ; 22 c` | VT220, Sixel, ANSI colour. Today the fork answers `CSI ? 62 ; 4 c`; upstream answers `CSI ? 6 c`. `4` is what `tmux`, `lsix`, `chafa` and `timg` look for. Adding `22` is deviation D13 |
 | DA2 `CSI > c` | `CSI > 0 ; {version} ; 1 c` | `version` from `CARGO_PKG_VERSION` as `major*10000 + minor*100 + patch` |
+| DA3 `CSI = c` | `DCS ! \| 00000000 ST` | DECRPTUI: two hex digits of manufacturing site and six of unit number. A software terminal has neither, xterm reports all zeroes in exactly that case, and a value derived from the embedder's product name would be a fingerprint rather than an identity (`US-0102`). As with DA1 and DA2, only `Ps == 0` answers |
 | DSR 5 | `CSI 0 n` | |
 | DSR 6 (CPR) | `CSI {row};{col} R` | **Spec-correct (C5)**: region-relative while `DECOM` is set, absolute otherwise (trap 38). Conhost's handshake is unaffected because conhost never sets origin mode |
 | DECXCPR `CSI ? 6 n` | `CSI ? {row};{col};1 R` | deviation D7 |
@@ -415,8 +421,9 @@ difference would have nowhere to be declared:
 - **`SUB` (`0x1A`) is a no-op**, not a replacement-glyph write. No recording sends it; the
   reference ignores it.
 
-Kept deliberately, because they are correct: traps 15, 16, 18, 21, 22, 25, 40 and 43. Mode 2027 is
-deferred whole (R-56), so it is not a deviation — it is unimplemented, and DECRQM says so.
+Kept deliberately, because they are correct: traps 15, 16, 18, 21, 22, 25, 40 and 43. Mode 2027 was
+deferred whole (R-56) and is no longer: `US-0102` wired it to `width::cluster_width`, and DECRQM
+reports its real state.
 
 ## Interfaces
 
@@ -545,7 +552,7 @@ Every other difference is a defect until a correction id says otherwise.
 - [ ] `dispatch::tests::kitty_query_reads_the_stack_top` — trap 42.
 - [ ] `dispatch::tests::kitty_pop_beyond_len_resets_the_stack` — deviation D15.
 - [ ] `dispatch::tests::decrqm_answers_match_the_mode_table` — a table test over every mode,
-  including that no accepted-but-inert mode (`? 45`, `? 9001`) ever answers `Set`.
+  including that no accepted-but-inert mode (`? 3`, `? 9001`) ever answers `Set`.
 - [ ] `dispatch::tests::da1_da2_dsr_xtversion_answers`
 - [ ] `dispatch::tests::decstr_soft_reset_scope` — correction C9.
 - [ ] `dispatch::tests::mouse_modes_are_exclusive_on_set_not_on_unset`
@@ -558,8 +565,21 @@ Every other difference is a defect until a correction id says otherwise.
   answers `Reset`.
 - [ ] `dispatch::tests::app_keypad_mode_is_reported` — R-64; `ESC =` then `ESC >`, read back
   through `ModeSnapshot`.
-- [ ] `dispatch::tests::mode_2027_is_recognised_and_inert` — R-56; setting it changes no
-  behaviour and DECRQM answers `NotSupported`.
+- [ ] `dispatch::tests::mode_2027_measures_grapheme_clusters` — R-56, closed by `US-0102`; a ZWJ
+  family advances the cursor by eight columns with the mode reset and by two with it set, and
+  DECRQM reports the real state.
+- [ ] `dispatch::tests::decscnm_is_a_screen_flag_and_touches_no_cell` — `? 5` reaches
+  `ModeSnapshot` and every cell and style on the row is byte-identical before and after.
+- [ ] `dispatch::tests::mouse_modes_9_and_1015_reach_the_snapshot` — the four reporting modes
+  are one choice and the three encodings are another, each replacing its siblings on set.
+- [ ] `dispatch::tests::locking_and_single_shifts_reach_g2_and_g3` — `LS2` / `LS3` / `SS2` /
+  `SS3`, including that a single shift survives an intervening escape sequence and that
+  `DECSC` / `DECRC` do not save the locking set.
+- [ ] `dispatch::tests::da3_answers_a_decrptui_unit_id` — `CSI = c`, with DA1 and DA2 asserted
+  unchanged and `CSI = 1 c` counted.
+- [ ] `dispatch::tests::osc_17_and_19_set_and_query_the_selection_colours`.
+- [ ] `input::mouse::tests::x10_reports_a_press_and_nothing_else` and
+  `input::mouse::tests::urxvt_is_decimal_and_has_no_column_ceiling` — the encoder halves.
 - [ ] `dispatch::tests::claimed_osc_reaches_the_batch_without_allocating_per_osc` — a counting
   allocator.
 - [ ] `dispatch::tests::osc_20308_reaches_the_embedder_through_a_claim` — the extension point,
