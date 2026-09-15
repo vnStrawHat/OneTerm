@@ -50,8 +50,10 @@ This packet does **not** publish. The first `cargo publish` is the owner's, on a
 ## Acceptance
 
 - [x] `cargo publish -p oneterm-vt --dry-run` exits 0, and the file list it prints contains
-  `README.md`, `CHANGELOG.md` and `examples/headless.rs`. 63 files, 838.9 KiB (215.3 KiB
-  compressed); `fuzz/` is excluded on its own, so no `exclude` key was needed.
+  `README.md`, `CHANGELOG.md` and `examples/headless.rs`. 64 files, 857.7 KiB (219.0 KiB
+  compressed); `fuzz/` is excluded on its own (it is a package of its own), so no `exclude` key was
+  needed. `public-api.txt` ships too, at 20 KiB: it describes the crate a reader is holding, and an
+  `exclude` key is one more thing to keep in step for no gain.
 - [x] `grep -c 'publish = true' crates/*/Cargo.toml` totals exactly 1, and it is `crates/vt`.
   Enforced in CI by `scripts/verify-dependency-graph.py` rather than by a shell grep: that script
   already reads `cargo metadata`, where a publishable package is `publish: null`, so the assertion
@@ -214,7 +216,7 @@ The full design is in [`low-level-design/packaging.md`](low-level-design/packagi
 
 ## Evidence and Gaps
 
-**Package.** `cargo publish -p oneterm-vt --dry-run`: `Packaged 63 files, 838.9KiB (215.3KiB
+**Package.** `cargo publish -p oneterm-vt --dry-run`: `Packaged 64 files, 857.7KiB (219.0KiB
 compressed)`, verified build clean, `warning: aborting upload due to dry run`. The list contains
 `README.md`, `CHANGELOG.md` and `examples/headless.rs`; `fuzz/` is excluded on its own (it is a
 package of its own), and no directory approaches 1 MB, so no `exclude` key was added. The one
@@ -223,7 +225,11 @@ renamed to `tests/cleanup_rows.rs`, and both `tests/*.rs` headers were rewritten
 
 **Citations.** 106 rustdoc lines in 44 files before, 0 after. Six module headers keep their design
 document as an absolute `https://github.com/vnStrawHat/OneTerm/...` link, which is the form the HLD
-allows; everything else became a plain `//` comment or plain English.
+allows; everything else became a plain `//` comment or plain English. The CI grep also covers
+`BUG-NNNN`, which the criterion's pattern omits: it caught four more lines, all of them `BUG-0058`.
+Internal vocabulary with no id at all (`trap 40`, `correction C8`, `deviation D4`, `R-56`) was found
+by grepping the **generated HTML** rather than the source, because that is what the rule is actually
+about; `Mode`'s variants were the only rendered offenders left.
 
 **Documentation.** 263 `missing documentation` warnings before, 0 after.
 `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` is clean; it found one
