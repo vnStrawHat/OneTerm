@@ -9,9 +9,9 @@ Created: 2026-09-15
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -48,19 +48,19 @@ HTML.
 
 ## Scope
 
-- [ ] In scope: `crates/vt/docs/guide/*.md` (thirteen chapters); `crates/vt/src/guide.rs` and its
+- [x] In scope: `crates/vt/docs/guide/*.md` (thirteen chapters); `crates/vt/src/guide.rs` and its
   `pub mod guide` line in `lib.rs`; `scripts/vt-docs.ps1` and `scripts/vt-docs.sh`; the `cargo doc`
   step in `scripts/ci-local.sh`, `scripts/ci-local.ps1` and `.github/workflows/ci.yml`; one row in
   `scripts/README.md`; the "Documentation" section of the README that `US-0097` writes.
-- [ ] Out of scope: the API reference itself -- `#![warn(missing_docs)]` and the per-item doc lines
+- [x] Out of scope: the API reference itself -- `#![warn(missing_docs)]` and the per-item doc lines
   are `US-0097`'s, and this packet assumes they are done.
-- [ ] Out of scope: publishing the guide to GitHub Pages. With no docs.rs page (owner ruling
+- [x] Out of scope: publishing the guide to GitHub Pages. With no docs.rs page (owner ruling
   2026-09-15) that is the only candidate for a public rendered URL, and it is one workflow file and
   no source change; see **Follow-up** below. Until somebody asks, `cargo doc` and the Markdown on
   GitHub are the two ways to read it.
-- [ ] Out of scope: mdBook, or any second documentation toolchain. Evaluated and rejected below.
-- [ ] Out of scope: translating the guide. English only, per `scripts/check-english.py`.
-- [ ] Out of scope: a tutorial that builds a renderer. The crate has no renderer by decision (f);
+- [x] Out of scope: mdBook, or any second documentation toolchain. Evaluated and rejected below.
+- [x] Out of scope: translating the guide. English only, per `scripts/check-english.py`.
+- [x] Out of scope: a tutorial that builds a renderer. The crate has no renderer by decision (f);
   the guide stops at the snapshot. The **transport** is no longer out: the owner ruling of
   2026-09-15 reversed decision (f) for the PTY, so chapter 13 exists and is gated on `US-0104`.
 
@@ -175,23 +175,27 @@ crate acquires readers who are not already `cargo doc` users.
 
 Each criterion below is a command a verifier who distrusts this packet can run.
 
-- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` exits 0 and
+- [x] `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` exits 0 and
   prints no warning.
-- [ ] `target/doc/oneterm_vt/guide/index.html` exists and links to exactly thirteen chapter modules.
-- [ ] `ls crates/vt/docs/guide/*.md | wc -l` is 13, and
+- [x] `target/doc/oneterm_vt/guide/index.html` exists and links to exactly thirteen chapter modules.
+- [x] `ls crates/vt/docs/guide/*.md | wc -l` is 13, and
   `grep -c 'include_str!' crates/vt/src/guide.rs` is 13.
-- [ ] `cargo test -p oneterm-vt --doc` is green, and **every chapter contributes at least one
+- [x] `cargo test -p oneterm-vt --doc` is green, and **every chapter contributes at least one
   doctest**: `cargo test -p oneterm-vt --doc -- --list | grep -c 'docs/guide/'` is at least 13.
-  Chapter 13's doctests name `pty` types, so they compile only with the default features on; the
-  chapter module and its doctests are `#[cfg(feature = "pty")]` and the count above is taken from a
-  default-feature run.
-- [ ] Deleting one character from any chapter code block makes `cargo test -p oneterm-vt --doc`
+  **Built differently.** `guide::ch13_pty` is **not** `#[cfg(feature = "pty")]`: gating the module
+  would hide a whole chapter from a `--no-default-features` reader, and `ci-local` runs
+  `cargo test -p oneterm-vt --no-default-features`, whose doctests compile the same chapter text.
+  Instead chapter 13's one `pty` block is ```rust,ignore``` with the reason stated in the block,
+  and the chapter carries a second, live block that compiles in every feature state. Measured: 27
+  guide doctests across 13 chapters, 25 of them compiled and run, 2 `ignore`d (chapters 7 and 13),
+  identical under default, `--all-features` and `--no-default-features`.
+- [x] Deleting one character from any chapter code block makes `cargo test -p oneterm-vt --doc`
   fail. Spot-checked on three chapters and recorded in Evidence; this is the same cannot-rot check
   `US-0097` applies to the README.
-- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` exits 0. There
+- [x] `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps --all-features` exits 0. There
   is no `[package.metadata.docs.rs]` table any more (owner ruling 2026-09-15), so this is the whole
   render check.
-- [ ] Public-API coverage. If `US-0097` shipped `scripts/vt-public-api.py` and
+- [x] Public-API coverage. If `US-0097` shipped `scripts/vt-public-api.py` and
   the host's public-API snapshot (`public-api.windows.txt` or `public-api.unix.txt`,
   `US-0104`), a cross-check reads that file and asserts every entry is named in at
   least one chapter or in the API reference. Otherwise the same check by grep, run from the
@@ -207,18 +211,18 @@ Each criterion below is a command a verifier who distrusts this packet can run.
   done
   ```
   Must print nothing. See the note under **Gaps** on why the criterion is worded this way.
-- [ ] `python scripts/check-english.py` passes: every chapter is ASCII English.
-- [ ] No chapter links into `docs/spec-intakes/`, per `US-0097`'s self-containment rule. Measured:
+- [x] `python scripts/check-english.py` passes: every chapter is ASCII English.
+- [x] No chapter links into `docs/spec-intakes/`, per `US-0097`'s self-containment rule. Measured:
   ```bash
   grep -rn 'docs/spec-intakes\|US-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}' \
     crates/vt/docs/guide/ | grep -v 'https://github.com/'
   ```
   returns 0 lines. An absolute link to the public repository is the allowed form.
-- [ ] `scripts/vt-docs.sh` and `pwsh scripts/vt-docs.ps1` each print a path that exists.
-- [ ] `cargo package -p oneterm-vt --list` contains `docs/guide/` -- the chapters must be
+- [x] `scripts/vt-docs.sh` and `pwsh scripts/vt-docs.ps1` each print a path that exists.
+- [x] `cargo package -p oneterm-vt --list` contains `docs/guide/` -- the chapters must be
   **inside** the package, or `include_str!` fails to build for anybody who depends on the crate by
   git (owner ruling 2026-09-15; this criterion said `cargo publish --dry-run` and docs.rs).
-- [ ] `pwsh scripts/ci-local.ps1` green.
+- [x] `pwsh scripts/ci-local.ps1` green.
 
 ## Documentation
 
@@ -255,8 +259,13 @@ No OneTerm-facing contract changes: the guide documents an existing API and adds
 
 ### Reconciliation
 
-Before completion, confirm the three edits above landed, list the twelve chapter files, and confirm
-that `US-0097`'s README "Documentation" section points at a URL that resolves.
+Done. The README edit and the `scripts/README.md` row landed here; `packaging.md` needed **no
+change** -- its **Guide** section already describes this packet's shape, and its
+"Effect on the repository's existing checks" table already carries the
+`RUSTDOCFLAGS="-D warnings" cargo doc` row marked "added in `US-0097`", which is the step that
+covers the guide. Adding a second doc step would have been the duplication that row exists to
+prevent. The thirteen chapter files are listed in Evidence, and the README's Documentation section
+points at a `cargo doc` command rather than a URL, per the owner ruling.
 
 ## Context
 
@@ -280,25 +289,25 @@ which is exactly why the guide has to restate them rather than link them.
 
 ## Plan
 
-- [ ] `crates/vt/src/guide.rs` with thirteen `#[doc = include_str!]` modules, and `pub mod guide;` in
+- [x] `crates/vt/src/guide.rs` with thirteen `#[doc = include_str!]` modules, and `pub mod guide;` in
   `lib.rs`. Write all thirteen module stubs and all thirteen files first, one heading each, so the
   build is green from the first commit and each chapter is then filled in isolation.
-- [ ] Chapters 1, 2, 3, 4, 5, 8, 9, 10, 12 -- writable as soon as `US-0101` has fixed the API names.
-- [ ] Chapters 6, 7, 11, 13 -- after `US-0099`, `US-0100`, `US-0102` and `US-0104` respectively.
-- [ ] `scripts/vt-docs.sh` and `scripts/vt-docs.ps1`; one row in `scripts/README.md`.
-- [ ] Tighten the existing `cargo doc` step in `scripts/ci-local.sh`, `scripts/ci-local.ps1` and
+- [x] Chapters 1, 2, 3, 4, 5, 8, 9, 10, 12 -- writable as soon as `US-0101` has fixed the API names.
+- [x] Chapters 6, 7, 11, 13 -- after `US-0099`, `US-0100`, `US-0102` and `US-0104` respectively.
+- [x] `scripts/vt-docs.sh` and `scripts/vt-docs.ps1`; one row in `scripts/README.md`.
+- [x] Tighten the existing `cargo doc` step in `scripts/ci-local.sh`, `scripts/ci-local.ps1` and
   `.github/workflows/ci.yml` with `RUSTDOCFLAGS="-D warnings"` and `--all-features`.
-- [ ] Add the "Documentation" section to `US-0097`'s README outline, and the **Guide** subsection to
+- [x] Add the "Documentation" section to `US-0097`'s README outline, and the **Guide** subsection to
   `packaging.md`.
-- [ ] Run the acceptance commands; paste the doctest count and the coverage-check output into
+- [x] Run the acceptance commands; paste the doctest count and the coverage-check output into
   Evidence.
 
 ## LOC budget
 
 | Artefact | Budget |
 | --- | --- |
-| `crates/vt/docs/guide/*.md` | about 1 300 lines of Markdown across thirteen chapters, average 100 |
-| `crates/vt/src/guide.rs` | about 43 lines, all of it `#[doc = include_str!]` and module headers |
+| `crates/vt/docs/guide/*.md` | budgeted about 1 300 lines across thirteen chapters; **actual 1 792**, average 138. Over by a third, and not padding: chapters 4 (twenty variants plus twenty-two intra-doc link definitions), 5 (four routes and two worked examples) and 13 (a full poll loop) each run to about 180. No acceptance criterion counts lines |
+| `crates/vt/src/guide.rs` | budgeted about 43 lines; **actual 51**, all of it `#[doc = include_str!]` and module headers |
 | `scripts/vt-docs.sh`, `scripts/vt-docs.ps1` | about 15 lines each |
 | CI and README edits | under 20 lines total |
 
@@ -323,17 +332,64 @@ switch to a static site is a new packet, not an amendment to this one.
   chapter 4, which is manual and is recorded as such.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Record: the doctest list and count; the coverage-check output; the three deletion spot checks; the
-`cargo package --list` file list showing `docs/guide/`; the rendered index path from each script.
+Run on `x86_64-pc-windows-msvc`, branch `docs/vt-embedder-guide` off `main` at `af5df2e7`.
+
+**Chapters.** Thirteen files under `crates/vt/docs/guide/`, 1 792 lines of Markdown:
+`01-overview.md` 100, `02-embedding.md` 175, `03-threading.md` 111, `04-events.md` 175,
+`05-osc.md` 186, `06-input.md` 148, `07-search.md` 134, `08-graphics.md` 136, `09-resize.md` 100,
+`10-limits.md` 114, `11-conformance.md` 127, `12-versioning.md` 114, `13-pty.md` 172.
+`grep -c 'include_str!' crates/vt/src/guide.rs` is 13.
+
+**Render.** `RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps` and the same with
+`--all-features` both exit 0 with no warning. `target/doc/oneterm_vt/guide/index.html` links
+exactly thirteen `chNN_*/index.html` modules.
+
+**Doctests.** `cargo test -p oneterm-vt --doc`: 31 passed, 0 failed, 2 ignored -- identical under
+`--all-features` and under `--no-default-features`. Of those, 27 come from the guide, at least one
+from every chapter: 01 x1, 02 x7, 03 x1, 04 x2, 05 x4, 06 x2, 07 x3, 08 x1, 09 x1, 10 x1, 11 x1,
+12 x1, 13 x2. The two `ignore`d blocks are chapter 7's `SearchPattern::Regex` and chapter 13's
+`pty` poll loop; each says in the block why it cannot run.
+
+**Cannot rot.** One character deleted from a code block in `04-events.md`, `07-search.md` and
+`10-limits.md` in turn; `cargo test -p oneterm-vt --doc` exited 101 each time and passed again
+after the file was restored.
+
+**Public-module and event coverage.** The packet's grep, with its second loop re-pointed at
+`crates/vt/src/events/vt_event.rs` (the packet names `crates/vt/src/event.rs`, which does not
+exist; the module is `event`, its files live in `events/`): checked 7 public modules and 20
+`VtEvent` variants, printed nothing.
+
+**Self-containment.** The widened citation grep over `crates/vt/docs/guide --include='*.md'`,
+excluding `https://github.com/`, returns 0 lines.
+
+**Package.** `cargo package -p oneterm-vt --allow-dirty --list` carries 13 `docs/guide/*.md`
+entries, and piped into `verify-dependency-graph.py --package-list -` it passes: the package
+carries `CHANGELOG.md`, `LICENSE`, `NOTICE`, `README.md`, `examples/headless.rs` and reaches
+nothing outside `crates/vt`.
+
+**Public API.** `python scripts/vt-public-api.py --check --no-doc` reports the surface
+**unchanged**, and neither snapshot needed an edit. That is not an oversight: the script lists one
+line per rustdoc *item* page, and `guide` and its thirteen chapter modules contain no item at all,
+so a module with no items adds no line. `--diff-platforms` still reports its six `oneterm_vt::pty`
+lines and nothing outside them. Carried forward as a gap below.
+
+**Scripts.** `pwsh scripts/vt-docs.ps1` printed
+`file:///D:/.../target/doc/oneterm_vt/guide/index.html` and `scripts/vt-docs.sh` printed the same
+path in its shell's spelling; both exist.
+
+**Gate.** `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo test -p oneterm-vt`, `python scripts/check-english.py` (867 files),
+`python scripts/check-doc-paths.py` (197 paths in 11 documents) and `pwsh scripts/ci-local.ps1
+-Full` all pass; the `ci-local` line is in the report.
 
 Known gaps to carry forward:
 
@@ -364,6 +420,20 @@ Known gaps to carry forward:
   not mistaken for a broken cache.
 - **GitHub Pages is not set up.** With no docs.rs page (owner ruling 2026-09-15) there is no
   public rendered URL at all: a reader runs `cargo doc` or reads the Markdown on GitHub.
+- **A new public module is invisible to the public-API snapshot.** `scripts/vt-public-api.py` reads
+  one line per rustdoc *item* page and walks module links only to find which modules are public, so
+  `pub mod guide` plus thirteen empty chapter modules changed neither snapshot. The gate is
+  therefore not the review line it claims to be for a module that carries no item. It is left alone
+  here rather than widened: adding module lines rewrites both snapshots for every module in the
+  crate, which is a change to a shared contract file and belongs to whoever owns that script, not
+  to a documentation packet. Anybody adding a public module should know the snapshot will not
+  notice.
+- **Chapter 11 is written against this tree and has a pending list.** The seven conformance gaps
+  it tabulates -- mouse `? 9` and `? 1015`, `DECSCNM`, `LS2` / `LS3` / `SS2` / `SS3`, `? 2027`
+  wiring, `OSC 17` / `OSC 19`, `DA3` -- are still open at `af5df2e7`, and `US-0102` closes them but
+  is not merged. The chapter names the pending state in a marked paragraph rather than claiming
+  either state; when `US-0102` merges, the gaps table shrinks and that paragraph goes. That edit is
+  the one thing in this packet that is known to be needed and not yet done.
 
 ## Handoff
 
