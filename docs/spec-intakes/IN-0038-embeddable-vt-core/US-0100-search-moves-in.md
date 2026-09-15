@@ -18,7 +18,11 @@ Created: 2026-09-15
 ## Classification
 
 - Change type: existing-contract change plus a new capability (the `regex` feature)
-- Risk lane: normal
+- Risk lane: high_risk -- the intake's lane. The packet first recorded `normal`, which was
+  wrong: it adds a public module and a public feature to an externally consumed crate and
+  makes a re-exported type `#[non_exhaustive]`, and a public contract is a high-risk trigger.
+  No gate was skipped by the mistake: the lane's requirement is a detail design before the
+  packet, and `low-level-design/encoding-and-search.md` predates this packet.
 - Spec Intake: `IN-0038`
 
 ## Outcome
@@ -88,17 +92,20 @@ OneTerm's own search stays literal and does **not** enable the feature.
 
 ### Documentation Action
 
-**Update required**: `docs/agents/structure.md` (two rows and the tree) and
+**Update required**: `docs/agents/structure.md` (two rows and the tree),
 `docs/agents/dependencies.md` (the `oneterm-vt` row gains `regex`, optional, default-off, and a
-sentence saying OneTerm does not enable it).
+sentence saying OneTerm does not enable it), and -- added after verification -- `crates/vt/README.md`,
+whose Features table and "no feature adds a dependency" sentence are part of the crate's own
+rustdoc.
 
 Reason: `dependencies.md` is the authoritative list of what each crate depends on, and an optional
 dependency that nothing in the workspace enables is exactly the kind of fact that rots silently if
-it is not written down.
+it is not written down. `README.md` is the same fact stated to somebody outside this repository,
+which is why getting it wrong was the one finding worth blocking on.
 
 ### Reconciliation
 
-Four edits, not two:
+Five edits, not two:
 
 - `docs/agents/structure.md` -- `search.rs` leaves the adapter's file list, `search/` joins the
   engine tree, the lib.rs comment now names four by-path modules, and the `vt` row gains the
@@ -108,6 +115,10 @@ Four edits, not two:
 - `docs/terminal-backend.md` -- `search.rs` leaves the adapter file layout; the `search` paragraph
   names `oneterm_vt::search::GridText` and says the adapter passes `SearchPattern::Literal`; the
   `IN-0038` forward pointer records that the search half has landed.
+- `crates/vt/README.md` -- the Features table gains the `regex` row, and the closing sentence
+  ("No feature adds a dependency today") is corrected to name the one that does. This file is the
+  crate's rustdoc front page (`#[doc = include_str!("../README.md")]`) and ships inside the
+  package, so a wrong sentence there is a wrong sentence in the published documentation.
 - `AGENTS.md`, `scripts/ci-local.{ps1,sh}` and `.github/workflows/ci.yml` -- the gate gains
   `cargo test -p oneterm-vt --features regex`, because a feature that carries a matcher needs its
   suite run under it.
@@ -169,11 +180,27 @@ exposes regex search to a user is a future product decision and is explicitly no
 ## Evidence and Gaps
 
 **Tests.** Twelve literal tests before the move (`git show main:crates/terminal/src/search.rs`),
-twelve after, same names, same inputs, same expectations. Two call sites changed and nothing else:
-the fixture (`crate::test_engine::terminal(GridSize { .. })` becomes
-`Terminal::new(Size { .. }, Config::default())`, which resolves to the same scrollback limit) and
-the one direct `search_grid_text` call, which now names `SearchPattern::Literal("cd")`. Five regex
-tests were added, so `cargo test -p oneterm-vt --features regex search` runs 17.
+twelve after, same names and same inputs. No assertion's **expectation** changed. Four things did
+change, and all four are listed rather than summarised, because "unchanged in input and
+expectation" is this packet's measurable criterion:
+
+1. the module doc header and the `use` paths (`oneterm_vt::scalar_width` becomes
+   `crate::width::scalar_width`);
+2. the fixture: `crate::test_engine::terminal(GridSize { .. })` plus `test_engine::feed` becomes a
+   local `terminal(cols, rows, bytes)` over `Terminal::new(Size { .. }, Config::default())`. The
+   scrollback limit is the same number -- `crates/terminal/src/handle.rs` sets
+   `DEFAULT_SCROLLBACK_LINES = DEFAULT_SCROLLBACK` and `Config::default()` sets
+   `scrollback_limit: DEFAULT_SCROLLBACK`;
+3. the one direct `search_grid_text` call now names `SearchPattern::Literal("cd")`;
+4. inside `grid_text_snapshot_matches_live_term_layout`: `assert_eq!(text.rows(), 2)` was **added**
+   (a new expectation, covering the newly-`pub` accessor), and `text.oldest` became
+   `text.oldest()` twice. Neither was forced -- the tests are a child module, so the private field
+   is still reachable, which the two lines above reading `text.num_cols` and `text.chars` prove.
+   The accessors are exercised on purpose: they are new public API and nothing else touched them.
+
+A stale comment was also corrected, "the eleven tests below" to "the twelve tests below".
+
+Five regex tests were added, so `cargo test -p oneterm-vt --features regex search` runs 17.
 
 **Dependency budget.**
 
@@ -227,9 +254,49 @@ New and recorded rather than fixed:
   `\s` matches the blanks after the last glyph; a wide-character spacer reads as `'\0'` and `.`
   will match it. Documented on `SearchPattern::Regex`, not changed: trimming would make a column
   index mean something different for the two matchers.
+- **An empty regex match can start one past the last column.** The offset table carries a sentinel
+  for the end of the row, so a pattern like `x*` reports its last zero-width match at
+  `start_col == end_col == num_cols`. The range is empty and safe to use as a range; a caller that
+  indexes the row at `start_col` must skip it. Documented on `search_grid_text`, `SearchMatch` and
+  `SearchPattern::Regex`, and pinned by a unit test and by
+  `verify_us0100::regex_checks::empty_matching_pattern_on_a_2048_column_row`. Not changed: the
+  alternative is clamping, which would report a match at a column the match does not cover.
+- **Non-default `SearchOptions` with a regex are ignored in a release build.** The guard is a
+  `debug_assert!`, by design -- the pattern owns its own `(?i)` and `\b`. Implementing them
+  instead was considered and rejected: `case_sensitive` would mean rebuilding the caller's
+  `Regex` with a different `case_insensitive` flag, which the engine cannot do to a `&Regex`,
+  and `whole_word` would mean rewriting the pattern source. Both belong to whoever compiles the
+  pattern. The rustdoc on `SearchOptions` and the CHANGELOG now say "ignored, in every build"
+  rather than leaving "debug-asserts" to be read as a release-build guarantee.
 - **`SearchPattern` is `Copy` and `Debug` but not `PartialEq`.** The design sketch derived `Eq`;
   `regex::Regex` does not implement it, and comparing two patterns is not something any caller
   does.
+
+## Verification notes closed
+
+Independent verification: **PASS-WITH-NOTES**, recorded at
+[`evidence/US-0100-verify.md`](evidence/US-0100-verify.md), run against `feat/vt-search` @ `ea9e82a`
+in the verifier's own worktree. Every note is closed below; the branch was then rebased onto `main`.
+
+| Note | Severity | What it said | What was done |
+| --- | --- | --- | --- |
+| N1 | Medium | `crates/vt/README.md` says "No feature adds a dependency today" and its Features table omits `regex`. The file is the crate's rustdoc front page and ships inside the package, so the sentence is wrong in the published documentation. | Both fixed: the table gains a `regex` row, and the sentence now names the four crates the feature adds. `README.md` added to the Reconciliation list above. |
+| N2 | Low | The "two call sites changed and nothing else" parity claim is really four. | The Evidence section now enumerates all four, and the corrected stale comment, and says which delta is a new expectation and why. |
+| N3 | Low | A zero-width regex match at end-of-row reports `start_col == num_cols`, one past the last column, and nothing documents it. | Documented on `search_grid_text`, `SearchMatch` and `SearchPattern::Regex`, and recorded as a known sharp edge. Pinned twice: the in-crate `empty_matching_pattern_terminates_and_advances` now asserts the last column equals the grid width, and the adopted integration test asserts it on a 2048-column row. |
+| N4 | Low | Risk lane recorded as `normal` for a public-contract change on a high-risk intake. | Classification and the harness snippet both say `high_risk`, with a sentence saying no gate was skipped because the detail design predates the packet. |
+| N5 | Low | The ignored-`SearchOptions` guard is a `debug_assert!`, so a release build ignores them silently; the CHANGELOG's "debug-asserts" could be read as a release guarantee. | Kept as a debug assertion, and said so plainly. The `SearchOptions` rustdoc and the CHANGELOG now lead with "ignored, in every build" and describe the assertion as a testing aid. Implementing the two options for a regex was considered and rejected -- both would require rewriting or recompiling the caller's pattern, which the engine cannot do to a `&Regex`. |
+| N6 | Info | The branch was two commits behind `main`. | Rebased onto `main` @ `a13002a`; the two intervening commits are the `US-0104` records and no file this packet touches conflicts. |
+| cosmetic | -- | `docs/agents/structure.md` lost a comma after `` `intern` `` when the module list gained `search`. | Restored. |
+
+The verifier's tests were adopted verbatim as `crates/vt/tests/verify_us0100.rs` -- 12 tests plus
+one `#[ignore]`d scrollback-timing test, written as an **integration** test so they consume the
+public surface exactly as an external embedder does. One line was added to them: an
+`#[allow(clippy::invalid_regex)]` on `invalid_regex_is_a_caller_error_not_a_panic`, whose two
+patterns are invalid on purpose and which `cargo clippy -- -D warnings` otherwise rejects. Under
+default features the file runs 5 tests; with `--features regex`, 12.
+
+What the verification did **not** cover, unchanged: the manual Windows search walk (nobody has run
+it), non-Windows platforms, and release-build behaviour of the debug assertion.
 
 ## Handoff
 
@@ -257,7 +324,7 @@ ROW = dict(
     id="US-0100",
     title="scrollback search is the engine's, with regex behind an optional feature",
     created_at="2026-09-15T00:00:00",
-    risk_lane="normal",
+    risk_lane="high_risk",
     contract_doc=(
         "docs/spec-intakes/IN-0038-embeddable-vt-core/"
         "low-level-design/encoding-and-search.md"
@@ -278,7 +345,11 @@ ROW = dict(
         "exactly regex, regex-automata, regex-syntax, aho-corasick. Cargo.lock +1 "
         "line, third-party-notices --check clean with no regeneration. "
         "public-api.txt +17 lines. Green under default, --features regex, "
-        "--features vt-paranoid and --no-default-features."
+        "--features vt-paranoid and --no-default-features. Independent "
+        "verification PASS-WITH-NOTES "
+        "(docs/spec-intakes/IN-0038-embeddable-vt-core/evidence/US-0100-verify.md); "
+        "N1-N5 and the cosmetic note closed, the verifier's 12+1 integration "
+        "tests adopted as crates/vt/tests/verify_us0100.rs."
     ),
     verify_command="pwsh scripts/ci-local.ps1 -Full",
     last_verified_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
