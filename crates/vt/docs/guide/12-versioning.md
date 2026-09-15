@@ -37,9 +37,12 @@ So does this crate:
 5. Anything reachable only with a non-default feature carries the same promise
    as the default surface. A feature is never a stability escape hatch.
 6. Behaviour is not the API, with one exception: **the reply bytes for `DA1`,
-   `DA2`, `DSR`, `DECRQM`, `XTVERSION` and the OSC colour queries are a
-   contract**, because programs parse them. Changing one is a minor bump and an
-   entry, even though no Rust signature moved.
+   `DA2`, `DA3`, `DSR`, `DECRQM`, `XTVERSION`, `DECRQCRA`, `DECRQSS`,
+   `XTGETTCAP` and the OSC colour queries are a contract**, because programs
+   parse them. Changing one is a minor bump and an entry, even though no Rust
+   signature moved. That covers the `DECRQCRA` checksum variant and the
+   `XTGETTCAP` capability table's values: a harness stores the number it was
+   given, so changing either is a break whatever the Rust surface says.
 7. `FeedStats` counter semantics are documented per field and are part of the
    contract. A counter that starts counting a different thing is a minor bump.
 
@@ -78,6 +81,16 @@ assert!(!options.case_sensitive);
 
 A new field on it is likewise a patch release, and code written that way keeps
 compiling across it.
+
+**`Config` is deliberately not marked**, and it is the type you would expect to
+be. The reason is a Rust rule rather than a preference: a `#[non_exhaustive]`
+struct cannot be built with a struct expression from another crate **at all**,
+functional-update syntax included, so `Config { scrollback_limit: 5_000,
+..Config::default() }` would stop compiling for every embedder — and that form
+is the one this guide recommends everywhere else. Marking `Config` would mean
+replacing it with setters, which buys a patch-level field at the cost of the
+ergonomics the type exists for. So a new `Config` field is a **minor** bump
+under clause 1, and the changelog names it.
 
 `SearchPattern` is the one where it matters immediately rather than eventually:
 its variant set depends on whether the `regex` feature is on, so the wildcard

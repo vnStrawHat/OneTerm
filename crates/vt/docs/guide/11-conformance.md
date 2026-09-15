@@ -24,11 +24,86 @@ for probe in [b"\x1b[c".as_slice(), b"\x1b[>c", b"\x1b[=c"] {
     assert!(batch.iter().any(|event| matches!(event, VtEvent::Reply(_))));
 }
 
-// `DECRQCRA` is a gap: parsed, counted, and never answered with a guess.
+// `DECRQCRA` reads the screen back, so it answers only when you opened the
+// gate. Shut — the default — it is counted and answers nothing.
 let stats = term.feed(b"\x1b[1;1;1;1;1;1*y", &mut batch, Instant::now());
 assert_eq!(stats.unhandled_sequences, 1);
 assert!(!batch.iter().any(|event| matches!(event, VtEvent::Reply(_))));
 ```
+
+## The screen-readback gate
+
+`DECRQCRA` (`CSI Pid ; Pp ; Pt ; Pl ; Pb ; Pr * y`) reports a checksum of a
+rectangle of the screen. That is how a conformance harness reads the screen
+back, and it is also how a program running inside the terminal could read back
+text it did not write. It is off unless you turn it on:
+
+```rust
+use oneterm_vt::Config;
+
+let config = Config { allow_screen_readback: true, ..Config::default() };
+assert!(config.allow_screen_readback);
+assert!(!Config::default().allow_screen_readback);
+```
+
+xterm gates the same sequence behind `allowWindowOps` and WezTerm behind
+`enable_checksum_rectangular_area`. Two things narrow it further here, whichever
+way the flag is set: the checksum covers the **visible screen only**, never the
+scrollback, so scrolled-off history is not reachable through it; and a rectangle
+outside the grid is clamped rather than refused, so a probe cannot use an
+out-of-range request to learn anything either.
+
+### The checksum variant, pinned
+
+**One variant is implemented and none is negotiated** (there is no `CSI Ps * x`
+here). It is the one xterm reaches with `checksumExtension: 7` — the positive
+sum of each cell's first Unicode scalar value, masked to 16 bits, with **no**
+attribute contribution, **no** negation, and **no** trimming of trailing blanks.
+An unwritten or erased cell counts as `U+0020`.
+
+```rust
+use std::time::Instant;
+use oneterm_vt::{Config, EventBatch, Size, Terminal, VtEvent};
+
+let mut term = Terminal::new(
+    Size { rows: 4, cols: 8 },
+    Config { allow_screen_readback: true, ..Config::default() },
+);
+let mut batch = EventBatch::new();
+
+fn ask(term: &mut Terminal, batch: &mut EventBatch, request: &[u8]) -> String {
+    batch.clear();
+    term.feed(request, batch, Instant::now());
+    let reply = batch
+        .iter()
+        .find_map(|event| match event {
+            VtEvent::Reply(span) => Some(batch.bytes(*span)),
+            _ => None,
+        })
+        .expect("the gate is open, so DECRQCRA answers");
+    String::from_utf8_lossy(reply).into_owned()
+}
+
+term.feed(b"A", &mut batch, Instant::now());
+
+// One cell over `A`, U+0041. Four upper-case hex digits, the label echoed back.
+assert_eq!(ask(&mut term, &mut batch, b"\x1b[1;0;1;1;1;1*y"), "\x1bP1!~0041\x1b\\");
+
+// A blank cell is U+0020, not zero and not skipped.
+assert_eq!(ask(&mut term, &mut batch, b"\x1b[1;0;1;2;1;2*y"), "\x1bP1!~0020\x1b\\");
+
+// The attributes contribute nothing: the same text answers the same number.
+term.feed(b"\x1b[1;4;7;31mA\x1b[0m", &mut batch, Instant::now());
+assert_eq!(ask(&mut term, &mut batch, b"\x1b[1;0;1;1;1;1*y"), "\x1bP1!~0041\x1b\\");
+```
+
+**A program written against xterm's default will disagree with this engine.**
+xterm's own default negates the total and folds the video attributes into each
+cell's value; this one does neither. The variant was chosen because it is the
+only one `esctest` scores without a per-cell correction, and because a negated
+16-bit total is the single most common place an implementation and a harness
+silently disagree. No program other than a test harness is known to send
+`DECRQCRA` at all, so the cost is recorded rather than hedged against.
 
 ## Supported
 
@@ -53,8 +128,8 @@ truecolour, colon sub-parameters, and the underline styles; `DSR` (`n`), also in
 its private form; `DECRQM` (`$ p`) and its private form; `DECSTR` (`! p`);
 `DA1`, `DA2`, `DA3` (`c`, `> c`, `= c`); `XTVERSION` (`> q`); cursor style (`SP q`); window
 operations (`t`); `modifyOtherKeys` (`> 4 m`); the kitty keyboard stack (`? u`,
-`= u`, `> u`, `< u`); and `REP` (`b`), whose source character survives
-intervening escape sequences.
+`= u`, `> u`, `< u`); `DECRQCRA` (`* y`), behind the gate described above; and
+`REP` (`b`), whose source character survives intervening escape sequences.
 
 **Modes.** Private: `1` application cursor keys, `5` reverse video, `6` origin,
 `7` autowrap, `9` X10 mouse, `12` cursor blink, `25` cursor visibility, `45`
@@ -82,7 +157,62 @@ is `Drop` by default and available to you by route; chapter 5.
 
 **DCS.** Sixel, as `DCS q`. The intermediate bytes are part of the routing key,
 so `DCS $ q` (`DECRQSS`) and `DCS + q` (`XTGETTCAP`) -- which share the final
-byte -- are counted unhandled rather than fed to the image decoder.
+byte -- open a query rather than the image decoder. Both are answered:
+
+- **`DECRQSS`** reports `m` (`SGR`), `r` (`DECSTBM`), `SP q` (`DECSCUSR`),
+  `" q` (`DECSCA`) and `" p` (`DECSCL`) as `DCS 1 $ r <value><setting> ST`.
+  Everything else gets `DCS 0 $ r ST`, the invalid reply. The list is short on
+  purpose: `DECSLRM`, `DECSASD`, `DECSACE`, `DECSCPP` and `DECSNLS` describe
+  features this engine does not have, and answering them would break the rule
+  at the top of this chapter.
+- **`XTGETTCAP`** answers from a table compiled into the crate -- the engine
+  reads no terminfo database, no environment variable and no file. Each
+  requested name gets its own reply, `DCS 1 + r <hex name> = <hex value> ST`
+  when it is known and `DCS 0 + r <hex name> ST` when it is not. `TN` reports
+  `Config::product_name`'s name half when you set one, and `xterm-256color`
+  otherwise. The table covers the terminal name, `colors`, the truecolour flags
+  and setters, styled underlines, `OSC 52` clipboard write, the cursor-style
+  pair, the alternate screen and ten basic motion and erase capabilities.
+
+Both are bounded against a hostile stream: at most 16 names per `XTGETTCAP`
+request and 128 bytes per name, with the remainder dropped and counted rather
+than truncated; odd-length or non-hex input answered unknown rather than
+partially decoded; and a query payload past 8 KiB -- larger than any answerable
+request -- answered with nothing and counted. A request that is not hex is not
+echoed back at all, because the echo is spliced into a DCS reply.
+
+```rust
+use std::time::Instant;
+use oneterm_vt::{Config, EventBatch, Size, Terminal, VtEvent};
+
+let mut term = Terminal::new(Size { rows: 24, cols: 80 }, Config::default());
+let mut batch = EventBatch::new();
+
+fn ask(term: &mut Terminal, batch: &mut EventBatch, request: &[u8]) -> String {
+    batch.clear();
+    term.feed(request, batch, Instant::now());
+    let mut out = String::new();
+    for event in batch.iter() {
+        if let VtEvent::Reply(span) = event {
+            out.push_str(&String::from_utf8_lossy(batch.bytes(*span)));
+        }
+    }
+    out
+}
+
+// A fresh terminal's SGR is a plain `0` -- not an empty answer.
+assert_eq!(ask(&mut term, &mut batch, b"\x1bP$qm\x1b\\"), "\x1bP1$r0m\x1b\\");
+// The scrolling region, 1-based and inclusive.
+assert_eq!(ask(&mut term, &mut batch, b"\x1bP$qr\x1b\\"), "\x1bP1$r1;24r\x1b\\");
+// A setting the engine does not have: the honest refusal.
+assert_eq!(ask(&mut term, &mut batch, b"\x1bP$qs\x1b\\"), "\x1bP0$r\x1b\\");
+
+// `XTGETTCAP` for `544e` (`TN`), hex in and hex out.
+assert_eq!(
+    ask(&mut term, &mut batch, b"\x1bP+q544e\x1b\\"),
+    "\x1bP1+r544e=787465726D2D323536636F6C6F72\x1b\\",
+);
+```
 
 **Unicode.** East-asian width, wide-glyph spacer cells, and two width rules the
 stream chooses between. With `? 2027` reset -- the power-on state -- width is
@@ -174,14 +304,16 @@ done.
 
 | Gap | What a program sees |
 | --- | --- |
-| `DECRQCRA` (`CSI * y`), the checksum report | counted unhandled. This is also why there is no `esctest` score below: that harness reads the screen back by asking for rectangle checksums, so without this sequence it cannot run at all |
-| `DECRQSS` (`DCS $ q`) | parsed and counted unhandled, never answered. A program asking the terminal to report a setting back gets silence rather than a wrong answer |
-| `XTGETTCAP` (`DCS + q`) | the same. Clients such as tmux and neovim use it to probe capabilities and fall back when it goes unanswered |
+| **Left-right margins** (`DECSLRM`, `DECLRMM`, and the `DECSACE` rectangle modes that need them) | counted unhandled. This is the largest single gap, and it is what the `esctest` groups below fail on |
+| `DECRQSS` for `DECSLRM`, `DECSASD`, `DECSACE`, `DECSCPP`, `DECSNLS` | the invalid reply, `DCS 0 $ r ST`. Deliberate: the engine does not have those features, and reporting a value would claim a capability that does not exist |
+| `CSI Ps * x` (`XTERM_CHECKSUM`), the runtime checksum-variant selector | counted unhandled. One variant is implemented and pinned above; xterm has a selector because it had its own history to reconcile |
+| `DA1` claims VT220 (`? 62`), not VT420 | a harness testing at VT420 level will find level-4 features absent, correctly. `DECSCL` reports the same level, so the two answers agree |
 | No way to refuse `? 2027` on a `WcsWidth` session | described above: there is no `Config` flag, so an embedder who opens a ConPTY in `WcsWidth` cannot tell the engine to ignore the mode |
 
 ## How conformance is checked
 
-Three layers, none of which is a claim about a published score:
+Four layers. Three are this repository's own; the fourth is an outside
+harness's, and none of them is enforced as a threshold:
 
 - **A frozen parity corpus.** Recorded byte streams from real programs, replayed
   through the engine, with the resulting grid compared against a stored
@@ -195,9 +327,18 @@ Three layers, none of which is a claim about a published score:
   costs milliseconds per call at a large scrollback and is therefore a test and
   fuzzing tool, never a release build.
 
-There is no `esctest` pass count, and the reason is mechanical rather than a
-matter of taste: `esctest` reads the screen back by asking the terminal for
-rectangle checksums with `DECRQCRA`, which this engine does not implement, so
-the harness cannot run at all. That gap is the first row of the table above. Add
-`DECRQCRA` and the score becomes measurable; until then a number here would be
-invented, and this chapter would rather say what is implemented and what is not.
+- **`esctest`**, the outside harness. It drives the engine through a pty and
+  reads the screen back with `DECRQCRA` rectangle checksums, which is why it
+  could not run here at all until that sequence existed. It runs on a Linux CI
+  job with `--expected-terminal xterm --xterm-checksum 334 --max-vt-level 4`,
+  and its log is published as a build artifact.
+
+**The `esctest` job is a report and never a gate**, which is a design decision
+rather than a convenience. The harness tests a VT420-level terminal; this engine
+claims VT220 in `DA1` and has no left-right margins, so several groups are
+expected to fail for reasons that are deliberate and listed in the table above.
+A pass threshold would turn a capability map into a quality score and would fail
+the build for choices this project made on purpose.
+
+So read the artifact as a map of what the engine does, not as a grade — and when
+a group fails, check the table above before assuming it is a defect.

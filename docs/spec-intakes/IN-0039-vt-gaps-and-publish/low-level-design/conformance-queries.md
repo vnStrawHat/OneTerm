@@ -44,6 +44,15 @@ Rules, all of which fall out of mechanics that already exist:
 1. **The ceiling is the existing one.** `parser::DCS_MAX_BYTES` already aborts an over-long DCS and
    `dcs_unhook(aborted: true)` already runs. The payload buffer inherits both; it adds no new
    limit and no new counter.
+
+   > **CORRECTION (`US-0106`, 2026-09-16).** The payload buffer takes its **own 8 KiB ceiling**
+   > (`query::QUERY_MAX_BYTES`) rather than inheriting `DCS_MAX_BYTES`. The two rules collide:
+   > rule 4 keeps the `Vec`'s capacity so the common case allocates once, so inheriting a 16 MiB
+   > ceiling would let one hostile `DCS + q` make the terminal retain 16 MiB for the rest of the
+   > session. 8 KiB is twice the largest answerable request (`16 * 128 * 2 + 15` = 4 111). A
+   > payload that reaches it answers nothing and is counted in `unhandled_sequences` -- the same
+   > treatment the `XTGETTCAP` ceilings give, and no new counter. `DCS_MAX_BYTES` and
+   > `aborted_dcs` still apply above it, unchanged.
 2. **An abort discards.** `CAN`, `SUB`, an over-long payload, or a `dcs_unhook(aborted)` for any
    other reason: the buffer is dropped and nothing is answered. `FeedStats::aborted_dcs` already
    counts this.
@@ -240,6 +249,10 @@ The table, compiled into the crate as a `&[(&str, &str)]` sorted by name:
 - **At most 128 bytes per requested name.** A longer name cannot match any table entry, so it is
   answered `DCS 0 + r ...` with the name echoed truncated, or dropped if truncation would make the
   echo a lie -- the design chooses **dropped**, and the reply omits it.
+- **A name that is not hex is not echoed back at all** (`US-0106`, not in the original design).
+  The echo is spliced into a DCS reply, so a "name" carrying `ESC \` would end that reply early
+  and leave its tail on the program's input as text. Only ASCII hex digits are echoed; anything
+  else echoes empty and is still answered unknown.
 - **Odd-length or non-hex input** is not a match and is answered as unknown. No panic, no partial
   decode.
 - **Every dropped name and every over-long request increments `FeedStats::unhandled_sequences`**,

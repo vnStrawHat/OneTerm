@@ -20,8 +20,9 @@ The crate is `0.x`, and Cargo treats a minor bump as breaking. So does this crat
    level.
 5. Anything reachable only with a non-default feature carries the same promise as the default
    surface. A feature is never a stability escape hatch.
-6. Behaviour is not the API, with one exception: **the reply bytes for `DA1`, `DA2`, `DSR`,
-   `DECRQM`, `XTVERSION` and the OSC colour queries are a contract**, because programs parse them.
+6. Behaviour is not the API, with one exception: **the reply bytes for `DA1`, `DA2`, `DA3`, `DSR`,
+   `DECRQM`, `XTVERSION`, `DECRQCRA`, `DECRQSS`, `XTGETTCAP` and the OSC colour queries are a
+   contract**, because programs parse them.
    Changing one is a minor bump and an entry below, even though no Rust signature moved.
    `Config::product_name` exists so an embedder can change the identity half of those replies
    without the engine changing the shape half.
@@ -52,6 +53,26 @@ carry no API change at all. Such a release says so below rather than being omitt
 
   `scripts/vt-public-api.py --check-nameable` is the gate that keeps this from coming back: it
   fails CI on a public signature naming a type defined in a private module.
+- **`DECRQCRA`, `DECRQSS` and `XTGETTCAP` are answered.** All three were parsed and counted
+  unhandled; none was ever answered, which is why no outside conformance harness could score this
+  engine and why tmux and neovim capability probes went unanswered.
+  - `DECRQCRA` (`CSI Pid ; Pp ; Pt ; Pl ; Pb ; Pr * y`) replies `DCS Pid ! ~ xxxx ST`. **One
+    checksum variant is implemented and none is negotiated**: xterm's `checksumExtension: 7` --
+    the positive sum of each cell's first Unicode scalar value, masked to 16 bits, no attribute
+    contribution, no negation, no trimming, an unwritten cell counting as `U+0020`. A program
+    written against xterm's *default* (negated, with attributes) will disagree. Guide chapter 11
+    states the variant beside a doctest that pins the digits.
+  - `DECRQSS` (`DCS $ q`) reports `m`, `r`, `SP q`, `" q` and `" p`; every other setting takes the
+    invalid reply `DCS 0 $ r ST`.
+  - `XTGETTCAP` (`DCS + q`) answers from a table compiled into the crate. The engine reads no
+    terminfo database, no environment variable and no file.
+
+  The reply bytes of all three are a contract from here on, under clause 6 above.
+- `Config::allow_screen_readback`, **default `false`**, which gates `DECRQCRA`. Shut, the sequence
+  answers nothing and is counted in `FeedStats::unhandled_sequences` -- byte for byte what the
+  engine did before it was implemented -- so this release changes no reply an existing embedder
+  can observe. A **minor** bump under clause 1: `Config` is not `#[non_exhaustive]`, and cannot be
+  without replacing struct-literal construction with setters (see guide chapter 12).
 
 - `guide`, a public module that carries the embedder's guide: thirteen Markdown chapters rendered
   by `cargo doc` beside the API reference, one empty module each. It adds no item and no
