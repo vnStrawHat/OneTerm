@@ -16,6 +16,8 @@ workspace = true
 
 [dependencies]
 oneterm-core.workspace = true
+# The adapter never names `oneterm_vt::pty`; the workspace entry has the
+# engine's `pty` feature off, so nothing here compiles ConPTY or `openpty`.
 oneterm-vt.workspace = true
 # The adapter owns the lock; the engine holds none (HLD decision 6 and 7).
 parking_lot.workspace = true

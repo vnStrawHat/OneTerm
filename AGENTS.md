@@ -112,15 +112,19 @@ cargo test -p oneterm-vt --features regex # the optional regex matcher, and the 
 # `oneterm-vt` is consumed by other projects as a git dependency (it is not
 # published), so its package and its public API are part of the gate:
 cargo build -p oneterm-vt --no-default-features --examples
+cargo test -p oneterm-vt --no-default-features # the engine with no transport compiled;
+                                               # the only step that runs engine_without_pty.rs
 cargo build -p oneterm-vt --all-features --examples
 cargo run -p oneterm-vt --example headless
 RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
-python scripts/vt-public-api.py --check --no-doc # the public API surface has not drifted
+python scripts/vt-public-api.py --check --no-doc # the host platform's public API surface
+python scripts/vt-public-api.py --diff-platforms # ...and the other platform's differs only in `pty`
 # What the package carries (README, CHANGELOG, LICENSE, NOTICE, the example) and
 # that it reaches nothing outside `crates/vt`. Offline, and works with
 # uncommitted files.
 cargo package -p oneterm-vt --allow-dirty --list | python scripts/verify-dependency-graph.py --package-list -
-# ...plus a grep: no US-/BUG-/DEC-/IN- or docs/spec-intakes citation in the crate's rustdoc
+# ...plus a grep: no US-/BUG-/DEC-/IN- citation and no bare crates/ or docs/ path
+# in the crate's rustdoc (a consumer's vendored copy has neither)
 python scripts/verify-dependency-graph.py     # crate graph policy + workspace version inheritance
 python scripts/check-doc-paths.py             # architecture doc paths
 python -m unittest scripts/test_check_english.py

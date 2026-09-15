@@ -16,7 +16,6 @@ members = [
     "crates/highlight",
     "crates/update",
     "crates/local-shell",
-    "crates/pty",
     "crates/ssh",
     "crates/completion",
     "crates/tools",
@@ -60,11 +59,14 @@ oneterm-settings-ui = { path = "crates/settings-ui" }
 oneterm-agent-ui = { path = "crates/agent-ui" }
 oneterm-highlight = { path = "crates/highlight" }
 oneterm-local-shell = { path = "crates/local-shell" }
-oneterm-pty = { path = "crates/pty" }
 oneterm-update = { path = "crates/update" }
 oneterm-ssh = { path = "crates/ssh" }
 oneterm-completion = { path = "crates/completion" }
-oneterm-vt = { path = "crates/vt" }
+# `default-features = false` turns the engine's default-on `pty` feature off
+# for the workspace; `local-shell` and `tools` are the only members that name
+# `oneterm_vt::pty`, and each asks for it with `features = ["pty"]`. An
+# outside embedder still gets the transport by default.
+oneterm-vt = { path = "crates/vt", default-features = false }
 
 # SIMD byte scan for the VT parser's ground state (oneterm-vt).
 memchr = "2"
@@ -77,7 +79,7 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false }
 # Event channel (SessionEvent subscription) — keeps Tokio out of the public API
 async-channel = "2"
-# PTY polling (oneterm-pty's evented transport)
+# PTY polling (the `pty` feature's evented transport in oneterm-vt)
 polling = "3.8"
 log = "0.4"
 env_logger = "0.11"
@@ -209,9 +211,6 @@ smol = { opt-level = 3 }
 # The VT engine (IN-0029 `US-0081`): the hot path runs through it, so it is
 # optimized here rather than left at `dev`'s opt-level = 0.
 oneterm-vt = { opt-level = 3 }
-# The transport was on the hot path before the swap too and was simply never
-# listed; added opportunistically while measuring the engine, not required by it.
-oneterm-pty = { opt-level = 3 }
 oneterm-terminal-view = { opt-level = 3 }
 oneterm-core = { opt-level = 3 }
 oneterm-terminal = { opt-level = 3 }

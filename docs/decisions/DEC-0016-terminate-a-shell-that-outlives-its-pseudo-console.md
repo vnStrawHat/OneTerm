@@ -40,7 +40,7 @@ outside Task Manager. One is leaked per affected close.
 When a pseudo-console has been closed and its child has not exited within a
 bounded grace period, OneTerm terminates that child.
 
-- Bound: **2 seconds**, `CHILD_EXIT_GRACE` in `crates/pty/src/windows/child.rs`.
+- Bound: **2 seconds**, `CHILD_EXIT_GRACE` in `crates/vt/src/pty/windows/child.rs`.
   Two orders of magnitude above the measured 20 ms normal path, and short enough
   that a closed tab's console host does not visibly linger.
 - Where: `ChildExitWatcher::drop`, which already owns the process handle

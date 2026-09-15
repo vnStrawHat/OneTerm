@@ -1,4 +1,4 @@
-//! `LocalSession` — spawn a local shell via `oneterm-pty` on a dedicated PTY
+//! `LocalSession` — spawn a local shell via `oneterm_vt::pty` on a dedicated PTY
 //! owner thread (ConPTY on Windows).
 //!
 //! This file holds the spawn path, the struct, and its inherent helpers. The
@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use oneterm_pty::{Options, Shell, WindowSize};
+use oneterm_vt::pty::{Options, Shell, WindowSize};
 
 use oneterm_core::config::resolve_shell;
 use oneterm_core::{AppError, LocalShellConfig, TerminalLogConfig, home_dir};
@@ -54,7 +54,7 @@ impl LocalSession {
             env: resolved.env,
             // The engine measures cluster widths with `wcswidth`, so the console
             // host is asked for the same rule.
-            glyph_width: oneterm_pty::GlyphWidth::WcsWidth,
+            glyph_width: oneterm_vt::pty::GlyphWidth::WcsWidth,
             #[cfg(unix)]
             child_signal_mask: None,
             // Escape every argument with the C-runtime rules so user-supplied
@@ -167,7 +167,7 @@ fn reap_owner_thread(join: std::thread::JoinHandle<()>) {
     }
 }
 
-/// The program string handed to `oneterm-pty` for `resolved.program`.
+/// The program string handed to `oneterm_vt::pty` for `resolved.program`.
 ///
 /// On Windows the transport joins the program and its arguments into one
 /// `CreateProcessW` command line with `lpApplicationName = NULL`, so an unquoted

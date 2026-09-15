@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::Shell;
+use crate::pty::Shell;
 
 fn size(rows: u16, cols: u16) -> WindowSize {
     WindowSize {
@@ -45,10 +45,10 @@ fn read_until(console: &mut PseudoConsole, needle: &[u8], timeout: Duration) -> 
 
 #[test]
 fn the_child_writes_through_the_pseudo_console() {
-    let mut console = spawn(&["/c", "echo", "oneterm-pty-ok"]);
-    let output = read_until(&mut console, b"oneterm-pty-ok", Duration::from_secs(10));
+    let mut console = spawn(&["/c", "echo", "vt-pty-ok"]);
+    let output = read_until(&mut console, b"vt-pty-ok", Duration::from_secs(10));
     assert!(
-        output.windows(13).any(|window| window == b"oneterm-pty-o"),
+        output.windows(8).any(|window| window == b"vt-pty-o"),
         "the child's output never arrived: {}",
         String::from_utf8_lossy(&output)
     );
@@ -59,13 +59,11 @@ fn typed_input_reaches_the_child() {
     let mut console = spawn(&["/q", "/k", "echo off"]);
     console
         .writer()
-        .write_all(b"echo oneterm-pty-typed\r\n")
+        .write_all(b"echo vt-pty-typed\r\n")
         .expect("write input");
-    let output = read_until(&mut console, b"oneterm-pty-typed", Duration::from_secs(10));
+    let output = read_until(&mut console, b"vt-pty-typed", Duration::from_secs(10));
     assert!(
-        output
-            .windows(17)
-            .any(|window| window == b"oneterm-pty-typed"),
+        output.windows(12).any(|window| window == b"vt-pty-typed"),
         "the typed command never echoed: {}",
         String::from_utf8_lossy(&output)
     );
@@ -123,7 +121,7 @@ fn drop_order_drains_the_output_pipe() {
 
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
-        .name("oneterm-pty-drop-order".to_owned())
+        .name("oneterm-vt-pty-drop-order".to_owned())
         .spawn(move || {
             drop(console);
             let _ = done_tx.send(());

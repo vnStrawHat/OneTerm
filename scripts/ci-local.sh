@@ -38,13 +38,32 @@ step cargo test -p oneterm-vt --features vt-paranoid
 step cargo test -p oneterm-vt --features regex
 
 # Other projects consume `oneterm-vt` as a git dependency, so its package, its
-# feature matrix and its documentation are part of the gate. Its default
-# feature set is empty, so the two builds below are the ends of the matrix.
+# feature matrix and its documentation are part of the gate. The default set is
+# `pty` (`US-0104`), so the two builds below really are different
+# configurations and only the first one is transport-free.
 step cargo build -p oneterm-vt --no-default-features --examples
+# Building it is not running it: `tests/engine_without_pty.rs` is gated
+# `#[cfg(not(feature = "pty"))]`, so this is the only step that executes it.
+step cargo test -p oneterm-vt --no-default-features
 step cargo build -p oneterm-vt --all-features --examples
+# The six-dependency claim the README makes is a claim about
+# `--no-default-features` specifically now that a *default* feature adds
+# dependencies. Without this assertion it would be prose.
+printf '\n==> cargo tree -p oneterm-vt -e normal --no-default-features\n'
+vt_leaves="$(cargo tree -p oneterm-vt -e normal --no-default-features --prefix none |
+  awk 'NR > 1 {print $1}' | sort -u | paste -sd' ' -)"
+if [ "$vt_leaves" != 'bitflags log memchr rustc-hash unicode-segmentation unicode-width' ]; then
+  printf '\nci-local: FAILED: oneterm-vt --no-default-features must be exactly six leaf dependencies, got: %s\n' \
+    "$vt_leaves" >&2
+  exit 1
+fi
 step cargo run -p oneterm-vt --example headless
 step env RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
+# Two snapshots, one per platform family (`US-0104`): `--check` compares the
+# host's, `--diff-platforms` asserts the other one differs only inside
+# `oneterm_vt::pty` and needs no rustdoc.
 step python scripts/vt-public-api.py --check --no-doc
+step python scripts/vt-public-api.py --diff-platforms
 # What the package carries, and that it reaches nothing outside `crates/vt`.
 # `--allow-dirty` because an agent runs this gate with uncommitted work; the
 # workflow packages a clean checkout without it.
@@ -57,10 +76,11 @@ if ! cargo package -p oneterm-vt --allow-dirty --list |
   exit 1
 fi
 # Published rustdoc must read for somebody who does not have this repository:
-# no work-packet, decision or intake citations in `///` or `//!` text. A link to
-# the public repository is the one allowed form.
+# no work-packet, decision or intake citations in `///` or `//!` text, and no
+# bare `crates/...` or `docs/...` path either -- a consumer's vendored copy has
+# neither. A link to the public repository is the one allowed form.
 printf '\n==> rustdoc self-containment (crates/vt/src)\n'
-if grep -rn '^[[:space:]]*//[/!].*\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|docs/spec-intakes\)' \
+if grep -rn '^[[:space:]]*//[/!].*\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|crates/\|docs/\)' \
     crates/vt/src --include='*.rs' | grep -v 'https://github.com/'; then
   printf '\nci-local: FAILED: the crate rustdoc cites a document only this repository has\n' >&2
   exit 1

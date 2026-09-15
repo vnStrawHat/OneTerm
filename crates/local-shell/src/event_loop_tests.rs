@@ -6,10 +6,10 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use oneterm_pty::{ChildEvent, EventedReadWrite};
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, SessionEvent, SessionEventSink, SharedSessionState,
 };
+use oneterm_vt::pty::{ChildEvent, EventedReadWrite};
 
 use super::*;
 use crate::transport::LocalTransport;

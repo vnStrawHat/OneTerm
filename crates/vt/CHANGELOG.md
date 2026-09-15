@@ -40,6 +40,23 @@ carry no API change at all. Such a release says so below rather than being omitt
 
 ### Added
 
+- `pty`, a cargo feature that is **on by default**, and the `oneterm_vt::pty` module behind it: a
+  child process behind a ConPTY on Windows or an `openpty` on Unix, exposed as a passive pollable
+  object. `PseudoConsole`, `Options`, `Shell`, `WindowSize`, `GlyphWidth`, `ChildEvent`, the
+  `EventedReadWrite` / `EventedPty` / `OnResize` traits, `PTY_CHILD_EVENT_TOKEN` and
+  `PTY_READ_WRITE_TOKEN`; `SignalMask` on Unix, `PipeReader` and `PipeWriter` on Windows. The code
+  moved here from a separate crate; nothing about what it does changed.
+
+  It adds `polling`, plus `windows-sys` on Windows or `libc` on Unix, and it is the only feature
+  that adds a dependency. `--no-default-features` removes the module, the traits and all three, and
+  leaves the same six leaf dependencies the crate had before.
+
+  `polling` is therefore a **public** dependency of this crate under `pty`: `Poller`, `Event` and
+  `PollMode` are in the `EventedReadWrite` signatures, so a `polling` major bump is a breaking
+  change here and will get an entry naming both versions.
+
+  The crate ships no Windows console host. See the feature table in `README.md` for what that means
+  for Sixel in a local shell.
 - `Config::product_name`: what the terminal calls itself in `XTVERSION` (`CSI > 0 q`) and `DA2`
   (`CSI > c`). `None` answers `oneterm-vt(<version>)`. The value is sanitised before it is used:
   C0, `DEL` and C1 controls are dropped so a name cannot end the DCS string early, and the result

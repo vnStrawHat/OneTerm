@@ -14,7 +14,7 @@
 //! the caller is not already looking at it, and `read`/`write` re-post when they
 //! leave the ring usable. A caller may therefore stop reading with bytes still
 //! buffered and be woken again, which is what [`PollMode::Level`] promises and
-//! what `crates/local-shell`'s loop relies on.
+//! what an embedder's read loop relies on.
 //!
 //! The registration semantics — readable/writable gating, clearing a one-shot
 //! interest after posting, and the priming packet on first registration — follow
@@ -168,14 +168,14 @@ impl PipeReader {
     pub(super) fn new(pipe: OwnedHandle, capacity: usize) -> io::Result<Self> {
         let ring = Ring::new(capacity, Side::Read);
         let thread_ring = ring.clone();
-        spawn_pipe_thread("oneterm-pty-conout", move || {
+        spawn_pipe_thread("oneterm-vt-pty-conout", move || {
             let mut chunk = [0u8; CHUNK];
             loop {
                 let read = match read_pipe(&pipe, &mut chunk) {
                     Ok(0) => return,
                     Ok(read) => read,
                     Err(error) => {
-                        log::debug!("oneterm-pty: conout read ended: {error}");
+                        log::debug!("oneterm-vt-pty: conout read ended: {error}");
                         return;
                     }
                 };
@@ -268,14 +268,14 @@ impl PipeWriter {
     pub(super) fn new(pipe: OwnedHandle, capacity: usize) -> io::Result<Self> {
         let ring = Ring::new(capacity, Side::Write);
         let thread_ring = ring.clone();
-        spawn_pipe_thread("oneterm-pty-conin", move || {
+        spawn_pipe_thread("oneterm-vt-pty-conin", move || {
             let mut chunk = Vec::with_capacity(CHUNK);
             loop {
                 if !pull(&thread_ring, &mut chunk) {
                     return;
                 }
                 if let Err(error) = write_pipe(&pipe, &chunk) {
-                    log::debug!("oneterm-pty: conin write ended: {error}");
+                    log::debug!("oneterm-vt-pty: conin write ended: {error}");
                     return;
                 }
             }
@@ -320,7 +320,7 @@ impl io::Write for PipeWriter {
     /// Never blocks. A short count (`0` included) leaves the remainder with the
     /// caller, which is how the local-shell loop already handles partial writes.
     ///
-    /// Level semantics, the mirror of [`PipeReader::read`]: while the ring has
+    /// Level semantics, the mirror of `PipeReader`'s `read`: while the ring has
     /// room the caller is woken again, so it may stop writing and come back.
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut bytes = self.ring.lock();
@@ -356,9 +356,10 @@ impl Drop for PipeWriter {
 /// A pipe thread that cannot be joined: it is parked in a blocking `ReadFile` or
 /// `WriteFile` and only returns when the pipe breaks.
 ///
+// `docs/agents/error-policy.md`, transport row.
 /// A failure to spawn is fatal to the session — without this thread the
 /// pseudo-console can never move a byte in that direction — so it is reported
-/// rather than logged (`docs/agents/error-policy.md`, transport row).
+/// rather than logged.
 fn spawn_pipe_thread(name: &str, body: impl FnOnce() + Send + 'static) -> io::Result<()> {
     std::thread::Builder::new()
         .name(name.to_owned())

@@ -41,10 +41,31 @@ Invoke-Step @("cargo", "test", "-p", "oneterm-vt", "--features", "vt-paranoid")
 Invoke-Step @("cargo", "test", "-p", "oneterm-vt", "--features", "regex")
 
 # Other projects consume `oneterm-vt` as a git dependency, so its package, its
-# feature matrix and its documentation are part of the gate. Its default
-# feature set is empty, so the two builds below are the ends of the matrix.
+# feature matrix and its documentation are part of the gate. The default set is
+# `pty` (`US-0104`), so the two builds below really are different
+# configurations and only the first one is transport-free.
 Invoke-Step @("cargo", "build", "-p", "oneterm-vt", "--no-default-features", "--examples")
+# Building it is not running it: `tests/engine_without_pty.rs` is gated
+# `#[cfg(not(feature = "pty"))]`, so this is the only step that executes it.
+Invoke-Step @("cargo", "test", "-p", "oneterm-vt", "--no-default-features")
 Invoke-Step @("cargo", "build", "-p", "oneterm-vt", "--all-features", "--examples")
+# The six-dependency claim the README makes is a claim about
+# `--no-default-features` specifically now that a *default* feature adds
+# dependencies. Without this assertion it would be prose.
+Write-Host ""
+Write-Host "==> cargo tree -p oneterm-vt -e normal --no-default-features"
+$vtTree = cargo tree -p oneterm-vt -e normal --no-default-features --prefix none
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "ci-local: FAILED: cargo tree -p oneterm-vt --no-default-features"
+    exit 1
+}
+$vtLeaves = (($vtTree | Select-Object -Skip 1 | ForEach-Object { ($_ -split ' ')[0] } |
+    Sort-Object -Unique) -join ' ')
+if ($vtLeaves -ne 'bitflags log memchr rustc-hash unicode-segmentation unicode-width') {
+    Write-Error ("ci-local: FAILED: oneterm-vt --no-default-features must be exactly six leaf " +
+        "dependencies, got: $vtLeaves")
+    exit 1
+}
 Invoke-Step @("cargo", "run", "-p", "oneterm-vt", "--example", "headless")
 $previousRustdocFlags = $env:RUSTDOCFLAGS
 $env:RUSTDOCFLAGS = "-D warnings"
@@ -53,7 +74,11 @@ try {
 } finally {
     $env:RUSTDOCFLAGS = $previousRustdocFlags
 }
+# Two snapshots, one per platform family (`US-0104`): `--check` compares the
+# host's, `--diff-platforms` asserts the other one differs only inside
+# `oneterm_vt::pty` and needs no rustdoc.
 Invoke-Step @("python", "scripts/vt-public-api.py", "--check", "--no-doc")
+Invoke-Step @("python", "scripts/vt-public-api.py", "--diff-platforms")
 
 # What the package carries, and that it reaches nothing outside `crates/vt`.
 # `--allow-dirty` because an agent runs this gate with uncommitted work; the
@@ -75,12 +100,13 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Published rustdoc must read for somebody who does not have this repository:
-# no work-packet, decision or intake citations in `///` or `//!` text. A link to
-# the public repository is the one allowed form.
+# no work-packet, decision or intake citations in `///` or `//!` text, and no
+# bare `crates/...` or `docs/...` path either -- a consumer's vendored copy has
+# neither. A link to the public repository is the one allowed form.
 Write-Host ""
 Write-Host "==> rustdoc self-containment (crates/vt/src)"
 $citations = Get-ChildItem -Path "crates/vt/src" -Recurse -Filter "*.rs" |
-    Select-String -Pattern '^\s*//[/!].*(US-0\d{3}|BUG-0\d{3}|DEC-0\d{3}|IN-0\d{3}|docs/spec-intakes)' |
+    Select-String -Pattern '^\s*//[/!].*(US-0\d{3}|BUG-0\d{3}|DEC-0\d{3}|IN-0\d{3}|crates/|docs/)' |
     Where-Object { $_.Line -notmatch 'https://github\.com/' }
 if ($citations) {
     $citations | ForEach-Object { Write-Host $_ }

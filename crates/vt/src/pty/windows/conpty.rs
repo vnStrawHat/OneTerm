@@ -31,9 +31,9 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::core::{HRESULT, PWSTR};
 use windows_sys::s;
 
-use crate::windows::child::ChildExitWatcher;
-use crate::windows::{PIPE_CAPACITY, PseudoConsole, cmdline, win32_string};
-use crate::{GlyphWidth, Options, WindowSize};
+use crate::pty::windows::child::ChildExitWatcher;
+use crate::pty::windows::{PIPE_CAPACITY, PseudoConsole, cmdline, win32_string};
+use crate::pty::{GlyphWidth, Options, WindowSize};
 
 use super::pipe::{PipeReader, PipeWriter};
 
@@ -83,12 +83,11 @@ pub(super) struct ConptyApi {
 impl ConptyApi {
     /// Resolve the bundled host first, `kernel32` second.
     ///
-    /// That order is [`DEC-0013`] and it must not be simplified away: the inbox
-    /// `conhost.exe` swallows Sixel DCS payloads, so images only survive the
-    /// round trip through the bundled `OpenConsole.exe`. A build without the
-    /// bundled files still runs — without Sixel passthrough.
-    ///
-    /// [`DEC-0013`]: ../../../../docs/decisions/DEC-0013-bundled-conpty-host-and-bump-script.md
+    /// That order is [a recorded decision](https://github.com/vnStrawHat/OneTerm/blob/main/docs/decisions/DEC-0013-bundled-conpty-host-and-bump-script.md) and it must not be
+    /// simplified away: the inbox `conhost.exe` swallows Sixel DCS payloads, so
+    /// images only survive the round trip through a bundled `OpenConsole.exe`.
+    /// A build without the bundled files still runs — without Sixel
+    /// passthrough.
     pub(super) fn resolve() -> Self {
         let api = match executable_directory() {
             Some(directory) => Self::resolve_in(&directory),
@@ -138,7 +137,7 @@ impl ConptyApi {
             let proc = unsafe { GetProcAddress(module, name) };
             if proc.is_none() {
                 log::warn!(
-                    "oneterm-pty: {} has no {label}; falling back to the system ConPTY",
+                    "oneterm-vt-pty: {} has no {label}; falling back to the system ConPTY",
                     path.display()
                 );
             }
@@ -161,8 +160,10 @@ impl ConptyApi {
     }
 }
 
-/// The directory OneTerm's executable lives in, where the bundled pair is
-/// installed (`crates/app/build.rs` copies it there).
+// OneTerm stages the pair from `crates/app/build.rs`; an embedder's own build
+// script is what puts it there for them.
+/// The directory the running executable lives in, where a bundled ConPTY pair
+/// is looked for.
 fn executable_directory() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()?
@@ -439,7 +440,7 @@ fn environment_block(custom: &HashMap<String, String>) -> Option<Vec<u16>> {
             push_entry(&mut block, key, OsStr::new(value));
         } else {
             log::warn!(
-                "oneterm-pty: dropping the duplicate environment key '{}'",
+                "oneterm-vt-pty: dropping the duplicate environment key '{}'",
                 key.display()
             );
         }
@@ -476,13 +477,13 @@ mod tests {
 
     fn scratch_directory(name: &str) -> PathBuf {
         let directory =
-            std::env::temp_dir().join(format!("oneterm-pty-{name}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("oneterm-vt-pty-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("scratch directory");
         directory
     }
 
-    /// DEC-0013: this is the test that stops a refactor from quietly turning
-    /// Sixel passthrough off by dropping the bundled-DLL path.
+    // `DEC-0013`: this is the test that stops a refactor from quietly turning
+    // Sixel passthrough off by dropping the bundled-DLL path.
     #[test]
     fn conpty_api_prefers_the_bundled_host() {
         let directory = scratch_directory("bundled");
@@ -551,14 +552,14 @@ mod tests {
     #[test]
     fn custom_entries_win_over_the_inherited_ones() {
         // SAFETY: single-threaded setup for this test process only.
-        unsafe { std::env::set_var("ONETERM_PTY_OVERRIDE", "parent") };
+        unsafe { std::env::set_var("ONETERM_VT_PTY_OVERRIDE", "parent") };
 
         let mut custom = HashMap::new();
-        custom.insert("oneterm_pty_override".to_owned(), "child".to_owned());
+        custom.insert("oneterm_vt_pty_override".to_owned(), "child".to_owned());
         let block = environment_block(&custom).expect("a custom block");
 
         let text = String::from_utf16_lossy(&block).to_ascii_uppercase();
-        assert!(text.contains("ONETERM_PTY_OVERRIDE=CHILD"));
-        assert!(!text.contains("ONETERM_PTY_OVERRIDE=PARENT"));
+        assert!(text.contains("ONETERM_VT_PTY_OVERRIDE=CHILD"));
+        assert!(!text.contains("ONETERM_VT_PTY_OVERRIDE=PARENT"));
     }
 }

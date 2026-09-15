@@ -29,7 +29,7 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
   workspace's **embeddable crate** (`IN-0038`): it depends on no OneTerm crate, ships its own
   `README.md`, `CHANGELOG.md`, `LICENSE`, `NOTICE` and `examples/`, and its public API, its rustdoc
   and its reply bytes are an external contract. It is **not** published to crates.io (owner ruling
-  2026-09-15); other projects depend on it by git, pinned to a tag. Local PTY via `oneterm-pty` (`crates/pty`, OneTerm's
+  2026-09-15); other projects depend on it by git, pinned to a tag. Local PTY via `oneterm_vt::pty` (`crates/vt/src/pty`, OneTerm's
   own transport: Windows ConPTY with the bundled `conpty.dll` / `OpenConsole.exe` preferred over
   `kernel32`, `openpty` on Unix); SSH/SFTP via `russh` + `russh-sftp` on a tokio runtime hidden
   inside `crates/ssh`.

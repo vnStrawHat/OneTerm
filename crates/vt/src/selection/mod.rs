@@ -295,9 +295,9 @@ impl SelectionRange {
 
 /// Fractional pointer coordinates to a grid position and a side.
 ///
-/// This is `crates/terminal/src/model.rs::point_and_side` moved into the
-/// engine, so the view stops doing `line + display_offset` arithmetic. Out of
-/// range clamps rather than producing a position outside the live rows.
+/// The hit test lives here rather than in a view, so nothing above the engine
+/// does `line + display_offset` arithmetic. Out of range clamps rather than
+/// producing a position outside the live rows.
 pub(crate) fn hit_test(grid: &TerminalGrid, viewport_row: f32, col: f32) -> (Pos, Side) {
     let viewport = grid.screen().viewport();
     let index = (viewport_row.max(0.0) as u32).min(u32::from(viewport.rows.saturating_sub(1)));

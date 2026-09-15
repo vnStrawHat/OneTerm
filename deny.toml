@@ -92,7 +92,7 @@ workspace-default-features = "allow"
 external-default-features = "allow"
 # Deliberately excluded designs (docs/agents/dependencies.md §3).
 deny = [
-    { crate = "portable-pty", reason = "local PTY goes through oneterm-pty (docs/terminal-backend.md)" },
+    { crate = "portable-pty", reason = "local PTY goes through oneterm_vt::pty (docs/terminal-backend.md)" },
     { crate = "openssl-sys", reason = "TLS/crypto is rustls + ring only; no native OpenSSL linkage" },
 ]
 

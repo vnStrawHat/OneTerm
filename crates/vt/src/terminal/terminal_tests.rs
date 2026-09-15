@@ -2,9 +2,9 @@
 //!
 //! Every test drives real bytes through a real [`Terminal`] and asserts on
 //! cells, the cursor, modes or the event batch — the shape
-//! `testing-and-bench.md` § 1 names. The 45-recording parity gate
-//! (`crates/tools/tests/corpus_check.rs`) is this file's real exit criterion;
-//! these exist so a failure names the sequence rather than the recording.
+//! `testing-and-bench.md` § 1 names. The 45-recording parity gate is this
+//! file's real exit criterion; these exist so a failure names the sequence
+//! rather than the recording.
 
 use std::time::Instant;
 
@@ -1439,9 +1439,10 @@ fn osc_20308_reaches_the_embedder_through_a_claim() {
     assert_eq!(stats.unhandled_sequences, 1);
 }
 
-/// `OSC 9;7` is the agent channel's deprecated alias, kept for one release
-/// (`docs/osc-agent-status.md` § 3.1). Its counterpart — asserting the claim is
-/// gone — belongs to the release that drops it.
+// The alias and its sunset are `docs/osc-agent-status.md` § 3.1.
+/// `OSC 9;7` is the agent channel's deprecated alias, kept for one release. Its
+/// counterpart — asserting the claim is gone — belongs to the release that
+/// drops it.
 #[test]
 fn osc_9_7_still_reaches_the_embedder_during_the_alias_release() {
     let mut session = Session::with(claiming(20, 4, &[9]));

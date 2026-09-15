@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
 use log::error;
-use oneterm_pty::{
+use oneterm_vt::pty::{
     ChildEvent, EventedPty, OnResize, Options, PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN,
     PseudoConsole, WindowSize,
 };
@@ -454,7 +454,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                         // query answer, and that must not queue behind a frame.
                         // And the yield must not leave the read loop: the conout
                         // ring re-arms its wake-up only when a read finds it
-                        // empty (`crates/pty/src/windows/pipe.rs`), so a loop
+                        // empty (`crates/vt/src/pty/windows/pipe.rs`), so a loop
                         // that stops reading with bytes still buffered parks in
                         // `poll.wait` and the session freezes. The next pass
                         // keeps draining the pipe into `buf` and re-locks once

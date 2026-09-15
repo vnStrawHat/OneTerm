@@ -3,7 +3,7 @@
 //!
 //! Watching is passive while the watcher lives. Dropping it is not: the
 //! pseudo-console has closed by then, and a client that never noticed is
-//! terminated after a bounded grace period (`DEC-0016`). See
+//! terminated after a bounded grace period. See
 //! [`ChildExitWatcher::terminate_if_still_running`].
 //!
 //! `RegisterWaitForSingleObject` fires a thread-pool callback when the child's
@@ -39,10 +39,11 @@ use windows_sys::Win32::System::Threading::{
     UnregisterWaitEx, WT_EXECUTEINWAITTHREAD, WT_EXECUTEONLYONCE, WaitForSingleObject,
 };
 
-use crate::ChildEvent;
+use crate::pty::ChildEvent;
 
+// The bound and the measurement below are `DEC-0016`.
 /// How long the child is given to exit once its pseudo-console has closed,
-/// before it is terminated (`DEC-0016`).
+/// before it is terminated.
 ///
 /// Measured on `cmd.exe /K chcp 65001 >nul`: a client that had finished starting
 /// exits within 20 ms of `ClosePseudoConsole`, while one that was still
@@ -174,21 +175,21 @@ impl ChildExitWatcher {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
+    // `DEC-0016`, and the client that provoked it is `BUG-0055`.
     /// Give the child [`CHILD_EXIT_GRACE`] to notice that its pseudo-console is
-    /// gone, then terminate it (`DEC-0016`).
+    /// gone, then terminate it.
     ///
     /// This runs while the watcher drops, which is **after**
     /// `ClosePseudoConsole`: the watcher is the last field of `PseudoConsole`
     /// and the pseudo-console is the first. Closing the pseudo-console asks the
     /// host to end the session, and the host asks its client to exit — but a
     /// client that had not finished initialising never processes that request
-    /// and then stays forever, holding its console host alive with it
-    /// (`BUG-0055`).
+    /// and then stays forever, holding its console host alive with it.
     ///
     /// Only this child is ever touched, and only through the handle
-    /// `CreateProcessW` returned. Never matching a process by name is the rule
-    /// `DEC-0005-terminate-only-oneterm-s-own.md` set; restricting the reach to
-    /// this crate's own child is stricter still, and is `DEC-0016`'s own.
+    /// `CreateProcessW` returned. Never matching a process by name is a hard
+    /// rule; reaching no further than this module's own child is stricter
+    /// still, and is what this drop promises.
     fn terminate_if_still_running(&self) {
         let handle = self.process.as_raw_handle() as HANDLE;
         // SAFETY: the handle is owned by `self` and live until after this call.
@@ -198,7 +199,7 @@ impl ChildExitWatcher {
         }
 
         log::warn!(
-            "oneterm-pty: the shell (pid {}) did not exit within {CHILD_EXIT_GRACE:?} of its \
+            "oneterm-vt-pty: the shell (pid {}) did not exit within {CHILD_EXIT_GRACE:?} of its \
              pseudo-console closing; terminating it",
             self.pid.unwrap_or(0)
         );
@@ -206,7 +207,7 @@ impl ChildExitWatcher {
         // process created the child.
         if unsafe { TerminateProcess(handle, 1) } == 0 {
             log::warn!(
-                "oneterm-pty: terminating the shell (pid {}) failed: {}",
+                "oneterm-vt-pty: terminating the shell (pid {}) failed: {}",
                 self.pid.unwrap_or(0),
                 io::Error::last_os_error()
             );
@@ -233,7 +234,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::PTY_CHILD_EVENT_TOKEN;
+    use crate::pty::PTY_CHILD_EVENT_TOKEN;
 
     fn watcher_for(child: std::process::Child) -> (ChildExitWatcher, u32) {
         use std::os::windows::io::{FromRawHandle, IntoRawHandle};

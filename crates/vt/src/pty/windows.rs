@@ -21,7 +21,7 @@ use child::ChildExitWatcher;
 use conpty::Conpty;
 pub use pipe::{PipeReader, PipeWriter};
 
-use crate::{
+use crate::pty::{
     ChildEvent, EventedPty, EventedReadWrite, OnResize, Options, PTY_CHILD_EVENT_TOKEN,
     PTY_READ_WRITE_TOKEN, Shell, WindowSize,
 };
@@ -121,8 +121,7 @@ impl OnResize for PseudoConsole {
 /// Join the program and its arguments into one `CreateProcessW` command line.
 ///
 /// `CreateProcessW` is called with a null application name, so the program is
-/// part of the command line and the caller is responsible for quoting it (see
-/// `crates/local-shell/src/session.rs`).
+/// part of the command line and the caller is responsible for quoting it.
 fn cmdline(options: &Options) -> String {
     let default_shell = Shell::new("powershell".to_owned(), Vec::new());
     let shell = options.shell.as_ref().unwrap_or(&default_shell);

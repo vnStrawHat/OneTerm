@@ -64,9 +64,9 @@ Every third-party dependency is declared once in root `[workspace.dependencies]`
 |---|---|
 | SSH and SFTP | `russh 0.63.x` (`default-features = false`, features `ring`, `flate2`, `rsa`), `russh-sftp 3.0.x`. They move together as one family (`IN-0036`): `russh-cryptovec` and `russh-util` follow transitively and are never declared. `russh 0.63` is what takes the crypto stack off RustCrypto release candidates (16 `-rc` crates down to 3); `ssh-key`, `rsa` and `pkcs1` are the three that stay on one, because `russh 0.63.3` pins all three with `=` requirements — they move only when russh does. The SFTP client is constructed with `session::sftp_config()`, not russh-sftp's defaults, and for opposite reasons per direction: 3.0 cut the in-flight write budget 4x, which `sftp_config()` pins back to 2.3.0's (`IN-0036`); its read-ahead is kept at 3.0's default depth because since `IN-0037` it *is* OneTerm's download pipeline: nothing seeks per chunk any more, so nothing throws it away. |
 | SSH runtime | `tokio`, `tokio-util`, `rand` |
-| Local shell PTY | `oneterm-pty` (OneTerm's own crate) over `polling` + `windows-sys` / `libc` (do not use `portable-pty`) |
+| Local shell PTY | `oneterm_vt::pty` (`oneterm-vt`'s default-on `pty` feature) over `polling` + `windows-sys` / `libc` (do not use `portable-pty`) |
 | Terminal parser / grid | `oneterm-vt` (OneTerm's own crate) — see the row below; there is no third-party terminal engine |
-| OneTerm's own VT engine (`oneterm-vt`, IN-0029) | `memchr 2.x` (the parser's ground-state scan for the next escape), `bitflags 2.x` (cell and row attribute flags), `rustc-hash 2.x` (`FxHashMap` for the interners), `unicode-width 0.2.x` (scalar width), `unicode-segmentation 1.x` (grapheme clusters); dev-only: `proptest 1.x`. The parser's `vte 0.15` differential oracle retired with the fork at `US-0087`; what pins the state machine now is `parser::props::arbitrary_bytes_never_panic_and_chunking_is_invariant`, the parser unit suite, and the 46 frozen corpus recordings. All already resolved in `Cargo.lock`, so the graph does not grow; `bitflags` and `rustc-hash` each resolve to two versions, and the engine pins the 2.x line. Since `IN-0038` other projects depend on this crate by git, so the list is also a promise to people outside the repository: **default features add no dependency**, and anything else arrives behind a default-off feature. There is one such feature: `regex` makes `regex 1.x` an optional dependency for `search::SearchPattern::Regex`, and adds `regex`, `regex-automata`, `regex-syntax` and `aho-corasick` to the tree when it is on. **OneTerm itself does not enable it** — `crates/terminal` takes `oneterm-vt` with no features, and the search overlay is literal — so the application's graph is unchanged either way. |
+| OneTerm's own VT engine (`oneterm-vt`, IN-0029) | `memchr 2.x` (the parser's ground-state scan for the next escape), `bitflags 2.x` (cell and row attribute flags), `rustc-hash 2.x` (`FxHashMap` for the interners), `unicode-width 0.2.x` (scalar width), `unicode-segmentation 1.x` (grapheme clusters); dev-only: `proptest 1.x`. The parser's `vte 0.15` differential oracle retired with the fork at `US-0087`; what pins the state machine now is `parser::props::arbitrary_bytes_never_panic_and_chunking_is_invariant`, the parser unit suite, and the 46 frozen corpus recordings. All already resolved in `Cargo.lock`, so the graph does not grow; `bitflags` and `rustc-hash` each resolve to two versions, and the engine pins the 2.x line. Since `IN-0038` other projects depend on this crate by git, so the list is also a promise to people outside the repository. `US-0104` replaced the old form of that promise -- "default features add no dependency" -- with the one that now holds: **`--no-default-features` adds nothing and is a CI target**. Two features add dependencies. `pty` is **on by default** and adds `polling` plus `windows-sys` (Windows) or `libc` (Unix). `regex` is default-off and makes `regex 1.x` an optional dependency for `search::SearchPattern::Regex`, adding `regex`, `regex-automata`, `regex-syntax` and `aho-corasick` when it is on; **OneTerm itself does not enable it** — the search overlay is literal — so the application's graph is unchanged either way. The workspace entry for `oneterm-vt` carries `default-features = false`, so `pty` is off for every member that does not ask: `crates/local-shell` and `crates/tools` take `features = ["pty"]`, and `crates/terminal` compiles no transport at all. |
 | Event channel | `async-channel` |
 | Terminal helpers | `base64`, `aho-corasick`, `regex` |
 | Serialization | `serde`, `serde_json` |
@@ -76,21 +76,23 @@ Every third-party dependency is declared once in root `[workspace.dependencies]`
 | Auto-update | `reqwest`, `semver`, `sha2`, `zip`, `tar`, `flate2` |
 | UI helpers | `chrono`, `sysinfo`, `rust-embed` |
 | Terminal graphics | `image` (default features off: only the pixel-buffer types `gpui::RenderImage` takes; same major as GPUI's own `image`) |
-| Windows FFI | `windows-sys 0.59` with a workspace-wide feature union (`Win32_System_Pipes` + `Win32_Security` are `oneterm-pty`'s `CreatePipe`) |
-| Build / development | `embed-resource`; diagnostics also use `libc`, `polling`, and `oneterm-pty`; `futures` (dev-only) feeds russh's in-process SSH agent server in `oneterm-ssh` tests |
+| Windows FFI | `windows-sys 0.59` with a workspace-wide feature union (`Win32_System_Pipes` + `Win32_Security` are `oneterm_vt::pty`'s `CreatePipe`) |
+| Build / development | `embed-resource`; diagnostics also use `libc`, `polling`, and `oneterm-vt`; `futures` (dev-only) feeds russh's in-process SSH agent server in `oneterm-ssh` tests |
 
 Do not re-add without a design decision: `tracing` / `tracing-subscriber`, `directories`, `toml`, `russh-cryptovec`, `ssh-key`, `smol`, or `rust-i18n`.
 
-### `oneterm-pty`'s direct dependencies (`US-0071`)
+### `oneterm-vt`'s `pty` feature dependencies (`US-0071`, `US-0104`)
 
 | Crate | Why | Note |
 |---|---|---|
-| `polling` | the caller's poll loop | **Public**: `Poller`, `Event` and `PollMode` appear in `EventedReadWrite`'s signatures, so a `polling` bump is a breaking change to `oneterm-pty`'s own API. |
+| `polling` | the caller's poll loop | **Public**: `Poller`, `Event` and `PollMode` appear in `EventedReadWrite`'s signatures, so a `polling` major bump is a breaking change to `oneterm-vt`'s own API. |
 | `windows-sys` | ConPTY, `CreatePipe`, the child-exit wait callback | Windows only, at the workspace pin. |
 | `libc` | `openpty`, `TIOCSCTTY`/`TIOCSWINSZ`, the signal mask | Unix only. |
-| `log` | one `info` line naming the resolved ConPTY host | |
+| `log` | one `info` line naming the resolved ConPTY host | Unconditional in `oneterm-vt`, so the feature adds nothing here. |
 
-The crate deliberately reproduces `miow` (anonymous pipes), `piper` (the reader/writer ring)
+The first three are **optional** and reached only through `pty = ["dep:polling", "dep:windows-sys", "dep:libc"]`; `--no-default-features` drops all three.
+
+The module deliberately reproduces `miow` (anonymous pipes), `piper` (the reader/writer ring)
 and `signal-hook` + `rustix-openpty` (Unix child exit) with the platform APIs and `std` instead
 of depending on them: a transport crate must not install a process-global `SIGCHLD` handler, and
 the ring is a `Mutex<VecDeque<u8>>` because a pseudo-console is nowhere near fast enough for the

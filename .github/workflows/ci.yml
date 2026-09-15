@@ -165,12 +165,30 @@ jobs:
           python-version: "3.11"
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
-      # The default feature set is empty, so these two builds are the whole
-      # matrix, and `--examples` proves the example in the README still builds.
+      # The default feature set is `pty` (`US-0104`), so these two builds are
+      # different configurations, and `--examples` proves the example in the
+      # README still builds.
       - name: Build the feature matrix
         run: |
           cargo build -p oneterm-vt --no-default-features --examples
+          # Building it is not running it: `tests/engine_without_pty.rs` is
+          # gated `#[cfg(not(feature = "pty"))]`, so this is the only step
+          # that executes the transport-free engine.
+          cargo test -p oneterm-vt --no-default-features
           cargo build -p oneterm-vt --all-features --examples
+      # The README's six-dependency claim is a claim about
+      # `--no-default-features` specifically now that a default feature adds
+      # dependencies. This is what keeps it from being prose.
+      - name: The transport-free build is six leaf dependencies
+        run: |
+          set -euo pipefail
+          leaves="$(cargo tree -p oneterm-vt -e normal --no-default-features --prefix none |
+            awk 'NR > 1 {print $1}' | sort -u | paste -sd' ' -)"
+          expected='bitflags log memchr rustc-hash unicode-segmentation unicode-width'
+          if [ "$leaves" != "$expected" ]; then
+            echo "::error::oneterm-vt --no-default-features must be exactly six leaf dependencies, got: $leaves"
+            exit 1
+          fi
       - name: Run the headless example
         run: cargo run -p oneterm-vt --example headless
       # `#![warn(missing_docs)]` plus denied rustdoc warnings: an undocumented
@@ -179,8 +197,13 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc -p oneterm-vt --no-deps --all-features
+      # This job runs on Linux, so `--check` compares `public-api.unix.txt`; the
+      # Windows job's surface lives in `public-api.windows.txt` (`US-0104`).
+      # `--diff-platforms` asserts the two differ only inside `oneterm_vt::pty`.
       - name: Check the public API surface
-        run: python scripts/vt-public-api.py --check --no-doc
+        run: |
+          python scripts/vt-public-api.py --check --no-doc
+          python scripts/vt-public-api.py --diff-platforms
       # The crate packages cleanly and carries what a consumer needs. Apache-2.0
       # 4(a) and 4(d) are why `LICENSE` and `NOTICE` are in the required set: a
       # git dependency is a distribution too.
@@ -195,10 +218,12 @@ jobs:
             python scripts/verify-dependency-graph.py --package-list -
       # Published rustdoc must read for somebody who does not have this
       # repository: no work-packet, decision or intake citations in `///` or
-      # `//!` text. A link to the public repository is the one allowed form.
+      # `//!` text, and no bare `crates/...` or `docs/...` path either -- a
+      # consumer's vendored copy has neither. A link to the public repository is
+      # the one allowed form.
       - name: Published rustdoc must stand alone
         run: |
-          if grep -rn '^[[:space:]]*//[/!].*\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|docs/spec-intakes\)' \
+          if grep -rn '^[[:space:]]*//[/!].*\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|crates/\|docs/\)' \
               crates/vt/src --include='*.rs' | grep -v 'https://github.com/'; then
             echo "::error::published rustdoc cites a document only this repository has"
             exit 1

@@ -930,7 +930,7 @@ mod props {
     /// stream must produce one action sequence whatever the chunking.
     ///
     /// This is the in-tree substitute for the `cargo-fuzz` target: libFuzzer is
-    /// unusable on `x86_64-pc-windows-msvc`, so `crates/vt/fuzz/` is a
+    /// unusable on `x86_64-pc-windows-msvc`, so the `fuzz/` workspace is a
     /// scheduled Linux activity while this runs on every `cargo test`.
     #[test]
     fn arbitrary_bytes_never_panic_and_chunking_is_invariant() {

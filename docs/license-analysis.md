@@ -152,7 +152,7 @@ licence position clean are:
 - **MIT/Apache-2.0 source may be reused** if the copyright notice is retained in `NOTICE` /
   `THIRD-PARTY-NOTICES.md`. This covers the crates the project already depends on
   (`windows`, `windows-sys`, `winapi`, `uds_windows`, gpui, gpui-component). It also covers
-  the fragments `crates/pty` adapted from Alacritty's Windows backend, each with the notice
+  the fragments `crates/vt/src/pty` adapted from Alacritty's Windows backend, each with the notice
   in its own source header.
 - **Vendored test data follows the same rule as vendored source.** The VT parity corpus at
   `crates/tools/corpus/alacritty-ref/` is 45 reference captures reused from Alacritty
