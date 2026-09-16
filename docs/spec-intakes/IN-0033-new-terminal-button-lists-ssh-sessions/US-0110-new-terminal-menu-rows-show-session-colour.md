@@ -182,16 +182,20 @@ what the HLD now states.
 
 ```
 cargo test -p oneterm-session-ui menu_entries
-    running 9 tests ... test result: ok. 9 passed; 0 failed; 0 ignored
+    running 9 tests
+    ... menu_entries_carries_the_saved_colour ... ok
+    ... menu_entries_applies_the_default_colour_when_none_is_saved ... ok
+    test result: ok. 9 passed; 0 failed; 0 ignored; 53 filtered out
 
 cargo test -p oneterm-terminal-view
-    (lib) test result: ok. 154 passed; 0 failed; 0 ignored
-    (tests/*) ok. 0 + 3 + 3 + 3 + 8 + 5 passed; 0 failed
+    test result: ok. 341 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out
 ```
 
-Tamper check: reverting `menu_entries` to emit a literal `"#56B6C2"` for every row fails
-`menu_entries_carries_the_saved_colour`; dropping the blank-colour arm fails
-`menu_entries_applies_the_default_colour_when_none_is_saved`.
+The two new tests are the ones that bite: `menu_entries_carries_the_saved_colour` fails if
+the producer ever emits a constant instead of the session's own hex, and
+`menu_entries_applies_the_default_colour_when_none_is_saved` fails if the `None` or blank
+arm is dropped. The seven pre-existing `menu_entries` tests were moved onto a `row()`
+helper so the widened tuple did not force a literal default into every expectation.
 
 ### Gate
 
@@ -204,16 +208,31 @@ ci-local: all checks passed
 
 ### E2E (Windows desktop)
 
-Launched `cargo run -p oneterm-app` and drove only that pid.
+Built and launched `target/debug/oneterm.exe` from this worktree (pid 4848) and drove only
+that pid; it was stopped by pid afterwards. `target/ssh_session.json` (the debug config
+dir is `target/`, relative to the process cwd, so this worktree's store is isolated from
+the owner's) was seeded with six sessions: `prod-web` `#E06C75`, `staging` `#C678DD`,
+`no-colour-saved` with no `color` field, group `infra` holding `db-01` `#98C379` and
+`db-02` `#E5C07B`, and group `lab` holding `sandbox`, also with no `color` field.
 
-- `evidence/US-0110-menu-rows-with-colour-squares.png` — the "+" dropdown with saved
-  sessions, each row preceded by its own coloured square (a red, a green and a purple
-  session in the ungrouped section, and the grouped ones under their dashed heading).
-- `evidence/US-0110-menu-row-default-colour.png` — the same menu with a session saved
-  without a colour: its square is the default `#56B6C2` teal, next to a session with an
-  explicit colour for contrast.
+- `evidence/US-0110-menu-rows-with-colour-squares.png` — the "+" dropdown open: each saved
+  session row carries its own square (red `prod-web`, purple `staging`, green `db-01`,
+  amber `db-02`), the local shells, both labelled separators and "New SSH Session" are
+  unchanged, and the right dock's tree is visible in the same frame for comparison.
+- `evidence/US-0110-menu-rows-zoomed.png` — the same menu at 3x, where the two sessions
+  that saved no colour (`no-colour-saved`, `sandbox`) clearly show the default `#56B6C2`
+  teal, the same teal the tree gives them.
 - `evidence/US-0110-session-tree-for-comparison.png` — the right dock's SSH Sessions tree
-  showing the same sessions, for the side-by-side the owner asked for.
+  alone, the surface being matched.
+- `evidence/US-0110-connect-dialog-from-coloured-row.png` — clicking the `prod-web` row
+  opens "Connect to prod-web (deploy@10.20.0.11:22)", so `on_click` still fires on the
+  element item and the session id still routes correctly.
+
+Capture method: the desktop was locked during the walk, so `CopyFromScreen` returned the
+lock screen. `PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)` against the launched pid's own
+window returned the real frames, and the clicks were delivered as `WM_MOUSEMOVE` /
+`WM_LBUTTONDOWN` / `WM_LBUTTONUP` posted to that window. Both target the single pid this
+session launched; no window was enumerated by name or title.
 
 ### Gaps
 
@@ -226,6 +245,11 @@ Launched `cargo run -p oneterm-app` and drove only that pid.
 - The square's colour is not asserted by an automated test at the render layer — the
   gpui element tree is not queryable in the panel tests. The data half (which hex reaches
   the row) is unit-tested; the drawing half is covered by the GUI evidence above.
+- Keyboard navigation over the new rows was **not** exercised in the GUI walk: the locked
+  desktop made synthetic key input unreliable, and the click evidence was captured by
+  window message instead. It rests on the kit source read recorded under Context —
+  `is_clickable()` matches `ElementItem` and `confirm()` has an explicit `ElementItem` arm
+  — plus the fact that the menu's existing element items already navigate correctly.
 
 ## Handoff
 
@@ -253,9 +277,10 @@ db.execute(
         "US-0110-new-terminal-menu-rows-show-session-colour.md",
         "implemented",
         "cargo test -p oneterm-session-ui menu_entries (9 passed)",
-        "cargo test -p oneterm-terminal-view (154 passed)",
+        "cargo test -p oneterm-terminal-view (341 passed)",
         "GUI walk: evidence/US-0110-menu-rows-with-colour-squares.png, "
-        "evidence/US-0110-menu-row-default-colour.png",
+        "evidence/US-0110-menu-rows-zoomed.png, "
+        "evidence/US-0110-connect-dialog-from-coloured-row.png",
         "pwsh scripts/ci-local.ps1 -- all checks passed",
         "docs/spec-intakes/IN-0033-new-terminal-button-lists-ssh-sessions/evidence/",
         "pwsh scripts/ci-local.ps1",
