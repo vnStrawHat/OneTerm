@@ -262,6 +262,12 @@ assert_eq!(
 release nobody asked to hear about, a key with no code point, or a chord with no
 encoding at all.
 
+How much of `KeyEvent` you can fill is your platform's answer, not the engine's:
+a GPUI embedder, for instance, gets `kind` from `KeyDownEvent::is_held` plus a
+`KeyUpEvent` and `text` from the keystroke's own `key_char`, but its `Keystroke`
+carries no shifted or base-layout code point, so `shifted` and `base_layout` stay
+`None` and `REPORT_ALTERNATE_KEYS` is inert there.
+
 ### What this engine does not encode
 
 Three ceilings on the kitty rung, stated rather than discovered:

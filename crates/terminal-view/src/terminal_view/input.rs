@@ -7,8 +7,9 @@
 //! the URL confirmation dialog.
 
 use gpui::{
-    App, Context, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseExitEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, ScrollWheelEvent, Window,
+    App, Context, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point,
+    ScrollWheelEvent, Window,
 };
 use gpui_component::{
     ActiveTheme as _, WindowExt as _,
@@ -16,12 +17,12 @@ use gpui_component::{
     dialog::DialogFooter,
 };
 use oneterm_state::BroadcastInput;
-use oneterm_terminal::TargetDecision;
+use oneterm_terminal::{KeyEvent, KeyEventKind, KeyMods, KeySpec, KeyboardFlags, TargetDecision};
 
 use super::TerminalView;
 use crate::input::{
-    KeyAction, KeyContext, MouseInputs, MouseOutcome, UrlOpen, classify_key, copy_selection,
-    interrupt, paste_clipboard, send_key,
+    KeyAction, KeyContext, MouseInputs, MouseOutcome, UrlOpen, canonical_key, classify_key,
+    copy_selection, interrupt, map_key, paste_clipboard, send_key,
 };
 use crate::url::DetectedUrl;
 
@@ -39,6 +40,9 @@ impl TerminalView {
         if alt_screen && self.completion.is_visible() {
             self.completion.dismiss();
         }
+        // The frame's modes are at most one paint old; read once, so the
+        // classification and the encoding cannot disagree about them.
+        let modes = self.render_state.borrow().frame.modes();
         let ctx = KeyContext {
             search_focused: matches!(key, "enter" | "return")
                 && self.search.input_is_focused(window, cx),
@@ -46,9 +50,20 @@ impl TerminalView {
             completion_visible: self.completion.is_visible(),
             completion_selected: self.completion.has_selection(),
             completion_accept_tab: self.completion.accept_tab(),
+            ctrl_c_is_a_key: modes.keyboard_flags.intersects(
+                KeyboardFlags::DISAMBIGUATE_ESC_CODES | KeyboardFlags::REPORT_ALL_KEYS_AS_ESC,
+            ),
         };
 
-        let action = classify_key(&e.keystroke, e.prefer_character_input, ctx);
+        // GPUI's own held flag — on Windows the `WM_KEYDOWN` previous-key-state
+        // bit, so the cadence is the user's own repeat rate. Nothing here times,
+        // counts or synthesises a repeat.
+        let kind = if e.is_held {
+            KeyEventKind::Repeat
+        } else {
+            KeyEventKind::Press
+        };
+        let action = classify_key(&e.keystroke, e.prefer_character_input, kind, ctx);
         match action {
             KeyAction::ToggleSearch => self.toggle_search(window, cx),
             KeyAction::SwallowInSearch => {}
@@ -96,29 +111,109 @@ impl TerminalView {
             // The platform / IME path delivers the text: do not stop
             // propagation, or the character never arrives.
             KeyAction::Ignore | KeyAction::Unhandled => return,
-            KeyAction::Interrupt => {
-                interrupt(&session, cx);
+            KeyAction::Interrupt(encoded) => {
+                match encoded {
+                    // The program negotiated the `CSI u` rung for ctrl chords,
+                    // so this pane's own terminal gets the key it asked for --
+                    // and owes it a release like any other written press.
+                    Some(event) => {
+                        if send_key(&session, &event, &modes, cx).is_some() {
+                            self.hold_key(&event.key);
+                        }
+                    }
+                    None => interrupt(&session, cx),
+                }
+                // The peers are not this pane: each negotiated its own flags,
+                // or none, and an interrupt is the one form all of them
+                // understand. Same rule as a release, which is never fanned out
+                // either; re-encoding per target is the named follow-up.
                 self.deps
                     .fan_out(cx.entity_id(), BroadcastInput::Interrupt, cx);
                 self.clear_bell(cx);
             }
-            KeyAction::Send(spec, mods) => {
+            KeyAction::Send(event) => {
                 // Run-first: Enter with nothing selected runs the command —
                 // capture the typed line into history before it scrolls away.
                 if matches!(key, "enter" | "return") {
                     self.completion_capture_current(cx);
                 }
-                // The frame's modes are at most one paint old.
-                let modes = self.render_state.borrow().frame.modes();
-                let Some(bytes) = send_key(&session, &spec, mods, &modes, cx) else {
+                let Some(bytes) = send_key(&session, &event, &modes, cx) else {
                     return;
                 };
+                // Only a press that actually reached the PTY is owed a release.
+                self.hold_key(&event.key);
                 self.deps
                     .fan_out(cx.entity_id(), BroadcastInput::Bytes(&bytes), cx);
                 self.clear_bell(cx);
             }
         }
         cx.stop_propagation();
+    }
+
+    /// The key-up half. Deliberately **not** `classify_key`: the table is full
+    /// of view-side shortcuts, and running it here would risk zooming or
+    /// toggling the search bar on a release. A release is also never fanned out
+    /// to broadcast peers — a peer whose program negotiated nothing must not
+    /// receive a `:3` sequence it has never seen a press for.
+    pub(super) fn on_key_up(
+        &mut self,
+        e: &KeyUpEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(event) = map_key(&e.keystroke, KeyEventKind::Release) else {
+            return;
+        };
+        // The press never reached the PTY (a swallowed chord, a key the IME
+        // owns, a chord with no encoding), so neither does the release.
+        let canonical = canonical_key(&event.key);
+        let Some(at) = self.held_keys.iter().position(|held| *held == canonical) else {
+            return;
+        };
+        self.held_keys.remove(at);
+        let modes = self.render_state.borrow().frame.modes();
+        // This pane's own session and no fan-out: a peer that negotiated
+        // nothing must not receive a `:3` it has never seen a press for.
+        send_key(&self.session, &event, &modes, cx);
+        // No `stop_propagation`: the up path consumes nothing another handler
+        // might want.
+    }
+
+    /// Record that a press reached the PTY, so its release will too.
+    ///
+    /// Idempotent: a fresh press of a key already held (a release the platform
+    /// never delivered, or one lost to a name this canonical form does not
+    /// collapse) leaves one entry rather than two, so a missed release cannot
+    /// compound into a stuck key.
+    fn hold_key(&mut self, spec: &KeySpec) {
+        let canonical = canonical_key(spec);
+        if !self.held_keys.contains(&canonical) {
+            self.held_keys.push(canonical);
+        }
+    }
+
+    /// Focus left with keys still down: send the release the program is owed,
+    /// or a `vim` in kitty mode believes the key is held forever.
+    ///
+    /// **Untested in this repository, in both places.** The GPUI test window is
+    /// never active, so its focus events carry no previous focus path and the
+    /// `on_blur` subscription cannot fire — `US-0108`'s
+    /// `verify_the_blur_drain_is_unprovable_in_a_test_window` demonstrates that
+    /// rather than asserting it. The wiring is proved only by the manual
+    /// Windows walk in `IN-0040`'s detail design.
+    pub(super) fn release_held_keys(&mut self, cx: &mut App) {
+        if self.held_keys.is_empty() {
+            return;
+        }
+        let session = self.session.clone();
+        let modes = self.render_state.borrow().frame.modes();
+        // The modifiers that were held are not part of a blur, so each release
+        // is reported unmodified — the key itself is what the program tracks.
+        for spec in std::mem::take(&mut self.held_keys) {
+            let mut event = KeyEvent::new(spec, KeyMods::default());
+            event.kind = KeyEventKind::Release;
+            send_key(&session, &event, &modes, cx);
+        }
     }
 
     pub(super) fn on_modifiers_changed(

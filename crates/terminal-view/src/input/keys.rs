@@ -8,7 +8,8 @@
 
 use gpui::{App, Entity, Keystroke, Modifiers};
 use oneterm_terminal::{
-    KeyMods, KeySpec, ModeSnapshot, NamedKey, TerminalSession, encode_key, report_generated_input,
+    KeyEvent, KeyEventKind, KeyMods, KeySpec, ModeSnapshot, NamedKey, TerminalSession,
+    encode_key_event, report_generated_input,
 };
 
 /// What a key-down does. The order of the variants mirrors the classification
@@ -35,10 +36,14 @@ pub(crate) enum KeyAction {
     ScrollBottom,
     Copy,
     Paste,
-    /// Ctrl+C: SIGINT via `send_ctrl_c`, regardless of the selection.
-    Interrupt,
+    /// Ctrl+C. `None` is the SIGINT this has always been; `Some(event)` is the
+    /// encoded key, for a program that negotiated a kitty flag putting a ctrl
+    /// chord on the `CSI u` rung. Either way the **broadcast channel** receives
+    /// an interrupt, because a peer negotiated its own flags (or none) and an
+    /// interrupt is the one form every peer understands.
+    Interrupt(Option<KeyEvent>),
     /// Encode and write to the PTY (see [`send_key`]).
-    Send(KeySpec, KeyMods),
+    Send(KeyEvent),
     /// Deliberately not sent: the IME / platform path delivers this text.
     /// The view must not stop propagation.
     Ignore,
@@ -74,11 +79,29 @@ pub(crate) struct KeyContext {
     pub completion_selected: bool,
     /// `completion.accept_tab` setting.
     pub completion_accept_tab: bool,
+    /// The program negotiated a kitty flag that puts a ctrl chord on the
+    /// `CSI u` rung, so Ctrl+C is the encoded key rather than a `SIGINT` the
+    /// program can never observe.
+    ///
+    /// The specification is explicit for `DISAMBIGUATE_ESC_CODES` alone:
+    /// "Turning on this flag will cause the terminal to report the Esc,
+    /// alt+key, ctrl+key, ctrl+alt+key, shift+alt+key keys using `CSI u`
+    /// sequences instead of legacy ones", with Enter, Tab and Backspace the
+    /// only exceptions. `REPORT_ALL_KEYS_AS_ESC` implies the same. The view
+    /// mirrors `kitty_applies`'s rung here so the two halves cannot disagree
+    /// about one key.
+    pub ctrl_c_is_a_key: bool,
 }
 
 /// Classify a key-down. `prefer_char` is `KeyDownEvent::prefer_character_input`
-/// — the platform's own "this is layout text, not a chord" flag.
-pub(crate) fn classify_key(ks: &Keystroke, prefer_char: bool, ctx: KeyContext) -> KeyAction {
+/// — the platform's own "this is layout text, not a chord" flag. `kind` is
+/// `Repeat` when GPUI reports the key held (the OS's own auto-repeat).
+pub(crate) fn classify_key(
+    ks: &Keystroke,
+    prefer_char: bool,
+    kind: KeyEventKind,
+    ctx: KeyContext,
+) -> KeyAction {
     // Row 0: the visible overlay sees every key first, and falls through for
     // the ones it does not bind.
     if ctx.completion_visible
@@ -163,12 +186,19 @@ pub(crate) fn classify_key(ks: &Keystroke, prefer_char: bool, ctx: KeyContext) -
         return KeyAction::Ignore;
     }
 
+    // A program that negotiated the `CSI u` rung for ctrl chords asked to see
+    // this key itself; turning it into a signal it can never observe is the
+    // opposite of what it negotiated. With no such flag pushed, unchanged.
     if mods.control && !mods.shift && matches!(key, "c" | "C") {
-        return KeyAction::Interrupt;
+        return KeyAction::Interrupt(if ctx.ctrl_c_is_a_key {
+            map_key(ks, kind)
+        } else {
+            None
+        });
     }
 
-    match map_key(ks) {
-        Some((spec, key_mods)) => KeyAction::Send(spec, key_mods),
+    match map_key(ks, kind) {
+        Some(event) => KeyAction::Send(event),
         None => KeyAction::Unhandled,
     }
 }
@@ -210,40 +240,95 @@ fn is_layout_text(key_char: Option<&str>) -> bool {
     key_char.is_some_and(|text| !text.is_empty() && !text.chars().any(char::is_control))
 }
 
-/// Map a GPUI [`Keystroke`] to the encoder's [`KeySpec`] + [`KeyMods`].
+/// Map a GPUI [`Keystroke`] to a [`KeyEvent`] of the given kind.
 ///
 /// `key_char` is the literal text; `key` is the chord name and is the only
 /// thing available once Ctrl/Alt suppress the character. Multi-character names
 /// have no terminal encoding, so they return `None` rather than being sent as
 /// literal text — except `"space"`, translated to `" "` so Ctrl+Space encodes
 /// NUL.
-pub(crate) fn map_key(ks: &Keystroke) -> Option<(KeySpec, KeyMods)> {
+///
+/// `shifted` and `base_layout` stay `None`: a GPUI `Keystroke` is
+/// `{ modifiers, key, key_char }` and carries neither, so the kitty
+/// `REPORT_ALTERNATE_KEYS` flag is inert for this embedder.
+pub(crate) fn map_key(ks: &Keystroke, kind: KeyEventKind) -> Option<KeyEvent> {
     let mods = ks.modifiers;
     let key_mods = KeyMods {
         shift: mods.shift,
         ctrl: mods.control,
         alt: mods.alt,
     };
-    if let Some(named) = named_key(ks.key.as_str()) {
-        return Some((KeySpec::Named(named), key_mods));
-    }
-    let text = ks
-        .key_char
-        .clone()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            if ks.key == "space" {
-                " ".to_string()
-            } else {
-                ks.key.clone()
+    let spec = match named_key(ks.key.as_str()) {
+        Some(named) => KeySpec::Named(named),
+        None => {
+            let text = ks
+                .key_char
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| {
+                    if ks.key == "space" {
+                        " ".to_string()
+                    } else {
+                        ks.key.clone()
+                    }
+                });
+            if text.chars().count() != 1 {
+                // An unrecognised multi-character name ("print", "f25"): no
+                // encoding exists, with or without modifiers.
+                return None;
             }
-        });
-    if text.chars().count() != 1 {
-        // An unrecognised multi-character name ("print", "f25"): no encoding
-        // exists, with or without modifiers.
-        return None;
+            KeySpec::Character(text)
+        }
+    };
+    let mut event = KeyEvent::new(spec, key_mods);
+    event.kind = kind;
+    // Only a press or a repeat carries text, and only when the modifiers would
+    // have let that text reach the program: `Ctrl+A` produces `0x01`, and
+    // reporting an `a` here would tell the program that `Ctrl+A` inserted one.
+    // That is the engine's own rule for its fallback (`kitty.rs`, `text_field`),
+    // applied to the text this side supplies so the two halves agree rather
+    // than one cleaning up after the other. Inert on Windows, where a control
+    // `key_char` never survives `process_key`; not inert everywhere.
+    if kind != KeyEventKind::Release && !(key_mods.ctrl || key_mods.alt) {
+        event.text = ks.key_char.clone().filter(|text| !text.is_empty());
     }
-    Some((KeySpec::Character(text), key_mods))
+    Some(event)
+}
+
+/// The two halves of the US keyboard's shift relation, in the same order —
+/// the PC-101 table the engine's own `unshifted` uses (`crates/vt`'s
+/// `input/kitty.rs`), which is private to it.
+const SHIFTED_ASCII: &str = "~!@#$%^&*()_+{}|:\"<>?";
+const UNSHIFTED_ASCII: &str = "`1234567890-=[]\\;',./";
+
+/// The identity a press and its release are paired by in
+/// [`TerminalView`](crate::terminal_view::TerminalView)'s held set — and the
+/// spec a blur uses to build the release it owes.
+///
+/// The pairing is deliberately **not** `Keystroke::key`. The Windows backend
+/// renames a digit or an OEM punctuation key to its shifted glyph while Shift
+/// is down and back again once Shift is up (`get_keystroke_key` /
+/// `need_to_convert_to_shifted_key`), so `Shift+1` presses as `"!"` and, if
+/// Shift is lifted first, releases as `"1"`. Pairing on the raw name loses that
+/// release and strands the key. The encoder already collapses the two —
+/// `unshifted("!")` and `unshifted("1")` are both `49` — so pairing on the same
+/// unshifted form makes the two events match by construction.
+///
+/// Taking a [`KeySpec`] rather than the name also pairs `"enter"` with
+/// `"return"`. A layout that pairs shift differently is the ceiling, and its
+/// worst case is the missed release that is today's behaviour.
+pub(crate) fn canonical_key(spec: &KeySpec) -> KeySpec {
+    let KeySpec::Character(text) = spec else {
+        return spec.clone();
+    };
+    let Some(first) = text.chars().next() else {
+        return spec.clone();
+    };
+    KeySpec::Character(match SHIFTED_ASCII.find(first) {
+        // Both tables are ASCII, so a byte offset is a character offset.
+        Some(at) => UNSHIFTED_ASCII[at..=at].to_string(),
+        None => first.to_lowercase().to_string(),
+    })
 }
 
 fn named_key(key: &str) -> Option<NamedKey> {
@@ -294,16 +379,16 @@ fn named_key(key: &str) -> Option<NamedKey> {
 /// user is typing, so they want to see the echo) and write the encoding.
 ///
 /// Returns the bytes that were sent so the caller can repeat them on its
-/// broadcast channel, or `None` when the chord has no encoding (Ctrl +
-/// non-ASCII), in which case nothing was written and nothing failed.
+/// broadcast channel, or `None` when the event sends nothing — a chord with no
+/// encoding (Ctrl + non-ASCII), or a release no program asked to hear about —
+/// in which case nothing was written and nothing failed.
 pub(crate) fn send_key(
     session: &Entity<Box<dyn TerminalSession>>,
-    spec: &KeySpec,
-    mods: KeyMods,
+    event: &KeyEvent,
     modes: &ModeSnapshot,
     cx: &mut App,
 ) -> Option<Vec<u8>> {
-    let bytes = encode_key(spec, mods, modes)?;
+    let bytes = encode_key_event(event, modes)?;
     session.update(cx, |s, _| {
         s.scroll_to_bottom();
         report_generated_input("key", s.write(&bytes));

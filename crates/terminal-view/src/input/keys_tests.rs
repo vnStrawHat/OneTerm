@@ -4,7 +4,9 @@
 
 use gpui::{AppContext as _, Keystroke, Modifiers, TestAppContext};
 use oneterm_terminal::test_support::FakeTerminalSession;
-use oneterm_terminal::{KeyMods, KeySpec, ModeSnapshot, NamedKey, encode_key};
+use oneterm_terminal::{
+    KeyEvent, KeyEventKind, KeyMods, KeySpec, ModeSnapshot, NamedKey, encode_key, encode_key_event,
+};
 
 use super::keys::{
     CompletionKey, KeyAction, KeyContext, classify_key, interrupt, map_key, send_key,
@@ -19,7 +21,7 @@ fn ks(key: &str, mods: Modifiers, key_char: Option<&str>) -> Keystroke {
 }
 
 fn classify(ks: &Keystroke) -> KeyAction {
-    classify_key(ks, false, KeyContext::default())
+    classify_key(ks, false, KeyEventKind::Press, KeyContext::default())
 }
 
 fn ctrl() -> Modifiers {
@@ -88,12 +90,12 @@ fn enter_in_search_is_swallowed() {
     };
     let enter = ks("enter", Modifiers::default(), Some("\r"));
     assert_eq!(
-        classify_key(&enter, false, focused),
+        classify_key(&enter, false, KeyEventKind::Press, focused),
         KeyAction::SwallowInSearch
     );
     assert!(matches!(
         classify(&enter),
-        KeyAction::Send(KeySpec::Named(NamedKey::Enter), _)
+        KeyAction::Send(ref e) if e.key == KeySpec::Named(NamedKey::Enter)
     ));
 }
 
@@ -133,7 +135,7 @@ fn shift_page_and_home_end_scroll() {
     // Without Shift the same keys are ordinary terminal keys.
     assert!(matches!(
         classify(&ks("home", Modifiers::default(), None)),
-        KeyAction::Send(KeySpec::Named(NamedKey::Home), _)
+        KeyAction::Send(ref e) if e.key == KeySpec::Named(NamedKey::Home)
     ));
 }
 
@@ -150,7 +152,7 @@ fn platform_shift_arrows_scroll_one_line() {
     // Shift alone keeps Shift+Up as a program key.
     assert!(matches!(
         classify(&ks("up", shift(), None)),
-        KeyAction::Send(KeySpec::Named(NamedKey::ArrowUp), _)
+        KeyAction::Send(ref e) if e.key == KeySpec::Named(NamedKey::ArrowUp)
     ));
 }
 
@@ -185,8 +187,8 @@ fn plain_char_on_alt_screen_is_sent() {
         ..KeyContext::default()
     };
     assert!(matches!(
-        classify_key(&ks("a", Modifiers::default(), Some("a")), false, alt),
-        KeyAction::Send(KeySpec::Character(ref c), _) if c == "a"
+        classify_key(&ks("a", Modifiers::default(), Some("a")), false, KeyEventKind::Press, alt),
+        KeyAction::Send(ref e) if e.key == KeySpec::Character("a".into())
     ));
 }
 
@@ -200,7 +202,7 @@ fn altgr_char_on_windows_is_ignored() {
     let altgr = ks("q", ctrl_alt, Some("@"));
     // The platform flag settles it everywhere.
     assert_eq!(
-        classify_key(&altgr, true, KeyContext::default()),
+        classify_key(&altgr, true, KeyEventKind::Press, KeyContext::default()),
         KeyAction::Ignore
     );
     // Windows reports AltGr as Ctrl+Alt with no flag, so printable text is
@@ -212,7 +214,12 @@ fn altgr_char_on_windows_is_ignored() {
     }
     // A real Ctrl+Alt chord (no printable text) always reaches the encoder.
     assert!(matches!(
-        classify_key(&ks("q", ctrl_alt, None), true, KeyContext::default()),
+        classify_key(
+            &ks("q", ctrl_alt, None),
+            true,
+            KeyEventKind::Press,
+            KeyContext::default()
+        ),
         KeyAction::Send(..)
     ));
 }
@@ -220,8 +227,8 @@ fn altgr_char_on_windows_is_ignored() {
 #[gpui::test]
 fn ctrl_c_interrupts(cx: &mut TestAppContext) {
     // Ctrl+C is SIGINT even with a selection: it is never "copy" here.
-    assert_eq!(classify(&ks("c", ctrl(), None)), KeyAction::Interrupt);
-    assert_eq!(classify(&ks("C", ctrl(), None)), KeyAction::Interrupt);
+    assert_eq!(classify(&ks("c", ctrl(), None)), KeyAction::Interrupt(None));
+    assert_eq!(classify(&ks("C", ctrl(), None)), KeyAction::Interrupt(None));
 
     let (session, probe) = FakeTerminalSession::boxed(4, 8, "");
     cx.update(|cx| {
@@ -233,14 +240,14 @@ fn ctrl_c_interrupts(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn ctrl_space_encodes_nul(cx: &mut TestAppContext) {
-    let (spec, mods) = map_key(&ks("space", ctrl(), None)).expect("Ctrl+Space maps");
-    assert_eq!(spec, KeySpec::Character(" ".into()));
-    assert!(mods.ctrl);
+    let event = map_key(&ks("space", ctrl(), None), KeyEventKind::Press).expect("Ctrl+Space maps");
+    assert_eq!(event.key, KeySpec::Character(" ".into()));
+    assert!(event.mods.ctrl);
 
     let (session, probe) = FakeTerminalSession::boxed(4, 8, "");
     cx.update(|cx| {
         let session = cx.new(|_| session);
-        assert!(send_key(&session, &spec, mods, &ModeSnapshot::default(), cx).is_some());
+        assert!(send_key(&session, &event, &ModeSnapshot::default(), cx).is_some());
     });
     assert_eq!(probe.writes(), vec![vec![0u8]]);
 }
@@ -254,10 +261,11 @@ fn unmapped_chord_writes_nothing(cx: &mut TestAppContext) {
         ..Default::default()
     };
     assert!(encode_key(&spec, mods, &ModeSnapshot::default()).is_none());
+    let event = KeyEvent::new(spec, mods);
     let (session, probe) = FakeTerminalSession::boxed(4, 8, "");
     cx.update(|cx| {
         let session = cx.new(|_| session);
-        assert!(send_key(&session, &spec, mods, &ModeSnapshot::default(), cx).is_none());
+        assert!(send_key(&session, &event, &ModeSnapshot::default(), cx).is_none());
     });
     assert!(probe.writes().is_empty());
 }
@@ -279,13 +287,13 @@ fn alt_c_sends_escape_prefix() {
         alt: true,
         ..Default::default()
     };
-    let KeyAction::Send(spec, mods) = classify(&ks("c", alt, None)) else {
+    let KeyAction::Send(event) = classify(&ks("c", alt, None)) else {
         panic!("Alt+C must be sent");
     };
-    assert_eq!(spec, KeySpec::Character("c".into()));
-    assert!(mods.alt);
+    assert_eq!(event.key, KeySpec::Character("c".into()));
+    assert!(event.mods.alt);
     assert_eq!(
-        encode_key(&spec, mods, &ModeSnapshot::default()),
+        encode_key_event(&event, &ModeSnapshot::default()),
         Some(b"\x1bc".to_vec())
     );
 }
@@ -299,7 +307,7 @@ fn ctrl_shift_c_is_copy_not_send() {
     };
     assert_eq!(classify(&chord), KeyAction::Copy);
     // The chord still maps, so the ordering of the table is what makes it copy.
-    assert!(map_key(&chord).is_some());
+    assert!(map_key(&chord, KeyEventKind::Press).is_some());
 }
 
 #[test]
@@ -321,29 +329,34 @@ fn completion_navigation_forwards_until_selected() {
         let stroke = ks(key, mods, None);
         assert!(
             !matches!(
-                classify_key(&stroke, false, visible),
+                classify_key(&stroke, false, KeyEventKind::Press, visible),
                 KeyAction::Completion(_)
             ),
             "{key} must reach the shell while nothing is selected"
         );
         assert_eq!(
-            classify_key(&stroke, false, selected),
+            classify_key(&stroke, false, KeyEventKind::Press, selected),
             KeyAction::Completion(expected),
             "{key} navigates once a suggestion is selected"
         );
     }
     // Escape always dismisses; Enter accepts only with a selection.
     assert_eq!(
-        classify_key(&ks("escape", Modifiers::default(), None), false, visible),
+        classify_key(
+            &ks("escape", Modifiers::default(), None),
+            false,
+            KeyEventKind::Press,
+            visible
+        ),
         KeyAction::Completion(CompletionKey::Dismiss)
     );
     let enter = ks("enter", Modifiers::default(), Some("\r"));
     assert!(matches!(
-        classify_key(&enter, false, visible),
+        classify_key(&enter, false, KeyEventKind::Press, visible),
         KeyAction::Send(..)
     ));
     assert_eq!(
-        classify_key(&enter, false, selected),
+        classify_key(&enter, false, KeyEventKind::Press, selected),
         KeyAction::Completion(CompletionKey::Accept)
     );
 }
@@ -357,7 +370,7 @@ fn completion_tab_select_then_accept() {
     };
     let tab = ks("tab", Modifiers::default(), None);
     assert_eq!(
-        classify_key(&tab, false, visible),
+        classify_key(&tab, false, KeyEventKind::Press, visible),
         KeyAction::Completion(CompletionKey::SelectFirst)
     );
     let selected = KeyContext {
@@ -365,7 +378,7 @@ fn completion_tab_select_then_accept() {
         ..visible
     };
     assert_eq!(
-        classify_key(&tab, false, selected),
+        classify_key(&tab, false, KeyEventKind::Press, selected),
         KeyAction::Completion(CompletionKey::Accept)
     );
 }
@@ -379,7 +392,39 @@ fn completion_tab_forwards_when_disabled() {
         ..KeyContext::default()
     };
     assert!(matches!(
-        classify_key(&ks("tab", Modifiers::default(), None), false, visible),
-        KeyAction::Send(KeySpec::Named(NamedKey::Tab), _)
+        classify_key(&ks("tab", Modifiers::default(), None), false, KeyEventKind::Press, visible),
+        KeyAction::Send(ref e) if e.key == KeySpec::Named(NamedKey::Tab)
     ));
 }
+
+// ── Press / repeat / release (IN-0040, US-0108) ─────────────────────────
+
+#[test]
+fn the_kind_reaches_the_event_and_text_stops_at_a_release() {
+    let stroke = ks("a", Modifiers::default(), Some("a"));
+    let alt = KeyContext {
+        alt_screen: true,
+        ..KeyContext::default()
+    };
+    for (kind, text) in [
+        (KeyEventKind::Press, Some("a")),
+        (KeyEventKind::Repeat, Some("a")),
+        (KeyEventKind::Release, None),
+    ] {
+        let event = map_key(&stroke, kind).expect("a plain letter maps");
+        assert_eq!(event.kind, kind);
+        assert_eq!(event.text.as_deref(), text, "{kind:?}");
+        // A GPUI `Keystroke` carries neither, so the kitty
+        // `REPORT_ALTERNATE_KEYS` flag stays inert for this embedder.
+        assert_eq!(event.shifted, None);
+        assert_eq!(event.base_layout, None);
+    }
+    // `classify_key` carries the kind through the table untouched.
+    let KeyAction::Send(held) = classify_key(&stroke, false, KeyEventKind::Repeat, alt) else {
+        panic!("a letter on the alternate screen is sent");
+    };
+    assert_eq!(held.kind, KeyEventKind::Repeat);
+}
+
+// Ctrl+C across every flag state is `us0108_verify_tests`'s
+// `ctrl_c_across_the_flag_states`, which asserts the encoded bytes too.

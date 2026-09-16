@@ -48,19 +48,20 @@ pub use logging::{
 /// the engine knows. Re-exported here **for one release**, so the move did not
 /// have to touch every consumer at once; name them from `oneterm_vt::input`.
 pub use oneterm_vt::input::{
-    KeyMods, KeySpec, MouseModifiers, NamedKey, TerminalMouseButton, encode_key, encode_mouse_move,
-    encode_mouse_press, encode_mouse_release, encode_wheel_event,
+    KeyEvent, KeyEventKind, KeyMods, KeySpec, MouseModifiers, NamedKey, TerminalMouseButton,
+    encode_key, encode_key_event, encode_mouse_move, encode_mouse_press, encode_mouse_release,
+    encode_wheel_event,
 };
 pub use oneterm_vt::search::{SearchMatch, SearchOptions};
 /// The engine vocabulary this crate's own API speaks, re-exported so a consumer
 /// can name what [`TerminalContent`]'s native accessors return without taking a
 /// direct dependency on `oneterm-vt` first (`US-0085`).
 pub use oneterm_vt::{
-    Attrs, CellWidth, Color, CursorShape, GraphicData, GraphicId, HyperlinkId, ModeSnapshot,
-    MouseEncoding, MouseProtocol, MouseReporting, NamedColor, Progress as TerminalProgress,
-    ResizePolicy, Rgb, RowId, SelectionKind, SelectionRange, Semantic, SeqNo, ShellMark, Size,
-    SnapshotCell, SnapshotContent, SnapshotCursor, SnapshotPlacement, SnapshotRow, SnapshotUpdate,
-    Style, StyleRun, Terminal,
+    Attrs, CellWidth, Color, CursorShape, GraphicData, GraphicId, HyperlinkId, KeyboardFlags,
+    ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting, NamedColor,
+    Progress as TerminalProgress, ResizePolicy, Rgb, RowId, SelectionKind, SelectionRange,
+    Semantic, SeqNo, ShellMark, Size, SnapshotCell, SnapshotContent, SnapshotCursor,
+    SnapshotPlacement, SnapshotRow, SnapshotUpdate, Style, StyleRun, Terminal,
 };
 pub use osc::encode_osc52;
 pub use osc_agent::{
