@@ -56,6 +56,37 @@ fn snapshot_contains(session: &PtySession<LocalSession>, needle: &str) -> bool {
     session.snapshot().text().contains(needle)
 }
 
+/// Ceiling for one round trip through a real shell: write, and wait for the
+/// shell's answer to reach the snapshot or its exit to reach `alive()`.
+///
+/// This is a *detects-at-all* gate, not a latency budget. Every test that uses
+/// it fails the same way whether the bound is one second or fifteen — the shell
+/// never answered — so the number buys nothing but flake resistance, and the
+/// tests here run 8-wide against a real shell each, on runners with two vCPUs.
+///
+/// Measured on the owner's host with the whole binary pinned to two logical
+/// CPUs at `--test-threads=8` (ten runs, worst case of each wait): shell exit
+/// 405 ms, `hello` echo 437 ms, `hello_world` echo 415 ms, `oneterm_e2e` echo
+/// 169 ms. The bounds these replaced were 4 s, 2 s, 2 s and 6 s, so the tightest
+/// of them had under 5x headroom — and a two-vCPU ubuntu runner blew the 4 s one
+/// (BUG-0066). 15 s was already this file's bound for the PowerShell prompt.
+const SHELL_ROUND_TRIP: Duration = Duration::from_secs(15);
+
+/// The snapshot's non-blank lines, for an assertion message.
+///
+/// The grid persists, so this answers "did the shell ever print anything (a
+/// prompt, an error) at all" — which is what separates a shell that never
+/// started from one that ran and whose exit never came back.
+fn snapshot_lines(session: &PtySession<LocalSession>) -> Vec<String> {
+    session
+        .snapshot()
+        .text()
+        .lines()
+        .map(|line| line.trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
 /// Serialises every real-shell spawn in this test binary.
 ///
 /// `session_orphan_tests` works out which processes belong to its session by
@@ -105,7 +136,7 @@ fn assert_powershell_prompt_emits_cwd(kind: oneterm_core::ShellKind, label: &str
     };
     let session = spawn_guarded(cfg).unwrap_or_else(|error| panic!("spawn {label}: {error}"));
 
-    let emitted_cwd = wait_until(Duration::from_secs(15), || session.cwd().is_some());
+    let emitted_cwd = wait_until(SHELL_ROUND_TRIP, || session.cwd().is_some());
     // `snapshot()` consumes render damage, which is fine here: no renderer runs.
     let snapshot = session.snapshot().text();
     assert!(
@@ -270,9 +301,11 @@ fn selection_text_and_clear() {
     assert!(s.selection_text().is_none() || s.selection_text().as_deref() == Some(""));
     // Write a few characters then select.
     let _ = s.write(b"hello");
-    assert!(wait_until(Duration::from_secs(2), || snapshot_contains(
-        &s, "hello"
-    )));
+    assert!(
+        wait_until(SHELL_ROUND_TRIP, || snapshot_contains(&s, "hello")),
+        "`hello` never reached the snapshot; blank lines dropped: {:?}",
+        snapshot_lines(&s)
+    );
     s.mouse_down(
         0.0,
         0.0,
@@ -291,9 +324,13 @@ fn selection_text_and_clear() {
 fn mouse_drag_updates_selection_not_mouse_move() {
     let s = spawn_default();
     let _ = s.write(b"hello_world");
-    assert!(wait_until(Duration::from_secs(2), || {
-        snapshot_contains(&s, "hello_world")
-    }));
+    assert!(
+        wait_until(SHELL_ROUND_TRIP, || {
+            snapshot_contains(&s, "hello_world")
+        }),
+        "`hello_world` never reached the snapshot; blank lines dropped: {:?}",
+        snapshot_lines(&s)
+    );
     // Start selection at col 0
     s.mouse_down(
         0.0,
@@ -346,10 +383,16 @@ fn trait_wheel_scroll_does_not_panic() {
 fn spawned_shell_exit_is_detected() {
     // Cross-platform round trip: request shell exit and observe lifecycle state.
     let s = spawn_default();
+    let started = Instant::now();
     let _ = s.write(b"exit\r");
+    let detected = wait_until(SHELL_ROUND_TRIP, || !s.alive());
     assert!(
-        wait_until(Duration::from_secs(4), || !s.alive()),
-        "shell exit not detected after 4s"
+        detected,
+        "shell exit not detected in {:?} (bound {SHELL_ROUND_TRIP:?}); alive={} at the \
+         end; terminal snapshot, blank lines dropped: {:?}",
+        started.elapsed(),
+        s.alive(),
+        snapshot_lines(&s),
     );
 }
 
@@ -359,12 +402,11 @@ fn spawned_shell_exit_is_detected() {
 fn e2e_echo_output_rendered_in_snapshot() {
     let s = spawn_default();
     let _ = s.write(b"echo oneterm_e2e\r");
-    let found = wait_until(Duration::from_secs(6), || {
-        snapshot_contains(&s, "oneterm_e2e")
-    });
+    let found = wait_until(SHELL_ROUND_TRIP, || snapshot_contains(&s, "oneterm_e2e"));
+    let lines = snapshot_lines(&s);
     let _ = s.close();
     assert!(
         found,
-        "`echo oneterm_e2e` did not appear in the snapshot after 6s"
+        "`echo oneterm_e2e` never appeared in the snapshot; blank lines dropped: {lines:?}"
     );
 }
