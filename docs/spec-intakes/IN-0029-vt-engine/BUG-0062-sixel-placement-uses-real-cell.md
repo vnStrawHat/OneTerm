@@ -226,7 +226,7 @@ in [`low-level-design/graphics.md`](low-level-design/graphics.md), which already
 
 Measurable by a hostile verifier from a clean checkout of this branch:
 
-- [ ] `cargo test -p oneterm-vt footprint` passes, and its assertions are exact cell counts for a
+- [x] `cargo test -p oneterm-vt footprint` passes, and its assertions are exact cell counts for a
       `384 x 576` image:
 
       | cell pixels | source | expected `cols x rows` |
@@ -236,23 +236,23 @@ Measurable by a hostile verifier from a clean checkout of this branch:
       | unset `(0, 0)` | never called | `39 x 29` (`VIRTUAL_CELL`) |
 
       and a `1 x 1` image is `1 x 1` at all three.
-- [ ] The same test proves the cursor walk stays inside the footprint: after the image, the
+- [x] The same test proves the cursor walk stays inside the footprint: after the image, the
       cursor row is not above the last stamped row, at each of the three cell sizes.
-- [ ] `cargo test -p oneterm-terminal placement` passes: through `TerminalSession` /
+- [x] `cargo test -p oneterm-terminal placement` passes: through `TerminalSession` /
       `TerminalContent`, a Sixel placed after `set_cell_pixels(9, 18)` reports a different
       `SnapshotPlacement::cols`/`rows` than the same Sixel placed with the cell unset, and both
       match the table above. This is the adapter-level proof that the real cell reaches placement,
       not only the engine's own field.
-- [ ] `cargo test -p oneterm-terminal-view image_quad` passes: for a `384 x 576` image at a 9x18
+- [x] `cargo test -p oneterm-terminal-view image_quad` passes: for a `384 x 576` image at a 9x18
       device cell and scale factor 2.0, the image rectangle's **device** size is exactly
       `384 x 576` — the image's own pixels — and **not** `43 * 9` x `32 * 18` (`387 x 576`), the
       footprint's. The clip rectangle is the footprint.
-- [ ] `grep -rn "SIXEL_VIRTUAL_CELL" crates/` returns nothing.
-- [ ] `cargo test -p oneterm-tools --test corpus_check` passes with **no snapshot edited** in the
+- [x] `grep -rn "SIXEL_VIRTUAL_CELL" crates/` returns nothing.
+- [x] `cargo test -p oneterm-tools --test corpus_check` passes with **no snapshot edited** in the
       diff: the corpus never calls `set_cell_pixels`, so every byte is unchanged.
-- [ ] `python scripts/vt-public-api.py --check` passes with **no snapshot edited**: nothing public
+- [x] `python scripts/vt-public-api.py --check` passes with **no snapshot edited**: nothing public
       changed spelling.
-- [ ] `pwsh scripts/ci-local.ps1 -Full` is green.
+- [x] `pwsh scripts/ci-local.ps1 -Full` is green.
 
 ## Verification Plan
 
@@ -270,11 +270,11 @@ Measurable by a hostile verifier from a clean checkout of this branch:
 - Platform: not applicable; no platform-specific code path.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ### E2E criterion (owner, after merge)
@@ -304,7 +304,60 @@ Measurable by a hostile verifier from a clean checkout of this branch:
 
 ## Evidence and Gaps
 
-To be completed after implementation.
+Four commits on `fix/sixel-real-cell` from `main` (`47e7e93c`): the packet, the engine, the
+adapter and view, the docs, plus one fixup for the rustdoc self-containment gate. Ten files,
+about 300 insertions.
+
+Test names, since none of them is selected by the obvious filter:
+
+| Level | Command | Test |
+| --- | --- | --- |
+| Unit, engine | `cargo test -p oneterm-vt --lib graphics::` | `footprint_follows_the_embedder_cell_size`, `a_one_pixel_image_covers_one_cell_at_every_cell_size`, `a_zero_axis_falls_back_to_the_virtual_cell` |
+| Unit, view | `cargo test -p oneterm-terminal-view --lib render::metrics` | `an_image_is_drawn_at_its_own_pixels_and_clipped_to_the_footprint` |
+| Integration | `cargo test -p oneterm-terminal --lib session::` | `the_pushed_cell_size_decides_a_sixel_placement_footprint` |
+
+The footprint table, from the engine and adapter tests (image `384 x 576`, the OpenTUI dragon):
+
+| cell pixels | source | `cols x rows` | cursor lands |
+| --- | --- | --- | --- |
+| `(9, 18)` | `set_cell_pixels(9, 18)`, 100 % scale | `43 x 32` | row 31, the image's last |
+| `(18, 36)` | `set_cell_pixels(18, 36)`, 200 % scale | `22 x 16` | row 15, the image's last |
+| `(0, 0)` | never set — `VIRTUAL_CELL` | `39 x 29` | row 28, the image's last |
+| `(9, 0)` / `(0, 18)` | half-set, an embedder bug | `39 x 29` | — |
+
+A `1 x 1` image is `1 x 1` at all three cell sizes.
+
+The view quad, from `an_image_is_drawn_at_its_own_pixels_and_clipped_to_the_footprint`: at a 9x18
+device cell and scale factor 2.0 the image rectangle is `384 x 576` **device** pixels — the
+image's own — while the clip is `387 x 576`, the `43 x 32` footprint. The test asserts the two
+numbers differ, so it fails if the quad is ever sized from the footprint again.
+
+- `cargo test -p oneterm-vt` (default) — 548 + 12 suites, all passed.
+- `cargo test -p oneterm-vt --no-default-features`, `--all-features`, `--features vt-paranoid` —
+  all passed, including the whole-history integrity walk.
+- `cargo test --workspace` — passed, `corpus_check` included and **no corpus snapshot edited**:
+  the corpus never calls `set_cell_pixels`, so every byte took the fallback path.
+- `python scripts/vt-public-api.py --check --no-doc` — "public API surface unchanged
+  (public-api.windows.txt)"; `--check-nameable` and `--diff-platforms` unchanged (the delta is the
+  same six `oneterm_vt::pty` lines). No snapshot edited, so nothing to mirror to unix.
+- `python scripts/check-english.py` (908 files), `scripts/check-doc-paths.py` (199 paths) — passed.
+- `pwsh scripts/ci-local.ps1 -Full` — `ci-local: all checks passed`, `cargo deny` included
+  (advisories ok, bans ok, licenses ok). Log kept out of the repository.
+
+Gaps:
+
+- **E2E not run here** (`e2e_proof 0`), and it is the criterion this packet exists for: nothing in
+  this branch has been compared against Windows Terminal. The owner's steps are above, and they
+  must be run at **both** 100 % and 200 % display scale — one scale alone cannot tell a real fix
+  from a tuned constant, because the old error ran in opposite directions at the two.
+- **The `crates/vt` rustdoc may not cite a work packet** (`ci-local`'s self-containment step): the
+  first pass of the engine and test doc comments named `BUG-0062` and the gate caught it. The
+  reasoning is in the doc comments, only the id is gone. Worth knowing before the next `crates/vt`
+  edit, which is why it is recorded rather than quietly fixed.
+- **No test covers a metrics change after an image is placed.** The behaviour is documented
+  (the footprint stays, the picture is cropped or gains margin) and follows from the clip, but the
+  GPUI test window pins `scale_factor` at 2.0 — the same limitation `BUG-0061` recorded.
+- The XTSMGRAPHICS and re-placing follow-ups above are open by design.
 
 ## Handoff
 

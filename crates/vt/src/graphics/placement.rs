@@ -103,7 +103,7 @@ pub(crate) fn place(state: &mut State, image: DecodedSixel) -> Vec<ScrollReport>
 ///
 /// `Terminal::set_cell_pixels` is how the embedder says so, and it is the same
 /// number `CSI 14 t` reports — so a program that sizes an image from that reply
-/// gets the cells it asked for (`BUG-0062`). **An embedder that never calls it
+/// gets the cells it asked for. **An embedder that never calls it
 /// keeps VT340 sizing**, which is the documented fallback rather than an
 /// accident: the engine's own tests, the `headless` example and the corpus
 /// runner all place at 10x20 and their output is unchanged.

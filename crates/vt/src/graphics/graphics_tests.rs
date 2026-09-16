@@ -681,7 +681,7 @@ fn dragon(session: &mut Session) {
 ///
 /// The three rows are the real device cell at 100 % display scale, the same
 /// font at 200 %, and an embedder that skipped `set_cell_pixels`. Before
-/// `BUG-0062` every row answered `39 x 29`, so a program that sized the image
+/// this fix every row answered `39 x 29`, so a program that sized the image
 /// from the `CSI 14 t` reply had it drawn at `device_cell / (10, 20)` of the
 /// size it meant.
 #[test]

@@ -44,7 +44,7 @@ pub(crate) use sixel::SixelParser;
 /// [`Terminal::set_cell_pixels`](crate::Terminal::set_cell_pixels), which is
 /// also what `CSI 14 t` reports, so a program that sizes an image from that
 /// reply covers the cells it meant. **An embedder that never calls
-/// `set_cell_pixels` gets VT340 sizing**, unchanged from before `BUG-0062`.
+/// `set_cell_pixels` gets VT340 sizing**, which is what a DEC terminal does.
 ///
 /// The renderer draws the image at its own pixel size, clipped to the
 /// footprint. It does not rescale to this cell, and there is no
