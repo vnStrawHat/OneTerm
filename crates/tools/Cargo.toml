@@ -17,6 +17,12 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# A passthrough, so `vt-bench grid --check` can see that the engine is walking
+# its whole history after every feed and refuse to produce a verdict instead of
+# reporting a number that is orders of magnitude off.
+vt-paranoid = ["oneterm-vt/vt-paranoid"]
+
 # Diagnostics only — this crate is never a dependency of the app; it sits
 # outside the L0–L4 layering (docs/agents/crate-dependency-rules.md), like a
 # `tools/` directory, and may only reach down to leaf crates.
