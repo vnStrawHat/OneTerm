@@ -632,3 +632,66 @@ No live reference-implementation comparison; xterm's own pages still unreachable
 lock, the keypad, media and modifier keys remain unrepresentable in `KeyMods` / `NamedKey`; the
 manual Windows walk was not attempted and the packet's own "should not be accepted without the
 walk" still stands.
+
+---
+
+# Final confirmation at 4574b6ac
+
+Branch `feat/vt-kitty-keyboard` @ `4574b6ac`. Date: 2026-09-16. Nothing committed by the verifier.
+
+**Verdict: PASS.** Both remaining byte defects are fixed, the three record and prose notes are
+closed, and the one expectation of mine the branch corrected was right to correct.
+
+| | Confirmed |
+| --- | --- |
+| R1 | `text_field` returns `None` on `KeyEventKind::Release`. The 448-case event-type matrix is **0 mismatches**: a release of a text key under `EVT \| ALL \| TXT` is `ESC[97;1:3u`, and a repeat still carries `;97` because a repeat does insert. Both halves asserted, on all 32 flag sets |
+| R2 | Legacy `F15` is `CSI 28 ~` -- xterm's and rxvt's own `kf15`, and the DEC VT220 code -- which collides with nothing. The equivalence harness reports `3072000` compared, `61440 deliberately moved (ctrl+~, F15)`, **0 mismatches**, so the divergence is named and counted rather than tolerated, and the moved count is pinned. The in-crate guard now walks `0u8..32` -- 32 of 32 flag sets, the empty one included -- on both rungs, and my sweep covers the 31 non-empty ones: no CSI sequence anywhere ends in `R`. Excluding `SS3 R` for a plain `F3` is correct: a Cursor Position Report is `CSI <row> ; <col> R`, so only a CSI introducer can be mistaken for one, and the test says so |
+| R3 | The clause-6 entry now reads "the three remaining ceilings -- modifier values `1`-`8` only, no private-use keypad, lock, media or modifier keys, and an un-shifted key code derived from the PC-101 shift relation". Both stale clauses are gone, and `F15` has its own **Breaking, clause 6** entry |
+| R4 | `- [x] Reopened (acceptance rework)` is ticked and the harness snippet carries `status="reopened"` |
+| R5 | Recorded twice: a row in the findings table and a paragraph in Gaps, both naming the ambiguity and claiming nothing. Measured behaviour, printed by the test: `alt+a` is `ESC a` at level 0 and `CSI 27;3;97~` at levels 1 and 2 |
+
+## The corrected row: the branch is right, I was wrong
+
+My adopted row asserted that `CSI < u` restores the live value in force before the push. It does
+not, and the specification's own sentence is the one my row quoted two lines later:
+
+> If a pop request is received that **empties the stack, all flags are reset**.
+
+In that sequence `CSI = 4 ; 3 u` had set the live flags to `3` **without pushing**, so the stack was
+still empty and the following `CSI > 1 u` was its first and only entry. Popping it therefore empties
+the stack, and the flags reset to `0` -- the pre-push live value was never on the stack and there is
+nothing in the specification that preserves it. `CSI ? 0 u` is correct and my `CSI ? 3 u` was not.
+The branch also added the case my row was reaching for, with two entries on the stack, where the pop
+really does uncover the older one (`CSI > 3 u`, `CSI > 1 u`, pop, `CSI ? 3 u`). That is the right
+correction and the right addition.
+
+## Test results at this commit
+
+```
+[event-type-matrix]  448 cases, 0 mismatches      [pc101-shift-table]    68 cases, 0 mismatches
+[associated-text-modifiers] 9 cases, 0 mismatches [function-keys]        24 cases, 0 mismatches
+[modify-other-keys] 26 cases, 0 mismatches        [deckm-deckpam]       122 cases, 0 mismatches
+[alternate-keys]     5 cases, 0 mismatches        [legacy-f15] F15 on the legacy rung -> ESC[28~
+reverify_us0105:              11 passed, 0 failed
+verify_us0105_independent:    17 passed, 0 failed, 16 frozen deviations (13 + 3, all at flags 0)
+verify_us0099_equiv:  encode_key cases compared: 3072000, 61440 deliberately moved
+                      (ctrl+~, F15), 0 mismatches
+```
+
+## Gates
+
+`pwsh scripts/ci-local.ps1 -Full` on the branch as delivered, with no file of mine moved out --
+the re-derivation test is committed now, so the gate ran it too. Private log
+`<scratchpad>/ci-full-3.log`, 21 720 lines. **`ci-local: all checks passed.`** All 24 steps,
+including `vt-public-api.py --check --no-doc`, `--check-nameable --no-doc`, `--diff-platforms`
+("the delta is 6 lines, all inside `oneterm_vt::pty`"), both `cargo doc` runs under `-D warnings`,
+the package list, the two rustdoc self-containment greps, check-doc-paths, check-english, and
+`cargo deny check licenses bans advisories` ("advisories ok, bans ok, licenses ok").
+
+## Standing, unchanged
+
+The manual Windows walk was still not run, and the packet's own "should not be accepted without the
+walk" still stands -- that is the one acceptance item this verification cannot supply. There is
+still no comparison against a live reference implementation, `alt` at `modifyOtherKeys` level 1 is
+still unresolved upstream, and caps lock, num lock, the keypad, the media keys and the modifier keys
+remain unrepresentable in `KeyMods` / `NamedKey` and therefore untestable.
