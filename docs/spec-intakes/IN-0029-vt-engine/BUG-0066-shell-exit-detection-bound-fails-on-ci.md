@@ -477,3 +477,20 @@ arrives with elapsed time, `alive()` and the snapshot in the message: an empty s
 shell that never started, a populated snapshot with `alive=true` is an exit that never came
 back through the reaper, and neither is this packet's ceiling -- both are new packets against
 `crates/vt` or `crates/local-shell`.
+
+## Coordinator note after verification (2026-09-16)
+
+The verifier (evidence: `evidence/BUG-0066-verify.md`) confirmed the remedy and the shape of the
+measurement, and corrected the mechanism stated above:
+
+- Sessions are closed on `Drop` (`crates/local-shell/src/session.rs`, `Drop for LocalSession`
+  calls `pty_close()` synchronously), so the live-shell population scales with the test thread
+  count (about 23 processes at `--test-threads=8`, 12 at 2) and drains; it does not accumulate
+  because tests "never close". The bound raise is the right fix either way.
+- `docs/review-refresh-2026-08/06-testing.md` TEST-02 records this class of flake and prescribes a
+  fake transport plus an `#[ignore]`d real-shell smoke test. Not adopted here: it is a larger
+  change than a bound, and the real-shell tests are the only Unix coverage of the exit path.
+  Reviewed, no change; left as the follow-up if a 15 s bound ever fails.
+- The "flood test costs ~47 ms" figure did not reproduce; treat it as a null result.
+- The `close()` latency assertion (500 ms) was measured at 42 µs worst on two pinned cores, so it
+  is not a flake candidate.
