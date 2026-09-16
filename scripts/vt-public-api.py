@@ -25,8 +25,8 @@ both a public and a private path passes on the public one -- correctly, because
 the embedder can name it. A fourth limit is the `NAMED` pattern below: it wants
 three characters or more, so that a generic parameter (`T`, `Ps`) is not read as
 a type, and a type named in one or two characters would be skipped with it. None
-exists today. `KNOWN_UNNAMEABLE` below carries the instances that predate the
-gate; that list may only shrink.
+exists today. There is no allow-list: a finding is a signature to fix, not an
+entry to record.
 
 **There are two snapshots, one per platform family** (`US-0104`): the `pty` module
 publishes `PipeReader`, `PipeWriter` and `Options::escape_args` on Windows, and
@@ -87,19 +87,6 @@ TAG = re.compile(r"<[^>]+>")
 NAMED = re.compile(r"\b[A-Z][A-Za-z0-9_]{2,}\b")
 # An enum variant opens its own line and is never a type reference.
 VARIANT = re.compile(r"(?m)^\s*[A-Z][A-Za-z0-9_]*")
-# The unnameable types that already existed when the gate was written (`BUG-0059`
-# closed the four the outside evaluation reported and found these seven on the way).
-# The list may only shrink: a name here that no longer fires is an error, and a
-# name not here that does fire is the failure the gate exists for.
-KNOWN_UNNAMEABLE = {
-    "ByteSpan",
-    "ColorOverrides",
-    "Invalidation",
-    "ModeState",
-    "ParamSpans",
-    "StrSpan",
-    "Watermark",
-}
 # Where this crate defines a type, at any visibility: `pub`, `pub(crate)`,
 # `pub(super)` or `pub(in path)`. A type missing from this map can never be
 # reported, so the visibility group is deliberately anything in parentheses.
@@ -179,7 +166,7 @@ def defining_modules() -> dict[str, str]:
 
 def check_nameable() -> int:
     """Fail on a public signature naming a type the embedder cannot write."""
-    modules, defined, findings, seen = public_modules(), defining_modules(), [], set()
+    modules, defined, findings = public_modules(), defining_modules(), []
     for page in sorted(DOC_ROOT.rglob("*.html")):
         name = ITEM.match(page.name)
         module = page.parent.relative_to(DOC_ROOT).as_posix()
@@ -198,19 +185,11 @@ def check_nameable() -> int:
                 # not a type an embedder has to name.
                 if named in (item, "Self") or named not in defined:
                     continue
-                seen.add(named)
                 finding = f"{prefix}::{item}: `{named}` is not nameable (defined in `{defined[named]}`)"
-                if named not in KNOWN_UNNAMEABLE and finding not in findings:
+                if finding not in findings:
                     findings.append(finding)
-    fixed = sorted(KNOWN_UNNAMEABLE - seen)
-    if fixed:
-        findings.append(
-            f"KNOWN_UNNAMEABLE is stale -- no public signature names "
-            f"{', '.join(fixed)} any more; delete from the ledger"
-        )
     if not findings:
-        print(f"every type in a public signature is nameable, "
-              f"but the {len(KNOWN_UNNAMEABLE)} in KNOWN_UNNAMEABLE")
+        print("every type in a public signature is nameable")
         return 0
     print(
         "oneterm-vt has public signatures naming types no embedder can write.\n"
