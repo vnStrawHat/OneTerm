@@ -338,6 +338,11 @@ the legacy rung is still written through unchanged, which is pre-existing and un
 
 **The corpus does not move.** `cargo test -p oneterm-tools --test corpus_check`: 2 passed.
 
+**The gate.** `pwsh scripts/ci-local.ps1 -Full` ends `ci-local: all checks passed.`, `cargo deny`
+included. It also passed on the delivery the verification failed, which is the reason that line is
+not evidence on its own: `--check-nameable` (new, from `BUG-0059`) and `--diff-platforms` are both
+green, and neither can see a wrong byte.
+
 **The surface diff is exactly the planned additions**, nothing removed: two `ModeSnapshot` fields,
 `Terminal::encode_key_event`, `input::KeyEvent` with its seven items, `input::KeyEventKind` with
 three variants, and `input::encode_key_event`. Sixteen lines added to each snapshot; the Unix file
@@ -355,16 +360,22 @@ against `main`:
 
 | | Insertions | Deletions | Net | Budget |
 | --- | --- | --- | --- | --- |
-| `crates/vt` production | 523 | 9 | **+514** | +430 |
-| `crates/vt` tests | 830 | 40 | **+790** | +400 |
+| `crates/vt` production | 597 | 13 | **+584** | +430 |
+| `crates/vt` tests | 2 182 | 49 | **+2 133** | +400 |
 
-Production is 84 lines over. `crates/vt/src/input/kitty.rs` is 348 lines of which **104 are
-comment lines and 22 blank**, so the executable half is about 222; the thirty-eight-arm
-`named_form` table is 45 of those and is irreducible. The overrun is documentation and the key
-table, and cutting either to reach a number would be the wrong trade. Tests are 390 over because
-the acceptance criteria ask for three separate exhaustive runs (the specification table, the
-115 200-case flag cross-product and the hostile matrix) plus the round-trip parser those runs
-need; the estimate was low, not the tests excessive.
+Production is 154 lines over. `crates/vt/src/input/kitty.rs` is 410 lines of which about 130 are
+comment lines and 25 blank, so the executable half is around 255; the thirty-eight-arm `named_form`
+table is 50 of those and is irreducible, and most of the comments are the specification sentences
+each rung answers -- which is what the verification found missing the first time.
+
+Tests are 1 733 over, and 1 132 of that is one file: the independently derived 214-row table
+adopted whole from the verification. Keeping it is the point. The rest is the three exhaustive runs
+the acceptance criteria ask for, their round-trip parsers, and the regression rows for the four
+blocking defects.
+
+Both numbers are reported rather than met. Cutting documentation or deleting the independent table
+to reach an estimate written before the work would be the wrong trade, and the estimate is the
+thing that was wrong.
 
 Gaps to state rather than discover:
 
