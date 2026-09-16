@@ -1,0 +1,37 @@
+# Every Rust job in this repository starts the same three steps: read the channel
+# `rust-toolchain.toml` pins, install exactly that toolchain, restore that job's
+# cargo cache. Six jobs carried six identical copies, which is six places to
+# forget when a pinned action SHA moves (`US-0109`). This is the one copy.
+#
+# The SHAs below are the ones those six jobs already used, unchanged. Pinning is
+# the security property; keep it, and keep the comment that dates the pin.
+name: Set up Rust
+description: Install the toolchain pinned by rust-toolchain.toml and restore the cargo cache.
+
+inputs:
+  components:
+    description: >
+      Comma-separated rustup components, for example "rustfmt, clippy". Leave it
+      unset for a job that needs neither, which is what those jobs did before by
+      omitting the key.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Read pinned toolchain
+      id: toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+        [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
+        echo "channel=$channel" >> "$GITHUB_OUTPUT"
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
+      with:
+        toolchain: ${{ steps.toolchain.outputs.channel }}
+        components: ${{ inputs.components }}
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23

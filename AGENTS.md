@@ -92,8 +92,10 @@ Refs: #issue
 ## 4. Automated quality gate
 
 Before completing a task, the agent **must** run and confirm the **same set of checks
-CI runs** (`.github/workflows/ci.yml`). Run the bundled script (it stops at the first
-failure and prints the failing command):
+CI runs** (`.github/workflows/ci.yml`). CI spreads that set across eight jobs and three
+runner OSes and runs each check only in the jobs that need it; the local script is one
+machine, so it runs the whole set in one place. Run the bundled script (it stops at the
+first failure and prints the failing command):
 
 ```bash
 scripts/ci-local.sh          # bash / Git Bash
