@@ -31,7 +31,7 @@ use crate::pty::{
 /// Capture it on a thread where terminal signals are unblocked and hand it to
 /// [`Options::child_signal_mask`]: a child forked from a worker thread otherwise
 /// inherits that thread's blocked mask, and Ctrl-C never reaches it.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub struct SignalMask(libc::sigset_t);
 
 impl SignalMask {
@@ -40,8 +40,11 @@ impl SignalMask {
         let mut set = MaybeUninit::<libc::sigset_t>::uninit();
 
         // `pthread_sigmask` only writes the kernel-relevant prefix of a
-        // `sigset_t`, so the padding has to be zeroed first: reading it (in
-        // `PartialEq`) would otherwise be undefined behaviour.
+        // `sigset_t`, so the padding has to be zeroed first: without this the
+        // `assume_init` below would claim bytes the call never wrote, and every
+        // later copy of this `Copy` type would read them. Uninitialised bytes
+        // inside the integer array glibc uses for a `sigset_t` are undefined
+        // behaviour to read at all, whoever reads them.
         //
         // SAFETY: `set` is a valid, writable `sigset_t`.
         if unsafe { libc::sigemptyset(set.as_mut_ptr()) } != 0 {

@@ -219,6 +219,17 @@ carry no API change at all. Such a release says so below rather than being omitt
   limit under `? 2027`, so a continuation arriving in a later `feed` starts a cluster of its own.
   Zero for every well-formed stream.
 
+### Removed
+
+- **`pty::SignalMask` and `pty::Options` no longer implement `PartialEq` or `Eq`.** The derive on
+  `SignalMask` asked `libc::sigset_t` for a comparison it does not have: an alias for `u32` on
+  macOS, an opaque struct on glibc, so the code compiled on one Unix and not on the other, and the
+  `Option<SignalMask>` field made `Options` inherit the same problem on every Unix. Nothing needs
+  the comparison -- a captured signal mask is passed to a child, not matched against another mask
+  -- so the derives are gone on both platforms rather than being reimplemented by hand over
+  padding bytes. Windows is where this is a real removal: `Options` did compare there. No
+  signature, field or type moved.
+
 ### Changed
 
 - **Behaviour, no signature: a Sixel's footprint in cells comes from your cell size, not from

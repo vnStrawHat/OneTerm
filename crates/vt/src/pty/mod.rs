@@ -109,7 +109,12 @@ impl Shell {
 ///
 /// `drain_on_exit` is deliberately absent: it only ever configured the read loop
 /// this crate does not have.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+///
+/// Not comparable: on Unix the struct holds a `SignalMask`, which wraps a
+/// `libc::sigset_t` that is a plain `u32` on some targets and an opaque struct
+/// on others. A derived `PartialEq` compiles on the first kind only, and a
+/// hand-written one would compare padding. Nothing needs it.
+#[derive(Clone, Debug, Default)]
 pub struct Options {
     /// The program to run. `None` selects the platform default.
     pub shell: Option<Shell>,
