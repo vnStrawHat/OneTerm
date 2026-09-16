@@ -525,7 +525,10 @@ reachable through the loopback socket, whose readiness is level-triggered; the
 real-shell tests in `session_tests.rs` are what cover it.
 
 **Closing a local session** is guaranteed to leave no process behind **while OneTerm is
-running**. The grace period below is served on the detached PTY owner thread, so a session
+running** — a **Windows** guarantee, because it rests on the escalation in §6.3. The Unix
+transport has no escalation: its `PseudoConsole` has no `Drop` at all, and closing the
+master hangs up the slave so the child, as session leader, gets `SIGHUP`.
+The grace period below is served on the detached PTY owner thread, so a session
 still inside it when the application process exits (or is killed) never gets the escalation —
 that hole is recorded under Gaps in `BUG-0055` and is not closed by this design.
 `LocalSession::drop`
