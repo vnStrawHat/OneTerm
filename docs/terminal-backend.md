@@ -56,6 +56,15 @@
 > **key encoder** returns for a program that negotiated the kitty protocol. The engine is still
 > consumed as a git dependency and is not published to crates.io. Target shape in
 > [`spec-intakes/IN-0039-vt-gaps-and-publish/high-level-design.md`](spec-intakes/IN-0039-vt-gaps-and-publish/high-level-design.md).
+>
+> **Forward pointer (2026-09, records only):** `IN-0040` is the application half of that encoder.
+> `US-0105` shipped the engine and recorded that `crates/terminal-view` registers `on_key_down`
+> alone, so a key **release** is never observed and a held-key **repeat** is indistinguishable from
+> a first press -- which means the kitty `REPORT_EVENT_TYPES` flag OneTerm negotiates and answers
+> is not honoured inside OneTerm itself. Section 10 below, "Input: keystroke -> byte + IME",
+> describes path 1 as it stands today and is the document that packet updates. Nothing else here
+> moves: no pump, lock, transport or session change, and no file under `crates/vt`. Target shape in
+> [`spec-intakes/IN-0040-view-key-release-repeat/high-level-design.md`](spec-intakes/IN-0040-view-key-release-repeat/high-level-design.md).
 
 ---
 
