@@ -412,7 +412,17 @@ pub(super) fn encode_legacy(key: &KeySpec, mods: KeyMods, modes: &ModeSnapshot) 
         // These are rarely used but xterm maps them to 2P/2Q/.../~ forms.
         KeySpec::Named(NamedKey::F13) => b"\x1b[1;2P".to_vec(),
         KeySpec::Named(NamedKey::F14) => b"\x1b[1;2Q".to_vec(),
-        KeySpec::Named(NamedKey::F15) => b"\x1b[1;2R".to_vec(),
+        // `F15` is the one function key that cannot keep its xterm shifted
+        // form. `CSI 1 ; 2 R` is byte-identical to a Cursor Position Report for
+        // row 1, column 2, so a program that reads replies and key bytes from
+        // the same stream cannot tell them apart -- and unlike the rest of this
+        // rung, no flag makes it go away: the three enhancement flags that do
+        // not move a functional key onto the kitty rung leave it reachable. The
+        // DEC VT220 code `CSI 28 ~` (terminfo `kf15` on vt220 and rxvt)
+        // collides with nothing. This is the same exception the kitty
+        // specification makes for `F3`, for the same reason and in the same
+        // shape. `US-0105`; the equivalence harness names the divergence.
+        KeySpec::Named(NamedKey::F15) => b"\x1b[28~".to_vec(),
         KeySpec::Named(NamedKey::F16) => b"\x1b[1;2S".to_vec(),
         KeySpec::Named(NamedKey::F17) => b"\x1b[15;2~".to_vec(),
         KeySpec::Named(NamedKey::F18) => b"\x1b[17;2~".to_vec(),

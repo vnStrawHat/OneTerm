@@ -453,7 +453,9 @@ fn shifted_function_keys_take_the_private_use_codes() {
             b"\x1b[57376u".as_slice(),
             b"\x1b[1;2P".as_slice(),
         ),
-        (NamedKey::F15, b"\x1b[57378u", b"\x1b[1;2R"),
+        // `F15`'s legacy form moved off the `R` final byte in the same packet;
+        // `verify_us0099_equiv.rs` names the divergence.
+        (NamedKey::F15, b"\x1b[57378u", b"\x1b[28~"),
         (NamedKey::F17, b"\x1b[57380u", b"\x1b[15;2~"),
         (NamedKey::F24, b"\x1b[57387u", b"\x1b[24;2~"),
     ] {
@@ -476,15 +478,11 @@ fn shifted_function_keys_take_the_private_use_codes() {
 /// `[~ABCDEFHPQS]` set the disambiguate section permits.
 #[test]
 fn f3_never_collides_with_the_cursor_position_report() {
-    for bits in 1u8..32 {
-        // Only the two flags that move a functional key onto the kitty rung;
-        // the others are enhancements of a form some flag already chose. The
-        // legacy rung still spells `F15` as `shift+F3` (`CSI 1 ; 2 R`), which
-        // collides with a CPR and is frozen by `US-0099`'s equivalence bar --
-        // recorded in guide chapter 6 rather than fixed inside this packet.
-        if bits & 0b1001 == 0 {
-            continue;
-        }
+    // All thirty-two flag sets, the empty one included, because the three
+    // enhancement flags that do *not* move a functional key onto the kitty rung
+    // leave the legacy form reachable -- which is how the legacy `F15` survived
+    // the first sweep. Nothing on either rung may end in `R` now.
+    for bits in 0u8..32 {
         let modes = modes(KeyboardFlags::from_bits_truncate(bits));
         for mods in [
             KeyMods::default(),
@@ -494,9 +492,12 @@ fn f3_never_collides_with_the_cursor_position_report() {
             for key in [NamedKey::F3, NamedKey::F15] {
                 let event = KeyEvent::new(named(key), mods);
                 let bytes = encode_key_event(&event, &modes).expect("F-keys always encode");
-                assert_ne!(
-                    bytes.last(),
-                    Some(&b'R'),
+                // A Cursor Position Report is `CSI <row> ; <col> R`, so only a
+                // CSI-introduced sequence can be mistaken for one. `SS3 R`,
+                // which the legacy rung still sends for a plain `F3`, is a
+                // different introducer and is not ambiguous with anything.
+                assert!(
+                    !(bytes.starts_with(b"\x1b[") && bytes.last() == Some(&b'R')),
                     "{key:?} {mods:?} under flags {bits} is {:?}",
                     String::from_utf8_lossy(&bytes)
                 );

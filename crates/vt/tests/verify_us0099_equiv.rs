@@ -777,23 +777,40 @@ fn encode_key_is_byte_identical_to_main() {
         let o_spec = orig_spec(spec);
         for mods in MODS {
             let o_mods = orig_mods(mods);
-            // The one row `US-0105` deliberately moved: the specification's
-            // legacy ctrl table has `~ -> 30` and `ctrl_bytes` fell through to
-            // `~` itself. Everything else must still be byte-identical, so the
-            // divergence is named here rather than allowed by a slack bound.
-            let divergent = matches!(spec, KeySpec::Character(s) if s == "~") && mods.ctrl;
+            // The two rows `US-0105` deliberately moved. Everything else must
+            // still be byte-identical, so each divergence is named here, with
+            // both sides asserted, rather than allowed by a slack bound.
+            //
+            // `ctrl+~`: the specification's legacy ctrl table has `~ -> 30` and
+            // `ctrl_bytes` fell through to `~` itself, while `ctrl+^` -- the
+            // same key -- was already `0x1e`.
+            //
+            // `F15`: `CSI 1 ; 2 R` is byte-identical to a Cursor Position
+            // Report, so a program reading replies and key bytes from one
+            // stream cannot tell them apart. The DEC VT220 code `CSI 28 ~`
+            // collides with nothing.
+            let moved_bytes: Option<(&[u8], &[u8])> = match spec {
+                KeySpec::Character(s) if s == "~" && mods.ctrl => Some((&[0x1e], &[0x7e])),
+                KeySpec::Named(NamedKey::F15) => Some((b"\x1b[28~", b"\x1b[1;2R")),
+                _ => None,
+            };
             for snap in &snaps {
                 let got = encode_key(spec, mods, snap);
                 let want = orig_key::encode_key(&o_spec, o_mods, snap.app_cursor);
                 let event = KeyEvent::new(spec.clone(), mods);
                 let got_event = encode_key_event(&event, snap);
-                if divergent {
-                    // Both entry points answer the corrected byte, and the
-                    // frozen oracle answers the old one. `alt` prefixes ESC
-                    // onto either, as it always did. Counted, not excused.
-                    let prefix: &[u8] = if mods.alt { &[0x1b] } else { &[] };
-                    let now = [prefix, &[0x1e]].concat();
-                    let before = [prefix, &[0x7e]].concat();
+                if let Some((now, before)) = moved_bytes {
+                    // Both entry points answer the corrected bytes, and the
+                    // frozen oracle answers the old ones. `alt` prefixes ESC
+                    // onto a `ctrl+~` byte, as it always did, and is dropped by
+                    // the functional-key table for `F15`, as it always was.
+                    let prefix: &[u8] = if mods.alt && now.len() == 1 {
+                        &[0x1b]
+                    } else {
+                        &[]
+                    };
+                    let now = [prefix, now].concat();
+                    let before = [prefix, before].concat();
                     assert_eq!(got.as_deref(), Some(now.as_slice()));
                     assert_eq!(got_event.as_deref(), Some(now.as_slice()));
                     assert_eq!(want.as_deref(), Some(before.as_slice()));
@@ -822,17 +839,19 @@ fn encode_key_is_byte_identical_to_main() {
     }
     println!(
         "encode_key cases compared: {n} (specs {} x mods {} x snapshots {}), \
-         {moved} deliberately moved (ctrl+~), {bad} mismatches",
+         {moved} deliberately moved (ctrl+~, F15), {bad} mismatches",
         specs.len(),
         MODS.len(),
         snaps.len()
     );
     assert_eq!(bad, 0, "{bad} mismatches");
-    // 4 ctrl-bearing modifier sets x 2560 snapshots x 2 entry points. If this
-    // number changes, a second row moved and nobody wrote it down.
+    // `ctrl+~` is the 4 ctrl-bearing modifier sets; `F15` is all 8, because the
+    // functional-key table ignores modifiers for it. Times the snapshots, times
+    // the two entry points. If this number changes, a third row moved and
+    // nobody wrote it down.
     assert_eq!(
         moved,
-        4 * snaps.len() as u64 * 2,
+        (4 + MODS.len() as u64) * snaps.len() as u64 * 2,
         "the moved set changed size"
     );
 }

@@ -476,3 +476,159 @@ A passing `ci-local -Full` is not evidence that the encoder speaks the protocol.
 
 Because the contract is "the bytes a program parses", each of 1-4 is the kind of change clause 6
 of the semver promise now covers: they belong in this packet, before the promise is published.
+
+---
+
+# Re-verification at 63c99535
+
+Branch `feat/vt-kitty-keyboard` @ `63c99535`, rebased onto `main` @ `4437b98e`.
+Date: 2026-09-16. Same verifier, same rules, nothing committed.
+
+**Verdict: PASS-WITH-NOTES.** All four blocking findings above are closed and verified closed.
+One new byte defect (R1) and three record/prose precision notes remain.
+
+## Method
+
+The branch adopted this report's test file, so it was not trusted: a second file was written from
+the specification page again, with its own expectation derivations and its own shape rules --
+`crates/vt/tests/reverify_us0105.rs` (this worktree, **not committed**). Nine tests, plus a
+95 976-case CPR sweep and a 23 040-case hostile sweep. Two of its rows were wrong and were
+corrected against the specification, not against the engine (below).
+
+| Re-derived test | Cases | Mismatches |
+| --- | --- | ---: |
+| `event_type_matrix_over_every_flag_set` (32 flags x 7 key classes x repeat/release) | 448 | **4** |
+| `associated_text_over_every_modifier_set` | 9 | 0 |
+| `modify_other_keys_matrix` (levels 0/1/2 x letters, digits, punctuation, space, Tab, Enter, Backspace, Escape, shift-only, functional) | 26 | 0 |
+| `unshifted_key_code_for_every_printable_ascii_key` (PC-101) | 68 | 0 |
+| `function_keys_in_both_rungs` (F1-F24, plus a no-phantom-shift assertion each) | 24 | 0 |
+| `cursor_key_mode_and_keypad_mode` (DECCKM on both rungs, DECKPAM inert) | 122 | 0 |
+| `alternate_key_sub_fields` | 5 | 0 |
+| `the_detection_recipe_and_the_stack` (13 assertions) | 13 | 0 |
+| `hostile_text_is_bounded` | 23 040 | 0 |
+| `no_kitty_form_collides_with_the_cursor_position_report` | 95 976 | **240** |
+
+Two expectations of mine were wrong and were fixed rather than reported: a repeat of a text key
+**does** carry the associated-text field (a repeat inserts the character), and one alternate-key
+row passed the wrong payload. Both were my error, not the engine's.
+
+## Closed, and verified closed
+
+| # | Closed | How it was re-checked |
+| --- | --- | --- |
+| 1 | yes | The 448-case event-type matrix: `reportable` matches the specification's rule exactly for text keys, `Enter`/`Tab`/`Backspace`, functional keys and `Escape`, across all 32 flag sets. A repeat under `REPORT_EVENT_TYPES` alone is the character again; a release is silent |
+| 2 | yes | 9 modifier combinations under `ALL_ESC \| TEXT`: no text field for ctrl, alt, ctrl+alt, ctrl+shift or ctrl+shift+alt; the field present for plain and shift-only |
+| 3 | yes | The specification's detection recipe end to end: `CSI = 5 ; 1 u` then `CSI ? u` answers `CSI ? 5 u`; union (mode 2) and difference (mode 3) both visible; push/pop; a pop past the depth resets; separate stacks across `CSI ? 1049 h` / `l` |
+| 4 | yes, on the kitty rung | `F3` is `CSI 13 ~`; `F15` is `CSI 57378 u`. The 95 976-case sweep finds **no** `R` final byte on the kitty rung. See R2 for the legacy rung |
+| 5 | yes | Level 1 keeps `ctrl+a`, `ctrl+space`, `ctrl+3`, `ctrl+Tab`, `ctrl+Backspace` legacy and escapes `ctrl+;`, `ctrl+0`, `ctrl+1`, `ctrl+9` -- xterm(1)'s exception list, not its complement. Level 2 escapes all of them and `ctrl+Escape` too. **No level fires on shift alone**, so a capital letter stays a capital letter, which the packet discloses its own first draft got wrong |
+| 6 | yes | All 24 F-keys take the private-use codes, and for each one `shift+Fn` differs from `Fn`, so no modifier bit is asserted that was not pressed |
+| 7 | yes | The PC-101 table is correct for all 21 shifted-punctuation pairs, all 26 letters and all 21 un-shifted keys, re-derived independently |
+| 8, 10 | yes (documented) | Guide chapter 6's five-row disagreement table matches what the engine does, row for row |
+| 9 | yes | `ctrl+~` is `0x1e`. The frozen oracle in `verify_us0099_equiv.rs` was **not** edited: the divergence is asserted in both directions, counted, and pinned to an exact size (`4 x snapshots x 2`), so a second row cannot move unnoticed. This is the right mechanism and it matters for R2 |
+| 11 | yes | `E0639` is named in the CHANGELOG under `### Changed` / **Breaking** with both consequences, and in guide chapter 12 with "including functional update syntax" |
+| 12 | yes | Chapter 6 now names the caps-lock/num-lock bits and `DECKPAM` as unreachable. Confirmed by test: `app_keypad` changes nothing the encoder returns, under any flag set |
+
+**The 16 frozen deviations are genuinely pre-existing, and this is proved rather than asserted.**
+All 16 are at `keyboard_flags == 0` and `modify_other_keys == 0`, and the frozen-copy harness
+compares that exact configuration against the un-edited `0558fa2` oracle across 3 072 000 cases
+with exactly one named divergence. Anything at flags 0 that differed from `main` would fail that
+run, so the freeze claim is true by construction. The `modifyOtherKeys 1: ctrl+2` correction is
+sound: xterm(1) names `Control-Space to make a NUL` in its level-1 exception list and `ctrl+2` is
+that chord's alias, so `0x00` is right and my original row was wrong.
+
+## Remaining findings
+
+### R1. LOW-MEDIUM -- a **release** of a text key still carries the associated-text field
+
+`crates/vt/src/input/kitty.rs`, `text_field`: it consults `event.mods` but never `event.kind`.
+
+| Flags | Event | Spec | Got |
+| --- | --- | --- | --- |
+| `EVT \| ALL \| TXT` and its three supersets | release of `a` | `ESC[97;1:3u` | `ESC[97;1:3;97u` |
+
+A key release inserts nothing, so it has no associated text; kitty sends the field on press and
+repeat only. This is the same defect as finding 2, on the event-kind axis instead of the modifier
+axis, and it survived because the fix added a modifier guard and not a kind guard. Four flag sets,
+4 of 448 rows. One condition: drop the payload fallback when `event.kind == Release`.
+
+### R2. MEDIUM -- the legacy rung's `F15` CPR collision is reachable **with flags negotiated**, and has no owner
+
+240 of 95 976 swept cases end in the final byte `R`. Every one is `F15` on the legacy rung -- and
+every one is at a **non-empty** flag set: `REPORT_EVENT_TYPES`, `REPORT_ALTERNATE_KEYS` or
+`REPORT_ASSOCIATED_TEXT` pushed alone, and their combinations, at all three `modifyOtherKeys`
+levels. A program that pushed `CSI > 2 u` and pressed `F15` receives `ESC[1;2R`, which is
+byte-identical to a Cursor Position Report for row 1, column 2.
+
+Three things follow:
+
+1. Guide chapter 6's mitigation sentence -- "If you need the specification's legacy tables rather
+   than xterm's, push `DISAMBIGUATE_ESC_CODES`" -- is narrower than it reads. It is true for
+   `DISAMBIGUATE_ESC_CODES` and `REPORT_ALL_KEYS_AS_ESC` and false for the other three flags.
+2. The packet's finding-4 closure says "A new test walks every flag set and both keys and asserts
+   the final byte is never `R`". It walks 24 of the 31 non-empty flag sets: `kitty_tests.rs`
+   skips `bits & 0b1001 == 0` and the adopted sweep's key list omits `F15` entirely. Both
+   exclusions carry honest comments in the code; the packet prose does not carry the caveat.
+3. "Frozen by the equivalence bar" is a **choice here, not a constraint**. `ctrl+~` (finding 9)
+   proves the mechanism for a deliberate, named, counted legacy divergence already exists inside
+   this packet. A collision with a reply sequence is a correctness hazard rather than a spelling,
+   and kitty itself resolves it the same way ("kitty chooses to encode these using `CSI u`
+   encoding even in legacy mode"). Either move the legacy `F13`-`F24` to their private-use codes
+   with the same named-divergence treatment, or record a follow-up packet ID and owner. At present
+   the note appears in three documents and **no packet owns it**.
+
+### R3. LOW -- the CHANGELOG describes ceilings this release removed
+
+`crates/vt/CHANGELOG.md`, the clause-6 `Changed` entry, still reads:
+
+> Guide chapter 6 has the decision ladder, the flag table and the ceilings -- modifier values
+> `1`-`8` only, no private-use functional keys, **`F13`-`F24` on xterm's shifted forms**, and
+> **the un-shifted key code derived by lower-casing, which is wrong for shifted punctuation** and
+> has no API to correct it.
+
+Both bolded clauses were made false by this same rework: the kitty rung now uses `57376`-`57387`
+(finding 6) and the un-shifted code goes through the PC-101 table, so shifted punctuation is right
+(finding 7). Guide chapter 6 says so correctly in three places; the CHANGELOG, which is the file a
+consumer reads first, contradicts it. Two clauses to edit.
+
+### R4. LOW -- the packet was reworked after a FAIL without being reopened
+
+`Status` still reads `- [x] Implemented` with `- [ ] Reopened (acceptance rework)` unticked, while
+`## Verification notes closed` records a full rework answering twelve findings from an independent
+FAIL. `AGENTS.md` calls that acceptance rework of the owning US and asks for the reopen. Everything
+else in the records is consistent: the `HARNESS:PROOF` block (`unit`/`integration`/`verify` ticked,
+`e2e`/`platform` not) matches the snippet's `unit_proof=1, integration_proof=1, e2e_proof=0,
+platform_proof=0`, `intake_id=44` is correct, and the budget and gate lines were updated.
+
+### R5. INFO -- unresolved, deliberately not raised as a defect
+
+`alt` alone at `modifyOtherKeys` level 1. This engine escapes `alt+a` to `CSI 27;3;97~`; the
+pre-rework code sent `ESC a`. xterm(1) is quoted both ways in the two secondary sources reachable
+from this network ("The Alt- and Meta- modifiers do not cause xterm to send escape sequences" for
+value 1, versus a paraphrase saying they do), and `invisible-island.net` remained unreachable. The
+measured behaviour is printed by `print_alt_at_modify_other_keys_level_one` so the maintainer can
+decide; no claim is made here.
+
+## Gates at 63c99535
+
+`pwsh scripts/ci-local.ps1 -Full` on the branch as delivered (my re-derivation file moved out of
+the tree for the run, restored after). Private log `<scratchpad>/ci-full-2.log`, 21 653 lines.
+**`ci-local: all checks passed.`** -- fmt, both clippy passes, `cargo test --workspace`,
+`vt-paranoid`, `regex`, the `--no-default-features` build and test, the `--all-features` build,
+`cargo tree`, the headless example, both `cargo doc` runs with `-D warnings`,
+`vt-public-api.py --check --no-doc`, the new `--check-nameable`, `--diff-platforms`
+("the delta is 6 lines, all inside `oneterm_vt::pty`"), the package list, both rustdoc
+self-containment greps, the dependency graph, doc paths, the check-english unit tests,
+check-english, the completion catalogs, third-party notices, and
+`cargo deny check licenses bans advisories` ("advisories ok, bans ok, licenses ok" -- the advisory
+database was reachable).
+
+As before, the gate is green and R1 and R2 are invisible to it: no committed test pairs
+`REPORT_ASSOCIATED_TEXT` with a release, and both `F15` guards exclude the flag sets where the
+collision lives.
+
+## Could not verify (unchanged)
+
+No live reference-implementation comparison; xterm's own pages still unreachable; caps lock, num
+lock, the keypad, media and modifier keys remain unrepresentable in `KeyMods` / `NamedKey`; the
+manual Windows walk was not attempted and the packet's own "should not be accepted without the
+walk" still stands.

@@ -13,7 +13,7 @@ Created: 2026-09-15
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -253,6 +253,28 @@ reach xterm's source, which is why this is stated as a citation rather than a me
 **Result after rework: 214 rows, 0 mismatches, 16 recorded frozen deviations**, plus the four
 standalone assertions and the 57 600-case flag-space walk with its CPR-collision guard.
 
+### Re-verification: PASS-WITH-NOTES, and the five notes
+
+A second independent pass at `63c99535` confirmed all four blockers closed and raised five more,
+from a table re-derived from the specification without reusing the first one. Its report replaces
+the first in [`evidence/US-0105-verify.md`](evidence/US-0105-verify.md) and its file is adopted at
+`crates/vt/tests/reverify_us0105.rs`.
+
+| # | Note | Closed by |
+| --- | --- | --- |
+| R1 | **LOW-MED.** `text_field` guarded the modifiers but not the event kind, so a *release* of a text key carried the text it did not insert: `CSI 97 ; 1 : 3 ; 97 u` where kitty sends `CSI 97 ; 1 : 3 u`. The same defect as finding 2 on the other axis, and it survived because the fix added one guard and not two | `text_field` returns `None` for a release. A repeat still carries text, because a repeat does insert |
+| R2 | **MED.** The legacy `F15` CPR collision was reachable **with flags negotiated** -- 240 of 95 976 swept cases -- at every `REPORT_EVENT_TYPES` / `REPORT_ALTERNATE_KEYS` / `REPORT_ASSOCIATED_TEXT` combination, and no packet owned it. Both existing `R` guards excluded exactly the flag sets where it lived | **Fixed, not deferred.** Legacy `F15` is `CSI 28 ~`, the DEC VT220 code, with the same named-divergence treatment as `ctrl+~`: both bytes asserted, cases counted, count pinned. The sweep now walks **all 32 flag sets including the empty one**, and asserts no CSI sequence ending in `R` on either rung. (`SS3 R`, which plain `F3` still sends on the legacy rung, is a different introducer and cannot be read as a CPR.) |
+| R3 | **LOW.** The CHANGELOG's clause-6 entry still listed two ceilings this rework removed | Rewritten to the three that remain, plus a pointer to the disagreement table |
+| R4 | **LOW.** Reworked after a FAIL without `Reopened (acceptance rework)` being ticked | Ticked, and the harness snippet's `status` is `reopened` |
+| R5 | **INFO.** `alt` alone at `modifyOtherKeys` level 1, where xterm(1) is quoted both ways and the source was unreachable | Recorded in Gaps below as measured behaviour with the ambiguity named. No claim made |
+
+One expectation in the adopted re-verification was corrected, with the citation beside it in the
+file: `the_detection_recipe_and_the_stack` expected a pop of the *only* stack entry to restore the
+live value `CSI = 4 ; 3 u` had set before the push. The specification's next sentence, which the
+row itself quotes, is "If a pop request is received that empties the stack, **all flags are
+reset**", so it resets to `0`; the stack never held `3`. The row keeps its original assertion as
+well, moved to a two-entry stack where a pop really does uncover the older value.
+
 ## Evidence and Gaps
 
 Branch `feat/vt-kitty-keyboard`, rebased onto `main` at `4437b98e` (`BUG-0059`).
@@ -289,7 +311,7 @@ harness, now runs both entry points against the frozen `0558fa2` oracle:
 
 ```text
 encode_key cases compared: 3072000 (specs 75 x mods 8 x snapshots 2560),
-  20480 deliberately moved (ctrl+~), 0 mismatches
+  61440 deliberately moved (ctrl+~, F15), 0 mismatches
 test encode_key_is_byte_identical_to_main ... ok
 ```
 
@@ -298,11 +320,12 @@ test encode_key_is_byte_identical_to_main ... ok
 and `modify_other_keys == 0` before it is used, so the run is the equivalence claim and not a
 sample.
 
-The 20 480 are the one row this packet deliberately moved after the verification's finding 9:
-`ctrl+~`, in the four ctrl-bearing modifier sets across 2 560 snapshots and both entry points. They
-are not excused by a tolerance -- the harness asserts the corrected byte on this side, the old byte
-from the frozen oracle, and that the moved set is exactly `4 x snapshots x 2` in size, so a second
-row moving fails the test.
+The 61 440 are the two rows this packet deliberately moved on the legacy rung: `ctrl+~` (finding 9,
+four ctrl-bearing modifier sets) and `F15` (note R2, all eight, because the functional-key table
+ignores modifiers for it), each across 2 560 snapshots and both entry points. Neither is excused by
+a tolerance -- the harness asserts the corrected byte on this side, the old byte from the frozen
+oracle, and that the moved set is exactly `(4 + 8) x snapshots x 2` in size, so a third row moving
+fails the test.
 
 **The whole flag space is safe.** `verify_us0105.rs::the_whole_flag_space_is_safe`: 32 flag values
 x 2 `app_cursor` values x 75 keys x 8 modifier sets x 3 event kinds = **115 200 cases, 92 688 of
@@ -392,11 +415,15 @@ Gaps to state rather than discover:
   and recorded, and it will look like a bug to the next reader who finds it without this note.
   Guide chapter 6 names it with `Alt+F5` as the worked case.
 
-- **`F13`-`F24` and `F3` were corrected, and the legacy rung's `F15` was not.** The kitty rung now
-  follows the specification (private-use codes, `CSI 13 ~`), but rung 4 still spells `F15` as
-  `CSI 1 ; 2 R`, which is byte-identical to a Cursor Position Report for row 1, column 2. It is
-  pre-existing, frozen by `US-0099`'s equivalence bar, and named in guide chapter 6. A program that
-  wants unambiguous function keys pushes `DISAMBIGUATE_ESC_CODES`, which is the flag's purpose.
+- **`alt` alone at `modifyOtherKeys` level 1 is unresolved, and the measured behaviour is stated
+  rather than claimed.** This engine escapes `alt+a` to `CSI 27 ; 3 ; 97 ~`, because `ESC a` is not
+  a control byte and the level-1 rule is "leave the chords that already produce one". The
+  pre-rework code sent `ESC a`. xterm(1) is quoted both ways by the secondary sources reachable
+  from here -- "The Alt- and Meta- modifiers do not cause xterm to send escape sequences" for
+  value 1, against a paraphrase saying they do -- and `invisible-island.net` was unreachable in
+  both verification passes and in this one. `reverify_us0105.rs` prints the measured bytes so a
+  maintainer with the source can settle it; **no claim is made in either direction**, and if xterm
+  turns out to exclude alt, the fix is one condition in `modify_other_keys`.
 
 - **The un-shifted key code is derived, not looked up.** Letters are lower-cased and ASCII
   punctuation goes through the PC-101 shift table, which covers the layout the base-layout
@@ -463,7 +490,9 @@ ROW = dict(
         "docs/spec-intakes/IN-0039-vt-gaps-and-publish/"
         "US-0105-kitty-keyboard-encoder.md"
     ),
-    status="implemented",
+    # Reworked twice after independent verifications: FAIL, then
+    # PASS-WITH-NOTES. `AGENTS.md` calls that acceptance rework of the owning US.
+    status="reopened",
     unit_proof=1,
     integration_proof=1,
     e2e_proof=0,

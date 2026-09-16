@@ -301,7 +301,14 @@ specification's. So the two answer differently in five places, all deliberate:
 | `Ctrl+Enter`, `Shift+Enter` | `CSI 13 ; <mod> u` (xterm's) | `CSI 13 u` only under `REPORT_ALL_KEYS_AS_ESC`; otherwise `0x0d`, the exception |
 | `Ctrl+Shift+<text key>` | the ctrl table, ignoring shift: `Ctrl+Shift+I` is `0x09` | `CSI 105 ; 6 u`. The specification puts this one in legacy mode too ("Any other combination of modifiers with these keys is output as the appropriate `CSI u` escape code"); this engine's legacy rung does not, because it is xterm's |
 | `F13`-`F24` | xterm's shifted `F1`-`F12` forms (`CSI 1 ; 2 P`, `CSI 15 ; 2 ~`, ...) | the private-use codes `57376`-`57387`, so no modifier bit is asserted that the user did not press |
-| `F15` | `CSI 1 ; 2 R`, which collides with a Cursor Position Report -- pre-existing and frozen | `CSI 57378 u` |
+| `F15` | `CSI 28 ~`, the DEC VT220 code, because the xterm shifted form `CSI 1 ; 2 R` is byte-identical to a Cursor Position Report | `CSI 57378 u` |
+
+`F15` is the one row where the legacy rung moved rather than being frozen. **No keyboard flag
+removed the collision**: the three enhancement flags that do not put a functional key on the kitty
+rung left `CSI 1 ; 2 R` reachable, so a program that pushed `CSI > 2 u` and saw `F15` could not tell
+the key from a reply. A collision with a reply sequence is a correctness hazard rather than a
+spelling, so it was corrected with the same named-divergence treatment as `Ctrl+~`. Nothing this
+encoder emits, on either rung, is now a CSI sequence ending in `R`.
 
 If you need the specification's legacy tables rather than xterm's, push
 `DISAMBIGUATE_ESC_CODES`: that is what the flag is for.

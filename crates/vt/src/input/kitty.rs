@@ -305,7 +305,8 @@ fn alternates(event: &KeyEvent, flags: KeyboardFlags, shift: bool) -> String {
 ///
 /// The specification calls associated text undefined without
 /// `REPORT_ALL_KEYS_AS_ESC`, so this engine treats the flag as inert there
-/// rather than guessing.
+/// rather than guessing. A **release** never carries text either: nothing was
+/// inserted by letting a key go.
 ///
 /// The text the embedder supplies wins. The fallback is a `Character` key's own
 /// payload, but **only when the modifiers would have let that payload reach the
@@ -320,6 +321,10 @@ fn text_field(event: &KeyEvent, flags: KeyboardFlags) -> Option<String> {
     if !flags.contains(KeyboardFlags::REPORT_ASSOCIATED_TEXT)
         || !flags.contains(KeyboardFlags::REPORT_ALL_KEYS_AS_ESC)
     {
+        return None;
+    }
+    // A release inserts nothing, so it has no associated text. A repeat does.
+    if event.kind == KeyEventKind::Release {
         return None;
     }
     let text = match (event.text.as_deref(), &event.key) {

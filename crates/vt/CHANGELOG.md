@@ -219,10 +219,10 @@ carry no API change at all. Such a release says so below rather than being omitt
   parsing key bytes is in exactly the position of one parsing a `DA1` reply, so a change to them is
   a minor bump and an entry here.
 
-  Guide chapter 6 has the decision ladder, the flag table and the ceilings -- modifier values
-  `1`-`8` only, no private-use functional keys, `F13`-`F24` on xterm's shifted forms, and the
-  un-shifted key code derived by lower-casing, which is wrong for shifted punctuation and has no
-  API to correct it.
+  Guide chapter 6 has the decision ladder, the flag table, the three remaining ceilings -- modifier
+  values `1`-`8` only, no private-use keypad, lock, media or modifier keys, and an un-shifted key
+  code derived from the PC-101 shift relation rather than from your layout -- and a table of every
+  place the legacy rung and the kitty rung deliberately disagree.
 
 - **Breaking, clause 6.** `CSI ? u` answers the **live** keyboard flags rather than the top of the
   flag stack. `CSI = Ps ; Pm u` sets the live flags without pushing, so an application following the
@@ -232,8 +232,18 @@ carry no API change at all. Such a release says so below rather than being omitt
 
 - **Breaking, clause 6.** `Ctrl+~` is `0x1e` on the legacy rung, not `~`. The specification's legacy
   ctrl table has the row and `ctrl_bytes` fell through to the character itself; `Ctrl+^` was already
-  `0x1e`, so the two spellings of the same key now agree. This is the only byte on the legacy rung
-  that moved in this release, and the equivalence run names it rather than allowing a tolerance.
+  `0x1e`, so the two spellings of the same key now agree.
+
+- **Breaking, clause 6.** `F15` is `CSI 28 ~` on the legacy rung, not `CSI 1 ; 2 R`. The old form is
+  byte-identical to a Cursor Position Report for row 1, column 2, so a program reading replies and
+  key bytes from one stream could not tell them apart -- and no keyboard flag removed it, because
+  the three enhancement flags that leave a functional key on the legacy rung left it reachable.
+  `CSI 28 ~` is the DEC VT220 code (terminfo `kf15` on vt220 and rxvt) and collides with nothing.
+  This is the same exception the kitty specification makes for `F3`, for the same reason.
+
+  These two are the only bytes on the legacy rung that moved in this release, and the equivalence
+  run names both rather than allowing a tolerance: it asserts the new byte and the old one, counts
+  the cases, and pins the count, so a third row cannot move unnoticed.
 
 - **Breaking.** `ModeSnapshot` is `#[non_exhaustive]`. Two things change for you, and only the
   first is a benefit: a new field on it is a patch release from now on, and **you can no longer
