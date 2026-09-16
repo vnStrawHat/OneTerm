@@ -5,14 +5,15 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    ClipboardItem, EntityInputHandler as _, KeyDownEvent, Keystroke, Modifiers, TestAppContext,
+    ClipboardItem, EntityInputHandler as _, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
+    TestAppContext,
 };
 use oneterm_core::InputChannel;
 use oneterm_settings::TerminalBlink;
 use oneterm_state::InputChannelRegistry;
 use oneterm_terminal::security_policy::MAX_QUEUED_NOTIFICATIONS;
 use oneterm_terminal::test_support::FakeTerminalSession;
-use oneterm_terminal::{SessionEvent, SessionKind, TerminalError};
+use oneterm_terminal::{KeyboardFlags, SessionEvent, SessionKind, TerminalError};
 
 use super::TerminalViewEvent;
 use super::test_support::{self, open_view, open_views};
@@ -355,14 +356,29 @@ fn closing_search_refocuses_the_terminal(cx: &mut TestAppContext) {
 // ── Broadcast input channels (IN-0022) ──────────────────────────────────
 
 fn key_down(key: &str, modifiers: Modifiers) -> KeyDownEvent {
+    held_key_down(key, modifiers, false)
+}
+
+/// The same event with GPUI's own held flag set — the OS auto-repeat.
+fn held_key_down(key: &str, modifiers: Modifiers, is_held: bool) -> KeyDownEvent {
     KeyDownEvent {
         keystroke: Keystroke {
             modifiers,
             key: key.to_string(),
             key_char: None,
         },
-        is_held: false,
+        is_held,
         prefer_character_input: false,
+    }
+}
+
+fn key_up(key: &str, modifiers: Modifiers) -> KeyUpEvent {
+    KeyUpEvent {
+        keystroke: Keystroke {
+            modifiers,
+            key: key.to_string(),
+            key_char: None,
+        },
     }
 }
 
@@ -457,5 +473,228 @@ fn shutdown_leaves_the_channel(cx: &mut TestAppContext) {
         registry.read_with(cx, |registry, _| registry.channel_of(id)),
         None,
         "a closed Space is no longer a broadcast target"
+    );
+}
+
+// ── Press, repeat and release (IN-0040, US-0108) ────────────────────────
+
+/// With no keyboard flag pushed, a press, three OS repeats and a release write
+/// exactly what the same key-downs wrote before releases existed: a repeat is
+/// the press byte again, and a release contributes **no entry at all** because
+/// the encoder answers `None` at rung 1.
+#[gpui::test]
+fn without_a_flag_press_repeat_and_release_write_todays_bytes(cx: &mut TestAppContext) {
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+    let ctrl = Modifiers::control();
+    let table: [(&str, Modifiers, &[u8]); 6] = [
+        ("enter", Modifiers::default(), b"\r"),
+        ("a", Modifiers::default(), b"a"),
+        ("up", Modifiers::default(), b"\x1b[A"),
+        ("escape", Modifiers::default(), b"\x1b"),
+        ("f5", Modifiers::default(), b"\x1b[15~"),
+        ("a", ctrl, b"\x01"),
+    ];
+
+    let mut expected: Vec<Vec<u8>> = Vec::new();
+    for (key, modifiers, bytes) in table {
+        view.update_in(cx, |view, window, cx| {
+            view.on_key_down(&held_key_down(key, modifiers, false), window, cx);
+            for _ in 0..3 {
+                view.on_key_down(&held_key_down(key, modifiers, true), window, cx);
+            }
+            view.on_key_up(&key_up(key, modifiers), window, cx);
+        });
+        // Four key-downs, one byte string each; the key-up adds nothing.
+        expected.extend(std::iter::repeat_n(bytes.to_vec(), 4));
+    }
+    assert_eq!(probe.writes(), expected);
+    assert!(
+        view.read_with(cx, |view, _| view.held_keys.is_empty()),
+        "every release cleared its key"
+    );
+}
+
+/// The integration criterion: a real `Terminal` behind the fake session is fed
+/// `CSI > 2 u`, and the view's repeat and release carry the `:2` / `:3`
+/// event-type sub-fields the program asked for.
+#[gpui::test]
+fn report_event_types_produces_the_repeat_and_release_bytes(cx: &mut TestAppContext) {
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+
+    // The view reads its modes from the **last painted frame**, so the flags
+    // only reach it through a repaint. Without the draw below the test would
+    // silently assert the legacy bytes.
+    let before = view.read_with(cx, |view, _| view.render_state.borrow().frame.modes());
+    assert!(
+        before.keyboard_flags.is_empty(),
+        "nothing is negotiated before the program pushes"
+    );
+    probe.feed(b"\x1b[>2u");
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let after = view.read_with(cx, |view, _| view.render_state.borrow().frame.modes());
+    assert!(
+        after
+            .keyboard_flags
+            .contains(KeyboardFlags::REPORT_EVENT_TYPES),
+        "the repaint must carry the pushed flags, or the assertions below prove nothing"
+    );
+
+    probe.take_writes();
+    view.update_in(cx, |view, window, cx| {
+        view.on_key_down(
+            &held_key_down("up", Modifiers::default(), false),
+            window,
+            cx,
+        );
+        view.on_key_down(&held_key_down("up", Modifiers::default(), true), window, cx);
+        view.on_key_up(&key_up("up", Modifiers::default()), window, cx);
+    });
+    assert_eq!(
+        probe.writes(),
+        vec![
+            // `REPORT_EVENT_TYPES` alone leaves a press on the legacy rung…
+            b"\x1b[A".to_vec(),
+            // …while a repeat and a release have no legacy spelling at all.
+            b"\x1b[1;1:2A".to_vec(),
+            b"\x1b[1;1:3A".to_vec(),
+        ]
+    );
+}
+
+/// A press the view swallowed is never owed a release, and neither is a key-up
+/// that never had a press. Four swallow paths plus the stray key-up.
+#[gpui::test]
+fn a_swallowed_press_never_produces_a_release(cx: &mut TestAppContext) {
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+    let copy_chord = if cfg!(target_os = "macos") {
+        ("c", Modifiers::command())
+    } else {
+        ("C", Modifiers::control_shift())
+    };
+
+    // 1. a view chord (copy), 2. `KeyAction::Ignore` — a printable key on the
+    // primary screen, which the IME owns, 3. a chord with no encoding
+    // (Ctrl + a multi-character name), 4. a key-up with no key-down at all.
+    let swallowed: [(&str, Modifiers); 3] = [
+        copy_chord,
+        ("x", Modifiers::default()),
+        ("print", Modifiers::control()),
+    ];
+    view.update_in(cx, |view, window, cx| {
+        for (key, modifiers) in swallowed {
+            let mut event = held_key_down(key, modifiers, false);
+            // A printable key needs its layout text for the IME row to fire.
+            if key == "x" {
+                event.keystroke.key_char = Some("x".to_string());
+            }
+            view.on_key_down(&event, window, cx);
+            view.on_key_up(&key_up(key, modifiers), window, cx);
+        }
+        view.on_key_up(&key_up("f7", Modifiers::default()), window, cx);
+    });
+    assert!(
+        view.read_with(cx, |view, _| view.held_keys.is_empty()),
+        "nothing the view swallowed entered the held set"
+    );
+    assert!(
+        probe.writes().is_empty(),
+        "a swallowed press writes nothing, and so does its release: {:?}",
+        probe.writes()
+    );
+
+    // 5. the completion overlay consumed the key.
+    let prompt = r"C:\Users\trunglt>d";
+    probe.set_text(prompt);
+    probe.set_cursor(0, prompt.chars().count());
+    view.update(cx, |view, cx| view.update_completion(cx));
+    view.update_in(cx, |view, window, cx| {
+        view.on_key_down(
+            &held_key_down("escape", Modifiers::default(), false),
+            window,
+            cx,
+        );
+        view.on_key_up(&key_up("escape", Modifiers::default()), window, cx);
+    });
+    assert!(
+        probe.writes().is_empty(),
+        "the overlay dismissal is not input"
+    );
+}
+
+/// Focus left with a key still down: the program is owed the release, or a
+/// `vim` in kitty mode believes the key is held forever.
+#[gpui::test]
+fn blur_drains_every_held_key(cx: &mut TestAppContext) {
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+    probe.feed(b"\x1b[>2u");
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    view.update_in(cx, |view, window, cx| {
+        view.on_key_down(
+            &held_key_down("up", Modifiers::default(), false),
+            window,
+            cx,
+        );
+    });
+    assert_eq!(
+        view.read_with(cx, |view, _| view.held_keys.len()),
+        1,
+        "the press reached the PTY, so it is owed a release"
+    );
+
+    probe.take_writes();
+    view.update(cx, |view, cx| view.release_held_keys(cx));
+    assert_eq!(probe.writes(), vec![b"\x1b[1;1:3A".to_vec()]);
+    assert!(view.read_with(cx, |view, _| view.held_keys.is_empty()));
+
+    // A second blur has nothing left to drain.
+    probe.take_writes();
+    view.update(cx, |view, cx| view.release_held_keys(cx));
+    assert!(probe.writes().is_empty(), "a drained set stays drained");
+}
+
+/// A release reaches the origin session and no broadcast peer: a peer whose
+/// program negotiated nothing must not receive a `:3` sequence it has never
+/// seen a press for.
+#[gpui::test]
+fn a_release_is_never_fanned_out_to_channel_peers(cx: &mut TestAppContext) {
+    test_support::init(cx);
+    cx.update(InputChannelRegistry::init);
+    let (origin_session, origin_probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (peer_session, peer_probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (views, cx) = open_views(cx, vec![origin_session, peer_session]);
+    for view in &views {
+        view.update(cx, |view, cx| view.join_channel(InputChannel::A, cx));
+    }
+    origin_probe.feed(b"\x1b[>2u");
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+
+    views[0].update_in(cx, |view, window, cx| {
+        view.on_key_down(
+            &held_key_down("up", Modifiers::default(), false),
+            window,
+            cx,
+        );
+        view.on_key_up(&key_up("up", Modifiers::default()), window, cx);
+    });
+    assert_eq!(
+        origin_probe.writes(),
+        vec![b"\x1b[A".to_vec(), b"\x1b[1;1:3A".to_vec()],
+        "the origin receives both halves"
+    );
+    assert_eq!(
+        peer_probe.writes(),
+        vec![b"\x1b[A".to_vec()],
+        "the peer receives the press and nothing else"
     );
 }
