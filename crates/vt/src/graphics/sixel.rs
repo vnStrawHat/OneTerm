@@ -13,16 +13,21 @@
 //! wrong pixels, which is the documented degradation when a host loses bytes
 //! mid-image.
 
-use super::{MAX_DIMENSION, MAX_PIXEL_BYTES, VIRTUAL_CELL};
+use super::{MAX_DIMENSION, MAX_PIXEL_BYTES};
 
 /// A finished image, before it is given an id and placed.
 pub(crate) struct DecodedSixel {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) rgba: Vec<u8>,
-    /// Rows the text cursor moves down: the row holding the top of the last
-    /// sixel band (`bands * 6 / 20`), as DEC terminals and conhost do.
-    pub(crate) cursor_rows: u16,
+    /// Pixel height of the bands **above** the last one (`bands * 6`).
+    ///
+    /// The text cursor moves down `band_pixels / cell_height` rows — the row
+    /// holding the top of the last sixel band, as DEC terminals and conhost do.
+    /// The division happens in [`place`](super::placement::place), against the
+    /// same cell size the footprint uses, so the cursor can never land inside
+    /// the image; at [`VIRTUAL_CELL`](super::VIRTUAL_CELL) it is the classic `bands * 6 / 20`.
+    pub(crate) band_pixels: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -251,7 +256,7 @@ impl SixelParser {
         if width == 0 || height == 0 {
             return None;
         }
-        let cursor_rows = (self.band.saturating_mul(6) / u32::from(VIRTUAL_CELL.1)) as u16;
+        let band_pixels = self.band.saturating_mul(6);
         let mut rgba = vec![0u8; (width as usize) * (height as usize) * 4];
         let buffered_rows = if self.stride == 0 {
             0
@@ -270,7 +275,7 @@ impl SixelParser {
             width,
             height,
             rgba,
-            cursor_rows,
+            band_pixels,
         })
     }
 }

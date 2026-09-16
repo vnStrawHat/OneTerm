@@ -660,3 +660,82 @@ fn corrupt_band_does_not_panic() {
     session.feed(b"\x1bcok");
     assert_eq!(session.cursor(), (0, 2));
 }
+
+// ── BUG-0062: the footprint comes from the embedder's cell ───────────────────
+
+/// `WEBP 384x576` is the OpenTUI "Native Image Lab" dragon, the image the
+/// owner's E2E is judged on; 95 graphics newlines put the top of the last band
+/// at 570 px, so the cursor rule has something to divide.
+fn dragon(session: &mut Session) {
+    let body = format!("#0;2;100;0;0#0~{}", "-~".repeat(95));
+    session.feed(&sixel(&format!("\"1;1;384;576{body}")));
+    assert_eq!(
+        session.term.placements()[0].pixel_size,
+        (384, 576),
+        "the raster size is declared"
+    );
+}
+
+/// The footprint is `ceil(pixels / cell)` against the size the embedder set,
+/// and the VT340 10x20 cell only when it never set one.
+///
+/// The three rows are the real device cell at 100 % display scale, the same
+/// font at 200 %, and an embedder that skipped `set_cell_pixels`. Before
+/// `BUG-0062` every row answered `39 x 29`, so a program that sized the image
+/// from the `CSI 14 t` reply had it drawn at `device_cell / (10, 20)` of the
+/// size it meant.
+#[test]
+fn footprint_follows_the_embedder_cell_size() {
+    for (cell, cols, rows) in [
+        (Some((9u16, 18u16)), 43u16, 32u16),
+        (Some((18, 36)), 22, 16),
+        (None, 39, 29),
+    ] {
+        let mut session = Session::new(80, 40);
+        if let Some((width, height)) = cell {
+            session.term.set_cell_pixels(width, height);
+        }
+        dragon(&mut session);
+        let placement = session.term.placements()[0];
+        assert_eq!((placement.cols, placement.rows), (cols, rows), "{cell:?}");
+
+        // The cursor stays inside the picture's own last row: the footprint and
+        // the `bands * 6 / cell_height` walk divide by the same number, which is
+        // the whole reason `DecodedSixel` carries band *pixels*.
+        assert_eq!(session.cursor(), (rows - 1, 0), "{cell:?} cursor");
+        assert_eq!(
+            session.offset(rows - 1, 0),
+            Some((placement.id, 0, rows - 1)),
+            "{cell:?} the cursor's own row is still inside the image"
+        );
+    }
+}
+
+/// One pixel is one cell whatever the cell is: `ceil` never rounds an image
+/// down to nothing, and the `.max(1)` on rows is not what does the work.
+#[test]
+fn a_one_pixel_image_covers_one_cell_at_every_cell_size() {
+    for cell in [Some((9u16, 18u16)), Some((18, 36)), None] {
+        let mut session = Session::new(20, 5);
+        if let Some((width, height)) = cell {
+            session.term.set_cell_pixels(width, height);
+        }
+        session.feed(&sixel("\"1;1;1;1#0;2;100;0;0#0~"));
+        let placement = session.term.placements()[0];
+        assert_eq!((placement.cols, placement.rows), (1, 1), "{cell:?}");
+        assert_eq!(session.cursor(), (0, 0), "{cell:?}");
+    }
+}
+
+/// A half-set cell is an embedder bug, and the reading that cannot divide by
+/// zero is the whole fallback.
+#[test]
+fn a_zero_axis_falls_back_to_the_virtual_cell() {
+    for cell in [(9, 0), (0, 18), (0, 0)] {
+        let mut session = Session::new(80, 40);
+        session.term.set_cell_pixels(cell.0, cell.1);
+        dragon(&mut session);
+        let placement = session.term.placements()[0];
+        assert_eq!((placement.cols, placement.rows), (39, 29), "{cell:?}");
+    }
+}

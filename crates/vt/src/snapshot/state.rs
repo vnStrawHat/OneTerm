@@ -89,8 +89,9 @@ pub struct SnapshotPlacement {
     pub cols: u16,
     /// How many rows the image covers.
     pub rows: u16,
-    /// The decoded image's size in pixels; the renderer rescales it by
-    /// `cell_width / 10` and `line_height / 20`.
+    /// The decoded image's size in pixels. The renderer draws it at exactly
+    /// this size, clipped to `cols` x `rows`, which the engine derived from the
+    /// same pixels and the embedder's cell size.
     pub pixel_size: (u32, u32),
 }
 
