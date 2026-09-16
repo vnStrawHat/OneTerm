@@ -109,9 +109,15 @@ Decisions this wireframe fixes:
   still falls back to `host:port` so no row is ever invisible.
 - **Rows carry the session's colour square** (owner, 2026-09-16, `US-0110`). Each saved
   session row is drawn like the right dock's tree leaf: an 8px square in the session's own
-  colour, `gap_2`, then the title. A session with no saved colour gets the same
-  `SshSession::DEFAULT_COLOR_HEX` default the tree gives it, applied by `menu_entries` so
-  the constant is read in one place. A row is a `PopupMenuItem::element` — the kit renders
+  colour, `gap_2`, then the title. **One resolver decides that colour for both surfaces**:
+  `session_color_hex` in `crates/session-ui` returns the saved value when `parse_hex`
+  accepts it and `SshSession::DEFAULT_COLOR_HEX` otherwise, and the tree leaf and the menu
+  row each render what it returns. A fallback chain per surface is what let the same
+  hand-edited session show teal in the tree and the theme accent in the menu. The resolver
+  returns hex text rather than an `Hsla` because `Colorize::to_hex` truncates channels
+  (`#C678DD` returns as `#C677DD`), so converting for the primitive-only seam would put
+  that divergence back for every colour the app itself saves. A row is a
+  `PopupMenuItem::element` — the kit renders
   it with the same padding, height, hover and selection styling as a plain `Item`, and
   `is_clickable()` / `confirm()` treat it identically, so mouse and keyboard reach are
   unchanged.
@@ -130,9 +136,9 @@ Decisions this wireframe fixes:
   read as the same list.
 - **No colour or icon literals in the menu builder.** Headings and text take their colours
   from `cx.theme()` through the kit. A row's square is the session's own saved colour,
-  data rather than a literal; where the saved hex will not parse the builder falls back to
-  `cx.theme().accent`, and the "no colour saved" default lives with the session type in
-  `crates/session-ui`, not in the menu.
+  data rather than a literal; the fallback for an unparseable one lives with the session
+  type in `crates/session-ui`, not in the menu, so both builders keep a
+  `cx.theme().accent` arm that is unreachable while `DEFAULT_COLOR_HEX` is a valid hex.
 
 ## Data Flow
 
@@ -144,7 +150,7 @@ Decisions this wireframe fixes:
    `SshSessionStore` global and maps its entries through `menu_entries` to
    `Vec<(String, Vec<(u64, String, String)>)>` — sections of `(group name, rows)`, the
    ungrouped rows under an empty group name first, each row the stable session id, its
-   title, and its hex colour with the default already applied (`US-0110`). Primitives
+   title, and the hex colour `session_color_hex` resolved for it (`US-0110`). Primitives
    only: `crates/state` sits below `crates/session-ui` and must not name its types.
 4. The closure appends the labelled "SSH Sessions" separator and then either the sections
    — ungrouped rows first, then a dashed labelled separator and its rows per group — or the

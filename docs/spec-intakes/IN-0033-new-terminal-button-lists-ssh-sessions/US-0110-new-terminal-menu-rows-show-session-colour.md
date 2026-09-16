@@ -40,9 +40,10 @@ the menu changes.
   - Carry the session colour to the menu through the existing `WorkspaceCommands` hop —
     the row tuple in `oneterm_state::commands::SavedSshSessionSections` gains a hex-colour
     `String`, produced with the default already applied.
-  - `menu_entries` in `crates/session-ui/src/tree_builder.rs` resolves the colour (saved
-    value, else `SshSession::DEFAULT_COLOR_HEX`), so the data default lives in one place
-    next to the constant.
+  - `session_color_hex` in `crates/session-ui/src/tree_builder.rs` resolves the colour
+    (saved value when `parse_hex` accepts it, else `SshSession::DEFAULT_COLOR_HEX`), and
+    both `menu_entries` and the tree's own `tree_render.rs` go through it, so the two
+    surfaces cannot draw one session two ways.
   - `TerminalPanel::title_suffix` renders each saved-session row as a square plus the
     title, matching `tree_render.rs`: `Hsla::parse_hex`, theme accent as the last resort,
     `div().w(px(8.)).h(px(8.))` and `gap_2`.
@@ -51,8 +52,10 @@ the menu changes.
 - [x] Out of scope:
   - Local-shell rows, the "No saved sessions" hint, the two labelled separators, the
     plain separator and "New SSH Session" — all unchanged.
-  - The right dock's session tree, the session dialog's colour picker, and the persisted
-    `ssh_session.json` shape — unchanged.
+  - The session dialog's colour picker and the persisted `ssh_session.json` shape —
+    unchanged. The right dock's tree keeps its appearance for every colour the app can
+    save; the rework only routes it through the shared resolver so a hand-edited value
+    resolves the same way on both surfaces.
   - Any new crate edge or dependency (R1/R5 forbid `terminal-view -> session-ui`).
 
 ## Acceptance
@@ -116,9 +119,11 @@ implementation — the connect flow, its entry point and its id are untouched.
   tuple element rather than a struct because `crates/state` sits below the feature crates
   and must stay primitive-only (R10), and because the two existing elements already
   travel this way.
-- The default is applied by the producer (`menu_entries`), not the renderer, so
-  `SshSession::DEFAULT_COLOR_HEX` is read in exactly one place, next to the constant. The
-  renderer's only fallback is `cx.theme().accent`, for a hex that will not parse.
+- The colour is resolved by the producer, not the renderer, in one function
+  (`session_color_hex`) that both the tree leaf and the menu row call — so
+  `SshSession::DEFAULT_COLOR_HEX` is read once, next to the constant, and the two surfaces
+  cannot disagree about any input. Each renderer's `cx.theme().accent` arm is unreachable
+  while the constant is a valid hex.
 - Kit check (`reference/gpui-kit/crates/component/src/menu/popup_menu.rs`) before choosing
   `PopupMenuItem::element` over `.icon()`:
   - `render_item` builds the same `MenuItemElement::new(ix, &group_name)` base for
@@ -160,9 +165,14 @@ what the HLD now states.
 ## Verification Plan
 
 1. `cargo test -p oneterm-session-ui menu_entries` — the colour passes through, the
-   default is applied for `None` and for a blank value, and the existing ordering and
-   fallback tests still hold with the wider row.
-2. `cargo test -p oneterm-terminal-view` — the panel's test double builds the new tuple.
+   resolver agrees with the tree for every input `parse_hex` rejects, each row keeps its
+   own colour within one section, and the existing ordering and fallback tests still hold
+   with the wider row. This is the only automated proof of the behaviour.
+2. `cargo test -p oneterm-terminal-view` — a **compile check on the widened tuple**, not
+   coverage of the menu. The crate's test double (`src/panel/tests.rs:454`) returns
+   `Vec::new()` and no test in the crate exercises `title_suffix`, so the 341 passing
+   tests prove only that the new type still builds everywhere it is named. The rendering
+   itself is covered by the GUI evidence, and by nothing else — see Gaps.
 3. `pwsh scripts/ci-local.ps1` with `CARGO_BUILD_JOBS=6` — the full gate.
 4. E2E on the Windows desktop: launch `cargo run -p oneterm-app`, open the "+" dropdown,
    capture the saved-session rows with their squares, including one session whose colour
@@ -176,34 +186,137 @@ what the HLD now states.
 - [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
+## Owner decision pending: accessible name
+
+Raised by the independent verification as **F1** (major); see
+`evidence/US-0110-verify.md` §6. **No code was changed for it — it needs a call, not a
+patch.**
+
+What changed: a saved-session row used to be `PopupMenuItem::new(name)`, an `Item`, whose
+`a11y_label()` returns `Some(label)` (`popup_menu.rs:274-276`) and reaches the element as
+`.aria_label(label)` (`popup_menu.rs:1210`). It is now a `PopupMenuItem::element`, an
+`ElementItem`, whose `a11y_label()` is `None` (`popup_menu.rs:278`). So each row still
+renders as `Role::MenuItem` but carries no accessible name: a screen reader announces the
+row without the session it opens. That is a regression in a row that previously had one,
+on the surface this packet set out to make more legible. (The packet originally noted "the
+two labelled separators already have the same property" — that does not carry: those are
+`disabled`, deliberately outside hover and keyboard navigation, so they were never
+announced as items in the first place.)
+
+Why it cannot be fixed here: `gpui-component` comes from crates.io (`Cargo.toml:44`, no
+`[patch]` section), and the `a11y_label()` match is private to the kit. The only in-repo
+alternative, `PopupMenuItem::new(name).icon(square)`, keeps the accessible name but forces
+`Icon::xsmall()` = 12 px (`popup_menu.rs:1138`), and it flips `has_left_icon` for the whole
+menu, indenting the local-shell labels too.
+
+The two options, for the owner:
+
+- **A — accept, with a follow-up upstream.** Keep the 8 px square that matches the tree
+  exactly, record the regression in a `DEC`, and open a follow-up to carry an
+  `aria_label` on `ElementItem` in `gpui-component`. Costs: the rows stay unnamed to a
+  screen reader until that lands.
+- **B — use `.icon()` at 12 px.** The rows keep their accessible name today, at the cost
+  of a square half again the size of the tree's, and the local-shell rows gaining an icon
+  gutter they do not use — so the two surfaces stop matching, which is the outcome this
+  packet was asked for.
+
+Recommendation: **A**, because the request was explicitly "like in the SSH Sessions panel"
+and B breaks exactly that; but this is the owner's call and the packet should not be
+accepted as if a Gaps bullet had settled it.
+
 ## Evidence and Gaps
+
+### Rework after independent verification (2026-09-16)
+
+`evidence/US-0110-verify.md` returned PASS-WITH-NOTES. F2, F4 and F3 are addressed below;
+F1 is recorded above as an owner decision and no code changed for it. F5 is moot: the
+`chore(release): v0.6.0` bot commit (`fef4b866`) that rode along on the branch is now on
+`main`, so this packet's diff is clean.
+
+**F2 — one resolver, both surfaces.** `session_color_hex(&SshSession) -> &str` now lives in
+`crates/session-ui/src/tree_builder.rs`, beside `session_subtitle`, and is the only place
+that decides which hex a session is drawn with: the saved value when
+`Colorize::parse_hex` accepts it, `SshSession::DEFAULT_COLOR_HEX` otherwise. Both
+`tree_render.rs` (the tree leaf) and `menu_entries` (the "+" row) call it, so the
+verifier's three divergent inputs — `"#abc"`, `"#GGGGGG"`, `" #E06C75 "` — now draw the
+same teal on both surfaces. `terminal_panel.rs`'s `cx.theme().accent` arm is kept but is
+now unreachable, exactly as the tree's already was, and its comment says so instead of
+claiming a fallback policy of its own.
+
+It returns the hex **text**, not an `Hsla`, which is a deliberate deviation from the
+rework brief's "`menu_entries` then emits `color.to_hex()`". `Colorize::to_hex` is lossy:
+it truncates each channel (`color.rs:269-287`) after a round trip through `Hsla`. Probed
+over ten hex values, three came back changed — `#C678DD -> #C677DD`, `#010203 -> #010202`,
+`#123456 -> #113456`. Converting in the producer would therefore have re-introduced the
+very divergence F2 is about, and made it *more* reachable: it would hit every colour the
+session dialog itself saves, not just a hand-edited file. Relaying the resolved text keeps
+the two surfaces byte-identical. The string is still always parseable, which was the point
+of the instruction, because it is either a value `parse_hex` just accepted or the crate's
+own constant.
+
+**F4 — the surviving mutation is caught.** `menu_entries_carries_the_saved_colour` gained
+a third session, `db-02` `#E5C07B`, in the *same* `infra` group as `db-01` `#98C379`, so a
+section now contains two different colours. Running the verifier's M3 mutation (every row
+after the first in a section takes the first row's colour):
+
+```
+test tree_builder::tests::menu_entries_carries_the_saved_colour ... FAILED
+assertion `left == right` failed: each row keeps its own colour, including within one section
+  left: [("", [(1, "prod", "#E06C75")]), ("infra", [(2, "db-01", "#98C379"), (3, "db-02", "#98C379")])]
+ right: [("", [(1, "prod", "#E06C75")]), ("infra", [(2, "db-01", "#98C379"), (3, "db-02", "#E5C07B")])]
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 53 filtered out
+```
+
+The mutation was reverted immediately; the suite is green below.
+
+**F3 — the Verification Plan no longer implies `-p oneterm-terminal-view` covers the
+menu.** Step 2 now says it is a compile check on the widened tuple, matching what Gaps
+already said.
 
 ### Focused
 
 ```
 cargo test -p oneterm-session-ui menu_entries
-    running 9 tests
+    running 10 tests
     ... menu_entries_carries_the_saved_colour ... ok
     ... menu_entries_applies_the_default_colour_when_none_is_saved ... ok
-    test result: ok. 9 passed; 0 failed; 0 ignored; 53 filtered out
+    ... menu_entries_and_the_tree_resolve_every_colour_alike ... ok
+    test result: ok. 10 passed; 0 failed; 0 ignored; 53 filtered out
+
+cargo test -p oneterm-session-ui
+    test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 cargo test -p oneterm-terminal-view
     test result: ok. 341 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out
 ```
 
-The two new tests are the ones that bite: `menu_entries_carries_the_saved_colour` fails if
-the producer ever emits a constant instead of the session's own hex, and
+The three colour tests are the ones that bite. `menu_entries_carries_the_saved_colour`
+fails if the producer emits a constant instead of the session's own hex, or pairs a row
+with a neighbour's colour (F4 above).
 `menu_entries_applies_the_default_colour_when_none_is_saved` fails if the `None` or blank
-arm is dropped. The seven pre-existing `menu_entries` tests were moved onto a `row()`
-helper so the widened tuple did not force a literal default into every expectation.
+arm is dropped. `menu_entries_and_the_tree_resolve_every_colour_alike` walks the verifier's
+probe inputs — blank, whitespace, no hash, lowercase, 3-digit, 8-digit, garbage, padded —
+and asserts for each that the menu row and the tree's square resolve to the same string,
+so the two surfaces cannot drift apart again. The seven pre-existing `menu_entries` tests
+were moved onto a `row()` helper so the widened tuple did not force a literal default into
+every expectation.
 
 ### Gate
 
+Re-run after the verification rework, from this worktree root with
+`$env:CARGO_BUILD_JOBS = 6`:
+
 ```
-pwsh scripts/ci-local.ps1   ($env:CARGO_BUILD_JOBS = 6)
+pwsh scripts/ci-local.ps1
 ...
-ci-local: third-party notices OK
-ci-local: all checks passed
+==> python scripts/check-english.py
+English contributor-text check passed for 928 files.
+==> python scripts/completion-catalog.py validate
+[completion-catalog] all catalogs valid
+==> python scripts/third-party-notices.py --check
+THIRD-PARTY-NOTICES.md is up to date.
+
+ci-local: all checks passed.
 ```
 
 ### E2E (Windows desktop)
@@ -228,6 +341,12 @@ the owner's) was seeded with six sessions: `prod-web` `#E06C75`, `staging` `#C67
   opens "Connect to prod-web (deploy@10.20.0.11:22)", so `on_click` still fires on the
   element item and the session id still routes correctly.
 
+The PNGs were captured before the verification rework and were **not** re-taken: the
+desktop is still locked, and the rework cannot change what they show. Every colour in the
+walk (`#E06C75`, `#C678DD`, `#98C379`, `#E5C07B`, and the two sessions with none) is a
+value `parse_hex` already accepted, so `session_color_hex` returns it unchanged and each
+square is the same pixel it was.
+
 Capture method: the desktop was locked during the walk, so `CopyFromScreen` returned the
 lock screen. `PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)` against the launched pid's own
 window returned the real frames, and the clicks were delivered as `WM_MOUSEMOVE` /
@@ -236,12 +355,11 @@ session launched; no window was enumerated by name or title.
 
 ### Gaps
 
-- `PopupMenuItem::ElementItem` carries no `aria_label` (the kit's `a11y_label()` returns
-  `None` for it, `popup_menu.rs` line ~278), so a saved-session row is now unlabelled to a
-  screen reader where a plain `Item` row was labelled. Hover, selection, click and
-  keyboard navigation are unaffected. Fixing it needs a kit change (an `a11y_label` on
-  `ElementItem`), which is out of this packet's scope; the menu's two labelled separators
-  already have the same property.
+- `PopupMenuItem::ElementItem` carries no `aria_label`, so a saved-session row is now
+  unlabelled to a screen reader where a plain `Item` row was labelled. Hover, selection,
+  click and keyboard navigation are unaffected. This is **not** settled here: see "Owner
+  decision pending: accessible name" above, which is where it must be resolved before the
+  packet is accepted.
 - The square's colour is not asserted by an automated test at the render layer — the
   gpui element tree is not queryable in the panel tests. The data half (which hex reaches
   the row) is unit-tested; the drawing half is covered by the GUI evidence above.
@@ -276,7 +394,7 @@ db.execute(
         "docs/spec-intakes/IN-0033-new-terminal-button-lists-ssh-sessions/"
         "US-0110-new-terminal-menu-rows-show-session-colour.md",
         "implemented",
-        "cargo test -p oneterm-session-ui menu_entries (9 passed)",
+        "cargo test -p oneterm-session-ui (63 passed; menu_entries 10 passed)",
         "cargo test -p oneterm-terminal-view (341 passed)",
         "GUI walk: evidence/US-0110-menu-rows-with-colour-squares.png, "
         "evidence/US-0110-menu-rows-zoomed.png, "
@@ -286,8 +404,10 @@ db.execute(
         "pwsh scripts/ci-local.ps1",
         now,
         "pass",
-        "Row tuple widened to (id, title, hex colour); default applied in menu_entries. "
-        "Gap: ElementItem carries no aria_label (kit limitation).",
+        "Row tuple widened to (id, title, hex colour); one session_color_hex resolver "
+        "shared by the tree and the menu (verifier F2). Owner decision pending: "
+        "ElementItem carries no aria_label (kit limitation) -- accept with an upstream "
+        "follow-up, or use .icon() at 12px and diverge from the tree's 8px.",
         intake_id,
     ),
 )

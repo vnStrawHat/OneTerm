@@ -85,9 +85,11 @@ fn labelled_separator(label: impl Into<SharedString>, rule: SeparatorRule) -> Po
 /// title — the same pair the right dock's session tree draws for a leaf, so the
 /// two surfaces read as one list (`US-0110`).
 ///
-/// The colour arrives as a hex string with the session feature's default already
-/// applied (see `SavedSshSessionSections`); the theme accent is only the last
-/// resort for a hex that will not parse. An element item rather than a plain
+/// The colour arrives as a hex string the session feature has already resolved
+/// against the same rule the tree uses (see `SavedSshSessionSections`), so it
+/// always parses and the theme accent below is a formality, not a second
+/// fallback policy — the fallback lives in one place, and not here. An element
+/// item rather than a plain
 /// one because a plain item renders text alone — the kit gives both the same
 /// padding, height, hover and selection styling, and treats both as clickable
 /// for the mouse and the arrow keys.

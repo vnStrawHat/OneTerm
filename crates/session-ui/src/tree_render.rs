@@ -7,7 +7,7 @@ use gpui_component::{
     list::ListItem, menu::PopupMenuItem, notification::NotificationType, tree::tree,
 };
 
-use crate::session_state::{SshSession, SshSessionStore};
+use crate::session_state::SshSessionStore;
 use oneterm_actions::{DeleteSession, NewSession, OpenSession, SessionProperty};
 use oneterm_theme::notif_ext::notify;
 
@@ -15,7 +15,7 @@ use super::connect_dialog::open_connect_dialog;
 use super::panel::SessionPanel;
 use super::rename_group::open_rename_group_dialog;
 use super::session_dialog::open_session_dialog;
-use super::tree_builder::{parse_group_id, parse_session_id, session_subtitle};
+use super::tree_builder::{parse_group_id, parse_session_id, session_color_hex, session_subtitle};
 
 impl SessionPanel {
     /// Render the tree widget — item renderer + context menu.
@@ -87,13 +87,14 @@ impl SessionPanel {
                     let session_id = parse_session_id(&item.id);
                     let session = session_id.and_then(|id| store.read(cx).get(id));
                     let subtitle = session.map(|s| session_subtitle(s)).unwrap_or_default();
+                    // The same resolver the "+" menu's rows go through, so the
+                    // two surfaces cannot disagree about a session's square
+                    // (`US-0110`). The accent is unreachable unless
+                    // `DEFAULT_COLOR_HEX` itself stops parsing.
                     let color = session
-                        .and_then(|s| s.color.as_deref())
+                        .map(session_color_hex)
                         .and_then(|hex| Hsla::parse_hex(hex).ok())
-                        .unwrap_or_else(|| {
-                            Hsla::parse_hex(SshSession::DEFAULT_COLOR_HEX)
-                                .unwrap_or(cx.theme().accent)
-                        });
+                        .unwrap_or_else(|| cx.theme().accent);
 
                     ListItem::new(ix)
                         .w_full()
