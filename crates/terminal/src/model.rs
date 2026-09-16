@@ -170,6 +170,13 @@ impl TerminalModel {
         term.resize(Size { rows, cols }, self.resize_policy);
     }
 
+    /// Tell the engine how many pixels one cell is, which only the view knows.
+    /// It is what `CSI 14 t` reports, and a program that asks before it has
+    /// been set is told the window has no pixels (`BUG-0061`).
+    pub fn set_cell_pixels(&self, width: u16, height: u16) {
+        self.term.lock().set_cell_pixels(width, height);
+    }
+
     /// Scroll the scrollback by `delta` lines (no-op in alt-screen).
     ///
     /// Positive scrolls towards history, which is the sign every caller already

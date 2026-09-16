@@ -201,6 +201,17 @@ impl<'a> Harness<'a> {
             .read_with(self.cx, |host, cx| host.session.read(cx).query_state())
     }
 
+    /// The device-pixel cell the painter used this frame -- the one value the
+    /// session is told about.
+    fn cell_device(&self) -> crate::render::shapes::CellSizeDevicePx {
+        self.state
+            .borrow()
+            .geometry
+            .expect("a frame was drawn")
+            .metrics
+            .device
+    }
+
     fn grid(&self) -> GridSize {
         self.state
             .borrow()
@@ -433,6 +444,51 @@ fn resize_replans_all_and_resizes_session(cx: &mut TestAppContext) {
     assert_eq!(
         (state.rows, state.cols),
         (usize::from(smaller.rows), usize::from(smaller.cols))
+    );
+}
+
+/// `BUG-0061`: the engine starts with a zero cell size, so `CSI 14 t` told
+/// every program the window had no pixels and the ones that gate image support
+/// on it (OpenTUI, chafa) drew block mosaics instead of Sixels. The view is the
+/// only place that knows the cell, and this is the path that hands it over.
+#[gpui::test]
+fn cell_pixels_reach_the_session_so_csi_14_t_answers(cx: &mut TestAppContext) {
+    let mut h = Harness::open(cx, 24, 80, "", inputs_without_cursor());
+    h.first_frame();
+
+    let grid = h.grid();
+    let cell = h.cell_device();
+    assert!(cell.w > 0 && cell.h > 0, "{cell:?}");
+    assert_eq!(
+        h.probe.feed_replies(b"\x1b[14t"),
+        format!(
+            "\x1b[4;{};{}t",
+            u32::from(grid.rows) * cell.h as u32,
+            u32::from(grid.cols) * cell.w as u32
+        ),
+        "the pixel size is the view's own grid times its own device cell"
+    );
+    assert_eq!(
+        h.probe.feed_replies(b"\x1b[18t"),
+        format!("\x1b[8;{};{}t", grid.rows, grid.cols),
+        "the neighbouring arm still answers in cells"
+    );
+
+    // A metrics change alone updates it. This is the DPI-scale path's
+    // mechanism -- both go through the one `MetricsKey` cache -- driven here by
+    // the font size, because the GPUI test window pins `scale_factor` at 2.0.
+    h.state.borrow_mut().inputs.font_size = px(20.0);
+    h.draw();
+    let grown = h.cell_device();
+    assert!(grown.h > cell.h, "{cell:?} -> {grown:?}");
+    let grid = h.grid();
+    assert_eq!(
+        h.probe.feed_replies(b"\x1b[14t"),
+        format!(
+            "\x1b[4;{};{}t",
+            u32::from(grid.rows) * grown.h as u32,
+            u32::from(grid.cols) * grown.w as u32
+        )
     );
 }
 

@@ -290,6 +290,20 @@ resizes the grid from its loop — the UI thread does that in
 `TerminalSession::resize`: `PtyTransport::pty_resize` first, so the process learns
 the new size before any output for it arrives, then `TerminalModel::resize_grid`.
 
+**The cell size is the adapter's second duty to the engine** (`BUG-0061`). The grid is
+measured in cells and the engine has no way to learn how many pixels one of them is, so
+`Terminal::set_cell_pixels` — what `CSI 14 t` multiplies by the grid and reports — stays
+`(0, 0)` until an embedder says otherwise, and a program that gates image support on a
+non-zero answer (OpenTUI, chafa) draws block mosaics instead of Sixels. `TerminalElement`
+pushes it through `TerminalSession::set_cell_pixels` → `TerminalModel::set_cell_pixels`
+from `prepaint`, from the measured `CellMetrics::device`, **before** the grid check that
+calls `resize`, so the first reply after spawn already carries real pixels. It is a
+separate method and not a wider `resize` because a DPI-scale change moves the device cell
+while rows and columns stand still, which `resize` would discard. The same `CellMetrics`
+the painter uses is the only source: the engine still *places* Sixels in the VT340
+`VIRTUAL_CELL` (10x20) and the view rescales by it, so the reported size is a report, not
+a placement input.
+
 **Resize policy (`ResizePolicy`, DEC-0008).** Both policies are the engine's own since
 `US-0077`, and since `US-0082` the adapter does nothing but pick one: `TerminalModel::new`
 takes anything convertible into `oneterm_vt::ResizePolicy` and `resize_grid` passes it

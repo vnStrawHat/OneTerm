@@ -103,6 +103,20 @@ impl Element for TerminalElement {
         state.stats = FrameStats::default();
 
         let metrics = state.metrics(window, cx);
+        // The engine's only source for `CSI 14 t`, pushed before the resize
+        // below so the first reply after spawn already has real pixels
+        // (`BUG-0061`). Keyed on the metrics, not on the grid: a DPI-scale
+        // change moves the device cell while rows and columns stand still.
+        if state.last_cell_pixels != Some(metrics.device) {
+            let device = metrics.device;
+            self.spec.session.update(cx, |session, _| {
+                session.set_cell_pixels(
+                    device.w.clamp(1, i32::from(u16::MAX)) as u16,
+                    device.h.clamp(1, i32::from(u16::MAX)) as u16,
+                );
+            });
+            state.last_cell_pixels = Some(device);
+        }
         let gutter_width = state.gutter_width(window);
         let geometry = GridGeometry::new(bounds, metrics, gutter_width, state.inputs.padding);
         if state.last_grid != Some(geometry.size) {
