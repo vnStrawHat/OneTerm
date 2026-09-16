@@ -9,7 +9,7 @@ Created: 2026-09-16
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [ ] Planned
+- [x] Planned
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
@@ -487,7 +487,18 @@ Known gaps to state rather than discover:
 
 The harness database is not edited by this packet's session. This is the row it owes, for whoever
 applies it. The columns are `harness.db`'s real `story` schema; the `intake` row for `IN-0039` is
-`id = 44`.
+`id = 44`. The row below is the **implemented** state, matching the Status and Proof blocks above
+and the sibling `BUG-0059` and `US-0106` rows already in the database (`1, 1, 0, 1`); the planned
+row this section first carried was written before the work ran and would misreport it.
+
+Two statements the same session owes, and neither is written here because this session does not
+write `harness.db`:
+
+- `intake.notes` for `id = 44` reads "IN-0039 COMPLETE 2026-09-16: BUG-0059, US-0105, US-0106,
+  US-0107 merged into main", which stops one packet short even though `intake.story_id` already
+  lists `BUG-0060`. It should read "... BUG-0059, US-0105, US-0106, US-0107, BUG-0060 merged into
+  main", or a reader concludes the intake closed without its last packet.
+- `BUG-0060` is the intake's last packet, so applying the row below closes `IN-0039`.
 
 ```python
 #!/usr/bin/env python3
@@ -506,15 +517,17 @@ ROW = dict(
         "docs/spec-intakes/IN-0039-vt-gaps-and-publish/"
         "BUG-0060-remaining-unnameable-types.md"
     ),
-    status="planned",
-    unit_proof=0,
-    integration_proof=0,
+    status="implemented",
+    unit_proof=1,
+    integration_proof=1,
     e2e_proof=0,
-    platform_proof=0,
-    evidence=None,
+    platform_proof=1,
+    evidence=(
+        "docs/spec-intakes/IN-0039-vt-gaps-and-publish/evidence/BUG-0060-verify.md"
+    ),
     verify_command="pwsh scripts/ci-local.ps1",
-    last_verified_at=None,
-    last_verified_result=None,
+    last_verified_at="2026-09-16",
+    last_verified_result="pass",
     notes=(
         "Normal lane, not the intake's high_risk: additive public surface only, no "
         "reply byte and no encoder byte moves, and the one narrowing "
@@ -530,6 +543,33 @@ with sqlite3.connect("harness.db") as db:
     db.execute(f"INSERT INTO story ({columns}) VALUES ({placeholders})", tuple(ROW.values()))
 print("inserted BUG-0060")
 ```
+
+And, in the same session, the intake note that stops one packet short:
+
+```python
+db.execute(
+    "UPDATE intake SET notes = replace(notes, 'US-0107 merged', "
+    "'US-0107, BUG-0060 merged') WHERE id = 44"
+)
+```
+
+## Verification notes closed
+
+Independent verification on `428e9951`:
+[`evidence/BUG-0060-verify.md`](evidence/BUG-0060-verify.md). **PASS WITH NOTES**, and all four
+notes are record-level -- none is a defect in the shipped code, and none of the implementation,
+the gate or the two snapshots changed to answer them.
+
+| # | Finding | Closed by |
+| --- | --- | --- |
+| F1 | The Harness Row snippet proposed `status="planned"` with every proof `0`, contradicting the packet's own ticked blocks and the sibling rows already in the database. | The snippet above is now the implemented row: `status='implemented'`, `1, 1, 0, 1`, `last_verified_result='pass'`, and the `evidence` column points at the verification file. |
+| F2 | `intake.notes` for `id = 44` names four packets as merged and stops before this one. | The corrected note and its `UPDATE` are stated in the Harness Row section, for the same session that applies the row. Not written here: this session does not edit `harness.db`. |
+| F3 | The status block left `Planned` unticked, unlike `docs/templates/work.md` and `BUG-0059`. | `Planned` is ticked and stays ticked beside `Implemented`. |
+| F4 | `BUG-0059-unnameable-public-types.md:289` linked "`BUG-0060`" at the intake rather than at the packet. Pre-existing on `main`. | The link now points at `BUG-0060-remaining-unnameable-types.md`, and the sentence reads as the past tense it now is. |
+
+The verifier reproduced every load-bearing claim: all seven types nameable from a real external
+crate, the gate failing when a re-export is reverted and passing when it is restored, the
+`ColorOverrides` surface reduced to `get` and `iter`, and six `pty` lines from `--diff-platforms`.
 
 ## Handoff
 

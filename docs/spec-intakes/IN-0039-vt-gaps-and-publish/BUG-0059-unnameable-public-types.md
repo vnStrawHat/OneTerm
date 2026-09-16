@@ -286,7 +286,7 @@ drive-by. The LLD's edge case offers "a re-export or an entry in a short allow-l
 allow-list is added speculatively. These are not speculative -- they are seven named, verified
 findings -- so they are a `KNOWN_UNNAMEABLE` ledger in the script. The ledger may only **shrink**:
 a name in it that stops firing fails the gate too, so it cannot rot into a permanent exemption.
-**[`BUG-0060`](IN-0039.md) is the proposed packet that empties it**, `ModeState` first. This is the one place the packet's "four
+**[`BUG-0060`](BUG-0060-remaining-unnameable-types.md) is the packet that emptied it**, `ModeState` first. This is the one place the packet's "four
 names and no more" scope and its "the gate passes on the branch" acceptance could not both hold,
 and the ledger keeps both true without hiding the other seven.
 
