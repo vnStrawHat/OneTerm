@@ -395,3 +395,145 @@ reference.
    rests on are taken as given.
 3. `harness.db` was never opened, by instruction. The snippet's shape is checked; its
    effect on the live database is not.
+
+---
+
+# Re-verification: the acceptance rework
+
+Commit under test: `2aaf138b` ("docs(vt): attribute the Unix hang-up to the right
+descriptor"), built on the verification commit `21328df6`.
+Targeted pass over D1-D4 and D6 only. Date: 2026-09-16.
+
+## Verdict
+
+**PASS.** Every defect this pass covers is closed, and none of the fixes introduced a new
+mis-attribution. The rework was correctly scoped as acceptance rework of BUG-0065 rather
+than a new bug, and it fixed the block comment in `unix.rs:222-229` the wrong sentence was
+derived from -- which is the part that would otherwise have been re-derived by the next
+writer.
+
+## D1 -- the Unix hang-up, all four copies
+
+The three banned attributions are gone from the whole tree:
+
+```text
+$ grep -rn -i "line discipline\|foreground process group" \
+      crates/vt/src crates/vt/docs docs/spec-intakes/.../low-level-design \
+      docs/terminal-backend.md crates/vt/README.md
+crates/vt/src/pty/unix.rs:327:/// Ask the line discipline to treat input as UTF-8. ...
+```
+
+The single survivor is correct and unrelated: `IUTF8` is a `termios` `c_iflag`, which *is*
+the line discipline's business. Every "controlling terminal" in the tree now names the
+**slave**.
+
+Each of the four sentences judged against the fd lifetimes and the `setsid` + `TIOCSCTTY`
+sequence traced in the first pass:
+
+| # | Where | Text | Verdict |
+| --- | --- | --- | --- |
+| 1 | `crates/vt/src/pty/mod.rs:48-55` | "dropping closes the master side, and nothing else holds a slave descriptor once the child is running, so that close hangs up the slave -- the child's controlling terminal, taken at spawn -- and the child, as session leader, receives `SIGHUP`" | **correct** |
+| 2 | `crates/vt/docs/guide/13-pty.md:186-193` | same wording, "That is the hang-up that was wanted" appended | **correct** |
+| 3 | `low-level-design/pty.md:432-434` | "closing the master side is the last descriptor to go, so it hangs up the slave (the child's controlling terminal, taken at spawn) and the child, as session leader, receives `SIGHUP`" | **correct** |
+| 4 | `crates/vt/src/pty/unix.rs:222-230` | "Closing `master` instead is both safe and sufficient: nothing else holds a slave descriptor once the child is running, so that close hangs up the slave -- the controlling terminal the child took with `setsid` + `TIOCSCTTY` -- and the child, as session leader, receives `SIGHUP`" | **correct** |
+
+Against the code:
+
+- **the slave is the controlling terminal** -- `unix.rs:131` `setsid()`, then `:141`
+  `set_controlling_terminal(slave_fd)` -> `ioctl(slave_fd, TIOCSCTTY, 0)`. Copy 4's
+  "`setsid` + `TIOCSCTTY`" names the pair in the right order, and `setsid` really is the
+  prerequisite (it leaves the new session with no controlling terminal for `TIOCSCTTY` to
+  fill).
+- **closing the master is what hangs up** -- and it is the last master-side close, because
+  `master` is never duplicated (`:180`, `:245`, `:274-280` all borrow). The `slave` opened
+  at `:93` is not stored in `Self` (`:187-192`), so it and the `Command` holding the three
+  `try_clone()` stdio duplicates (`:109-111`) drop when `spawn` returns; the child closed
+  its own inherited copies at `:144`. The parent holds no slave descriptor, exactly as the
+  first pass traced.
+- **the child, as session leader, receives `SIGHUP`** -- correct on both Linux and BSD: the
+  hang-up path signals session leaders whose controlling tty this is, and `setsid()` at
+  `:131` makes the child one. This is the claim the previous wording got wrong by naming
+  the foreground process group, and it is now the claim the crate can actually defend.
+
+One wording note, not a defect: "nothing else holds a slave descriptor once the child is
+running" reads most naturally as "nothing else **in this process**" -- the child of course
+holds three, as its stdio, which is what there is to hang up. Copy 3 avoids the ambiguity
+("the last descriptor to go"). No reader is misled about the outcome, and the sentence is
+true on the reading the paragraph supports.
+
+## D2 -- risk lane
+
+`Risk lane: normal` (packet `:23`) and `"normal"` in the insert snippet (`:289`). The
+snippet still parses: 17 column names, 17 `?` placeholders, 17 tuple values, proof flags
+`1, 0, 0, 1` still matching the `HARNESS:PROOF` block. **Closed.**
+
+## D3 -- the two Windows pipe threads
+
+Split in all three places, and each half now matches the code:
+
+- `mod.rs:57-63`: "The Windows reader is parked in a blocking pipe read and returns when the
+  pipe breaks; the Windows writer waits on its ring and returns once the drop closes it."
+- `13-pty.md:164-166`: the same split in the thread list.
+- the packet's truth table `:76`, which now cites `pipe.rs:297-304` (the writer's condvar
+  wait in `pull`) and `pipe.rs:348-352` (`PipeWriter::drop` -> `Ring::close()`) -- the exact
+  lines the first pass identified. **Closed.**
+
+## D4 -- `docs/terminal-backend.md` §6.2
+
+`:527-530` now reads: "**Closing a local session** is guaranteed to leave no process behind
+**while OneTerm is running** -- a **Windows** guarantee, because it rests on the escalation
+in §6.3. The Unix transport has no escalation: its `PseudoConsole` has no `Drop` at all, and
+closing the master hangs up the slave so the child, as session leader, gets `SIGHUP`." The
+headline is labelled and the added Unix sentence carries none of the three mis-attributions.
+The later `ClosePseudoConsole` sentence (`:535-537`) is still written without a platform word
+of its own, but it now sits under an explicit Windows label and names only Windows APIs, so
+the over-generalisation is gone. **Closed.**
+
+## D6 -- citations
+
+`unix.rs:222-229` for the no-`Drop` invariant (packet `:73`) and `unix.rs:219` for the
+reaper's `.map(drop)` (`:76`). Both verified against the file. The truth table's new Unix
+citations are correct too: `unix.rs:93` is `let (master, slave) = open_pty()?`, `:144` is
+the child's `libc::close(slave_fd)`, and `:131, 141` are `setsid()` and
+`set_controlling_terminal`. **Closed.**
+
+## D5 -- no action, and agreed
+
+`intake_id` stays the literal `43`. The packet says so explicitly and the value is correct
+for IN-0038; the recommendation was about method, not about this row.
+
+## Gates
+
+```text
+$ # ci.yml:235-251, both stand-alone greps
+GATE A PASS (no hits)   -- rustdoc, crates/vt/src
+GATE B PASS (no hits)   -- embedder guide, crates/vt/docs/guide
+
+$ RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features
+    Finished `dev` profile ... Generated target/doc/oneterm_vt/index.html      [exit 0]
+
+$ python scripts/vt-public-api.py --check --no-doc
+public API surface unchanged (public-api.windows.txt)                          [exit 0]
+
+$ python scripts/check-english.py
+English contributor-text check passed for 919 files.                           [exit 0]
+
+$ cargo fmt --all -- --check                                                   [exit 0]
+```
+
+`cargo fmt` was run because this commit touches a `.rs` file for the first time in the
+packet (`unix.rs`, comment text only -- `git show --stat` reports 7 lines, and the change is
+entirely inside the `//` block at `:222-230`). The public API surface being unchanged
+confirms the same thing from the other side. The `[Platforms](#platforms)` link still
+renders as `<a href="#platforms">Platforms</a>` against an `id="platforms"` heading.
+
+No full `ci-local` was re-run, per instruction, and nothing here failed to require it.
+
+## One observation
+
+The `HARNESS:STATUS` block still shows `Implemented` rather than `Reopened (acceptance
+rework)`. That block is machine-owned and mirrored from `harness.db`, which is out of bounds
+from this worktree, so it cannot be moved here -- and the packet does record the rework in
+prose, under "Acceptance rework, after the independent verification", with the correct
+reasoning for why it is rework rather than a new bug. Worth a coordinator's attention when
+the row is finally inserted, not a defect in the change.
