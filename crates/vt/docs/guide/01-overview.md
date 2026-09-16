@@ -93,8 +93,9 @@ are the two halves of the output side: the events, and the OSC routing that
 decides which events exist. Chapter 6 is the input side. Chapters 7 to 10 are
 one subsystem each -- search, images, resize, and the ceilings that keep a
 hostile stream from costing you memory. Chapter 11 says what is conformant and
-what is missing, chapter 12 what a version number promises, and chapter 13 the
-transport.
+what is missing, chapter 12 what a version number promises, chapter 13 the
+transport, and chapter 14 how fast the engine is, on what machine, and what that
+number does not cover.
 
 These chapters are themselves part of the crate: they render as
 `oneterm_vt::guide`, beside the API reference and at the version you depend on,

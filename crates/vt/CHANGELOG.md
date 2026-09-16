@@ -77,7 +77,15 @@ carry no API change at all. Such a release says so below rather than being omitt
   can observe. A **minor** bump under clause 1: `Config` is not `#[non_exhaustive]`, and cannot be
   without replacing struct-literal construction with setters (see guide chapter 12).
 
-- `guide`, a public module that carries the embedder's guide: thirteen Markdown chapters rendered
+- `guide::ch14_performance`, a chapter that publishes a measured throughput figure for the first
+  time: the command that produced it, the machine it ran on, the spread across cycles, the
+  transport ceiling beside it, and the list of things it is not evidence of -- no renderer, no
+  pseudo-console, and no comparison against another engine. The repository gains a committed
+  baseline and a `vt-bench grid --check` trip-wire that fails a fixture once it has become twice as
+  slow; it runs by hand, never in continuous integration, and no number here is a promise.
+  Performance stays outside the promise above.
+
+- `guide`, a public module that carries the embedder's guide: fourteen Markdown chapters rendered
   by `cargo doc` beside the API reference, one empty module each. It adds no item and no
   dependency, and every Rust block in it is a doctest, so a chapter that describes an API the
   crate no longer has fails the build rather than misleading a reader.
