@@ -366,12 +366,15 @@ jobs:
   # Linux and Windows already run `cargo test --workspace` in the two quality
   # gates above; macOS is the only platform without that coverage.
   #
-  # `oneterm-vt` is in the list because `cfg(unix)` is not one platform but two:
-  # `libc::sigset_t` is a `u32` alias on macOS and a struct on glibc, which is
-  # exactly how `BUG-0063` reached `main` — code that compiled on one Unix and
-  # not on the other. `crates/vt/src/pty/unix.rs` is the module that difference
-  # lives in, and this is the only job that compiles its macOS half
-  # (`US-0109`).
+  # `oneterm-vt` is in the list so that macOS **runs the engine's own test
+  # targets** — `crates/vt/src/pty/unix.rs`'s `#[cfg(test)]` module, the
+  # `#[cfg(unix)]` arm of `pty/loopback_tests.rs`, and the rest of the suite.
+  # It was already *compiled* here, as a dependency of `oneterm-local-shell`
+  # (which takes `oneterm-vt` with `features = ["pty"]`), but compiling a crate
+  # as a dependency never builds its `#[cfg(test)]` modules, so none of that
+  # ran. `cfg(unix)` is two platforms, not one — `libc::sigset_t` is a `u32`
+  # alias here and a struct on glibc (`BUG-0063`) — and this is the job where
+  # the macOS one is exercised rather than merely built (`US-0109`).
   macos-tests:
     name: macOS backend tests
     runs-on: macos-latest

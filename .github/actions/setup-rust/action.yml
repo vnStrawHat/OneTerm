@@ -1,7 +1,14 @@
-# Every Rust job in this repository starts the same three steps: read the channel
+# Every Rust job in `ci.yml` starts the same three steps: read the channel
 # `rust-toolchain.toml` pins, install exactly that toolchain, restore that job's
 # cargo cache. Six jobs carried six identical copies, which is six places to
-# forget when a pinned action SHA moves (`US-0109`). This is the one copy.
+# forget when a pinned action SHA moves (`US-0109`). This is the one copy for
+# `ci.yml`.
+#
+# `release.yml` keeps its own copy on purpose: its build matrix passes
+# `targets: ${{ matrix.target }}` to the toolchain action and `key:` to the
+# cache action, neither of which this action takes, and adding two inputs for a
+# single caller would be generality nobody asked for. A SHA bump is therefore
+# two edits, here and there — which is still five fewer than before.
 #
 # The SHAs below are the ones those six jobs already used, unchanged. Pinning is
 # the security property; keep it, and keep the comment that dates the pin.

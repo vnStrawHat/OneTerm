@@ -30,9 +30,14 @@ Applied:
   quality jobs for `vt-package`.
 - **`regex`** is a `oneterm-vt` feature too, so it follows `vt-paranoid` into `vt-package`,
   the job that already builds the crate in three feature configurations.
-- **macOS** gains `-p oneterm-vt`. `BUG-0063` is the evidence: `libc::sigset_t` is a `u32`
-  alias on macOS and a `{ __val: [c_ulong; 16] }` struct on glibc, so "it compiles on one Unix"
-  is not "it compiles on Unix". macOS is the flavour nothing currently builds.
+- **macOS** gains `-p oneterm-vt`, so the engine's own test targets run there for the first
+  time: `crates/vt/src/pty/unix.rs`'s `#[cfg(test)]` module, the `#[cfg(unix)]` arm of
+  `pty/loopback_tests.rs`, and the rest of the suite. The file was already *compiled* on macOS
+  — `oneterm-local-shell`, which that job tests, takes `oneterm-vt` with `features = ["pty"]` —
+  but compiling a crate as a dependency never builds its `#[cfg(test)]` modules. `BUG-0063` is
+  why the distinction is worth paying for: `libc::sigset_t` is a `u32` alias on macOS and a
+  `{ __val: [c_ulong; 16] }` struct on glibc, so `cfg(unix)` is two platforms and each deserves
+  its own run, not just its own build.
 - **The setup triple** — read the pinned channel, `dtolnay/rust-toolchain`,
   `Swatinem/rust-cache` — becomes `.github/actions/setup-rust`, a local composite action with
   one optional `components` input. The pinned SHAs are carried over character for character;
