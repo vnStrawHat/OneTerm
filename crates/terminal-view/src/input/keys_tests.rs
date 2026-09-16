@@ -5,8 +5,7 @@
 use gpui::{AppContext as _, Keystroke, Modifiers, TestAppContext};
 use oneterm_terminal::test_support::FakeTerminalSession;
 use oneterm_terminal::{
-    KeyEvent, KeyEventKind, KeyMods, KeySpec, KeyboardFlags, ModeSnapshot, NamedKey, encode_key,
-    encode_key_event,
+    KeyEvent, KeyEventKind, KeyMods, KeySpec, ModeSnapshot, NamedKey, encode_key, encode_key_event,
 };
 
 use super::keys::{
@@ -228,8 +227,8 @@ fn altgr_char_on_windows_is_ignored() {
 #[gpui::test]
 fn ctrl_c_interrupts(cx: &mut TestAppContext) {
     // Ctrl+C is SIGINT even with a selection: it is never "copy" here.
-    assert_eq!(classify(&ks("c", ctrl(), None)), KeyAction::Interrupt);
-    assert_eq!(classify(&ks("C", ctrl(), None)), KeyAction::Interrupt);
+    assert_eq!(classify(&ks("c", ctrl(), None)), KeyAction::Interrupt(None));
+    assert_eq!(classify(&ks("C", ctrl(), None)), KeyAction::Interrupt(None));
 
     let (session, probe) = FakeTerminalSession::boxed(4, 8, "");
     cx.update(|cx| {
@@ -427,24 +426,5 @@ fn the_kind_reaches_the_event_and_text_stops_at_a_release() {
     assert_eq!(held.kind, KeyEventKind::Repeat);
 }
 
-#[test]
-fn ctrl_c_is_a_key_once_the_program_asked_for_every_key_as_an_escape_code() {
-    let all_esc = KeyContext {
-        all_keys_as_esc: true,
-        ..KeyContext::default()
-    };
-    let stroke = ks("c", ctrl(), None);
-    // Unchanged with nothing negotiated: still a signal.
-    assert_eq!(classify(&stroke), KeyAction::Interrupt);
-
-    let KeyAction::Send(event) = classify_key(&stroke, false, KeyEventKind::Press, all_esc) else {
-        panic!("Ctrl+C is the encoded key once REPORT_ALL_KEYS_AS_ESC is pushed");
-    };
-    let mut modes = ModeSnapshot::default();
-    modes.keyboard_flags = KeyboardFlags::REPORT_ALL_KEYS_AS_ESC;
-    assert_eq!(
-        encode_key_event(&event, &modes),
-        Some(b"\x1b[99;5u".to_vec()),
-        "the program sees the key it negotiated, not a signal it cannot observe"
-    );
-}
+// Ctrl+C across every flag state is `us0108_verify_tests`'s
+// `ctrl_c_across_the_flag_states`, which asserts the encoded bytes too.

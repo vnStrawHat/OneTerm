@@ -14,7 +14,7 @@ pub(crate) mod mouse;
 
 pub(crate) use edit::{copy_selection, paste_clipboard};
 pub(crate) use keys::{
-    CompletionKey, KeyAction, KeyContext, classify_key, interrupt, map_key, send_key,
+    CompletionKey, KeyAction, KeyContext, canonical_key, classify_key, interrupt, map_key, send_key,
 };
 pub(crate) use menu::{MenuContext, MenuSplitContext, build_menu};
 pub(crate) use mouse::{MouseInputs, MouseOutcome, MouseState, UrlOpen};
@@ -27,3 +27,5 @@ mod keys_tests;
 mod menu_tests;
 #[cfg(test)]
 mod mouse_tests;
+#[cfg(test)]
+mod us0108_verify_tests;

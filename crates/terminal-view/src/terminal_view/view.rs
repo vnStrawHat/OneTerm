@@ -6,7 +6,7 @@
 //! owns (search, scrollbar, gutter timestamps, completion, agent status).
 
 use std::cell::RefCell;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -23,7 +23,8 @@ use oneterm_state::{
 };
 use oneterm_terminal::security_policy::MAX_QUEUED_NOTIFICATIONS;
 use oneterm_terminal::{
-    SessionEvent, SessionKind, TerminalPalette, TerminalProgress, TerminalSession, encode_osc52,
+    KeySpec, SessionEvent, SessionKind, TerminalPalette, TerminalProgress, TerminalSession,
+    encode_osc52,
 };
 
 use super::completion::CompletionState;
@@ -133,13 +134,17 @@ pub(crate) struct TerminalView {
     /// focus/blur subscriptions so the blink task can pause while unfocused
     /// without needing a `Window`.
     pub(super) focused: bool,
-    /// Keys whose press actually reached the PTY, by the GPUI key name.
+    /// Keys whose press actually reached the PTY, in the canonical form
+    /// [`canonical_key`](crate::input::canonical_key) produces.
     ///
     /// A release is sent only for a key in here, which keeps a chord the view
     /// swallowed (zoom, copy, the completion overlay, a dead key, a printable
     /// key the IME owns) from producing a release the program never saw a press
-    /// for. Drained on blur. Bounded by the number of physically held keys.
-    pub(super) held_keys: HashSet<String>,
+    /// for. Drained on blur. A `Vec` rather than a set because `KeySpec` is not
+    /// `Hash` and this is bounded by the number of physically held keys -- a
+    /// handful, so a linear scan is the cheaper answer as well as the smaller
+    /// one.
+    pub(super) held_keys: Vec<KeySpec>,
     /// Render state shared with the element and read by the input handlers
     /// (the hit-test contract lives in its `geometry`).
     pub(super) render_state: Rc<RefCell<RenderState>>,
@@ -276,7 +281,7 @@ impl TerminalView {
             focus,
             deps,
             focused: true,
-            held_keys: HashSet::new(),
+            held_keys: Vec::new(),
             render_state: Rc::new(RefCell::new(RenderState::new(inputs))),
             cached_font: None,
             theme_key: None,
