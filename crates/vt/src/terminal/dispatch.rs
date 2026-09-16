@@ -32,6 +32,7 @@ fn event_term(term: StringTerm) -> crate::event::StringTerm {
 use crate::terminal::color::{ColorKey, parse_color};
 use crate::terminal::mode::{CursorShape, CursorStyle, FlagApply, KeyboardFlags, Mode, ModeState};
 use crate::terminal::osc::OscRoute;
+use crate::terminal::query::{self, DcsQuery};
 use crate::terminal::{MARK_MAX, State};
 use crate::width::cluster_width;
 use unicode_segmentation::UnicodeSegmentation;
@@ -596,6 +597,7 @@ impl Handler<'_> {
         // placements die through the ordinary release sweep, because the reset
         // blanked every row they cover.
         self.state.graphics.reset();
+        self.clear_dcs_query();
         self.state.active_charset = 0;
         self.state.single_shift = None;
         self.state.saved_shifts = [(0, None); 2];
@@ -631,7 +633,20 @@ impl Handler<'_> {
         self.state.grid.screen_mut().set_region_raw(0, rows);
         self.set_template(Cell::EMPTY);
         self.state.grid.screen_mut().goto(0, 0);
+        self.clear_dcs_query();
         self.save_cursor();
+    }
+
+    /// Drop any in-flight `DECRQSS` / `XTGETTCAP` payload, keeping its
+    /// allocation.
+    ///
+    /// A DCS cannot in fact be in flight across `RIS` or `DECSTR` — both arrive
+    /// as their own sequences, so the parser has already left
+    /// `DcsPassthrough` — but the buffer is reset with its neighbours so a
+    /// future reader does not have to prove that.
+    fn clear_dcs_query(&mut self) {
+        self.state.dcs_query = None;
+        self.state.dcs_payload.clear();
     }
 
     // ── Tabs ────────────────────────────────────────────────────────────────
@@ -738,6 +753,195 @@ impl Handler<'_> {
             index
         };
         (row + 1, self.cursor_col() + 1)
+    }
+
+    // ── Conformance queries ─────────────────────────────────────────────────
+
+    /// `CSI Pid ; Pp ; Pt ; Pl ; Pb ; Pr * y` — `DECRQCRA`, the checksum of a
+    /// rectangle of the screen, answered as `DCS Pid ! ~ xxxx ST`.
+    ///
+    /// Gated by [`Config::allow_screen_readback`](crate::Config::allow_screen_readback),
+    /// which is `false` by default: with the gate shut this counts unhandled
+    /// and answers nothing, exactly as it did before it was implemented.
+    ///
+    /// `Pp`, the page number, is parsed and ignored: this engine has one page,
+    /// and one page here is one visible screen. The scrollback is not
+    /// addressable, so a program cannot read scrolled-off history with it.
+    fn decrqcra(&mut self, args: &mut CsiArgs<'_>) {
+        let id = args.next_or(0);
+        let _page = args.next_or(0);
+        let (rows, cols) = (self.rows(), self.cols());
+        // `DECOM`: while origin mode is set the addressable page **is** the
+        // scrolling region. Rows are relative to its top, and -- this is the
+        // half that is easy to miss -- they are also clamped to its bottom.
+        // xterm spells the pair `minRectRow` / `maxRectRow`: `xtermParseRect`
+        // defaults an omitted row to them and `limitedParseRow` clamps an
+        // explicit one into the same span. Applying the offset without the
+        // clamp is the Contour bug the design cites; applying only the clamp
+        // would be the mirror image of it.
+        let (min_row, max_row) = if self.origin() {
+            let region = self.region();
+            (region.top, region.bottom)
+        } else {
+            (0, rows)
+        };
+        let top = args.next_or(1);
+        let left = args.next_or(1);
+        let bottom = args.next_or(rows);
+        let right = args.next_or(cols);
+        if !self.state.config.allow_screen_readback {
+            self.unhandled();
+            return;
+        }
+        // 1-based and inclusive on the wire, 0-based and half-open here.
+        // Saturating throughout: a rectangle larger than the page is the page,
+        // and a reversed one (`Pb < Pt`) is empty rather than an underflow.
+        //
+        // Deviation from xterm, deliberate: `validRect` **rejects** a rectangle
+        // that falls outside the page and answers a checksum of zero over
+        // nothing, where this engine clamps it to the page. A request wholly
+        // outside still answers `0000` either way, so only a partially outside
+        // rectangle can tell the two apart -- and clamping is the friendlier
+        // answer to give a harness that guessed the size.
+        let top = top
+            .saturating_sub(1)
+            .saturating_add(min_row)
+            .clamp(min_row, max_row);
+        let left = left.saturating_sub(1).min(cols);
+        let bottom = bottom.saturating_add(min_row).clamp(min_row, max_row);
+        let right = right.min(cols);
+
+        let mut checksum: u32 = 0;
+        let screen = self.state.grid.screen();
+        for index in top..bottom.max(top) {
+            let row = screen.row(screen.screen_top() + u64::from(index));
+            for col in left..right.max(left) {
+                // A blank or never-written cell reads as `U+0020` already, which
+                // is the `csNOTRIM` half of the variant; the attributes are not
+                // consulted, which is the `csATTRIBS` half; the sum is not
+                // negated, which is `csPOSITIVE`. See `query::decrqcra_reply`.
+                //
+                // **Every scalar of the cell counts, not just the first.** At
+                // extension 7 `csBYTE` is clear, so xterm's `xtermCheckRect`
+                // walks `combData` and adds each combining scalar on top of the
+                // base character. A cluster of `e` + `U+0301` is `0x65 + 0x301`
+                // in both, so the two agree cell for cell.
+                match row.cell(col).content() {
+                    CellContent::Scalar(c) => checksum = checksum.wrapping_add(c as u32),
+                    CellContent::Grapheme(id) => {
+                        for scalar in self.state.interner.resolve_grapheme(id) {
+                            checksum = checksum.wrapping_add(*scalar as u32);
+                        }
+                    }
+                }
+            }
+        }
+        let reply = query::decrqcra_reply(id, checksum);
+        self.reply(&reply);
+    }
+
+    /// `DCS $ q <setting> ST` — `DECRQSS`, answered as
+    /// `DCS 1 $ r <value><setting> ST` for a setting the engine reports and
+    /// `DCS 0 $ r ST` for every other.
+    ///
+    /// The short list is deliberate. `DECSLRM`, `DECSASD`, `DECSACE`, `DECSCPP`
+    /// and `DECSNLS` describe features this engine does not have, and answering
+    /// them would claim a capability that does not exist; the invalid reply is
+    /// the honest one.
+    fn decrqss(&mut self) {
+        let request = std::mem::take(&mut self.state.dcs_payload);
+        let value = match request.as_slice() {
+            b"m" => Some(query::sgr_parameters(&self.style())),
+            b"r" => {
+                let region = self.region();
+                Some(format!("{};{}", region.top + 1, region.bottom))
+            }
+            b" q" => {
+                // The *shape selector*, not the visibility: `DECTCEM` hides the
+                // cursor without changing which shape `DECSCUSR` chose, so
+                // `Terminal::cursor_style` — which folds the two together for a
+                // renderer — is the wrong source here.
+                let style = self
+                    .state
+                    .cursor_style
+                    .unwrap_or(self.state.config.default_cursor_style);
+                let base = match style.shape {
+                    CursorShape::Underline => 3,
+                    CursorShape::Beam => 5,
+                    // `Hidden` and `HollowBlock` are not shapes a stream can
+                    // select with `DECSCUSR`, so they report the block they
+                    // fall back to.
+                    _ => 1,
+                };
+                Some((base + u8::from(!style.blinking)).to_string())
+            }
+            // `DECSCA`. The protected bit is stored on every cell and honoured
+            // by nothing, and no `CSI Ps " q` sets it, so the template's bit is
+            // the whole truth and it is always `0`.
+            b"\"q" => Some(u8::from(self.template().protected()).to_string()),
+            // `DECSCL`, reporting the level `DA1` already claims: VT220, with
+            // 7-bit controls, which is the only form the engine ever emits.
+            b"\"p" => Some(format!("{DECSCL_LEVEL};1")),
+            _ => None,
+        };
+        let reply = match value {
+            // `request` is one of the byte strings matched above, so it is
+            // ASCII by construction.
+            Some(value) => query::decrqss_reply(&value, &String::from_utf8_lossy(&request)),
+            None => query::DECRQSS_INVALID.to_owned(),
+        };
+        self.reply(&reply);
+        self.state.dcs_payload = request;
+    }
+
+    /// `DCS + q <hex name> [; <hex name>]... ST` — `XTGETTCAP`, answered with
+    /// one `DCS 1 + r <hex name> = <hex value> ST` per known capability and
+    /// `DCS 0 + r <hex name> ST` per unknown one.
+    ///
+    /// The table is compiled in: the engine reads no terminfo database, no
+    /// environment variable and no file. Both ceilings drop rather than
+    /// truncate, because a truncated echo would be a lie about what was asked,
+    /// and a request that dropped anything is counted — **once**, not once per
+    /// name, so a hostile 4 000-name request cannot drive the counter by 4 000.
+    fn xtgettcap(&mut self) {
+        let request = std::mem::take(&mut self.state.dcs_payload);
+        let mut name = Vec::new();
+        let mut replies = Vec::new();
+        let mut dropped = false;
+        for (position, hex) in request.split(|&byte| byte == b';').enumerate() {
+            if position >= query::XTGETTCAP_MAX_NAMES
+                || hex.len() > query::XTGETTCAP_MAX_NAME_BYTES * 2
+            {
+                dropped = true;
+                continue;
+            }
+            name.clear();
+            let decoded = query::hex_decode(hex, &mut name);
+            let product = self.state.config.product_name.as_deref();
+            // Odd-length or non-hex input decodes to nothing and is answered
+            // unknown: no panic, no partial decode, and the name echoed back is
+            // the one that was sent.
+            let value = decoded.then(|| query::capability(&name, product)).flatten();
+            let mut reply = String::from(if value.is_some() {
+                "\x1bP1+r"
+            } else {
+                "\x1bP0+r"
+            });
+            reply.push_str(query::hex_echo(hex));
+            if let Some(value) = value {
+                reply.push('=');
+                query::hex_encode(value.as_bytes(), &mut reply);
+            }
+            reply.push_str("\x1b\\");
+            replies.push(reply);
+        }
+        for reply in &replies {
+            self.reply(reply);
+        }
+        if dropped {
+            self.unhandled();
+        }
+        self.state.dcs_payload = request;
     }
 
     fn window_ops(&mut self, arg: u16) {
@@ -1018,6 +1222,14 @@ pub(super) const PRODUCT_NAME_MAX: usize = 64;
 /// number derived from the product name would be a fingerprint, not an
 /// identity.
 const DEVICE_UNIT_ID: &str = "\x1bP!|00000000\x1b\\";
+
+/// The operating level `DECSCL` reports through `DECRQSS`.
+///
+/// It is the level `identify_terminal`'s `DA1` already claims, `? 62` (VT220),
+/// and moving one without the other would have the terminal answer two
+/// different levels to two questions about the same thing. A doctest in guide
+/// chapter 11 pins both replies together.
+const DECSCL_LEVEL: u16 = 62;
 
 /// The embedder's product name, made safe to splice into a reply.
 ///
@@ -1508,6 +1720,7 @@ impl Dispatch for Handler<'_> {
                 let n = args.next_or(1);
                 self.state.grid.screen_mut().erase_chars(n);
             }
+            (b'y', [b'*']) => self.decrqcra(&mut args),
             _ => self.unhandled(),
         }
     }
@@ -1549,39 +1762,77 @@ impl Dispatch for Handler<'_> {
         self.state.config.osc_routes.allows_large(code)
     }
 
-    /// Only Sixel — final byte `q` with **no** intermediate — is decoded
-    /// The intermediates are part of the routing key: `DCS $ q`
-    /// (DECRQSS) and `DCS + q` (XTGETTCAP, which clients such as tmux, neovim
-    /// and kitty are documented to send) share the final byte and are not
-    /// images. Every other DCS is counted unhandled.
+    /// The intermediates are part of the routing key. Final byte `q` with **no**
+    /// intermediate is Sixel and opens the image decoder; `DCS $ q` (`DECRQSS`)
+    /// and `DCS + q` (`XTGETTCAP`, which clients such as tmux, neovim and kitty
+    /// are documented to send) share that final byte, are not images, and open
+    /// a payload buffer the matching [`Dispatch::dcs_unhook`] answers from.
+    /// Every other DCS is counted unhandled.
     ///
-    /// No decoder can be in flight here: an unterminated Sixel is ended by the
-    /// `ESC` that introduces the next DCS, and `advance_dcs_passthrough` leaves
-    /// that state only through [`Dispatch::dcs_unhook`], which takes the
-    /// parser. So a partial Sixel is *finished* by the sequence behind it, not
-    /// aborted by it, and this branch has nothing to clear.
+    /// Exactly one sink is open at a time, and no sink can be in flight here: an
+    /// unterminated DCS is ended by the `ESC` that introduces the next one, and
+    /// `advance_dcs_passthrough` leaves that state only through
+    /// [`Dispatch::dcs_unhook`]. So a partial Sixel is *finished* by the
+    /// sequence behind it, not aborted by it, and this branch has nothing to
+    /// clear beyond the payload buffer it is about to reuse.
     fn dcs_hook(&mut self, _params: &Params, intermediates: &[u8], byte: u8) {
         self.state.dispatched = true;
         self.break_cluster();
-        if byte == b'q' && intermediates.is_empty() {
-            self.state.graphics.parser = Some(SixelParser::new());
-        } else {
-            self.unhandled();
-        }
+        let kind = match (byte, intermediates) {
+            (b'q', []) => {
+                self.state.graphics.parser = Some(SixelParser::new());
+                return;
+            }
+            (b'q', [b'$']) => DcsQuery::Decrqss,
+            (b'q', [b'+']) => DcsQuery::Xtgettcap,
+            _ => {
+                self.unhandled();
+                return;
+            }
+        };
+        self.state.dcs_query = Some(kind);
+        self.state.dcs_payload.clear();
     }
 
     fn dcs_put(&mut self, byte: u8) {
         if let Some(parser) = self.state.graphics.parser.as_mut() {
             parser.put(byte);
+        } else if self.state.dcs_query.is_some()
+            && self.state.dcs_payload.len() < query::QUERY_MAX_BYTES
+        {
+            // Past the ceiling the bytes are dropped rather than buffered, and
+            // `dcs_unhook` reads the full buffer as "over-long". The parser's
+            // own `DCS_MAX_BYTES` still ends the sequence eventually; this is
+            // what stops one hostile request retaining 16 MiB until the session
+            // ends.
+            self.state.dcs_payload.push(byte);
         }
     }
 
     fn dcs_unhook(&mut self, aborted: bool) {
         let parser = self.state.graphics.parser.take();
+        let query = self.state.dcs_query.take();
         if aborted {
             // A `CAN`/`SUB` abort or a payload past `DCS_MAX_BYTES`: the partial
-            // image is discarded and no cell is stamped.
+            // image is discarded, no cell is stamped, and a query answers
+            // nothing rather than answering from a truncated request.
+            self.state.dcs_payload.clear();
             self.state.stats.aborted_dcs = self.state.stats.aborted_dcs.saturating_add(1);
+            return;
+        }
+        if let Some(kind) = query {
+            // A payload that filled the buffer is longer than any request that
+            // could be answered, so it is not one: nothing is answered and the
+            // attempt is counted.
+            if self.state.dcs_payload.len() >= query::QUERY_MAX_BYTES {
+                self.state.dcs_payload.clear();
+                self.unhandled();
+                return;
+            }
+            match kind {
+                DcsQuery::Decrqss => self.decrqss(),
+                DcsQuery::Xtgettcap => self.xtgettcap(),
+            }
             return;
         }
         let Some(image) = parser.and_then(SixelParser::finish) else {

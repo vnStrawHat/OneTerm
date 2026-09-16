@@ -15,6 +15,7 @@ mod color;
 mod dispatch;
 mod mode;
 mod osc;
+mod query;
 
 #[cfg(test)]
 #[path = "terminal_tests.rs"]
@@ -23,6 +24,10 @@ mod tests;
 #[cfg(test)]
 #[path = "dcs_routing_tests.rs"]
 mod dcs_routing_tests;
+
+#[cfg(test)]
+#[path = "query_tests.rs"]
+mod query_tests;
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -67,6 +72,15 @@ const MARK_MAX: usize = 1024;
 // No dead knobs: the fork's `vi_mode_cursor_style`, `kitty_keyboard` and
 // `osc52` are gone, the last because the engine never applies a clipboard
 // policy.
+//
+// **Deliberately not `#[non_exhaustive]`**, against the accepted IN-0038
+// design, which assumed `Config { ..Config::default() }` would keep working
+// under the mark. It does not: Rust forbids a struct expression for a
+// non-exhaustive struct outside the defining crate, functional-update syntax
+// included (E0639), so the mark would break every embedder, this crate's own
+// integration tests, the `headless` example and six guide doctests at once.
+// A new field here is therefore a minor version bump under clause 1 of guide
+// chapter 12 rather than a patch. Recorded in `US-0106`.
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Rows of scrollback to keep above the screen. The grid clamps what it
@@ -101,6 +115,25 @@ pub struct Config {
     /// is stored as `None`. [`Terminal::config`] therefore reports the
     /// sanitised name, not the one you passed.
     pub product_name: Option<Cow<'static, str>>,
+    /// Whether `DECRQCRA` (`CSI Pid ; Pp ; Pt ; Pl ; Pb ; Pr * y`) may answer.
+    /// **Default `false`.**
+    ///
+    /// The sequence reports a checksum of a rectangle of the screen. That is
+    /// how a conformance harness reads the screen back — and how a program
+    /// running inside the terminal could read back text it did not write, from
+    /// a password prompt to another program's output. xterm gates it behind
+    /// `allowWindowOps` and WezTerm behind `enable_checksum_rectangular_area`;
+    /// this is the same gate, shut by default.
+    ///
+    /// With this `false` the sequence answers nothing and is counted in
+    /// [`FeedStats::unhandled_sequences`](crate::FeedStats::unhandled_sequences),
+    /// which is byte for byte what the engine did before it was implemented at
+    /// all.
+    ///
+    /// The checksum covers the **visible screen** only, never the scrollback,
+    /// so even with the gate open a program cannot read scrolled-off history
+    /// with it.
+    pub allow_screen_readback: bool,
     // `accept_c1` (the `S8C1T` hook) is deliberately **absent**. The LLD
     // publishes it, but the parser hard-codes trap 48 — an 8-bit C1 byte is
     // executed, never treated as an introducer — so the field would be a knob
@@ -117,6 +150,7 @@ impl Default for Config {
             default_cursor_style: CursorStyle::default(),
             semantic_escape_chars: crate::selection::SEMANTIC_ESCAPE_CHARS.to_owned(),
             product_name: None,
+            allow_screen_readback: false,
         }
     }
 }
@@ -133,6 +167,21 @@ pub(crate) struct State {
     /// Decoded images, their placements and the in-flight Sixel decoder.
     /// Owns one anchor entry per live placement.
     pub(crate) graphics: GraphicsState,
+    /// The `DCS $ q` (`DECRQSS`) or `DCS + q` (`XTGETTCAP`) currently being
+    /// received, if any. Never set at the same time as `graphics.parser`: a
+    /// DCS cannot nest, so `dcs_hook` opens exactly one sink.
+    pub(crate) dcs_query: Option<query::DcsQuery>,
+    /// That query's payload so far. `clear()`ed rather than dropped, so a
+    /// program polling `XTGETTCAP` in a loop allocates once.
+    ///
+    /// Bounded by `query::QUERY_MAX_BYTES` (8 KiB), **not** by the parser's
+    /// `DCS_MAX_BYTES` (16 MiB): keeping the capacity is what makes the reuse
+    /// work, so inheriting the image ceiling would let one hostile `DCS + q`
+    /// retain 16 MiB for the session. Reaching the query ceiling answers
+    /// nothing and moves `FeedStats::unhandled_sequences`; it is **not** an
+    /// abort, so `aborted_dcs` does not move. `DCS_MAX_BYTES` and `aborted_dcs`
+    /// still apply above it, unchanged.
+    pub(crate) dcs_payload: Vec<u8>,
     /// Owns two entries in the anchor list while it lives, which is why every
     /// path that drops it goes through `Terminal::selection_clear`.
     pub(crate) selection: Option<Selection>,
@@ -209,6 +258,8 @@ impl Terminal {
                 keyboard: KeyboardStacks::default(),
                 sync: SyncState::new(),
                 graphics: GraphicsState::default(),
+                dcs_query: None,
+                dcs_payload: Vec::new(),
                 selection: None,
                 theme: ThemeColors::new(),
                 cursor_style: None,

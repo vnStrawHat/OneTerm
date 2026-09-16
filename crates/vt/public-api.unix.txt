@@ -85,6 +85,7 @@ enum oneterm_vt::ColorKey
     variant SelectionBackground
     variant SelectionForeground
 struct oneterm_vt::Config
+    structfield allow_screen_readback
     structfield default_cursor_style
     structfield osc_routes
     structfield product_name

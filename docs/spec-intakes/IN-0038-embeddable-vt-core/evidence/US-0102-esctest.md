@@ -65,6 +65,17 @@ assert on the observable result; they are listed in `US-0102-conformance-gaps.md
 the sequence each one feeds. The 46-recording parity corpus replays byte-identically, which is the
 packet's own statement that none of the eight changed behaviour it should not have.
 
+## Closed by `US-0106`
+
+All three deferred steps were executed in
+[`IN-0039/US-0106-conformance-queries.md`](../../IN-0039-vt-gaps-and-publish/US-0106-conformance-queries.md):
+`DECRQCRA` (behind `Config::allow_screen_readback`, default off) together with `DECRQSS` and
+`XTGETTCAP`, the `crates/tools/src/bin/vt-esctest.rs` bridge, and the report-only Linux CI job.
+
+This record is **not** rewritten: it was accurate when written, and its reasoning for deferring the
+harness — unverifiable code shipped on a promise until step 1 landed — is exactly why `US-0106`
+wrote the binary and the job that exercises it in the same change.
+
 ## References
 
 - `esctest2` — <https://github.com/ThomasDickey/esctest2>

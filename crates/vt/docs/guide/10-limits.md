@@ -18,7 +18,10 @@ is dropped, truncated, or degraded to a documented fallback, and counted.
 | OSC parameters kept | 16 | bytes past the last one accumulate into it, which is what `OSC 8`'s `;`-joined URIs rely on |
 | CSI parameters and sub-parameters | 32 | the sequence is marked ignored and dispatched as unhandled |
 | Intermediate bytes | 2 | a third makes the sequence unhandled |
-| DCS or APC payload | 16 MiB | the sequence is aborted and any partial image discarded |
+| DCS or APC payload | 16 MiB | the sequence is aborted and any partial image discarded; `aborted_dcs` counts it |
+| `DECRQSS` / `XTGETTCAP` payload | 8 KiB | **not** an abort: the request answers nothing and `unhandled_sequences` counts it. A query buffer is kept between requests so a polling program allocates once, so it takes a far smaller ceiling than an image payload can |
+| `XTGETTCAP` names per request | 16 | the rest are dropped, never truncated, and the request counts **once** in `unhandled_sequences` however many were dropped |
+| `XTGETTCAP` bytes per requested name | 128 | the name is dropped rather than echoed back truncated, because a truncated echo would misreport what was asked |
 | Image dimension | 4096 per axis | pixels past it are dropped rather than allocated |
 | Scrollback rows | 1 000 000 hard, 10 000 by default | the oldest rows are trimmed |
 | Viewport | 1024 rows, 2048 columns | clamped by `Size::clamped`, which `Terminal::new` and `resize` call for you |
@@ -97,7 +100,11 @@ What each one means:
   not valid base64 or not valid UTF-8.
 - `truncated_osc` -- payloads that hit a size ceiling and lost their tail.
 - `aborted_dcs` -- `DCS` sequences abandoned by `CAN` or `SUB`, or for running
-  past the payload ceiling.
+  past the **16 MiB** payload ceiling. The 8 KiB query ceiling is a different
+  thing and moves a different counter: a `DECRQSS` or `XTGETTCAP` request past
+  it is not aborted, answers nothing, and raises `unhandled_sequences` while
+  `aborted_dcs` stays where it was. A 9 KiB `DCS $ q` payload therefore reads
+  `unhandled_sequences` 1, `aborted_dcs` 0.
 - `hyperlink_table_exhausted` -- `OSC 8` links dropped because the hyperlink
   table was full. The text still renders; the link is simply not clickable.
 - `dropped_cluster_carries` -- grapheme clusters that grew past the engine's

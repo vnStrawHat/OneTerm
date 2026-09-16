@@ -2610,13 +2610,15 @@ fn an_intermediate_dcs_q_is_not_sixel() {
             "{} opened the Sixel decoder",
             String::from_utf8_lossy(bytes)
         );
-        assert_eq!(stats.unhandled_sequences, 1);
+        // `US-0106` answers both, so the sequence is no longer unhandled and
+        // the batch carries the reply ahead of the repaint hint.
+        assert_eq!(stats.unhandled_sequences, 0);
         assert_eq!(stats.aborted_dcs, 0);
         assert!(session.term.take_graphics().is_empty());
 
         let events: Vec<&VtEvent> = session.batch.iter().collect();
         assert!(
-            matches!(events.as_slice(), [VtEvent::Repaint]),
+            matches!(events.as_slice(), [VtEvent::Reply(_), VtEvent::Repaint]),
             "{} produced {events:?}",
             String::from_utf8_lossy(bytes)
         );

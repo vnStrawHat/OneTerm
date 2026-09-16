@@ -140,7 +140,7 @@ bump is the breaking one.
 | `US-0105` | `#[non_exhaustive]` on `ModeSnapshot`, in the same packet | folded into the same minor bump; after it, a field is a patch | -- |
 | `US-0105` | `encode_key` returns different bytes under non-empty flags | 6 -- the reply-bytes clause covers what the terminal *answers*; this is what the terminal *sends on the user's behalf*, which the clause does not name. **The clause is amended by this intake to include the `input` encoders**, because a program parsing key bytes is in the same position as one parsing a `DA1` reply | **minor** |
 | `US-0106` | `Config::allow_screen_readback` | `Config` is **not** `#[non_exhaustive]` today (see below), so clause 1 | **minor** |
-| `US-0106` | `#[non_exhaustive]` on `Config`, in the same packet | folded into the same minor bump | -- |
+| ~~`US-0106`~~ | ~~`#[non_exhaustive]` on `Config`, in the same packet~~ | **withdrawn** -- the mark is impossible for a struct an embedder constructs; see the correction below | -- |
 | `US-0106` | three new reply forms for sequences that previously answered nothing | 6 | **minor**, and a CHANGELOG line naming each |
 | `US-0107` | nothing in `crates/vt`'s API | -- | none |
 
@@ -206,6 +206,26 @@ under the mark.
 Recorded as a **drift finding against IN-0038**, not as new scope: the accepted design and the
 shipped code disagree, the packet that touches the type fixes it, and guide chapter 12's count
 becomes nine.
+
+> **CORRECTION (`US-0106`, 2026-09-16). The three paragraphs above are wrong, and so is the
+> `IN-0038` clause they inherit. `Config` must NOT be marked.**
+>
+> `Config { ..Config::default() }` is **not** the supported construction form under
+> `#[non_exhaustive]`. Rust forbids a struct expression for a non-exhaustive struct outside the
+> defining crate **entirely**, functional-update syntax included. The mark was applied during
+> `US-0106` and the compiler rejected it (`E0639`) in this crate's own integration tests, the
+> `headless` example, six guide doctests and `crates/terminal`. Marking `Config` would require
+> replacing struct-literal construction with setters across the whole surface, which costs the
+> ergonomics the type's own documentation recommends in order to buy patch-level field additions.
+>
+> The mark is therefore **not** applied. Guide chapter 12's count stays at **eight** and the
+> chapter now states why the type a reader would expect to be marked is not. A new `Config` field
+> is a **minor** bump under clause 1, and `Config::allow_screen_readback` is one.
+>
+> `ResizeOutcome`, `Placement`, `ModeSnapshot`, `KeyEvent` and `KeyEventKind` are unaffected: the
+> rule applies to any non-exhaustive struct, so `BUG-0059` and `US-0105` must check the same thing
+> for the structs among them -- an enum's `#[non_exhaustive]` costs a `match` arm and nothing else,
+> but a struct an embedder constructs cannot carry the mark at all.
 
 ### Removed
 

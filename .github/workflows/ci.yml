@@ -323,6 +323,93 @@ jobs:
           name: vt-bench-${{ github.sha }}
           path: vt-bench.md
 
+  vt-esctest:
+    # The outside conformance harness (IN-0039 / US-0106). Like `vt-bench` it
+    # REPORTS and never gates, and for a stronger reason than a benchmark's:
+    # `esctest` tests a VT420-level terminal while this engine claims VT220 in
+    # `DA1` and has no left-right margins, so some groups are expected to fail
+    # for reasons that are deliberate design choices. A threshold here would
+    # turn a capability map into a quality score. `continue-on-error` plus no
+    # assertions is the point — read the artifact, do not let it fail a pull
+    # request. The standing rule is
+    # `docs/spec-intakes/IN-0029-vt-engine/low-level-design/testing-and-bench.md`
+    # section 6, "Conformance as a report, not a gate".
+    #
+    # Linux only: `crates/tools/src/bin/vt-esctest.rs` is a pty bridge and is a
+    # stub on every other host, so this job is the only place it is compiled in
+    # substance.
+    name: esctest conformance (recorded, never gated)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
+      # Fetched, never vendored and never linked: `esctest` is GPL-2.0, and this
+      # job's relationship with it is the same one CI has with every other tool
+      # it runs. Pinned to a commit so a rewritten upstream test cannot silently
+      # change what this engine is scored against.
+      - name: Fetch esctest
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/ThomasDickey/esctest2.git esctest2
+          git -C esctest2 checkout "$ESCTEST_REF"
+        env:
+          # The head of `master` on 2026-09-13, resolved and pinned here on
+          # 2026-09-16. A branch name would let a rewritten upstream test
+          # silently change what this engine is scored against, which would make
+          # the artifact incomparable with the one beside it.
+          ESCTEST_REF: 2798f12149a19c3295e9b4853ab2da4b2eff1b2b
+      - name: Build the bridge
+        run: cargo build -p oneterm-tools --release --bin vt-esctest
+      # `--xterm-checksum 334` is load-bearing, not cosmetic: it is what makes
+      # `esc.py`'s `empty()` return a space rather than `NUL` and what stops
+      # `escutil.py` applying the pre-patch-279 negation. Together they are the
+      # only configuration matching the single checksum variant the engine
+      # implements (`checksumExtension: 7`). Any other value fails every
+      # rectangle assertion.
+      - name: Run esctest against the engine
+        run: >
+          ./target/release/vt-esctest
+          python3 esctest2/esctest/esctest.py
+          --expected-terminal xterm
+          --xterm-checksum 334
+          --max-vt-level 4
+          --logfile "$GITHUB_WORKSPACE/esctest.log"
+          2>&1 | tee esctest-bridge.log
+      - name: Summarise the run
+        if: always()
+        run: |
+          set -uo pipefail
+          {
+            echo '### esctest (report only, never gates)'
+            echo
+            echo '```'
+            tail -n 40 esctest.log 2>/dev/null || echo 'no esctest.log was written'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish the matrix
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: esctest-${{ github.sha }}
+          path: |
+            esctest.log
+            esctest-bridge.log
+          if-no-files-found: warn
+
   # Linux and Windows already run `cargo test --workspace` in the two quality
   # gates above; macOS is the only platform without that coverage.
   macos-tests:
