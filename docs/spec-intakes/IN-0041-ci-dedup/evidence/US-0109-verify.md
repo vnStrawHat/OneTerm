@@ -409,3 +409,145 @@ green, which is the pair that CI now runs in `vt-package`.
 The workflow is **never executed** in this environment — there is no GitHub runner, and none was
 installed. Everything above is static analysis of GitHub Actions semantics plus source scans. The
 first real proof is the next push, exactly as the packet says.
+
+---
+
+# Re-verification of the acceptance rework
+
+Under test: `22027a6c` ("fix(ci): correct the macOS rationale and four record defects"), on top of
+this document at `3efaeca7`. Targeted pass over the five findings only; the workflow
+restructuring was not re-litigated, and `ci-local` was not re-run because nothing failed.
+Date: 2026-09-16.
+
+## Verdict: **PASS.** All five defects are fixed, and no fix introduced a new false statement.
+
+### D1 — the macOS rationale (was MEDIUM) — **fixed in all five places**
+
+| Place | Now says |
+| --- | --- |
+| `IN-0041.md` § Source 2 | "The macOS job does *compile* that file — `oneterm-local-shell` … depends on `oneterm-vt` with `features = ["pty"]` — but it has never **run** `oneterm-vt`'s own test targets" |
+| `IN-0041.md` § Project Impact | "so the engine's own test targets run there for the first time" |
+| `high-level-design.md` | "so the engine's own test targets run there for the first time … The file was already *compiled* on macOS" |
+| packet § Outcome + § Context | "the point is **running**, not compiling" and "`pty/unix.rs` was compiled on macOS before this change" |
+| `ci.yml` macos-tests comment | "It was already *compiled* here, as a dependency of `oneterm-local-shell` … but compiling a crate as a dependency never builds its `#[cfg(test)]` modules" |
+| rework commit body (`22027a6c`) | corrects `aa2bf37f`'s claim explicitly, without rewriting history |
+
+The BUG-0063 attribution is fixed too. No text now says or implies that macOS would have caught
+it: `ci.yml` cites it only as evidence that "`cfg(unix)` is two platforms, not one", and the
+packet says outright "BUG-0063 itself was *caught* by the Linux job, not missed by macOS". The
+same correction is carried into the `intake.summary` and `story.notes` snippet strings.
+
+Automated sweep of the five files for any surviving form of the old claim
+(`never compil|not compil|nothing currently builds|does not build|only the glibc one|is
+unverified|only job that compiles`):
+
+```text
+--- 9 hits, every one of them either a correct statement
+    ("compiling a crate as a dependency does not build its #[cfg(test)] modules",
+     "the point is **running**, not compiling",
+     "the workflow's *execution* is unverified")
+    or the D1-D5 rework table quoting the old wrong wording in order to record it.
+--- no surviving assertion that pty/unix.rs was uncompiled on macOS.
+```
+
+Choosing to correct `aa2bf37f`'s message in the rework body rather than by rewriting an already
+pushed-to-nobody-but-shared branch is the right call; the false sentence stays findable next to
+its correction.
+
+### D2 — `last_verified_result` (was MEDIUM) — **fixed, and proved rather than eyeballed**
+
+The value is now `"pass"`, with a sentence above the snippet recording why. I extracted the
+snippet's two `INSERT`s with `ast`, checked the shapes, and **executed the snippet** against a
+throwaway SQLite file carrying the documented CHECK constraints (the main checkout's
+`harness.db` was never opened):
+
+```text
+intake  columns=11 values=11  placeholders=11
+story   columns=17 values=17  placeholders=17
+   risk_lane = 'normal'   status = 'implemented'
+   unit_proof=0 integration_proof=0 e2e_proof=0 platform_proof=1
+   last_verified_result = 'pass'
+inserted story rows: 1     inserted intake rows: 1
+```
+
+Both rows insert cleanly. The earlier `"passed"` would have raised `IntegrityError` here.
+
+### D3 — `action.yml` vs `release.yml` (was LOW) — **fixed, and the stated reason is true**
+
+The header now says "This is the one copy for `ci.yml`" and names `release.yml`. I checked the
+reason against the file rather than taking it:
+
+```text
+.github/workflows/release.yml:179  uses: dtolnay/rust-toolchain@4cda84d5…
+                              182    targets: ${{ matrix.target }}
+.github/workflows/release.yml:184  uses: Swatinem/rust-cache@e18b4977…
+                              186    key: ${{ matrix.target }}
+```
+
+`setup-rust` takes neither `targets` nor `key`, so `release.yml` is genuinely **not** a drop-in
+caller — the decision to reword rather than convert is correct, and declining to add two inputs
+for one caller is the right shape. The arithmetic checks out too: a SHA bump was 7 edits (6 in
+`ci.yml` + 1 in `release.yml`) and is now 2, "five fewer than before".
+
+### D4 — the Gaps count (was LOW) — **fixed**
+
+Packet line 491 now reads "Coverage genuinely narrows in **two** places", matching the two it
+lists and the `story.notes` string that always said two. The `components` empty-string bullet was
+also restructured from an open worry into a closed finding citing this document — accurate, since
+attack 1 settled it against `dtolnay/rust-toolchain`'s pinned `action.yml`.
+
+### D5 — the archived table (was LOW) — **fixed, and fixed the right way**
+
+`docs/spec-intakes/IN-0029-vt-engine/evidence/US-0087-verify.md` gains a three-line dated note
+**under** the table instead of having the table rewritten — the correct treatment for archived
+evidence of a past run. The note's content is accurate: `vt-paranoid` is now `vt-package`-only,
+`macos-tests` gained `-p oneterm-vt`, and the `ci-local` column is indeed unchanged. The finding
+is also recorded in the packet's Owning Docs Reviewed as found by verification rather than by the
+original sweep, which is the honest bookkeeping.
+
+### The Python scan the packet now quotes — **reproduces exactly**
+
+The packet replaced the `grep` bullet (whose pattern this shell mangles) with a Python `re` scan.
+Re-run independently here:
+
+```text
+diagnostics sites: 42 in 5 files
+  D crates/local-shell/src/event_loop.rs
+  D crates/ssh/src/transport.rs
+  D crates/terminal-view/src/render/{diagnostics,element,state}.rs
+files with a platform cfg: 11
+  P local-shell/src/{event_loop_tests,session,session_terminal,session_tests}.rs
+  P ssh/src/agent.rs, ssh/src/sftp_task/{sftp_task_tests,transfer}.rs
+  P terminal-view/src/input/{keys,keys_tests}.rs, panel/terminal_panel.rs,
+    terminal_view/view_tests.rs
+intersection: []
+```
+
+42 / 5 / 11 / empty — the packet's numbers to the file. The added parenthetical ("The three
+*crates* do contain platform cfgs … the claim is about the diagnostics sites, not about the
+crates") is exactly the wording note this document asked for.
+
+### Gates re-run after the rework
+
+```text
+$ python -c "yaml.safe_load(...)"   yaml ok: .github/workflows/ci.yml
+                                    yaml ok: .github/actions/setup-rust/action.yml
+$ python scripts/check-doc-paths.py Doc path check passed for 199 current paths in 11 documents.   exit 0
+$ python scripts/check-english.py   English contributor-text check passed for 922 files.           exit 0
+```
+
+`ci-local.ps1` was not re-run: the rework touches only comments, Markdown and YAML text, no Rust
+and no script, and nothing failed. Its result from the first pass (25 steps, 131 sections, 4533
+passed, 0 failed, exit 0) still stands.
+
+## One observation, no action required
+
+The packet now ticks `[x] Reopened (acceptance rework)` while the snippet keeps
+`status="implemented"`. Both conventions exist in this repository — `IN-0036/US-0095` ticks
+Reopened and writes `implemented`; `IN-0039/US-0105` ticks Reopened and writes `reopened` — so
+this is a pre-existing repo-wide inconsistency, not something this packet introduced.
+`implemented` is defensible as the end state after a same-day rework, and the `story.notes`
+string records the reopening explicitly.
+
+**The workflow is still never executed here.** Both passes are static; the first real proof
+remains the next push.
