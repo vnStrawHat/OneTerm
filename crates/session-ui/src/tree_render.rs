@@ -15,7 +15,7 @@ use super::connect_dialog::open_connect_dialog;
 use super::panel::SessionPanel;
 use super::rename_group::open_rename_group_dialog;
 use super::session_dialog::open_session_dialog;
-use super::tree_builder::{parse_group_id, parse_session_id, session_subtitle};
+use super::tree_builder::{parse_group_id, parse_session_id, session_color_hex, session_subtitle};
 
 impl SessionPanel {
     /// Render the tree widget — item renderer + context menu.
@@ -87,13 +87,18 @@ impl SessionPanel {
                     let session_id = parse_session_id(&item.id);
                     let session = session_id.and_then(|id| store.read(cx).get(id));
                     let subtitle = session.map(|s| session_subtitle(s)).unwrap_or_default();
-                    let color = session
-                        .and_then(|s| s.color.as_deref())
-                        .and_then(|hex| Hsla::parse_hex(hex).ok())
-                        .unwrap_or_else(|| {
-                            Hsla::parse_hex(SshSession::DEFAULT_COLOR_HEX)
-                                .unwrap_or(cx.theme().accent)
-                        });
+                    // The same resolver the "+" menu's rows go through, so the
+                    // two surfaces cannot disagree about a session's square
+                    // (`US-0110`). A leaf whose id no longer resolves in the
+                    // store takes the default too, as it did before the
+                    // resolver existed; the accent is unreachable unless
+                    // `DEFAULT_COLOR_HEX` itself stops parsing.
+                    let color = Hsla::parse_hex(
+                        session
+                            .map(session_color_hex)
+                            .unwrap_or(SshSession::DEFAULT_COLOR_HEX),
+                    )
+                    .unwrap_or_else(|_| cx.theme().accent);
 
                     ListItem::new(ix)
                         .w_full()

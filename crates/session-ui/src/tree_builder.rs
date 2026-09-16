@@ -3,7 +3,8 @@
 
 use std::collections::BTreeMap;
 
-use gpui::SharedString;
+use gpui::{Hsla, SharedString};
+use gpui_component::Colorize as _;
 
 use gpui_component::tree::TreeItem;
 
@@ -29,6 +30,30 @@ pub(crate) fn parse_group_id(id: &SharedString) -> Option<String> {
     id.strip_prefix(GROUP_ID_PREFIX).map(|s| s.to_string())
 }
 
+/// The hex colour a session is drawn with, resolved once for every surface that
+/// draws it — the right dock's tree leaf and the "+" menu row (`US-0110`).
+///
+/// The saved value wins when [`Hsla::parse_hex`] accepts it; anything it rejects
+/// — absent, blank, padded with spaces, three digits, not hex at all, all of
+/// which only a hand-edited `ssh_session.json` can hold — falls back to
+/// [`SshSession::DEFAULT_COLOR_HEX`]. One resolver rather than one per surface
+/// because the two disagreed while they each had their own fallback chain: the
+/// same session showed teal in the tree and the theme accent in the menu.
+///
+/// Returns the hex text, not an `Hsla`, so the menu can relay it through
+/// `oneterm_state`'s primitive-only seam without a colour round trip.
+/// `Colorize::to_hex` is lossy — `#C678DD` comes back `#C677DD` — so converting
+/// here would put the divergence back, for every colour the app itself saves
+/// instead of only the hand-edited ones. Both surfaces parse the string this
+/// returns, and both can only fail to if the constant itself stops being a hex
+/// colour, so their `parse_hex` fallbacks stay dead together.
+pub(crate) fn session_color_hex(session: &SshSession) -> &str {
+    match session.color.as_deref() {
+        Some(hex) if Hsla::parse_hex(hex).is_ok() => hex,
+        _ => SshSession::DEFAULT_COLOR_HEX,
+    }
+}
+
 /// Build the subtitle for a session leaf: `user@host:port` or `host:port`.
 pub(crate) fn session_subtitle(s: &SshSession) -> String {
     match &s.username {
@@ -50,16 +75,25 @@ pub(crate) fn session_subtitle(s: &SshSession) -> String {
 /// shows their `user@host:port`). An entry whose label is blank — only a
 /// hand-edited file can produce one — falls back to [`session_subtitle`]
 /// rather than rendering an unidentifiable empty row.
+///
+/// Each row also carries the session's colour as a hex string, resolved by
+/// [`session_color_hex`] so the menu draws exactly the square the tree draws
+/// (`US-0110`). Resolving **here** keeps `crates/state` relaying primitives and
+/// the menu builder in `crates/terminal-view` ignorant of this crate's defaults.
 pub(crate) fn menu_entries(sessions: &[SshSessionEntry]) -> SavedSshSessionSections {
-    let mut ungrouped: Vec<(u64, String)> = Vec::new();
-    let mut groups: Vec<(String, Vec<(u64, String)>)> = Vec::new();
+    let mut ungrouped: Vec<(u64, String, String)> = Vec::new();
+    let mut groups: Vec<(String, Vec<(u64, String, String)>)> = Vec::new();
 
     for entry in sessions {
         let title = match entry.session.label.trim() {
             "" => session_subtitle(&entry.session),
             label => label.to_string(),
         };
-        let row = (entry.id.raw(), title);
+        let row = (
+            entry.id.raw(),
+            title,
+            session_color_hex(&entry.session).to_string(),
+        );
         match entry.session.group.as_deref().map(str::trim) {
             Some(group) if !group.is_empty() => {
                 match groups.iter_mut().find(|(name, _)| name == group) {
@@ -173,6 +207,16 @@ mod tests {
         let entry: SshSessionEntry = serde_json::from_value(raw).unwrap();
         assert_eq!(entry.session.auth_method, SshAuthPreference::Password);
         entry
+    }
+
+    /// A `menu_entries` row for a session that saved no colour: id, title, and
+    /// the default colour the producer fills in.
+    fn row(id: u64, title: &str) -> (u64, String, String) {
+        (
+            id,
+            title.to_string(),
+            SshSession::DEFAULT_COLOR_HEX.to_string(),
+        )
     }
 
     fn labels(items: &[TreeItem]) -> Vec<(String, String, Vec<String>)> {
@@ -292,10 +336,7 @@ mod tests {
         let sessions = vec![entry(7, "prod", None), entry(5, "db", None)];
         assert_eq!(
             menu_entries(&sessions),
-            vec![(
-                String::new(),
-                vec![(7, "prod".to_string()), (5, "db".to_string())]
-            )]
+            vec![(String::new(), vec![row(7, "prod"), row(5, "db")])]
         );
     }
 
@@ -314,10 +355,7 @@ mod tests {
         ];
         assert_eq!(
             menu_entries(&sessions),
-            vec![(
-                "infra".to_string(),
-                vec![(1, "db-01".to_string()), (2, "db-02".to_string())]
-            )]
+            vec![("infra".to_string(), vec![row(1, "db-01"), row(2, "db-02")])]
         );
     }
 
@@ -335,15 +373,9 @@ mod tests {
         assert_eq!(
             menu_entries(&sessions),
             vec![
-                (
-                    String::new(),
-                    vec![(1, "prod".to_string()), (3, "staging".to_string())]
-                ),
-                (
-                    "zeta".to_string(),
-                    vec![(2, "web".to_string()), (5, "cache".to_string())]
-                ),
-                ("alpha".to_string(), vec![(4, "db-01".to_string())]),
+                (String::new(), vec![row(1, "prod"), row(3, "staging")]),
+                ("zeta".to_string(), vec![row(2, "web"), row(5, "cache")]),
+                ("alpha".to_string(), vec![row(4, "db-01")]),
             ],
             "groups keep store order, and a group's members do too"
         );
@@ -364,13 +396,9 @@ mod tests {
             vec![
                 (
                     String::new(),
-                    vec![
-                        (1, "empty".to_string()),
-                        (2, "spaces".to_string()),
-                        (3, "none".to_string()),
-                    ]
+                    vec![row(1, "empty"), row(2, "spaces"), row(3, "none")]
                 ),
-                ("infra".to_string(), vec![(4, "real".to_string())]),
+                ("infra".to_string(), vec![row(4, "real")]),
             ],
             "a padded group name is trimmed, a blank one is no group at all"
         );
@@ -386,7 +414,7 @@ mod tests {
         session.session.port = 2222;
         assert_eq!(
             menu_entries(&[session]),
-            vec![(String::new(), vec![(3, "10.0.0.9:2222".to_string())])]
+            vec![(String::new(), vec![row(3, "10.0.0.9:2222")])]
         );
     }
 
@@ -396,7 +424,7 @@ mod tests {
         session.session.label = "  staging  ".into();
         assert_eq!(
             menu_entries(&[session]),
-            vec![(String::new(), vec![(4, "staging".to_string())])]
+            vec![(String::new(), vec![row(4, "staging")])]
         );
     }
 
@@ -414,17 +442,14 @@ mod tests {
         let sections = menu_entries(&[first, second]);
         assert_eq!(
             sections,
-            vec![(
-                String::new(),
-                vec![(1, "alpha".to_string()), (2, "alpha".to_string())]
-            )],
+            vec![(String::new(), vec![row(1, "alpha"), row(2, "alpha")])],
             "title-only rows: the id, not the text, distinguishes duplicate labels"
         );
 
         let unicode = entry(9, "日本-🚀", None);
         assert_eq!(
             menu_entries(&[unicode]),
-            vec![(String::new(), vec![(9, "日本-🚀".to_string())])]
+            vec![(String::new(), vec![row(9, "日本-🚀")])]
         );
 
         let many: Vec<SshSessionEntry> = (1..=50)
@@ -434,7 +459,98 @@ mod tests {
         assert_eq!(sections.len(), 1, "none of them is grouped");
         let rows = &sections[0].1;
         assert_eq!(rows.len(), 50, "every stored session gets exactly one row");
-        assert_eq!(rows[0], (1, "host-01".to_string()));
-        assert_eq!(rows[49], (50, "host-50".to_string()));
+        assert_eq!(rows[0], row(1, "host-01"));
+        assert_eq!(rows[49], row(50, "host-50"));
+    }
+
+    /// The saved colour reaches the menu untouched — the "+" dropdown draws the
+    /// same square as the tree, from the same data (`US-0110`).
+    ///
+    /// `infra` holds two differently coloured sessions on purpose: a single
+    /// colour per section would not catch a loop that pairs every row in a
+    /// section with the first row's colour.
+    #[test]
+    fn menu_entries_carries_the_saved_colour() {
+        let mut tagged = entry(1, "prod", None);
+        tagged.session.color = Some("#E06C75".into());
+        let mut grouped = entry(2, "db-01", Some("infra"));
+        grouped.session.color = Some("#98C379".into());
+        let mut sibling = entry(3, "db-02", Some("infra"));
+        sibling.session.color = Some("#E5C07B".into());
+        assert_eq!(
+            menu_entries(&[tagged, grouped, sibling]),
+            vec![
+                (
+                    String::new(),
+                    vec![(1, "prod".to_string(), "#E06C75".to_string())]
+                ),
+                (
+                    "infra".to_string(),
+                    vec![
+                        (2, "db-01".to_string(), "#98C379".to_string()),
+                        (3, "db-02".to_string(), "#E5C07B".to_string()),
+                    ]
+                ),
+            ],
+            "each row keeps its own colour, including within one section"
+        );
+    }
+
+    /// The tree sends *every* colour `parse_hex` rejects to the default, not
+    /// only a missing or blank one, and does not trim. The menu must agree for
+    /// each of these, or one hand-edited session shows teal in the right dock
+    /// and something else in the "+" menu (`US-0110`, verifier finding F2).
+    ///
+    /// Both surfaces now read [`session_color_hex`], so this walks the resolver
+    /// over the verifier's probe inputs and pins what both of them draw.
+    #[test]
+    fn menu_entries_and_the_tree_resolve_every_colour_alike() {
+        let cases: [(Option<&str>, &str); 8] = [
+            (None, SshSession::DEFAULT_COLOR_HEX),
+            (Some(""), SshSession::DEFAULT_COLOR_HEX),
+            (Some("   "), SshSession::DEFAULT_COLOR_HEX),
+            // parse_hex strips a leading '#' but not surrounding spaces.
+            (Some(" #E06C75 "), SshSession::DEFAULT_COLOR_HEX),
+            (Some("#abc"), SshSession::DEFAULT_COLOR_HEX),
+            (Some("#GGGGGG"), SshSession::DEFAULT_COLOR_HEX),
+            (Some("#56b6c2"), "#56b6c2"),
+            (Some("98C379"), "98C379"),
+        ];
+        for (saved, expected) in cases {
+            let mut session = entry(1, "probe", None);
+            session.session.color = saved.map(str::to_string);
+            assert_eq!(
+                session_color_hex(&session.session),
+                expected,
+                "the tree's square for {saved:?}"
+            );
+            assert_eq!(
+                menu_entries(std::slice::from_ref(&session)),
+                vec![(
+                    String::new(),
+                    vec![(1, "probe".to_string(), expected.to_string())]
+                )],
+                "the menu row for {saved:?} must match the tree's square"
+            );
+        }
+        // An 8-digit value keeps its alpha on both surfaces.
+        let mut translucent = entry(2, "alpha", None);
+        translucent.session.color = Some("#56B6C280".into());
+        assert_eq!(session_color_hex(&translucent.session), "#56B6C280");
+    }
+
+    /// A session saved before the colour tag existed, or one hand-edited to a
+    /// blank value, gets the tree's default rather than an unpaintable row.
+    #[test]
+    fn menu_entries_applies_the_default_colour_when_none_is_saved() {
+        let none = entry(1, "no-colour", None);
+        assert_eq!(none.session.color, None, "the fixture saves no colour");
+        let mut blank = entry(2, "blank", None);
+        blank.session.color = Some("   ".into());
+        assert_eq!(
+            menu_entries(&[none, blank]),
+            vec![(String::new(), vec![row(1, "no-colour"), row(2, "blank")])],
+            "both fall back to SshSession::DEFAULT_COLOR_HEX"
+        );
     }
 }

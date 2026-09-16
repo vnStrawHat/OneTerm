@@ -9,12 +9,12 @@
 
 use gpui::{
     Anchor, App, AppContext as _, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
-    Subscription, WeakEntity, Window, div, px,
+    Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    Styled as _, Subscription, WeakEntity, Window, div, px,
 };
 use gpui_component::dock::{ClosePanel, Panel, PanelControl, PanelEvent, TabGroup};
 use gpui_component::{
-    ActiveTheme as _, IconName, Sizable as _,
+    ActiveTheme as _, Colorize as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     menu::{DropdownMenu as _, PopupMenuItem},
 };
@@ -79,6 +79,30 @@ fn labelled_separator(label: impl Into<SharedString>, rule: SeparatorRule) -> Po
             .child(line())
     })
     .disabled(true)
+}
+
+/// One saved SSH session in the "+" menu: the session's colour square, then its
+/// title — the same pair the right dock's session tree draws for a leaf, so the
+/// two surfaces read as one list (`US-0110`).
+///
+/// The colour arrives as a hex string the session feature has already resolved
+/// against the same rule the tree uses (see `SavedSshSessionSections`), so it
+/// always parses and the theme accent below is a formality, not a second
+/// fallback policy — the fallback lives in one place, and not here. An element
+/// item rather than a plain
+/// one because a plain item renders text alone — the kit gives both the same
+/// padding, height, hover and selection styling, and treats both as clickable
+/// for the mouse and the arrow keys.
+fn saved_session_row(title: String, color_hex: String) -> PopupMenuItem {
+    PopupMenuItem::element(move |_, cx| {
+        let color = Hsla::parse_hex(&color_hex).unwrap_or_else(|_| cx.theme().accent);
+        gpui_component::h_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .child(div().w(px(8.)).h(px(8.)).bg(color).flex_shrink_0())
+            .child(div().truncate().child(title.clone()))
+    })
 }
 
 /// Initial PTY size for a freshly spawned session; the element resizes it to
@@ -678,10 +702,10 @@ impl Panel for TerminalPanel {
                         session_rows += 1;
                     }
                     session_rows += rows.len();
-                    for (id, name) in rows {
+                    for (id, name, color) in rows {
                         let open = commands.open_saved_ssh_session;
                         menu = menu.item(
-                            PopupMenuItem::new(name)
+                            saved_session_row(name, color)
                                 .on_click(move |_, window, cx| open(id, window, cx)),
                         );
                     }
