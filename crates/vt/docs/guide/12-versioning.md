@@ -59,15 +59,17 @@ contract rather than an implementation detail.
 
 ## Which types are `#[non_exhaustive]`
 
-Thirteen public types are marked, and the mark costs a caller two different
+Fourteen public types are marked, and the mark costs a caller two different
 things depending on whether it is an enum or a struct. The compiler will tell you
 either way, but it is worth knowing before you design around them.
 
-**Eight enums**, on which a `match` needs a wildcard arm: `VtEvent`,
-`OscRoute`, `Progress`, `ShellMark`, `input::KeySpec`, `input::NamedKey`,
-`input::KeyEventKind` and `search::SearchPattern`. A new variant on any of them
-is a patch release, and your wildcard arm is what makes that true for your code
-too.
+**Nine enums**, on which a `match` needs a wildcard arm: `VtEvent`,
+`OscRoute`, `Progress`, `ShellMark`, `Invalidation`, `input::KeySpec`,
+`input::NamedKey`, `input::KeyEventKind` and `search::SearchPattern`. A new
+variant on any of them is a patch release, and your wildcard arm is what makes
+that true for your code too. `Invalidation` is the cheap case: you build its
+variants to ask `Selection::invalidated_by` a question rather than matching on
+one, and the mark forbids only the match.
 
 **Five structs**: `search::SearchOptions`, `ResizeOutcome`, `Placement`,
 `ModeSnapshot` and `input::KeyEvent`. There are no variants and no wildcard arm;

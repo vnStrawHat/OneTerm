@@ -9,9 +9,9 @@ Created: 2026-09-16
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -63,7 +63,7 @@ seven in one commit and the order is a reading order, not a schedule.
 
 ## Scope
 
-- [ ] In scope:
+- [x] In scope:
   - Re-export all seven from the crate root: `ModeState`, `StrSpan`, `ByteSpan`, `ParamSpans`,
     `ColorOverrides`, `Watermark`, `Invalidation`. Six are pure additions; `ColorOverrides` also
     narrows four of its own methods, below.
@@ -76,7 +76,7 @@ seven in one commit and the order is a reading order, not a schedule.
     docstring sentences that describe it, from `scripts/vt-public-api.py`.
   - Regenerate `crates/vt/public-api.windows.txt` and `crates/vt/public-api.unix.txt`.
   - A CHANGELOG entry naming all seven, and guide chapter 12's `#[non_exhaustive]` count and lists.
-- [ ] Out of scope:
+- [x] Out of scope:
   - Any other item on the public surface. The gate names exactly these seven; this packet adds
     nothing it did not name.
   - Renaming any of the seven. `Watermark`, `Invalidation` and `ColorOverrides` are all slightly
@@ -139,7 +139,7 @@ knob to add speculatively."
 
 Each criterion is a command a hostile verifier can run, with a stated expected result.
 
-- [ ] **An external crate can store and match all seven, not merely import them.** `BUG-0059`'s
+- [x] **An external crate can store and match all seven, not merely import them.** `BUG-0059`'s
       standing proof imports four names and binds `Option<T> = None`, which proves nameability and
       not much else. The proof here is stronger, because two of the seven are an enum whose whole
       complaint was that it could not be matched:
@@ -173,34 +173,34 @@ Each criterion is a command a hostile verifier can run, with a stated expected r
       in `crates/vt/src/lib.rs` beside the `BUG-0059` one and `cargo test -p oneterm-vt --doc`
       passes. On `main` the same doctest fails with seven unresolved imports; **both outputs are
       attached**, and this criterion fails if only the passing run is.
-- [ ] **The ledger is gone and the gate is strict.** `grep -n KNOWN_UNNAMEABLE
+- [x] **The ledger is gone and the gate is strict.** `grep -n KNOWN_UNNAMEABLE
       scripts/vt-public-api.py` prints nothing. `python scripts/vt-public-api.py --check-nameable`
       exits zero and its success line reads `every type in a public signature is nameable`, with no
       ledger tail.
-- [ ] **The gate still catches the defect it was written for**, with the ledger gone rather than
+- [x] **The gate still catches the defect it was written for**, with the ledger gone rather than
       because of it. Revert one of the seven re-exports, re-run `--check-nameable`, and it exits
       non-zero naming that type and its private module; restore it and it exits zero. Output
       attached. A gate not seen to fail after the ledger was removed has not been tested after the
       change that matters.
-- [ ] **`ColorOverrides`'s mutators are not on the surface.** `grep -n 'ColorOverrides' on both
+- [x] **`ColorOverrides`'s mutators are not on the surface.** `grep -n 'ColorOverrides' on both
       regenerated snapshot files lists `fn get` and `fn iter` under it and neither `fn set` nor any
       `fn reset*`.
-- [ ] **The documentation build is clean with `missing_docs` on.**
+- [x] **The documentation build is clean with `missing_docs` on.**
       `RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps` and the same with
       `--all-features` both exit zero.
-- [ ] **The surface diff is exactly the seven items and the four narrowed methods.** After
+- [x] **The surface diff is exactly the seven items and the four narrowed methods.** After
       `--update` on both platforms, `git diff crates/vt/public-api.*.txt` shows the seven added
       items with their fields and methods, the four `ColorOverrides` mutators absent, and nothing
       else added, removed or renamed.
-- [ ] **The two snapshots still differ only inside `oneterm_vt::pty`.**
+- [x] **The two snapshots still differ only inside `oneterm_vt::pty`.**
       `python scripts/vt-public-api.py --diff-platforms` passes and reports **six** lines, all of
       them `oneterm_vt::pty` items -- the same six `BUG-0059` and `US-0105` each reported, since
       nothing here is `cfg`-gated.
-- [ ] **Nothing else in the workspace moved.** `cargo test --workspace` passes with no `#[allow]`
+- [x] **Nothing else in the workspace moved.** `cargo test --workspace` passes with no `#[allow]`
       added anywhere; `crates/tools/src/corpus_replay.rs` compiles unchanged against the narrowed
       `ColorOverrides`; `cargo build -p oneterm-vt --no-default-features` builds, since none of the
       seven is behind `pty`. `pwsh scripts/ci-local.ps1` is green.
-- [ ] **The production diff is inside budget**: `crates/vt` +55 / -12 and
+- [x] **The production diff is inside budget**: `crates/vt` +55 / -12 and
       `scripts/vt-public-api.py` +2 / -22, measured with `git diff --numstat main...HEAD` excluding
       the two generated snapshots, and attached. A diff more than 50 per cent over budget is a
       finding to explain in Evidence, not a silent overrun -- `BUG-0059` overran by more than half
@@ -250,8 +250,20 @@ packet's to fix.
 
 ### Reconciliation
 
-Before completion, list the docs actually changed and confirm the guide's count matches
-`grep -c non_exhaustive` over the public types.
+Docs changed: `crates/vt/CHANGELOG.md` (an `### Added` bullet naming all seven and an
+`### Changed` bullet for the `ColorOverrides` narrowing), `crates/vt/docs/guide/12-versioning.md`
+(thirteen to fourteen, eight enums to nine), `scripts/vt-public-api.py`'s docstring (the ledger
+sentence replaced by "There is no allow-list"), and both `crates/vt/public-api.*.txt`.
+`crates/vt/README.md` and `crates/vt/docs/guide/04-events.md` were reviewed and need no change:
+the README enumerates no types, and chapter 4 describes `EventBatch::str` / `bytes` / `params`
+through their accessors without claiming a span cannot be named.
+
+The guide's count matches the source. Grepping the three lines after each mark
+(`grep -rn -A 3 '#\[non_exhaustive\]' crates/vt/src/ | grep -E 'pub (struct|enum)'`) yields
+**fourteen** types -- nine enums (`Invalidation`, `KeyEventKind`, `KeySpec`, `NamedKey`,
+`OscRoute`, `Progress`, `SearchPattern`, `ShellMark`, `VtEvent`) and five structs (`KeyEvent`,
+`ModeSnapshot`, `Placement`, `ResizeOutcome`, `SearchOptions`) -- exactly what chapter 12 now
+says.
 
 ## Context
 
@@ -277,20 +289,20 @@ Before completion, list the docs actually changed and confirm the guide's count 
 
 ## Plan
 
-- [ ] Add the seven re-exports to `crates/vt/src/lib.rs`, in the existing alphabetical blocks.
-- [ ] Document `ModeState`'s four variants and `ColorOverrides::get`; run
+- [x] Add the seven re-exports to `crates/vt/src/lib.rs`, in the existing alphabetical blocks.
+- [x] Document `ModeState`'s four variants and `ColorOverrides::get`; run
       `RUSTDOCFLAGS="-D warnings" cargo doc` until clean.
-- [ ] Narrow `ColorOverrides::set`, `reset`, `reset_indexed` and `reset_all` to `pub(crate)`;
+- [x] Narrow `ColorOverrides::set`, `reset`, `reset_indexed` and `reset_all` to `pub(crate)`;
       `cargo test --workspace` is what proves nothing outside `crates/vt` called them.
-- [ ] Add `#[non_exhaustive]` to `Invalidation` with its one-line reason.
-- [ ] Add the external-crate doctest that stores and matches, before the re-exports, and watch it
+- [x] Add `#[non_exhaustive]` to `Invalidation` with its one-line reason.
+- [x] Add the external-crate doctest that stores and matches, before the re-exports, and watch it
       fail with seven unresolved imports.
-- [ ] Delete `KNOWN_UNNAMEABLE`, its staleness branch, the now-unused `seen` set, the ledger tail
+- [x] Delete `KNOWN_UNNAMEABLE`, its staleness branch, the now-unused `seen` set, the ledger tail
       on the success line, and the two docstring sentences.
-- [ ] Revert one re-export, confirm the gate fails naming it, restore.
-- [ ] Regenerate both surface files; on the platform that is not the host, use the `#` note the
+- [x] Revert one re-export, confirm the gate fails naming it, restore.
+- [x] Regenerate both surface files; on the platform that is not the host, use the `#` note the
       script already supports and say in Evidence which half was produced by hand.
-- [ ] CHANGELOG entry; guide chapter 12's count and enum list.
+- [x] CHANGELOG entry; guide chapter 12's count and enum list.
 
 ## Decisions
 
@@ -328,11 +340,11 @@ the arithmetic does not change.
 - `pwsh scripts/ci-local.ps1`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 E2E proof is **not applicable** and must be recorded as such rather than left blank: nothing a user
@@ -341,12 +353,118 @@ can see changes, and no byte on any wire moves. Platform proof is the two surfac
 
 ## Evidence and Gaps
 
-To be filled by the implementing session. It must contain, at minimum:
+Implemented on `fix/vt-nameable-types-2`, base `main` `980bf5da`, worktree
+`.claude/worktrees/agent-a71ff4859b391464a`, with `CARGO_BUILD_JOBS=4`. Not pushed.
 
-- the failing doctest output on `main` and the passing one on the branch;
-- the `--check-nameable` output with one re-export reverted, and the clean run;
-- `git diff --numstat` against the budget, with any overrun stated rather than buried;
-- which of the two snapshot files was produced by hand.
+**The doctest fails before the re-exports and passes after.** The store-and-match doctest was
+added to `crates/vt/src/lib.rs` first, with the crate root otherwise untouched, and
+`cargo test -p oneterm-vt --doc` reported one failure:
+
+```
+---- crates\vt\src\lib.rs - (line 27) stdout ----
+error[E0432]: unresolved imports `oneterm_vt::ByteSpan`, `oneterm_vt::ColorOverrides`,
+`oneterm_vt::Invalidation`, `oneterm_vt::ModeState`, `oneterm_vt::ParamSpans`,
+`oneterm_vt::StrSpan`, `oneterm_vt::Watermark`
+  --> crates\vt\src\lib.rs:30:5
+   |
+30 |     ByteSpan, ColorOverrides, Invalidation, ModeState, ParamSpans, StrSpan, Watermark,
+   |     ^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^  ^^^^^^^^^ no `Watermark` in the root
+...
+test result: FAILED. 43 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+Seven unresolved imports, one per type, which is the defect stated as a compiler error. After the
+re-exports the same command reports `44 passed`.
+
+**An external crate outside the workspace stores, matches and passes all seven.** A doctest is
+compiled as an external crate, but it is compiled by this repository's own test run, so a
+standalone crate was built as well: a `probe` binary in the session scratchpad depending on
+`oneterm-vt` by path, with its own `[workspace]` and its own `CARGO_TARGET_DIR`. It stores
+`StrSpan`, `ByteSpan`, `ParamSpans` and `Watermark` in struct fields, exhaustively matches
+`Mode::inert_state()`'s `Option<ModeState>` on all five variants by path, calls
+`Selection::invalidated_by` with a constructed `Invalidation::EraseScreen`, and binds
+`Terminal::colors()` to a `&ColorOverrides` it then calls `get` and `iter` on. `cargo run` prints:
+
+```
+probe ok: cleared=true watermark=Watermark(SeqNo(0)) inert=not supported
+```
+
+Its first compile failed on two of the probe's *own* mistakes (`SelectionKind::Char` and an
+integer where a `RowId` belongs) and on neither of the seven names -- all seven resolved from the
+crate root on the first attempt. The probe is not committed; it lives outside the repository
+because nothing in the workspace should depend on `oneterm-vt` by a scratchpad path.
+
+**The gate still fails, with the ledger gone rather than because of it.** `Invalidation` was
+removed from the crate root's `pub use selection::{..}` line, rustdoc rebuilt, and
+`python scripts/vt-public-api.py --check-nameable --no-doc` exited **1**:
+
+```
+oneterm-vt has public signatures naming types no embedder can write.
+Re-export each from the crate root, or change the signature:
+  oneterm_vt::Selection: `Invalidation` is not nameable (defined in `selection`)
+```
+
+Restored, rebuilt, and the same command exits **0** printing
+`every type in a public signature is nameable` -- the success line with no ledger tail.
+`grep -n KNOWN_UNNAMEABLE scripts/vt-public-api.py` prints nothing; the only surviving match for
+`seen` in that file is the word in the docstring's limits sentence.
+
+**The surface diff is the seven and nothing else.** `--update` regenerated
+`public-api.windows.txt` on this Windows host (+22 / -0): `struct oneterm_vt::ByteSpan`,
+`struct oneterm_vt::ColorOverrides` with **`method get` and `method iter` only**,
+`enum oneterm_vt::Invalidation` with its seven variants, `enum oneterm_vt::ModeState` with its
+five, `struct oneterm_vt::ParamSpans`, `struct oneterm_vt::StrSpan`, and
+`struct oneterm_vt::Watermark` with `structfield 0`. No line was removed or renamed, and neither
+`fn set` nor any `fn reset*` appears under `ColorOverrides` in either file.
+`python scripts/vt-public-api.py --check` then reports the surface unchanged.
+
+**`public-api.unix.txt` was produced by hand**, as its `#` header says, on 2026-09-16. Nothing in
+this packet is `cfg`-gated, so it was rebuilt mechanically from the freshly generated Windows file
+with the existing Unix file's `oneterm_vt::pty` blocks kept, and `--diff-platforms` then confirmed
+the invariant with **six** lines, all inside `oneterm_vt::pty`: `Options::escape_args`,
+`PipeReader` and `PipeWriter` on Windows; `Options::child_signal_mask`, `SignalMask` and
+`SignalMask::current` on Unix. The same six `BUG-0059` and `US-0105` each reported.
+
+**Nothing else in the workspace moved.** `cargo test --workspace`, `cargo test -p oneterm-vt`
+(819 passed), `--no-default-features` (791), `--all-features` (832) and `cargo test -p
+oneterm-tools` (16) all pass, with no `#[allow]` added anywhere.
+`crates/tools/src/corpus_replay.rs:319` compiles unchanged against the narrowed `ColorOverrides`,
+because `iter` is one of the two methods that stay public.
+`RUSTDOCFLAGS="-D warnings" cargo doc -p oneterm-vt --no-deps` and the same with `--all-features`
+both exit zero. `pwsh scripts/ci-local.ps1 -Full` is green.
+
+**One rustdoc fix the packet did not predict, and it is worth recording.** `Invalidation`'s doc
+comment linked `[`Anchors::shift_region`]` and `[`Anchors::trim`]`. Both were legal while the type
+was private and became `rustdoc::private_intra_doc_links` errors the moment it was published,
+failing `-D warnings`. They are now plain code spans, matching `Anchors::remap` in the same
+sentence, which was already written that way. Publishing a type re-reads every doc link on it:
+that is the general lesson, and it cost two lines.
+
+**The diff is over budget on the production halves, and here is the arithmetic.**
+`git diff --numstat main...HEAD`, excluding the two generated snapshots:
+
+| Path | Actual | Budget |
+| --- | --- | --- |
+| `crates/vt/src` (seven files) | +54 / -15 | -- |
+| `crates/vt/CHANGELOG.md` | +20 / -0 | -- |
+| `crates/vt/docs/guide/12-versioning.md` | +8 / -6 | -- |
+| **`crates/vt` total** | **+82 / -21** | +55 / -12 |
+| `scripts/vt-public-api.py` | +5 / -26 | +2 / -22 |
+| `crates/vt/public-api.windows.txt` | +22 / -0 | generated |
+| `crates/vt/public-api.unix.txt` | +23 / -1 | generated (by hand) |
+
+`crates/vt` is **49 per cent over** on additions, inside the packet's 50-per-cent threshold but
+stated rather than buried. Two thirds of the overrun is the CHANGELOG: the entry names all seven
+types with the signature each was reached through, as the promise requires, and that is twenty
+lines rather than the handful the budget assumed. The rest is the doctest, which is 28 lines
+because the acceptance criterion asks it to store four types in a struct *and* match two by path
+rather than bind four `Option`s to `None`. The removals overrun (-21 against -12) is nine lines in
+absolute terms: four `pub` to `pub(crate)` rewrites, two intra-doc links, one duplicate
+`pub(crate) use color::ColorOverrides;` in `crates/vt/src/terminal/mod.rs` that became a
+dead import once the `pub use` beside it named the same type, and the guide's two reflowed
+sentences. The script's `+5 / -26` is the docstring sentence being replaced rather than deleted
+(the gate's four limits keep their paragraph, and the reader is told there is no allow-list at
+all) plus the two rewritten `check_nameable` lines.
 
 Known gaps to state rather than discover:
 
