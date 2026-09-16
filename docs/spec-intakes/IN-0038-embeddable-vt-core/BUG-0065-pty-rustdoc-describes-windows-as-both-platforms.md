@@ -20,7 +20,7 @@ Created: 2026-09-16
 ## Classification
 
 - Change type: bug (public documentation accuracy; no code change)
-- Risk lane: standard
+- Risk lane: normal
 - Spec Intake, when required: IN-0038 (`crates/pty` became `crates/vt/src/pty`, `US-0104`)
 
 ## Outcome
@@ -52,10 +52,12 @@ The defects were found by the independent verifier of `BUG-0063`
 
 - [x] In scope: the `pty` module rustdoc (`crates/vt/src/pty/mod.rs`), guide chapter 13
       (`crates/vt/docs/guide/13-pty.md`), the one clause in `crates/vt/CHANGELOG.md` that
-      repeats D3's imprecise reason, and the owning low-level design
-      (`low-level-design/pty.md`), which carries the same three false claims.
+      repeats D3's imprecise reason, the owning low-level design
+      (`low-level-design/pty.md`), which carries the same three false claims, and -- added
+      in the acceptance rework -- the `unix.rs` block comment those sentences were derived
+      from and the unlabelled headline of `docs/terminal-backend.md` §6.2.
 - [x] Out of scope: any code, signature, field order or behaviour change. Guide chapter 3
-      and `docs/terminal-backend.md` (both already correct -- see Documentation). No new
+      (already correct -- see Documentation). No new
       `CHANGELOG` entry: nothing an embedder compiles against changed, which is that
       file's own stated bar for an entry.
 
@@ -68,10 +70,10 @@ declaration order: `Conpty`, `PipeReader`, `PipeWriter`, `ChildExitWatcher`.
 
 | | Windows (ConPTY) | Unix (`openpty`) |
 | --- | --- | --- |
-| What drop does | `Conpty::drop` -> `ClosePseudoConsole` (`conpty.rs:198-206`), which blocks until conout is drained; then `ChildExitWatcher::drop` (`child.rs:218-229`) waits `CHILD_EXIT_GRACE` = 2 s on the child handle | closes `master`, `exit_signal` and the event receiver. Nothing else; there is no `Drop` impl (`unix.rs:209-217` states this as the invariant) |
-| Child fate | asked to exit by the host; if it is still running after the 2 s grace, `TerminateProcess(handle, 1)` -- only this process's own child, only through its own handle, logged at `warn` first (`child.rs:178-215`, `DEC-0016`) | the last close of the controlling terminal makes the line discipline send `SIGHUP` to the child's foreground process group. This crate never signals the child: the reaper's `wait()` has already reaped the pid, so a later `kill(pid)` could hit whatever the kernel handed that pid to next |
+| What drop does | `Conpty::drop` -> `ClosePseudoConsole` (`conpty.rs:198-206`), which blocks until conout is drained; then `ChildExitWatcher::drop` (`child.rs:218-229`) waits `CHILD_EXIT_GRACE` = 2 s on the child handle | closes `master`, `exit_signal` and the event receiver. Nothing else; there is no `Drop` impl (`unix.rs:222-229` states this as the invariant) |
+| Child fate | asked to exit by the host; if it is still running after the 2 s grace, `TerminateProcess(handle, 1)` -- only this process's own child, only through its own handle, logged at `warn` first (`child.rs:178-215`, `DEC-0016`) | the parent holds no slave descriptor after the spawn -- the `slave` opened at `unix.rs:93` is never stored in `Self`, so it drops at the end of `spawn`, and the child closes its own copies at `:144` -- so closing `master` is the last descriptor to go: it hangs up the slave, which is the controlling terminal the child took with `setsid` + `TIOCSCTTY` (`unix.rs:131, 141`), and the child, as session leader, receives `SIGHUP`. This crate never signals the child: the reaper's `wait()` has already reaped the pid, so a later `kill(pid)` could hit whatever the kernel handed that pid to next |
 | Does drop block? | **yes**, up to the 2 s grace (plus the conout drain). Belongs on an owner thread, not a UI thread | **no**. Nothing waits |
-| Thread fate on drop | neither pipe thread is joined; the `JoinHandle` is dropped at spawn (`pipe.rs:363-368`). Each is parked in a blocking `ReadFile`/`WriteFile` and returns when the pipe breaks | the reaper is not joined either (`unix.rs:194-207`, `.map(drop)`); it deliberately outlives the drop, blocked in `child.wait()`, and returns when the child exits |
+| Thread fate on drop | neither pipe thread is joined; the `JoinHandle` is dropped at spawn (`pipe.rs:363-368`). The conout reader is parked in a blocking `ReadFile` and returns when the pipe breaks; the conin writer waits on its ring condvar (`pipe.rs:297-304`) and returns once `PipeWriter::drop` closes it (`pipe.rs:348-352`) | the reaper is not joined either (`unix.rs:219`, `.map(drop)`); it deliberately outlives the drop, blocked in `child.wait()`, and returns when the child exits |
 | Exit-event delivery | `RegisterWaitForSingleObject` thread-pool callback -> `mpsc` + an IOCP completion packet posted to the embedder's poller (`child.rs:1-22, 86-98`) | one thread per session blocked in `Child::wait` -> `mpsc` + one byte on a `UnixStream` the poller already watches (`unix.rs:1-8, 200-218`). **No** process-global `SIGCHLD` handler: a library crate that installs one fights every other runtime in the process |
 
 Neither `DEC-0016` nor the low-level design ever asked Unix to terminate its child:
@@ -109,10 +111,12 @@ this stays a documentation packet.
   the grace period and the escalation. Reviewed, **no change**: it is stated in ConPTY
   terms throughout and never claims a Unix half, so the decision is already correct and it
   is the rustdoc that over-generalised it.
-- `docs/terminal-backend.md` §6.2-6.3 -- OneTerm's own use of the transport. Reviewed,
-  **no change**: the escalation lives in §6.3 "Windows-specific", §6.2 defers to it by
-  reference and names Windows-only APIs (`ClosePseudoConsole`) where it describes the
-  bounded wait. Nothing there claims the behaviour on Unix.
+- `docs/terminal-backend.md` §6.2-6.3 -- OneTerm's own use of the transport. **Updated**
+  (acceptance rework, verifier defect D4): §6.3 is correctly labelled "Windows-specific"
+  and §6.2's body defers to it by reference, but §6.2's headline -- "closing a local
+  session is guaranteed to leave no process behind" -- carried no platform label while
+  resting entirely on the Windows escalation. It is the same class of over-generalisation
+  this packet exists to remove, so it is labelled rather than argued away.
 - `crates/vt/docs/guide/03-threading.md:126-131` -- reviewed, **no change**: already says
   the transport threads are "none of which is joined on drop" and points at chapter 13.
   It was one of the texts contradicting the module rustdoc, and it was the correct one.
@@ -131,10 +135,12 @@ Reason: the code is correct on both platforms and is not touched.
 ### Reconciliation
 
 Docs changed: `crates/vt/src/pty/mod.rs` (module rustdoc, `Options`, `EventedPty`),
+`crates/vt/src/pty/unix.rs` (the block comment the wrong sentence was derived from),
+`docs/terminal-backend.md` §6.2,
 `crates/vt/docs/guide/13-pty.md`, `crates/vt/CHANGELOG.md`,
 `docs/spec-intakes/IN-0038-embeddable-vt-core/low-level-design/pty.md`.
-No-change reasons recorded above for `DEC-0016`, `docs/terminal-backend.md` and guide
-chapter 3 remain valid.
+`docs/terminal-backend.md` moved from no-change to changed in the rework; the no-change
+reasons for `DEC-0016` and guide chapter 3 remain valid.
 
 ## Plan
 
@@ -212,6 +218,43 @@ The two self-containment steps are the ones that matter most here: they are the 
 that fail on a `US-`/`BUG-`/`DEC-`/`IN-` citation or a bare `crates/` or `docs/` path in
 the crate's rustdoc and in the guide, and both halves of this change are rustdoc.
 
+### Acceptance rework, after the independent verification
+
+`evidence/BUG-0065-verify.md` returned PASS-WITH-NOTES on the first commit. Reworked here
+rather than opened as a new bug, because the defects are in this packet's own unaccepted
+output:
+
+- **D1 (MEDIUM), the Unix hang-up was mis-attributed.** The replacement sentence said the
+  *master* is the controlling terminal and that the *line discipline* signals the
+  *foreground process group*. The slave is the controlling terminal (`setsid` +
+  `TIOCSCTTY`, `unix.rs:131, 141`); the hang-up is the tty layer's when the last master
+  descriptor closes; and the signal the crate can defend is `SIGHUP` to the session
+  leader, which is the child. All three copies (module rustdoc, guide chapter 13, the
+  low-level design) now read the same, and so does the block comment in `unix.rs:222-229`
+  that the wrong sentence was derived from -- left unfixed it would have been re-derived.
+- **D2 (MEDIUM), risk lane.** `standard` is not in the repository's vocabulary and the DB
+  `CHECK` rejects it. Now `normal`, here and in the harness snippet.
+- **D3 (LOW), the Windows pipe threads do not end the same way.** Only the conout reader
+  returns when the pipe breaks; the conin writer waits on its ring condvar and returns when
+  `PipeWriter::drop` closes it. Split in the module rustdoc, in guide chapter 13's thread
+  list and in the truth table above.
+- **D4 (LOW), `docs/terminal-backend.md` §6.2.** Labelled Windows -- see the
+  documentation review above.
+- **D6 (LOW), citations.** The no-`Drop` invariant is `unix.rs:222-229` and the reaper's
+  `.map(drop)` is `unix.rs:219`.
+- **D5**: no action, `intake_id` 43 is correct.
+
+Second gate run, after the rework:
+
+```text
+$ RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps                 clean
+$ RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vt --no-deps --all-features  clean
+$ cargo test -p oneterm-vt --doc                                 44 passed, 0 failed
+$ python scripts/vt-public-api.py --check --no-doc    public API surface unchanged
+$ rustdoc self-containment greps (crates/vt/src, crates/vt/docs/guide)         clean
+$ python scripts/check-english.py           passed for 918 files
+```
+
 Gaps:
 
 1. **Windows host only.** Nothing here compiled or ran a line of `cfg(unix)` code, so the
@@ -243,16 +286,16 @@ with sqlite3.connect("harness.db") as db:
             "BUG-0065",
             "The pty rustdoc describes Windows-only behaviour as if it held on both platforms",
             "2026-09-16",
-            "standard",
+            "normal",
             "docs/spec-intakes/IN-0038-embeddable-vt-core/low-level-design/pty.md",
             "docs/spec-intakes/IN-0038-embeddable-vt-core/BUG-0065-pty-rustdoc-describes-windows-as-both-platforms.md",
             "implemented",
             1, 0, 0, 1,
-            "pwsh scripts/ci-local.ps1 passed on Windows (25 steps, 131 test sections, 4533 passed, 0 failed), including both rustdoc self-containment greps, cargo test -p oneterm-vt --doc (44 passed) and vt-public-api.py --check (surface unchanged). Documentation only; no Unix build ran.",
+            "pwsh scripts/ci-local.ps1 passed on Windows (25 steps, 131 test sections, 4533 passed, 0 failed), including both rustdoc self-containment greps, cargo test -p oneterm-vt --doc (44 passed) and vt-public-api.py --check (surface unchanged). Documentation only; no Unix build ran. After the verifier's PASS-WITH-NOTES the MEDIUM/LOW defects were reworked and the doc, doctest, public-API, self-containment and English checks were re-run clean on the reworked tree.",
             "pwsh scripts/ci-local.ps1",
             "2026-09-16",
             "pass",
-            "Closes D1-D3 from evidence/BUG-0063-verify.md. No code changed: the Unix PseudoConsole has no Drop impl by design and DEC-0016 is Windows-only, so the prose was wrong and the code was right. Also corrected the same three claims in the owning low-level design and one clause in crates/vt/CHANGELOG.md.",
+            "Closes D1-D3 from evidence/BUG-0063-verify.md, then D1-D4 and D6 from evidence/BUG-0065-verify.md as acceptance rework. No code changed: the Unix PseudoConsole has no Drop impl by design and DEC-0016 is Windows-only, so the prose was wrong and the code was right. Also corrected the same three claims in the owning low-level design and one clause in crates/vt/CHANGELOG.md.",
             43,
         ),
     )

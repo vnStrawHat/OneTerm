@@ -224,9 +224,10 @@ fn reap_in_background(
 // reuse. A `kill(self.pid, …)` here would therefore be aimed at whatever the
 // kernel handed the pid to next — and the common reason to drop a session is
 // that the child already exited. Closing `master` instead is both safe and
-// sufficient: the last close of the controlling terminal makes the line
-// discipline send `SIGHUP` to the child's foreground process group, which is
-// exactly the hang-up that was wanted.
+// sufficient: nothing else holds a slave descriptor once the child is running,
+// so that close hangs up the slave — the controlling terminal the child took
+// with `setsid` + `TIOCSCTTY` — and the child, as session leader, receives
+// `SIGHUP`. Exactly the hang-up that was wanted.
 
 impl EventedReadWrite for PseudoConsole {
     type Reader = File;

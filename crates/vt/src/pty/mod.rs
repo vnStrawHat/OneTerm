@@ -45,10 +45,11 @@
 //!   pollable event. Unix-only items: `SignalMask` and the
 //!   `Options::child_signal_mask` field.
 //!
-//!   There is no `Drop` impl: dropping closes the master side, and that last
-//!   close of the controlling terminal makes the line discipline send `SIGHUP`
-//!   to the child's foreground process group. This crate never signals the child
-//!   itself: the reaper's `wait` reaps the pid the moment the child exits, and
+//!   There is no `Drop` impl: dropping closes the master side, and nothing else
+//!   holds a slave descriptor once the child is running, so that close hangs up
+//!   the slave — the child's controlling terminal, taken at spawn — and the
+//!   child, as session leader, receives `SIGHUP`. This crate never signals the
+//!   child itself: the reaper's `wait` reaps the pid the moment the child exits, and
 //!   the usual reason to drop a session is that it already has, so a signal from
 //!   here could reach whatever the kernel handed that pid to next. Nothing
 //!   waits, so the drop does not block.
@@ -56,9 +57,10 @@
 //! Two threads exist inside the transport on Windows (a pipe reader and a pipe
 //! writer) and one on Unix (the reaper). All are internal and none calls into
 //! embedder code — and **none of them is joined**: dropping a pseudo-console
-//! does not wait for them. The Windows pair is parked in a blocking pipe read or
-//! write and returns when the pipe breaks; the Unix reaper deliberately outlives
-//! the drop, because owning the child is what keeps its exit observable. Each
+//! does not wait for them. The Windows reader is parked in a blocking pipe read
+//! and returns when the pipe breaks; the Windows writer waits on its ring and
+//! returns once the drop closes it; the Unix reaper deliberately outlives the
+//! drop, because owning the child is what keeps its exit observable. Each
 //! holds only what it was given, so a thread still running after `drop` returns
 //! cannot touch embedder memory. They are the only threads this crate spawns,
 //! which is why `--no-default-features` leaves the engine's "no threads, no

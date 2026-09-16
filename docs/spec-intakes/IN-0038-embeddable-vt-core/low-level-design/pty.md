@@ -429,8 +429,9 @@ embedder gets wrong first:
   Windows closes the console, then waits up to `CHILD_EXIT_GRACE` (2 s, `DEC-0016`) for the child
   and terminates it if it never exits: a bounded stall, so it must not run on a UI thread. OneTerm
   hands that drop to a detached owner thread (`LocalSession::shutdown_owner`); an embedder must do
-  something equivalent. On Unix there is no `Drop` impl at all -- closing the master side lets the
-  line discipline `SIGHUP` the child's foreground process group, the crate never signals the child
+  something equivalent. On Unix there is no `Drop` impl at all -- closing the master side is the
+  last descriptor to go, so it hangs up the slave (the child's controlling terminal, taken at
+  spawn) and the child, as session leader, receives `SIGHUP`; the crate never signals the child
   itself (the reaper's `wait` reaps the pid the moment the child exits, so a signal from the drop
   could reach whatever the kernel handed that pid to next), and nothing waits. The rustdoc and guide must
   state both halves per platform, never one as if it were both.

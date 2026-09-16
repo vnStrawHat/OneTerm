@@ -161,9 +161,9 @@ interior mutability" claim literally true rather than nearly true.
 **None of them is joined, and drop does not wait for them.** Be exact about
 this, because shutdown ordering gets built on it:
 
-- the Windows pipe threads are parked in a blocking read or write and return
-  only when the pipe breaks, so there is no join to perform -- the handle is
-  dropped at spawn;
+- the Windows reader is parked in a blocking pipe read and returns when the pipe
+  breaks, and the writer waits on its ring until the drop closes it; neither has
+  a join to perform -- the handle is dropped at spawn;
 - the Unix reaper owns the child handle and deliberately outlives the drop,
   which is how a child exit stays observable while the owner is tearing down.
 
@@ -183,10 +183,11 @@ different action on each platform. Neither half waits for the threads above:
   to that grace period, and belongs on an owner thread rather than on a UI
   thread. Only your own child is ever touched, and only through the handle it was
   spawned with.
-- **Unix**: there is no `Drop` impl at all. Closing the master side is the last
-  close of the controlling terminal, so the line discipline sends `SIGHUP` to the
-  child's foreground process group -- which is the hang-up that was wanted. The
-  crate never signals the child itself: the reaper's `wait` reaps the pid the
+- **Unix**: there is no `Drop` impl at all. The drop closes the master side, and
+  nothing else holds a slave descriptor once the child is running, so that close
+  hangs up the slave -- the child's controlling terminal, taken at spawn -- and
+  the child, as session leader, receives `SIGHUP`. That is the hang-up that was
+  wanted. The crate never signals the child itself: the reaper's `wait` reaps the pid the
   moment the child exits, and the usual reason to drop a session is that it
   already has, so a signal from here could reach whatever the kernel handed that
   pid to next. Nothing waits, so the drop does not block.
