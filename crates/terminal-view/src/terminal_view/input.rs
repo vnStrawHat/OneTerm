@@ -198,7 +198,7 @@ impl TerminalView {
     /// **Untested in this repository, in both places.** The GPUI test window is
     /// never active, so its focus events carry no previous focus path and the
     /// `on_blur` subscription cannot fire — `US-0108`'s
-    /// `the_blur_drain_cannot_be_reached_from_a_test_window` demonstrates that
+    /// `verify_the_blur_drain_is_unprovable_in_a_test_window` demonstrates that
     /// rather than asserting it. The wiring is proved only by the manual
     /// Windows walk in `IN-0040`'s detail design.
     pub(super) fn release_held_keys(&mut self, cx: &mut App) {

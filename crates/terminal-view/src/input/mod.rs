@@ -28,4 +28,6 @@ mod menu_tests;
 #[cfg(test)]
 mod mouse_tests;
 #[cfg(test)]
+mod us0108_reverify_tests;
+#[cfg(test)]
 mod us0108_verify_tests;

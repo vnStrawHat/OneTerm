@@ -985,3 +985,109 @@ fn verify_a_repeated_press_leaves_one_held_entry(cx: &mut TestAppContext) {
         "and one release, not three; the second key-up finds nothing"
     );
 }
+
+// ── Re-verification attacks at db8a059b. NOT part of the packet. ─────────
+
+/// Two peers, one of which negotiated `REPORT_ALL_KEYS_AS_ESC` itself. The
+/// rework fans an interrupt at every peer regardless, so the peer that *did*
+/// negotiate receives a signal its program asked to see as a key.
+#[gpui::test]
+fn reverify_a_negotiating_peer_still_receives_the_interrupt(cx: &mut TestAppContext) {
+    test_support::init(cx);
+    cx.update(InputChannelRegistry::init);
+    let (origin_session, origin_probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (esc_session, esc_probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (plain_session, plain_probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (views, cx) = open_views(cx, vec![origin_session, esc_session, plain_session]);
+    for view in &views {
+        view.update(cx, |view, cx| view.join_channel(InputChannel::A, cx));
+    }
+    origin_probe.feed(b"\x1b[>8u");
+    esc_probe.feed(b"\x1b[>8u");
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    origin_probe.take_writes();
+    esc_probe.take_writes();
+    plain_probe.take_writes();
+
+    views[0].update_in(cx, |view, window, cx| {
+        view.on_key_down(&key_down("c", Modifiers::control()), window, cx);
+    });
+    assert_eq!(
+        origin_probe.writes(),
+        vec![b"\x1b[99;5u".to_vec()],
+        "the origin gets the key its own program negotiated"
+    );
+    assert_eq!(
+        esc_probe.writes(),
+        vec![b"\x03".to_vec()],
+        "the peer that negotiated the same flag still gets a signal it asked to see as a key"
+    );
+    assert_eq!(
+        plain_probe.writes(),
+        vec![b"\x03".to_vec()],
+        "and the peer that negotiated nothing gets the form it understands"
+    );
+}
+
+/// Ctrl+C under `DISAMBIGUATE_ESC_CODES` alone at the view level: exactly one
+/// write, the encoded key, with no `0x03` alongside it -- the view took the
+/// encoded branch and did not also signal.
+#[gpui::test]
+fn reverify_ctrl_c_under_disambiguate_is_handled_once(cx: &mut TestAppContext) {
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+    probe.feed(b"\x1b[>1u");
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    probe.take_writes();
+    view.update_in(cx, |view, window, cx| {
+        view.on_key_down(&key_down("c", Modifiers::control()), window, cx);
+        view.on_key_up(&key_up("c", Modifiers::control()), window, cx);
+    });
+    assert_eq!(
+        probe.writes(),
+        vec![b"\x1b[99;5u".to_vec()],
+        "one write for the press; no release, because REPORT_EVENT_TYPES was not pushed"
+    );
+    assert!(
+        view.read_with(cx, |view, _| view.held_keys.is_empty()),
+        "and the key-up cleared the entry the encoded interrupt created"
+    );
+}
+
+/// The stranding case the fix exists for, driven the way the platform produces
+/// it, and the reverse of the case the packet's own test drives.
+#[gpui::test]
+fn reverify_a_digit_release_pairs_in_both_directions(cx: &mut TestAppContext) {
+    for (down, up) in [("!", "1"), ("1", "!")] {
+        let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+        let (view, cx) = open_view(cx, session);
+        // The alternate screen first: the kitty flag stack is per-screen, so
+        // pushing before the switch leaves the new screen with nothing.
+        probe.feed(b"\x1b[?1049h\x1b[>10u");
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        probe.take_writes();
+        view.update_in(cx, |view, window, cx| {
+            let mut press = held_key_down(down, Modifiers::default(), false);
+            press.keystroke.key_char = Some(down.to_string());
+            view.on_key_down(&press, window, cx);
+            let mut release = key_up(up, Modifiers::default());
+            release.keystroke.key_char = Some(up.to_string());
+            view.on_key_up(&release, window, cx);
+        });
+        assert!(
+            view.read_with(cx, |view, _| view.held_keys.is_empty()),
+            "press {down:?} / release {up:?}: nothing may be stranded"
+        );
+        assert_eq!(
+            probe.writes(),
+            vec![b"\x1b[49u".to_vec(), b"\x1b[49;1:3u".to_vec()],
+            "press {down:?} / release {up:?}: both events name key 49, so they pair"
+        );
+    }
+}
