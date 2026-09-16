@@ -9,7 +9,24 @@ exposes then has to be an intentional line in a review.
     python scripts/vt-public-api.py                    # print the host's surface
     python scripts/vt-public-api.py --update           # regenerate the host's file
     python scripts/vt-public-api.py --check            # fail if the host's file is stale
+    python scripts/vt-public-api.py --check-nameable   # fail on a signature naming a private type
     python scripts/vt-public-api.py --diff-platforms   # what the two files disagree on
+
+`--check-nameable` closes the hole `--check` cannot see: a public signature that
+refers to a type defined in a `pub(crate)` module, which an embedder can use by
+field access but cannot write down. rustdoc links every type whose page it
+rendered, and it renders a page only for a publicly reachable one, so a type
+this crate defines that appears **unlinked** in a rendered signature is exactly
+one an embedder cannot name. Three stated limits: only named types in the
+rendered signature are seen (a type reached solely through an associated type, a
+where-clause bound or a macro-generated impl is not), primitives and `std` types
+are skipped because their links leave the crate, and a type reachable through
+both a public and a private path passes on the public one -- correctly, because
+the embedder can name it. A fourth limit is the `NAMED` pattern below: it wants
+three characters or more, so that a generic parameter (`T`, `Ps`) is not read as
+a type, and a type named in one or two characters would be skipped with it. None
+exists today. `KNOWN_UNNAMEABLE` below carries the instances that predate the
+gate; that list may only shrink.
 
 **There are two snapshots, one per platform family** (`US-0104`): the `pty` module
 publishes `PipeReader`, `PipeWriter` and `Options::escape_args` on Windows, and
@@ -61,6 +78,34 @@ ITEM = re.compile(r"^(struct|enum|trait|fn|constant|type|union|macro)\.(.+)\.htm
 MEMBER = re.compile(r'id="(structfield|variant|associatedconstant|method)\.([A-Za-z0-9_]+)"')
 # Everything from here down the page belongs to a trait impl, not to the item.
 TRAIT_IMPLS = re.compile(r'id="(trait-implementations|synthetic-implementations|blanket)')
+
+# The item's own rendered signature, and one per inherent method.
+DECL = re.compile(r'<(?:pre class="rust item-decl"|h4 class="code-header")>(.*?)</(?:pre|h4)>', re.S)
+ANCHOR = re.compile(r"<a\b[^>]*>.*?</a>", re.S)
+TAG = re.compile(r"<[^>]+>")
+# A type name, not a generic parameter (`T`, `K`, `Ps`) and not a field name.
+NAMED = re.compile(r"\b[A-Z][A-Za-z0-9_]{2,}\b")
+# An enum variant opens its own line and is never a type reference.
+VARIANT = re.compile(r"(?m)^\s*[A-Z][A-Za-z0-9_]*")
+# The unnameable types that already existed when the gate was written (`BUG-0059`
+# closed the four the outside evaluation reported and found these seven on the way).
+# The list may only shrink: a name here that no longer fires is an error, and a
+# name not here that does fire is the failure the gate exists for.
+KNOWN_UNNAMEABLE = {
+    "ByteSpan",
+    "ColorOverrides",
+    "Invalidation",
+    "ModeState",
+    "ParamSpans",
+    "StrSpan",
+    "Watermark",
+}
+# Where this crate defines a type, at any visibility: `pub`, `pub(crate)`,
+# `pub(super)` or `pub(in path)`. A type missing from this map can never be
+# reported, so the visibility group is deliberately anything in parentheses.
+DEFINITION = re.compile(
+    r"^pub(?:\([^)]*\))? (?:struct|enum|trait|type|union) ([A-Za-z0-9_]+)", re.M
+)
 
 
 def members(page: Path) -> list[str]:
@@ -119,6 +164,62 @@ def sorted_blocks(lines: list[str]) -> list[str]:
             blocks.append([line])
     blocks.sort(key=lambda block: block[0].split(" ", 1)[1])
     return [line for block in blocks for line in block]
+
+
+def defining_modules() -> dict[str, str]:
+    """Every type this crate defines, mapped to the module that defines it."""
+    src = ROOT / "crates" / "vt" / "src"
+    where: dict[str, str] = {}
+    for file in sorted(src.rglob("*.rs")):
+        module = file.relative_to(src).with_suffix("").as_posix().removesuffix("/mod")
+        for name in DEFINITION.findall(file.read_text(encoding="utf-8", errors="replace")):
+            where.setdefault(name, module.replace("/", "::"))
+    return where
+
+
+def check_nameable() -> int:
+    """Fail on a public signature naming a type the embedder cannot write."""
+    modules, defined, findings, seen = public_modules(), defining_modules(), [], set()
+    for page in sorted(DOC_ROOT.rglob("*.html")):
+        name = ITEM.match(page.name)
+        module = page.parent.relative_to(DOC_ROOT).as_posix()
+        if not name or module not in modules:
+            continue
+        item = name.group(2)
+        prefix = "oneterm_vt" + ("" if module == "." else "::" + module.replace("/", "::"))
+        html = page.read_text(encoding="utf-8", errors="replace")
+        cut = TRAIT_IMPLS.search(html)
+        if cut:
+            html = html[: cut.start()]
+        for decl in DECL.findall(html):
+            rendered = VARIANT.sub("", TAG.sub("", ANCHOR.sub("", decl)))
+            for named in NAMED.findall(rendered):
+                # The page's own item is never linked to itself, and `Self` is
+                # not a type an embedder has to name.
+                if named in (item, "Self") or named not in defined:
+                    continue
+                seen.add(named)
+                finding = f"{prefix}::{item}: `{named}` is not nameable (defined in `{defined[named]}`)"
+                if named not in KNOWN_UNNAMEABLE and finding not in findings:
+                    findings.append(finding)
+    fixed = sorted(KNOWN_UNNAMEABLE - seen)
+    if fixed:
+        findings.append(
+            f"KNOWN_UNNAMEABLE is stale -- no public signature names "
+            f"{', '.join(fixed)} any more; delete from the ledger"
+        )
+    if not findings:
+        print(f"every type in a public signature is nameable, "
+              f"but the {len(KNOWN_UNNAMEABLE)} in KNOWN_UNNAMEABLE")
+        return 0
+    print(
+        "oneterm-vt has public signatures naming types no embedder can write.\n"
+        "Re-export each from the crate root, or change the signature:",
+        file=sys.stderr,
+    )
+    for finding in findings:
+        print(f"  {finding}", file=sys.stderr)
+    return 1
 
 
 def host_surface_file() -> Path:
@@ -189,6 +290,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="fail if the file is stale")
     parser.add_argument(
+        "--check-nameable", action="store_true",
+        help="fail if a public signature names a type defined in a private module",
+    )
+    parser.add_argument(
         "--update", "--write", dest="update", action="store_true",
         help="regenerate this host's file",
     )
@@ -208,6 +313,9 @@ def main() -> int:
     if not DOC_ROOT.is_dir():
         print(f"no rustdoc output at {DOC_ROOT}", file=sys.stderr)
         return 1
+
+    if args.check_nameable:
+        return check_nameable()
 
     text = "\n".join(surface()) + "\n"
     if args.update:

@@ -32,8 +32,8 @@ use std::time::Instant;
 pub use color::ColorKey;
 pub(crate) use color::ColorOverrides;
 pub(crate) use dispatch::ClusterCarry;
-pub use mode::{CursorShape, KeyboardFlags, Mode};
-pub(crate) use mode::{CursorStyle, KeyboardStacks, Modes, TitleState};
+pub use mode::{CursorShape, CursorStyle, KeyboardFlags, Mode};
+pub(crate) use mode::{KeyboardStacks, Modes, TitleState};
 pub use osc::{OscRoute, OscRoutes};
 
 use crate::cell::{Cell, Style};

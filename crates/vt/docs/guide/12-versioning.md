@@ -52,7 +52,7 @@ contract rather than an implementation detail.
 
 ## Which types are `#[non_exhaustive]`
 
-Eight public types are marked, and the mark costs a caller two different things
+Ten public types are marked, and the mark costs a caller two different things
 depending on whether it is an enum or a struct. The compiler will tell you
 either way, but it is worth knowing before you design around them.
 
@@ -61,9 +61,12 @@ either way, but it is worth knowing before you design around them.
 `search::SearchPattern`. A new variant on any of them is a patch release, and
 your wildcard arm is what makes that true for your code too.
 
-**One struct**, `search::SearchOptions`. There are no variants and no wildcard
-arm; what the mark costs you is that you cannot build it with a struct literal.
-Start from the default and assign:
+**Three structs**: `search::SearchOptions`, `ResizeOutcome` and `Placement`.
+There are no variants and no wildcard arm; what the mark costs you is that you
+cannot build one with a struct literal. `ResizeOutcome` and `Placement` are only
+ever returned to you -- by `Terminal::resize` and `Terminal::placements` -- so
+you read their fields and never construct one. `SearchOptions` you do build, and
+the way to build it is to start from the default and assign:
 
 ```rust
 use oneterm_vt::search::SearchOptions;

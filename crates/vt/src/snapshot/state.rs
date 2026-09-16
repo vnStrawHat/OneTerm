@@ -74,6 +74,9 @@ pub struct SnapshotCursor {
 /// offset inside the image from this record (see
 /// [`SnapshotState::graphic_offset`]), which is what keeps a whole image to
 /// **one** interned entry.
+///
+/// [`Placement`](crate::Placement) is the same image as the engine holds it,
+/// positioned by anchor so it follows its content through scroll and reflow.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SnapshotPlacement {
     /// The image this placement shows.

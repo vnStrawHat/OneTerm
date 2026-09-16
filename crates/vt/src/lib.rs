@@ -9,6 +9,18 @@
 //!
 //! Design: <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/high-level-design.md>.
 //!
+//! Every type a public signature mentions is nameable from this root, so an
+//! embedder can store one in a struct or return it from a function:
+//!
+//! ```
+//! use oneterm_vt::{CursorStyle, Placement, ResizeOutcome, SyncState};
+//!
+//! let _: Option<ResizeOutcome> = None;
+//! let _: Option<CursorStyle> = None;
+//! let _: Option<SyncState> = None;
+//! let _: Option<Placement> = None;
+//! ```
+//!
 //! Terminal input is untrusted. Nothing here returns an error to the embedder
 //! and nothing here panics on input: a malformed or hostile stream is dropped,
 //! truncated or degraded to a documented fallback, and counted.
@@ -61,18 +73,18 @@ pub use cell::{Attrs, Cell, CellContent, CellWidth, Color, NamedColor, Rgb, Sema
 // `FeedStats` has no external namer either, but it is what `Terminal::feed`
 // returns, so it stays published.
 pub use event::{ClipboardKind, EventBatch, FeedStats, Progress, ShellMark, StringTerm, VtEvent};
-pub use graphics::{GraphicData, VIRTUAL_CELL};
+pub use graphics::{GraphicData, Placement, VIRTUAL_CELL};
 pub use grid::{Pos, RowId, RowRef, SeqNo, Size, Viewport};
 pub use intern::{Extras, ExtrasId, GraphicId, Hyperlink, HyperlinkId, Interner};
-pub use reflow::ResizePolicy;
+pub use reflow::{ResizeOutcome, ResizePolicy};
 pub use selection::{Selection, SelectionKind, SelectionRange, Side};
 pub use snapshot::{
     ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting, Palette, SnapshotCell,
     SnapshotContent, SnapshotCursor, SnapshotPlacement, SnapshotRow, SnapshotState, SnapshotUpdate,
-    StyleRun,
+    StyleRun, SyncState,
 };
 pub use terminal::{
-    ColorKey, Config, CursorShape, KeyboardFlags, Mode, OscRoute, OscRoutes, Terminal,
+    ColorKey, Config, CursorShape, CursorStyle, KeyboardFlags, Mode, OscRoute, OscRoutes, Terminal,
 };
 // Both halves of the width decision are published: `scalar_width` is what the
 // print path uses by default, `cluster_width` what it uses under mode `? 2027`,

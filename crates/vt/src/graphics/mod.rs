@@ -79,12 +79,25 @@ pub struct GraphicData {
 /// `anchor` is an [`AnchorKind::Graphic`](crate::grid::AnchorKind) entry naming
 /// the **top-left** cell, so the placement follows its content; `cols` and
 /// `rows` are its extent in cells, already clipped on the right.
+///
+/// [`SnapshotPlacement`](crate::SnapshotPlacement) is the same image seen
+/// through a snapshot, positioned by resolved row and column instead.
+///
+/// You read these and never build one: no API takes a `Placement`, and the
+/// `#[non_exhaustive]` mark with no `Default` says so in the type system.
+// Returned, never built outside the crate, and `pixel_size` is an early shape.
+#[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Placement {
+    /// The interned image this places.
     pub id: GraphicId,
+    /// The anchor naming the top-left cell the image starts at.
     pub anchor: AnchorId,
+    /// The image's width in cells, already clipped on the right.
     pub cols: u16,
+    /// The image's height in cells.
     pub rows: u16,
+    /// The source image's size in pixels, as decoded.
     pub pixel_size: (u32, u32),
 }
 

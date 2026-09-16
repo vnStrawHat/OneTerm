@@ -40,6 +40,19 @@ carry no API change at all. Such a release says so below rather than being omitt
 
 ### Added
 
+- `ResizeOutcome`, `CursorStyle`, `SyncState` and `Placement` are re-exported from the crate root.
+  All four were already **returned** by a public `Terminal` method -- `resize`, `cursor_style`,
+  `sync` and `placements` -- but were defined in a `pub(crate)` module, so no embedder could write
+  the name: the values were usable by field access and could not be stored in a struct, returned
+  from a function or matched on by path. Nothing changed about what the four methods do.
+
+  `ResizeOutcome` and `Placement` are `#[non_exhaustive]`; neither was nameable before, so no
+  outside code can be affected. `Placement`'s five fields and `SyncState::new` are documented now
+  that they are publicly reachable.
+
+  `scripts/vt-public-api.py --check-nameable` is the gate that keeps this from coming back: it
+  fails CI on a public signature naming a type defined in a private module.
+
 - `guide`, a public module that carries the embedder's guide: thirteen Markdown chapters rendered
   by `cargo doc` beside the API reference, one empty module each. It adds no item and no
   dependency, and every Rust block in it is a doctest, so a chapter that describes an API the
