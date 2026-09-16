@@ -477,15 +477,24 @@ fn loop_child_exit_ends_the_session_and_stops_the_thread() {
     assert_eq!(events.last(), Some(&SessionEvent::Closed));
 }
 
-/// How long a frame may wait for the engine while the pump floods.
+/// A ceiling on one hold of the engine while the pump floods, not a stopwatch
+/// reading.
 ///
-/// Not a stopwatch. The property is "**one batch**, not the whole flood", and a
-/// batch here is whatever the socket buffer held, parsed at `test` profile
-/// opt-level 0: measured worst-of-five at 86 / 108 / 125 ms over three runs,
-/// against `US-0082`'s 157 µs for a 4 KiB in-process chunk. The failing side is
-/// not slower, it never arrives — with the flood running, a loop that ignores
-/// the demand holds the engine until the producer stops.
-const HANDOVER_BOUND: Duration = Duration::from_millis(250);
+/// The property is "**one batch**, not the whole flood", and a batch here is
+/// whatever the socket buffer held, parsed at `test` profile opt-level 0:
+/// measured worst-of-five at 86 / 108 / 125 ms over three runs on the author's
+/// machine, against `US-0082`'s 157 µs for a 4 KiB in-process chunk.
+///
+/// The bound sits far above all of those on purpose, because the failing side
+/// is not slower, it never arrives — with the flood running, a loop that
+/// ignores the demand holds the engine until the producer stops, and that case
+/// fails on `recv_timeout(deadline)` below whatever this constant says. What
+/// the assertion adds on top is that a hold lasting *seconds* is caught too. So
+/// the number only has to sit between "a chunk on a loaded machine" and "a hold
+/// long enough to be a regression": 250 ms was inside the first of those on a
+/// shared two-vCPU CI runner, where a frame waited 339 ms with the yield
+/// working correctly. 1 s is not.
+const HANDOVER_BOUND: Duration = Duration::from_secs(1);
 
 /// Frames taken while the pump floods. One acquisition could be luck; the
 /// assertion is on the worst of them.

@@ -226,9 +226,13 @@ The negative control is unchanged and is the important half: `no frame reached t
 within 4.75s of a flooding pump`, failing in 4.99 s. The failing side is not slower, it
 never arrives.
 
-The test's bound is **250 ms** (was 750 ms before the read cap). It is far above
-`US-0082`'s 157 µs because the units differ — `US-0082` fed 4 KiB in-process chunks — and
-the property the test pins is the design's: **one batch, not the whole flood**.
+The test's bound is **1 s** (250 ms when this packet shipped, 750 ms before the read cap;
+raised by `BUG-0064` after a shared two-vCPU CI runner measured 339 ms with the yield
+working). It is far above `US-0082`'s 157 µs because the units differ — `US-0082` fed
+4 KiB in-process chunks — and the property the test pins is the design's: **one batch, not
+the whole flood**. The bound is a ceiling on one hold, not a measurement: the defect side
+does not arrive at all and fails on the deadline instead, which is what gap 10 below
+says.
 
 ### The read cap (verifier MAJOR-2)
 
