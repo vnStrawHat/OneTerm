@@ -492,6 +492,34 @@ fn cell_pixels_reach_the_session_so_csi_14_t_answers(cx: &mut TestAppContext) {
     );
 }
 
+/// BUG-0061 verification (independent, not the implementer's test): ONE frame.
+/// The very first prepaint must already have pushed the cell size, or a program
+/// that queries right after spawn is still told the window has no pixels.
+#[gpui::test]
+fn verify_first_prepaint_alone_makes_csi_14_t_non_zero(cx: &mut TestAppContext) {
+    let mut h = Harness::open(cx, 24, 80, "", inputs_without_cursor());
+    if h.probe.snapshot_calls() == 0 {
+        h.draw();
+    }
+    assert_eq!(h.probe.snapshot_calls(), 1, "exactly one frame was drawn");
+
+    let reply = h.probe.feed_replies(b"\x1b[14t");
+    let nums: Vec<u32> = reply
+        .trim_start_matches('\u{1b}')
+        .trim_start_matches("[4;")
+        .trim_end_matches('t')
+        .split(';')
+        .map(|n| n.parse().expect("numeric reply"))
+        .collect();
+    assert_eq!(nums.len(), 2, "{reply:?}");
+    assert!(nums[0] > 0 && nums[1] > 0, "{reply:?}");
+
+    let grid = h.grid();
+    let cell = h.cell_device();
+    assert_eq!(nums[0], u32::from(grid.rows) * cell.h as u32);
+    assert_eq!(nums[1], u32::from(grid.cols) * cell.w as u32);
+}
+
 #[gpui::test]
 fn cursor_layer_and_gutter_paint(cx: &mut TestAppContext) {
     let mut inputs = inputs();
