@@ -105,10 +105,17 @@ engine never learns the real font cell size. The renderer rescales by `cell_widt
 `line_height / 20`." `crates/terminal-view/src/render/element.rs:359` is that rescale, through
 `oneterm_terminal::SIXEL_VIRTUAL_CELL`.
 
-So a program that sizes an image from the new `CSI 14 t` answer -- one cell = `w x h` real
-pixels -- has it drawn at `w/10` by `h/20` of the size it intended; for a typical 9x18 cell that
-is a uniform 0.9 shrink, and for a 9x19 cell a 0.90 x 0.95 one. The image appears, at very
-slightly the wrong size, which is what this packet promises and all it promises.
+So a program that sizes an image from the new `CSI 14 t` answer -- one cell = `w x h` device
+pixels -- has it drawn at **`device_cell / (10, 20)`** of the size it intended. That factor is
+scale-dependent, and the first draft of this packet got it wrong by quoting only the unscaled
+case: at 100 % scale a 9x18 cell gives 0.9 x 0.9, so the image is **smaller**; at 200 % scale the
+same font gives an 18x36 device cell and a factor of 1.8 x 1.8, so the image is **larger**, by
+almost double. The image appears, at the wrong size, which is what this packet promises and all
+it promises.
+
+Concretely, for the dragon (`WEBP 384x576`): the engine always covers
+`ceil(384/10) x ceil(576/20) = 39 x 29` cells, while the program that sized it from the reported
+cell meant `43 x 32` cells at a 9x18 device cell (100 %) and `22 x 16` at 18x36 (200 %).
 
 Reporting `(10, 20)` instead would make the geometry exact and was rejected: it tells a
 DPI-aware program the window is a different size than it is, it would make `chafa` and any
@@ -156,10 +163,15 @@ Changed: `docs/terminal-backend.md` §5.3 -- a paragraph beside the resize hop n
 duty, where it is pushed from, why it is not folded into `resize`, and that the reported size is a
 report rather than a placement input.
 
-The three no-change reasons still hold. `low-level-design/graphics.md` describes placement, which
-this packet does not touch; `crates/vt/docs/guide/08-graphics.md` already states the embedder
-contract correctly and is what the fix now obeys; the engine's `set_cell_pixels` and the `14 t` /
-`18 t` arms are unchanged, and `crates/vt` has no edit in this branch.
+Also changed, after verification (F9): `low-level-design/graphics.md` line 71 read "The engine
+never learns the real font cell size", which this packet made false in the literal reading -- the
+engine learns it, and simply does not use it for placement. The sentence now says so, and names
+the `device_cell / (10, 20)` consequence and `BUG-0062`. The packet's earlier "reviewed, still
+correct" claim for that file is withdrawn.
+
+The other two no-change reasons hold. `crates/vt/docs/guide/08-graphics.md` already states the
+embedder contract correctly and is what the fix now obeys; the engine's `set_cell_pixels` and the
+`14 t` / `18 t` arms are unchanged, and `crates/vt` has no edit in this branch.
 
 ## Context
 
@@ -238,22 +250,44 @@ Measurable by a hostile verifier from a clean checkout of this branch:
 3. Expected: the dragon is drawn as a **pixel image**, not as a quadrant-block mosaic -- the
    same thing Windows Terminal shows. The `WEBP 384x576` label is unchanged, because the image
    itself is unchanged.
-4. Known and accepted for this packet: the image may appear about 10 % smaller than in Windows
-   Terminal ("The one thing this does not fix"). A *mosaic* is a failure; a slightly small
-   picture is this packet's success.
+4. Known and accepted for this packet: the drawn size is off by `device_cell / (10, 20)` --
+   smaller than Windows Terminal at 100 % display scale (0.9 for a 9x18 cell), larger at 200 %
+   (1.8x for an 18x36 one). Judge the criterion on **form, not size**: only a quadrant or
+   half-block mosaic is a failure; a picture at the wrong size is this packet's success and
+   `BUG-0062`'s work.
 5. Cross-check with a second program if one is at hand: `sixel` output from `img2sixel` must be
    unaffected, since it does not consult `CSI 14 t`.
 
 ## Follow-ups
 
-- **The placement scale.** Let the engine place images by the embedder's cell size when one has
-  been set, falling back to `VIRTUAL_CELL` when it is `(0, 0)`. Touches
-  `crates/vt/src/graphics/placement.rs`, `sixel.rs`'s `cursor_rows` rule (the conhost agreement
-  is stated in 20-pixel units), `element.rs`'s rescale and
-  `crates/terminal/src/sixel_tests.rs`. Owner: a new `IN-0029` packet.
+- **Proposed `BUG-0062`: Sixel placement uses the real cell size.** Let the engine place images
+  by the embedder's cell size when one has been set, falling back to `VIRTUAL_CELL` when it is
+  still `(0, 0)`. Until then an image sized from `CSI 14 t` is drawn at `device_cell / (10, 20)`
+  of its intended size: for `WEBP 384x576` the engine covers `39 x 29` cells against the `43 x 32`
+  the program meant at a 9x18 device cell, and the `22 x 16` it meant at 18x36 -- so the error is
+  a shrink at 100 % scale and a 1.8x enlargement at 200 %. Touches
+  `crates/vt/src/graphics/placement.rs`, `sixel.rs`'s `cursor_rows` rule (the conhost agreement is
+  stated in 20-pixel units), `element.rs`'s rescale and `crates/terminal/src/sixel_tests.rs`, and
+  it deletes the qualified sentence in `low-level-design/graphics.md`. Owner: a new `IN-0029`
+  packet.
 - **XTSMGRAPHICS.** `CSI ? 2;1;0 S` -> `CSI ? 2;0;<maxw>;<maxh> S` (maximum image geometry) and
   `CSI ? 1;1;0 S` -> colour registers, for `chafa` and `notcurses`. Owner: `US-0106`
   (`IN-0039`), which already owns the query-reply surface.
+
+## Verification notes closed
+
+Independent verification, 2026-09-16: **PASS with notes, no blocker**
+([`evidence/BUG-0061-verify.md`](evidence/BUG-0061-verify.md)). F1-F3, F5, F6 and F10 passed as
+claimed, including the ordering property -- the first prepaint alone is enough. The four notes
+raised are closed here:
+
+| Note | Closed by |
+| --- | --- |
+| F2 (ordering) | The verifier's own single-frame test is adopted verbatim as `verify_first_prepaint_alone_makes_csi_14_t_non_zero` in `element_tests.rs`: one drawn frame, then a `CSI 14 t` whose two numbers are parsed, asserted non-zero and matched against the grid and the device cell. |
+| F4 (two locks) | Documented, not closed in code, on `TerminalModel::set_cell_pixels`. During a resize the grid answer is already momentarily stale by design -- `needs_resize`, `pty_resize` and `resize_grid` are three acquisitions -- so `CSI 18 t` carries the same window; both are corrected by the next query. Making the pair atomic needs one combined engine-lock hop, which is more change than the inconsistency is worth. |
+| F7 (the size rule) | The scale-dependent rule replaces "about 10 % small" in both places, with the dragon's cell counts, and the E2E criterion now judges form rather than size. |
+| F8 (snippet) | The `harness.db` row now reads `implemented`, unit 1, integration 1, e2e 0, platform 1, the evidence path and `last_verified_result="pass"`. `intake_id` stays for the coordinator. |
+| F9 (stale sentence) | `low-level-design/graphics.md` line 71 is qualified and the packet's no-change claim for it is withdrawn (see Reconciliation). |
 
 ## Evidence and Gaps
 
@@ -271,8 +305,12 @@ Commits on `fix/adapter-cell-pixels`: the packet, then one implementation commit
   real headless GPUI window: after the view's own prepaint the reply is
   `ESC [ 4;<rows*h>;<cols*w> t` for the grid the view pushed and the device cell the painter used,
   both non-zero; `CSI 18 t` is unchanged; then a metrics change alone updates the reply.
+- `cargo test -p oneterm-terminal-view csi_14` -- passed, both view tests, after the branch was
+  rebased onto `main` (`a4eb5573`) and the verifier's single-frame test was adopted. Note the
+  filter: the adopted test is named `verify_first_prepaint_alone_makes_csi_14_t_non_zero`, so
+  `... cell_pixels` does not select it and `... csi_14` selects both.
 - `pwsh scripts/ci-local.ps1 -Full` -- passed (`ci-local: all checks passed`, `cargo deny`
-  included: advisories ok, bans ok, licenses ok).
+  included: advisories ok, bans ok, licenses ok), and again after close-out.
 
 Gaps:
 
@@ -317,15 +355,17 @@ ROW = dict(
         "docs/spec-intakes/IN-0029-vt-engine/"
         "BUG-0061-adapter-never-sets-cell-pixels.md"
     ),
-    status="planned",
-    unit_proof=0,
-    integration_proof=0,
+    status="implemented",
+    unit_proof=1,
+    integration_proof=1,
     e2e_proof=0,
-    platform_proof=0,
-    evidence=None,
+    platform_proof=1,
+    evidence=(
+        "docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0061-verify.md"
+    ),
     verify_command="pwsh scripts/ci-local.ps1 -Full",
-    last_verified_at=None,
-    last_verified_result=None,
+    last_verified_at="2026-09-16",
+    last_verified_result="pass",
     notes=(
         "Normal lane. Engine untouched: set_cell_pixels and the CSI 14 t arm already "
         "exist and are tested in crates/vt; the adapter never called them, so OpenTUI "

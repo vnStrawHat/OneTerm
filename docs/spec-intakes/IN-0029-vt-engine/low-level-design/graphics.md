@@ -68,9 +68,14 @@ exactly once. **That is the only drain (R-16)**: the adapter calls it after the 
 `SnapshotState` never touches pixels. If `snapshot_update` drained, a second snapshot state would never
 see an image and the adapter's own call would see nothing.
 
-The engine never learns the real font cell size. The renderer rescales by `cell_width / 10` and
-`line_height / 20`. There is no `set_cell_size` and there never was — `vendor/README.md` § 2
-claims one exists and is stale; the replacement docs must not repeat the claim.
+The engine never learns the real font cell size **for placement**. The renderer rescales by
+`cell_width / 10` and `line_height / 20`. There is no `set_cell_size` and there never was —
+`vendor/README.md` § 2 claims one exists and is stale; the replacement docs must not repeat the
+claim. Since `BUG-0061` the embedder does tell the engine its cell size through
+`Terminal::set_cell_pixels`, but that number is only what `CSI 14 t` reports: placement, the
+covered-cell count and the conhost cursor rule all still use `VIRTUAL_CELL`, which is why an
+image sized from the reported cell lands at `device_cell / (10, 20)` of its intended size.
+`BUG-0062` proposes closing that gap.
 
 ### Liveness and the release signal
 
