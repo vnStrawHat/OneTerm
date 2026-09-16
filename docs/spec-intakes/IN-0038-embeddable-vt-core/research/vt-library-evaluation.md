@@ -1,3 +1,5 @@
+> Re-run on 2026-09-16 after four of the five gaps below were closed: [`vt-library-evaluation-2026-09-16.md`](vt-library-evaluation-2026-09-16.md).
+
 # Choosing a terminal core: oneterm-vt vs alacritty_terminal vs rio-vt
 
 An outside evaluation, written from the position of an independent developer starting a new
