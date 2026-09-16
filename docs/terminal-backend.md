@@ -915,10 +915,20 @@ Four input paths:
    `TerminalView::held_keys` records the keys whose press actually reached the PTY: a release is
    sent only for a member, so a chord the view swallowed (zoom, copy, the completion overlay, a
    printable key the IME owns) never produces a release the program saw no press for, and a
-   key-up with no key-down writes nothing. The set is drained on blur — one release per key —
-   so a window the user left cannot strand a held key. The key-up path does not run
-   `classify_key` (the table is full of view-side shortcuts) and does not stop propagation, and
-   a release is never repeated onto a broadcast channel's peers.
+   key-up with no key-down writes nothing. Entries are the **unshifted** `KeySpec`, not the
+   platform's key name: Windows renames a digit or an OEM punctuation key to its shifted glyph
+   while Shift is down, so `Shift+1` presses as `!` and, if Shift is lifted first, releases as
+   `1`, and only the unshifted form pairs the two. The set is drained on blur — one release per
+   key — so a window the user left cannot strand a held key; **that drain is proved only by the
+   manual Windows walk**, because a GPUI test window is never active and its `on_blur`
+   subscription therefore cannot fire. The key-up path does not run `classify_key` (the table is
+   full of view-side shortcuts) and does not stop propagation, and a release is never repeated
+   onto a broadcast channel's peers.
+   `Ctrl+C` follows the same fan-out rule: once the program negotiated a kitty flag that puts a
+   ctrl chord on the `CSI u` rung (`DISAMBIGUATE_ESC_CODES` or `REPORT_ALL_KEYS_AS_ESC`) this
+   pane's terminal receives the encoded key rather than `SIGINT` — the specification promises it
+   bytes — but the channel's peers always receive an interrupt, which is the one form a peer that
+   negotiated nothing still understands.
    `KeyEvent::shifted` and `base_layout` stay `None`: a GPUI `Keystroke` carries neither, so
    `REPORT_ALTERNATE_KEYS` is inert for this embedder (`US-0108`).
 2. **GPUI action** (Ctrl-Shift-C/V copy/paste, Ctrl-Tab…): map → `try_keystroke` or

@@ -59,14 +59,20 @@ pub(crate) fn send_key(
 ```rust
 let mut event = KeyEvent::new(spec, key_mods);
 event.kind = kind;
-// Only a press or a repeat carries text. The engine refuses it on a release
-// anyway; not sending it keeps the two halves agreeing rather than relying on
-// one of them to clean up after the other.
-if kind != KeyEventKind::Release {
+// Only a press or a repeat carries text, and only when the modifiers would
+// have let that text reach the program: `Ctrl+A` produces `0x01`, and claiming
+// an `a` here would tell the program it inserted one. That is the engine's own
+// rule for its fallback, applied to the text this side supplies so the two
+// halves agree rather than one cleaning up after the other.
+if kind != KeyEventKind::Release && !(key_mods.ctrl || key_mods.alt) {
     event.text = ks.key_char.clone().filter(|text| !text.is_empty());
 }
 Some(event)
 ```
+
+The modifier test is `US-0108`'s finding `F5`: the first draft supplied the text for every press,
+which is inert on Windows (a control `key_char` never survives `process_key`) and wrong on a
+backend that reports a printable one for a ctrl chord.
 
 `KeyEvent` is `#[non_exhaustive]`, so it is built with `KeyEvent::new` and then assigned -- which
 is what its own documentation and guide chapter 12 both prescribe.
@@ -94,30 +100,49 @@ migrate, and that is a cheaper debt than a dependency edge added as a side effec
 One field on `TerminalView`, beside the `focused` flag it already keeps:
 
 ```rust
-/// Keys whose press actually reached the PTY, by the GPUI key name.
+/// Keys whose press actually reached the PTY, in the canonical form
+/// `canonical_key` produces.
 ///
 /// A release is sent only for a key in here, which is what keeps a chord the
 /// view swallowed (zoom, copy, the completion overlay, a dead key, a printable
 /// key the IME owns) from producing a release the program never saw a press
 /// for. Drained on blur so a window the user left cannot strand a held key.
-held_keys: HashSet<SharedString>,
+held_keys: Vec<KeySpec>,
 ```
 
-Bounded by the number of physically held keys -- a handful -- so no eviction policy and no cap.
-Keyed by `Keystroke::key`, the chord name, not by `key_char`: the name is what both the down and
-the up event carry, and it is stable under a modifier changing between the two (holding `a`, then
-pressing and releasing `Shift`, then releasing `a` still produces a key-up whose `key` is `a`).
+Bounded by the number of physically held keys -- a handful -- so no eviction policy and no cap,
+and a linear scan rather than a `HashSet` (`KeySpec` is not `Hash`, and hashing a handful would
+buy nothing).
+
+**Not** keyed by `Keystroke::key`. That was this design's first answer and `US-0108`'s verification
+found it wrong (`F1`): the Windows backend resolves a digit or an OEM punctuation key to its
+**shifted** glyph while Shift is down and clears `shift` from the modifiers
+(`get_keystroke_key` / `need_to_convert_to_shifted_key`), so `Shift+1` arrives as `key: "!"`, and a
+user who lifts Shift before the digit produces a key-up named `"1"`. A set keyed on the raw name
+misses, no release is written, and the program is left believing `!` is held. Letters are stable;
+digits and `VK_OEM_*` are not.
+
+The key is therefore the [`KeySpec`] `map_key` produces, canonicalized: a `Named` key as-is (which
+also pairs `"enter"` with `"return"`), and a `Character` key folded through the same PC-101 shift
+relation the encoder's own `unshifted` uses, so `"!"` and `"1"` are one key exactly as code point
+`49` is one key to the encoder. A layout that pairs shift differently is the ceiling, and its worst
+case is the missed release that is today's behaviour.
 
 Three write sites and no others:
 
 | Site | Action |
 | --- | --- |
-| `on_key_down`, after `send_key` returned `Some` | `insert(ks.key.clone())` |
-| `on_key_up`, before building the event | `remove(&ks.key)`; `false` means drop the event |
-| `on_blur` | drain, one `Release` per name, then clear |
+| `on_key_down`, after `send_key` returned `Some` | `hold_key(&event.key)` |
+| `on_key_up`, before writing | remove the canonical key; absent means drop the event |
+| `on_blur` | drain, one `Release` per entry, then clear |
 
 `send_key` returning `None` (a chord with no encoding, `Ctrl` plus a non-ASCII character) must
 **not** insert: nothing was written, so nothing is owed a release.
+
+`hold_key` is idempotent, which is the one safety net against a stuck key that a test can reach: a
+fresh press of a key already held -- a release the platform never delivered, or one lost to a name
+this canonical form does not collapse -- leaves one entry rather than two, so a missed release
+cannot compound.
 
 ### The key-up path
 
@@ -127,17 +152,23 @@ The release path is four steps and nothing else:
 
 ```rust
 pub(super) fn on_key_up(&mut self, e: &KeyUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
-    if !self.held_keys.remove(&e.keystroke.key) {
-        return; // the press never reached the PTY, so neither does the release
-    }
     let Some(event) = map_key(&e.keystroke, KeyEventKind::Release) else {
         return;
     };
+    // The press never reached the PTY, so neither does the release.
+    let canonical = canonical_key(&event.key);
+    let Some(at) = self.held_keys.iter().position(|held| *held == canonical) else {
+        return;
+    };
+    self.held_keys.remove(at);
     let modes = self.render_state.borrow().frame.modes();
     send_key(&self.session, &event, &modes, cx);
     // No fan-out, and no `cx.stop_propagation()`.
 }
 ```
+
+The event is built before the set is consulted, because the canonical key is derived from the
+`KeySpec` rather than from the raw name.
 
 Two absences are deliberate:
 
@@ -169,7 +200,12 @@ is to the status quo rather than to a wrong cadence.
 | `map_key` | `(&Keystroke) -> Option<(KeySpec, KeyMods)>` | `(&Keystroke, KeyEventKind) -> Option<KeyEvent>` |
 | `send_key` | `(session, &KeySpec, KeyMods, &ModeSnapshot, cx) -> Option<Vec<u8>>` | `(session, &KeyEvent, &ModeSnapshot, cx) -> Option<Vec<u8>>` |
 | `TerminalView::on_key_up` | does not exist | `(&mut self, &KeyUpEvent, &mut Window, &mut Context<Self>)` |
-| `TerminalView::held_keys` | does not exist | `HashSet<SharedString>` |
+| `TerminalView::held_keys` | does not exist | `Vec<KeySpec>`, canonicalized |
+| `TerminalView::release_held_keys` | does not exist | `(&mut self, &mut App)`, the blur drain |
+| `TerminalView::hold_key` | does not exist | `(&mut self, &KeySpec)`, the idempotent insert |
+| `canonical_key` | does not exist | `(&KeySpec) -> KeySpec` |
+| `KeyAction::Interrupt` | `Interrupt` | `Interrupt(Option<KeyEvent>)` |
+| `KeyContext` | five fields | adds `ctrl_c_is_a_key` |
 | `crates/terminal`'s shim | `{KeyMods, KeySpec, NamedKey, encode_key, ...}` | adds `KeyEvent`, `KeyEventKind`, `encode_key_event` |
 
 All four `crates/terminal-view` items are `pub(crate)`; nothing outside the crate sees the change.
@@ -202,14 +238,22 @@ The `render.rs` registration gains one line:
       `ModifiersChanged` on Windows and never reach either handler. Expected: unchanged behaviour;
       `REPORT_ALL_KEYS_AS_ESC` cannot report them, and that ceiling is the platform's rather than
       this design's.
-- [ ] **`Ctrl+C`.** `KeyAction::Interrupt` sends `SIGINT` and never encodes. Expected: no insert
-      into the held set and therefore no release, which keeps the press and the release consistent
-      with each other. Pre-existing divergence; intake open decision 1.
+- [ ] **`Ctrl+C`.** `KeyAction::Interrupt(None)` sends `SIGINT` and never encodes, and inserts
+      nothing into the held set, so there is no release either. With a kitty flag that puts a ctrl
+      chord on the `CSI u` rung -- `DISAMBIGUATE_ESC_CODES` or `REPORT_ALL_KEYS_AS_ESC` --
+      `Interrupt(Some(event))` writes the encoded key to **this pane** instead and inserts it, so
+      its release pairs like any other. Intake open decision 1, settled; `US-0108`'s `F4` is why
+      the gate names both flags rather than only the second.
 - [ ] **A held key while the broadcast channel is active.** Expected: presses and repeats fan out
       exactly as today; a release never does. A peer pane whose program negotiated nothing must not
       receive a `:3` sequence, which is a byte form it has never seen -- unlike the pre-existing
       `app_cursor` and kitty-rung divergence, which at least produces bytes the peer's program
       recognises as a key.
+- [ ] **`Ctrl+C` while the broadcast channel is active.** Expected: whatever the **origin**
+      negotiated, every peer receives `BroadcastInput::Interrupt` and never the encoded bytes. Same
+      rule as the release, for the same reason, and `US-0108`'s `F2` is the draft that broke it: a
+      user who broadcasts `Ctrl+C` to four panes to stop four runaway programs must not stop one
+      and print `^[[99;5u` into the other three.
 - [ ] **The session died.** `send_key` goes through `session.write`, which the alive gate already
       guards; a release takes the same path as a press and needs no separate check.
 - [ ] **A repeat arriving with no preceding press**, if a backend sets `is_held` on a first event.
@@ -242,10 +286,31 @@ The `render.rs` registration gains one line:
       it must pass without being edited, which is the cheapest available proof that presses still
       fan out identically.
 - [ ] **A manual Windows walk**, recorded as the E2E criterion and runnable only outside the
-      implementing session. Instrument: a short Python script inside an OneTerm local shell that
-      pushes `CSI > 2 u`, echoes the bytes it receives, and pops with `CSI < u` on exit --
-      `kitty +kitten show_key -m kitty` is not available on Windows, and `US-0105`'s walk specifies
-      the same instrument. Expected: holding an arrow prints a stream of `:2` events at the user's
-      own repeat rate, releasing it prints one `:3`, alt-tabbing away while holding it prints the
-      `:3` rather than nothing, and typing in a plain shell with the script not running produces
-      exactly the characters typed.
+      implementing session. It is the **only** proof of the blur drain: `US-0108`'s verification
+      showed (`F3`) that no view test can reach the `on_blur` subscription, because GPUI raises
+      focus events only inside a draw and builds the event's `previous_focus_path` only
+      `if previous_window_active`, while a test window's `is_active` is hard-coded `false`.
+      `view_tests::verify_the_blur_drain_is_unprovable_in_a_test_window` demonstrates that rather
+      than asserting it. The drain is therefore untested in *both* places until this walk is run.
+
+      Instrument: a short Python script inside an OneTerm local shell that pushes `CSI > 2 u`,
+      echoes the bytes it receives, and pops with `CSI < u` on exit -- `kitty +kitten show_key -m
+      kitty` is not available on Windows, and `US-0105`'s walk specifies the same instrument.
+
+      Steps, each with its expected result:
+
+      1. Open a local shell, run the script. Type a few letters: **exactly the characters typed**
+         appear, and no escape codes -- `REPORT_EVENT_TYPES` alone exempts text keys.
+      2. Tap an arrow key once: one press event, no `:2`, no `:3` (a press stays on the legacy
+         rung under this flag alone).
+      3. **Hold** the arrow for about two seconds: a stream of `\x1b[1;1:2A` at the user's own
+         repeat rate -- the OS rate, not a fixed cadence. Release it: exactly one `\x1b[1;1:3A`.
+      4. Hold `Shift` and tap `1`, then release `Shift` **before** releasing `1`: the release is
+         reported and carries the same code point (`49`) as the press. This is `F1`, and the
+         reason the set is not keyed on the platform's key name.
+      5. **The blur drain.** Hold the arrow down and alt-tab away while still holding it. Expect a
+         `\x1b[1;1:3A` at the moment focus leaves. Release the key outside the window, alt-tab
+         back, and expect **no further `:2` and no second `:3`** -- a repeated `:2` after refocus,
+         or silence where the `:3` should be, is the drain not firing and is a defect to report.
+      6. Quit the script (it pops with `CSI < u`) and type in the plain shell: exactly the
+         characters typed, proving the flags were popped and nothing leaked.

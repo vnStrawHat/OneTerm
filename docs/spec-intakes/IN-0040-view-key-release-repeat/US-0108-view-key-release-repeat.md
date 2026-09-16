@@ -74,13 +74,11 @@ Each criterion is a command a hostile verifier can run, with a stated expected r
       involved: a key-down with `is_held: false` classifies as `Send` with `KeyEventKind::Press`;
       the same with `is_held: true` as `Repeat`; a key-up after a sent press yields a `Release`;
       and a key-up whose press was swallowed (`Ctrl+Shift+C`, the copy chord) yields nothing.
-- [x] **With no flag pushed, the bytes are identical.** A test drives a press, three repeats and a
-      release for each of `enter`, `a`, `up`, `escape`, `f5` and `Ctrl+A` against a
-      `FakeTerminalSession` and asserts `probe.writes()` matches the recorded list -- in which a
-      release contributes **no entry at all**, because the encoder answers `None` at rung 1. The
-      same list is produced by the same key-down sequence on `main`, and **both runs are attached**.
-      This is the criterion the lane exists for; a session that cannot produce the `main` run must
-      say so rather than assert the list from reading the code.
+- [x] **With no flag pushed, the bytes are identical.** Met in the **strong** form: 12528 cases
+      compared against `main`'s own `map_key` + `encode_key`, 0 divergences, measured by
+      `us0108_verify_tests::byte_identity_with_main_when_no_kitty_flag_is_pushed` and printed by the
+      test. `without_a_flag_press_repeat_and_release_write_todays_bytes` drives the same six keys
+      through a `FakeTerminalSession`, where a release contributes **no entry at all**.
 - [x] **`REPORT_EVENT_TYPES` produces `:2` and `:3`.** An integration test feeds the real
       `Terminal` behind the fake session `\x1b[>2u`, forces a repaint so the frame's `ModeSnapshot`
       carries the flags, then drives press / held / up on an arrow and asserts the written bytes
@@ -255,30 +253,38 @@ the acceptance criterion states. They must be reported as unrun rather than tick
 Filled by the implementing session on branch `feat/view-key-release-repeat`, three commits on
 `980bf5da`.
 
-### The byte lists, side by side
+### Byte identity: the strong form, 12528 cases
 
-`without_a_flag_press_repeat_and_release_write_todays_bytes` drives a press, three OS repeats
-(`is_held: true`) and a release for each key against a `FakeTerminalSession` with no flag pushed,
-and asserts the exact write list:
+The first pass of this packet delivered the weak form and said so. The independent verification
+delivered the strong one, and its harness is adopted as
+`crates/terminal-view/src/input/us0108_verify_tests.rs` so the criterion keeps being measured
+rather than argued. It carries `main`'s `map_key` and `named_key` at `980bf5da`, copied verbatim,
+and compares for every case `encode_key(spec, mods, modes)` on `main`'s mapping against
+`encode_key_event(event, modes)` on this branch's:
 
-| Key | `main`: four key-downs | this branch: four key-downs plus one key-up |
+- 65 (key name, `key_char`) pairs: every `named_key` row, `enter` and `tab` with layout text,
+  letters, digits, the OEM punctuation, a shifted glyph, a non-ASCII character, the `space`
+  translation, and two names with no encoding (`print`, `f25`);
+- 8 modifier combinations (shift x ctrl x alt);
+- DECCKM off and on; `modifyOtherKeys` levels 0, 1 and 2;
+- kinds `Press` and `Repeat`, with no kitty flag pushed, asserted inside the loop.
+
+Result, printed by the test itself: **`byte-identity cases compared: 12528 (8128 of them wrote
+bytes)`, 0 divergences**. Mappability, `KeySpec`, `KeyMods` and the encoded bytes all match, and
+the same loop asserts that a `Release` with no flag encodes to `None` in every case, so a release
+adds no entry to the stream. The table the first pass reasoned to is the table this measures:
+
+| Key | four key-downs, `main` and this branch | the key-up |
 | --- | --- | --- |
-| `enter` | `\r` x4 | `\r` x4 |
-| `a` | `a` x4 | `a` x4 |
-| `up` | `\x1b[A` x4 | `\x1b[A` x4 |
-| `escape` | `\x1b` x4 | `\x1b` x4 |
-| `f5` | `\x1b[15~` x4 | `\x1b[15~` x4 |
-| `Ctrl+A` | `\x01` x4 | `\x01` x4 |
+| `enter` | `\r` x4 | nothing |
+| `a` | `a` x4 | nothing |
+| `up` | `\x1b[A` x4 | nothing |
+| `escape` | `\x1b` x4 | nothing |
+| `f5` | `\x1b[15~` x4 | nothing |
+| `Ctrl+A` | `\x01` x4 | nothing |
 
-The release contributes **no entry at all**: rung 1 of the encoder answers `None`, so nothing is
-written. **The `main` column was not produced by a run on `main`.** This session could not check
-out `main` in a worktree whose `crates/vt` build is shared with another session, so the column is
-the legacy encoding the unchanged `encode_legacy` table produces for the same `KeySpec` and
-`KeyMods`, which is the code path a repeat and a flagless press still take. Two independent checks
-stand behind it rather than a reading of the code: `member_input_reaches_the_channel_peers_only`
-and `a_view_without_a_registry_still_writes_to_its_own_session` both assert `\r` for `enter` and
-both passed **unedited**, and the whole `oneterm-vt` byte-equivalence suite is untouched. This is a
-weaker form of the criterion than the packet asked for, and is stated as such.
+`without_a_flag_press_repeat_and_release_write_todays_bytes` drives exactly that against a
+`FakeTerminalSession`, so the claim is measured at the view level as well as at the encoder's.
 
 ### The `:2` and `:3` bytes
 
@@ -312,17 +318,24 @@ rustfmt reflowing two `pub use` lists.
 
 ### Deviations from the detail design, and why
 
-- **`held_keys` is `HashSet<String>`, not `HashSet<SharedString>`.** `gpui::Keystroke::key` is a
-  `String`; converting at both ends would buy nothing.
+The detail design has since been reconciled with all three (`F7`), so these are history rather
+than open divergences.
+
+- **`held_keys` is `Vec<KeySpec>`, not `HashSet<SharedString>`.** The first pass used
+  `HashSet<String>` of `Keystroke::key`, which the verification showed strands a shifted digit
+  (`F1`); the entries are now the unshifted `KeySpec` that `canonical_key` produces, in a `Vec`
+  because `KeySpec` is not `Hash` and a handful of held keys does not need a hash.
 - **`Ctrl+C` is no longer out of scope.** The coordinator settled intake open decision 1 the other
-  way: with `REPORT_ALL_KEYS_AS_ESC` pushed it is the encoded key, because that is what the
-  program asked for. `KeyContext` gained one `all_keys_as_esc` field, the `Interrupt` row gained
-  one `&& !ctx.all_keys_as_esc`, and the flag is read from the same frame snapshot the encoding
-  uses, so the two cannot disagree. Unchanged with nothing negotiated, which `ctrl_c_interrupts`
-  and the broadcast test both still assert.
+  way, and the verification widened it: with any kitty flag that puts a ctrl chord on the `CSI u`
+  rung -- `DISAMBIGUATE_ESC_CODES` as well as `REPORT_ALL_KEYS_AS_ESC` (`F4`) -- it is the encoded
+  key, because the specification promises the program bytes. `KeyContext` gained one
+  `ctrl_c_is_a_key` field, read from the same frame snapshot the encoding uses so the two cannot
+  disagree, and `KeyAction::Interrupt` gained an `Option<KeyEvent>` so the channel's peers still
+  receive an interrupt (`F2`). Unchanged with nothing negotiated, which `ctrl_c_interrupts` and the
+  broadcast tests all still assert.
 - **The blur drain reports each release unmodified.** A blur carries no modifier state, so every
-  drained key is encoded with `Modifiers::default()`. The drain is sorted, so its order is
-  deterministic rather than a `HashSet`'s.
+  drained key is encoded with no modifiers. Its order is the order the keys were pressed, because
+  the held set is a `Vec`.
 
 ### Verification run
 
@@ -330,7 +343,7 @@ rustfmt reflowing two `pub use` lists.
 | --- | --- |
 | `cargo fmt --all` | clean |
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean, no `#[allow]` added |
-| `cargo test -p oneterm-terminal-view` | 312 passed, 0 failed |
+| `cargo test -p oneterm-terminal-view` | 325 passed, 0 failed, 3 ignored |
 | `cargo test -p oneterm-terminal` | 216 passed, 0 failed |
 | `cargo test --workspace` | green (`CARGO_BUILD_JOBS=1`; 4 and 2 jobs ran the machine out of commit while a sibling worktree built `crates/vt`) |
 | `python scripts/check-english.py` / `check-doc-paths.py` | clean |
@@ -345,8 +358,9 @@ rustfmt reflowing two `pub use` lists.
   `is_held` and key-up delivery are platform behaviour and no test here exercises the Windows
   message pump. The instrument is specified in
   [`low-level-design/input-events.md`](low-level-design/input-events.md) under Verification.
-- **The byte-identity criterion is met in the weaker form described above**, because a run on
-  `main` was not available in this worktree.
+- **The blur drain is untested in both places, not only on the platform** (`F3`). No view test
+  can reach the `on_blur` subscription in this harness, and the manual walk was not run, so nothing
+  in the repository shows that a release is ever sent on focus loss.
 - **`REPORT_ALTERNATE_KEYS` and the modifier keys stay unreportable.** GPUI's `Keystroke` carries
   no shifted or base-layout code point, and Windows turns the modifier keys into
   `ModifiersChanged` before a key event exists. A program that negotiates all five flags gets
@@ -362,12 +376,18 @@ rustfmt reflowing two `pub use` lists.
   re-encoding.** The fan-out should repeat the `KeyEvent` rather than the bytes and let each target
   encode against its own `ModeSnapshot`. Its own outcome, its own packet.
 - **The blur drain loses the modifiers** that were held with the key, as described above.
+- **The canonical key follows the PC-101 shift relation**, the same ceiling the engine's own
+  `unshifted` has. A layout that pairs shift differently can still strand a key, and its worst case
+  is the missed release that was the behaviour before `F1` was fixed.
 
 ## Harness Row
 
 The harness database is not edited by this packet's session. This is the row it owes, for whoever
-applies it. The columns are `harness.db`'s real `story` schema; the `intake` row for `IN-0040` must
-be inserted first (the snippet is in [`IN-0040.md`](IN-0040.md)) and its rowid substituted below.
+applies it. The columns are `harness.db`'s real `story` schema; the `intake` row for `IN-0040` is
+rowid 45. The proof columns match the `HARNESS:PROOF` block above -- unit and integration proved,
+E2E and platform not, because the manual walk cannot run in an agent session. `US-0108`'s
+verification (`F6`) found the first draft of this row claiming `planned` with both proofs 0,
+contradicting the document it came from.
 
 ```python
 #!/usr/bin/env python3
@@ -375,7 +395,7 @@ be inserted first (the snippet is in [`IN-0040.md`](IN-0040.md)) and its rowid s
 import sqlite3
 
 # The rowid of the IN-0040 intake row, which must be inserted first.
-IN_0040 = None  # <- fill in
+IN_0040 = 45
 
 ROW = dict(
     id="US-0108",
@@ -390,15 +410,19 @@ ROW = dict(
         "docs/spec-intakes/IN-0040-view-key-release-repeat/"
         "US-0108-view-key-release-repeat.md"
     ),
-    status="planned",
-    unit_proof=0,
-    integration_proof=0,
+    status="implemented",
+    unit_proof=1,
+    integration_proof=1,
     e2e_proof=0,
     platform_proof=0,
-    evidence=None,
+    evidence=(
+        "Byte identity proved in the strong form: 12528 compared cases against "
+        "main's own map_key + encode_key, 0 divergences. Independently verified; "
+        "see evidence/US-0108-verify.md."
+    ),
     verify_command="pwsh scripts/ci-local.ps1",
-    last_verified_at=None,
-    last_verified_result=None,
+    last_verified_at="2026-09-16",
+    last_verified_result="pass",
     notes=(
         "No file under crates/vt changes. E2E and platform proof are expected to "
         "stay 0 in an agent session: the manual Windows walk means launching a "
@@ -414,6 +438,29 @@ with sqlite3.connect("harness.db") as db:
     db.execute(f"INSERT INTO story ({columns}) VALUES ({placeholders})", tuple(ROW.values()))
 print("inserted US-0108")
 ```
+
+## Verification notes closed
+
+`US-0108` was independently verified at `4c57f542` and came back **PASS-WITH-NOTES**: the central
+claim held and was proved in the strong form this session could not run, and eight findings were
+raised. The full report is at
+[`evidence/US-0108-verify.md`](evidence/US-0108-verify.md). All eight are closed here.
+
+| # | Finding | Closed by |
+| --- | --- | --- |
+| `F1` | **A stuck key.** The held set was keyed on `Keystroke::key`, and the Windows backend renames a digit or an OEM punctuation key to its shifted glyph while Shift is down. `Shift+1` pressed as `"!"` and, with Shift lifted first, released as `"1"`: the release was dropped and the program left believing `!` was held | `canonical_key` folds a `Character` spec through the same PC-101 shift relation the encoder's own `unshifted` uses, and `held_keys` became `Vec<KeySpec>` of canonical specs. `us0108_verify_tests::a_digit_keeps_one_identity_when_shift_is_released_first` and `the_canonical_key_mirrors_the_engines_shift_table`, plus `view_tests::verify_a_shifted_digit_release_is_paired`, which now asserts both the press and the release carry code point `49` |
+| `F2` | **Ctrl+C fanned escape bytes at peers.** The Ctrl+C row fell through to `Send`, which fans bytes, so a peer that negotiated nothing received `CSI 99;5 u` where it used to receive an interrupt -- the same hazard release fan-out was closed to avoid | `KeyAction::Interrupt(Option<KeyEvent>)`. The origin gets the encoded key when its program negotiated the rung; the channel always gets `BroadcastInput::Interrupt`. `view_tests::verify_ctrl_c_fans_an_interrupt_whatever_the_origin_negotiated` |
+| `F3` | **The blur drain is unprovable here.** A GPUI test window's `is_active` is hard-coded `false`, so focus events carry no previous focus path and the `on_blur` subscription can never fire | Design kept; the gap is now documented rather than implied, in `release_held_keys`'s own rustdoc, in `docs/terminal-backend.md` and in the acceptance criterion. The verifier's demonstration is adopted as `view_tests::verify_the_blur_drain_is_unprovable_in_a_test_window`. The testable safety net is `hold_key`'s idempotence -- a fresh press of a key already held leaves one entry, so a missed release cannot compound (`verify_a_repeated_press_leaves_one_held_entry`). The detail design's walk now carries step-by-step instructions, including the alt-tab-while-held step and what a failure looks like |
+| `F4` | **Ctrl+C under `DISAMBIGUATE_ESC_CODES` alone** was still a signal, while `encode_key_event` put it on the kitty rung | Resolved against the specification, which is explicit: "Turning on this flag will cause the terminal to report the Esc, alt+key, ctrl+key, ctrl+alt+key, shift+alt+key keys using `CSI u` sequences instead of legacy ones", with Enter, Tab and Backspace the only exceptions. The view's gate widened to match the encoder's rung (`KeyContext::ctrl_c_is_a_key`, both flags). Cited in intake open decision 1 and asserted across all four flag states in `ctrl_c_across_the_flag_states` |
+| `F5` | **`KeyEvent::text` was supplied for Ctrl and Alt chords**, which would tell a program that `Ctrl+A` inserted an `a` | `map_key` gained `&& !(key_mods.ctrl \|\| key_mods.alt)`, the engine's own rule for its fallback. `a_ctrl_or_alt_chord_carries_no_associated_text` |
+| `F6` | **The harness row contradicted the packet**: `status="planned"` with both proofs 0, and no intake id | Row corrected to `implemented`, unit 1, integration 1, E2E 0, platform 0, `intake_id = 45`, with evidence and verification result filled in |
+| `F7` | **The detail design still specified superseded shapes** | `low-level-design/input-events.md`'s held-set section rewritten for the canonical key, its Interfaces table given the four items it was missing, its `on_key_up` sketch matched to the code, and the needless `self.session.clone()` removed from the code rather than from the sketch |
+| `F8` | **`IN-0040` claimed a drain on session close** that does not exist | Claim corrected. A dead session has no program left to strand, and draining from `Drop` has no `App` to write through |
+
+One thing the verification asked about is **not** closed and is not a finding: whether a key typed
+into the focused search bar reaches the PTY on the alternate screen. It predates this packet and
+this packet does not widen it -- a release is gated by the same `held_keys` entry the press
+created.
 
 ## Handoff
 
