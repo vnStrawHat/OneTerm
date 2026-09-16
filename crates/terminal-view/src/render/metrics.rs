@@ -67,6 +67,53 @@ impl CellMetrics {
     pub(crate) fn logical(&self, device: i32) -> Pixels {
         px(device as f32 / self.scale_factor)
     }
+
+    /// Where a Sixel image is drawn, and what it is clipped to (`BUG-0062`).
+    ///
+    /// `anchor` is the origin of any cell that references the image, `offset`
+    /// is that cell's `(across, down)` position inside the image's own cell
+    /// grid, and `footprint` is the placement's `(cols, rows)`. Returns
+    /// `(clip, image)`, both anchored at the image's top-left cell.
+    ///
+    /// **The image is drawn at its own pixel size**, one image pixel to one
+    /// device pixel — not stretched to the footprint. The engine derived that
+    /// footprint from these same pixels and the cell size the view pushed
+    /// through `set_cell_pixels`, so the two agree to within the `ceil` and the
+    /// clip is normally a no-op. It is not a no-op in the two cases that matter:
+    /// an embedder-less fallback placement measured in the VT340 10x20 cell, and
+    /// a font size or DPI scale that changed *after* the image was placed — the
+    /// footprint stays in cells and the picture is cropped rather than allowed
+    /// to paint over the text below it.
+    ///
+    /// The caller intersects `clip` with the grid bounds; rows scrolled off the
+    /// top are cut by that, not by this.
+    pub(crate) fn image_quad(
+        &self,
+        anchor: Point<Pixels>,
+        offset: (u16, u16),
+        pixel_size: (u32, u32),
+        footprint: (u16, u16),
+    ) -> (Bounds<Pixels>, Bounds<Pixels>) {
+        let origin = point(
+            anchor.x - self.cell_width * f32::from(offset.0),
+            anchor.y - self.line_height * f32::from(offset.1),
+        );
+        let clip = Bounds {
+            origin,
+            size: Size {
+                width: self.cell_width * f32::from(footprint.0),
+                height: self.line_height * f32::from(footprint.1),
+            },
+        };
+        let image = Bounds {
+            origin,
+            size: Size {
+                width: self.logical(pixel_size.0 as i32),
+                height: self.logical(pixel_size.1 as i32),
+            },
+        };
+        (clip, image)
+    }
 }
 
 /// Round `logical` to a whole device pixel; returns the snapped logical value
@@ -244,6 +291,49 @@ mod tests {
 
     fn metrics(cell_w: f32, line_h: f32, scale: f32) -> CellMetrics {
         CellMetrics::snapped(cell_w, line_h, 10.0, 3.0, 5.0, scale)
+    }
+
+    /// `BUG-0062`: the image is drawn at **its own pixel size**, and the
+    /// footprint is only what clips it.
+    ///
+    /// The numbers are the OpenTUI dragon (`384 x 576`) on a 9x18 device cell at
+    /// 200 % display scale — `43 x 32` cells, which is `387 x 576` device pixels,
+    /// three wider than the image because `ceil` gave the last column a whole
+    /// cell. The quad must be `384` and not `387`: before this the painter
+    /// stretched the image to the footprint, and the footprint came from the
+    /// VT340 10x20 cell, so the picture landed at `device_cell / (10, 20)` of
+    /// the size the program meant.
+    #[test]
+    fn an_image_is_drawn_at_its_own_pixels_and_clipped_to_the_footprint() {
+        let m = metrics(4.5, 9.0, 2.0);
+        assert_eq!((m.device.w, m.device.h), (9, 18), "a 9x18 device cell");
+
+        let anchor = point(px(100.0), px(50.0));
+        let (clip, image) = m.image_quad(anchor, (0, 0), (384, 576), (43, 32));
+
+        let device = |p: Pixels| (f32::from(p) * m.scale_factor).round() as i32;
+        assert_eq!(
+            (device(image.size.width), device(image.size.height)),
+            (384, 576),
+            "the quad is the image's own pixels"
+        );
+        assert_eq!(
+            (device(clip.size.width), device(clip.size.height)),
+            (43 * 9, 32 * 18),
+            "the clip is the footprint"
+        );
+        assert_ne!(
+            device(image.size.width),
+            43 * 9,
+            "and the two are not the same number, so the assertion above bites"
+        );
+        assert_eq!(image.origin, anchor);
+        assert_eq!(clip.origin, anchor);
+
+        // A cell in the middle of the image walks back to the same top-left.
+        let inner = point(anchor.x + m.cell_width * 5.0, anchor.y + m.line_height * 7.0);
+        let (_, from_inner) = m.image_quad(inner, (5, 7), (384, 576), (43, 32));
+        assert_eq!(from_inner, image);
     }
 
     #[test]

@@ -60,7 +60,7 @@ pub use oneterm_vt::{
     MouseEncoding, MouseProtocol, MouseReporting, NamedColor, Progress as TerminalProgress,
     ResizePolicy, Rgb, RowId, SelectionKind, SelectionRange, Semantic, SeqNo, ShellMark, Size,
     SnapshotCell, SnapshotContent, SnapshotCursor, SnapshotPlacement, SnapshotRow, SnapshotUpdate,
-    Style, StyleRun, Terminal, VIRTUAL_CELL as SIXEL_VIRTUAL_CELL,
+    Style, StyleRun, Terminal,
 };
 pub use osc::encode_osc52;
 pub use osc_agent::{

@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use oneterm_terminal::{
     Attrs, CellWidth, Color as EngineColor, CursorShape as EngineCursorShape, GraphicData,
-    GraphicId, HyperlinkId, ModeSnapshot, NamedColor, RowId, SeqNo, SnapshotContent, SnapshotRow,
-    SnapshotUpdate, Style, TerminalContent, TerminalSession,
+    GraphicId, HyperlinkId, ModeSnapshot, NamedColor, RowId, SeqNo, SnapshotContent,
+    SnapshotPlacement, SnapshotRow, SnapshotUpdate, Style, TerminalContent, TerminalSession,
 };
 
 /// FNV-1a, the hash used for shaped-run keys and the style key.
@@ -494,6 +494,15 @@ impl Frame {
     /// what the painter anchors the image by.
     pub(crate) fn graphic_offset(&self, id: GraphicId, row: RowId, col: u16) -> Option<(u16, u16)> {
         self.content.graphic_offset(id, row, col)
+    }
+
+    /// The placement an image id names, for the cell footprint the painter
+    /// clips to (`BUG-0062`). `None` once the image is gone.
+    pub(crate) fn placement(&self, id: GraphicId) -> Option<&SnapshotPlacement> {
+        self.content
+            .placements()
+            .iter()
+            .find(|placement| placement.id == id)
     }
 
     /// The OSC 8 target behind a cell's link id.
