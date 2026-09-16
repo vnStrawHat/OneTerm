@@ -375,7 +375,7 @@ digits are echoed; anything else echoes empty (`hex_echo`, with
 | `python scripts/vt-public-api.py --check-nameable --no-doc` | pass (`BUG-0059`'s new gate, inherited by the rebase) |
 | `pwsh scripts/ci-local.ps1 -Full` | **`ci-local: all checks passed.`** (exit 0, 26 steps) |
 
-`ci-local -Full` ran all 21 steps green, including the two that this packet was most at risk of
+`ci-local -Full` ran all 26 steps green, including the two that this packet was most at risk of
 breaking: **rustdoc self-containment** over `crates/vt/src` and `crates/vt/docs/guide` (it caught
 four `///` citations and a bare `docs/` path in the first draft, now fixed), and
 `cargo package -p oneterm-vt --list` against the dependency-graph policy. `cargo deny check
@@ -432,6 +432,10 @@ Independent verification: [`evidence/US-0106-verify.md`](evidence/US-0106-verify
 **PASS-WITH-NOTES**, 33 independently written tests against the public API, all passing. Its test
 file was adopted as `crates/vt/tests/verify_us0106.rs`. All twelve findings are closed.
 
+The same record carries a **final re-check at `a22036db`**, which confirmed every closure and
+raised two further notes, both text-only and both fixed below (13 and 14). Its eight re-check
+tests were adopted as `crates/vt/tests/verify_us0106_recheck.rs`.
+
 | # | Finding | Disposition |
 | --- | --- | --- |
 | 1 | `vt-esctest` loses esctest's status on the end-of-file path | **Fixed.** Pty end of file arrives as `EIO` at the instant the child exits and races the exit token, so the bridge reported a false timeout and exit 2. It now records end of file, then waits up to 2 s for `next_child_event` before deciding, and distinguishes "the pty closed but no status arrived" (exit 1) from a real timeout (exit 2). `waitpid` is deliberately **not** called: `PseudoConsole` owns a reaper thread already blocked in it. The race is named in a comment. **Code review only** -- no host here compiles this half. |
@@ -445,6 +449,8 @@ file was adopted as `crates/vt/tests/verify_us0106.rs`. All twelve findings are 
 | 9 | A dead `base == 58` branch contradicted its own comment | **Fixed.** `color_parameters` returns `None` for a named underline colour, and `a_named_underline_colour_is_dropped_rather_than_mis_reported` asserts it even though the arm is unreachable today -- the shared arm would have emitted `58` for black and `59`, *reset underline colour*, for red. |
 | 10 | The budget table was taken one commit early | **Fixed** -- the block below is regenerated against `main` @ `4437b98e`. |
 | 11 | A bare `ESC` finishes an in-flight query and the answer is given | **Recorded** in the LLD's edge-case list, upgraded from an argument to a demonstration. `clear_dcs_query` is kept: it is unreachable, as its comment claims, and resetting the field with its neighbours is what spares the next reader the derivation. |
+| 13 | The `ci-local` paragraph still said 21 steps where the table row said 26 | **Fixed.** The paragraph was not re-counted when the row was. |
+| 14 | `verify_us0106.rs`'s `DECOM` test kept its pre-fix header | **Fixed.** The header described the behaviour finding 5 removed and called the test a characterisation, which it is no longer. It now states what the test asserts and keeps the old `0369` as the regression guard it has become. |
 | 12 | esctest never ran | **Stands, unchanged.** Still the packet's blocking unmet criterion; this rework did not and could not retire it, and finding 1 is the standing proof that a defect in the uncompiled half is exactly what nothing here catches. |
 
 ### Gaps
@@ -460,6 +466,14 @@ file was adopted as `crates/vt/tests/verify_us0106.rs`. All twelve findings are 
   what the code does, proven by this repository's own tests, and **not** an outside number. The
   "before" count is zero by construction, as predicted: every rectangle assertion times out on
   `main`.
+- **A non-`EIO` read error in the bridge also reports exit 1, not 2.** `drain` returns `false` for
+  any read error that is not `WouldBlock` or `Interrupted`, so a genuinely broken descriptor takes
+  the end-of-file path and, finding no status, exits 1 with "the pty closed but the child status
+  never arrived". Residual from finding 1, recorded rather than fixed: the message stays accurate
+  (the pty *is* unusable and no status *did* arrive), exit 1 is the right shape for "ran, no
+  verdict", and the alternative -- classifying `errno` in the bridge -- would add a platform
+  branch that no host here can compile to prove. The distinction that mattered is kept: a real
+  `DEADLINE` expiry is still the only thing that exits 2.
 - **`vt-esctest.rs`'s pty half was never compiled.** The file carries a Windows stub, so
   `cargo check -p oneterm-tools` and `cargo clippy -p oneterm-tools --all-targets -- -D warnings`
   pass here -- but they compile the stub. `rustup target list --installed` reports only

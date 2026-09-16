@@ -496,3 +496,147 @@ licenses bans advisories` all pass.
 - **Whether `esctest` compares `TERM` against `XTGETTCAP`'s `TN`.** Finding 2 is a
   contradiction inside the bridge's own source; whether it costs a test group is
   unknown until the job runs.
+
+---
+
+# Final re-check at `a22036db`
+
+Branch `feat/vt-conformance-queries` @ `a22036db`, rebased onto `main` @ `4437b98e`.
+Same worktree, same rules. The re-check's own tests are
+`crates/vt/tests/verify_us0106_recheck.rs`, uncommitted.
+
+## Verdict: PASS-WITH-NOTES (two new Low notes; all twelve original findings closed)
+
+The four engine changes are correct and the eight documentation and record changes say
+what the code does. The 33 adopted tests were **not weakened**: three were re-pointed
+because the behaviour they characterised was fixed, and each of those now keeps the old
+number out with an `assert_ne!` -- `decrqcra_sums_every_scalar_of_a_cluster` rejects
+`0065`, `decrqcra_origin_mode_clamps_to_the_region` rejects `0369`. Every other
+assertion is byte-identical to what was verified at `f0ae8c46`. All 33 pass, plus the 8
+written for this re-check.
+
+### The four engine changes, attacked
+
+- **DECOM clamp (finding 5).** `dispatch.rs` now derives `(min_row, max_row)` from the
+  region under `DECOM` and `(0, rows)` otherwise, and `clamp`s both ends. The `0245`
+  case passes. New: a rectangle whose rows are wholly past the region answers `0000` and
+  does not spill onto row 4 (`decom_rectangle_past_the_region_is_empty`, three requests
+  including `65535;65535`); `DECOM` off leaves the whole screen addressable with the same
+  region set, defaults included, and row 4 still individually readable
+  (`decom_off_leaves_the_whole_screen_addressable`); and the page follows the region in
+  both directions -- `CSI r` while `DECOM` is on widens it back to the screen, `CSI 2;3r`
+  narrows it again, `CSI ? 6 l` widens it
+  (`decom_and_the_region_move_the_page_both_ways`). `clamp` cannot panic here:
+  `region.top < region.bottom` is a grid invariant and `rows >= 1` after `Size::clamped`.
+- **Every scalar (finding 6).** `e` + `U+0301` is `0366`. New: three marks on one base
+  sum to `0x65+0x301+0x302+0x303`, and the cell beside it is still a plain `0020`
+  (`every_combining_mark_of_a_long_cluster_counts`); a wide base with two marks puts
+  every scalar on the glyph cell and leaves the spacer at `0020`, the pair summing to
+  both (`a_wide_character_with_marks_sums_the_glyph_cell_only`); and an erased cluster
+  goes back to `0020` with no interner residue
+  (`an_erased_cluster_counts_as_a_blank_again`).
+- **Clamp-not-reject, documented.** The prose is in all four places asked for and all
+  four agree: `guide/11-conformance.md` ("xterm's `validRect` **rejects** ... where this
+  engine clamps it to the page. Only a partially outside rectangle can tell the two
+  apart"), `CHANGELOG.md`, `low-level-design/conformance-queries.md` (as a dated
+  CORRECTION), and the `query::decrqcra_reply` rustdoc. Isolated by
+  `a_partially_outside_rectangle_is_clamped_not_rejected`: rows 1-99 of a four-row screen
+  answers the four rows that exist, columns 1-99 likewise, and a wholly outside rectangle
+  answers `0000` -- the case where the two implementations agree, so the test pins
+  exactly the distinguishing one.
+- **Base 58 named colour (finding 9).** `color_parameters` gains
+  `Color::Named(_) if base == 58 => None` above the shared arm, with the reasoning inline
+  and `a_named_underline_colour_is_dropped_rather_than_mis_reported` asserting it for
+  black, red and bright white while checking 30/40 still report `31`/`41`. The SGR round
+  trip still holds (`sgr_still_round_trips_after_the_rework`).
+
+### The bridge (finding 1), read again
+
+`vt-esctest.rs` now sets `end_of_file` on the `drain`-returns-false arm and, after the
+loop, polls `next_child_event` up to `REAP_POLLS` (100) times at `REAP_INTERVAL` (20 ms)
+-- two seconds -- before deciding. The three outcomes are distinct and correctly ordered:
+a reaped status maps to its own code; end of file without a status is **exit 1** with
+"the pty closed but the child status never arrived"; only a genuine `DEADLINE` expiry is
+**exit 2**. `waitpid` is not called, and the comment says why -- `PseudoConsole` owns a
+reaper thread already blocked in it, and a second waiter would race it for the status,
+which is exactly right. The race itself is named in a comment rather than left for the
+next reader. `deregister` still runs before `process::exit`. One residual, minor and
+arguably correct: a non-`EIO` read error also sets `end_of_file`, so a genuinely broken
+descriptor reports exit 1 rather than 2; the message stays accurate either way.
+**Still code review only** -- `#[cfg(unix)]`, and only `x86_64-pc-windows-msvc` is
+installed here, so this remains unproven until the job runs.
+
+### Findings 2, 3, 4, 7, 8, 10, 11, 12
+
+- **2.** `product_name` is gone from the bridge and the `TERM` comment now says why
+  setting it would contradict `XTGETTCAP`. Consistent.
+- **3.** `State::dcs_payload`'s comment names `QUERY_MAX_BYTES` (8 KiB), says the ceiling
+  moves `unhandled_sequences` and **not** `aborted_dcs`, and says why the image ceiling
+  is wrong for a buffer that keeps its capacity.
+- **4.** Guide chapter 10 gains all three rows and the `aborted_dcs` bullet now carries
+  the verifier's own case (9 KiB `DCS $ q` -> `unhandled_sequences` 1, `aborted_dcs` 0),
+  which `decrqss_over_long_request_answers_nothing` asserts. Chapter 10 is now in the
+  packet's documentation table.
+- **7.** `ESCTEST_REF: 2798f12149a19c3295e9b4853ab2da4b2eff1b2b`, with the resolution
+  date in the comment. Checked against GitHub: the commit exists in
+  `ThomasDickey/esctest2` and is dated 2026-09-13, which matches the comment.
+- **8, 11.** Recorded in the LLD as dated corrections beside the rules they amend, not
+  quietly changed.
+- **10.** The budget block is regenerated against `main` @ `4437b98e` and is honestly
+  worse (2 764 insertions, 16 files), with the adopted 835-line suite named as the reason
+  and the trade stated rather than argued away.
+- **12.** Stands. `esctest` has still never run; it remains the packet's one blocking
+  unmet criterion, and the packet still says so.
+
+### Records
+
+The "Verification notes closed" table lists all twelve with an accurate disposition for
+each -- four *Fixed* in code, four *Fixed* in docs, three *Recorded*, one *Stands*. No
+finding is claimed fixed that is not. The harness snippet is unchanged in substance and
+still schema-valid against the live database (checked read-only through a copy): every
+`story` column exists, `risk_lane='high_risk'`, `status='implemented'`, proofs `1/1/0/0`
+and `last_verified_result='pass'` satisfy every `CHECK`, `intake_id=44` is IN-0039
+(`document_number=39`), and no `US-0106` row exists yet.
+
+### Two new notes (both Low, both text)
+
+13. **(Low) `US-0106-conformance-queries.md:378` still says "`ci-local -Full` ran all 21
+    steps green"**, two lines below the table row that now correctly says 26 steps. The
+    paragraph was not re-counted when the row was.
+14. **(Low) `crates/vt/tests/verify_us0106.rs:268-277` keeps the pre-fix doc comment.**
+    The test is named `decrqcra_origin_mode_clamps_to_the_region` and its body asserts
+    the region clamp, but its header still reads "F11. **Characterisation**: under
+    `DECOM` the rectangle is **not** confined to the scrolling region ... This engine
+    offsets by the region's top and then clamps to the **screen**, so the same request
+    reads rows 2, 3 and 4." That was true at `f0ae8c46` and is now the opposite of what
+    the test asserts; it is no longer a characterisation test either.
+
+### Gates at `a22036db`
+
+`pwsh scripts/ci-local.ps1 -Full` -- **`ci-local: all checks passed.` (exit 0)**, all
+26 steps, run against the final tree with this re-check's test file present (it caught
+one `rustfmt` diff in that file, which was formatted and the whole gate re-run from the
+top). `--check-nameable` is in the list, inherited from `BUG-0059` by the rebase.
+
+Run separately, because `ci-local` builds but does not test those two:
+
+```text
+cargo test -p oneterm-vt --all-features  ->  lib 535 pass, verify_us0106 33, recheck 8
+cargo test -p oneterm-tools              ->  pass (Windows stub of the bridge only)
+cargo test -p oneterm-vt --test verify_us0106 --test verify_us0106_recheck -> 41 pass
+```
+
+From the `ci-local` log: `cargo test --workspace` green, `corpus_check` included and the
+46-recording corpus byte-identical; `vt-paranoid`, `regex` and `--no-default-features`
+green; `vt-public-api.py --check --no-doc`, `--check-nameable --no-doc` and
+`--diff-platforms` all pass; `check-english.py` (889 files) and `check-doc-paths.py`
+(197 paths) pass; both rustdoc self-containment greps, `cargo package --list` against the
+dependency-graph policy, `verify-dependency-graph.py`, `completion-catalog.py validate`,
+`third-party-notices.py --check` and `cargo deny check licenses bans advisories` pass.
+
+### What still could not be verified
+
+Unchanged from the first pass: `esctest` itself, the Unix half of the bridge (never
+compiled), the CI job as executed, `invisible-island.net/ctlseqs` (proxy refused; xterm
+source and the XFree86 mirror used instead), and xterm's own contribution for a
+double-width spacer column.

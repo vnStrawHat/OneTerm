@@ -265,16 +265,18 @@ fn decrqcra_gate_has_no_runtime_setter() {
     // `method config` and no `config_mut` / `set_config`.
 }
 
-/// F11. Characterisation: under `DECOM` the rectangle is **not** confined to
-/// the scrolling region.
+/// F11. Under `DECOM` the rectangle is confined to the scrolling region.
 ///
 /// xterm's `xtermParseRect` defaults `top` / `bottom` to `minRectRow` /
 /// `maxRectRow`, which under origin mode are the scrolling region's margins,
 /// and `limitedParseRow` clamps an explicit row into the same span. So xterm
 /// reading "the whole page" under a region of rows 2-3 reads rows 2-3 only.
 ///
-/// This engine offsets by the region's top and then clamps to the **screen**,
-/// so the same request reads rows 2, 3 and 4.
+/// This test began as a characterisation: the engine offset by the region's
+/// top and then clamped to the **screen**, so the same request read rows 2, 3
+/// and 4 and answered `0369`. It now clamps to the region and agrees with
+/// xterm at `0245`; the old number is kept below as the one that must not come
+/// back.
 #[test]
 fn decrqcra_origin_mode_clamps_to_the_region() {
     let mut q = Q::open(4, 8);
