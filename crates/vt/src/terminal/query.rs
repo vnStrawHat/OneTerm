@@ -49,11 +49,19 @@ pub(crate) enum DcsQuery {
 ///
 /// **One checksum variant, never negotiated.** It is what xterm reaches with
 /// `checksumExtension: 7` (`csPOSITIVE | csATTRIBS | csNOTRIM`): the positive
-/// sum of the cells' first Unicode scalar values, masked to 16 bits, with no
-/// attribute contribution, no negation and no trimming of trailing blanks. An
-/// unwritten or erased cell counts as `U+0020`. A program written against
-/// xterm's *default* (negated, with the video attributes folded in) will
-/// disagree; `DECRQCRA` is a harness primitive and no such program is known.
+/// sum of **every** Unicode scalar value in each cell -- the base character and
+/// any combining marks, which is what xterm's `combData` walk adds while
+/// `csBYTE` is clear -- masked to 16 bits, with no attribute contribution, no
+/// negation and no trimming of trailing blanks. An unwritten or erased cell
+/// counts as `U+0020`. A program written against xterm's *default* (negated,
+/// with the video attributes folded in) will disagree; `DECRQCRA` is a harness
+/// primitive and no such program is known.
+///
+/// One deviation from xterm survives at this extension, and it is in the
+/// rectangle rather than the sum: xterm's `validRect` **rejects** a rectangle
+/// that falls outside the page, where this engine clamps it to the page. Only a
+/// partially outside rectangle can tell the two apart -- a wholly outside one
+/// answers `0000` either way.
 pub(crate) fn decrqcra_reply(id: u16, checksum: u32) -> String {
     format!("\x1bP{id}!~{:04X}\x1b\\", checksum & 0xffff)
 }
@@ -118,9 +126,6 @@ pub(crate) fn sgr_parameters(style: &Style) -> String {
         push(&text);
     }
     if let Some(color) = style.underline_color {
-        // There is no named form for `SGR 58`, so a named colour cannot be
-        // reported and is dropped rather than mis-reported. The parser only
-        // ever stores a palette or an RGB colour there.
         if let Some(text) = color_parameters(color, 58) {
             push(&text);
         }
@@ -139,6 +144,14 @@ fn color_parameters(color: Color, base: u16) -> Option<String> {
     match color {
         Color::Named(NamedColor::Foreground) if base == 30 => None,
         Color::Named(NamedColor::Background) if base == 40 => None,
+        // `SGR 58` has no named form, so a named underline colour is dropped
+        // rather than mis-reported -- `58` alone is not "palette 0" and `59` is
+        // *reset underline colour*, so the shared arm below would emit an
+        // actively wrong answer. Unreachable today, because the only paths that
+        // set `underline_color` yield a palette or an RGB colour; it is here so
+        // that making `underline_color` settable another way cannot silently
+        // start lying.
+        Color::Named(_) if base == 58 => None,
         Color::Named(named) => ansi_index(named).map(|index| {
             let code = if index < 8 {
                 base + index
@@ -347,6 +360,27 @@ mod tests {
         out.clear();
         assert!(hex_decode(b"544e", &mut out));
         assert_eq!(out, b"TN");
+    }
+
+    #[test]
+    fn a_named_underline_colour_is_dropped_rather_than_mis_reported() {
+        // Unreachable through the parser today: `SGR 58` only ever yields a
+        // palette or an RGB colour. Asserted anyway, because the shared arm
+        // would emit `58` for black and `59` -- *reset underline colour* -- for
+        // red, and the next way `underline_color` becomes settable would
+        // inherit that silently.
+        for named in [NamedColor::Black, NamedColor::Red, NamedColor::BrightWhite] {
+            assert_eq!(color_parameters(Color::Named(named), 58), None, "{named:?}");
+        }
+        // The same colours are still reported for a foreground and a background.
+        assert_eq!(
+            color_parameters(Color::Named(NamedColor::Red), 30).as_deref(),
+            Some("31")
+        );
+        assert_eq!(
+            color_parameters(Color::Named(NamedColor::Red), 40).as_deref(),
+            Some("41")
+        );
     }
 
     #[test]

@@ -172,9 +172,15 @@ pub(crate) struct State {
     /// DCS cannot nest, so `dcs_hook` opens exactly one sink.
     pub(crate) dcs_query: Option<query::DcsQuery>,
     /// That query's payload so far. `clear()`ed rather than dropped, so a
-    /// program polling `XTGETTCAP` in a loop allocates once. Bounded by the
-    /// parser's existing `DCS_MAX_BYTES`, which aborts through `dcs_unhook`
-    /// and needs no second ceiling here.
+    /// program polling `XTGETTCAP` in a loop allocates once.
+    ///
+    /// Bounded by `query::QUERY_MAX_BYTES` (8 KiB), **not** by the parser's
+    /// `DCS_MAX_BYTES` (16 MiB): keeping the capacity is what makes the reuse
+    /// work, so inheriting the image ceiling would let one hostile `DCS + q`
+    /// retain 16 MiB for the session. Reaching the query ceiling answers
+    /// nothing and moves `FeedStats::unhandled_sequences`; it is **not** an
+    /// abort, so `aborted_dcs` does not move. `DCS_MAX_BYTES` and `aborted_dcs`
+    /// still apply above it, unchanged.
     pub(crate) dcs_payload: Vec<u8>,
     /// Owns two entries in the anchor list while it lives, which is why every
     /// path that drops it goes through `Terminal::selection_clear`.

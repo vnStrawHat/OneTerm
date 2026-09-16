@@ -771,9 +771,20 @@ impl Handler<'_> {
         let id = args.next_or(0);
         let _page = args.next_or(0);
         let (rows, cols) = (self.rows(), self.cols());
-        // `DECOM`: while origin mode is set the rows are relative to the
-        // scrolling region, the same rule `CPR` follows.
-        let offset = if self.origin() { self.region().top } else { 0 };
+        // `DECOM`: while origin mode is set the addressable page **is** the
+        // scrolling region. Rows are relative to its top, and -- this is the
+        // half that is easy to miss -- they are also clamped to its bottom.
+        // xterm spells the pair `minRectRow` / `maxRectRow`: `xtermParseRect`
+        // defaults an omitted row to them and `limitedParseRow` clamps an
+        // explicit one into the same span. Applying the offset without the
+        // clamp is the Contour bug the design cites; applying only the clamp
+        // would be the mirror image of it.
+        let (min_row, max_row) = if self.origin() {
+            let region = self.region();
+            (region.top, region.bottom)
+        } else {
+            (0, rows)
+        };
         let top = args.next_or(1);
         let left = args.next_or(1);
         let bottom = args.next_or(rows);
@@ -783,12 +794,21 @@ impl Handler<'_> {
             return;
         }
         // 1-based and inclusive on the wire, 0-based and half-open here.
-        // Saturating throughout: a rectangle larger than the screen is the
-        // screen, and a reversed one (`Pb < Pt`) is empty rather than an
-        // underflow.
-        let top = top.saturating_sub(1).saturating_add(offset).min(rows);
+        // Saturating throughout: a rectangle larger than the page is the page,
+        // and a reversed one (`Pb < Pt`) is empty rather than an underflow.
+        //
+        // Deviation from xterm, deliberate: `validRect` **rejects** a rectangle
+        // that falls outside the page and answers a checksum of zero over
+        // nothing, where this engine clamps it to the page. A request wholly
+        // outside still answers `0000` either way, so only a partially outside
+        // rectangle can tell the two apart -- and clamping is the friendlier
+        // answer to give a harness that guessed the size.
+        let top = top
+            .saturating_sub(1)
+            .saturating_add(min_row)
+            .clamp(min_row, max_row);
         let left = left.saturating_sub(1).min(cols);
-        let bottom = bottom.saturating_add(offset).min(rows);
+        let bottom = bottom.saturating_add(min_row).clamp(min_row, max_row);
         let right = right.min(cols);
 
         let mut checksum: u32 = 0;
@@ -800,17 +820,20 @@ impl Handler<'_> {
                 // is the `csNOTRIM` half of the variant; the attributes are not
                 // consulted, which is the `csATTRIBS` half; the sum is not
                 // negated, which is `csPOSITIVE`. See `query::decrqcra_reply`.
-                let scalar = match row.cell(col).content() {
-                    CellContent::Scalar(c) => c,
-                    CellContent::Grapheme(id) => self
-                        .state
-                        .interner
-                        .resolve_grapheme(id)
-                        .first()
-                        .copied()
-                        .unwrap_or(' '),
-                };
-                checksum = checksum.wrapping_add(scalar as u32);
+                //
+                // **Every scalar of the cell counts, not just the first.** At
+                // extension 7 `csBYTE` is clear, so xterm's `xtermCheckRect`
+                // walks `combData` and adds each combining scalar on top of the
+                // base character. A cluster of `e` + `U+0301` is `0x65 + 0x301`
+                // in both, so the two agree cell for cell.
+                match row.cell(col).content() {
+                    CellContent::Scalar(c) => checksum = checksum.wrapping_add(c as u32),
+                    CellContent::Grapheme(id) => {
+                        for scalar in self.state.interner.resolve_grapheme(id) {
+                            checksum = checksum.wrapping_add(*scalar as u32);
+                        }
+                    }
+                }
             }
         }
         let reply = query::decrqcra_reply(id, checksum);

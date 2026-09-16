@@ -189,15 +189,31 @@ fn decrqcra_never_reaches_the_scrollback() {
     assert_eq!(q.replies(), "\x1bP1!~0400\x1b\\");
 }
 
-/// A grapheme cluster contributes its **first** scalar, so a combining tail
-/// cannot silently change a checksum a harness compares against `ord(char)`.
+/// A grapheme cluster contributes **every** scalar it holds, which is what
+/// xterm's `combData` walk adds while `csBYTE` is clear.
 #[test]
-fn decrqcra_sums_the_first_scalar_of_a_cluster() {
+fn decrqcra_sums_every_scalar_of_a_cluster() {
     let mut q = Q::readable();
     q.feed(b"\x1b[?2027h");
     q.feed("e\u{301}".as_bytes());
     q.feed(b"\x1b[1;0;1;1;1;1*y");
-    assert_eq!(q.replies(), "\x1bP1!~0065\x1b\\");
+    // 0x65 + 0x301 = 0x366.
+    assert_eq!(q.replies(), "\x1bP1!~0366\x1b\\");
+}
+
+/// Under `DECOM` the addressable page is the scrolling region, so the
+/// rectangle is clamped to it and not merely offset into it.
+#[test]
+fn decrqcra_clamps_to_the_scrolling_region_under_origin_mode() {
+    let mut q = Q::readable();
+    q.feed(b"\x1b[1;1HA\x1b[2;1HB\x1b[3;1HC\x1b[4;1HD");
+    q.feed(b"\x1b[2;3r\x1b[?6h");
+    // The whole page, by default, is rows 2-3: 0x42 + 0x43 + 14 * 0x20 = 0x245.
+    q.feed(b"\x1b[7;0*y");
+    assert_eq!(q.replies(), "\x1bP7!~0245\x1b\\");
+    // An explicit bottom past the region is clamped to it too.
+    q.feed(b"\x1b[7;0;1;1;99;99*y");
+    assert_eq!(q.replies(), "\x1bP7!~0245\x1b\\");
 }
 
 // ── DECRQSS ─────────────────────────────────────────────────────────────────
