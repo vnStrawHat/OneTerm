@@ -7,7 +7,7 @@ use gpui_component::{
     list::ListItem, menu::PopupMenuItem, notification::NotificationType, tree::tree,
 };
 
-use crate::session_state::SshSessionStore;
+use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_actions::{DeleteSession, NewSession, OpenSession, SessionProperty};
 use oneterm_theme::notif_ext::notify;
 
@@ -89,12 +89,16 @@ impl SessionPanel {
                     let subtitle = session.map(|s| session_subtitle(s)).unwrap_or_default();
                     // The same resolver the "+" menu's rows go through, so the
                     // two surfaces cannot disagree about a session's square
-                    // (`US-0110`). The accent is unreachable unless
+                    // (`US-0110`). A leaf whose id no longer resolves in the
+                    // store takes the default too, as it did before the
+                    // resolver existed; the accent is unreachable unless
                     // `DEFAULT_COLOR_HEX` itself stops parsing.
-                    let color = session
-                        .map(session_color_hex)
-                        .and_then(|hex| Hsla::parse_hex(hex).ok())
-                        .unwrap_or_else(|| cx.theme().accent);
+                    let color = Hsla::parse_hex(
+                        session
+                            .map(session_color_hex)
+                            .unwrap_or(SshSession::DEFAULT_COLOR_HEX),
+                    )
+                    .unwrap_or_else(|_| cx.theme().accent);
 
                     ListItem::new(ix)
                         .w_full()

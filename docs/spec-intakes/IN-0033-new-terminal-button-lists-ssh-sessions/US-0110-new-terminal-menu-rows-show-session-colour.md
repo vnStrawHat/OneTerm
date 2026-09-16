@@ -45,8 +45,10 @@ the menu changes.
     both `menu_entries` and the tree's own `tree_render.rs` go through it, so the two
     surfaces cannot draw one session two ways.
   - `TerminalPanel::title_suffix` renders each saved-session row as a square plus the
-    title, matching `tree_render.rs`: `Hsla::parse_hex`, theme accent as the last resort,
-    `div().w(px(8.)).h(px(8.))` and `gap_2`.
+    title, matching `tree_render.rs`: `Hsla::parse_hex` over the hex the shared resolver
+    already settled, `div().w(px(8.)).h(px(8.))` and `gap_2`. Anything `parse_hex` rejects
+    has become `#56B6C2` in the resolver, on both surfaces alike, so each renderer's
+    `cx.theme().accent` arm is unreachable while that constant is a valid hex.
   - Documentation: the `docs/gui-layout.md` sentence describing the row, and the row-shape
     line in this intake's `high-level-design.md`.
 - [x] Out of scope:
@@ -67,7 +69,10 @@ the menu changes.
 - [x] Clicking a row still opens that session's connect dialog, and keyboard navigation
       still reaches the row.
 - [x] No colour literal is added to `crates/terminal-view`: the square's colour is the
-      session's, the fallback is `cx.theme().accent`.
+      session's, and the fallback for anything `parse_hex` rejects is `#56B6C2`, decided
+      once in `crates/session-ui` for the tree and the menu together. The
+      `cx.theme().accent` arm each renderer keeps is unreachable while that constant is a
+      valid hex.
 - [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
