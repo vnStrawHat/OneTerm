@@ -27,33 +27,29 @@ directly, in one process, from a byte buffer already in memory.
 | 4 | `resize` | reflow latency at 0, 10 000 and 100 000 scrollback rows |
 | 5 | `rss` | live heap held after filling 10 000 scrollback rows |
 
-Tier 2 is the tier published below. It is what an embedder pays on every byte
+Tier 2 is the tier published below: it is what an embedder pays on every byte
 that arrives, and unlike tiers 3 and 4 it is a throughput rather than a latency,
-so it is the one that can honestly be stated as a rate.
-
-Tier 5 counts **live heap** through a counting allocator rather than process
-resident size, because the design claim it exists to check -- what a grid of N
-rows costs -- is exactly live heap, while resident size also counts the
-allocator's own retained pages.
+so it is the one that can honestly be stated as a rate. Tier 5 counts **live
+heap** through a counting allocator rather than process resident size, because
+the claim it checks -- what a grid of N rows costs -- is exactly live heap.
 
 ## What is not measured
 
 The number below is the engine and nothing else. It does **not** include:
 
 - **Any renderer.** No glyph shaping, no atlas upload, no GPU work, no window.
-  Tier 3 measures the cost of *producing* what a renderer would paint, not the
-  cost of painting it. In a real application the renderer is usually the larger
-  half.
+  Tier 3 measures the cost of *producing* what a renderer would paint, never of
+  painting it. In a real application the renderer is usually the larger half.
 - **Any pseudo-console.** The bytes come from a buffer, not from a child
   process through a transport. See the ceiling below for why that matters.
 - **Reading, scheduling or thread hand-off.** One thread, no channel, no wake.
 - **Your terminal's own input handling, scrollback UI or search.**
 
 It also is not a comparison. There is no measurement here against
-`alacritty_terminal`, `rio-vt` or anything else. A fair cross-engine harness is
-a project of its own -- identical fixtures, identical geometry, identical
-scrollback policy, identical build flags -- and an unfair one is worse than
-none. If you need that comparison, build it; do not infer it from this table.
+`alacritty_terminal`, `rio-vt` or anything else: a fair cross-engine harness is
+a project of its own -- identical fixtures, geometry, scrollback policy and
+build flags -- and an unfair one is worse than none. If you need that
+comparison, build it; do not infer it from this table.
 
 ## The number
 
@@ -130,17 +126,13 @@ figure, and prints the full table of ratios either way. `--tolerance` moves the
 band and `--baseline` points at a different file.
 
 The band is deliberately that wide, and the check deliberately does not run in
-continuous integration:
-
-- A shared runner varies by more than a factor of two between machine classes,
-  so a gate on it would measure the runner, and a flaky performance gate is
-  worse than none -- people learn to re-run it.
-- The baseline is one machine's. Comparing another machine against it says
-  nothing.
-- What a factor-of-two band actually catches is the class of mistake that is a
-  factor rather than a percentage: an accidental clone in the print path, a
-  linear scan added to a per-cell loop, a snapshot update that stopped being
-  incremental. Those are the regressions worth an automatic verdict.
+continuous integration. A shared runner varies by more than a factor of two
+between machine classes, so a gate on it would measure the runner, and a flaky
+performance gate is worse than none -- people learn to re-run it. The baseline
+is one machine's, so comparing another machine against it says nothing anyway.
+What a factor-of-two band does catch is the class of mistake that is a factor
+rather than a percentage: an accidental clone in the print path, a linear scan
+added to a per-cell loop, a snapshot update that stopped being incremental.
 
 The check refuses to answer rather than answer wrongly: it exits non-zero in a
 debug build, under the engine's paranoid-integrity feature, when the baseline
@@ -155,14 +147,13 @@ section exists to prevent, and only reading the diff catches it.
 
 ## Why there is no criterion
 
-The obvious move is a `benches/` directory and the `criterion` crate, because
-that is what a reviewer expects to see. It is not here on purpose. The
-measurement already exists in a binary that is already built, tested and
-documented, and a second way to run the same fixtures is a second thing to keep
-in step. `criterion` earns its dependency tree when you need a distribution and
-a confidence interval on a microbenchmark; tier 2 is a throughput over a fixed
-32 MiB input whose noise floor is the machine, not the sampling. Add it the day
-somebody needs a distribution rather than a median -- not before.
+A `benches/` directory and the `criterion` crate are what a reviewer expects,
+and their absence is deliberate: the measurement already exists in a binary that
+is built, tested and documented, and a second way to run the same fixtures is a
+second thing to keep in step. `criterion` earns its dependency tree when you
+need a distribution and a confidence interval on a microbenchmark; tier 2 is a
+throughput over a fixed 32 MiB input whose noise floor is the machine, not the
+sampling. Add it the day somebody needs a distribution rather than a median.
 
 ## What this number is not
 
