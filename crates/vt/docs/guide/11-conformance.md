@@ -144,6 +144,10 @@ operations (`t`); `modifyOtherKeys` (`> 4 m`); the kitty keyboard stack (`? u`,
 `= u`, `> u`, `< u`); `DECRQCRA` (`* y`), behind the gate described above; and
 `REP` (`b`), whose source character survives intervening escape sequences.
 
+Both keyboard protocols are **encoded** as well as tracked, so what `CSI ? u`
+reports is what the key bytes actually are. Chapter 6 has the ladder and names
+the four things the encoder cannot express, none of which it claims to.
+
 **Modes.** Private: `1` application cursor keys, `5` reverse video, `6` origin,
 `7` autowrap, `9` X10 mouse, `12` cursor blink, `25` cursor visibility, `45`
 reverse wrap, `47` / `1047` / `1049` alternate screen, `1000` / `1002` / `1003`

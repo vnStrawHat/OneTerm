@@ -9,6 +9,8 @@
 // section "Mode snapshot" (R-17). The mode table itself lives in
 // `terminal::mode`; this is only what leaves it.
 
+use crate::terminal::KeyboardFlags;
+
 /// `? 9` / `? 1000` / `? 1002` / `? 1003`: how much motion the host asked for.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum MouseReporting {
@@ -46,8 +48,16 @@ pub struct MouseProtocol {
     pub encoding: MouseEncoding,
 }
 
-/// Everything the view reads that is not a cell, a cursor or a selection.
+/// Everything the view reads that is not a cell, a cursor or a selection, plus
+/// the two keyboard protocols [`crate::input::encode_key_event`] encodes
+/// against.
+///
+/// `#[non_exhaustive]`: a mode the engine does not track yet would land here,
+/// and a new field should not be a breaking change. Start from
+/// [`ModeSnapshot::default`] and assign, or take one from
+/// [`crate::Terminal::mode_snapshot`], which is what an embedder wants anyway.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
 pub struct ModeSnapshot {
     /// Whether the alternate screen is the current one (`? 1049`, `? 47`).
     pub alt_screen: bool,
@@ -70,6 +80,11 @@ pub struct ModeSnapshot {
     pub reverse_video: bool,
     /// `None` when the host asked for no mouse reporting at all.
     pub mouse: Option<MouseProtocol>,
+    /// The live kitty keyboard flags, as pushed by `CSI > Ps u` and friends.
+    /// Empty is the power-on state and the one the legacy encoding answers.
+    pub keyboard_flags: KeyboardFlags,
+    /// The `modifyOtherKeys` level `CSI > 4 ; Ps m` asked for: `0`, `1` or `2`.
+    pub modify_other_keys: u8,
 }
 
 impl Default for ModeSnapshot {
@@ -86,6 +101,8 @@ impl Default for ModeSnapshot {
             alternate_scroll: true,
             reverse_video: false,
             mouse: None,
+            keyboard_flags: KeyboardFlags::empty(),
+            modify_other_keys: 0,
         }
     }
 }

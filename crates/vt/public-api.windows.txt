@@ -202,6 +202,8 @@ struct oneterm_vt::ModeSnapshot
     structfield app_keypad
     structfield bracketed_paste
     structfield insert
+    structfield keyboard_flags
+    structfield modify_other_keys
     structfield mouse
     structfield reverse_video
     structfield show_cursor
@@ -406,6 +408,7 @@ struct oneterm_vt::Terminal
     method config
     method cursor_style
     method encode_key
+    method encode_key_event
     method feed
     method grid
     method grid_mut
@@ -646,6 +649,18 @@ struct oneterm_vt::grid::Viewport
     structfield cols
     structfield rows
     structfield top
+struct oneterm_vt::input::KeyEvent
+    method new
+    structfield base_layout
+    structfield key
+    structfield kind
+    structfield mods
+    structfield shifted
+    structfield text
+enum oneterm_vt::input::KeyEventKind
+    variant Press
+    variant Release
+    variant Repeat
 struct oneterm_vt::input::KeyMods
     structfield alt
     structfield ctrl
@@ -701,6 +716,7 @@ enum oneterm_vt::input::TerminalMouseButton
     variant Middle
     variant Right
 fn oneterm_vt::input::encode_key
+fn oneterm_vt::input::encode_key_event
 fn oneterm_vt::input::encode_mouse_move
 fn oneterm_vt::input::encode_mouse_press
 fn oneterm_vt::input::encode_mouse_release

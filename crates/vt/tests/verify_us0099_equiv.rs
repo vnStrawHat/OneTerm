@@ -448,8 +448,9 @@ pub fn encode_wheel_event(
 }
 
 use oneterm_vt::input::{
-    KeyMods, KeySpec, MouseModifiers, NamedKey, TerminalMouseButton, encode_key, encode_mouse_move,
-    encode_mouse_press, encode_mouse_release, encode_wheel_event,
+    KeyEvent, KeyMods, KeySpec, MouseModifiers, NamedKey, TerminalMouseButton, encode_key,
+    encode_key_event, encode_mouse_move, encode_mouse_press, encode_mouse_release,
+    encode_wheel_event,
 };
 use oneterm_vt::{ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting};
 
@@ -674,21 +675,27 @@ fn mouse_states() -> Vec<Option<MouseProtocol>> {
 }
 
 /// The full snapshot space: 2^8 boolean combinations x 10 mouse states = 2560.
+///
+/// `ModeSnapshot` became `#[non_exhaustive]` in `US-0105`, so an out-of-crate
+/// caller assigns rather than writing a literal. The two keyboard-protocol
+/// fields stay at their defaults here on purpose: this file is the proof that
+/// **nothing changes when nothing is negotiated**.
 fn all_snapshots() -> Vec<ModeSnapshot> {
     let mut out = Vec::new();
     for bits in 0u32..256 {
         for mouse in mouse_states() {
-            out.push(ModeSnapshot {
-                app_cursor: bits & 1 != 0,
-                alt_screen: bits & 2 != 0,
-                app_keypad: bits & 4 != 0,
-                bracketed_paste: bits & 8 != 0,
-                show_cursor: bits & 16 != 0,
-                insert: bits & 32 != 0,
-                alternate_scroll: bits & 64 != 0,
-                reverse_video: bits & 128 != 0,
-                mouse,
-            });
+            let mut snap = ModeSnapshot::default();
+            snap.app_cursor = bits & 1 != 0;
+            snap.alt_screen = bits & 2 != 0;
+            snap.app_keypad = bits & 4 != 0;
+            snap.bracketed_paste = bits & 8 != 0;
+            snap.show_cursor = bits & 16 != 0;
+            snap.insert = bits & 32 != 0;
+            snap.alternate_scroll = bits & 64 != 0;
+            snap.reverse_video = bits & 128 != 0;
+            snap.mouse = mouse;
+            assert!(snap.keyboard_flags.is_empty() && snap.modify_other_keys == 0);
+            out.push(snap);
         }
     }
     out
@@ -765,13 +772,52 @@ fn encode_key_is_byte_identical_to_main() {
     let snaps = all_snapshots();
     let mut n = 0u64;
     let mut bad = 0u64;
+    let mut moved = 0u64;
     for spec in &specs {
         let o_spec = orig_spec(spec);
         for mods in MODS {
             let o_mods = orig_mods(mods);
+            // The two rows `US-0105` deliberately moved. Everything else must
+            // still be byte-identical, so each divergence is named here, with
+            // both sides asserted, rather than allowed by a slack bound.
+            //
+            // `ctrl+~`: the specification's legacy ctrl table has `~ -> 30` and
+            // `ctrl_bytes` fell through to `~` itself, while `ctrl+^` -- the
+            // same key -- was already `0x1e`.
+            //
+            // `F15`: `CSI 1 ; 2 R` is byte-identical to a Cursor Position
+            // Report, so a program reading replies and key bytes from one
+            // stream cannot tell them apart. The DEC VT220 code `CSI 28 ~`
+            // collides with nothing.
+            let moved_bytes: Option<(&[u8], &[u8])> = match spec {
+                KeySpec::Character(s) if s == "~" && mods.ctrl => Some((&[0x1e], &[0x7e])),
+                KeySpec::Named(NamedKey::F15) => Some((b"\x1b[28~", b"\x1b[1;2R")),
+                _ => None,
+            };
             for snap in &snaps {
                 let got = encode_key(spec, mods, snap);
                 let want = orig_key::encode_key(&o_spec, o_mods, snap.app_cursor);
+                let event = KeyEvent::new(spec.clone(), mods);
+                let got_event = encode_key_event(&event, snap);
+                if let Some((now, before)) = moved_bytes {
+                    // Both entry points answer the corrected bytes, and the
+                    // frozen oracle answers the old ones. `alt` prefixes ESC
+                    // onto a `ctrl+~` byte, as it always did, and is dropped by
+                    // the functional-key table for `F15`, as it always was.
+                    let prefix: &[u8] = if mods.alt && now.len() == 1 {
+                        &[0x1b]
+                    } else {
+                        &[]
+                    };
+                    let now = [prefix, now].concat();
+                    let before = [prefix, before].concat();
+                    assert_eq!(got.as_deref(), Some(now.as_slice()));
+                    assert_eq!(got_event.as_deref(), Some(now.as_slice()));
+                    assert_eq!(want.as_deref(), Some(before.as_slice()));
+                    moved += 2;
+                    n += 2;
+                    continue;
+                }
                 if got != want {
                     bad += 1;
                     if bad < 20 {
@@ -781,16 +827,33 @@ fn encode_key_is_byte_identical_to_main() {
                     }
                 }
                 n += 1;
+                // `US-0105`: the richer entry point is the same encoder, so it
+                // owes the same answer on a plain press with nothing
+                // negotiated. Counted as its own comparison.
+                if got_event != want {
+                    bad += 1;
+                }
+                n += 1;
             }
         }
     }
     println!(
-        "encode_key cases compared: {n} (specs {} x mods {} x snapshots {})",
+        "encode_key cases compared: {n} (specs {} x mods {} x snapshots {}), \
+         {moved} deliberately moved (ctrl+~, F15), {bad} mismatches",
         specs.len(),
         MODS.len(),
         snaps.len()
     );
     assert_eq!(bad, 0, "{bad} mismatches");
+    // `ctrl+~` is the 4 ctrl-bearing modifier sets; `F15` is all 8, because the
+    // functional-key table ignores modifiers for it. Times the snapshots, times
+    // the two entry points. If this number changes, a third row moved and
+    // nobody wrote it down.
+    assert_eq!(
+        moved,
+        (4 + MODS.len() as u64) * snaps.len() as u64 * 2,
+        "the moved set changed size"
+    );
 }
 
 const MBUTTONS: [TerminalMouseButton; 3] = [
@@ -994,13 +1057,11 @@ fn hostile_inputs_do_not_panic() {
             );
         }
     }
-    let m = ModeSnapshot {
-        mouse: Some(MouseProtocol {
-            reporting: MouseReporting::AnyEvent,
-            encoding: MouseEncoding::Utf8,
-        }),
-        ..ModeSnapshot::default()
-    };
+    let mut m = ModeSnapshot::default();
+    m.mouse = Some(MouseProtocol {
+        reporting: MouseReporting::AnyEvent,
+        encoding: MouseEncoding::Utf8,
+    });
     let _ = encode_mouse_press(
         usize::MAX,
         usize::MAX,

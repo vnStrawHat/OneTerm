@@ -1690,10 +1690,16 @@ impl Dispatch for Handler<'_> {
                 let arg = args.next_or(1);
                 self.window_ops(arg);
             }
-            // Trap 42: the query reads the stack top, which can legitimately
-            // differ from the live flags after `CSI = Ps u`.
+            // The query reads the **live** flags, which is what the encoder
+            // uses and what the specification asks for: "query the terminal for
+            // the current values of the flags". An application following the
+            // specification's own detection recipe -- "first setting the
+            // desired progressive enhancements and then querying for the
+            // current progressive enhancement" -- uses `CSI = Ps u`, which sets
+            // the live flags without touching the stack, so answering with the
+            // stack top told it the terminal implements nothing. `US-0105`.
             (b'u', [b'?']) => {
-                let flags = self.state.keyboard.active.top().bits();
+                let flags = self.state.keyboard.active.live().bits();
                 self.reply(&format!("\x1b[?{flags}u"));
             }
             (b'u', [b'=']) => {

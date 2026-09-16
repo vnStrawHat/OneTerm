@@ -36,8 +36,10 @@ first build to fetch a few tens of megabytes.
   `oneterm_vt::pty`, behind the default-on `pty` feature; turn the feature off and the engine
   is all that is left.
 - **Not a window.** No event loop, no platform event handling, no clipboard, no window title bar.
-  `input` will turn a key press or a mouse click into the bytes the program expects, but you
-  deliver the event and you own every side effect it has on your own view.
+  `input` will turn a key press or a mouse click into the bytes the program expects -- the
+  legacy encoding, xterm's `modifyOtherKeys`, or the kitty keyboard protocol, whichever the
+  program negotiated -- but you deliver the event and you own every side effect it has on your
+  own view.
 - **Not a policy.** Whether a program may write your clipboard, open a URL or set your window
   title is your decision; the engine hands you the request and stays out of it.
 

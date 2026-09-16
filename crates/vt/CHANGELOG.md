@@ -21,8 +21,9 @@ The crate is `0.x`, and Cargo treats a minor bump as breaking. So does this crat
 5. Anything reachable only with a non-default feature carries the same promise as the default
    surface. A feature is never a stability escape hatch.
 6. Behaviour is not the API, with one exception: **the reply bytes for `DA1`, `DA2`, `DA3`, `DSR`,
-   `DECRQM`, `XTVERSION`, `DECRQCRA`, `DECRQSS`, `XTGETTCAP` and the OSC colour queries are a
-   contract**, because programs parse them.
+   `DECRQM`, `XTVERSION`, `DECRQCRA`, `DECRQSS`, `XTGETTCAP` and the OSC colour queries, and the
+   bytes the `input` encoders produce for a given (event, mode snapshot) pair, are a contract**,
+   because programs parse them.
    Changing one is a minor bump and an entry below, even though no Rust signature moved.
    `Config::product_name` exists so an embedder can change the identity half of those replies
    without the engine changing the shape half.
@@ -84,6 +85,15 @@ carry no API change at all. Such a release says so below rather than being omitt
   baseline and a `vt-bench grid --check` trip-wire that fails a fixture once it has become twice as
   slow; it runs by hand, never in continuous integration, and no number here is a promise.
   Performance stays outside the promise above.
+
+- `input::KeyEvent`, `input::KeyEventKind`, `input::encode_key_event` and
+  `Terminal::encode_key_event`: everything the enhanced keyboard protocols can report about one
+  key event -- press, repeat or release, the shifted and base-layout keys, and the text the event
+  would insert. `KeyEvent::new(key, mods)` builds a plain press; the optional fields are omitted
+  from the encoding when the platform does not know them, which the protocol allows.
+
+- `ModeSnapshot::keyboard_flags` and `ModeSnapshot::modify_other_keys`, the two keyboard protocols
+  the encoders now read. See **Changed** for what the mark on `ModeSnapshot` costs you.
 
 - `guide`, a public module that carries the embedder's guide: fourteen Markdown chapters rendered
   by `cargo doc` beside the API reference, one empty module each. It adds no item and no
@@ -195,6 +205,56 @@ carry no API change at all. Such a release says so below rather than being omitt
   Zero for every well-formed stream.
 
 ### Changed
+
+- **Breaking, and the point of the release.** `input::encode_key` and `Terminal::encode_key`
+  honour the kitty keyboard protocol and xterm's `modifyOtherKeys`. The engine has answered
+  `CSI ? u` with the pushed flags since the flag stack shipped and then sent legacy bytes anyway:
+  a program that negotiated the protocol and was told "yes" received keys it could not parse.
+  **The bytes returned for a given key therefore change whenever a program has pushed a kitty flag
+  or set a `modifyOtherKeys` level.** With both at their defaults -- which is every program that
+  never asked -- the bytes are identical to before, verified across the full cross-product of keys,
+  modifiers and mode snapshots.
+
+  Clause 6 of the promise above is amended by this release to cover the `input` encoders: a program
+  parsing key bytes is in exactly the position of one parsing a `DA1` reply, so a change to them is
+  a minor bump and an entry here.
+
+  Guide chapter 6 has the decision ladder, the flag table, the three remaining ceilings -- modifier
+  values `1`-`8` only, no private-use keypad, lock, media or modifier keys, and an un-shifted key
+  code derived from the PC-101 shift relation rather than from your layout -- and a table of every
+  place the legacy rung and the kitty rung deliberately disagree.
+
+- **Breaking, clause 6.** `CSI ? u` answers the **live** keyboard flags rather than the top of the
+  flag stack. `CSI = Ps ; Pm u` sets the live flags without pushing, so an application following the
+  specification's own detection recipe -- set the enhancements, then query -- was told the terminal
+  implements none of them. The query and the encoder now read the same value, which is the whole
+  point of the query.
+
+- **Breaking, clause 6.** `Ctrl+~` is `0x1e` on the legacy rung, not `~`. The specification's legacy
+  ctrl table has the row and `ctrl_bytes` fell through to the character itself; `Ctrl+^` was already
+  `0x1e`, so the two spellings of the same key now agree.
+
+- **Breaking, clause 6.** `F15` is `CSI 28 ~` on the legacy rung, not `CSI 1 ; 2 R`. The old form is
+  byte-identical to a Cursor Position Report for row 1, column 2, so a program reading replies and
+  key bytes from one stream could not tell them apart -- and no keyboard flag removed it, because
+  the three enhancement flags that leave a functional key on the legacy rung left it reachable.
+  `CSI 28 ~` is the DEC VT220 code (terminfo `kf15` on vt220 and rxvt) and collides with nothing.
+  This is the same exception the kitty specification makes for `F3`, for the same reason.
+
+  These two are the only bytes on the legacy rung that moved in this release, and the equivalence
+  run names both rather than allowing a tolerance: it asserts the new byte and the old one, counts
+  the cases, and pins the count, so a third row cannot move unnoticed.
+
+- **Breaking.** `ModeSnapshot` is `#[non_exhaustive]`. Two things change for you, and only the
+  first is a benefit: a new field on it is a patch release from now on, and **you can no longer
+  build one with a struct expression, functional update syntax included**. Code that wrote
+  `ModeSnapshot { app_cursor: true, ..Default::default() }` stops compiling with `E0639`. Take one
+  from `Terminal::mode_snapshot()`, which is what you want in almost every case, or start from
+  `ModeSnapshot::default()` and assign each field. The two new fields above are the same minor
+  bump, so this costs nothing extra in this release and saves one in the next.
+
+  `input::KeyEvent` and `input::KeyEventKind` are marked too and cost nothing, being new:
+  `KeyEvent::new(key, mods)` is the constructor and `..KeyEvent::new(..)` is likewise refused.
 
 - **Breaking.** The read model is called *snapshot*, not *render*: the crate hands out a consistent
   read of engine state and never draws, and its largest module no longer claims otherwise. The

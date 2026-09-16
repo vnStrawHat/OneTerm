@@ -12,9 +12,10 @@
 //! key and mouse events onto [`KeySpec`] and [`TerminalMouseButton`].
 
 mod key;
+mod kitty;
 mod mouse;
 
-pub use key::{KeyMods, KeySpec, NamedKey, encode_key};
+pub use key::{KeyEvent, KeyEventKind, KeyMods, KeySpec, NamedKey, encode_key, encode_key_event};
 pub use mouse::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
     encode_mouse_release, encode_wheel_event,

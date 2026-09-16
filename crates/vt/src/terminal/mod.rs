@@ -47,7 +47,7 @@ use crate::graphics::{self, GraphicData, GraphicsState};
 use crate::grid::{
     AnchorId, Charset, DEFAULT_SCROLLBACK, Pos, RowId, Screen, Size, TerminalGrid, Viewport,
 };
-use crate::input::{KeyMods, KeySpec};
+use crate::input::{KeyEvent, KeyMods, KeySpec};
 use crate::intern::Interner;
 use crate::parser::Parser;
 use crate::reflow::{ResizeOutcome, ResizePolicy};
@@ -444,6 +444,17 @@ impl Terminal {
         crate::input::encode_key(key, mods, &self.mode_snapshot())
     }
 
+    /// The bytes a whole key event sends to this terminal.
+    ///
+    /// [`crate::input::encode_key_event`] with this terminal's own modes, so a
+    /// program that negotiated the kitty keyboard protocol with *this* terminal
+    /// gets the encoding it asked for. `None` means the event sends nothing --
+    /// a release with no event-type reporting, or a chord with no encoding at
+    /// all -- and the embedder drops it.
+    pub fn encode_key_event(&self, event: &KeyEvent) -> Option<Vec<u8>> {
+        crate::input::encode_key_event(event, &self.mode_snapshot())
+    }
+
     /// The modes the view reads at paint time.
     pub fn mode_snapshot(&self) -> ModeSnapshot {
         ModeSnapshot {
@@ -456,6 +467,8 @@ impl Terminal {
             alternate_scroll: self.state.modes.contains(Mode::AlternateScroll),
             reverse_video: self.state.modes.contains(Mode::ReverseVideo),
             mouse: self.state.modes.mouse_reporting(),
+            keyboard_flags: self.state.keyboard.active.live(),
+            modify_other_keys: self.state.modify_other_keys,
         }
     }
 

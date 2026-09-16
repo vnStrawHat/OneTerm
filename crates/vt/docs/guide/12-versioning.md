@@ -38,11 +38,15 @@ So does this crate:
    as the default surface. A feature is never a stability escape hatch.
 6. Behaviour is not the API, with one exception: **the reply bytes for `DA1`,
    `DA2`, `DA3`, `DSR`, `DECRQM`, `XTVERSION`, `DECRQCRA`, `DECRQSS`,
-   `XTGETTCAP` and the OSC colour queries are a contract**, because programs
-   parse them. Changing one is a minor bump and an entry, even though no Rust
-   signature moved. That covers the `DECRQCRA` checksum variant and the
+   `XTGETTCAP` and the OSC colour queries, and the bytes the `input` encoders
+   produce for a given (event, mode snapshot) pair, are a contract**, because
+   programs parse them. Changing one is a minor bump and an entry, even though
+   no Rust signature moved. That covers the `DECRQCRA` checksum variant and the
    `XTGETTCAP` capability table's values: a harness stores the number it was
-   given, so changing either is a break whatever the Rust surface says.
+   given, so changing either is a break whatever the Rust surface says. The
+   encoders joined the clause when they learned the kitty keyboard protocol: a
+   program parsing key bytes is in exactly the position of one parsing a `DA1`
+   reply.
 7. `FeedStats` counter semantics are documented per field and are part of the
    contract. A counter that starts counting a different thing is a minor bump.
 
@@ -55,21 +59,25 @@ contract rather than an implementation detail.
 
 ## Which types are `#[non_exhaustive]`
 
-Ten public types are marked, and the mark costs a caller two different things
-depending on whether it is an enum or a struct. The compiler will tell you
+Thirteen public types are marked, and the mark costs a caller two different
+things depending on whether it is an enum or a struct. The compiler will tell you
 either way, but it is worth knowing before you design around them.
 
-**Seven enums**, on which a `match` needs a wildcard arm: `VtEvent`,
-`OscRoute`, `Progress`, `ShellMark`, `input::KeySpec`, `input::NamedKey` and
-`search::SearchPattern`. A new variant on any of them is a patch release, and
-your wildcard arm is what makes that true for your code too.
+**Eight enums**, on which a `match` needs a wildcard arm: `VtEvent`,
+`OscRoute`, `Progress`, `ShellMark`, `input::KeySpec`, `input::NamedKey`,
+`input::KeyEventKind` and `search::SearchPattern`. A new variant on any of them
+is a patch release, and your wildcard arm is what makes that true for your code
+too.
 
-**Three structs**: `search::SearchOptions`, `ResizeOutcome` and `Placement`.
-There are no variants and no wildcard arm; what the mark costs you is that you
-cannot build one with a struct literal. `ResizeOutcome` and `Placement` are only
-ever returned to you -- by `Terminal::resize` and `Terminal::placements` -- so
-you read their fields and never construct one. `SearchOptions` you do build, and
-the way to build it is to start from the default and assign:
+**Five structs**: `search::SearchOptions`, `ResizeOutcome`, `Placement`,
+`ModeSnapshot` and `input::KeyEvent`. There are no variants and no wildcard arm;
+what the mark costs you is that you cannot build one with a struct literal --
+**including functional update syntax**, so `ModeSnapshot { .., ..Default::default() }`
+no longer compiles. Four of the five you never construct: `ResizeOutcome` and
+`Placement` are returned by `Terminal::resize` and `Terminal::placements`,
+`ModeSnapshot` by `Terminal::mode_snapshot`, and `KeyEvent` by `KeyEvent::new`.
+`SearchOptions` you do build, and the way to build any of them is to start from
+the default (or the constructor) and assign:
 
 ```rust
 use oneterm_vt::search::SearchOptions;
