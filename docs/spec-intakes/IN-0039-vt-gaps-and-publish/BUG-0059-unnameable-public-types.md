@@ -245,17 +245,19 @@ host) and `public-api.unix.txt` (mirrored by hand under the `#` note it already 
 Unix half is the weaker one): four items with their fields and methods, nothing removed or
 renamed. `--diff-platforms` still reports six lines, all inside `oneterm_vt::pty`.
 
-**Budget.** `crates/vt` is **+62 / -13** against a budget of +16 / -4, and
-`scripts/vt-public-api.py` **+98** against +50. Both are over by more than half, so both are
-stated rather than buried:
+**Budget.** `crates/vt` is **+60 / -13** against a budget of +16 / -4, and
+`scripts/vt-public-api.py` **+98 / -0** against +50. Measured with
+`git diff --numstat main...HEAD`, excluding the two generated surface files. (Independent
+verification measured +57 / -13 at `6d8a442c`; the three extra lines are the `Placement`
+construction note its finding F8 asked for.) Both are over by more than half, so both are stated
+rather than buried:
 
 | Where | Cost | Budgeted? |
 | --- | --- | --- |
-| re-exports, `#[non_exhaustive]`, `Placement`'s fields, `SyncState::new` | +23 / -9 | yes, the +16 / -4 |
-| the crate-root doctest, and the `Placement` / `SnapshotPlacement` cross-references | +15 | the Plan asks for both; the +16 counted neither |
-| CHANGELOG and guide chapter 12 | +24 / -4 | the Documentation Action asks for both; not counted either |
+| `crates/vt/src`: the four re-exports, two `#[non_exhaustive]` marks, `Placement`'s five fields, `SyncState::new`, the two cross-references, and the crate-root doctest | +40 / -9 | the +16 / -4 counted the first four items and neither the cross-references nor the doctest, both of which the Plan asks for |
+| CHANGELOG and guide chapter 12 | +20 / -4 | the Documentation Action asks for both; the +16 counted neither |
 | the two surface files | +36 | generated |
-| the gate: the ledger below, its staleness check, the docstring | +98 | the +50 assumed no second finding |
+| the gate: its docstring, the ledger below and the ledger's staleness check | +98 | the +50 assumed the gate would find nothing but the four |
 
 **Tests.** `cargo test -p oneterm-vt` in all three feature states (default,
 `--no-default-features`, `--all-features`), `--doc`, and `cargo test --workspace`.
@@ -267,16 +269,16 @@ proxy -- an environment failure, unrelated to this branch and reproducible on `m
 **`crates/vt/README.md` unchanged**, as the packet predicted: it names none of the four.
 
 **The gate found seven more instances of the same defect, and this packet does not fix them.**
-Written as designed it fires on every public signature, and the crate has ten unnameable types,
-not four:
+Written as designed it fires on every public signature, and the crate has eleven unnameable
+types, not four -- the four fixed here and these seven:
 
 | Type | Defined in | Reached through |
 | --- | --- | --- |
-| `StrSpan`, `ByteSpan`, `ParamSpans` | `events::batch` | `VtEvent`'s variant payloads, and the `EventBatch` accessors that take one -- so those three methods cannot be called from outside at all |
+| `ModeState` | `terminal::mode` | `Mode::inert_state`, which returns `Option<ModeState>` -- an **enum** whose five variants have no path, so the value can be `{:?}`-printed and not matched, compared or converted. The worst of the seven, and the priority for the follow-up |
+| `StrSpan`, `ByteSpan`, `ParamSpans` | `events::batch` | `VtEvent`'s variant payloads. Passing one straight back into `EventBatch::str` / `bytes` / `params` **does** compile, because the binding is inferred; what is impossible is writing the type down -- storing a span in a struct field or returning one from a helper |
 | `ColorOverrides` | `terminal::color` | `Terminal::colors` |
 | `Watermark` | `snapshot::state` | `SnapshotState::watermark` |
 | `Invalidation` | `selection` | `Selection::invalidate` |
-| `ModeState` | `terminal::mode` | `Mode::state` |
 
 Re-exporting them is not in this packet's scope: each needs the same `#[non_exhaustive]` decision,
 field documentation and CHANGELOG line the four got, and that is a designed packet rather than a
@@ -284,7 +286,7 @@ drive-by. The LLD's edge case offers "a re-export or an entry in a short allow-l
 allow-list is added speculatively. These are not speculative -- they are seven named, verified
 findings -- so they are a `KNOWN_UNNAMEABLE` ledger in the script. The ledger may only **shrink**:
 a name in it that stops firing fails the gate too, so it cannot rot into a permanent exemption.
-**A follow-up packet under `IN-0039` should empty it.** This is the one place the packet's "four
+**[`BUG-0060`](IN-0039.md) is the proposed packet that empties it**, `ModeState` first. This is the one place the packet's "four
 names and no more" scope and its "the gate passes on the branch" acceptance could not both hold,
 and the ledger keeps both true without hiding the other seven.
 
@@ -298,14 +300,66 @@ Known gaps to state rather than discover:
   which is the same question answered from the other side. Two consequences of reading unlinked
   text: enum variant names are unlinked too, so a variant opening its own line is stripped before
   the scan, and an identifier is reported only if this crate actually defines a type by that name.
+- `Placement` is `#[non_exhaustive]` and derives no `Default`, so an external crate cannot
+  construct one **at all**: no struct literal, no functional update (`E0639`), no
+  constructor. That is deliberate and now documented on the type. No API in the crate takes
+  a `Placement` -- they are returned by `Terminal::placements` and read -- so a `Default`
+  would exist only to let an embedder synthesise one for its own painter test, which is a
+  reason to add it when somebody has that test, not before. `ResizeOutcome` derives
+  `Default` and has `pub` fields, so default-then-assign works there.
 - The gate reads rendered rustdoc HTML, so it sees only **named types in the rendered signature**.
   A type reachable solely through an associated type, a where-clause bound or a macro-generated
   impl is not checked. Rustdoc JSON would fix this and is nightly-only against a pinned stable
   toolchain -- the same limit `scripts/vt-public-api.py` already documents for its main mode.
+- The gate can only report a type it found a definition for. Its `DEFINITION` pattern
+  matched `pub` and `pub(crate)` only, which made a `pub(super)` or `pub(in path)` type
+  invisible; widened here to any parenthesised visibility, which is one regex alternation
+  and no new finding today. The `NAMED` pattern still wants three characters or more, so a
+  type named in one or two would be skipped -- none exists, and loosening it would read
+  every generic parameter as a type.
 - The gate cannot see a *signature change*, only an item added, removed or renamed. Unchanged.
 - The Windows surface file is regenerated on a Windows host and the Unix one in CI (or by hand with
   the script's `#` note). Whichever half is produced by hand is the weaker half, and the packet
   should say which it was.
+
+## Harness Row
+
+The harness database is not edited by this packet's session. This is the row it owes, for whoever
+applies it. The columns are `harness.db`'s real `story` schema, read from a copy of the shipped
+database -- **not** the shape the `US-0104` packet's snippet uses, which does not match it:
+
+```python
+import sqlite3
+
+with sqlite3.connect("harness.db") as db:
+    db.execute(
+        """INSERT INTO story (
+            id, title, created_at, risk_lane, contract_doc, packet_doc, status,
+            unit_proof, integration_proof, e2e_proof, platform_proof,
+            evidence, verify_command, last_verified_at, last_verified_result,
+            notes, intake_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "BUG-0059",
+            "Four public methods return types nothing outside the crate can name",
+            "2026-09-15",
+            "high_risk",
+            "docs/spec-intakes/IN-0039-vt-gaps-and-publish/low-level-design/api-surface.md",
+            "docs/spec-intakes/IN-0039-vt-gaps-and-publish/BUG-0059-unnameable-public-types.md",
+            "implemented",
+            1, 1, 0, 1,
+            "docs/spec-intakes/IN-0039-vt-gaps-and-publish/evidence/BUG-0059-verify.md",
+            "pwsh scripts/ci-local.ps1",
+            "2026-09-16",
+            "pass",
+            "E2E not applicable: nothing a user can see changes. cargo deny is proxy-blocked "
+            "on this host and was not run.",
+            44,
+        ),
+    )
+```
+
+`e2e_proof` is 0 on purpose, for the reason the Proof block already gives.
 
 ## Handoff
 

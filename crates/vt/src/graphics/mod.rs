@@ -82,6 +82,9 @@ pub struct GraphicData {
 ///
 /// [`SnapshotPlacement`](crate::SnapshotPlacement) is the same image seen
 /// through a snapshot, positioned by resolved row and column instead.
+///
+/// You read these and never build one: no API takes a `Placement`, and the
+/// `#[non_exhaustive]` mark with no `Default` says so in the type system.
 // Returned, never built outside the crate, and `pixel_size` is an early shape.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

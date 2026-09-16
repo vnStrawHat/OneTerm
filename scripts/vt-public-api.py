@@ -22,8 +22,11 @@ rendered signature are seen (a type reached solely through an associated type, a
 where-clause bound or a macro-generated impl is not), primitives and `std` types
 are skipped because their links leave the crate, and a type reachable through
 both a public and a private path passes on the public one -- correctly, because
-the embedder can name it. `KNOWN_UNNAMEABLE` below carries the instances that
-predate the gate; that list may only shrink.
+the embedder can name it. A fourth limit is the `NAMED` pattern below: it wants
+three characters or more, so that a generic parameter (`T`, `Ps`) is not read as
+a type, and a type named in one or two characters would be skipped with it. None
+exists today. `KNOWN_UNNAMEABLE` below carries the instances that predate the
+gate; that list may only shrink.
 
 **There are two snapshots, one per platform family** (`US-0104`): the `pty` module
 publishes `PipeReader`, `PipeWriter` and `Options::escape_args` on Windows, and
@@ -97,8 +100,12 @@ KNOWN_UNNAMEABLE = {
     "StrSpan",
     "Watermark",
 }
-# Where this crate defines a type, public module or not.
-DEFINITION = re.compile(r"^pub(?:\(crate\))? (?:struct|enum|trait|type|union) ([A-Za-z0-9_]+)", re.M)
+# Where this crate defines a type, at any visibility: `pub`, `pub(crate)`,
+# `pub(super)` or `pub(in path)`. A type missing from this map can never be
+# reported, so the visibility group is deliberately anything in parentheses.
+DEFINITION = re.compile(
+    r"^pub(?:\([^)]*\))? (?:struct|enum|trait|type|union) ([A-Za-z0-9_]+)", re.M
+)
 
 
 def members(page: Path) -> list[str]:
@@ -197,7 +204,10 @@ def check_nameable() -> int:
                     findings.append(finding)
     fixed = sorted(KNOWN_UNNAMEABLE - seen)
     if fixed:
-        findings.append(f"KNOWN_UNNAMEABLE is stale: {', '.join(fixed)} are nameable now")
+        findings.append(
+            f"KNOWN_UNNAMEABLE is stale -- no public signature names "
+            f"{', '.join(fixed)} any more; delete from the ledger"
+        )
     if not findings:
         print(f"every type in a public signature is nameable, "
               f"but the {len(KNOWN_UNNAMEABLE)} in KNOWN_UNNAMEABLE")
