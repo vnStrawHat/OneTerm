@@ -129,9 +129,12 @@ fn run() -> std::io::Result<()> {
 # let _ = run;
 ```
 
-Two tokens, because child exit must be observable without reading: on Unix that
-is race-free `SIGCHLD` handling, on Windows a wait callback. A child that exits
-while you are blocked on a read would otherwise never be noticed.
+Two tokens, because child exit must be observable without reading: on Windows a
+wait callback on the child's process handle, on Unix one thread per session
+blocked in `wait` that pokes a socket your poller already watches. Both are
+race-free, and neither is a `SIGCHLD` handler -- that signal is process-global,
+and a library that claims it fights every other runtime in your process. A child
+that exits while you are blocked on a read would otherwise never be noticed.
 
 Writing to the child is the same object: `EventedReadWrite::writer` is where
 every `VtEvent::Reply` goes, and where you send the bytes `input::encode_key`
@@ -169,11 +172,26 @@ still running after `drop` returns cannot touch your memory. But do not write
 code that assumes the process has no more threads of this crate in it the
 instant `drop` returns, because it does.
 
-**Dropping a pseudo-console is an action, not a release.** It closes the
-console, waits a bounded grace period for the *child* to exit -- not for those
-threads -- and terminates the child if it never does. The drop therefore blocks,
-and it belongs on an owner thread rather than on a UI thread. Deregister the
-sources from the poller before dropping the poller, not after.
+**Dropping a pseudo-console is an action, not a release** -- and it is a
+different action on each platform. Neither half waits for the threads above:
+
+- **Windows**: the drop closes the console, then gives the *child* a bounded
+  grace period of two seconds to exit and terminates it if it never does. A shell
+  that has finished starting exits within about 20 ms of the close; one that was
+  still initialising never processes the host's exit request and would otherwise
+  stay forever, holding its console host with it. So **the drop blocks**, for up
+  to that grace period, and belongs on an owner thread rather than on a UI
+  thread. Only your own child is ever touched, and only through the handle it was
+  spawned with.
+- **Unix**: there is no `Drop` impl at all. Closing the master side is the last
+  close of the controlling terminal, so the line discipline sends `SIGHUP` to the
+  child's foreground process group -- which is the hang-up that was wanted. The
+  crate never signals the child itself: the reaper's `wait` reaps the pid the
+  moment the child exits, and the usual reason to drop a session is that it
+  already has, so a signal from here could reach whatever the kernel handed that
+  pid to next. Nothing waits, so the drop does not block.
+
+Deregister the sources from the poller before dropping the poller, not after.
 
 ## Windows: the console host you have to ship
 

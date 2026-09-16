@@ -15,9 +15,9 @@
 //! must be observable without reading.
 //!
 //! Passive while it lives — **dropping** a pseudo-console is an action with an
-//! external side effect. It closes the console, waits a bounded grace period for
-//! the child to exit, and terminates that child if it never does. The drop
-//! therefore blocks, and belongs on an owner thread rather than on a UI thread.
+//! external side effect, and a different one on each platform: on Windows the
+//! drop blocks and can terminate the child, on Unix it neither waits nor
+//! signals. Read [Platforms](#platforms) before choosing the thread it drops on.
 //!
 //! # Platforms
 //!
@@ -34,15 +34,35 @@
 //!   executable gets the inbox `conhost.exe`, which swallows Sixel DCS payloads.
 //!   The loader resolves the path at run time, so only the embedder's own build
 //!   can put the pair there. Windows-only items: `PipeReader` and `PipeWriter`.
+//!
+//!   Dropping closes the pseudo-console, then gives the child a bounded grace
+//!   period — two seconds — to exit and terminates it if it has not: a client
+//!   that was still starting up never processes the host's exit request and
+//!   would otherwise outlive its console forever. Only this process's own child
+//!   is touched, and only through the handle it was spawned with. **The drop
+//!   therefore blocks**, and belongs on an owner thread rather than a UI thread.
 //! - **Unix** — `openpty` plus one reaper thread that turns child exit into a
 //!   pollable event. Unix-only items: `SignalMask` and the
 //!   `Options::child_signal_mask` field.
 //!
+//!   There is no `Drop` impl: dropping closes the master side, and that last
+//!   close of the controlling terminal makes the line discipline send `SIGHUP`
+//!   to the child's foreground process group. This crate never signals the child
+//!   itself: the reaper's `wait` reaps the pid the moment the child exits, and
+//!   the usual reason to drop a session is that it already has, so a signal from
+//!   here could reach whatever the kernel handed that pid to next. Nothing
+//!   waits, so the drop does not block.
+//!
 //! Two threads exist inside the transport on Windows (a pipe reader and a pipe
-//! writer) and one on Unix (the reaper). All are internal, all are joined on
-//! drop, and none calls into embedder code. They are the only threads this crate
-//! spawns, which is why `--no-default-features` leaves the engine's "no threads,
-//! no locks, no interior mutability" guarantee literally true.
+//! writer) and one on Unix (the reaper). All are internal and none calls into
+//! embedder code — and **none of them is joined**: dropping a pseudo-console
+//! does not wait for them. The Windows pair is parked in a blocking pipe read or
+//! write and returns when the pipe breaks; the Unix reaper deliberately outlives
+//! the drop, because owning the child is what keeps its exit observable. Each
+//! holds only what it was given, so a thread still running after `drop` returns
+//! cannot touch embedder memory. They are the only threads this crate spawns,
+//! which is why `--no-default-features` leaves the engine's "no threads, no
+//! locks, no interior mutability" guarantee literally true.
 //!
 //! Design:
 //! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/pty.md>.
@@ -111,9 +131,10 @@ impl Shell {
 /// this crate does not have.
 ///
 /// Not comparable: on Unix the struct holds a `SignalMask`, which wraps a
-/// `libc::sigset_t` that is a plain `u32` on some targets and an opaque struct
-/// on others. A derived `PartialEq` compiles on the first kind only, and a
-/// hand-written one would compare padding. Nothing needs it.
+/// `libc::sigset_t` — a plain `u32` on some targets and an opaque struct with no
+/// `PartialEq` on others, so a derive compiles on the first kind only. Comparing
+/// two masks by hand means walking the signal numbers, and their upper bound is
+/// per-target knowledge libc does not export. Nothing needs the comparison.
 #[derive(Clone, Debug, Default)]
 pub struct Options {
     /// The program to run. `None` selects the platform default.
@@ -207,8 +228,11 @@ pub trait EventedReadWrite {
 /// An [`EventedReadWrite`] that also reports what its child process did.
 ///
 /// Separate from the read/write half because child exit must be observable
-/// without reading: on Unix that is race-free `SIGCHLD` handling, on Windows a
-/// wait callback.
+/// without reading: on Windows a wait callback on the child's process handle, on
+/// Unix one thread per session blocked in `wait` that pokes a socket the
+/// embedder's poller already watches. Both are race-free. Neither is a
+/// `SIGCHLD` handler — that signal is process-global, and a library crate has no
+/// business claiming it.
 pub trait EventedPty: EventedReadWrite {
     /// The next pending child event, or `None`.
     fn next_child_event(&mut self) -> Option<ChildEvent>;

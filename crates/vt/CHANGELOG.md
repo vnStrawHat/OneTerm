@@ -226,8 +226,9 @@ carry no API change at all. Such a release says so below rather than being omitt
   macOS, an opaque struct on glibc, so the code compiled on one Unix and not on the other, and the
   `Option<SignalMask>` field made `Options` inherit the same problem on every Unix. Nothing needs
   the comparison -- a captured signal mask is passed to a child, not matched against another mask
-  -- so the derives are gone on both platforms rather than being reimplemented by hand over
-  padding bytes. Windows is where this is a real removal: `Options` did compare there. No
+  -- so the derives are gone on both platforms rather than being reimplemented by hand, which would
+  mean walking the signal numbers against a per-target upper bound libc does not export. Windows is
+  where this is a real removal: `Options` did compare there. No
   signature, field or type moved.
 
 ### Changed

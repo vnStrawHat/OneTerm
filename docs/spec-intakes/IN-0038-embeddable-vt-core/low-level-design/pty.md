@@ -416,14 +416,24 @@ embedder gets wrong first:
   the guide cites it.
 - **Two threads exist inside the transport, and they are not the embedder's.** Windows uses a
   reader thread and a writer thread over the ConPTY pipes (`pty/windows/pipe.rs`); Unix uses one
-  reaper thread that turns `SIGCHLD` into a pollable event (`pty/unix.rs`). Both are internal, both
-  are joined on drop, and neither calls into embedder code. This is the only place the crate spawns
-  a thread, and it is behind the `pty` feature -- so `--no-default-features` keeps the engine's
-  "no threads, no locks, no interior mutability, no callbacks" guarantee literally true.
-- **Drop blocks, and must not run on a UI thread.** Dropping a `PseudoConsole` closes the console,
-  waits up to `CHILD_EXIT_GRACE` (2 s, `DEC-0016`) for the child, and terminates it if it never
-  exits. That is an external side effect with a bounded stall. OneTerm hands the drop to a detached
-  owner thread (`LocalSession::shutdown_owner`); an embedder must do something equivalent.
+  reaper thread, blocked in `Child::wait`, that turns child exit into a pollable event
+  (`pty/unix.rs`) -- **not** a `SIGCHLD` handler, which is process-global and would fight every
+  other runtime in the process. Both are internal and neither calls into embedder code, and
+  **neither is joined**: the `JoinHandle` is dropped at spawn on both platforms, the Windows pair
+  is parked in a blocking pipe read or write until the pipe breaks, and the Unix reaper
+  deliberately outlives the drop because owning the child is what keeps its exit observable. This
+  is the only place the crate spawns a thread, and it is behind the `pty` feature -- so
+  `--no-default-features` keeps the engine's "no threads, no locks, no interior mutability, no
+  callbacks" guarantee literally true.
+- **Drop is an external side effect, and on Windows it blocks.** Dropping a `PseudoConsole` on
+  Windows closes the console, then waits up to `CHILD_EXIT_GRACE` (2 s, `DEC-0016`) for the child
+  and terminates it if it never exits: a bounded stall, so it must not run on a UI thread. OneTerm
+  hands that drop to a detached owner thread (`LocalSession::shutdown_owner`); an embedder must do
+  something equivalent. On Unix there is no `Drop` impl at all -- closing the master side lets the
+  line discipline `SIGHUP` the child's foreground process group, the crate never signals the child
+  itself (the reaper's `wait` reaps the pid the moment the child exits, so a signal from the drop
+  could reach whatever the kernel handed that pid to next), and nothing waits. The rustdoc and guide must
+  state both halves per platform, never one as if it were both.
 - **`FeedStats`, not a frame clock.** Nothing about the transport changes the pull-side read model.
   The engine still never pushes.
 
