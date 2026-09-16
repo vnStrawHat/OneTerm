@@ -25,10 +25,16 @@ use super::{GraphicData, MAX_PLACEMENTS, Placement, VIRTUAL_CELL};
 /// clipped at the bottom of the screen.
 ///
 /// The footprint and the cursor walk use the **same** cell size, which is what
-/// keeps the prompt below the image rather than inside it when conhost issues
-/// its absolute `CUP`. At the [`VIRTUAL_CELL`] fallback that is the 10x20 cell
-/// and the classic `bands * 6 / 20`, byte for byte; do not "improve" either
-/// without a fresh ConPTY capture.
+/// keeps the prompt off the body of the image — on its last row, whose own
+/// newline then carries the shell clear of it — rather than high inside it when
+/// conhost issues its absolute `CUP`. At the [`VIRTUAL_CELL`] fallback that is
+/// the 10x20 cell and the classic `bands * 6 / 20`, byte for byte; do not
+/// "improve" either without a fresh ConPTY capture.
+///
+/// That holds while the raster attributes agree with the data. A `"Pan;Pad;Ph;Pv`
+/// declaration overrides the measured height and the cursor keeps following the
+/// bands, so the two disagree in both directions — see [`DecodedSixel`]. The
+/// behaviour predates the real-cell footprint and is unchanged by it.
 ///
 /// Returns the scroll reports the line feeds produced, for the caller to turn
 /// into events — the engine's one reporting path lives on the dispatch handler.

@@ -25,8 +25,15 @@ pub(crate) struct DecodedSixel {
     /// The text cursor moves down `band_pixels / cell_height` rows — the row
     /// holding the top of the last sixel band, as DEC terminals and conhost do.
     /// The division happens in [`place`](super::placement::place), against the
-    /// same cell size the footprint uses, so the cursor can never land inside
-    /// the image; at [`VIRTUAL_CELL`](super::VIRTUAL_CELL) it is the classic `bands * 6 / 20`.
+    /// same cell size the footprint uses; at
+    /// [`VIRTUAL_CELL`](super::VIRTUAL_CELL) it is the classic `bands * 6 / 20`.
+    ///
+    /// The cursor therefore lands on the image's **last row**, not past it —
+    /// but only while the raster attributes agree with the data. `"Pan;Pad;Ph;Pv`
+    /// overrides the measured extents (see [`SixelParser::finish`]), and the
+    /// cursor keeps following the bands, so a declaration larger than the data
+    /// leaves the cursor high inside the image and one smaller than the data
+    /// walks it below. Pre-existing and unchanged by the real-cell footprint.
     pub(crate) band_pixels: u32,
 }
 

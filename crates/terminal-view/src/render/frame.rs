@@ -499,10 +499,7 @@ impl Frame {
     /// The placement an image id names, for the cell footprint the painter
     /// clips to (`BUG-0062`). `None` once the image is gone.
     pub(crate) fn placement(&self, id: GraphicId) -> Option<&SnapshotPlacement> {
-        self.content
-            .placements()
-            .iter()
-            .find(|placement| placement.id == id)
+        self.content.placement(id)
     }
 
     /// The OSC 8 target behind a cell's link id.

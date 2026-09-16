@@ -292,6 +292,12 @@ impl TerminalContent {
         self.state.placements()
     }
 
+    /// The placement an image id names, or `None` once the image is gone — the
+    /// painter's source for the cell footprint it clips to.
+    pub fn placement(&self, id: GraphicId) -> Option<&SnapshotPlacement> {
+        self.state.placement(id)
+    }
+
     /// The cell's `(col, row)` offset inside the image's own cell grid.
     pub fn graphic_offset(&self, id: GraphicId, row: RowId, col: u16) -> Option<(u16, u16)> {
         self.state.graphic_offset(id, row, col)

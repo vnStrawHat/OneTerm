@@ -113,11 +113,28 @@ behave exactly as they do for text -- and the cursor keeps its column. Image row
 below the final cursor row are placed without further scrolling and are clipped
 at the bottom of the screen.
 
-The footprint and the cursor walk divide by the same number, which is why a prompt
-lands below an image rather than inside it when a console host issues its absolute
-cursor move. At the fallback cell that walk is the classic `bands * 6 / 20`, the
+The footprint and the cursor walk divide by the same number, which is what keeps a
+prompt off the body of an image when a console host issues its absolute cursor
+move. At the fallback cell that walk is the classic `bands * 6 / 20`, the
 agreement with the Windows console host: not tunable, and changing it needs a
 fresh capture from a real console rather than an argument from first principles.
+
+**Where the cursor actually stops.** `bands * 6` is the height of the bands *above*
+the last one, so with a payload that does not end in a graphics newline the cursor
+lands on the image's **last row**, not past it, keeping its column; the shell's own
+newline then carries the prompt clear. Real encoders (`libsixel`, `img2sixel`) do
+end the payload with `-`, which makes `bands * 6` the full height and puts the
+cursor genuinely below the image whenever your cell height divides it -- at 9x18 and
+18x36 it does; at the fallback 20 px cell a 576 px image gives `576 / 20 = 28` against
+29 rows, and the cursor is still on the last row. This is the DEC and conhost rule.
+It is **not** xterm's: xterm moves to the left margin of the line below the image,
+and carries a `sixelScrollsRight` resource to opt out of that -- stated here for
+comparison only, since this repository holds no xterm capture to pin it against.
+
+One more case the rule does not cover: `"Pan;Pad;Ph;Pv` overrides the measured size
+while the cursor keeps following the bands. Declare a height the data does not fill
+and the cursor stops high inside the image; declare one smaller than the data and it
+walks past the bottom. Emit raster attributes that match what you draw.
 
 `SnapshotPlacement::pixel_size` is the image's true size in pixels. Draw it at
 exactly that size -- one image pixel to one device pixel -- anchored at the

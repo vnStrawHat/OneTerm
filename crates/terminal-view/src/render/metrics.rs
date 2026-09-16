@@ -456,3 +456,105 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod verifier_bug_0062 {
+    use gpui::{Bounds, point, px, size};
+
+    use super::CellMetrics;
+
+    fn metrics(cell_w: f32, line_h: f32, scale: f32) -> CellMetrics {
+        CellMetrics::snapped(cell_w, line_h, 10.0, 3.0, 5.0, scale)
+    }
+
+    /// At 100 % scale the same 9x18 device cell gives the same device numbers.
+    #[test]
+    fn v_quad_is_native_pixels_at_scale_one() {
+        let m = metrics(9.0, 18.0, 1.0);
+        assert_eq!((m.device.w, m.device.h), (9, 18));
+        let (clip, image) = m.image_quad(point(px(0.0), px(0.0)), (0, 0), (384, 576), (43, 32));
+        assert_eq!(image.size, size(px(384.0), px(576.0)));
+        assert_eq!(clip.size, size(px(387.0), px(576.0)));
+        // The ceil strip is outside the image, so it is never painted at all.
+        assert!(clip.size.width > image.size.width);
+    }
+
+    /// The fallback placement (`39 x 29` at 10x20) on a real 9x18 cell: the
+    /// clip is SMALLER than the image, so the picture is cropped and cannot
+    /// paint over the text below it.
+    #[test]
+    fn v_a_fallback_footprint_crops_the_image() {
+        let m = metrics(9.0, 18.0, 1.0);
+        let (clip, image) = m.image_quad(point(px(0.0), px(0.0)), (0, 0), (384, 576), (39, 29));
+        assert_eq!(clip.size, size(px(351.0), px(522.0)));
+        assert_eq!(image.size, size(px(384.0), px(576.0)));
+        let visible = clip.intersect(&image);
+        assert_eq!(visible.size, clip.size, "the clip wins in both axes");
+    }
+
+    /// A font that grew after placement leaves margin; the image is not
+    /// stretched to fill it.
+    #[test]
+    fn v_a_bigger_cell_after_placement_leaves_margin_not_stretch() {
+        let m = metrics(18.0, 36.0, 1.0);
+        let (clip, image) = m.image_quad(point(px(0.0), px(0.0)), (0, 0), (384, 576), (43, 32));
+        assert_eq!(clip.size, size(px(774.0), px(1152.0)));
+        assert_eq!(image.size, size(px(384.0), px(576.0)), "still native");
+    }
+
+    /// Partially scrolled off the top: the caller's grid bounds cut the image,
+    /// and the surviving rectangle is the bottom of the picture.
+    #[test]
+    fn v_partly_scrolled_off_the_top_is_cut_by_the_grid_bounds() {
+        let m = metrics(9.0, 18.0, 1.0);
+        let anchor = point(px(0.0), px(-180.0)); // ten rows above the grid
+        let grid = Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(720.0), px(720.0)),
+        };
+        let (clip, image) = m.image_quad(anchor, (0, 0), (384, 576), (43, 32));
+        let painted = grid.intersect(&clip).intersect(&image);
+        assert_eq!(painted.origin, point(px(0.0), px(0.0)));
+        assert_eq!(
+            painted.size,
+            size(px(384.0), px(396.0)),
+            "576 - 180 rows of picture survive"
+        );
+    }
+
+    /// Clipped at the right edge of the grid.
+    #[test]
+    fn v_clipped_at_the_right_edge() {
+        let m = metrics(9.0, 18.0, 1.0);
+        let grid = Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(180.0), px(720.0)),
+        };
+        let (clip, image) = m.image_quad(point(px(0.0), px(0.0)), (0, 0), (384, 576), (20, 32));
+        let painted = grid.intersect(&clip).intersect(&image);
+        assert_eq!(painted.size, size(px(180.0), px(576.0)));
+    }
+
+    /// The walk back from an interior cell lands on the same top-left at both
+    /// scales.
+    #[test]
+    fn v_interior_cell_walks_back_to_the_same_origin() {
+        for scale in [1.0f32, 1.5, 2.0] {
+            let m = metrics(9.0 / scale, 18.0 / scale, scale);
+            let anchor = point(px(100.0), px(50.0));
+            let (_, image) = m.image_quad(anchor, (0, 0), (384, 576), (43, 32));
+            let inner = point(
+                anchor.x + m.cell_width * 12.0,
+                anchor.y + m.line_height * 9.0,
+            );
+            let (_, from_inner) = m.image_quad(inner, (12, 9), (384, 576), (43, 32));
+            assert_eq!(from_inner, image, "scale {scale}");
+            let device = |p: gpui::Pixels| (f32::from(p) * m.scale_factor).round() as i32;
+            assert_eq!(
+                (device(image.size.width), device(image.size.height)),
+                (384, 576),
+                "scale {scale}"
+            );
+        }
+    }
+}

@@ -589,7 +589,9 @@ fn render_has_single_engine_file() {
 fn sixel_image_paints_once_per_frame(cx: &mut TestAppContext) {
     let mut h = Harness::open(cx, 6, 12, "", inputs_without_cursor());
     let _ = h.first_frame();
-    // Two bands of two columns: 2 x 12 pixels, one virtual 10 x 20 cell.
+    // Two bands of two columns: 2 x 12 pixels. The element pushes the real
+    // device cell in prepaint before this is fed, so the placement is sized by
+    // that cell, not by the VT340 one.
     h.probe.push_sixel(None);
     let stats = h.draw();
     assert_eq!((stats.images_uploaded, stats.images), (1, 1), "{stats:?}");
