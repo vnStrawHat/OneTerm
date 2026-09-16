@@ -347,3 +347,188 @@ Graphics.CopyFromScreen(200,200,400x300) -> distinct colors sampled: 1
   6- or 8-*byte* multibyte colour (e.g. `"a<3-byte char>bc"`) panics. This is a kit bug
   reachable identically from the tree and the menu, pre-dates this packet, and is out of its
   scope — noted only so it is not rediscovered as a US-0110 regression.
+
+---
+
+# Re-verification of `13ada75a` (2026-09-16)
+
+Targeted re-check of the rework commit `13ada75a`
+("fix(session-ui): one resolver decides a session's colour for both surfaces"), which the
+implementer stacked on this report's commit `91ca41f1`. Scope: findings F1-F5 and the
+gate only — no GUI walk (the desktop is still locked), no new review of the parts that
+already passed.
+
+## Verdict
+
+**PASS-WITH-NOTES.** Every item in the re-verification brief checks out. F2 and F4 are
+fixed at the root and I reproduced both fixes. F3 is corrected. F1 is now raised as an
+explicit blocking owner decision with accurate options rather than buried under Gaps —
+which is what I asked for; it is *escalated*, not *resolved*, so it still gates acceptance.
+F5 is moot. The two remaining notes are cosmetic doc nits plus one unreachable behaviour
+change I did not see anyone flag.
+
+## Per-finding status
+
+### F2 — FIXED, and fixed in the right place
+
+`session_color_hex(&SshSession) -> &str` now lives at
+`crates/session-ui/src/tree_builder.rs:50-55`, beside `session_subtitle`, and is the *only*
+place that decides a session's hex: `Some(hex) if Hsla::parse_hex(hex).is_ok() => hex`,
+else `SshSession::DEFAULT_COLOR_HEX`. Both callers go through it — `tree_render.rs:94-97`
+(`session.map(session_color_hex).and_then(|hex| Hsla::parse_hex(hex).ok()).unwrap_or_else(|| cx.theme().accent)`)
+and `menu_entries` (`tree_builder.rs:92-96`). This is stronger than asserting agreement on
+a list of inputs: the two surfaces now parse *the same string* with the same function, so
+they agree by construction for every possible input, not just the eight probed.
+
+`menu_entries_and_the_tree_resolve_every_colour_alike` walks my probe inputs and pins both
+sides for each. Run on `13ada75a`:
+
+```
+cargo test -p oneterm-session-ui
+test tree_builder::tests::menu_entries_and_the_tree_resolve_every_colour_alike ... ok
+test tree_builder::tests::menu_entries_carries_the_saved_colour ... ok
+test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+```
+
+Re-running my round-1 table against the new resolver — all six cases the brief named, plus
+the three that diverged before:
+
+| saved `color` | tree | menu | same? |
+|---|---|---|---|
+| `None` / `""` / `"   "` | `#56B6C2` | `#56B6C2` | yes |
+| `" #E06C75 "` | `#56B6C2` | `#56B6C2` | **yes (was: teal vs red)** |
+| `"#abc"` | `#56B6C2` | `#56B6C2` | **yes (was: teal vs accent)** |
+| `"#GGGGGG"` | `#56B6C2` | `#56B6C2` | **yes (was: teal vs accent)** |
+| `"#56b6c2"` | `#56b6c2` | `#56b6c2` | yes |
+| `"98C379"` | `98C379` | `98C379` | yes |
+| `"#56B6C280"` | `#56B6C280` (alpha kept) | same | yes |
+
+Note the resolver deliberately does **not** trim, matching `parse_hex`, so `" #E06C75 "`
+now falls back on both surfaces rather than being rescued on one. That is the right call:
+one rule, and the rule is "whatever `parse_hex` accepts".
+
+**The `to_hex` claim is true — I probed it independently.** Twelve hex values through
+`Hsla::parse_hex(...).to_hex()`, temporary test, then reverted:
+
+```
+to_hex does not round-trip: ["#C678DD -> #C677DD", "#010203 -> #010202", "#123456 -> #113456"]
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 63 filtered out
+```
+
+Three of twelve, exactly the three the implementer named. The cause is
+`(rgb.r * 255.) as u32` in `to_hex`
+(`reference/gpui-kit/crates/component/src/theme/color.rs:269-287`) — truncation, not
+rounding, after float error from the `Rgba -> Hsla -> Rgba` trip.
+**So returning hex text rather than `Hsla::to_hex()` is right**, and for a sharper reason
+than "lossy": the session dialog persists `h.to_hex()` (`session_dialog.rs:309`), so a
+second `to_hex` in the producer would shift colours the app itself saved — turning F2 from
+a hand-edit-only defect into an everyday one. It is also the smaller change: no conversion
+at all, and `crates/state`'s seam stays a plain `String`.
+
+### F4 — FIXED, mutation confirmed dead
+
+`menu_entries_carries_the_saved_colour` gained `db-02` `#E5C07B` alongside `db-01`
+`#98C379` inside the same `infra` group, so one section now holds two colours. I re-applied
+my M3 mutation ("every row in a section takes the first row's colour") on `13ada75a`:
+
+```
+test tree_builder::tests::menu_entries_carries_the_saved_colour ... FAILED
+assertion `left == right` failed: each row keeps its own colour, including within one section
+  left: [("", [(1, "prod", "#E06C75")]), ("infra", [(2, "db-01", "#98C379"), (3, "db-02", "#98C379")])]
+ right: [("", [(1, "prod", "#E06C75")]), ("infra", [(2, "db-01", "#98C379"), (3, "db-02", "#E5C07B")])]
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 54 filtered out
+```
+
+Mutation reverted; `git status --short` empty. (The packet quotes the same failure with
+"53 filtered out"; mine reads 54 only because my `to_hex` probe was still in the file.)
+
+### F3 — CORRECTED
+
+Verification Plan step 2 now reads "a **compile check on the widened tuple**, not coverage
+of the menu", names `src/panel/tests.rs:454` and its `Vec::new()`, and says the rendering is
+covered by the GUI evidence "and by nothing else — see Gaps". Accurate: I re-confirmed
+`fn saved_sessions` at `tests.rs:454` returns `Vec::new()` and that no test in the crate
+touches `title_suffix`. Step 1 correspondingly gained "This is the only automated proof of
+the behaviour". Honest.
+
+### F1 — CORRECTLY ESCALATED, still pending the owner
+
+New section "Owner decision pending: accessible name" in the packet. Every technical claim
+in it re-derives correctly against
+`reference/gpui-kit/crates/component/src/menu/popup_menu.rs`: `a11y_label()` returns
+`Some(label)` for `Item` at **274-276** and reaches the element as `.aria_label(label)` at
+**1210**; it is `None` for `ElementItem` at **278**; `gpui-component` is a plain crates.io
+dependency (`Cargo.toml:44`, no `[patch]` section); and `render_icon` forces
+`Some(icon.xsmall())` at **1138**, which `Sizable` maps to `size_3` = 12 px
+(`icon.rs:161`), so option B really cannot draw the tree's 8 px square and really would
+flip `has_left_icon` for the whole menu. The correction to the original "the separators
+already have the same property" defence is accurate — those are `disabled`. Options A and B
+are stated fairly and the recommendation (A) is the one consistent with the owner's "like
+in the SSH Sessions panel" request. It is now stated that the packet "should not be
+accepted as if a Gaps bullet had settled it", and the Gaps entry points here. That is the
+right handling; the decision itself is still open and still gates acceptance.
+
+### F5 — moot
+
+`fef4b866` is now on `main` (tag `v0.6.0` fetched), so the branch diff is this packet only.
+
+## Docs
+
+- `docs/gui-layout.md:65` — rewritten and accurate: the colour "resolved by the session
+  feature's `session_color_hex` — the one function the right dock's tree also goes through,
+  so a value neither surface can parse … falls back to the same `#56B6C2` in both". The old
+  "a hex that will not parse falls back to the theme accent" sentence is gone.
+- `high-level-design.md:109-120` and `:136-141` — the shared resolver, the
+  hex-text-not-`Hsla` rationale with the `#C678DD -> #C677DD` example, and "both builders
+  keep a `cx.theme().accent` arm that is unreachable while `DEFAULT_COLOR_HEX` is a valid
+  hex". All match the code.
+- Rustdoc: Grep over `crates/**/*.rs` for `accent` shows both renderer comments now say the
+  arm is unreachable (`tree_render.rs:92-93`, `terminal_panel.rs:89-91`). No stale claim.
+- **N1 (minor, cosmetic)** — two lines in the packet's older sections were not swept:
+  Acceptance bullet 5 (`:70`) still reads "the fallback is `cx.theme().accent`", which now
+  describes an unreachable arm rather than the behaviour, and Scope bullet 3 (`:48`) still
+  says "matching `tree_render.rs`: `Hsla::parse_hex`, theme accent as the last resort"
+  without mentioning the shared resolver the next bullet introduces. Neither is false —
+  both renderers do keep an accent last resort — but the Acceptance bullet reads as if the
+  accent were the fallback policy, which is exactly the phrasing F2 was about.
+- **N2 (minor, unreachable)** — `tree_render.rs:94-97` changed shape from
+  `session.and_then(|s| s.color…).unwrap_or_else(|| parse_hex(DEFAULT).unwrap_or(accent))`
+  to `session.map(session_color_hex).and_then(parse_hex).unwrap_or_else(|| accent)`. The
+  `session == None` arm therefore moved from "default teal" to "theme accent". It is
+  unreachable — the tree's items are built from the same store read in the same render, and
+  a `None` there would already render an empty subtitle — but it is a semantic change
+  nobody recorded. `session.map(…).unwrap_or(SshSession::DEFAULT_COLOR_HEX)` would keep the
+  old behaviour for free.
+- Observation, out of scope: the colour picker persists `h.to_hex()`
+  (`session_dialog.rs:309`), so every saved colour is already one lossy `to_hex` hop from
+  what the user picked in the dialog. Same kit truncation as above, pre-dates this packet,
+  and the rework does not make it worse — noted so it is not mistaken for a US-0110 defect.
+
+## Commands run
+
+```
+pwsh scripts/ci-local.ps1   ($env:CARGO_BUILD_JOBS = 6)
+...
+==> python scripts/third-party-notices.py --check
+ci-local: all checks passed.
+```
+
+```
+cargo test -p oneterm-session-ui
+test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+```
+
+```
+F4 mutation   test result: FAILED. 9 passed; 1 failed; 0 ignored; 54 filtered out   <- now caught
+to_hex probe  to_hex does not round-trip: ["#C678DD -> #C677DD", "#010203 -> #010202", "#123456 -> #113456"]
+```
+
+Both temporary edits reverted; the worktree is clean apart from this document.
+
+## Gaps unchanged from round 1
+
+The desktop is still locked, so there is still no GUI walk and still no end-to-end proof of
+the one acceptance bullet neither of us has exercised — that Down-arrow reaches a
+saved-session row and Enter opens its connect dialog. The rework does not touch rendering
+or the click path, so the existing PNGs remain valid evidence for what they show, and the
+implementer says so explicitly rather than re-taking them.
