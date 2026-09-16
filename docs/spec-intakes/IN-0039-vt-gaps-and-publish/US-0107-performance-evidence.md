@@ -109,8 +109,11 @@ rather than silently substituted.
       and needs no `crates/...` argument.
 - [x] **Nothing about publishing changed.** The diff touches neither `crates/vt/Cargo.toml` nor
       `scripts/verify-dependency-graph.py`; the README only gains a section.
-- [ ] **The budget holds.** Chapter 14 is 136 lines (~130) and the README +38 (+40), both inside
-      budget. **`crates/tools` is +251, not +100** -- see Gaps.
+- [ ] **The budget holds.** README +38 against +40, inside budget. **Chapter 14 is 172 lines
+      against ~130, and `crates/tools` is +266 against +100** -- both over; see Gaps. (An earlier
+      revision of this packet said the chapter was 136 lines. That was wrong: it came from
+      PowerShell's `Measure-Object -Line`, which does not count blank lines. `wc -l` and
+      `git diff --numstat` both say 172.)
 
 ## Documentation
 
@@ -257,7 +260,8 @@ percent between quiet runs, not by a factor.
 | Case | Result |
 | --- | --- |
 | `grid --mib 32 --check` against the committed baseline | exit 0, PASS, ratios 0.85-1.03 |
-| ...against a baseline doubled in place | exit 1, FAIL, all ten fixtures named at 0.27-0.35 x |
+| ...against a baseline **tripled** in place | exit 1, FAIL, all ten at 0.28-0.32 x |
+| ...against a baseline **doubled** in place | exit 1, FAIL, all ten at 0.41-0.50 x -- but see below |
 | `--baseline <missing file>` | exit 1, "no baseline at ...: The system cannot find the file" |
 | baseline with an extra `retired_fixture` entry | exit 1, "baseline entry `retired_fixture` has no fixture" |
 | baseline with `sixel` removed | exit 1, "fixture `sixel` has no baseline entry" |
@@ -266,23 +270,51 @@ percent between quiet runs, not by a factor.
 | debug build | exit 1, "--check needs a release build (cargo run --release)" |
 | `--features vt-paranoid`, release | exit 1, "--check is meaningless under vt-paranoid" |
 
+**The doubled-baseline case is a boundary test, and the first recording of it here was wrong.**
+An earlier revision of this packet reported 0.27-0.35 x for it; those figures came from a run taken
+while three sibling worktrees were compiling, which depressed the whole table and moved every ratio
+well clear of the band. On a quiet machine the true ratio against a doubled baseline is *exactly*
+0.50 by construction, and the observed value lands either side of it on noise alone: this session
+saw 0.41-0.50 (all ten failing), and the independent verifier saw 0.48-0.49 with **two fixtures
+passing at 0.51**.
+
+That is correct behaviour, not a defect. The comparison is `ratio < tolerance`, so exactly half as
+fast passes: the rule is "twice as slow fails", and something exactly half as fast is not yet
+*below* half. The band is now spelt out in the guard's own output ("A fixture fails *below* 0.50 x
+its baseline figure; exactly 0.50 passes") and in `guard`'s rustdoc, which also says that a proof of
+the guard should multiply the baseline by **three**, never two -- a test whose outcome is decided by
+measurement noise proves nothing. The tripled run above is the proof of record.
+
 ### Budget
 
-`crates/tools` +251 (Cargo.toml 6, `bench.rs` 62, `vt-bench.rs` 183) plus the 73-line baseline data
-file; chapter 14 136 lines; README +38. Two of three inside budget, one over -- see Gaps.
+`crates/tools` +266 plus the 73-line baseline data file; chapter 14 **172** lines; README +38. Only
+the README is inside budget.
 
 Gaps to state rather than discover:
 
-- **`crates/tools` is +251 against a +100 budget.** The budget assumed `--check` bolting onto an
+- **Chapter 14 is 172 lines against a ~130 budget**, a third over. The chapter is mostly its limits
+  section and the guard's rationale, which is the part the packet exists for, so nothing was cut to
+  hit the number; but the overrun is real and was previously misreported as 136.
+- **`crates/tools` is +266 against a +100 budget.** The budget assumed `--check` bolting onto an
   existing `tier3` mode that already reported MiB/s. No such mode exists: tier 3 reports
   microseconds per frame, so the guard had to be built against tier 2, and the tier-2 text table
   had to learn to omit the columns of a tier that was not asked for (otherwise a published
   single-tier table is half `-` cells). The guard itself, with its seven refusals, is ~75 lines;
   the interleaving and spread are ~45. Nothing here is speculative, but the estimate was wrong
   rather than the work being padded, and that is worth an owner's eye.
-- **The published spread is one run's, on a machine that was not idle all session.** `osc_9_7`'s
-  31% is visible in the published table rather than smoothed away, which is the point of the
-  column, but a reader should know the table would be tighter on a quiet machine.
+- **`osc_9_7` is reproducibly the noisiest fixture and nobody knows why.** 31% here and 26% in the
+  verifier's independent quiet-machine run, so it is a property of the fixture, not one unlucky
+  cycle -- the earlier claim that it was "one disturbed cycle" was wrong and is corrected in both
+  the chapter and the README. The mechanism has not been isolated; it is the only fixture emitting
+  an OSC per line, so the event path is the obvious place to look, but that is a hypothesis and the
+  documents deliberately do not state it as fact.
+- **Tier 3 has two timing flaws, both pre-existing and neither fixed here.** Its timed span
+  includes the `render.rows()` walk that computes `cells`, so the reported per-frame cost is the
+  snapshot *plus* a walk of every row it produced; and it takes a single sample rather than a
+  median of cycles, so it has no spread and no defence against one disturbed run. Neither touches
+  tiers 1-2 or `--check`. Recorded in `run_render`'s rustdoc as well: **tier 3 must not be
+  published as a figure until both are fixed**, which is the trap the next person to reach for "the
+  primary metric" would otherwise fall into.
 - **No Rust doctest in chapter 14.** Every code block in it is a shell command, fenced `console` or
   `text`. The chapter is covered by the rustdoc build and the standalone grep, not by
   `cargo test --doc`, because there is no API in it to compile against.
@@ -304,6 +336,26 @@ Gaps to state rather than discover:
   is the intake's Open Decision 4.
 - **The baseline can be refreshed to hide a regression** and no automation prevents it. Only the
   review of the commit that changes it does.
+
+## Verification notes closed
+
+Independent verification: **accepted with findings** -- the mechanism was sound and the published
+table reproduced within its spread on a quiet machine. Full report:
+[`evidence/US-0107-verify.md`](evidence/US-0107-verify.md). Every finding was a wrong sentence in a
+published document or a wrong number in this record, which is the failure mode this packet was
+written to prevent, so each is closed by correction rather than by argument.
+
+| # | Finding | Closed by |
+| --- | --- | --- |
+| F1 | "Most are ported from vtebench's generators" was false -- 2 of 10 are | Chapter 14 now names `dense_cells` and `scrolling` as the two, and says the other eight were written for this engine |
+| F2 | `osc_9_7`'s spread is not "one disturbed cycle"; it reproduced at 26% on a quiet machine | Chapter 14 and the README now call it reproducibly the noisiest fixture and say the cause is not isolated, rather than inventing one |
+| F3 | Chapter 1's "How to read the rest" stopped at chapter 13 | Chapter 14 added to the reading order |
+| F4 | This packet said the chapter was 136 lines; it is 172 | Corrected, with the cause (`Measure-Object -Line` skips blank lines) and the overrun recorded in Gaps |
+| F5 | The recorded doubled-baseline ratios (0.27-0.35 x) were impossible for a doubled baseline | Re-run and re-recorded; the strict `<` is documented as intended, and a x3 baseline is now the proof of record. See "The guard" above |
+| F6 | `vt-bench all` printed one unlabelled spread column, silently tier 2's | Each tier carries its own labelled spread column |
+| F7 | `--tolerance abc` and valueless flags fell back to defaults silently | All six value-taking flags are hard errors now, exit 1 with a message naming the flag |
+| F8 | A stray "Tier 3 measures..." sentence sat in the tier-2 exclusions | Rewritten without it |
+| F9 | Tier 3's timing flaw was unrecorded | In Gaps above and in `run_render`'s rustdoc, with "do not publish tier 3 until fixed" |
 
 ## Harness Row
 
@@ -347,7 +399,9 @@ ROW = dict(
         "proved in nine states: PASS on the baseline, FAIL on a doubled baseline, "
         "and seven refusals (missing file, stale entry, missing entry, wrong tier "
         "key, wrong tier command, debug build, vt-paranoid). Guide is fourteen "
-        "chapters; no 'thirteen' remains in crates/vt."
+        "chapters; no 'thirteen' remains in crates/vt. Independently verified: "
+        "accepted with nine findings, all closed on the branch; see "
+        "docs/spec-intakes/IN-0039-vt-gaps-and-publish/evidence/US-0107-verify.md."
     ),
     verify_command="pwsh scripts/ci-local.ps1 -Full",
     last_verified_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -356,10 +410,12 @@ ROW = dict(
         "Published tier 2 (grid), not tier 3: tier 3 reports us/frame, not MiB/s, "
         "so it cannot carry the throughput table the packet asks for. unit_proof=0 "
         "because the change is a diagnostic binary and documentation with no new "
-        "#[test]; integration proof is the nine guard states. crates/tools came to "
-        "+251 against a +100 budget -- the estimate assumed a tier-3 MiB/s mode that "
-        "does not exist. Interleaved cycles replace 3 back-to-back runs, so tier-1/2 "
-        "figures recorded in earlier packets are not comparable with these."
+        "#[test]; integration proof is the ten guard states. crates/tools came to "
+        "+266 against a +100 budget and chapter 14 to 172 lines against ~130 -- the "
+        "estimate assumed a tier-3 MiB/s mode that does not exist. Interleaved "
+        "cycles replace 3 back-to-back runs, so tier-1/2 figures recorded in earlier "
+        "packets are not comparable with these. The --check band is strict (<), so a "
+        "doubled baseline is a boundary test; use x3 to prove the guard."
     ),
     intake_id=44,
 )
