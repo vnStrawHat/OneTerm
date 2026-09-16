@@ -281,3 +281,101 @@ Verification tests added in this worktree only (not committed, not part of the p
    set only for `enter`. Whether the input consumes other keys first was not established; if it does
    not, the leak predates this packet and this packet does not widen it -- the release is gated by
    the same `held_keys` entry the press created. Flagged as a question, not a finding.
+
+---
+
+# Re-verification at `db8a059b`
+
+Branch: `feat/view-key-release-repeat` at `db8a059b`, rebased onto `main` at `47e7e93c`.
+Date: 2026-09-16. Same worktree, same rules; nothing committed to the packet's branch.
+
+## Verdict: PASS
+
+All eight findings are closed, every one of them by a mechanism rather than by a note, and the
+attacks below did not find a new way in.
+
+## Attacks run, and what they found
+
+Added in this worktree only: `crates/terminal-view/src/input/us0108_reverify_tests.rs` (registered
+from `crates/terminal-view/src/input/mod.rs`) and three `reverify_*` tests appended to
+`crates/terminal-view/src/terminal_view/view_tests.rs`. Seven attacks, all passing.
+
+- **F1, the canonical form against the original rather than against itself.** The packet's
+  `the_canonical_key_mirrors_the_engines_shift_table` only proves its copied table is internally
+  consistent; a drift from `crates/vt`'s private `unshifted` would still pass it.
+  `canonical_key_agrees_with_the_engines_own_unshifted_code_point` reads the engine's own answer back
+  out of the bytes it emits (`DISAMBIGUATE` + `ctrl` puts a text key on the `CSI <code>;5 u` rung)
+  and compares it with `canonical_key`'s fold for **49 keys**: all 21 shifted glyphs, all 21
+  unshifted ones, upper and lower case letters, space, and a non-ASCII letter. Zero disagreements.
+- **F1, every pairing in both directions.** `every_pairing_holds_in_both_directions` drives all 21
+  PC-101 pairs **each way** -- including the reverse of the case the packet drives, press `1` then
+  release `!`, which is what a user who presses Shift after the digit produces -- plus case folding
+  (`A`/`a`, `E`/`e`, and caps-lock's upper-case `key_char`), the letter with no PC-101 pairing
+  (`E acute` / `e acute`), and the names Windows renames or omits (`enter`/`return`, `escape`,
+  `tab`, `backspace`, `space`, which `named_key` does not cover and which becomes `" "`). It also
+  asserts the negative: `1` does not pair with `2`, `Enter` not with `Tab`, `" "` not with `Tab`.
+  At the view level, `reverify_a_digit_release_pairs_in_both_directions` runs both directions
+  through a real `Terminal` and gets `\x1b[49u` then `\x1b[49;1:3u` with nothing stranded.
+- **F1, the ceiling.** `two_physical_keys_sharing_a_code_point_collapse_to_one_entry` records the
+  price: two distinct physical keys that share one unshifted code point (a numpad digit and the
+  digit row, on a backend that names both `1`) become one held entry. The idempotent `hold_key`
+  makes that one release short rather than a stuck key, and the program could not tell the two
+  apart anyway, since both encode as `49`. Acceptable, and now written down.
+- **F2, with a peer that negotiated.** `reverify_a_negotiating_peer_still_receives_the_interrupt`
+  runs three panes: origin and one peer both push `REPORT_ALL_KEYS_AS_ESC`, the third pushes
+  nothing. The origin gets `\x1b[99;5u`; **both** peers get `\x03`. So the regression is closed, and
+  the residue is that a peer which negotiated the flag receives a signal its program asked to see as
+  a key. That is the pre-existing "broadcast fan-out re-encodes nothing" divergence, named as the
+  follow-up in `IN-0040`'s Candidate Work Packets and again in the `Interrupt` variant's own comment
+  -- it is documented, it is not widened, and it is strictly narrower than the alternative the
+  previous revision shipped.
+- **F4, the gate against the spec and against the encoder.** The kitty specification's
+  "Disambiguate escape codes" section is explicit, and the code quotes it verbatim at
+  `crates/terminal-view/src/input/keys.rs`: *"Turning on this flag will cause the terminal to report
+  the Esc, alt+key, ctrl+key, ctrl+alt+key, shift+alt+key keys using `CSI u` sequences instead of
+  legacy ones"*, with Enter, Tab and Backspace the only exceptions. `ctrl+c` is a `ctrl+key` chord
+  that generates no text, so under disambiguate alone the specification asks for `CSI 99;5u`, not
+  `0x03`. The widened gate is therefore right, and it matches this engine's own rung
+  (`kitty_applies`). `the_ctrl_c_gate_mirrors_the_encoders_rung` asserts view and encoder agree
+  across seven flag states, including the three pure-enhancement flags (`REPORT_EVENT_TYPES`,
+  `REPORT_ALTERNATE_KEYS`, `REPORT_ASSOCIATED_TEXT`), which must **not** move Ctrl+C on their own --
+  and they do not. `reverify_ctrl_c_under_disambiguate_is_handled_once` shows the view writes the
+  encoded key exactly once under `CSI > 1 u`, with no `0x03` alongside it, and that the key-up
+  clears the entry the encoded interrupt created.
+- **F5.** `map_key` now gates text on `!(ctrl || alt)`; the packet's own
+  `a_ctrl_or_alt_chord_carries_no_associated_text` covers it and shift-only still reports.
+- **F3.** Unchanged by design and now documented where a reader meets it:
+  `release_held_keys`'s rustdoc states it is untested in both places and names the manual walk as its
+  only proof. That is the honest disposition. The walk is still **NOT RUN**.
+- **F6-F8, records.** The harness row is now `status="implemented"`, `unit_proof=1`,
+  `integration_proof=1`, `e2e_proof=0`, `platform_proof=0`, `last_verified_result="pass"`,
+  `intake_id = IN_0040 = 45`. The detail design carries `Vec<KeySpec>`, `canonical_key` and
+  `release_held_keys` in its Interfaces table. `IN-0040`'s lifecycle paragraph now says the set is
+  drained on blur and explains why not on session close.
+
+## Identity harness
+
+`byte_identity_with_main_when_no_kitty_flag_is_pushed` re-run at `db8a059b`: **12528 cases compared,
+0 divergences** (8128 wrote bytes). The `!(ctrl || alt)` text gate does not move a byte, as expected:
+with no flag pushed the text field is never read.
+
+## Gates
+
+| Check | Result |
+| --- | --- |
+| `cargo test -p oneterm-terminal-view` | 334 passed, 0 failed, 3 ignored |
+| `cargo test -p oneterm-terminal` | 217 passed, 0 failed |
+| `python scripts/check-doc-paths.py` | passed, 198 paths in 11 documents |
+| `python scripts/check-english.py` | passed, 910 files |
+| `pwsh scripts/ci-local.ps1 -Full` | `ci-local: all checks passed.` (all steps, `cargo deny` included) |
+
+## Remaining, none of them blocking
+
+1. **The manual Windows walk is still NOT RUN**, so `E2E proof` and `Platform proof` stay 0 and the
+   packet stays correctly reported as unverified on the platform that ships. `is_held`, key-up
+   delivery and the blur drain all end at that boundary.
+2. **A broadcast peer that negotiated a flag receives an interrupt rather than its own encoding.**
+   The named follow-up (per-target re-encoding), not a defect of this packet.
+3. **Nit.** `crates/terminal-view/src/terminal_view/input.rs`'s `release_held_keys` rustdoc cites a
+   test called `the_blur_drain_cannot_be_reached_from_a_test_window`; the test is named
+   `verify_the_blur_drain_is_unprovable_in_a_test_window`. A dangling citation, one word to fix.

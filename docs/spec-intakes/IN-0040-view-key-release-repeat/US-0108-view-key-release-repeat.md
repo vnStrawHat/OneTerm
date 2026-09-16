@@ -42,7 +42,8 @@ a first press. This packet is that half and nothing else -- **no file under `cra
     event; `send_key` calls `encode_key_event`.
   - `kind` from `KeyDownEvent::is_held` (`Repeat`) or its absence (`Press`), and `Release` on the
     key-up path.
-  - `KeyEvent::text` from the `Keystroke`'s own `key_char`, on a press and a repeat only.
+  - `KeyEvent::text` from the `Keystroke`'s own `key_char`, on a press and a repeat only, and
+    only when no ctrl or alt would have stopped that text reaching the program (`F5`).
   - A `held_keys` set on `TerminalView`: a release is sent only for a key whose press was written,
     and the set is drained on blur.
   - Three re-exports in `crates/terminal/src/lib.rs`: `KeyEvent`, `KeyEventKind`,
@@ -56,9 +57,11 @@ a first press. This packet is that half and nothing else -- **no file under `cra
     `KeyEvent::shifted` and `base_layout` stay `None`.
   - Reporting the modifier keys themselves. Windows turns them into `ModifiersChanged` before a key
     event exists.
-  - `Ctrl+C`. `KeyAction::Interrupt` keeps sending `SIGINT` rather than encoding, so a program that
-    pushed `REPORT_ALL_KEYS_AS_ESC` still cannot see it as a key. Pre-existing; intake open
-    decision 1.
+  - ~~`Ctrl+C`~~ -- **pulled into scope** by the coordinator's answer to intake open decision 1,
+    and widened again by finding `F4`. `KeyAction::Interrupt` carries an `Option<KeyEvent>`: the
+    encoded key once the program negotiated a kitty flag that puts a ctrl chord on the `CSI u`
+    rung, the `SIGINT` otherwise, and `BroadcastInput::Interrupt` to the channel's peers either
+    way.
   - The IME's ownership of printable keys on the primary screen, which makes
     `REPORT_ALL_KEYS_AS_ESC` work fully only on the alternate screen. Intake open decision 2.
   - Re-encoding broadcast bytes per target pane. Pre-existing divergence; this packet must not
@@ -379,6 +382,13 @@ than open divergences.
 - **The canonical key follows the PC-101 shift relation**, the same ceiling the engine's own
   `unshifted` has. A layout that pairs shift differently can still strand a key, and its worst case
   is the missed release that was the behaviour before `F1` was fixed.
+- **Two physical keys that share one unshifted code point collapse to one held entry.** A numpad
+  digit and the digit row, on a backend that names both `1`, are one entry rather than two, so
+  holding both and releasing one sends the release and leaves the other key **one release short**
+  rather than stuck — `hold_key`'s idempotence is what keeps it from being stuck. The program could
+  not have told the two apart in any case: both encode as code point `49`. Measured and written
+  down rather than discovered, by
+  `us0108_reverify_tests::two_physical_keys_sharing_a_code_point_collapse_to_one_entry`.
 
 ## Harness Row
 
@@ -461,6 +471,15 @@ One thing the verification asked about is **not** closed and is not a finding: w
 into the focused search bar reaches the PTY on the alternate screen. It predates this packet and
 this packet does not widen it -- a release is gated by the same `held_keys` entry the press
 created.
+
+**Re-verified at `db8a059b`: PASS.** Seven further attacks found no new way in, and their tests are
+adopted as `crates/terminal-view/src/input/us0108_reverify_tests.rs` and three `reverify_*` cases in
+`view_tests.rs`. The two that are worth naming: `canonical_key`'s fold is now checked against the
+**engine's own** answer rather than against its own copied table -- read back out of the bytes the
+encoder emits, for 49 keys, with zero disagreements -- and every PC-101 pairing is driven in **both**
+directions, including the press-`1`-release-`!` order a user who presses Shift *after* the digit
+produces. The re-verification's own nit, a dangling test name in `release_held_keys`'s rustdoc, is
+fixed, and its ceiling (two physical keys sharing one code point) is recorded under Gaps.
 
 ## Handoff
 
