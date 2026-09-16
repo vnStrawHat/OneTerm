@@ -218,9 +218,44 @@ the CHANGELOG and guide chapter 12, which are the documents a consumer actually 
 - [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
+## Verification notes closed
+
+An independent verification of `341b6b97` returned **FAIL** with twelve findings, four of them
+blocking, and a 211-row table test derived from the specification before the implementation was
+read: **43 row mismatches and 2 failed assertions**. The full report is
+[`evidence/US-0105-verify.md`](evidence/US-0105-verify.md) and its test file is adopted at
+`crates/vt/tests/verify_us0105_independent.rs`. Nothing was deleted from it.
+
+Every finding, and what closed it:
+
+| # | Finding | Closed by |
+| --- | --- | --- |
+| 1 | **HIGH.** A repeat or release of a *text* key became `CSI u` under `REPORT_EVENT_TYPES` alone, so holding a letter stopped typing it. The event-type rung fired before `generates_text` was consulted | `kitty.rs`: rung 1 computes `reportable`, which is false for a text-producing key (and for `Enter`/`Tab`/`Backspace`) without `REPORT_ALL_KEYS_AS_ESC`; rung 2 reads the same value. A repeat falls to the legacy rung -- "key repeat events are treated as key press events" -- and a release is silent. 6/6 rows |
+| 2 | **HIGH.** The associated-text field was fabricated from the key payload without looking at the modifiers, so under `ALL_ESC \| TEXT` a `Ctrl+A` told the program an `a` was inserted | `text_field` uses the payload fallback only when neither ctrl nor alt is held. An embedder-supplied `KeyEvent::text` still wins. 2/2 rows |
+| 3 | **HIGH.** `CSI ? u` answered the stack **top** while the encoder read the **live** flags, so the specification's own detection recipe (`CSI = Ps u`, then query) reported that the terminal implements nothing | `dispatch.rs` answers `live()`. The in-crate test that asserted the old behaviour is inverted and renamed `kitty_query_reads_the_live_flags`. CHANGELOG entry under clause 6 |
+| 4 | **MEDIUM-HIGH.** `F3` emitted `CSI R` / `CSI 1 ; <mod> R`, which the specification removed because it collides with the Cursor Position Report; `CSI 1 ; 6 R` *is* a CPR for row 1 column 6 | `F3` is `Form::Tilde(13)`. `F15`, which inherited the final byte, moved to its private-use code with the rest of `F13`-`F24`. A new test walks every flag set and both keys and asserts the final byte is never `R` |
+| 5 | **MEDIUM.** `modifyOtherKeys` level 1 was the complement of xterm's exception list | The rule is now xterm's own, as one predicate: level 1 leaves any chord whose legacy encoding is already a control byte. And neither level fires on shift alone -- the first draft turned every capital letter into `CSI 27 ; 2 ; 97 ~` at level 2, which the verification did not test and which is the same class of defect as finding 2 |
+| 6 | **MEDIUM.** `F13`-`F24` asserted a shift the user never pressed | The kitty rung uses the private-use codes `57376`-`57387`; the legacy rung keeps xterm's shifted forms, which `US-0099` freezes. 12/12 rows |
+| 7 | **MEDIUM.** The un-shifted key code was a lower-case, so `ctrl+shift+1` reported `33`; and the documented remedy ("supply `base_layout`") could not work, because that field is the third sub-field and never the primary code | `unshifted` also walks the PC-101 shift table, so `!`→`49`, `$`→`52`, `+`→`61`. 5/5 rows. Guide chapter 6 no longer offers the remedy that does not exist and states the ceiling instead |
+| 8 | **LOW-MEDIUM.** The legacy rung drops `alt` on more keys than the guide listed, and sends xterm's `Enter` forms rather than kitty's | Documented exactly: guide chapter 6 has a five-row table of every place the two rungs disagree. The 13 C0-control rows are kept in the adopted test as **frozen deviations** -- the engine's answer is asserted, the specification's is printed on every run -- because `US-0099`'s equivalence bar freezes rung 4 |
+| 9 | **LOW.** `ctrl+~` was missing from the legacy ctrl table | `key.rs` maps `~` to `0x1e` beside `^`. This is the **only** byte on the legacy rung that moved, and the equivalence harness names the row explicitly rather than widening a tolerance |
+| 10 | **LOW.** `ctrl+shift+<text key>` in legacy mode is `CSI u` in the specification and is not here | Frozen; the three rows are kept as frozen deviations and the disagreement table in guide chapter 6 names it, with "push `DISAMBIGUATE_ESC_CODES`" as the answer |
+| 11 | **LOW.** `#[non_exhaustive]` on `ModeSnapshot` is breaking (`E0639` on functional update syntax) and was filed under `### Added` as a benefit | Moved to `### Changed` with the **Breaking** marker, both consequences spelled out, and guide chapter 12 now says functional update syntax is refused too |
+| 12 | **INFO.** Ceilings confirmed as disclosed | Unchanged, and chapter 6 now also names the caps-lock/num-lock bits and `DECKPAM` as unreachable |
+
+One expectation in the adopted test was corrected rather than accepted, with the reason in the test
+file beside it: `modifyOtherKeys 1: ctrl+2` expected `CSI 27;5;50~`, but `Control-Space to make a
+NUL` is named in xterm(1)'s exception list and `ctrl+2` is its alias, so the row now expects `0x00`
+and the level-2 row that the verification did not have was added beside it. The report's own
+finding 5 table agrees with the correction; its test row did not. The report also says it could not
+reach xterm's source, which is why this is stated as a citation rather than a measurement.
+
+**Result after rework: 214 rows, 0 mismatches, 16 recorded frozen deviations**, plus the four
+standalone assertions and the 57 600-case flag-space walk with its CPR-collision guard.
+
 ## Evidence and Gaps
 
-Branch `feat/vt-kitty-keyboard`, from `main` at `c5ddad59`.
+Branch `feat/vt-kitty-keyboard`, rebased onto `main` at `4437b98e` (`BUG-0059`).
 
 **The claim is true.** `crates/vt/tests/verify_us0105.rs::a_negotiated_protocol_is_actually_spoken`
 drives a real `Terminal`: it feeds `CSI > 1 u`, asserts `CSI ? u` answers `CSI ? 1 u`, and asserts
@@ -231,7 +266,12 @@ takes the claim back with it, which the same test checks.
 **The specification table.** `crates/vt/src/input/kitty_tests.rs::specification_worked_examples`
 is seventeen rows, each labelled with the specification section it came from, all passing. Beyond
 the mandatory list it adds the un-shifted-key-code rule (`ctrl+shift+a` is `97`, never `65`), the
-repeat event type, and `PageUp` keeping its `CSI 5 ~` form.
+repeat event type, and `PageUp` keeping its `CSI 5 ~` form. Beside it now sit the regression tests
+for the rework: the text-key event-type rule, the text-field fallback's modifier check, the `F3`
+CPR guard across every flag set, and the private-use `F13`-`F24` codes against their frozen legacy
+forms. **The independently derived 214-row table in
+`crates/vt/tests/verify_us0105_independent.rs` is the stronger artefact** -- it was written against
+the specification before this implementation was read.
 
 **One mandatory row could not be made to pass and is recorded rather than dropped:**
 `alt+a -> CSI 0 ; ; 229 u`. Read in full, the specification's own prose for that row says the
@@ -248,7 +288,8 @@ text it produced, and is encoded with that text's own key code.
 harness, now runs both entry points against the frozen `0558fa2` oracle:
 
 ```text
-encode_key cases compared: 3072000 (specs 75 x mods 8 x snapshots 2560)
+encode_key cases compared: 3072000 (specs 75 x mods 8 x snapshots 2560),
+  20480 deliberately moved (ctrl+~), 0 mismatches
 test encode_key_is_byte_identical_to_main ... ok
 ```
 
@@ -257,10 +298,18 @@ test encode_key_is_byte_identical_to_main ... ok
 and `modify_other_keys == 0` before it is used, so the run is the equivalence claim and not a
 sample.
 
+The 20 480 are the one row this packet deliberately moved after the verification's finding 9:
+`ctrl+~`, in the four ctrl-bearing modifier sets across 2 560 snapshots and both entry points. They
+are not excused by a tolerance -- the harness asserts the corrected byte on this side, the old byte
+from the frozen oracle, and that the moved set is exactly `4 x snapshots x 2` in size, so a second
+row moving fails the test.
+
 **The whole flag space is safe.** `verify_us0105.rs::the_whole_flag_space_is_safe`: 32 flag values
-x 2 `app_cursor` values x 75 keys x 8 modifier sets x 3 event kinds = **115 200 cases, 93 808 of
+x 2 `app_cursor` values x 75 keys x 8 modifier sets x 3 event kinds = **115 200 cases, 92 688 of
 them producing bytes**, no panic, and every non-`None` result parsed back by a round-trip parser
-living in the test file. The parser accepts a legacy byte string, `SS3`, and a CSI whose final byte
+living in the test file. (The count of emitted results fell by 1 120 against the first
+implementation: those were the spurious escape sequences finding 1 produced for repeats and
+releases of text keys.) The adopted independent test walks 57 600 more with a CPR-collision guard. The parser accepts a legacy byte string, `SS3`, and a CSI whose final byte
 is `u`, `~` or a letter and whose parameters are digits, `;` and `:` with no trailing empty
 sub-field.
 
@@ -332,18 +381,18 @@ Gaps to state rather than discover:
   and recorded, and it will look like a bug to the next reader who finds it without this note.
   Guide chapter 6 names it with `Alt+F5` as the worked case.
 
-- **`F13`-`F24` deviate from the specification.** The design's own table keeps them on xterm's
-  shifted `F1`-`F12` forms (`CSI 1 ; 2 P`, `CSI 15 ; 2 ~`, ...), while the specification gives them
-  private-use codes `57376`-`57387`. A kitty-protocol program will read `CSI 15 ; 2 ~` as
-  `shift+F5` rather than `F17`. This matches what the legacy path already sends, so it is not a
-  regression, but it is a real deviation and guide chapter 6 names it. Discovered while reading the
-  specification's functional key table, which also shows `F3` has no letter form there
-  (`13 ~` only) while this encoder emits `CSI 1 ; <mod> R`, as the design's table specifies.
+- **`F13`-`F24` and `F3` were corrected, and the legacy rung's `F15` was not.** The kitty rung now
+  follows the specification (private-use codes, `CSI 13 ~`), but rung 4 still spells `F15` as
+  `CSI 1 ; 2 R`, which is byte-identical to a Cursor Position Report for row 1, column 2. It is
+  pre-existing, frozen by `US-0099`'s equivalence bar, and named in guide chapter 6. A program that
+  wants unambiguous function keys pushes `DISAMBIGUATE_ESC_CODES`, which is the flag's purpose.
 
-- **The un-shifted key code is the lower-cased payload.** The protocol wants the un-shifted code
-  point; for letters lower-casing gives it, for shifted punctuation nothing can without a platform
-  key map, so `shift+4` reports `$` rather than `4`. An embedder that knows better supplies
-  `base_layout`. Named in the guide.
+- **The un-shifted key code is derived, not looked up.** Letters are lower-cased and ASCII
+  punctuation goes through the PC-101 shift table, which covers the layout the base-layout
+  sub-field is itself defined against. A layout that pairs `!` with something other than `1`
+  reports the key it produced. There is **no field on `KeyEvent` that overrides the primary code**
+  -- `base_layout` is the third colon sub-field -- so this is a ceiling and not a setting, and the
+  guide no longer suggests otherwise.
 
 - **The manual Windows walk was not run, so `Platform proof` and `E2E proof` stay unticked.**
   A GUI walk means launching `oneterm.exe`, and the maintainer runs their coding agent inside this

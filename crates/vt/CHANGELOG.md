@@ -224,6 +224,17 @@ carry no API change at all. Such a release says so below rather than being omitt
   un-shifted key code derived by lower-casing, which is wrong for shifted punctuation and has no
   API to correct it.
 
+- **Breaking, clause 6.** `CSI ? u` answers the **live** keyboard flags rather than the top of the
+  flag stack. `CSI = Ps ; Pm u` sets the live flags without pushing, so an application following the
+  specification's own detection recipe -- set the enhancements, then query -- was told the terminal
+  implements none of them. The query and the encoder now read the same value, which is the whole
+  point of the query.
+
+- **Breaking, clause 6.** `Ctrl+~` is `0x1e` on the legacy rung, not `~`. The specification's legacy
+  ctrl table has the row and `ctrl_bytes` fell through to the character itself; `Ctrl+^` was already
+  `0x1e`, so the two spellings of the same key now agree. This is the only byte on the legacy rung
+  that moved in this release, and the equivalence run names it rather than allowing a tolerance.
+
 - **Breaking.** `ModeSnapshot` is `#[non_exhaustive]`. Two things change for you, and only the
   first is a benefit: a new field on it is a patch release from now on, and **you can no longer
   build one with a struct expression, functional update syntax included**. Code that wrote

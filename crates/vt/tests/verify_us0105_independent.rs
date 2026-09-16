@@ -420,7 +420,7 @@ fn spec_key_code_is_always_the_unshifted_key() {
     for (shifted_payload, unshifted_code, label) in [
         ("!", 49u32, "shift+1"),
         ("$", 52, "shift+4"),
-        ("#", 35 - 35 + 51, "shift+3"),
+        ("#", 51, "shift+3"),
         (":", 59, "shift+;"),
         ("+", 61, "shift+="),
     ] {

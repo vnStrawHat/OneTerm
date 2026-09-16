@@ -219,17 +219,26 @@ keeps it (rule 4 above) and only the code-point form is used for keys that have 
 | `PageUp` / `PageDown` | `CSI 5 ; <mod> ~` / `CSI 6 ; <mod> ~` | `CSI 5 ~` / `CSI 6 ~` |
 | `F1`-`F4` | `CSI 1 ; <mod> P` / `Q` / `R` / `S` | `SS3 P` / `Q` / `R` / `S` |
 | `F5`-`F12` | `CSI 15 ; <mod> ~`, `17`, `18`, `19`, `20`, `21`, `23`, `24` | the same without the modifier |
-| `F13`-`F24` | the same `~` and letter forms with the shift modifier, as today | as today |
+| `F13`-`F24` | the specification's private-use codes `57376`-`57387` | xterm's shifted `F1`-`F12` forms, as today |
 | `KeySpec::Character(s)` | `CSI <code point of the first scalar> u` | the character itself, or the ctrl table |
 
-**Two deviations from the specification's own table, found while implementing and recorded here
-rather than quietly shipped.** The specification gives `F13`-`F24` the private-use codes
-`57376`-`57387`, and gives `F3` only the `13 ~` form where `F1`, `F2` and `F4` also have letter
-forms. This design keeps `F13`-`F24` on xterm's shifted `F1`-`F12` forms and gives `F3` the
-`CSI 1 ; <mod> R` form, in both cases because that is what the legacy path already sends and the
-two rungs agreeing matters more here than the private-use spelling. A kitty-protocol program will
-therefore read `CSI 15 ; 2 ~` as `shift+F5` rather than `F17` -- which is exactly what it reads
-today, so nothing regresses. Guide chapter 6 names it.
+**Amended after independent verification (`evidence/US-0105-verify.md`, findings 4 and 6).** This
+design first kept `F13`-`F24` on xterm's shifted `F1`-`F12` forms and gave `F3` a
+`CSI 1 ; <mod> R` form, on the grounds that the legacy rung already sends those. Both were wrong on
+the kitty rung and are corrected above:
+
+- **`F3` must not take the `R` final byte.** The specification: "The original version of this
+  specification allowed `F3` to be encoded as both `CSI R` and `CSI ~`. However, **`CSI R` conflicts
+  with the Cursor Position Report, so it was removed**." `CSI 1 ; 6 R` for `ctrl+shift+F3` is
+  byte-identical to a CPR for row 1, column 6. The permitted second form is
+  `CSI 1 ; modifier [~ABCDEFHPQS]`, which has no `R` in it. `F3` is `Form::Tilde(13)`.
+- **`F13`-`F24` must not assert a shift the user did not press.** Spelling them as shifted
+  `F1`-`F12` sets the shift bit in the modifier field, so a program matching `shift+F5` fires on a
+  bare `F17`. Under the flags they take the private-use codes; the legacy rung keeps xterm's forms,
+  because `US-0099` froze it and a legacy program has no code point to read anyway.
+
+The legacy rung's `F15` is still `CSI 1 ; 2 R` and still collides with a CPR. That is pre-existing,
+frozen by the equivalence bar, and named in guide chapter 6 rather than fixed here.
 
 **Not representable, and therefore never emitted:** the keypad keys (`57399`-`57415`), the lock and
 system keys (`57358`-`57363`), the media keys (`57428`+) and the modifier keys themselves
@@ -268,8 +277,30 @@ CSI 27 ; <modifier> ; <code point> ~
 | Level | What the encoder does |
 | --- | --- |
 | `0` | nothing; rung 4 |
-| `1` | the `CSI 27 ; ... ~` form for keys that have no unambiguous legacy encoding -- the chords xterm calls "other": ctrl with a digit or punctuation, `Ctrl+Enter`, `Ctrl+Tab`, `Shift+Enter` |
-| `2` | the `CSI 27 ; ... ~` form for every modified key that is not already an unambiguous functional key |
+| `1` | the `CSI 27 ; ... ~` form for every ctrl or alt chord **except** the ones whose legacy encoding is already a control byte |
+| `2` | the `CSI 27 ; ... ~` form for every ctrl or alt chord that is not already an unambiguous functional key |
+
+**Amended after independent verification (finding 5).** This design first described level `1` as
+"the chords that have no unambiguous legacy encoding" and listed `Ctrl+Enter`, `Ctrl+Tab` and
+`Shift+Enter` among them, which is the complement of xterm's own list. xterm(1):
+
+> **1** -- Enables this feature for keys **except** for those with well-known behavior, e.g., Tab,
+> Backarrow and some special control character cases which are built into the X11 library, e.g.,
+> Control-Space to make a NUL, or Control-3 to make an Escape character.
+>
+> **2** -- Enables this feature for keys including the exceptions listed.
+
+Every exception in that sentence is a chord whose legacy encoding *is* a control byte, so the rule
+is one predicate rather than a list: `Ctrl+A` stays `0x01`, `Ctrl+Space` and `Ctrl+2` stay `0x00`,
+`Ctrl+3` stays `ESC`, `Tab` stays `0x09`, and `Ctrl+;` -- which has no control byte and is exactly
+what `modifyOtherKeys` exists for -- escapes. Level `2` drops the exceptions, which is the setting
+that makes `Ctrl+I` distinguishable from `Tab`.
+
+**Neither level fires on shift alone.** xterm reaches `modifyOtherKeys` only for a ctrl or alt
+chord; the layout has already consumed shift to produce the character, so `Shift+A` is the letter
+`A` at every level. The first draft of this design did not say so, and the implementation turned
+every capital letter into `CSI 27 ; 2 ; 97 ~` at level `2` until the verification's neighbouring
+finding made it visible. `Shift+Enter` therefore leaves the level-1 list with the others.
 
 `US-0099`'s `modify_other_keys_never_reaches_the_bytes` test is **inverted** by this packet: it
 becomes the assertion that the level *does* reach the bytes, with the four chords it already names

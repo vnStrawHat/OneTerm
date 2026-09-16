@@ -169,6 +169,17 @@ implement on top.
   `DISAMBIGUATE_ESC_CODES`, `REPORT_EVENT_TYPES`, `REPORT_ALTERNATE_KEYS`,
   `REPORT_ALL_KEYS_AS_ESC` and `REPORT_ASSOCIATED_TEXT`;
 - `Terminal::modify_other_keys()` is the `CSI > 4 ; Ps m` level, `0`, `1` or `2`.
+  Level `1` is xterm's "except for those with well-known behavior ... e.g.,
+  Control-Space to make a NUL, or Control-3 to make an Escape character", which
+  here is the single rule "the chord already produces a control byte, so leave
+  it alone"; level `2` drops the exceptions, which is what separates `Ctrl+I`
+  from `Tab`. Neither level fires on shift alone -- the layout has already used
+  shift to make the character, so typing stays typing.
+
+`CSI ? u` answers the **live** flags, which is what the encoder reads. That
+matters because the specification's own detection recipe is "first setting the
+desired progressive enhancements and then querying for the current progressive
+enhancement", and `CSI = Ps u` sets them without touching the stack.
 
 Both reach the bytes through `ModeSnapshot`, so `encode_key` already honours
 them. **The bytes it returns therefore change once a program has negotiated
@@ -217,10 +228,10 @@ Which flag makes rung 2 apply:
 | Flag | Applies to | Does not apply to |
 | --- | --- | --- |
 | `DISAMBIGUATE_ESC_CODES` | `Escape`, every named key, and any character chord with ctrl or alt -- every event that generates no text | **`Enter`, `Tab`, `Backspace`**, the specification's own exception, so that you can still type `reset` after a program crashes with the flags set |
-| `REPORT_EVENT_TYPES` | nothing on its own; it adds the `:event-type` sub-field and turns a release from "no bytes" into bytes | `Enter`, `Tab` and `Backspace` still send no release unless `REPORT_ALL_KEYS_AS_ESC` is set too |
+| `REPORT_EVENT_TYPES` | nothing on its own; it adds the `:event-type` sub-field to keys that generate no text, and turns their releases from "no bytes" into bytes | **a key that produces text.** "Key events that result in text are reported as plain UTF-8 text, so events are not supported for them, unless the application requests key report mode" -- so a held letter keeps typing the letter, and its key-up sends nothing, until `REPORT_ALL_KEYS_AS_ESC` is set too. `Enter`, `Tab` and `Backspace` are the same |
 | `REPORT_ALTERNATE_KEYS` | nothing on its own; it adds the `:shifted:base` sub-fields to a form another flag already chose | -- |
 | `REPORT_ALL_KEYS_AS_ESC` | **every** key, `Enter`, `Tab` and `Backspace` included. Text is no longer sent as text | -- |
-| `REPORT_ASSOCIATED_TEXT` | nothing on its own; it adds the trailing `;text-codepoints` field. The specification calls it undefined without `REPORT_ALL_KEYS_AS_ESC`, and this engine treats it as inert there rather than guessing | -- |
+| `REPORT_ASSOCIATED_TEXT` | nothing on its own; it adds the trailing `;text-codepoints` field. The specification calls it undefined without `REPORT_ALL_KEYS_AS_ESC`, and this engine treats it as inert there rather than guessing | a chord that produces no text. `KeyEvent::text` is what you supply; when you supply none, a `Character` key's own payload is used **only** if neither ctrl nor alt is held, because `Ctrl+A` produces `0x01` and "the associated text must not contain control codes" |
 
 ### The richer entry point
 
@@ -253,29 +264,44 @@ encoding at all.
 
 ### What this engine does not encode
 
-Four ceilings, stated rather than discovered:
+Three ceilings on the kitty rung, stated rather than discovered:
 
 - **Modifier values `1` through `8` only.** `KeyMods` has shift, ctrl and alt.
   The protocol also defines super, hyper, meta, caps lock and num lock, and
-  nothing here can supply them. `KeyMods` stays exhaustive, so the compiler
-  will tell you the day it grows.
+  nothing here can supply them -- so a program that sets
+  `REPORT_ALL_KEYS_AS_ESC` and expects the caps-lock bit will not see it.
+  `KeyMods` stays exhaustive, so the compiler will tell you the day it grows.
 - **The private-use functional keys are not emitted.** `NamedKey` cannot name
-  the keypad (`57399`-`57415`), the lock and system keys (`57358`-`57363`), the
+  the keypad (`57399`-`57427`), the lock and system keys (`57358`-`57363`), the
   media keys (`57428`+) or the modifier keys themselves (`57441`+), so under
   `REPORT_ALL_KEYS_AS_ESC` a `Super` press has nothing to be delivered as.
-  `NamedKey` is `#[non_exhaustive]`, so adding them is a patch release.
-- **`F13`-`F24` keep xterm's shifted `F1`-`F12` forms** (`CSI 1 ; 2 P`,
-  `CSI 15 ; 2 ~`, ...) rather than the specification's `57376`-`57387`, because
-  that is what the legacy path already sends and the two paths agreeing matters
-  more here than the private-use spelling.
-- **The un-shifted key code is the lower-cased text.** The protocol wants the
-  un-shifted code point (`ctrl+shift+a` is `97`, never `65`) and gets it for
-  letters; shifted punctuation cannot be un-shifted without a platform key map,
-  so `shift+4` reports `$`. Supply `base_layout` when your platform knows
-  better.
+  `NamedKey` is `#[non_exhaustive]`, so adding them is a patch release. The
+  keypad is also why `DECKPAM` is not read by the encoder at all.
+- **The un-shifted key code is derived, not looked up.** The protocol wants the
+  un-shifted code point (`ctrl+shift+a` is `97`, never `65`). Letters are
+  lower-cased and ASCII punctuation goes through the PC-101 shift table, so
+  `ctrl+shift+1` reports `49` and `ctrl+shift+=` reports `61`. A layout that
+  pairs them differently reports the key it actually produced; there is no field
+  on `KeyEvent` that overrides the primary code (`base_layout` is the third
+  sub-field, not the first), so this is a ceiling rather than a setting.
 
-And one disagreement between the two rungs, deliberate and recorded: the legacy
-encoder ignores `alt` on `Insert`, `Tab` and `F1`-`F24`, which is a defect
-predating this. The legacy rung keeps that behaviour byte for byte; the kitty
-rung does not have it, because there the modifier is a field rather than a table
-lookup. So `Alt+F5` is `CSI 15 ~` on rung 4 and `CSI 15 ; 3 ~` on rung 2.
+`F3` is worth knowing about because it is the one key whose spelling had to
+change: it has no letter form, since "`CSI R` conflicts with the Cursor Position
+Report, so it was removed". Under the flags it is `CSI 13 ~`.
+
+### Where the legacy rung and the kitty rung disagree
+
+Rung 4 is xterm's table, not kitty's legacy table, and it is frozen: an
+embedder's existing programs depend on it byte for byte. Rung 2 is the
+specification's. So the two answer differently in five places, all deliberate:
+
+| Chord | Legacy rung | Kitty rung |
+| --- | --- | --- |
+| `Alt+Insert`, `Alt+Tab`, `Alt+Escape`, `Alt+Enter`, `Ctrl+Alt+Backspace`, `Alt+F1`-`F24` | `alt` is dropped: `CSI 2 ~`, `0x09`, `0x1b`, `0x0d`, `0x08`, `CSI 15 ~` | the modifier is a field, so it is kept: `CSI 2 ; 3 ~`, `CSI 9 ; 3 u`, ... |
+| `Ctrl+Enter`, `Shift+Enter` | `CSI 13 ; <mod> u` (xterm's) | `CSI 13 u` only under `REPORT_ALL_KEYS_AS_ESC`; otherwise `0x0d`, the exception |
+| `Ctrl+Shift+<text key>` | the ctrl table, ignoring shift: `Ctrl+Shift+I` is `0x09` | `CSI 105 ; 6 u`. The specification puts this one in legacy mode too ("Any other combination of modifiers with these keys is output as the appropriate `CSI u` escape code"); this engine's legacy rung does not, because it is xterm's |
+| `F13`-`F24` | xterm's shifted `F1`-`F12` forms (`CSI 1 ; 2 P`, `CSI 15 ; 2 ~`, ...) | the private-use codes `57376`-`57387`, so no modifier bit is asserted that the user did not press |
+| `F15` | `CSI 1 ; 2 R`, which collides with a Cursor Position Report -- pre-existing and frozen | `CSI 57378 u` |
+
+If you need the specification's legacy tables rather than xterm's, push
+`DISAMBIGUATE_ESC_CODES`: that is what the flag is for.
