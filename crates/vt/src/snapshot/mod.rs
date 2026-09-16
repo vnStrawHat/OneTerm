@@ -21,7 +21,7 @@ pub use modes::{ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting};
 pub use palette::Palette;
 pub use row::{SnapshotCell, SnapshotContent, SnapshotRow, StyleRun};
 pub(crate) use state::EngineView;
-pub use state::{SnapshotCursor, SnapshotPlacement, SnapshotState, SnapshotUpdate};
+pub use state::{SnapshotCursor, SnapshotPlacement, SnapshotState, SnapshotUpdate, Watermark};
 pub use sync::SyncState;
 
 #[cfg(test)]

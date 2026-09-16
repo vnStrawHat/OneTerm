@@ -54,6 +54,21 @@ carry no API change at all. Such a release says so below rather than being omitt
 
   `scripts/vt-public-api.py --check-nameable` is the gate that keeps this from coming back: it
   fails CI on a public signature naming a type defined in a private module.
+- `ModeState`, `StrSpan`, `ByteSpan`, `ParamSpans`, `ColorOverrides`, `Watermark` and
+  `Invalidation` are re-exported from the crate root. Each was already returned or accepted by a
+  public signature -- `Mode::inert_state`, ten `VtEvent` payloads, `VtEvent::Reply`,
+  `VtEvent::Osc`, `Terminal::colors`, `SnapshotState::watermark` and `Selection::invalidated_by` --
+  and none could be written down, so none could be stored in a struct or named in a signature of
+  the embedder's own. `Invalidation` is the one that was worse than a spelling problem: it is an
+  **argument**, so `Selection::invalidated_by` was a public method no embedder could call at all.
+
+  `Invalidation` is `#[non_exhaustive]`; it was not nameable before, so no outside code can be
+  affected, and an embedder constructs its variants rather than matching on them. `ModeState`'s
+  four undocumented variants and `ColorOverrides::get` are documented now that they are publicly
+  reachable.
+
+  `scripts/vt-public-api.py` no longer carries an allow-list at all: the seven above were the last
+  entries on it, and the gate now has nowhere to record an exception.
 - **`DECRQCRA`, `DECRQSS` and `XTGETTCAP` are answered.** All three were parsed and counted
   unhandled; none was ever answered, which is why no outside conformance harness could score this
   engine and why tmux and neovim capability probes went unanswered.
@@ -206,6 +221,11 @@ carry no API change at all. Such a release says so below rather than being omitt
 
 ### Changed
 
+- **Breaking on paper only.** `ColorOverrides::set`, `reset`, `reset_indexed` and `reset_all` are
+  `pub(crate)`; the public surface of the type is `get` and `iter`. All four need `&mut self` and
+  the only accessor, `Terminal::colors`, hands out a shared reference -- and the type had no name
+  outside the crate until this release, so no embedder could have held one, let alone called them.
+  Publishing an unreachable mutator is a worse surface than not publishing it.
 - **Breaking, and the point of the release.** `input::encode_key` and `Terminal::encode_key`
   honour the kitty keyboard protocol and xterm's `modifyOtherKeys`. The engine has answered
   `CSI ? u` with the pushed flags since the flag stack shipped and then sent legacy bytes anyway:

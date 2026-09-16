@@ -70,8 +70,8 @@ pub struct SelectionRange {
 ///
 /// The row-**moving** half of the design's invalidation matrix needs no entry
 /// here and no code anywhere: `SU`, `SD`, `IL`, `DL`, `RI`, a scroll into
-/// history and a resize already drive [`Anchors::shift_region`],
-/// [`Anchors::trim`] and `Anchors::remap`, and an anchor that dies makes
+/// history and a resize already drive `Anchors::shift_region`,
+/// `Anchors::trim` and `Anchors::remap`, and an anchor that dies makes
 /// [`Selection::to_range`] return `None` — which is the matrix's "cleared".
 /// `scroll_viewport` appears nowhere for the same reason: the range is in row
 /// space, so a viewport scroll cannot touch it.
@@ -79,7 +79,10 @@ pub struct SelectionRange {
 /// Each variant is answered against the grid **before** the operation runs:
 /// every rule is about the rows the operation is going to blank, and the cursor
 /// row is the input.
+/// Marked `#[non_exhaustive]`: an embedder constructs these to ask the
+/// question and never matches on them, so a new erase form is a patch release.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
 pub enum Invalidation {
     /// `EL 0` / `EL 1` / `EL 2`: the cursor row.
     EraseLine,

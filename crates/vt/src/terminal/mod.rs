@@ -34,10 +34,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub use color::ColorKey;
-pub(crate) use color::ColorOverrides;
+pub use color::{ColorKey, ColorOverrides};
 pub(crate) use dispatch::ClusterCarry;
-pub use mode::{CursorShape, CursorStyle, KeyboardFlags, Mode};
+pub use mode::{CursorShape, CursorStyle, KeyboardFlags, Mode, ModeState};
 pub(crate) use mode::{KeyboardStacks, Modes, TitleState};
 pub use osc::{OscRoute, OscRoutes};
 

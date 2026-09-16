@@ -36,6 +36,7 @@ struct oneterm_vt::Attrs
     method symmetric_difference
     method toggle
     method union
+struct oneterm_vt::ByteSpan
 struct oneterm_vt::Cell
     associatedconstant EMPTY
     method content
@@ -80,6 +81,9 @@ enum oneterm_vt::ColorKey
     variant Palette
     variant SelectionBackground
     variant SelectionForeground
+struct oneterm_vt::ColorOverrides
+    method get
+    method iter
 struct oneterm_vt::Config
     structfield allow_screen_readback
     structfield default_cursor_style
@@ -131,6 +135,14 @@ struct oneterm_vt::GraphicData
     structfield id
     structfield rgba
     structfield width
+enum oneterm_vt::Invalidation
+    variant EraseAbove
+    variant EraseBelow
+    variant EraseHistory
+    variant EraseLine
+    variant EraseScreen
+    variant Reset
+    variant SwapAlt
 struct oneterm_vt::KeyboardFlags
     associatedconstant DISAMBIGUATE_ESC_CODES
     associatedconstant REPORT_ALL_KEYS_AS_ESC
@@ -207,6 +219,12 @@ struct oneterm_vt::ModeSnapshot
     structfield mouse
     structfield reverse_video
     structfield show_cursor
+enum oneterm_vt::ModeState
+    variant NotSupported
+    variant PermanentlyReset
+    variant PermanentlySet
+    variant Reset
+    variant Set
 enum oneterm_vt::MouseEncoding
     variant Default
     variant Sgr
@@ -275,6 +293,7 @@ struct oneterm_vt::Palette
     structfield dim_foreground
     structfield foreground
     structfield indexed
+struct oneterm_vt::ParamSpans
 struct oneterm_vt::Placement
     structfield anchor
     structfield cols
@@ -383,6 +402,7 @@ enum oneterm_vt::SnapshotUpdate
     variant Full
     variant Partial
     variant Unchanged
+struct oneterm_vt::StrSpan
 enum oneterm_vt::StringTerm
     variant Bel
     variant St
@@ -467,6 +487,8 @@ enum oneterm_vt::VtEvent
     variant ShellMark
     variant Title
     variant TitleReset
+struct oneterm_vt::Watermark
+    structfield 0
 fn oneterm_vt::cluster_width
 struct oneterm_vt::grid::Anchor
     structfield alive

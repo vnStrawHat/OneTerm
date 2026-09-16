@@ -111,20 +111,21 @@ impl Default for ColorOverrides {
 }
 
 impl ColorOverrides {
+    /// The override for one slot, or `None` when the theme still owns it.
     pub fn get(&self, key: ColorKey) -> Option<Rgb> {
         self.slots[key.index()]
     }
 
     /// Returns whether anything visible changed, which is what decides a full
     /// damage stamp: a cursor colour that did not move is free.
-    pub fn set(&mut self, key: ColorKey, color: Rgb) -> bool {
+    pub(crate) fn set(&mut self, key: ColorKey, color: Rgb) -> bool {
         let slot = &mut self.slots[key.index()];
         let changed = *slot != Some(color);
         *slot = Some(color);
         changed && key != ColorKey::Cursor
     }
 
-    pub fn reset(&mut self, key: ColorKey) -> bool {
+    pub(crate) fn reset(&mut self, key: ColorKey) -> bool {
         let slot = &mut self.slots[key.index()];
         let changed = slot.is_some();
         *slot = None;
@@ -133,7 +134,7 @@ impl ColorOverrides {
 
     /// `OSC 104` with no parameter: indices 0..=255 only, and **not**
     /// foreground / background / cursor (trap 26).
-    pub fn reset_indexed(&mut self) -> bool {
+    pub(crate) fn reset_indexed(&mut self) -> bool {
         let mut changed = false;
         for slot in self.slots[..256].iter_mut() {
             changed |= slot.is_some();
@@ -144,7 +145,7 @@ impl ColorOverrides {
 
     /// `RIS`, correction C6: the reference leaves the overrides in place
     /// (trap 39).
-    pub fn reset_all(&mut self) -> bool {
+    pub(crate) fn reset_all(&mut self) -> bool {
         let changed = self.slots.iter().any(Option::is_some);
         self.slots.fill(None);
         changed
