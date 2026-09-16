@@ -119,11 +119,27 @@ VT520's calculation as the default, with `checksumExtension` factoring out the d
 xterm reaches with `checksumExtension: 7` -- `csPOSITIVE | csATTRIBS | csNOTRIM`:
 
 ```text
-checksum = (sum over every cell in the rectangle of the cell's first Unicode scalar value) & 0xffff
+checksum = (sum over every cell in the rectangle of every Unicode scalar value in that cell) & 0xffff
 ```
 
 with an unwritten or erased cell counting as `U+0020`, no attribute contribution, no negation and
 no trimming.
+
+> **CORRECTION (`US-0106` verification, 2026-09-16).** An earlier draft of this line, and the first
+> implementation, summed the cell's **first** scalar only. That is not extension 7: `csBYTE` is
+> clear there, so `xtermCheckRect` runs its `for_each_combData` loop and adds every combining
+> scalar on top of the base character. `e` + `U+0301` in one cell is `0x65 + 0x301` in xterm and is
+> now `0x65 + 0x301` here. Pinned by `decrqcra_sums_every_scalar_of_a_cluster` in both suites.
+>
+> Two further deviations from xterm at this extension are named rather than removed:
+>
+> - **Out-of-range rectangles are clamped, not rejected.** xterm's `validRect` refuses a rectangle
+>   outside the page; this engine clamps it to the page. Only a partially outside rectangle can
+>   tell them apart, and clamping is the friendlier answer to a harness that guessed the size.
+> - **Under `DECOM` the rectangle is clamped to the scrolling region**, matching xterm's
+>   `minRectRow` / `maxRectRow`. The first implementation applied the origin offset without the
+>   clamp and so read past the region's bottom; that is fixed, and
+>   `decrqcra_origin_mode_clamps_to_the_region` keeps the old number out.
 
 Four reasons, in order of weight:
 
@@ -257,6 +273,12 @@ The table, compiled into the crate as a `&[(&str, &str)]` sorted by name:
   decode.
 - **Every dropped name and every over-long request increments `FeedStats::unhandled_sequences`**,
   so a prober hitting a ceiling is visible rather than silent.
+
+  > **CORRECTION (`US-0106`, 2026-09-16).** The implementation counts **once per request** that
+  > dropped anything, not once per dropped name: a hostile request of 4 000 semicolons must not be
+  > able to move the counter by 4 000, which would drown the signal the counter exists to give.
+  > A prober hitting a ceiling is still visible, which is what the rule was for. Recorded as the
+  > third deviation from this design, alongside the payload ceiling and the checksum's scalar walk.
 - The table is `const` and the lookup is a linear scan over about twenty entries. No map, no
   allocation, no `lazy_static`.
 
@@ -332,6 +354,14 @@ record, not a red build: the harness tests a VT420-level terminal and this engin
       batch already supports this; `DA1` twice already works.
 - [ ] **`RIS` between hook and unhook** -> impossible through the parser, and the buffer is cleared
       by `RIS` anyway.
+
+      **Demonstrated (`US-0106` verification).** Feeding `DCS + q 436f` and then `ESC c` answers
+      `DCS 1 + r 436f=323536 ST` *before* resetting: the `ESC` that introduces the next sequence
+      unhooks the DCS normally, so `dcs_unhook(aborted: false)` runs and the partial payload is
+      answered as if terminated. That is the same way a partial Sixel is finished by the sequence
+      behind it, and no stray byte reaches the screen. `Handler::clear_dcs_query` is therefore
+      unreachable in practice, exactly as its own comment claims -- kept, because the field is
+      reset with its neighbours so a future reader does not have to re-derive the argument.
 
 ## Verification
 

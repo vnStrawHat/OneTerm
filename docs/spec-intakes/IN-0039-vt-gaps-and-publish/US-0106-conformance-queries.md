@@ -155,6 +155,7 @@ from what was never attempted.
 | Doc | Change |
 | --- | --- |
 | `crates/vt/docs/guide/11-conformance.md` | the "Supported" DCS paragraph, the "Known gaps" table (three rows out, the run's findings in), the "How conformance is checked" section (an `esctest` matrix now exists), and the new checksum doctest with its variant paragraph |
+| `crates/vt/docs/guide/10-limits.md` | the ceilings table gains the three new limits and the `aborted_dcs` bullet is disambiguated against the query ceiling (added after verification finding 4; the chapter whose whole subject is ceilings was missed) |
 | `crates/vt/docs/guide/12-versioning.md` | clause 6's list gains `DECRQSS`, `DECRQCRA` and `XTGETTCAP`; the `#[non_exhaustive]` count gains `Config` |
 | `crates/vt/CHANGELOG.md` | `### Added` for the three answers and the `Config` field; a note that the reply bytes are a contract from here on |
 | `crates/vt/src/terminal/dispatch.rs` | `dcs_hook`'s header comment, which currently describes the old behaviour |
@@ -385,31 +386,62 @@ fixups were comment text only.
 
 ### Budget: over, on every line
 
+`git diff --stat` against `main` @ `4437b98e`, after the verification rework:
+
 ```text
- .github/workflows/ci.yml                    |  83 ++      (budget +40)
+ .github/workflows/ci.yml                    |  87 ++      (budget +40)
  crates/tools/Cargo.toml                     |   9 +
- crates/tools/src/bin/vt-esctest.rs          | 220 ++      (budget +140 for both)
- crates/vt/CHANGELOG.md                      |  26 +-
- crates/vt/docs/guide/11-conformance.md      | 169 ++
+ crates/tools/src/bin/vt-esctest.rs          | 271 ++      (budget +140 for both)
+ crates/vt/CHANGELOG.md                      |  28 +-
+ crates/vt/docs/guide/10-limits.md           |  11 +-
+ crates/vt/docs/guide/11-conformance.md      | 182 ++
  crates/vt/docs/guide/12-versioning.md       |  19 +-
  crates/vt/public-api.unix.txt               |   1 +
  crates/vt/public-api.windows.txt            |   1 +
- crates/vt/src/terminal/dcs_routing_tests.rs |  20 +-
- crates/vt/src/terminal/dispatch.rs          | 260 ++      \
- crates/vt/src/terminal/mod.rs               |  45 ++       > ~660 (budget +470)
- crates/vt/src/terminal/query.rs             | 369 ++      /
- crates/vt/src/terminal/query_tests.rs       | 584 ++      \
- crates/vt/src/terminal/terminal_tests.rs    |   6 +-       > ~610 (budget +380)
- 14 files changed, 1770 insertions(+), 42 deletions(-)
+ crates/vt/src/terminal/dcs_routing_tests.rs |  21 +-
+ crates/vt/src/terminal/dispatch.rs          | 283 ++      \
+ crates/vt/src/terminal/mod.rs               |  51 ++       > ~737 (budget +470)
+ crates/vt/src/terminal/query.rs             | 403 ++      /
+ crates/vt/src/terminal/query_tests.rs       | 600 ++      \
+ crates/vt/src/terminal/terminal_tests.rs    |   6 +-       > ~1441 (budget +380)
+ crates/vt/tests/verify_us0106.rs            | 835 ++      /
+ 16 files changed, 2764 insertions(+), 44 deletions(-)
 ```
 
-Stated rather than explained away. Two honest causes and no third: roughly 40% of `query.rs` and of
-the new `dispatch.rs` lines are doc comments, which this crate's conventions require and which the
-budget did not account for; and the acceptance criteria themselves ask for more tests than 380
-lines hold -- the `DECRQCRA` edge set alone is nine named tests, and the `XTGETTCAP` boundary set is
-five. The CI job is 83 lines because it is a full job (toolchain pin, cache, fetch, run, summary,
-artifact), not the 40-line increment the budget assumed. Nothing here was padded and nothing was
-cut to fit; if the budget is the binding constraint, the tests are the only place with slack.
+Stated rather than explained away, and **worse than the first measurement** for two reasons that
+are both worth having: the verification's 835-line, 33-test suite was adopted rather than
+discarded, and closing findings 5 and 6 added engine code and the tests that pin it. The first
+report's table was also taken one commit early (finding 10), which is corrected here.
+
+The underlying causes are unchanged: roughly 40% of `query.rs` and of the new `dispatch.rs` lines
+are doc comments, which this crate's conventions require and which the budget did not account for;
+the acceptance criteria ask for more tests than 380 lines hold (the `DECRQCRA` edge set alone is
+eleven named tests); and the CI job is a full job -- toolchain pin, cache, fetch, run, summary,
+artifact -- not the 40-line increment the budget assumed. Nothing was padded and nothing was cut to
+fit. If the budget is the binding constraint, the adopted verification suite is the only large
+block that could be dropped, and dropping an independent 33-test suite to hit a line count would be
+a bad trade.
+
+### Verification notes closed
+
+Independent verification: [`evidence/US-0106-verify.md`](evidence/US-0106-verify.md) --
+**PASS-WITH-NOTES**, 33 independently written tests against the public API, all passing. Its test
+file was adopted as `crates/vt/tests/verify_us0106.rs`. All twelve findings are closed.
+
+| # | Finding | Disposition |
+| --- | --- | --- |
+| 1 | `vt-esctest` loses esctest's status on the end-of-file path | **Fixed.** Pty end of file arrives as `EIO` at the instant the child exits and races the exit token, so the bridge reported a false timeout and exit 2. It now records end of file, then waits up to 2 s for `next_child_event` before deciding, and distinguishes "the pty closed but no status arrived" (exit 1) from a real timeout (exit 2). `waitpid` is deliberately **not** called: `PseudoConsole` owns a reaper thread already blocked in it. The race is named in a comment. **Code review only** -- no host here compiles this half. |
+| 2 | The bridge's `TN` contradicted the `TERM` it set | **Fixed.** `product_name` dropped from the bridge, so `XTGETTCAP`'s `TN` and `TERM` both say `xterm-256color`. `esctest`'s `escutil.py` was fetched and checked: it never reads `TN`, so nothing depended on the choice -- the terminal should simply not contradict itself. `XTVERSION` and `DA2` now report the engine's own identity. |
+| 3 | `dcs_payload`'s doc comment still cited `DCS_MAX_BYTES` | **Fixed.** It now names `QUERY_MAX_BYTES` (8 KiB), says the ceiling raises `unhandled_sequences` and **not** `aborted_dcs`, and says why the image ceiling is the wrong one for a buffer that keeps its capacity. |
+| 4 | Guide chapter 10's ceilings table was not updated | **Fixed.** Three rows added (8 KiB query payload, 16 names, 128 bytes per name) and the `aborted_dcs` bullet disambiguated with the verifier's own case: a 9 KiB `DCS $ q` gives `unhandled_sequences` 1, `aborted_dcs` 0. Chapter 10 is added to the documentation table below. |
+| 5 | Under `DECOM` the rectangle was offset into the region but not clamped to it | **Fixed** -- a real conformance defect, and the most valuable finding here. The rectangle now clamps to `region.top ..= region.bottom`, matching xterm's `minRectRow` / `maxRectRow`. The verifier's `0245` case is a test in both suites (`decrqcra_origin_mode_clamps_to_the_region`, `decrqcra_clamps_to_the_scrolling_region_under_origin_mode`), each keeping the old `0369` as the number that must not come back. |
+| 6 | The `checksumExtension: 7` label did not match the sum | **Fixed by changing the code, not the label.** At extension 7 `csBYTE` is clear, so xterm's `for_each_combData` loop adds every combining scalar; the engine summed only the cluster's first. It now sums them all, so `e` + `U+0301` is `0x65 + 0x301` = `0366` in both. The second, smaller mismatch -- xterm *rejects* an out-of-range rectangle where this engine *clamps* -- is kept and now stated in guide 11, the CHANGELOG, the LLD and the `decrqcra_reply` rustdoc. |
+| 7 | The CI job claimed a commit pin it did not have | **Fixed.** `ESCTEST_REF` is now `2798f12149a19c3295e9b4853ab2da4b2eff1b2b`, the head of `ThomasDickey/esctest2` `master` committed 2026-09-13, resolved through the GitHub API on 2026-09-16 and recorded with that date in the job. |
+| 8 | Counter-per-name in the design vs counter-per-request in the code | **Recorded** as the third deviation, in the LLD beside the rule it amends. The implementation's behaviour stands: 4 000 semicolons must not move the counter by 4 000, or the signal the counter exists to give is drowned. |
+| 9 | A dead `base == 58` branch contradicted its own comment | **Fixed.** `color_parameters` returns `None` for a named underline colour, and `a_named_underline_colour_is_dropped_rather_than_mis_reported` asserts it even though the arm is unreachable today -- the shared arm would have emitted `58` for black and `59`, *reset underline colour*, for red. |
+| 10 | The budget table was taken one commit early | **Fixed** -- the block below is regenerated against `main` @ `4437b98e`. |
+| 11 | A bare `ESC` finishes an in-flight query and the answer is given | **Recorded** in the LLD's edge-case list, upgraded from an argument to a demonstration. `clear_dcs_query` is kept: it is unreachable, as its comment claims, and resetting the field with its neighbours is what spares the next reader the derivation. |
+| 12 | esctest never ran | **Stands, unchanged.** Still the packet's blocking unmet criterion; this rework did not and could not retire it, and finding 1 is the standing proof that a defect in the uncompiled half is exactly what nothing here catches. |
 
 ### Gaps
 

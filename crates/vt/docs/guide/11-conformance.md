@@ -57,9 +57,14 @@ out-of-range request to learn anything either.
 
 **One variant is implemented and none is negotiated** (there is no `CSI Ps * x`
 here). It is the one xterm reaches with `checksumExtension: 7` — the positive
-sum of each cell's first Unicode scalar value, masked to 16 bits, with **no**
-attribute contribution, **no** negation, and **no** trimming of trailing blanks.
-An unwritten or erased cell counts as `U+0020`.
+sum of **every** Unicode scalar value in each cell, masked to 16 bits, with
+**no** attribute contribution, **no** negation, and **no** trimming of trailing
+blanks. An unwritten or erased cell counts as `U+0020`.
+
+"Every scalar" is the part worth spelling out: a grapheme cluster contributes
+its base character *and* each combining mark, which is what xterm's `combData`
+walk adds while `csBYTE` is clear. `e` + `U+0301` in one cell is
+`0x65 + 0x301`, not `0x65`.
 
 ```rust
 use std::time::Instant;
@@ -104,6 +109,14 @@ only one `esctest` scores without a per-cell correction, and because a negated
 16-bit total is the single most common place an implementation and a harness
 silently disagree. No program other than a test harness is known to send
 `DECRQCRA` at all, so the cost is recorded rather than hedged against.
+
+One difference from xterm survives even at that extension, and it is in the
+rectangle rather than the sum: xterm's `validRect` **rejects** a rectangle that
+falls outside the page, where this engine clamps it to the page. Only a
+partially outside rectangle can tell the two apart — a wholly outside one
+answers `0000` either way. Under `DECOM` the page is the scrolling region, so
+the rectangle is clamped to the region's rows and not merely offset into them,
+which is what xterm's `minRectRow` / `maxRectRow` do.
 
 ## Supported
 

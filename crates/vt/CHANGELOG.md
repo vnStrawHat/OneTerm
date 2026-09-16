@@ -58,10 +58,13 @@ carry no API change at all. Such a release says so below rather than being omitt
   engine and why tmux and neovim capability probes went unanswered.
   - `DECRQCRA` (`CSI Pid ; Pp ; Pt ; Pl ; Pb ; Pr * y`) replies `DCS Pid ! ~ xxxx ST`. **One
     checksum variant is implemented and none is negotiated**: xterm's `checksumExtension: 7` --
-    the positive sum of each cell's first Unicode scalar value, masked to 16 bits, no attribute
-    contribution, no negation, no trimming, an unwritten cell counting as `U+0020`. A program
-    written against xterm's *default* (negated, with attributes) will disagree. Guide chapter 11
-    states the variant beside a doctest that pins the digits.
+    the positive sum of **every** Unicode scalar value in each cell (the base character and each
+    combining mark, which is xterm's `combData` walk while `csBYTE` is clear), masked to 16 bits,
+    no attribute contribution, no negation, no trimming, an unwritten cell counting as `U+0020`.
+    A program written against xterm's *default* (negated, with attributes) will disagree. One
+    difference from xterm survives at extension 7 and is in the rectangle rather than the sum:
+    xterm's `validRect` rejects a rectangle outside the page where this engine clamps it. Guide
+    chapter 11 states the variant beside a doctest that pins the digits.
   - `DECRQSS` (`DCS $ q`) reports `m`, `r`, `SP q`, `" q` and `" p`; every other setting takes the
     invalid reply `DCS 0 $ r ST`.
   - `XTGETTCAP` (`DCS + q`) answers from a table compiled into the crate. The engine reads no
