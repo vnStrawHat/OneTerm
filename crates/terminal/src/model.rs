@@ -170,6 +170,24 @@ impl TerminalModel {
         term.resize(Size { rows, cols }, self.resize_policy);
     }
 
+    /// Tell the engine how many pixels one cell is, which only the view knows.
+    /// It is what `CSI 14 t` reports, and a program that asks before it has
+    /// been set is told the window has no pixels (`BUG-0061`).
+    ///
+    /// Its own lock, not `resize_grid`'s, so a frame that changes both leaves a
+    /// two-statement window in which `CSI 14 t` answers with the new pixels and
+    /// the old rows. Left open deliberately: the resize path already spans
+    /// three acquisitions of the same lock (`needs_resize`, `pty_resize`,
+    /// `resize_grid`), so during a resize the pixel and cell answers are
+    /// momentarily inconsistent with each other **by design** — `CSI 18 t` has
+    /// the same window today. Both are corrected by the next query, which a
+    /// program that cares about either issues after its own `SIGWINCH`. Closing
+    /// it means one engine-lock hop that carries the grid and the cell size
+    /// together, which is a bigger change than the inconsistency is worth.
+    pub fn set_cell_pixels(&self, width: u16, height: u16) {
+        self.term.lock().set_cell_pixels(width, height);
+    }
+
     /// Scroll the scrollback by `delta` lines (no-op in alt-screen).
     ///
     /// Positive scrolls towards history, which is the sign every caller already

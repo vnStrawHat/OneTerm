@@ -327,6 +327,10 @@ pub trait TerminalInput: Send + Sync {
     fn send_ctrl_c(&self);
     /// Resize rows×cols (PTY resize / ssh window_change).
     fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError>;
+    /// One cell's size in device pixels — what `CSI 14 t` reports, multiplied
+    /// by the grid. Separate from [`Self::resize`] because a DPI-scale change
+    /// moves the pixels while leaving rows and columns alone (`BUG-0061`).
+    fn set_cell_pixels(&self, width: u16, height: u16);
     /// Scroll the scrollback (only when not alt-screen / not mouse mode).
     fn scroll(&self, delta: i32);
     /// Scroll to bottom (display_offset = 0) — used when there is new output.
@@ -639,6 +643,10 @@ impl<O: PtyOwner> TerminalInput for PtySession<O> {
         Ok(())
     }
 
+    fn set_cell_pixels(&self, width: u16, height: u16) {
+        self.model().set_cell_pixels(width, height);
+    }
+
     fn scroll(&self, delta: i32) {
         self.model().scroll(delta);
     }
@@ -831,6 +839,41 @@ mod tests {
         // A resize to the size already in effect asks the owner nothing.
         session.resize(30, 80).expect("a no-op resize is still Ok");
         assert_eq!(session.owner().resizes.lock().unwrap().len(), 1);
+    }
+
+    /// `BUG-0061`: the engine starts at `(0, 0)` cell pixels, so `CSI 14 t`
+    /// answers "this window has no pixels" and every renderer that gates image
+    /// support on it (OpenTUI, chafa) falls back to block mosaics. The view
+    /// pushes the measured cell through this method; here is the hop that
+    /// carries it to the engine.
+    #[test]
+    fn cell_pixels_reach_the_engine_and_csi_14_t() {
+        let session = fake_session();
+        let mut batch = oneterm_vt::EventBatch::new();
+        let mut reply = |session: &PtySession<FakeOwner>, bytes: &[u8]| {
+            batch.clear();
+            session
+                .term
+                .lock()
+                .feed(bytes, &mut batch, std::time::Instant::now());
+            batch
+                .iter()
+                .filter_map(|event| match event {
+                    oneterm_vt::VtEvent::Reply(span) => {
+                        Some(String::from_utf8_lossy(batch.bytes(*span)).into_owned())
+                    }
+                    _ => None,
+                })
+                .collect::<String>()
+        };
+
+        assert_eq!(reply(&session, b"[14t"), "[4;0;0t");
+
+        session.set_cell_pixels(9, 18);
+
+        assert_eq!(reply(&session, b"[14t"), "[4;432;720t");
+        // The neighbouring arm is untouched: cells, not pixels.
+        assert_eq!(reply(&session, b"[18t"), "[8;24;80t");
     }
 
     #[test]

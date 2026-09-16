@@ -15,7 +15,7 @@ use async_channel::{Receiver, Sender, TrySendError};
 use oneterm_vt::MouseReporting;
 use oneterm_vt::{
     Cell, CellContent, CellWidth, CursorShape, EventBatch, Extras, ModeSnapshot, Pos, Rgb,
-    SelectionKind, Side, Size, Style, Terminal,
+    SelectionKind, Side, Size, Style, Terminal, VtEvent,
 };
 
 use crate::content::{LineRangeCells, TerminalContent};
@@ -93,6 +93,21 @@ impl GridFixture {
     pub fn feed(&mut self, bytes: &[u8]) {
         let mut batch = EventBatch::new();
         self.term.feed(bytes, &mut batch, Instant::now());
+    }
+
+    /// Feed bytes and return what the engine wants written back to the PTY —
+    /// the `VtEvent::Reply` bytes `OscRouter` forwards, in order. For tests of
+    /// query replies (`CSI 14 t`, `CSI 18 t`, ...).
+    pub fn feed_replies(&mut self, bytes: &[u8]) -> String {
+        let mut batch = EventBatch::new();
+        self.term.feed(bytes, &mut batch, Instant::now());
+        let mut replies = String::new();
+        for event in batch.iter() {
+            if let VtEvent::Reply(span) = event {
+                replies.push_str(&String::from_utf8_lossy(batch.bytes(*span)));
+            }
+        }
+        replies
     }
 
     /// Open a new batch, so the rows written after it carry a sequence number a
@@ -302,6 +317,12 @@ impl FakeSessionProbe {
     /// Feed raw bytes to the terminal behind the fake.
     pub fn feed(&self, bytes: &[u8]) {
         self.state.engine.lock().unwrap().feed(bytes);
+    }
+
+    /// Feed raw bytes and return the engine's reply bytes (what the adapter
+    /// would write back to the PTY).
+    pub fn feed_replies(&self, bytes: &[u8]) -> String {
+        self.state.engine.lock().unwrap().feed_replies(bytes)
     }
 
     /// Turn mouse reporting on (`? 9` / `? 1000` / `? 1002` / `? 1003`) or off.
@@ -609,6 +630,15 @@ impl TerminalInput for FakeTerminalSession {
             .term
             .resize(size, oneterm_vt::ResizePolicy::BottomAnchor);
         Ok(())
+    }
+
+    fn set_cell_pixels(&self, width: u16, height: u16) {
+        self.state
+            .engine
+            .lock()
+            .unwrap()
+            .term
+            .set_cell_pixels(width, height);
     }
 
     fn scroll(&self, delta: i32) {

@@ -23,6 +23,7 @@ use super::metrics::{CellMetrics, GridGeometry, measure};
 use super::overlay::{RowSpan, SearchHighlight, SearchRect, search_rects, selection_rects};
 use super::plan_cache::{PlanCache, StyleKey};
 use super::row_plan::{PlanContext, Scratch};
+use super::shapes::CellSizeDevicePx;
 use crate::highlight::SemanticOverlay;
 use crate::theme::TerminalTheme;
 
@@ -160,6 +161,8 @@ pub(crate) struct RenderState {
     pub gutter: GutterLabels,
     /// The grid last pushed to `session.resize`.
     pub last_grid: Option<GridSize>,
+    /// The cell size last pushed to `session.set_cell_pixels`.
+    pub last_cell_pixels: Option<CellSizeDevicePx>,
     /// Sixel images by id, GPU-ready.
     pub graphics: GraphicStore,
     pub stats: FrameStats,
@@ -187,6 +190,7 @@ impl RenderState {
             scratch: Scratch::new(),
             gutter: GutterLabels::default(),
             last_grid: None,
+            last_cell_pixels: None,
             graphics: GraphicStore::default(),
             stats: FrameStats::default(),
             #[cfg(any(test, feature = "terminal-diagnostics"))]
