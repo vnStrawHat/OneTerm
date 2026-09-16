@@ -282,9 +282,13 @@ impl Mode {
 pub enum ModeState {
     /// Not recognised; "do not use it".
     NotSupported = 0,
+    /// Recognised and currently on.
     Set = 1,
+    /// Recognised and currently off.
     Reset = 2,
+    /// Recognised, always on, and `l` cannot turn it off.
     PermanentlySet = 3,
+    /// Recognised, always off, and `h` cannot turn it on.
     PermanentlyReset = 4,
 }
 

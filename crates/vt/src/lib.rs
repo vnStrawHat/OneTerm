@@ -21,6 +21,34 @@
 //! let _: Option<Placement> = None;
 //! ```
 //!
+//! Naming one is not enough: an embedder stores these in its own structs, and
+//! matches or passes the ones that carry a decision.
+//!
+//! ```
+//! use oneterm_vt::{
+//!     ByteSpan, ColorOverrides, Invalidation, ModeState, ParamSpans, StrSpan, Watermark,
+//! };
+//!
+//! struct Probe {
+//!     title: StrSpan,
+//!     reply: ByteSpan,
+//!     osc: ParamSpans,
+//!     mark: Watermark,
+//! }
+//!
+//! fn recognised(state: ModeState) -> bool {
+//!     !matches!(state, ModeState::NotSupported)
+//! }
+//!
+//! fn clears(selection: &oneterm_vt::Selection, grid: &oneterm_vt::grid::TerminalGrid) -> bool {
+//!     selection.invalidated_by(grid, Invalidation::EraseScreen)
+//! }
+//!
+//! fn overrides(terminal: &oneterm_vt::Terminal) -> &ColorOverrides {
+//!     terminal.colors()
+//! }
+//! ```
+//!
 //! Terminal input is untrusted. Nothing here returns an error to the embedder
 //! and nothing here panics on input: a malformed or hostile stream is dropped,
 //! truncated or degraded to a documented fallback, and counted.
@@ -72,19 +100,23 @@ pub(crate) mod width;
 pub use cell::{Attrs, Cell, CellContent, CellWidth, Color, NamedColor, Rgb, Semantic, Style};
 // `FeedStats` has no external namer either, but it is what `Terminal::feed`
 // returns, so it stays published.
-pub use event::{ClipboardKind, EventBatch, FeedStats, Progress, ShellMark, StringTerm, VtEvent};
+pub use event::{
+    ByteSpan, ClipboardKind, EventBatch, FeedStats, ParamSpans, Progress, ShellMark, StrSpan,
+    StringTerm, VtEvent,
+};
 pub use graphics::{GraphicData, Placement, VIRTUAL_CELL};
 pub use grid::{Pos, RowId, RowRef, SeqNo, Size, Viewport};
 pub use intern::{Extras, ExtrasId, GraphicId, Hyperlink, HyperlinkId, Interner};
 pub use reflow::{ResizeOutcome, ResizePolicy};
-pub use selection::{Selection, SelectionKind, SelectionRange, Side};
+pub use selection::{Invalidation, Selection, SelectionKind, SelectionRange, Side};
 pub use snapshot::{
     ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting, Palette, SnapshotCell,
     SnapshotContent, SnapshotCursor, SnapshotPlacement, SnapshotRow, SnapshotState, SnapshotUpdate,
-    StyleRun, SyncState,
+    StyleRun, SyncState, Watermark,
 };
 pub use terminal::{
-    ColorKey, Config, CursorShape, CursorStyle, KeyboardFlags, Mode, OscRoute, OscRoutes, Terminal,
+    ColorKey, ColorOverrides, Config, CursorShape, CursorStyle, KeyboardFlags, Mode, ModeState,
+    OscRoute, OscRoutes, Terminal,
 };
 // Both halves of the width decision are published: `scalar_width` is what the
 // print path uses by default, `cluster_width` what it uses under mode `? 2027`,

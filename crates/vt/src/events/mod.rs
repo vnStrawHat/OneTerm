@@ -13,7 +13,7 @@
 pub(crate) mod batch;
 mod vt_event;
 
-pub use batch::EventBatch;
+pub use batch::{ByteSpan, EventBatch, ParamSpans, StrSpan};
 pub use vt_event::{ClipboardKind, FeedStats, Progress, ShellMark, StringTerm, VtEvent};
 
 #[cfg(test)]
