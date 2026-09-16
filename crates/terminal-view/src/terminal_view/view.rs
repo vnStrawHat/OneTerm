@@ -6,7 +6,7 @@
 //! owns (search, scrollbar, gutter timestamps, completion, agent status).
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -133,6 +133,13 @@ pub(crate) struct TerminalView {
     /// focus/blur subscriptions so the blink task can pause while unfocused
     /// without needing a `Window`.
     pub(super) focused: bool,
+    /// Keys whose press actually reached the PTY, by the GPUI key name.
+    ///
+    /// A release is sent only for a key in here, which keeps a chord the view
+    /// swallowed (zoom, copy, the completion overlay, a dead key, a printable
+    /// key the IME owns) from producing a release the program never saw a press
+    /// for. Drained on blur. Bounded by the number of physically held keys.
+    pub(super) held_keys: HashSet<String>,
     /// Render state shared with the element and read by the input handlers
     /// (the hit-test contract lives in its `geometry`).
     pub(super) render_state: Rc<RefCell<RenderState>>,
@@ -249,7 +256,10 @@ impl TerminalView {
 
         let subscriptions = vec![
             cx.on_focus(&focus, window, |view, _, _| view.focused = true),
-            cx.on_blur(&focus, window, |view, _, _| view.focused = false),
+            cx.on_blur(&focus, window, |view, _, cx| {
+                view.focused = false;
+                view.release_held_keys(cx);
+            }),
         ];
 
         let inputs = {
@@ -266,6 +276,7 @@ impl TerminalView {
             focus,
             deps,
             focused: true,
+            held_keys: HashSet::new(),
             render_state: Rc::new(RefCell::new(RenderState::new(inputs))),
             cached_font: None,
             theme_key: None,

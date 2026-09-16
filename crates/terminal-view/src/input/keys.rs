@@ -8,7 +8,8 @@
 
 use gpui::{App, Entity, Keystroke, Modifiers};
 use oneterm_terminal::{
-    KeyMods, KeySpec, ModeSnapshot, NamedKey, TerminalSession, encode_key, report_generated_input,
+    KeyEvent, KeyEventKind, KeyMods, KeySpec, ModeSnapshot, NamedKey, TerminalSession,
+    encode_key_event, report_generated_input,
 };
 
 /// What a key-down does. The order of the variants mirrors the classification
@@ -38,7 +39,7 @@ pub(crate) enum KeyAction {
     /// Ctrl+C: SIGINT via `send_ctrl_c`, regardless of the selection.
     Interrupt,
     /// Encode and write to the PTY (see [`send_key`]).
-    Send(KeySpec, KeyMods),
+    Send(KeyEvent),
     /// Deliberately not sent: the IME / platform path delivers this text.
     /// The view must not stop propagation.
     Ignore,
@@ -74,11 +75,21 @@ pub(crate) struct KeyContext {
     pub completion_selected: bool,
     /// `completion.accept_tab` setting.
     pub completion_accept_tab: bool,
+    /// The program pushed the kitty `REPORT_ALL_KEYS_AS_ESC` flag, so it asked
+    /// to be told about every key itself — including Ctrl+C, which is then the
+    /// encoded key rather than a `SIGINT` the program never sees.
+    pub all_keys_as_esc: bool,
 }
 
 /// Classify a key-down. `prefer_char` is `KeyDownEvent::prefer_character_input`
-/// — the platform's own "this is layout text, not a chord" flag.
-pub(crate) fn classify_key(ks: &Keystroke, prefer_char: bool, ctx: KeyContext) -> KeyAction {
+/// — the platform's own "this is layout text, not a chord" flag. `kind` is
+/// `Repeat` when GPUI reports the key held (the OS's own auto-repeat).
+pub(crate) fn classify_key(
+    ks: &Keystroke,
+    prefer_char: bool,
+    kind: KeyEventKind,
+    ctx: KeyContext,
+) -> KeyAction {
     // Row 0: the visible overlay sees every key first, and falls through for
     // the ones it does not bind.
     if ctx.completion_visible
@@ -163,12 +174,15 @@ pub(crate) fn classify_key(ks: &Keystroke, prefer_char: bool, ctx: KeyContext) -
         return KeyAction::Ignore;
     }
 
-    if mods.control && !mods.shift && matches!(key, "c" | "C") {
+    // A program that pushed `REPORT_ALL_KEYS_AS_ESC` asked to see every key as
+    // an escape code; turning this one into a signal it can never observe is
+    // the opposite of what it negotiated. With no flag pushed, unchanged.
+    if mods.control && !mods.shift && matches!(key, "c" | "C") && !ctx.all_keys_as_esc {
         return KeyAction::Interrupt;
     }
 
-    match map_key(ks) {
-        Some((spec, key_mods)) => KeyAction::Send(spec, key_mods),
+    match map_key(ks, kind) {
+        Some(event) => KeyAction::Send(event),
         None => KeyAction::Unhandled,
     }
 }
@@ -210,40 +224,55 @@ fn is_layout_text(key_char: Option<&str>) -> bool {
     key_char.is_some_and(|text| !text.is_empty() && !text.chars().any(char::is_control))
 }
 
-/// Map a GPUI [`Keystroke`] to the encoder's [`KeySpec`] + [`KeyMods`].
+/// Map a GPUI [`Keystroke`] to a [`KeyEvent`] of the given kind.
 ///
 /// `key_char` is the literal text; `key` is the chord name and is the only
 /// thing available once Ctrl/Alt suppress the character. Multi-character names
 /// have no terminal encoding, so they return `None` rather than being sent as
 /// literal text — except `"space"`, translated to `" "` so Ctrl+Space encodes
 /// NUL.
-pub(crate) fn map_key(ks: &Keystroke) -> Option<(KeySpec, KeyMods)> {
+///
+/// `shifted` and `base_layout` stay `None`: a GPUI `Keystroke` is
+/// `{ modifiers, key, key_char }` and carries neither, so the kitty
+/// `REPORT_ALTERNATE_KEYS` flag is inert for this embedder.
+pub(crate) fn map_key(ks: &Keystroke, kind: KeyEventKind) -> Option<KeyEvent> {
     let mods = ks.modifiers;
     let key_mods = KeyMods {
         shift: mods.shift,
         ctrl: mods.control,
         alt: mods.alt,
     };
-    if let Some(named) = named_key(ks.key.as_str()) {
-        return Some((KeySpec::Named(named), key_mods));
-    }
-    let text = ks
-        .key_char
-        .clone()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            if ks.key == "space" {
-                " ".to_string()
-            } else {
-                ks.key.clone()
+    let spec = match named_key(ks.key.as_str()) {
+        Some(named) => KeySpec::Named(named),
+        None => {
+            let text = ks
+                .key_char
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| {
+                    if ks.key == "space" {
+                        " ".to_string()
+                    } else {
+                        ks.key.clone()
+                    }
+                });
+            if text.chars().count() != 1 {
+                // An unrecognised multi-character name ("print", "f25"): no
+                // encoding exists, with or without modifiers.
+                return None;
             }
-        });
-    if text.chars().count() != 1 {
-        // An unrecognised multi-character name ("print", "f25"): no encoding
-        // exists, with or without modifiers.
-        return None;
+            KeySpec::Character(text)
+        }
+    };
+    let mut event = KeyEvent::new(spec, key_mods);
+    event.kind = kind;
+    // Only a press or a repeat carries text. The engine refuses it on a release
+    // anyway; not sending it keeps the two halves agreeing rather than relying
+    // on one of them to clean up after the other.
+    if kind != KeyEventKind::Release {
+        event.text = ks.key_char.clone().filter(|text| !text.is_empty());
     }
-    Some((KeySpec::Character(text), key_mods))
+    Some(event)
 }
 
 fn named_key(key: &str) -> Option<NamedKey> {
@@ -294,16 +323,16 @@ fn named_key(key: &str) -> Option<NamedKey> {
 /// user is typing, so they want to see the echo) and write the encoding.
 ///
 /// Returns the bytes that were sent so the caller can repeat them on its
-/// broadcast channel, or `None` when the chord has no encoding (Ctrl +
-/// non-ASCII), in which case nothing was written and nothing failed.
+/// broadcast channel, or `None` when the event sends nothing — a chord with no
+/// encoding (Ctrl + non-ASCII), or a release no program asked to hear about —
+/// in which case nothing was written and nothing failed.
 pub(crate) fn send_key(
     session: &Entity<Box<dyn TerminalSession>>,
-    spec: &KeySpec,
-    mods: KeyMods,
+    event: &KeyEvent,
     modes: &ModeSnapshot,
     cx: &mut App,
 ) -> Option<Vec<u8>> {
-    let bytes = encode_key(spec, mods, modes)?;
+    let bytes = encode_key_event(event, modes)?;
     session.update(cx, |s, _| {
         s.scroll_to_bottom();
         report_generated_input("key", s.write(&bytes));

@@ -13,7 +13,9 @@ pub(crate) mod menu;
 pub(crate) mod mouse;
 
 pub(crate) use edit::{copy_selection, paste_clipboard};
-pub(crate) use keys::{CompletionKey, KeyAction, KeyContext, classify_key, interrupt, send_key};
+pub(crate) use keys::{
+    CompletionKey, KeyAction, KeyContext, classify_key, interrupt, map_key, send_key,
+};
 pub(crate) use menu::{MenuContext, MenuSplitContext, build_menu};
 pub(crate) use mouse::{MouseInputs, MouseOutcome, MouseState, UrlOpen};
 
