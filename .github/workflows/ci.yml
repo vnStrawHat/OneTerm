@@ -367,7 +367,11 @@ jobs:
           git clone --no-checkout https://github.com/ThomasDickey/esctest2.git esctest2
           git -C esctest2 checkout "$ESCTEST_REF"
         env:
-          ESCTEST_REF: master
+          # The head of `master` on 2026-09-13, resolved and pinned here on
+          # 2026-09-16. A branch name would let a rewritten upstream test
+          # silently change what this engine is scored against, which would make
+          # the artifact incomparable with the one beside it.
+          ESCTEST_REF: 2798f12149a19c3295e9b4853ab2da4b2eff1b2b
       - name: Build the bridge
         run: cargo build -p oneterm-tools --release --bin vt-esctest
       # `--xterm-checksum 334` is load-bearing, not cosmetic: it is what makes

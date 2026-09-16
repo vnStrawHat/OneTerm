@@ -70,6 +70,15 @@ mod unix {
     /// whole run is minutes; this is an order of magnitude above that.
     const DEADLINE: Duration = Duration::from_secs(900);
 
+    /// How long to wait for the child to be reaped after the pty reports
+    /// end of file, and how long each wait between polls is.
+    ///
+    /// Two seconds is far longer than the reaper thread needs -- it is already
+    /// blocked in `waitpid` when the child exits -- and short enough that a
+    /// child which somehow never reports still lets the job finish.
+    const REAP_POLLS: u32 = 100;
+    const REAP_INTERVAL: Duration = Duration::from_millis(20);
+
     pub fn run() {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let Some((program, harness_args)) = args.split_first() else {
@@ -81,8 +90,12 @@ mod unix {
 
         let options = Options {
             shell: Some(Shell::new(program.clone(), harness_args.to_vec())),
-            // `esctest` keys some expectations off `TERM`, and the engine
-            // answers `XTGETTCAP`'s `TN` with the same name.
+            // `esctest` keys some expectations off `TERM`. The engine answers
+            // `XTGETTCAP`'s `TN` with the same name, which is why
+            // `product_name` is deliberately **not** set below: setting it
+            // overrides `TN`, and a terminal that says `xterm-256color` in the
+            // environment and something else over `XTGETTCAP` is contradicting
+            // itself in front of a conformance harness.
             env: [
                 ("TERM".to_owned(), "xterm-256color".to_owned()),
                 ("COLORTERM".to_owned(), "truecolor".to_owned()),
@@ -117,7 +130,12 @@ mod unix {
             },
             Config {
                 allow_screen_readback: true,
-                product_name: Some("oneterm-vt-esctest(1.0.0)".into()),
+                // No `product_name`: it would override `XTGETTCAP`'s `TN` away
+                // from the `TERM` set above. `esctest`'s own `escutil.py` never
+                // reads `TN`, so nothing here depends on the choice -- but the
+                // terminal should not contradict itself whether or not anyone
+                // is checking. `XTVERSION` and `DA2` then report the engine's
+                // own identity, which is the truth about what is running.
                 ..Config::default()
             },
         );
@@ -138,6 +156,7 @@ mod unix {
         let mut buffer = vec![0u8; 64 * 1024];
         let started = Instant::now();
         let mut status = None;
+        let mut end_of_file = false;
 
         'outer: while started.elapsed() < DEADLINE {
             events.clear();
@@ -159,8 +178,33 @@ mod unix {
                     continue;
                 }
                 if event.readable && !drain(&mut pty, &mut term, &mut batch, &mut buffer) {
+                    end_of_file = true;
                     break 'outer;
                 }
+            }
+        }
+
+        // **The race this closes.** End of file on the pty master is how the
+        // kernel says the last slave descriptor closed, and on Linux it arrives
+        // as `EIO` rather than as a clean `Ok(0)`. That happens at the same
+        // instant the child exits, so the master's readability and the
+        // child-exit socket both become ready at once and `events.iter()` may
+        // hand back either first. Leaving the loop through the end-of-file arm
+        // therefore says nothing about whether the child has been reaped -- and
+        // the first version of this file fell straight through to the timeout
+        // branch and reported exit 2 for a harness that had finished normally.
+        //
+        // So: having seen end of file, wait for the reaper. `waitpid` is not
+        // called here on purpose -- `PseudoConsole` owns a reaper thread that is
+        // already blocked in it, and a second waiter would race it for the
+        // status. `next_child_event` is how that thread hands the status over.
+        if end_of_file && status.is_none() {
+            for _ in 0..REAP_POLLS {
+                if let Some(ChildEvent::Exited(code)) = pty.next_child_event() {
+                    status = Some(code);
+                    break;
+                }
+                std::thread::sleep(REAP_INTERVAL);
             }
         }
 
@@ -173,6 +217,13 @@ mod unix {
         let code = match status {
             Some(Some(status)) => status.code().unwrap_or(1),
             Some(None) => 1,
+            None if end_of_file => {
+                // The pty closed but the reaper never reported. The harness did
+                // run, so this is not a timeout and must not be reported as
+                // one; there is simply no status to pass on.
+                eprintln!("vt-esctest: the pty closed but the child status never arrived");
+                1
+            }
             None => {
                 eprintln!("vt-esctest: the harness did not exit within {DEADLINE:?}");
                 2
