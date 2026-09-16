@@ -90,8 +90,23 @@ would have to replay the scroll that produced the placement.
 The `bands * 6 / cell_height` cursor walk divides by the **same** cell. `DecodedSixel` therefore
 carries the bands' pixel height rather than a row count already divided by 20: leave that alone
 and a 384x576 image at a 9x18 cell stamps 32 rows while the cursor descends 28, putting the
-prompt inside the picture — the one thing the conhost agreement exists to prevent. At
+prompt high inside the picture — the one thing the conhost agreement exists to prevent. At
 `VIRTUAL_CELL` the quotient is the identical `bands * 6 / 20`.
+
+Two qualifications, both pre-existing and neither introduced by the real-cell footprint:
+
+- **The cursor lands on the image's last row, not below it.** Without a trailing graphics
+  newline, `bands * 6` is the height of the bands *above* the last, so the walk stops one row
+  short of the bottom and the shell's own newline carries the prompt clear. Real encoders
+  (`libsixel`, `img2sixel`) do emit the trailing `-`, which makes `bands * 6` the full height and
+  puts the cursor genuinely below the image whenever the cell height divides it — at 9x18 and
+  18x36 it does, at the VT340 20 px cell `576 / 20 = 28` and it does not.
+- **`DECGRA` can break the agreement.** `"Pan;Pad;Ph;Pv` overrides the measured extents while the
+  cursor keeps following the band count, so a declared height larger than the data leaves the
+  cursor high inside the image (declared `384 x 576` with two bands: footprint `43 x 32`, cursor
+  row 0) and one smaller walks it past (declared `384 x 60` with 96 bands: footprint `43 x 4`,
+  cursor row 31). Making the footprint and the walk both follow `max(declared, measured)` was
+  considered and rejected — see `BUG-0062` § Evidence and Gaps for why it is not a small change.
 
 ### Liveness and the release signal
 

@@ -294,6 +294,9 @@ Measurable by a hostile verifier from a clean checkout of this branch:
 
 ## Follow-ups
 
+- **`DECGRA` and the cursor walk.** Make the footprint and the walk agree when the raster
+  attributes disagree with the data (verifier finding 7). Needs its own packet: it changes what
+  `"Pan;Pad;Ph;Pv` means, and the reasoning is under Evidence and Gaps.
 - **XTSMGRAPHICS.** `CSI ? 2;1;0 S` -> maximum image geometry, `CSI ? 1;1;0 S` -> colour
   registers, for `chafa` and `notcurses`. Owner: `US-0106` (`IN-0039`). Unchanged by this packet
   except that the maximum geometry now has a real cell size to be derived from.
@@ -302,18 +305,43 @@ Measurable by a hostile verifier from a clean checkout of this branch:
   without moving the anchor — cheap, and it changes what cells an old image covers, which is a
   decision rather than a bug fix.
 
+## Verification notes closed
+
+Independent verification, 2026-09-16: **PASS, no blocker**
+([`evidence/BUG-0062-verify.md`](evidence/BUG-0062-verify.md)). Findings 1-6 and 13 confirmed the
+packet's own claims — the `ceil` rule, the `band_pixels` cursor, the footprint table, the native
+quad, `SIXEL_VIRTUAL_CELL`'s single caller, the untouched corpus and public-api snapshots, and the
+records. The remaining five are closed here:
+
+| Finding | Closed by |
+| --- | --- |
+| 7 (`DECGRA` can put the cursor outside the image; pre-existing, docs overclaim) | **Docs, not code** — see the gap below for why. The "can never land inside" / "keeps the prompt below" wording is qualified at `sixel.rs`, `placement.rs`, `low-level-design/graphics.md` and guide 08; the verifier's two measurements (`v_raster_larger_than_the_data_...`, `v_raster_smaller_than_the_data_...`) are adopted, so the behaviour is now pinned rather than merely described. |
+| 8 (the cursor lands *on* the last row, not below) | Corrected in all four places. The guide now states where the cursor stops, why (`bands * 6` is the height of the bands *above* the last), and that xterm's rule differs — flagged as informational, since this repository holds no xterm capture to pin it against. |
+| 9 (a real encoder's trailing graphics newline shifts the cursor) | `v_a_trailing_graphics_newline_moves_the_cursor_below_the_image` is adopted, pinning the cursor row at `(9, 18)`, `(18, 36)` and the fallback for the payload shape `libsixel` and `img2sixel` actually emit — the shape the packet's own `dragon()` fixture omits. The guide names both shapes. |
+| 10 (`Frame::placement` duplicates `SnapshotState::placement`) | Fixed as the verifier suggested: `TerminalContent::placement` is the one-line forward onto the existing `pub` helper, and `Frame::placement` forwards to it. One scan per image per frame instead of two, and the duplicate is gone. |
+| 11 (stale "one virtual 10 x 20 cell" comment) | Corrected in `element_tests.rs`: the element pushes the real device cell in `prepaint` before the payload is fed, so that placement has not used the virtual cell since `BUG-0061`. |
+
+Finding 12 (an unbounded band count costs a line feed per row) is recorded as pre-existing and not
+acted on: it is the same shape as `main`'s, the `u16` clamp bounds it, and
+`v_a_one_pixel_cell_does_not_panic_or_hang` — adopted — proves the worst cell size neither panics
+nor hangs.
+
+All 18 verifier tests are adopted verbatim and pass unmodified: 12 `v_*` in
+`crates/vt/src/graphics/graphics_tests.rs` and the six of `verifier_bug_0062` in
+`crates/terminal-view/src/render/metrics.rs`.
+
 ## Evidence and Gaps
 
-Four commits on `fix/sixel-real-cell` from `main` (`47e7e93c`): the packet, the engine, the
-adapter and view, the docs, plus one fixup for the rustdoc self-containment gate. Ten files,
-about 300 insertions.
+Six commits on `fix/sixel-real-cell` from `main` (`47e7e93c`): the packet, the engine, the adapter
+and view, the docs, a fixup for the rustdoc self-containment gate, and the verification close-out
+(the adopted tests, the four doc qualifications, finding 10's de-duplication, and the report).
 
 Test names, since none of them is selected by the obvious filter:
 
 | Level | Command | Test |
 | --- | --- | --- |
-| Unit, engine | `cargo test -p oneterm-vt --lib graphics::` | `footprint_follows_the_embedder_cell_size`, `a_one_pixel_image_covers_one_cell_at_every_cell_size`, `a_zero_axis_falls_back_to_the_virtual_cell` |
-| Unit, view | `cargo test -p oneterm-terminal-view --lib render::metrics` | `an_image_is_drawn_at_its_own_pixels_and_clipped_to_the_footprint` |
+| Unit, engine | `cargo test -p oneterm-vt --lib graphics::` | `footprint_follows_the_embedder_cell_size`, `a_one_pixel_image_covers_one_cell_at_every_cell_size`, `a_zero_axis_falls_back_to_the_virtual_cell`, and the 12 adopted `v_*` |
+| Unit, view | `cargo test -p oneterm-terminal-view --lib render::metrics` | `an_image_is_drawn_at_its_own_pixels_and_clipped_to_the_footprint`, and the six adopted `verifier_bug_0062::v_*` |
 | Integration | `cargo test -p oneterm-terminal --lib session::` | `the_pushed_cell_size_decides_a_sixel_placement_footprint` |
 
 The footprint table, from the engine and adapter tests (image `384 x 576`, the OpenTUI dragon):
@@ -357,6 +385,22 @@ Gaps:
 - **No test covers a metrics change after an image is placed.** The behaviour is documented
   (the footprint stays, the picture is cropped or gains margin) and follows from the clip, but the
   GPUI test window pins `scale_factor` at 2.0 — the same limitation `BUG-0061` recorded.
+- **`DECGRA` versus the cursor walk is documented, not fixed** (verifier finding 7, pre-existing
+  on `main`). Making the footprint and the walk both follow `max(declared, measured)` was
+  considered on the coordinator's prompt and is **not** a few lines:
+  - it inverts `SixelParser::finish`'s documented rule that the declaration wins, which
+    `raster_attributes_declare_the_size` pins (declared `1 x 3` against 12 measured px — `max`
+    answers 12 and the test fails);
+  - the image's pixel buffer is allocated at the declared size, so a footprint from `max` would
+    cover cells the image has no pixels for, and the cursor would move over a picture that is not
+    there;
+  - tying the walk to the footprint rather than to the bands changes the fallback quotient away
+    from `bands * 6 / 20`, which is the conhost agreement `cursor_descends_bands_times_six_over_twenty`
+    pins and which the corpus runs through.
+
+  It is a `DECGRA` semantics change needing its own packet and a fresh capture, and the original
+  scope for this one put the raster attributes explicitly out of bounds. The behaviour is now
+  pinned by two adopted tests and stated in four docs instead.
 - The XTSMGRAPHICS and re-placing follow-ups above are open by design.
 
 ## Handoff
@@ -392,8 +436,7 @@ ROW = dict(
     e2e_proof=0,
     platform_proof=1,
     evidence=(
-        "docs/spec-intakes/IN-0029-vt-engine/"
-        "BUG-0062-sixel-placement-uses-real-cell.md"
+        "docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0062-verify.md"
     ),
     verify_command="pwsh scripts/ci-local.ps1 -Full",
     last_verified_at="2026-09-16",
