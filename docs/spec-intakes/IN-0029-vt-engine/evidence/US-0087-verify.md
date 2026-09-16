@@ -238,6 +238,10 @@ changed.
 | `vt-bench all --mib 25` | its own job, `continue-on-error` | **no counterpart** |
 | `cargo test -p oneterm-core -p oneterm-terminal -p oneterm-local-shell -p oneterm-ssh` | `macos-tests` | subsumed by `cargo test --workspace` |
 
+> Note added 2026-09-16 (`US-0109`, IN-0041): the table above records CI as it stood on this
+> date and is not maintained. `vt-paranoid` now runs in the `vt-package` job only, and the
+> `macos-tests` command has gained `-p oneterm-vt`. The `ci-local` column is unchanged.
+
 **Divergences, all benign:** (i) the six python checks run in a different *order*
 (ci.yml: graph, catalog, doc-paths, notices, unittest, english; ci-local: graph,
 doc-paths, unittest, english, catalog, notices) — same set, so no coverage gap; (ii)

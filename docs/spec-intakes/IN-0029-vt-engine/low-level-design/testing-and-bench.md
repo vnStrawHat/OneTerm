@@ -69,11 +69,14 @@ O(touched rows) and is flat in the scrollback depth.
 The residual ~150 us is the floor the bound describes — two 45-row screens, each cell visited by
 both walkers.
 
-**CI runs both tiers.** `scripts/ci-local.ps1`, `scripts/ci-local.sh` and both quality jobs in
+**CI runs both tiers.** `scripts/ci-local.ps1`, `scripts/ci-local.sh` and the `vt-package` job in
 `.github/workflows/ci.yml` carry an extra step,
 `cargo test -p oneterm-vt --features vt-paranoid`, so the unbounded invariants still gate every
 change. **M12 is closed**: the manifest entry landed with `US-0076` and the `cfg!` gate and CI step
-with the `US-0075` / `US-0079` rework.
+with the `US-0075` / `US-0079` rework. The step used to run in both quality jobs; `US-0109`
+moved it to the one crate-centric job, because the walk is grid logic with no
+platform-conditional site and the engine's only such module, `src/pty/`, is already compiled
+and run per platform by `cargo test --workspace`.
 
 **The guarding test** is `snapshot::bench::integrity_walk_cost_per_feed_and_snapshot_update`
 (`crates/vt/src/snapshot/snapshot_bench.rs`): it fills a 100 000-row history in one `feed`, reports the

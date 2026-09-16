@@ -88,21 +88,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Read pinned toolchain
-        id: toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
-          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
+        uses: ./.github/actions/setup-rust
         with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: rustfmt, clippy
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
       - name: Install Linux system dependencies (GPUI)
         run: |
           sudo apt-get update
@@ -117,26 +106,15 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
-      # `terminal-diagnostics` guards ~200 lines of incident diagnostics that no
-      # other step compiles — 18 bare `#[cfg(feature = …)]` sites inside
-      # `crates/local-shell`'s read loop alone. Without this step they rot until
-      # the incident that wants them (`IN-0032` § 2.4, `US-0090`).
-      - name: Lint workspace with terminal diagnostics
-        run: cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings
       # No separate `cargo build --workspace`: clippy --all-targets already
       # type-checks every target and `cargo test` links them (BUILD-28).
+      #
+      # The `terminal-diagnostics` lint runs in the Windows job and the two
+      # `oneterm-vt` feature suites in `vt-package`, each exactly once: none of
+      # the three has a platform-conditional site, so a second copy here bought
+      # nothing (`US-0109`).
       - name: Test workspace
         run: cargo test --workspace
-      # The VT engine's whole-history integrity walk (IN-0029 R-28). It is
-      # bounded to the rows an operation touched by default, because at a
-      # 100 000-row scrollback the full walk costs milliseconds per `feed`; CI
-      # is where the unbounded invariants are gated.
-      - name: Test the VT engine with the full integrity walk
-        run: cargo test -p oneterm-vt --features vt-paranoid
-      # `regex` gates a whole matcher, so the suite runs under it too: the
-      # literal half must answer identically with the feature on.
-      - name: Test the VT engine with regex search
-        run: cargo test -p oneterm-vt --features regex
 
   vt-package:
     # `oneterm-vt` is not published (owner ruling 2026-09-15), but other projects
@@ -147,24 +125,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Read pinned toolchain
-        id: toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
-          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
+        uses: ./.github/actions/setup-rust
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
       # The default feature set is `pty` (`US-0104`), so these two builds are
       # different configurations, and `--examples` proves the example in the
       # README still builds.
@@ -176,6 +142,21 @@ jobs:
           # that executes the transport-free engine.
           cargo test -p oneterm-vt --no-default-features
           cargo build -p oneterm-vt --all-features --examples
+      # The two feature configurations that have their own test run rather than
+      # just a build. Both live here, not in a platform quality job: the code
+      # each one switches on is platform-free, so running them per platform
+      # duplicated work without adding coverage (`US-0109`).
+      #
+      # The VT engine's whole-history integrity walk (IN-0029 R-28). It is
+      # bounded to the rows an operation touched by default, because at a
+      # 100 000-row scrollback the full walk costs milliseconds per `feed`; CI
+      # is where the unbounded invariants are gated.
+      - name: Test the VT engine with the full integrity walk
+        run: cargo test -p oneterm-vt --features vt-paranoid
+      # `regex` gates a whole matcher, so the suite runs under it too: the
+      # literal half must answer identically with the feature on.
+      - name: Test the VT engine with regex search
+        run: cargo test -p oneterm-vt --features regex
       # The README's six-dependency claim is a claim about
       # `--no-default-features` specifically now that a default feature adds
       # dependencies. This is what keeps it from being prose.
@@ -257,33 +238,29 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Read pinned toolchain
-        id: toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
-          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
+        uses: ./.github/actions/setup-rust
         with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: clippy
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # `terminal-diagnostics` guards ~200 lines of incident diagnostics that no
+      # other step compiles — 18 bare `#[cfg(feature = …)]` sites inside
+      # `crates/local-shell`'s read loop alone. Without this step they rot until
+      # the incident that wants them (`IN-0032` § 2.4, `US-0090`).
+      #
+      # It runs here and nowhere else (`US-0109`): its `#[cfg(feature = …)]`
+      # sites in `crates/local-shell`, `crates/ssh` and `crates/terminal-view`
+      # are all platform-free, so the primary platform is the one that needs to
+      # compile them.
       - name: Lint workspace with terminal diagnostics
         run: cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings
+      # This is also where `crates/vt/src/pty/windows.rs` is compiled and run.
+      # The engine's feature suites (`vt-paranoid`, `regex`) live in
+      # `vt-package` instead: neither feature switches on platform-conditional
+      # code, so there was nothing for a second platform to find (`US-0109`).
       - name: Test workspace
         run: cargo test --workspace
-      # The VT engine's whole-history integrity walk (IN-0029 R-28). It is
-      # bounded to the rows an operation touched by default, because at a
-      # 100 000-row scrollback the full walk costs milliseconds per `feed`; CI
-      # is where the unbounded invariants are gated.
-      - name: Test the VT engine with the full integrity walk
-        run: cargo test -p oneterm-vt --features vt-paranoid
 
   vt-bench:
     # The VT engine benchmark (IN-0029). It RECORDS and never gates: at
@@ -296,20 +273,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Read pinned toolchain
-        id: toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
-          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
+        uses: ./.github/actions/setup-rust
       - name: Run the five tiers
         # A smaller byte budget than a local record run: a shared runner is not
         # the machine the baseline in the packet was measured on, and this job
@@ -343,20 +308,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Read pinned toolchain
-        id: toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
-          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
+        uses: ./.github/actions/setup-rust
       # Fetched, never vendored and never linked: `esctest` is GPL-2.0, and this
       # job's relationship with it is the same one CI has with every other tool
       # it runs. Pinned to a commit so a rewritten upstream test cannot silently
@@ -412,24 +365,22 @@ jobs:
 
   # Linux and Windows already run `cargo test --workspace` in the two quality
   # gates above; macOS is the only platform without that coverage.
+  #
+  # `oneterm-vt` is in the list so that macOS **runs the engine's own test
+  # targets** — `crates/vt/src/pty/unix.rs`'s `#[cfg(test)]` module, the
+  # `#[cfg(unix)]` arm of `pty/loopback_tests.rs`, and the rest of the suite.
+  # It was already *compiled* here, as a dependency of `oneterm-local-shell`
+  # (which takes `oneterm-vt` with `features = ["pty"]`), but compiling a crate
+  # as a dependency never builds its `#[cfg(test)]` modules, so none of that
+  # ran. `cfg(unix)` is two platforms, not one — `libc::sigset_t` is a `u32`
+  # alias here and a struct on glibc (`BUG-0063`) — and this is the job where
+  # the macOS one is exercised rather than merely built (`US-0109`).
   macos-tests:
     name: macOS backend tests
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Read pinned toolchain
-        id: toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
-          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
+        uses: ./.github/actions/setup-rust
       - name: Test portable backend contracts
-        run: cargo test -p oneterm-core -p oneterm-terminal -p oneterm-local-shell -p oneterm-ssh
+        run: cargo test -p oneterm-core -p oneterm-terminal -p oneterm-local-shell -p oneterm-ssh -p oneterm-vt
