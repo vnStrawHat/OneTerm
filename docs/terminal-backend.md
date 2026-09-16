@@ -115,7 +115,7 @@
 ```
 
 **Data flow**:
-- Input: `Keystroke` (GPUI) → `terminal-view/src/input/keys.rs` maps it to a `KeySpec` → `oneterm_vt::input::encode_key` → `Vec<u8>` → `session.write(bytes)` → PTY/channel.
+- Input: `Keystroke` (GPUI) → `terminal-view/src/input/keys.rs` maps it to a `KeyEvent` (`Press` / `Repeat` / `Release`) → `oneterm_vt::input::encode_key_event` → `Vec<u8>` → `session.write(bytes)` → PTY/channel.
 - Output: PTY/channel → pump (`ShellEventLoop` local / `ssh_main_task` tokio ssh) → `TerminalPump::advance` feeds the per-session printable-output logger and the engine under the terminal lock, collecting the batch's events → `finish_batch` releases the lock, sends those events and then one `SessionEvent::Output` → View `cx.notify()` → `TerminalElement` prepaint calls `session.snapshot_into(&mut cache.snapshot)` (short lock, one `snapshot_update` into the `SnapshotState` the reusable `TerminalContent` in `RenderCache` owns — zero steady-state allocation — and advances *that buffer's* damage watermark) and paints from that buffer; `session.snapshot()` remains as the allocating convenience for tests and one-off reads. Logging behavior and file lifecycle are owned by [`terminal-logging.md`](terminal-logging.md).
 
 ---
@@ -903,9 +903,24 @@ See [`decisions/0002-ssh-duplicate-auth.md`](decisions/0002-ssh-duplicate-auth.m
 
 Four input paths:
 
-1. **Raw keystroke** (`on_key_down` in the element): `try_keystroke(keystroke, mods)`
-   → `oneterm_vt::input::encode_key` → `session.write(bytes)`. Mapping: Ctrl+char → `& 0x1f`, F-key /
-   arrow → ANSI escape, Enter → `\r`, Backspace → `0x7f`, Tab → `\t` / `\x1b[Z`…
+1. **Raw keystroke** (`on_key_down` / `on_key_up` on the wrapper div): `map_key` builds an
+   `oneterm_vt::input::KeyEvent` → `encode_key_event` → `session.write(bytes)`. Mapping:
+   Ctrl+char → `& 0x1f`, F-key / arrow → ANSI escape, Enter → `\r`, Backspace → `0x7f`,
+   Tab → `\t` / `\x1b[Z`…
+   The event's `kind` is `Repeat` when GPUI reports the key held (`KeyDownEvent::is_held` —
+   the OS's own auto-repeat; nothing in the view times, counts or synthesises one), `Press`
+   otherwise, and `Release` on the key-up path. A release produces bytes only once the program
+   pushed the kitty `REPORT_EVENT_TYPES` flag; otherwise the encoder answers `None` and nothing
+   is written, which is why the byte stream is unchanged for a program that negotiated nothing.
+   `TerminalView::held_keys` records the keys whose press actually reached the PTY: a release is
+   sent only for a member, so a chord the view swallowed (zoom, copy, the completion overlay, a
+   printable key the IME owns) never produces a release the program saw no press for, and a
+   key-up with no key-down writes nothing. The set is drained on blur — one release per key —
+   so a window the user left cannot strand a held key. The key-up path does not run
+   `classify_key` (the table is full of view-side shortcuts) and does not stop propagation, and
+   a release is never repeated onto a broadcast channel's peers.
+   `KeyEvent::shifted` and `base_layout` stay `None`: a GPUI `Keystroke` carries neither, so
+   `REPORT_ALTERNATE_KEYS` is inert for this embedder (`US-0108`).
 2. **GPUI action** (Ctrl-Shift-C/V copy/paste, Ctrl-Tab…): map → `try_keystroke` or
    clipboard.
 3. **IME**: keystroke not mapped → yield to GPUI IME → `EntityInputHandler` calls back
