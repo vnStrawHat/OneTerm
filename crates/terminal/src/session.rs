@@ -876,6 +876,43 @@ mod tests {
         assert_eq!(reply(&session, b"[18t"), "[8;24;80t");
     }
 
+    /// `BUG-0062`: the cell size the view pushes must reach **placement**, not
+    /// only the `CSI 14 t` reply.
+    ///
+    /// The image is the OpenTUI dragon's geometry (`384 x 576`). At the 9x18
+    /// device cell of a 100 % display it covers `43 x 32` cells; unset, it falls
+    /// back to the VT340 10x20 and covers `39 x 29` — which is what every
+    /// placement did before this packet, and why the picture came out small.
+    /// Read back through `TerminalContent`, the way the painter reads it.
+    #[test]
+    fn the_pushed_cell_size_decides_a_sixel_placement_footprint() {
+        let dragon = format!(
+            "\x1bPq\"1;1;384;576#0;2;100;0;0#0~{}\x1b\\",
+            "-~".repeat(95)
+        );
+
+        let footprint = |cell: Option<(u16, u16)>| {
+            let session = fake_session();
+            session.resize(40, 80).expect("room for the image");
+            if let Some((width, height)) = cell {
+                session.set_cell_pixels(width, height);
+            }
+            session.term.lock().feed(
+                dragon.as_bytes(),
+                &mut oneterm_vt::EventBatch::new(),
+                std::time::Instant::now(),
+            );
+            let content = TerminalContent::from(&mut session.term.lock());
+            let placement = content.placements()[0];
+            assert_eq!(placement.pixel_size, (384, 576));
+            (placement.cols, placement.rows)
+        };
+
+        assert_eq!(footprint(Some((9, 18))), (43, 32), "100 % display scale");
+        assert_eq!(footprint(Some((18, 36))), (22, 16), "200 % display scale");
+        assert_eq!(footprint(None), (39, 29), "no embedder, VT340 sizing");
+    }
+
     #[test]
     fn write_reaches_the_owner_while_alive_and_is_refused_once_closed() {
         let session = fake_session();

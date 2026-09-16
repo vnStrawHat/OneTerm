@@ -17,17 +17,24 @@ use super::{GraphicData, MAX_PLACEMENTS, Placement, VIRTUAL_CELL};
 /// Place a finished image at the cursor, the way DEC terminals and Windows
 /// conhost do (Sixel scrolling mode).
 ///
-/// Pixels are measured in [`VIRTUAL_CELL`] units; every covered cell gets the
-/// image's id and nothing else; the cursor walks down `bands * 6 / 20` rows
+/// Pixels are divided by [`cell_size`], every covered cell gets the image's id
+/// and nothing else, the cursor walks down `bands * 6 / cell_height` rows
 /// through the ordinary line feed — so the scroll region, the scrollback and
 /// the damage all behave as they do for text — and **keeps its column**. Image
 /// rows below the final cursor row are placed without further scrolling and are
 /// clipped at the bottom of the screen.
 ///
-/// The 10x20 virtual cell and the `bands * 6 / 20` rule are the conhost
-/// agreement: they are why the prompt lands below the image rather than inside
-/// it when conhost issues its absolute `CUP`. Do not "improve" either without a
-/// fresh ConPTY capture.
+/// The footprint and the cursor walk use the **same** cell size, which is what
+/// keeps the prompt off the body of the image — on its last row, whose own
+/// newline then carries the shell clear of it — rather than high inside it when
+/// conhost issues its absolute `CUP`. At the [`VIRTUAL_CELL`] fallback that is
+/// the 10x20 cell and the classic `bands * 6 / 20`, byte for byte; do not
+/// "improve" either without a fresh ConPTY capture.
+///
+/// That holds while the raster attributes agree with the data. A `"Pan;Pad;Ph;Pv`
+/// declaration overrides the measured height and the cursor keeps following the
+/// bands, so the two disagree in both directions — see [`DecodedSixel`]. The
+/// behaviour predates the real-cell footprint and is unchanged by it.
 ///
 /// Returns the scroll reports the line feeds produced, for the caller to turn
 /// into events — the engine's one reporting path lives on the dispatch handler.
@@ -36,14 +43,18 @@ pub(crate) fn place(state: &mut State, image: DecodedSixel) -> Vec<ScrollReport>
         width,
         height,
         rgba,
-        cursor_rows,
+        band_pixels,
     } = image;
+    let (cell_w, cell_h) = cell_size(state);
+    // Floor, not `cells_for`'s ceiling: the cursor lands on the row *holding*
+    // the top of the last band. `cell_h` is never zero (see `cell_size`).
+    let cursor_rows = u16::try_from(band_pixels / u32::from(cell_h)).unwrap_or(u16::MAX);
     let id = state.graphics.next_id();
     let cursor = state.grid.screen().cursor().pos;
     let screen_cols = state.grid.screen().cols();
     // Clipped on the right, never wrapped.
-    let cols = cells_for(width, VIRTUAL_CELL.0).min(screen_cols.saturating_sub(cursor.col));
-    let rows = cells_for(height, VIRTUAL_CELL.1).max(1);
+    let cols = cells_for(width, cell_w).min(screen_cols.saturating_sub(cursor.col));
+    let rows = cells_for(height, cell_h).max(1);
 
     // R-21: **one** interned extras entry for the whole image. A covered cell
     // that already carried a hyperlink keeps it and gets its own entry, which
@@ -91,6 +102,25 @@ pub(crate) fn place(state: &mut State, image: DecodedSixel) -> Vec<ScrollReport>
         rgba,
     }));
     reports
+}
+
+/// The cell size an image's pixels are divided by: the embedder's real cell
+/// when it set one, [`VIRTUAL_CELL`] when it did not.
+///
+/// `Terminal::set_cell_pixels` is how the embedder says so, and it is the same
+/// number `CSI 14 t` reports — so a program that sizes an image from that reply
+/// gets the cells it asked for. **An embedder that never calls it
+/// keeps VT340 sizing**, which is the documented fallback rather than an
+/// accident: the engine's own tests, the `headless` example and the corpus
+/// runner all place at 10x20 and their output is unchanged.
+///
+/// Both axes must be non-zero. A half-set `(9, 0)` is an embedder bug, and
+/// falling back whole is the reading that cannot divide by zero.
+fn cell_size(state: &State) -> (u16, u16) {
+    match state.cell_pixels {
+        (width, height) if width > 0 && height > 0 => (width, height),
+        _ => VIRTUAL_CELL,
+    }
 }
 
 /// Pixels to cells, rounding up, and saturating rather than wrapping: both

@@ -35,12 +35,20 @@ use crate::intern::GraphicId;
 pub(crate) use placement::{assert_integrity, drain_released, place, sweep};
 pub(crate) use sixel::SixelParser;
 
-/// The virtual cell Sixel pixels are measured in (VT240 / VT340: 10 x 20), and
-/// the value Windows conhost uses, so the rows an image consumes agree with a
-/// ConPTY host.
+/// The **fallback** cell Sixel pixels are divided by (VT240 / VT340: 10 x 20),
+/// and the value Windows conhost uses, so the rows an image consumes agree with
+/// a ConPTY host.
 ///
-/// The engine never learns the real font cell size; the renderer rescales by
-/// `cell_width / 10` and `line_height / 20`. There is no `set_cell_size`.
+/// It is the fallback and not the rule: an image's footprint in cells is
+/// `ceil(pixels / cell)` against the size the embedder set with
+/// [`Terminal::set_cell_pixels`](crate::Terminal::set_cell_pixels), which is
+/// also what `CSI 14 t` reports, so a program that sizes an image from that
+/// reply covers the cells it meant. **An embedder that never calls
+/// `set_cell_pixels` gets VT340 sizing**, which is what a DEC terminal does.
+///
+/// The renderer draws the image at its own pixel size, clipped to the
+/// footprint. It does not rescale to this cell, and there is no
+/// `set_cell_size`.
 pub const VIRTUAL_CELL: (u16, u16) = (10, 20);
 
 /// Largest width or height an image may have. Pixels beyond it are dropped.

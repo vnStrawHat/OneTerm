@@ -300,9 +300,18 @@ from `prepaint`, from the measured `CellMetrics::device`, **before** the grid ch
 calls `resize`, so the first reply after spawn already carries real pixels. It is a
 separate method and not a wider `resize` because a DPI-scale change moves the device cell
 while rows and columns stand still, which `resize` would discard. The same `CellMetrics`
-the painter uses is the only source: the engine still *places* Sixels in the VT340
-`VIRTUAL_CELL` (10x20) and the view rescales by it, so the reported size is a report, not
-a placement input.
+the painter uses is the only source.
+
+Since `BUG-0062` that number is **not only a report**: the engine divides an image's pixels
+by it to get the image's footprint in cells (`ceil(pixels / cell)`), and by the same number
+for the `bands * 6 / cell_height` cursor walk, so a program that sizes a Sixel from the
+`CSI 14 t` reply covers the cells it meant. `VIRTUAL_CELL` (10x20) survives only as the
+fallback for an embedder that never calls `set_cell_pixels` — which keeps VT340 sizing
+byte for byte, and is why the `crates/tools` corpus is unaffected. The painter no longer
+rescales to a virtual cell either: it draws the image at its own pixel size, clipped to
+the placement's footprint and the grid (`CellMetrics::image_quad`). A font-size or DPI
+change after an image is placed keeps the footprint in cells and crops the picture; the
+engine does not re-place.
 
 **Resize policy (`ResizePolicy`, DEC-0008).** Both policies are the engine's own since
 `US-0077`, and since `US-0082` the adapter does nothing but pick one: `TerminalModel::new`

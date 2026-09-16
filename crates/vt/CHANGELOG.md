@@ -221,6 +221,24 @@ carry no API change at all. Such a release says so below rather than being omitt
 
 ### Changed
 
+- **Behaviour, no signature: a Sixel's footprint in cells comes from your cell size, not from
+  `VIRTUAL_CELL`.** An image now covers `ceil(width / cell_width)` x `ceil(height / cell_height)`
+  cells against the size you passed to `Terminal::set_cell_pixels`, and the cursor walks down
+  `bands * 6 / cell_height` rows. Before, both used the VT340 virtual cell of 10x20 whatever you
+  had told the engine, so a program that sized an image from the `CSI 14 t` reply -- the number
+  `set_cell_pixels` feeds -- had it drawn at `real_cell / (10, 20)` of the size it meant: smaller
+  on a 9x18 cell, almost double on the 18x36 cell of the same font at 200 % display scale.
+
+  **An embedder that never calls `set_cell_pixels` is unaffected, exactly.** The VT340 cell is the
+  fallback, the walk is the identical `bands * 6 / 20`, and every byte of the reference corpus is
+  unchanged. Both axes must be non-zero to count, so a half-set `(9, 0)` falls back whole rather
+  than dividing by zero.
+
+  `Placement::cols`/`rows` and `SnapshotPlacement::cols`/`rows` are what change value; no type,
+  field or signature moved. A renderer should draw the image at `pixel_size` -- one image pixel to
+  one device pixel -- anchored at the placement's top-left cell and **clipped** to `cols` x `rows`,
+  rather than scaling it to the footprint as the old rule required. Guide chapter 8 has the
+  contract and the two cases where the clip is not a no-op.
 - **Breaking on paper only.** `ColorOverrides::set`, `reset`, `reset_indexed` and `reset_all` are
   `pub(crate)`; the public surface of the type is `get` and `iter`. All four need `&mut self` and
   the only accessor, `Terminal::colors`, hands out a shared reference -- and the type had no name

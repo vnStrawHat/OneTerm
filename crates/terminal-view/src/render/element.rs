@@ -12,7 +12,7 @@ use std::rc::Rc;
 use gpui::{
     App, Bounds, Corners, CursorStyle, Element, ElementId, Entity, GlobalElementId, Hitbox,
     HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, ShapedLine, Size,
-    StrikethroughStyle, Style, UnderlineStyle, Window, fill, point, px, size,
+    StrikethroughStyle, Style, UnderlineStyle, Window, fill, point, px,
 };
 use oneterm_terminal::TerminalSession;
 
@@ -336,9 +336,10 @@ impl GridPainter<'_> {
     }
 
     /// Sixel images: one `paint_image` per image visible in `rows`, anchored at
-    /// the first cell (row-major) that references it and scaled from the engine's
-    /// virtual 10 x 20 cell to the real cell, clipped to the grid bounds. Images
-    /// are polychrome sprites, which GPUI draws after glyphs inside the layer.
+    /// the first cell (row-major) that references it, drawn at the image's own
+    /// pixel size and clipped to the grid and to the placement's cell footprint
+    /// ([`CellMetrics::image_quad`], `BUG-0062`). Images are polychrome sprites,
+    /// which GPUI draws after glyphs inside the layer.
     ///
     /// ponytail: the whole image is painted from any surviving cell, so cells
     /// erased or overwritten inside it still show pixels; upgrade to per-row
@@ -365,22 +366,20 @@ impl GridPainter<'_> {
                 let Some((across, down)) = self.frame.graphic_offset(id, row_id, col as u16) else {
                     continue;
                 };
-                let anchor = self.geometry.cell_origin(row, col);
-                let origin = point(
-                    anchor.x - m.cell_width * f32::from(across),
-                    anchor.y - m.line_height * f32::from(down),
-                );
-                let (vw, vh) = oneterm_terminal::SIXEL_VIRTUAL_CELL;
-                let image_bounds = Bounds {
-                    origin,
-                    size: size(
-                        m.cell_width * (stored.width as f32 / vw as f32),
-                        m.line_height * (stored.height as f32 / vh as f32),
-                    ),
+                let Some(footprint) = self.frame.placement(id).map(|p| (p.cols, p.rows)) else {
+                    continue;
                 };
-                // Only the part inside the grid is drawn (scrolled-out rows are cut).
+                let (clip, image_bounds) = m.image_quad(
+                    self.geometry.cell_origin(row, col),
+                    (across, down),
+                    (stored.width, stored.height),
+                    footprint,
+                );
+                // Only the part inside both the grid and the placement is drawn:
+                // scrolled-out rows are cut by the first, an image larger than
+                // the cells the engine gave it by the second.
                 let painted = window.paint_image(
-                    self.bounds,
+                    self.bounds.intersect(&clip),
                     image_bounds,
                     Corners::default(),
                     stored.image.clone(),

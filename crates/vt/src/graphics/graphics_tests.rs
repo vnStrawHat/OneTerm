@@ -660,3 +660,284 @@ fn corrupt_band_does_not_panic() {
     session.feed(b"\x1bcok");
     assert_eq!(session.cursor(), (0, 2));
 }
+
+// ── BUG-0062: the footprint comes from the embedder's cell ───────────────────
+
+/// `WEBP 384x576` is the OpenTUI "Native Image Lab" dragon, the image the
+/// owner's E2E is judged on; 95 graphics newlines put the top of the last band
+/// at 570 px, so the cursor rule has something to divide.
+fn dragon(session: &mut Session) {
+    let body = format!("#0;2;100;0;0#0~{}", "-~".repeat(95));
+    session.feed(&sixel(&format!("\"1;1;384;576{body}")));
+    assert_eq!(
+        session.term.placements()[0].pixel_size,
+        (384, 576),
+        "the raster size is declared"
+    );
+}
+
+/// The footprint is `ceil(pixels / cell)` against the size the embedder set,
+/// and the VT340 10x20 cell only when it never set one.
+///
+/// The three rows are the real device cell at 100 % display scale, the same
+/// font at 200 %, and an embedder that skipped `set_cell_pixels`. Before
+/// this fix every row answered `39 x 29`, so a program that sized the image
+/// from the `CSI 14 t` reply had it drawn at `device_cell / (10, 20)` of the
+/// size it meant.
+#[test]
+fn footprint_follows_the_embedder_cell_size() {
+    for (cell, cols, rows) in [
+        (Some((9u16, 18u16)), 43u16, 32u16),
+        (Some((18, 36)), 22, 16),
+        (None, 39, 29),
+    ] {
+        let mut session = Session::new(80, 40);
+        if let Some((width, height)) = cell {
+            session.term.set_cell_pixels(width, height);
+        }
+        dragon(&mut session);
+        let placement = session.term.placements()[0];
+        assert_eq!((placement.cols, placement.rows), (cols, rows), "{cell:?}");
+
+        // The cursor stays inside the picture's own last row: the footprint and
+        // the `bands * 6 / cell_height` walk divide by the same number, which is
+        // the whole reason `DecodedSixel` carries band *pixels*.
+        assert_eq!(session.cursor(), (rows - 1, 0), "{cell:?} cursor");
+        assert_eq!(
+            session.offset(rows - 1, 0),
+            Some((placement.id, 0, rows - 1)),
+            "{cell:?} the cursor's own row is still inside the image"
+        );
+    }
+}
+
+/// One pixel is one cell whatever the cell is: `ceil` never rounds an image
+/// down to nothing, and the `.max(1)` on rows is not what does the work.
+#[test]
+fn a_one_pixel_image_covers_one_cell_at_every_cell_size() {
+    for cell in [Some((9u16, 18u16)), Some((18, 36)), None] {
+        let mut session = Session::new(20, 5);
+        if let Some((width, height)) = cell {
+            session.term.set_cell_pixels(width, height);
+        }
+        session.feed(&sixel("\"1;1;1;1#0;2;100;0;0#0~"));
+        let placement = session.term.placements()[0];
+        assert_eq!((placement.cols, placement.rows), (1, 1), "{cell:?}");
+        assert_eq!(session.cursor(), (0, 0), "{cell:?}");
+    }
+}
+
+/// A half-set cell is an embedder bug, and the reading that cannot divide by
+/// zero is the whole fallback.
+#[test]
+fn a_zero_axis_falls_back_to_the_virtual_cell() {
+    for cell in [(9, 0), (0, 18), (0, 0)] {
+        let mut session = Session::new(80, 40);
+        session.term.set_cell_pixels(cell.0, cell.1);
+        dragon(&mut session);
+        let placement = session.term.placements()[0];
+        assert_eq!((placement.cols, placement.rows), (39, 29), "{cell:?}");
+    }
+}
+
+// ── The independent verifier's checks, adopted ─────────────────────────────
+
+/// A sixel declaring raster `w x h` with `bands` bands of drawn data.
+fn v_raster(session: &mut Session, w: u32, h: u32, bands: usize) {
+    let body = format!("#0;2;100;0;0#0~{}", "-~".repeat(bands.saturating_sub(1)));
+    session.feed(&sixel(&format!("\"1;1;{w};{h}{body}")));
+}
+
+fn v_place(
+    cols: u16,
+    rows: u16,
+    cell: Option<(u16, u16)>,
+    w: u32,
+    h: u32,
+    bands: usize,
+) -> Session {
+    let mut s = Session::new(cols, rows);
+    if let Some((cw, ch)) = cell {
+        s.term.set_cell_pixels(cw, ch);
+    }
+    v_raster(&mut s, w, h, bands);
+    s
+}
+
+#[test]
+fn v_footprint_is_ceil_over_the_real_cell() {
+    for (w, h, cw, ch) in [
+        (384u32, 576u32, 9u16, 18u16),
+        (383, 575, 9, 18),
+        (385, 577, 9, 18),
+        (1, 1, 9, 18),
+        (1, 600, 9, 18),
+        (600, 1, 9, 18),
+        (100, 100, 7, 15),
+        (384, 576, 18, 36),
+    ] {
+        let s = v_place(250, 250, Some((cw, ch)), w, h, 1);
+        let p = s.term.placements()[0];
+        let want = (
+            u16::try_from(w.div_ceil(u32::from(cw))).unwrap(),
+            u16::try_from(h.div_ceil(u32::from(ch))).unwrap(),
+        );
+        assert_eq!((p.cols, p.rows), want, "{w}x{h} at {cw}x{ch}");
+    }
+}
+
+#[test]
+fn v_cursor_keeps_its_column_and_lands_on_the_last_band_row() {
+    for (cell, want_row) in [
+        (Some((9u16, 18u16)), 31u16),
+        (Some((18, 36)), 15),
+        (None, 28),
+    ] {
+        let mut s = Session::new(120, 60);
+        if let Some((cw, ch)) = cell {
+            s.term.set_cell_pixels(cw, ch);
+        }
+        s.feed(b"\x1b[6G"); // column 5, 0-based
+        v_raster(&mut s, 384, 576, 96);
+        assert_eq!(s.cursor(), (want_row, 5), "{cell:?}");
+    }
+}
+
+#[test]
+fn v_image_taller_than_the_screen_scrolls_and_stays_anchored() {
+    let s = v_place(80, 10, Some((9, 18)), 384, 576, 96);
+    let p = s.term.placements()[0];
+    assert_eq!(
+        (p.cols, p.rows),
+        (43, 32),
+        "footprint is not clamped to the screen"
+    );
+    // 31 line feeds from row 0 of a 10-row screen: 22 rows went to scrollback.
+    assert_eq!(s.cursor(), (9, 0));
+    assert_eq!(
+        s.offset(0, 0),
+        Some((p.id, 0, 22)),
+        "the visible top row is the image's 23rd row"
+    );
+    assert_eq!(s.offset(9, 0), Some((p.id, 0, 31)), "cursor row is inside");
+}
+
+#[test]
+fn v_image_wider_than_the_screen_is_clipped_not_wrapped() {
+    let mut s = Session::new(20, 40);
+    s.term.set_cell_pixels(9, 18);
+    s.feed(b"\x1b[6G");
+    v_raster(&mut s, 384, 576, 96);
+    let p = s.term.placements()[0];
+    assert_eq!((p.cols, p.rows), (15, 32), "20 cols - start col 5");
+    assert_eq!(s.graphic(0, 19), Some(p.id));
+    assert_eq!(s.graphic(0, 4), None, "nothing left of the start column");
+}
+
+#[test]
+fn v_height_not_a_multiple_of_six_still_puts_the_cursor_inside() {
+    // 575 px of a 576 px band stack: 32 rows, cursor on row 31.
+    let s = v_place(80, 40, Some((9, 18)), 384, 575, 96);
+    let p = s.term.placements()[0];
+    assert_eq!((p.cols, p.rows), (43, 32));
+    assert_eq!(s.cursor(), (31, 0));
+}
+
+/// DECGRA declaring MORE height than the data carries: the footprint follows
+/// the declaration, the cursor follows the bands, and they disagree.
+#[test]
+fn v_raster_larger_than_the_data_leaves_the_cursor_inside_the_image() {
+    let s = v_place(80, 40, Some((9, 18)), 384, 576, 2);
+    let p = s.term.placements()[0];
+    assert_eq!((p.cols, p.rows), (43, 32), "footprint from the declaration");
+    assert_eq!(s.cursor(), (0, 0), "cursor from 1 completed band: 6/18 = 0");
+    assert_eq!(
+        s.offset(0, 0),
+        Some((p.id, 0, 0)),
+        "the cursor sits on the image's own first row"
+    );
+}
+
+/// DECGRA declaring LESS height than the data: the cursor walks past the image.
+#[test]
+fn v_raster_smaller_than_the_data_walks_the_cursor_past_the_image() {
+    let s = v_place(80, 40, Some((9, 18)), 384, 60, 96);
+    let p = s.term.placements()[0];
+    assert_eq!((p.cols, p.rows), (43, 4));
+    assert_eq!(s.cursor(), (31, 0), "28 rows below the last stamped row");
+    assert_eq!(s.graphic(31, 0), None);
+}
+
+#[test]
+fn v_a_cell_change_does_not_move_an_earlier_footprint() {
+    let mut s = Session::new(80, 200);
+    s.term.set_cell_pixels(9, 18);
+    v_raster(&mut s, 384, 576, 96);
+    s.term.set_cell_pixels(18, 36);
+    v_raster(&mut s, 384, 576, 96);
+    let first = s.term.placements()[0];
+    let second = s.term.placements()[1];
+    assert_eq!(
+        (first.cols, first.rows),
+        (43, 32),
+        "unchanged by the later set"
+    );
+    assert_eq!((second.cols, second.rows), (22, 16));
+    assert_eq!(first.pixel_size, second.pixel_size);
+}
+
+#[test]
+fn v_fallback_reproduces_the_classic_numbers() {
+    let s = v_place(80, 40, None, 384, 576, 96);
+    let p = s.term.placements()[0];
+    assert_eq!((p.cols, p.rows), (39, 29));
+    assert_eq!(s.cursor(), (28, 0), "the classic bands * 6 / 20");
+}
+
+#[test]
+fn v_p2_and_background_fill_are_ignored_by_design() {
+    // `DCS 0;1;0 q` asks for a transparent background; the engine ignores P2.
+    let mut s = Session::new(80, 40);
+    s.term.set_cell_pixels(9, 18);
+    s.feed(b"\x1bP0;1;0q\"1;1;18;18#0;2;100;0;0#0~\x1b\\");
+    let p = s.term.placements()[0];
+    assert_eq!((p.cols, p.rows), (2, 1));
+    assert_eq!(s.cursor(), (0, 0));
+}
+
+#[test]
+fn v_a_one_pixel_cell_does_not_panic_or_hang() {
+    let s = v_place(80, 40, Some((1, 1)), 24, 24, 4);
+    let p = s.term.placements()[0];
+    assert_eq!((p.cols, p.rows), (24, 24));
+    assert_eq!(s.cursor(), (18, 0), "bands * 6 / 1");
+}
+
+/// Real encoders (libsixel, `img2sixel`) end the payload with a graphics
+/// newline, which makes `bands * 6` equal the full pixel height. The cursor
+/// then lands one row BELOW the image at a cell height that divides it, and
+/// still inside at one that does not (the VT340 20 px cell on a 576 px image:
+/// 576 / 20 = 28, and the image is 29 rows).
+#[test]
+fn v_a_trailing_graphics_newline_moves_the_cursor_below_the_image() {
+    for (cell, want_rows, want_cursor) in [
+        (Some((9u16, 18u16)), 32u16, 32u16),
+        (Some((18, 36)), 16, 16),
+        (None, 29, 28),
+    ] {
+        let mut s = Session::new(80, 60);
+        if let Some((cw, ch)) = cell {
+            s.term.set_cell_pixels(cw, ch);
+        }
+        let body = format!("#0;2;100;0;0#0~{}-", "-~".repeat(95));
+        s.feed(&sixel(&format!("\"1;1;384;576{body}")));
+        let p = s.term.placements()[0];
+        assert_eq!(p.rows, want_rows, "{cell:?}");
+        assert_eq!(s.cursor(), (want_cursor, 0), "{cell:?}");
+        assert_eq!(
+            s.graphic(want_cursor, 0).is_none(),
+            want_cursor >= want_rows,
+            "{cell:?} cursor inside the image exactly when the cell does not divide"
+        );
+    }
+}
