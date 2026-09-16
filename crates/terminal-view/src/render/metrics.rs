@@ -331,7 +331,10 @@ mod tests {
         assert_eq!(clip.origin, anchor);
 
         // A cell in the middle of the image walks back to the same top-left.
-        let inner = point(anchor.x + m.cell_width * 5.0, anchor.y + m.line_height * 7.0);
+        let inner = point(
+            anchor.x + m.cell_width * 5.0,
+            anchor.y + m.line_height * 7.0,
+        );
         let (_, from_inner) = m.image_quad(inner, (5, 7), (384, 576), (43, 32));
         assert_eq!(from_inner, image);
     }

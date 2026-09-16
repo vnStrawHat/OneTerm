@@ -10,8 +10,8 @@ Created: 2026-09-16
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -68,8 +68,10 @@ puts the prompt inside the picture.
     to logical by the existing `CellMetrics::logical`); `paint_graphics` calls it. The geometry
     moves out of `element.rs` deliberately: another worktree is editing that file and the
     arithmetic is what the new test needs to reach without a GPUI window.
-  - `crates/terminal/src/{lib,content}.rs` — the `SIXEL_VIRTUAL_CELL` re-export goes (see below);
-    `TerminalContent::placement` is added so the painter can read the footprint it clips to.
+  - `crates/terminal/src/{lib,content}.rs` — the `SIXEL_VIRTUAL_CELL` re-export goes (see below)
+    and `TerminalContent::placements` gains the doc that says what the footprint now means. The
+    painter reads the footprint through a `Frame::placement` pass-through over the existing
+    `placements()` slice, so no new public adapter method is added for one caller.
   - Tests at three levels (see Verification Plan) and the four docs below.
 - [x] Out of scope:
   - **DECGRA, the Sixel aspect ratio and the raster attributes (`" Pan;Pad;Ph;Pv`).** Unchanged.
@@ -151,7 +153,27 @@ those sentences standing is how the next reader reintroduces the defect.
 
 ### Reconciliation
 
-To be completed before the packet is marked implemented.
+Changed, all four as planned, plus one not planned:
+
+- [`low-level-design/graphics.md`](low-level-design/graphics.md) — the placement paragraph states
+  the `ceil(pixels / cell)` rule, the fallback and what it guarantees, that the renderer draws
+  native pixels and clips, the metrics-change behaviour, and why `DecodedSixel` carries band
+  pixels. The `BUG-0061` sentence it replaces ("placement ... still use `VIRTUAL_CELL`, which is
+  why an image ... lands at `device_cell / (10, 20)`") is gone, and so is the rescale formula.
+- `crates/vt/docs/guide/08-graphics.md` — the embedder-facing version of the same, with the
+  fallback stated as a consequence an embedder chooses rather than a default it inherits.
+- `docs/terminal-backend.md` — the closing sentence of the cell-size paragraph said the reported
+  size "is a report, not a placement input". It is now both, and the paragraph says what the
+  painter does instead of rescaling.
+- `crates/vt/CHANGELOG.md` § Unreleased § Changed — a behaviour entry, no signature, with the
+  no-op-for-a-silent-embedder guarantee spelled out.
+- `crates/terminal/src/content.rs` (**not planned**) — `TerminalContent::placements` is the one
+  adapter doc a painter author reads for this geometry and said nothing about what `cols`/`rows`
+  mean. Added while the re-export was being removed from the same crate.
+
+`DEC-0012`, `DEC-0015` and the `set_cell_pixels` / `window_ops` sources keep their recorded
+no-change reasons: no anchor moved, no row id changed, and `CSI 14 t` / `CSI 18 t` reply the same
+bytes (`cell_pixels_reach_the_engine_and_csi_14_t` still passes unedited).
 
 ## Context
 
@@ -184,14 +206,14 @@ as the cell edges.
 ## Plan
 
 - [x] The packet (this file), before any implementation edit.
-- [ ] `sixel.rs`: `DecodedSixel::cursor_rows` -> `band_pixels: u32`.
-- [ ] `placement.rs`: `cell_size(state)` helper, footprint and cursor walk from it; unit tests.
-- [ ] `graphics/mod.rs`: the `VIRTUAL_CELL` doc comment.
-- [ ] `crates/terminal`: `TerminalContent::placement`, drop the `SIXEL_VIRTUAL_CELL` re-export,
+- [x] `sixel.rs`: `DecodedSixel::cursor_rows` -> `band_pixels: u32`.
+- [x] `placement.rs`: `cell_size(state)` helper, footprint and cursor walk from it; unit tests.
+- [x] `graphics/mod.rs`: the `VIRTUAL_CELL` doc comment.
+- [x] `crates/terminal`: `TerminalContent::placement`, drop the `SIXEL_VIRTUAL_CELL` re-export,
       adapter-level test that the footprint follows `set_cell_pixels`.
-- [ ] `crates/terminal-view`: `CellMetrics::image_quad` + its test, `paint_graphics` uses it,
+- [x] `crates/terminal-view`: `CellMetrics::image_quad` + its test, `paint_graphics` uses it,
       `frame.rs` placement pass-through.
-- [ ] Docs (four files) and the gate.
+- [x] Docs (five files) and the gate.
 
 ## Decisions
 

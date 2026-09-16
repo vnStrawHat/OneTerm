@@ -282,6 +282,12 @@ impl TerminalContent {
 
     /// Live image placements, ids and geometry only — the pixels are in
     /// [`graphics`](Self::graphics), drained once.
+    ///
+    /// `cols` x `rows` is the image's footprint in cells, which the engine
+    /// derived from its pixels and the cell size pushed through
+    /// [`TerminalSession::set_cell_pixels`](crate::TerminalSession::set_cell_pixels)
+    /// (`BUG-0062`). Paint the image at `pixel_size`, clipped to that footprint;
+    /// do not scale it to the footprint.
     pub fn placements(&self) -> &[SnapshotPlacement] {
         self.state.placements()
     }
