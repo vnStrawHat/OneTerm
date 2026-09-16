@@ -1,0 +1,73 @@
+{
+  "columns": 160,
+  "engine": "oneterm-vt",
+  "lines": 45,
+  "machine": "Intel Core i7-12700 (12 cores / 20 threads), Windows 11 26200, rustc 1.96.0, release profile, 2026-09-16",
+  "mib_per_fixture": 32,
+  "note": "When this file is a committed baseline, refresh it only in a commit that says why the number moved.",
+  "runs": 5,
+  "tiers": {
+    "tier2_grid": [
+      {
+        "fixture": "plain_ascii",
+        "mib_per_second": 74.92764342150699,
+        "ns_per_byte": 12.727936884940258,
+        "spread_percent": 4.4393759764600365
+      },
+      {
+        "fixture": "long_lines",
+        "mib_per_second": 80.88004748289504,
+        "ns_per_byte": 11.791218552485871,
+        "spread_percent": 2.404289807207256
+      },
+      {
+        "fixture": "heavy_sgr",
+        "mib_per_second": 226.5313519391084,
+        "ns_per_byte": 4.20989990234375,
+        "spread_percent": 4.948802530327917
+      },
+      {
+        "fixture": "tui_redraw",
+        "mib_per_second": 125.58655827526735,
+        "ns_per_byte": 7.5937610641095485,
+        "spread_percent": 3.1771199308493308
+      },
+      {
+        "fixture": "scroll_region",
+        "mib_per_second": 60.96383352887331,
+        "ns_per_byte": 15.643279977703122,
+        "spread_percent": 5.255194131675216
+      },
+      {
+        "fixture": "cjk_wide",
+        "mib_per_second": 114.99769245662416,
+        "ns_per_byte": 8.292986546368878,
+        "spread_percent": 4.241361767681345
+      },
+      {
+        "fixture": "dense_cells",
+        "mib_per_second": 195.61442339007348,
+        "ns_per_byte": 4.8752760654286424,
+        "spread_percent": 8.319534069238715
+      },
+      {
+        "fixture": "scrolling",
+        "mib_per_second": 80.0747880886077,
+        "ns_per_byte": 11.909795069965723,
+        "spread_percent": 7.871475397637699
+      },
+      {
+        "fixture": "sixel",
+        "mib_per_second": 46.676939516293956,
+        "ns_per_byte": 20.431380597979054,
+        "spread_percent": 7.831794806805696
+      },
+      {
+        "fixture": "osc_9_7",
+        "mib_per_second": 102.16845305963072,
+        "ns_per_byte": 9.334332544407195,
+        "spread_percent": 31.03824807623989
+      }
+    ]
+  }
+}

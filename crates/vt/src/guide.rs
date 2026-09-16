@@ -1,6 +1,6 @@
 //! The embedder's guide: how to build a terminal on top of this crate.
 //!
-//! Thirteen chapters, in reading order. The API reference beside them says what
+//! Fourteen chapters, in reading order. The API reference beside them says what
 //! an item is; these say why you would reach for it and what you owe it back.
 //!
 //! Each chapter is one Markdown file, included below so `cargo doc` renders it
@@ -90,6 +90,9 @@ pub mod ch13_pty {}
 /// transport: three ways to have one, the evented poll loop, thread lifetimes,
 /// and the console host a Windows embedder has to ship for itself.
 ///
-/// Chapters 1 to 12 are true at every feature setting.
+/// Chapters 1 to 12 and 14 are true at every feature setting.
 #[cfg(not(feature = "pty"))]
 pub mod ch13_pty {}
+
+#[doc = include_str!("../docs/guide/14-performance.md")]
+pub mod ch14_performance {}

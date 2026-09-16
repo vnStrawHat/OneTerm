@@ -50,7 +50,7 @@ pub(crate) mod cell;
 pub(crate) mod event;
 pub(crate) mod graphics;
 pub mod grid;
-// Prose, not API: thirteen empty modules, each carrying one Markdown chapter of
+// Prose, not API: fourteen empty modules, each carrying one Markdown chapter of
 // the embedder's guide. Public so `cargo doc` renders them and `cargo test
 // --doc` compiles the Rust blocks inside them.
 pub mod guide;

@@ -68,6 +68,42 @@ The default build adds the `pty` feature's three: `polling` everywhere, plus `wi
 Windows or `libc` on Unix. That comes to 8 direct dependencies and 16 crates in the tree on
 `x86_64-pc-windows-msvc`, and 8 direct and 11 crates on `x86_64-unknown-linux-gnu`.
 
+## Performance
+
+Parse plus grid mutation -- what an embedder pays on every byte that arrives. Measured on an Intel
+Core i7-12700 (12 cores / 20 threads), Windows 11 build 26200, rustc 1.96.0, release profile, on
+2026-09-16; 160x45 grid, 32 MiB per fixture, median of five interleaved cycles after a discarded
+warm-up. `spread` is fastest cycle to slowest, as a percentage of the median.
+
+```console
+$ cargo run -p oneterm-tools --release --bin vt-bench -- grid --mib 32
+```
+
+| Fixture | MiB/s | ns/byte | spread | What the stream is |
+| --- | ---: | ---: | ---: | --- |
+| `plain_ascii` | 74.9 | 12.73 | 4% | plain ASCII lines ended by CRLF |
+| `long_lines` | 80.9 | 11.79 | 2% | lines five times the grid width, so every one wraps |
+| `heavy_sgr` | 226.5 | 4.21 | 5% | a 24-bit colour change per character |
+| `tui_redraw` | 125.6 | 7.59 | 3% | cursor placement plus a short string, a TUI repaint |
+| `scroll_region` | 61.0 | 15.64 | 5% | a scrolling region set once, then bare line feeds |
+| `cjk_wide` | 115.0 | 8.29 | 4% | wide CJK characters filling every line |
+| `dense_cells` | 195.6 | 4.88 | 8% | a 256-colour change for every cell |
+| `scrolling` | 80.1 | 11.91 | 8% | exactly-grid-width plain lines |
+| `sixel` | 46.7 | 20.43 | 8% | repeated small Sixel images |
+| `osc_9_7` | 102.2 | 9.33 | 31% | an application status channel between output lines |
+
+Read no difference smaller than the spread beside it: `osc_9_7`'s thirty-one percent is one
+disturbed cycle, and is exactly why the column is published rather than hidden.
+
+Read it next to the transport ceiling, because no engine number means anything in isolation: on the
+same machine a ConPTY carrying `cmd.exe` output moves about 1.2 MiB/s, and a flat-out full-screen
+producer about 30 MiB/s. The engine is not the bottleneck at any rate a shell can produce.
+
+This covers the engine and nothing else -- no renderer, no pseudo-console, no thread hand-off -- and
+it is not a comparison against any other engine. The other four tiers, the fixtures, the honest
+limits and the `--check` regression trip-wire are in guide chapter 14. Performance is deliberately
+outside the semver promise.
+
 ## Quick start
 
 ```rust
@@ -183,10 +219,10 @@ breaking change here and gets a `CHANGELOG.md` entry naming both versions.
 - The API reference: `cargo doc -p oneterm-vt --no-deps --open`. Every public item is documented,
   and the crate builds with `#![warn(missing_docs)]` so it stays that way. There is no docs.rs
   page, because the crate is not published.
-- **The embedder's guide**, thirteen chapters on how to build a terminal on top of this crate:
+- **The embedder's guide**, fourteen chapters on how to build a terminal on top of this crate:
   what it is and is not, embedding it, the threading model, every event, OSC routing and
   extension, input encoding, search, images, resize, the ceilings a hostile stream runs into,
-  conformance, versioning, and the transport. It renders beside the API reference as the
+  conformance, versioning, the transport, and performance. It renders beside the API reference as the
   `oneterm_vt::guide` module, so `cargo doc --open` reaches it offline at the version you depend
   on, and every code block in it is a doctest. The chapters are also readable as Markdown in
   [`docs/guide/`](docs/guide/). There is no hosted copy; a GitHub Pages deployment over
