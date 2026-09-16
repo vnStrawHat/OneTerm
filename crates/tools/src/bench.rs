@@ -428,6 +428,15 @@ pub struct FrameCost {
 /// costs anything. The `SnapshotState` is reused across frames, exactly as the
 /// view reuses its own — a fresh one every frame would measure a `Full` rebuild
 /// and nothing the damage model does.
+///
+/// **Two known flaws, neither fixed here.** The timed span includes the
+/// `render.rows()` sum that computes `cells`, so the reported per-frame cost is
+/// the snapshot plus a walk of every row the snapshot produced; and unlike
+/// tiers 1-2 this tier takes a single sample rather than a median of cycles, so
+/// it has no spread and no defence against one disturbed run. Both predate the
+/// interleaving work and neither affects tiers 1-2 or `--check`, which is why
+/// they were left alone — but tier 3 must not be published as a figure until
+/// they are fixed.
 pub fn run_render(frames: usize) -> Vec<FrameCost> {
     FIXTURES
         .iter()

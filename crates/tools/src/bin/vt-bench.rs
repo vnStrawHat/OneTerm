@@ -43,13 +43,42 @@ const BASELINE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/bench-baseline.json
 /// A fixture has to get twice as slow before `--check` fails it.
 const DEFAULT_TOLERANCE: f64 = 0.5;
 
+/// The value after a flag, or a message naming the flag that lacked one.
+///
+/// A flag that silently falls back to its default is the worst outcome for a
+/// benchmark: `--mib abc` would measure 100 MiB and report it as whatever the
+/// caller believed they asked for. Every one of these is a hard error.
+fn value(raw: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
+    raw.next()
+        .ok_or_else(|| format!("vt-bench: {flag} needs a value"))
+}
+
+fn number<T: std::str::FromStr>(
+    raw: &mut impl Iterator<Item = String>,
+    flag: &str,
+) -> Result<T, String> {
+    let text = value(raw, flag)?;
+    text.parse()
+        .map_err(|_| format!("vt-bench: {flag} wants a number, not {text:?}"))
+}
+
 fn main() -> ExitCode {
+    match parse_and_run() {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn parse_and_run() -> Result<ExitCode, String> {
     let mut raw = std::env::args().skip(1);
     let command = raw.next().unwrap_or_else(|| "all".to_owned());
     // `--help` as the first argument is a request for usage, not a command.
     if matches!(command.as_str(), "--help" | "-h" | "help") {
         println!("{USAGE}");
-        return ExitCode::SUCCESS;
+        return Ok(ExitCode::SUCCESS);
     }
     let mut mib = DEFAULT_MIB;
     let mut frames = 600;
@@ -62,41 +91,27 @@ fn main() -> ExitCode {
 
     while let Some(flag) = raw.next() {
         match flag.as_str() {
-            "--machine" => machine = raw.next(),
+            "--machine" => machine = Some(value(&mut raw, "--machine")?),
             "--check" => check = true,
-            "--baseline" => baseline = raw.next().map_or(baseline, PathBuf::from),
-            "--tolerance" => {
-                tolerance = raw
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(DEFAULT_TOLERANCE)
-            }
-            "--mib" => {
-                mib = raw
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(DEFAULT_MIB)
-            }
-            "--frames" => frames = raw.next().and_then(|v| v.parse().ok()).unwrap_or(frames),
+            "--baseline" => baseline = PathBuf::from(value(&mut raw, "--baseline")?),
+            "--tolerance" => tolerance = number(&mut raw, "--tolerance")?,
+            "--mib" => mib = number(&mut raw, "--mib")?,
+            "--frames" => frames = number(&mut raw, "--frames")?,
             "--json" => json = true,
-            "--out" => out = raw.next().map(PathBuf::from),
+            "--out" => out = Some(PathBuf::from(value(&mut raw, "--out")?)),
             "--help" | "-h" => {
                 println!("{USAGE}");
-                return ExitCode::SUCCESS;
+                return Ok(ExitCode::SUCCESS);
             }
-            other => {
-                eprintln!("vt-bench: unknown flag {other:?}");
-                return ExitCode::FAILURE;
-            }
+            other => return Err(format!("vt-bench: unknown flag {other:?}")),
         }
     }
 
     if check {
         if command != "grid" {
-            eprintln!("vt-bench: --check guards tier 2 only; run `vt-bench grid --check`");
-            return ExitCode::FAILURE;
+            return Err("vt-bench: --check guards tier 2 only; run `vt-bench grid --check`".into());
         }
-        return match guard(&baseline, tolerance, mib) {
+        return Ok(match guard(&baseline, tolerance, mib) {
             Ok(report) => {
                 print!("{report}");
                 ExitCode::SUCCESS
@@ -105,33 +120,25 @@ fn main() -> ExitCode {
                 print!("{report}");
                 ExitCode::FAILURE
             }
-        };
+        });
     }
 
     if command == "fixtures" {
-        let Some(dir) = out else {
-            eprintln!("vt-bench fixtures needs --out <dir>");
-            return ExitCode::FAILURE;
-        };
-        if let Err(error) = dump_fixtures(&dir, mib) {
-            eprintln!("vt-bench: {error}");
-            return ExitCode::FAILURE;
-        }
-        return ExitCode::SUCCESS;
+        let dir = out.ok_or("vt-bench fixtures needs --out <dir>")?;
+        dump_fixtures(&dir, mib).map_err(|error| format!("vt-bench: {error}"))?;
+        return Ok(ExitCode::SUCCESS);
     }
 
     let report = run(&command, mib, frames, json, machine.as_deref());
     match out {
-        Some(path) => match std::fs::write(&path, &report) {
-            Ok(()) => println!("wrote {}", path.display()),
-            Err(error) => {
-                eprintln!("vt-bench: writing {}: {error}", path.display());
-                return ExitCode::FAILURE;
-            }
-        },
+        Some(path) => {
+            std::fs::write(&path, &report)
+                .map_err(|error| format!("vt-bench: writing {}: {error}", path.display()))?;
+            println!("wrote {}", path.display());
+        }
         None => print!("{report}"),
     }
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
 }
 
 fn dump_fixtures(dir: &PathBuf, mib: usize) -> std::io::Result<()> {
@@ -146,6 +153,13 @@ fn dump_fixtures(dir: &PathBuf, mib: usize) -> std::io::Result<()> {
 
 /// The tier-2 regression trip-wire: fail a fixture that has become slower than
 /// `tolerance` times its committed baseline.
+///
+/// The comparison is strict (`ratio < tolerance`), so a fixture sitting exactly
+/// on the band passes: the rule is "twice as slow fails", and something exactly
+/// half as fast is not yet *below* half. That matters when testing the guard by
+/// editing a baseline, because doubling every figure lands the ratio precisely
+/// on 0.50 and a fixture a hair above it will pass. Multiply by three instead --
+/// a proof of the guard should not be a boundary case.
 ///
 /// `Err` carries the report as well as the verdict, so a failure prints the
 /// whole table rather than one line about the first fixture that tripped.
@@ -176,7 +190,8 @@ fn guard(baseline: &Path, tolerance: f64, mib: usize) -> Result<String, String> 
 
     let mut report = format!(
         "# vt-bench grid --check\n\n\
-         Baseline: {}\nA fixture fails below {tolerance:.2} x its baseline figure.\n\n\
+         Baseline: {}\nA fixture fails *below* {tolerance:.2} x its baseline figure; \
+         exactly {tolerance:.2} passes.\n\n\
          | Fixture | baseline MiB/s | now MiB/s | ratio | |\n\
          | --- | ---: | ---: | ---: | --- |\n",
         parsed["machine"]
@@ -266,29 +281,29 @@ fn run(command: &str, mib: usize, frames: usize, json: bool, machine: Option<&st
             };
             // A tier that was not asked for contributes no columns at all: a
             // table of `-` cells is what makes a published single-tier table
-            // look like a failed run.
+            // look like a failed run. Each tier that *is* present carries its
+            // own spread, labelled -- one bare `spread` column beside two tiers
+            // silently reports the second tier's and hides the first's.
             let mut header = String::from("| Fixture |");
             let mut rule = String::from("| --- |");
             for (present, label) in [(&parser, "parser"), (&grid, "parse+grid")] {
                 if present.is_some() {
-                    let _ = write!(header, " {label} MiB/s | {label} ns/B |");
-                    rule.push_str(" ---: | ---: |");
+                    let _ = write!(header, " {label} MiB/s | {label} ns/B | {label} spread |");
+                    rule.push_str(" ---: | ---: | ---: |");
                 }
             }
-            let _ = writeln!(out, "{header} spread |\n{rule} ---: |");
+            let _ = writeln!(out, "{header}\n{rule}");
             for (index, fixture) in FIXTURES.iter().enumerate() {
                 let mut row = format!("| `{}` |", fixture.name);
-                let mut spread = 0.0;
                 for tier in [&parser, &grid].into_iter().flatten() {
                     let measured = &tier[index];
-                    spread = measured.spread_percent;
                     let _ = write!(
                         row,
-                        " {:.1} | {:.2} |",
-                        measured.mib_per_second, measured.ns_per_byte
+                        " {:.1} | {:.2} | {:.0}% |",
+                        measured.mib_per_second, measured.ns_per_byte, measured.spread_percent
                     );
                 }
-                let _ = writeln!(out, "{row} {spread:.0}% |");
+                let _ = writeln!(out, "{row}");
             }
             let _ = writeln!(out);
         }
