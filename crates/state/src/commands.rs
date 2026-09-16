@@ -20,13 +20,18 @@ pub type SshDuplicateCompletion =
     Rc<dyn Fn(Box<dyn TerminalSession>, String, SessionDuplicateConfig, &mut Window, &mut App)>;
 
 /// The saved SSH sessions as the "+" (New Terminal) menu lists them: sections of
-/// `(group name, rows)`, each row `(stable session id, title)`. The sessions
-/// that have no group come first, in one section whose group name is empty;
-/// then one section per group, in the order the groups appear in the store.
+/// `(group name, rows)`, each row `(stable session id, title, hex colour)`. The
+/// sessions that have no group come first, in one section whose group name is
+/// empty; then one section per group, in the order the groups appear in the store.
+///
+/// The colour is the session's own tag, as the right dock's tree draws it, with
+/// the session feature's default already applied — the producer resolves it so
+/// the default is read in one place and this layer needs no knowledge of it
+/// (`US-0110`).
 ///
 /// Primitives rather than the session feature's own types, because `crates/state`
 /// sits below it and must not name them (`IN-0033`).
-pub type SavedSshSessionSections = Vec<(String, Vec<(u64, String)>)>;
+pub type SavedSshSessionSections = Vec<(String, Vec<(u64, String, String)>)>;
 
 /// Command function pointers registered by the feature crates.
 #[derive(Clone, Copy)]
