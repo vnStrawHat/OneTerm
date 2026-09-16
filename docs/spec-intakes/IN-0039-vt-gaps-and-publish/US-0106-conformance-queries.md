@@ -369,7 +369,11 @@ digits are echoed; anything else echoes empty (`hex_echo`, with
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | `python scripts/vt-public-api.py --check --no-doc` | unchanged after `--update` |
 | `python scripts/vt-public-api.py --diff-platforms` | 6 lines, all inside `oneterm_vt::pty` |
-| `pwsh scripts/ci-local.ps1 -Full` | **`ci-local: all checks passed.`** (exit 0) |
+| `cargo test -p oneterm-vt --all-features` | pass |
+| `cargo test -p oneterm-vt --test verify_us0106` | 33 pass -- the adopted verification suite |
+| `cargo test -p oneterm-tools` / `cargo check -p oneterm-tools` | pass. **Covers the Windows stub of `vt-esctest.rs` only**; its Unix half compiles on no host available here |
+| `python scripts/vt-public-api.py --check-nameable --no-doc` | pass (`BUG-0059`'s new gate, inherited by the rebase) |
+| `pwsh scripts/ci-local.ps1 -Full` | **`ci-local: all checks passed.`** (exit 0, 26 steps) |
 
 `ci-local -Full` ran all 21 steps green, including the two that this packet was most at risk of
 breaking: **rustdoc self-containment** over `crates/vt/src` and `crates/vt/docs/guide` (it caught
