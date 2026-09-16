@@ -61,13 +61,13 @@ control (`Panel::title_suffix`). The button itself does not change: it stays a p
                             | PowerShell                   |      specific, unchanged.
                             | PowerShell 7                 |      (Bash / Sh / Zsh on unix)
                             |------ SSH Sessions ---------|   <- labelled separator
-                            | prod-web                     |   <- ungrouped sessions,
-                            | staging                      |      store order, title only
+                            | [] prod-web                  |   <- ungrouped sessions, store
+                            | [] staging                   |      order, colour square + title
                             |- - - - - infra - - - - - - -|   <- dashed separator, group name
-                            | db-01                        |   <- that group's sessions
-                            | db-02                        |
+                            | [] db-01                     |   <- that group's sessions
+                            | [] db-02                     |
                             |- - - - - - lab - - - - - - -|   <- next group, store order
-                            | sandbox                      |
+                            | [] sandbox                   |
                             |------------------------------|
                             | New SSH Session              |   <- moved to the end
                             +------------------------------+
@@ -107,6 +107,14 @@ Decisions this wireframe fixes:
   sessions sharing a label are indistinguishable here; the owner accepted that, and the
   right dock's tree still shows `user@host:port`. A hand-edited entry with a blank label
   still falls back to `host:port` so no row is ever invisible.
+- **Rows carry the session's colour square** (owner, 2026-09-16, `US-0110`). Each saved
+  session row is drawn like the right dock's tree leaf: an 8px square in the session's own
+  colour, `gap_2`, then the title. A session with no saved colour gets the same
+  `SshSession::DEFAULT_COLOR_HEX` default the tree gives it, applied by `menu_entries` so
+  the constant is read in one place. A row is a `PopupMenuItem::element` — the kit renders
+  it with the same padding, height, hover and selection styling as a plain `Item`, and
+  `is_clickable()` / `confirm()` treat it identically, so mouse and keyboard reach are
+  unchanged.
 - **The headings are separators that carry a centred label.** The kit's `PopupMenu` offers
   a plain `Separator` and a plain `Label` but nothing that is both, so the heading row is
   composed from `PopupMenuItem::element(...).disabled(true)`: a rule, the label text,
@@ -120,8 +128,11 @@ Decisions this wireframe fixes:
   under the shells where the owner looks for it.
 - **Section label "SSH Sessions"** matches the panel the owner named, so the two surfaces
   read as the same list.
-- **No colour or icon literals.** The section is plain `PopupMenu::label` and
-  `PopupMenuItem` rows, which take their colours from `cx.theme()` through the kit.
+- **No colour or icon literals in the menu builder.** Headings and text take their colours
+  from `cx.theme()` through the kit. A row's square is the session's own saved colour,
+  data rather than a literal; where the saved hex will not parse the builder falls back to
+  `cx.theme().accent`, and the "no colour saved" default lives with the session type in
+  `crates/session-ui`, not in the menu.
 
 ## Data Flow
 
@@ -131,8 +142,10 @@ Decisions this wireframe fixes:
    `saved_ssh_sessions(cx)`.
 3. That fn pointer resolves to `oneterm_session_ui::saved_ssh_sessions`, which reads the
    `SshSessionStore` global and maps its entries through `menu_entries` to
-   `Vec<(String, Vec<(u64, String)>)>` — sections of `(group name, rows)`, the ungrouped
-   rows under an empty group name first, each row the stable session id and its title.
+   `Vec<(String, Vec<(u64, String, String)>)>` — sections of `(group name, rows)`, the
+   ungrouped rows under an empty group name first, each row the stable session id, its
+   title, and its hex colour with the default already applied (`US-0110`). Primitives
+   only: `crates/state` sits below `crates/session-ui` and must not name its types.
 4. The closure appends the labelled "SSH Sessions" separator and then either the sections
    — ungrouped rows first, then a dashed labelled separator and its rows per group — or the
    disabled "No saved sessions" hint, and finally a plain separator and "New SSH Session".
