@@ -38,8 +38,8 @@ the claim it checks -- what a grid of N rows costs -- is exactly live heap.
 The number below is the engine and nothing else. It does **not** include:
 
 - **Any renderer.** No glyph shaping, no atlas upload, no GPU work, no window.
-  Tier 3 measures the cost of *producing* what a renderer would paint, never of
-  painting it. In a real application the renderer is usually the larger half.
+  In a real application the renderer is usually the larger half of the cost, and
+  none of it is here.
 - **Any pseudo-console.** The bytes come from a buffer, not from a child
   process through a transport. See the ceiling below for why that matters.
 - **Reading, scheduling or thread hand-off.** One thread, no channel, no wake.
@@ -73,17 +73,19 @@ discarded warm-up cycle.
 
 The fixtures are deterministic generators in the benchmark's own source -- no
 recorded files, no random data -- so a run is reproducible from the repository
-alone. Most are ported from vtebench's generators; `sixel` and `osc_9_7` are
-this engine's own.
+alone. Two of the ten are ported from vtebench: `dense_cells` and `scrolling`.
+The other eight were written for this engine.
 
 **`spread` is the width of the whole sample, fastest cycle to slowest, as a
 percentage of the median.** It is published because it is the only thing that
 tells you whether a difference between two runs means anything. Nine of the ten
 rows above sit between two and eight percent, which is about the floor for this
-kind of machine; `osc_9_7` at thirty-one percent had one disturbed cycle and is
-the honest illustration of why the column is here at all. Read no meaning into a
-difference smaller than the spread beside it -- which is also why the guard
-below fires at a factor rather than a percentage.
+kind of machine. `osc_9_7` is reproducibly the outlier -- thirty-one percent
+here, and twenty-six percent in an independent run on a quiet machine -- so it
+is a property of that fixture and not one unlucky cycle. Why has not been
+isolated, and the column says so rather than guessing. Read no meaning into a
+difference smaller than the spread beside it, which is also why the guard below
+fires at a factor rather than a percentage.
 
 ### Read it next to the transport ceiling
 

@@ -92,8 +92,9 @@ $ cargo run -p oneterm-tools --release --bin vt-bench -- grid --mib 32
 | `sixel` | 46.7 | 20.43 | 8% | repeated small Sixel images |
 | `osc_9_7` | 102.2 | 9.33 | 31% | an application status channel between output lines |
 
-Read no difference smaller than the spread beside it: `osc_9_7`'s thirty-one percent is one
-disturbed cycle, and is exactly why the column is published rather than hidden.
+Read no difference smaller than the spread beside it. `osc_9_7` is reproducibly the noisiest
+fixture rather than one unlucky cycle, for a reason that has not been isolated; publishing the
+column rather than hiding it is what lets you see that at all.
 
 Read it next to the transport ceiling, because no engine number means anything in isolation: on the
 same machine a ConPTY carrying `cmd.exe` output moves about 1.2 MiB/s, and a flat-out full-screen
