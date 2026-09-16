@@ -11,11 +11,17 @@
 //! | 4 `resize` | resize latency at three scrollback depths | its own, deliberately |
 //! | 5 `rss` | heap held after filling scrollback with four content kinds | 160x45 |
 //!
-//! **Recorded, never gated.** At realistic shell and SSH rates the engine has
-//! two to three orders of magnitude of headroom (`perf-baseline.md` § 4, § 5.9),
-//! so a threshold here would be a flaky test measuring the machine. Every number
-//! is printed next to the ConPTY transport ceiling `pty-throughput` measures
-//! (about 1.2 MiB/s for a `cmd.exe` producer), so none is read in isolation.
+//! **Recorded, never gated in CI.** At realistic shell and SSH rates the engine
+//! has two to three orders of magnitude of headroom (`perf-baseline.md` § 4,
+//! § 5.9), so a threshold here would be a flaky test measuring the machine.
+//! Every number is printed next to the ConPTY transport ceiling
+//! `pty-throughput` measures (about 1.2 MiB/s for a `cmd.exe` producer), so none
+//! is read in isolation.
+//!
+//! `vt-bench grid --check` is the one comparison that has a verdict, and it runs
+//! by hand on the machine the committed baseline came from, with a band wide
+//! enough (a fixture must get twice as slow) that it can only catch the class of
+//! mistake that is a factor, not a percentage.
 //!
 //! Tier 4 uses its own geometry on purpose: it measures an operation, not a
 //! stream, and is only ever compared against the other engine at the same
@@ -37,8 +43,14 @@ use oneterm_vt::{Config, EventBatch, ResizePolicy, Size, Terminal};
 pub const COLS: usize = 160;
 /// Benchmark grid height, matching `pty-throughput`'s geometry.
 pub const ROWS: usize = 45;
-/// Median of three, per the LLD's noise rules.
-pub const RUNS: usize = 3;
+/// Cycles per measurement; the reported figure is the median of them.
+///
+/// Tiers 1-2 take one sample of *every* fixture per cycle rather than `RUNS`
+/// back-to-back samples of one, so a thermal or frequency drift over the length
+/// of the run spreads across the whole table instead of biasing whichever
+/// fixture happened to run while the machine was warm. Five is odd (so the
+/// median is a sample, not a mean of two) and enough to show a spread.
+pub const RUNS: usize = 5;
 /// Default bytes per scenario for tiers 1-3.
 pub const DEFAULT_MIB: usize = 100;
 /// Scrollback depths tier 4 resizes at.
@@ -307,24 +319,29 @@ fn new_term() -> Terminal {
 pub struct Throughput {
     /// Fixture name.
     pub fixture: &'static str,
-    /// Mebibytes per second, median of [`RUNS`].
+    /// Mebibytes per second, median of [`RUNS`] cycles.
     pub mib_per_second: f64,
     /// Nanoseconds per input byte at that rate.
     pub ns_per_byte: f64,
+    /// Fastest minus slowest cycle, as a percentage of the median.
+    ///
+    /// The honest companion to a median: it says how much of a difference
+    /// between two runs is the machine rather than the engine. A published
+    /// number whose spread is wider than the difference being argued about is
+    /// not evidence of anything.
+    pub spread_percent: f64,
 }
 
-fn median_throughput(
-    fixture: &'static str,
-    bytes: &[u8],
-    mut pass: impl FnMut(&[u8]) -> Duration,
-) -> Throughput {
-    let mut samples: Vec<Duration> = (0..RUNS).map(|_| pass(bytes)).collect();
+fn median_throughput(fixture: &'static str, len: usize, mut samples: Vec<Duration>) -> Throughput {
     samples.sort_unstable();
     let elapsed = samples[samples.len() / 2];
+    let rate = |d: Duration| (len as f64 / (1024.0 * 1024.0)) / d.as_secs_f64();
     Throughput {
         fixture,
-        mib_per_second: (bytes.len() as f64 / (1024.0 * 1024.0)) / elapsed.as_secs_f64(),
-        ns_per_byte: elapsed.as_nanos() as f64 / bytes.len() as f64,
+        mib_per_second: rate(elapsed),
+        ns_per_byte: elapsed.as_nanos() as f64 / len as f64,
+        spread_percent: (rate(samples[0]) - rate(samples[samples.len() - 1])) / rate(elapsed)
+            * 100.0,
     }
 }
 
@@ -357,12 +374,38 @@ pub fn run_grid(mib: usize) -> Vec<Throughput> {
     })
 }
 
+/// Runs `pass` over every fixture, [`RUNS`] cycles, one sample per fixture per
+/// cycle.
+///
+/// The fixture bytes are regenerated inside the cycle rather than all held at
+/// once: ten fixtures of `--mib 100` would be a gigabyte of resident input, and
+/// generation is outside the timed region anyway.
 fn tier(mib: usize, mut pass: impl FnMut(&[u8]) -> Duration) -> Vec<Throughput> {
+    let mut samples: Vec<Vec<Duration>> = vec![Vec::with_capacity(RUNS); FIXTURES.len()];
+    let mut len = vec![0usize; FIXTURES.len()];
+    for cycle in 0..=RUNS {
+        for (index, fixture) in FIXTURES.iter().enumerate() {
+            let bytes = (fixture.make)(mib * 1024 * 1024);
+            let sample = pass(&bytes);
+            // Cycle zero is a warm-up and is thrown away: it pays the cold
+            // instruction cache, the first-touch page faults on a freshly
+            // allocated input buffer, and the CPU's turbo ramp, none of which
+            // the engine will pay again on a stream that is already running.
+            if cycle > 0 {
+                len[index] = bytes.len();
+                samples[index].push(sample);
+            }
+        }
+    }
     FIXTURES
         .iter()
-        .map(|fixture| {
-            let bytes = (fixture.make)(mib * 1024 * 1024);
-            median_throughput(fixture.name, &bytes, &mut pass)
+        .enumerate()
+        .map(|(index, fixture)| {
+            median_throughput(
+                fixture.name,
+                len[index],
+                std::mem::take(&mut samples[index]),
+            )
         })
         .collect()
 }
