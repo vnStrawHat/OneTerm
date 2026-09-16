@@ -10,8 +10,8 @@ Created: 2026-09-16
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -53,7 +53,7 @@ whenever the font changes"), and OneTerm, the engine's own first embedder, does 
 
 ## Scope
 
-- [ ] In scope:
+- [x] In scope:
   - `TerminalInput::set_cell_pixels(&self, width: u16, height: u16)` -- one new trait method,
     implemented by `PtySession<O>` and by `FakeTerminalSession`.
   - `TerminalModel::set_cell_pixels` -- the engine-lock hop, beside `resize_grid`.
@@ -63,7 +63,7 @@ whenever the font changes"), and OneTerm, the engine's own first embedder, does 
     engine's reply bytes so a test can assert the `CSI 14 t` answer rather than an internal field.
   - `docs/terminal-backend.md`: the embedder-contract sentence, where the adapter's engine-lock
     duties are listed.
-- [ ] Out of scope:
+- [x] Out of scope:
   - **XTSMGRAPHICS (`CSI ? Pi;Pa;Pv S`).** Deferred, not forgotten: `chafa` and `notcurses` use
     it to size an image, and the engine answers nothing today. It belongs to
     `US-0106` (conformance queries, `IN-0039`), which owns the query-reply surface, its
@@ -152,8 +152,14 @@ adapter's duties without naming this call.
 
 ### Reconciliation
 
-Fill in at completion: docs changed, and confirmation that the three no-change reasons still
-hold.
+Changed: `docs/terminal-backend.md` §5.3 -- a paragraph beside the resize hop naming the cell-size
+duty, where it is pushed from, why it is not folded into `resize`, and that the reported size is a
+report rather than a placement input.
+
+The three no-change reasons still hold. `low-level-design/graphics.md` describes placement, which
+this packet does not touch; `crates/vt/docs/guide/08-graphics.md` already states the embedder
+contract correctly and is what the fix now obeys; the engine's `set_cell_pixels` and the `14 t` /
+`18 t` arms are unchanged, and `crates/vt` has no edit in this branch.
 
 ## Context
 
@@ -172,13 +178,13 @@ method there is two lines and makes the reply assertable from the view's own tes
 
 ## Plan
 
-- [ ] `TerminalModel::set_cell_pixels`, beside `resize_grid`, same lock discipline.
-- [ ] `TerminalInput::set_cell_pixels` + the `PtySession` implementation.
-- [ ] `FakeTerminalSession::set_cell_pixels` mirrors it into its own engine; add
+- [x] `TerminalModel::set_cell_pixels`, beside `resize_grid`, same lock discipline.
+- [x] `TerminalInput::set_cell_pixels` + the `PtySession` implementation.
+- [x] `FakeTerminalSession::set_cell_pixels` mirrors it into its own engine; add
       `GridFixture::feed_replies` / `FakeSessionProbe::feed_replies`.
-- [ ] `element.rs` prepaint pushes on a metrics change, before the resize check;
+- [x] `element.rs` prepaint pushes on a metrics change, before the resize check;
       `RenderState::last_cell_pixels`.
-- [ ] Tests (below), `docs/terminal-backend.md`, gate.
+- [x] Tests (below), `docs/terminal-backend.md`, gate.
 
 ## Decisions
 
@@ -190,19 +196,19 @@ above, not a rule future work must inherit; `DEC-0012` (cell-anchored graphics) 
 
 Measurable by a hostile verifier from a clean checkout of this branch:
 
-- [ ] `grep -rn "set_cell_pixels" crates/ --include=*.rs` lists a caller outside `crates/vt`.
-- [ ] `cargo test -p oneterm-terminal-view cell_pixels` passes, and its assertion is on reply
+- [x] `grep -rn "set_cell_pixels" crates/ --include=*.rs` lists a caller outside `crates/vt`.
+- [x] `cargo test -p oneterm-terminal-view cell_pixels` passes, and its assertion is on reply
       **bytes**: after the view's own resize path, feeding `\x1b[14t` to the session returns
       exactly `ESC [ 4 ; <rows*h> ; <cols*w> t`, with `rows`/`cols` the grid the view pushed and
       `h`/`w` the cell's device pixels, and both numbers strictly greater than zero.
-- [ ] The same test asserts `\x1b[18t` still returns `ESC [ 8 ; <rows> ; <cols> t` -- unchanged
+- [x] The same test asserts `\x1b[18t` still returns `ESC [ 8 ; <rows> ; <cols> t` -- unchanged
       bytes, so the fix did not disturb the neighbouring arm.
-- [ ] A metrics change (the scale-factor path's mechanism: the shared `MetricsKey` cache) pushes
+- [x] A metrics change (the scale-factor path's mechanism: the shared `MetricsKey` cache) pushes
       a new cell size and the `CSI 14 t` reply changes accordingly, without a grid change being
       required to trigger it.
-- [ ] `cargo test -p oneterm-terminal cell_pixels` proves the real `PtySession` path, not only
+- [x] `cargo test -p oneterm-terminal cell_pixels` proves the real `PtySession` path, not only
       the fake: `set_cell_pixels` on the session reaches the engine behind the model lock.
-- [ ] `pwsh scripts/ci-local.ps1 -Full` is green.
+- [x] `pwsh scripts/ci-local.ps1 -Full` is green.
 
 ## Verification Plan
 
@@ -216,11 +222,11 @@ Measurable by a hostile verifier from a clean checkout of this branch:
 - Platform: not applicable; no platform-specific code path.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ### E2E criterion (owner, after merge)
@@ -251,7 +257,37 @@ Measurable by a hostile verifier from a clean checkout of this branch:
 
 ## Evidence and Gaps
 
-After implementation: commands, results, and anything skipped, unavailable, partial, or failing.
+Commits on `fix/adapter-cell-pixels`: the packet, then one implementation commit
+(`crates/terminal/src/{model,session,test_support}.rs`,
+`crates/terminal-view/src/render/{element,state,element_tests}.rs`, `docs/terminal-backend.md`;
+169 insertions, 1 deletion).
+
+- `cargo test -p oneterm-terminal cell_pixels` -- passed.
+  `session::tests::cell_pixels_reach_the_engine_and_csi_14_t` pins the defect first
+  (`CSI 14 t` -> `ESC [ 4;0;0 t` before the call), then `set_cell_pixels(9, 18)` ->
+  `ESC [ 4;432;720 t` at 24x80, and `CSI 18 t` -> `ESC [ 8;24;80 t` unchanged.
+- `cargo test -p oneterm-terminal-view cell_pixels` -- passed.
+  `render::element::element_tests::cell_pixels_reach_the_session_so_csi_14_t_answers` drives a
+  real headless GPUI window: after the view's own prepaint the reply is
+  `ESC [ 4;<rows*h>;<cols*w> t` for the grid the view pushed and the device cell the painter used,
+  both non-zero; `CSI 18 t` is unchanged; then a metrics change alone updates the reply.
+- `pwsh scripts/ci-local.ps1 -Full` -- passed (`ci-local: all checks passed`, `cargo deny`
+  included: advisories ok, bans ok, licenses ok).
+
+Gaps:
+
+- **E2E not run here** (`e2e_proof 0`). The criterion and its steps are above; the owner runs
+  `opentui-examples.exe` after merge. Nothing in this branch has been seen by a real program.
+- **The GPUI test window pins `scale_factor` at 2.0**, so the DPI-scale change cannot be simulated
+  directly. The integration test drives the same mechanism (the one `MetricsKey` cache) through a
+  font-size change instead, which proves the push is keyed on the metrics rather than on the grid
+  -- the property the scale case needs -- but not the scale change itself.
+- **A flake, not a regression.** `cargo test --workspace` failed once on
+  `handle::tests::a_pump_yields_to_the_demand_within_a_bounded_number_of_chunks` ("the renderer
+  waited 10 chunks, not one") while two other worktrees were compiling on the same machine. It is
+  a lock-fairness timing test over `crates/terminal/src/handle.rs`, which this branch does not
+  touch; it passed on its own and the whole gate passed on the re-run.
+- The placement-scale and XTSMGRAPHICS follow-ups above are open by design, not overlooked.
 
 ## Handoff
 
