@@ -6,7 +6,7 @@
 //! table to be edited until it passes.
 
 use super::*;
-use crate::input::encode_key_event;
+use crate::input::{KeyMods, encode_key_event};
 
 const DISAMBIGUATE: KeyboardFlags = KeyboardFlags::DISAMBIGUATE_ESC_CODES;
 const EVENT_TYPES: KeyboardFlags = KeyboardFlags::REPORT_EVENT_TYPES;
@@ -361,6 +361,14 @@ fn an_empty_character_has_no_kitty_encoding() {
 }
 
 /// `modifyOtherKeys`, which the encoder reaches only when no kitty flag did.
+///
+/// xterm(1): level `1` "enables this feature for keys **except** for those with
+/// well-known behavior, e.g., Tab, Backarrow and some special control character
+/// cases which are built into the X11 library, e.g., Control-Space to make a
+/// NUL, or Control-3 to make an Escape character"; level `2` "enables this
+/// feature for keys including the exceptions listed". So the level-1 rule is
+/// "the chord already produces a control byte", and every row below is one side
+/// of it.
 #[test]
 fn modify_other_keys_levels() {
     let ctrl = mods(false, true, false);
@@ -369,16 +377,31 @@ fn modify_other_keys_levels() {
         ..ModeSnapshot::default()
     };
     let cases: &[(KeySpec, &[u8], &[u8])] = &[
-        // (key, level 1, level 2)
+        // (key with ctrl, level 1, level 2)
         (ch("a"), b"\x01", b"\x1b[27;5;97~"),
-        (ch("2"), b"\x1b[27;5;50~", b"\x1b[27;5;50~"),
+        (ch("2"), b"\x00", b"\x1b[27;5;50~"),
+        (ch("3"), b"\x1b", b"\x1b[27;5;51~"),
+        (ch(" "), b"\x00", b"\x1b[27;5;32~"),
+        // No control byte, so level 1 already escapes it. This is the chord
+        // modifyOtherKeys exists for.
+        (ch(";"), b"\x1b[27;5;59~", b"\x1b[27;5;59~"),
+        (ch("9"), b"\x1b[27;5;57~", b"\x1b[27;5;57~"),
         (named(NamedKey::Enter), b"\x1b[27;5;13~", b"\x1b[27;5;13~"),
-        (named(NamedKey::Tab), b"\x1b[27;5;9~", b"\x1b[27;5;9~"),
+        (named(NamedKey::Tab), b"\x09", b"\x1b[27;5;9~"),
+        (named(NamedKey::Backspace), b"\x08", b"\x1b[27;5;127~"),
     ];
     for (key, one, two) in cases {
         let event = KeyEvent::new(key.clone(), ctrl);
-        assert_eq!(encode_key_event(&event, &level(1)).as_deref(), Some(*one));
-        assert_eq!(encode_key_event(&event, &level(2)).as_deref(), Some(*two));
+        assert_eq!(
+            encode_key_event(&event, &level(1)).as_deref(),
+            Some(*one),
+            "{key:?} at level 1"
+        );
+        assert_eq!(
+            encode_key_event(&event, &level(2)).as_deref(),
+            Some(*two),
+            "{key:?} at level 2"
+        );
     }
     // A functional key already has an unambiguous form at either level.
     let up = KeyEvent::new(named(NamedKey::ArrowUp), ctrl);
@@ -386,12 +409,16 @@ fn modify_other_keys_levels() {
         encode_key_event(&up, &level(2)).as_deref(),
         Some(b"\x1b[1;5A".as_slice())
     );
-    // An unmodified key is never an "other" key.
-    let plain = KeyEvent::new(ch("a"), KeyMods::default());
-    assert_eq!(
-        encode_key_event(&plain, &level(2)).as_deref(),
-        Some(b"a".as_slice())
-    );
+    // An unmodified key is never an "other" key -- and neither is a shifted
+    // one, because the layout has already consumed shift to make the character.
+    for mods in [KeyMods::default(), mods(true, false, false)] {
+        let event = KeyEvent::new(ch("A"), mods);
+        assert_eq!(
+            encode_key_event(&event, &level(2)).as_deref(),
+            Some(b"A".as_slice()),
+            "{mods:?} must not turn typing into escape sequences"
+        );
+    }
 }
 
 /// The kitty flags supersede `modifyOtherKeys` when both are on.
@@ -409,21 +436,153 @@ fn kitty_wins_over_modify_other_keys() {
     );
 }
 
-/// `F13`-`F24` stay on xterm's shifted `F1`-`F12` forms, which is the recorded
-/// deviation from the specification's private-use codes.
+/// `F13`-`F24` take the specification's private-use codes on the kitty rung and
+/// keep xterm's shifted `F1`-`F12` forms on the legacy one.
+///
+/// The two rungs disagree on purpose. Spelling `F17` as `shift+F5` under the
+/// kitty flags would set a modifier bit the user never pressed, so a program
+/// matching `shift+F5` would fire on a bare `F17`; the legacy rung has no code
+/// point to use instead and is frozen anyway.
 #[test]
-fn shifted_function_keys_keep_the_xterm_form() {
-    let modes = modes(DISAMBIGUATE);
-    for (key, want) in [
-        (NamedKey::F13, b"\x1b[1;2P".as_slice()),
-        (NamedKey::F17, b"\x1b[15;2~"),
-        (NamedKey::F24, b"\x1b[24;2~"),
+fn shifted_function_keys_take_the_private_use_codes() {
+    let kitty = modes(DISAMBIGUATE);
+    let legacy = modes(KeyboardFlags::empty());
+    for (key, under_flags, legacy_form) in [
+        (
+            NamedKey::F13,
+            b"\x1b[57376u".as_slice(),
+            b"\x1b[1;2P".as_slice(),
+        ),
+        (NamedKey::F15, b"\x1b[57378u", b"\x1b[1;2R"),
+        (NamedKey::F17, b"\x1b[57380u", b"\x1b[15;2~"),
+        (NamedKey::F24, b"\x1b[57387u", b"\x1b[24;2~"),
     ] {
         let event = KeyEvent::new(named(key), KeyMods::default());
         assert_eq!(
-            encode_key_event(&event, &modes).as_deref(),
-            Some(want),
-            "{key:?}"
+            encode_key_event(&event, &kitty).as_deref(),
+            Some(under_flags),
+            "{key:?} under the kitty flags"
+        );
+        assert_eq!(
+            encode_key_event(&event, &legacy).as_deref(),
+            Some(legacy_form),
+            "{key:?} on the legacy rung"
         );
     }
+}
+
+/// `F3` never takes the `R` final byte: "`CSI R` conflicts with the Cursor
+/// Position Report, so it was removed", and `R` is not in the
+/// `[~ABCDEFHPQS]` set the disambiguate section permits.
+#[test]
+fn f3_never_collides_with_the_cursor_position_report() {
+    for bits in 1u8..32 {
+        // Only the two flags that move a functional key onto the kitty rung;
+        // the others are enhancements of a form some flag already chose. The
+        // legacy rung still spells `F15` as `shift+F3` (`CSI 1 ; 2 R`), which
+        // collides with a CPR and is frozen by `US-0099`'s equivalence bar --
+        // recorded in guide chapter 6 rather than fixed inside this packet.
+        if bits & 0b1001 == 0 {
+            continue;
+        }
+        let modes = modes(KeyboardFlags::from_bits_truncate(bits));
+        for mods in [
+            KeyMods::default(),
+            mods(true, true, false),
+            mods(false, false, true),
+        ] {
+            for key in [NamedKey::F3, NamedKey::F15] {
+                let event = KeyEvent::new(named(key), mods);
+                let bytes = encode_key_event(&event, &modes).expect("F-keys always encode");
+                assert_ne!(
+                    bytes.last(),
+                    Some(&b'R'),
+                    "{key:?} {mods:?} under flags {bits} is {:?}",
+                    String::from_utf8_lossy(&bytes)
+                );
+            }
+        }
+    }
+    assert_eq!(
+        encode_key_event(
+            &KeyEvent::new(named(NamedKey::F3), KeyMods::default()),
+            &modes(ALL_ESC)
+        )
+        .as_deref(),
+        Some(b"\x1b[13~".as_slice())
+    );
+}
+
+/// A held letter key keeps typing that letter under `REPORT_EVENT_TYPES` alone.
+///
+/// "Key events that result in text are reported as plain UTF-8 text, so events
+/// are not supported for them, unless the application requests key report
+/// mode."
+#[test]
+fn a_text_key_has_no_event_types_without_report_all_keys() {
+    for flags in [
+        EVENT_TYPES,
+        DISAMBIGUATE | EVENT_TYPES,
+        EVENT_TYPES | ALTERNATE,
+    ] {
+        let modes = modes(flags);
+        let press = KeyEvent::new(ch("a"), KeyMods::default());
+        let repeat = KeyEvent {
+            kind: KeyEventKind::Repeat,
+            ..press.clone()
+        };
+        let release = KeyEvent {
+            kind: KeyEventKind::Release,
+            ..press.clone()
+        };
+        assert_eq!(
+            encode_key_event(&repeat, &modes).as_deref(),
+            Some(b"a".as_slice()),
+            "a repeat under {flags:?} must still type the letter"
+        );
+        assert_eq!(
+            encode_key_event(&release, &modes),
+            None,
+            "a release under {flags:?} must send nothing"
+        );
+    }
+    // A non-text key does get its event types from the flag alone.
+    let release = KeyEvent {
+        kind: KeyEventKind::Release,
+        ..KeyEvent::new(named(NamedKey::ArrowUp), KeyMods::default())
+    };
+    assert_eq!(
+        encode_key_event(&release, &modes(EVENT_TYPES)).as_deref(),
+        Some(b"\x1b[1;1:3A".as_slice())
+    );
+}
+
+/// The associated-text field is never invented for a chord that produces no
+/// text: `Ctrl+A` must not tell the program an `a` was inserted.
+#[test]
+fn the_text_fallback_respects_the_modifiers() {
+    let modes = modes(ALL_ESC | TEXT);
+    for (mods, want) in [
+        (KeyMods::default(), b"\x1b[97;;97u".as_slice()),
+        (mods(true, false, false), b"\x1b[97;2;97u"),
+        (mods(false, true, false), b"\x1b[97;5u"),
+        (mods(false, false, true), b"\x1b[97;3u"),
+        (mods(false, true, true), b"\x1b[97;7u"),
+    ] {
+        let event = KeyEvent::new(ch("a"), mods);
+        assert_eq!(
+            encode_key_event(&event, &modes).as_deref(),
+            Some(want),
+            "{mods:?}"
+        );
+    }
+    // An embedder that knows the text still wins.
+    let event = KeyEvent {
+        text: Some("\u{e5}".into()),
+        ..KeyEvent::new(ch("a"), mods(false, false, true))
+    };
+    assert_eq!(
+        encode_key_event(&event, &modes).as_deref(),
+        Some(b"\x1b[97;3;229u".as_slice())
+    );
 }

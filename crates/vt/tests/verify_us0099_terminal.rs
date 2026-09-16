@@ -2,10 +2,12 @@
 //! `feed` -- the convenience form reads the terminal's own modes, so real bytes
 //! are the only honest way to set them.
 //!
-//! Also pins the axes that are deliberately **not** wired: the Kitty keyboard
-//! flags and `modifyOtherKeys` reach the mode table and do not reach the
-//! encoder. Those assertions are a record of today's behaviour, not a wish; the
-//! packet that connects them will rewrite them.
+//! It also pinned the two axes that were deliberately **not** wired -- the
+//! kitty keyboard flags and `modifyOtherKeys` reached the mode table and not
+//! the encoder -- and said the packet that connected them would rewrite those
+//! assertions. `US-0105` is that packet, so they now assert the opposite: both
+//! protocols reach the bytes, and the stack mechanics around them are what is
+//! unchanged.
 //!
 //! Written by an independent verifier for the encoder move and adopted here.
 
@@ -156,8 +158,10 @@ fn kitty_flags_swap_with_alt_screen_and_reach_the_bytes() {
 /// modifyOtherKeys (`CSI > 4 ; Ps m`) now reaches the bytes too.
 ///
 /// `US-0105` inverted this test as well, keeping its four chords as the table.
-/// Level `1` is the chords with no unambiguous legacy encoding, level `2` every
-/// modified "other" key.
+/// Level `1` keeps xterm's exceptions -- every chord whose legacy encoding is
+/// already a control byte, which is `Ctrl+A`, `Ctrl+2` and `Ctrl+Tab` here --
+/// and level `2` "enables this feature for keys including the exceptions
+/// listed", so all four move.
 #[test]
 fn modify_other_keys_reaches_the_bytes() {
     let (mut t, mut b) = term();
@@ -176,7 +180,7 @@ fn modify_other_keys_reaches_the_bytes() {
         (
             KeySpec::Character("2".into()),
             b"\x00",
-            b"\x1b[27;5;50~",
+            b"\x00",
             b"\x1b[27;5;50~",
         ),
         (
@@ -185,12 +189,7 @@ fn modify_other_keys_reaches_the_bytes() {
             b"\x1b[27;5;13~",
             b"\x1b[27;5;13~",
         ),
-        (
-            KeySpec::Named(NamedKey::Tab),
-            b"\t",
-            b"\x1b[27;5;9~",
-            b"\x1b[27;5;9~",
-        ),
+        (KeySpec::Named(NamedKey::Tab), b"\t", b"\t", b"\x1b[27;5;9~"),
     ];
     for level in [0u8, 1, 2] {
         feed(&mut t, &mut b, format!("\x1b[>4;{level}m").as_bytes());

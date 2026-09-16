@@ -214,7 +214,9 @@ fn ctrl_bytes(text: &str) -> Option<Vec<u8>> {
         '3' | '[' => 0x1b,
         '4' | '\\' => 0x1c,
         '5' | ']' => 0x1d,
-        '6' | '^' => 0x1e,
+        // `~` is in the specification's table beside `^`; it was missing here
+        // until `US-0105` measured the table row by row.
+        '6' | '^' | '~' => 0x1e,
         '7' | '_' | '/' => 0x1f,
         '8' | '?' => 0x7f,
         other => other as u8,
@@ -310,7 +312,7 @@ pub fn encode_key_event(event: &KeyEvent, modes: &ModeSnapshot) -> Option<Vec<u8
 ///   `app_cursor`, else `ESC [{ch}`.
 /// - `Home`/`End` + (shift|ctrl) → `CSI 1;{mod}H/F`; plain → `ESC OH/F`
 ///   when `app_cursor`, else `ESC [H/F`.
-fn encode_legacy(key: &KeySpec, mods: KeyMods, modes: &ModeSnapshot) -> Option<Vec<u8>> {
+pub(super) fn encode_legacy(key: &KeySpec, mods: KeyMods, modes: &ModeSnapshot) -> Option<Vec<u8>> {
     let shift = mods.shift;
     let ctrl = mods.ctrl;
     let alt = mods.alt;

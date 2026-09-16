@@ -11,7 +11,7 @@
 use crate::snapshot::ModeSnapshot;
 use crate::terminal::KeyboardFlags;
 
-use super::key::{KeyEvent, KeyEventKind, KeyMods, KeySpec, NamedKey, modifier_byte};
+use super::key::{KeyEvent, KeyEventKind, KeySpec, NamedKey, modifier_byte};
 
 /// The longest text field the encoder emits, in scalars. The same ceiling the
 /// print path puts on a client-supplied grapheme cluster
@@ -47,83 +47,104 @@ enum Form {
     Letter(u8),
 }
 
-/// The shape for a key, and whether the key implies shift.
-///
-/// `F13`–`F24` are xterm's shifted `F1`–`F12` here, which is what the legacy
-/// table already sends and what keeps the two paths agreeing. The
-/// specification's own private-use codes `57376`–`57387` are the deviation, and
-/// guide chapter 6 names it.
-fn form(key: &KeySpec) -> Option<(Form, bool)> {
-    let form = match key {
-        KeySpec::Character(text) => Form::Codepoint(unshifted(text)?),
+/// The shape for a key.
+fn form(key: &KeySpec) -> Option<Form> {
+    match key {
+        KeySpec::Character(text) => Some(Form::Codepoint(unshifted(text)?)),
         // `KeySpec` and `NamedKey` are `#[non_exhaustive]` to the outside, but
         // exhaustive here on purpose: a new variant must be given a code point
         // rather than silently falling into a wildcard that sends nothing.
-        KeySpec::Named(named) => return Some(named_form(*named)),
-    };
-    Some((form, false))
-}
-
-/// The shape for a named key.
-///
-/// `NamedKey` names thirty-eight keys and the specification's private-use table
-/// has about a hundred: the keypad (`57399`-`57415`), the lock and system keys
-/// (`57358`-`57363`), the media keys (`57428`+) and the modifier keys
-/// themselves (`57441`+) have no variant here, so no embedder can deliver one
-/// and nothing is dropped on the floor.
-fn named_form(named: NamedKey) -> (Form, bool) {
-    use NamedKey::*;
-    match named {
-        Escape => (Form::Codepoint(27), false),
-        Enter => (Form::Codepoint(13), false),
-        Tab => (Form::Codepoint(9), false),
-        Backspace => (Form::Codepoint(127), false),
-        ArrowUp => (Form::Letter(b'A'), false),
-        ArrowDown => (Form::Letter(b'B'), false),
-        ArrowRight => (Form::Letter(b'C'), false),
-        ArrowLeft => (Form::Letter(b'D'), false),
-        Home => (Form::Letter(b'H'), false),
-        End => (Form::Letter(b'F'), false),
-        Insert => (Form::Tilde(2), false),
-        Delete => (Form::Tilde(3), false),
-        PageUp => (Form::Tilde(5), false),
-        PageDown => (Form::Tilde(6), false),
-        F1 => (Form::Letter(b'P'), false),
-        F2 => (Form::Letter(b'Q'), false),
-        F3 => (Form::Letter(b'R'), false),
-        F4 => (Form::Letter(b'S'), false),
-        F5 => (Form::Tilde(15), false),
-        F6 => (Form::Tilde(17), false),
-        F7 => (Form::Tilde(18), false),
-        F8 => (Form::Tilde(19), false),
-        F9 => (Form::Tilde(20), false),
-        F10 => (Form::Tilde(21), false),
-        F11 => (Form::Tilde(23), false),
-        F12 => (Form::Tilde(24), false),
-        F13 => (Form::Letter(b'P'), true),
-        F14 => (Form::Letter(b'Q'), true),
-        F15 => (Form::Letter(b'R'), true),
-        F16 => (Form::Letter(b'S'), true),
-        F17 => (Form::Tilde(15), true),
-        F18 => (Form::Tilde(17), true),
-        F19 => (Form::Tilde(18), true),
-        F20 => (Form::Tilde(19), true),
-        F21 => (Form::Tilde(20), true),
-        F22 => (Form::Tilde(21), true),
-        F23 => (Form::Tilde(23), true),
-        F24 => (Form::Tilde(24), true),
+        KeySpec::Named(named) => Some(named_form(*named)),
     }
 }
 
+/// The shape for a named key, straight from the specification's "Functional key
+/// codes" table.
+///
+/// `NamedKey` names thirty-eight keys and that table has about a hundred: the
+/// keypad (`57399`-`57427`), the lock and system keys (`57358`-`57363`), the
+/// media keys (`57428`+) and the modifier keys themselves (`57441`+) have no
+/// variant here, so no embedder can deliver one and nothing is dropped on the
+/// floor.
+///
+/// `F3` is the row worth knowing about: it has no letter form, because
+/// "`CSI R` conflicts with the Cursor Position Report, so it was removed". The
+/// `[~ABCDEFHPQS]` set the "Disambiguate escape codes" section permits has no
+/// `R` in it either, which is the same rule stated twice.
+fn named_form(named: NamedKey) -> Form {
+    use NamedKey::*;
+    match named {
+        Escape => Form::Codepoint(27),
+        Enter => Form::Codepoint(13),
+        Tab => Form::Codepoint(9),
+        Backspace => Form::Codepoint(127),
+        ArrowUp => Form::Letter(b'A'),
+        ArrowDown => Form::Letter(b'B'),
+        ArrowRight => Form::Letter(b'C'),
+        ArrowLeft => Form::Letter(b'D'),
+        Home => Form::Letter(b'H'),
+        End => Form::Letter(b'F'),
+        Insert => Form::Tilde(2),
+        Delete => Form::Tilde(3),
+        PageUp => Form::Tilde(5),
+        PageDown => Form::Tilde(6),
+        F1 => Form::Letter(b'P'),
+        F2 => Form::Letter(b'Q'),
+        F3 => Form::Tilde(13),
+        F4 => Form::Letter(b'S'),
+        F5 => Form::Tilde(15),
+        F6 => Form::Tilde(17),
+        F7 => Form::Tilde(18),
+        F8 => Form::Tilde(19),
+        F9 => Form::Tilde(20),
+        F10 => Form::Tilde(21),
+        F11 => Form::Tilde(23),
+        F12 => Form::Tilde(24),
+        // The private-use codes the table gives these, rather than xterm's
+        // shifted `F1`-`F12` forms the legacy rung still sends. Spelling them
+        // as a shifted key would set a modifier bit the user never pressed, so
+        // a program matching `shift+F5` would fire on a bare `F17`.
+        F13 => Form::Codepoint(57376),
+        F14 => Form::Codepoint(57377),
+        F15 => Form::Codepoint(57378),
+        F16 => Form::Codepoint(57379),
+        F17 => Form::Codepoint(57380),
+        F18 => Form::Codepoint(57381),
+        F19 => Form::Codepoint(57382),
+        F20 => Form::Codepoint(57383),
+        F21 => Form::Codepoint(57384),
+        F22 => Form::Codepoint(57385),
+        F23 => Form::Codepoint(57386),
+        F24 => Form::Codepoint(57387),
+    }
+}
+
+/// The two halves of the US keyboard's shift relation, in the same order.
+///
+/// The specification's legacy section states the relation it wants undone --
+/// "output the shifted key, for example, `A` for `a` and `$` for `4`" -- and
+/// gives no way to ask the platform. This is the PC-101 answer, which is also
+/// the layout the base-layout sub-field is defined against.
+const SHIFTED_ASCII: &str = "~!@#$%^&*()_+{}|:\"<>?";
+const UNSHIFTED_ASCII: &str = "`1234567890-=[]\\;',./";
+
 /// The un-shifted code point of a text key.
 ///
-/// The specification is explicit: `ctrl+shift+a` is `CSI 97 ; 6 u` and must not
-/// be `CSI 65 ; 6 u`. The embedder hands over the text the key produced, so the
-/// best this can do without a platform key map is to lower-case it; shifted
-/// punctuation (`$` for `4`) cannot be un-shifted this way and is sent as
-/// itself. Guide chapter 6 names the ceiling.
+/// The specification is explicit: "the codepoint used is always the lower-case
+/// (or more technically, un-shifted) version of the key ... If the user
+/// presses, for example, `ctrl+shift+a` the escape code would be
+/// `CSI 97;modifiers u`. It must not be `CSI 65; modifiers u`."
+///
+/// The embedder hands over the text the key produced, so this undoes the shift
+/// relation itself: lower-case for letters, and the PC-101 table for
+/// punctuation, so `ctrl+shift+1` reports `49` rather than `33`. A layout that
+/// pairs them differently is the ceiling, and guide chapter 6 names it.
 fn unshifted(text: &str) -> Option<u32> {
     let first = text.chars().next()?;
+    if let Some(at) = SHIFTED_ASCII.find(first) {
+        // Both tables are ASCII, so a byte offset is a character offset.
+        return UNSHIFTED_ASCII.as_bytes().get(at).map(|byte| *byte as u32);
+    }
     Some(first.to_lowercase().next().unwrap_or(first) as u32)
 }
 
@@ -141,13 +162,22 @@ pub(crate) fn encode(event: &KeyEvent, modes: &ModeSnapshot) -> Encoded {
         KeySpec::Named(NamedKey::Enter | NamedKey::Tab | NamedKey::Backspace)
     );
 
-    // Rung 1: nobody asked to hear about releases, so there are no bytes.
-    if event.kind == KeyEventKind::Release && (!event_types || (legacy_c0 && !all_esc)) {
+    // Rung 1: nobody asked to hear about this release, so there are no bytes.
+    //
+    // `REPORT_EVENT_TYPES` alone is not enough for a key that produces text.
+    // The specification, under "Event types": "Key events that result in text
+    // are reported as plain UTF-8 text, so events are not supported for them,
+    // unless the application requests key report mode" -- key report mode being
+    // `REPORT_ALL_KEYS_AS_ESC`. Same sentence for `Enter`, `Tab` and
+    // `Backspace`, which "will not have release events unless Report all keys
+    // as escape codes is also set".
+    let reportable = event_types && (all_esc || !(legacy_c0 || generates_text(event)));
+    if event.kind == KeyEventKind::Release && !reportable {
         return Encoded::Silent;
     }
 
     // Rung 2: the kitty flags supersede `modifyOtherKeys` whenever they apply.
-    if kitty_applies(event, flags, legacy_c0) {
+    if kitty_applies(event, flags, legacy_c0, reportable) {
         return match csi_u(event, flags) {
             Some(bytes) => Encoded::Bytes(bytes),
             // A key with no code point at all (an empty `Character`): the
@@ -158,14 +188,23 @@ pub(crate) fn encode(event: &KeyEvent, modes: &ModeSnapshot) -> Encoded {
     }
 
     // Rung 3: xterm's older answer to the same problem.
-    match modify_other_keys(event, modes.modify_other_keys) {
+    match modify_other_keys(event, modes.modify_other_keys, modes) {
         Some(bytes) => Encoded::Bytes(bytes),
         None => Encoded::Legacy,
     }
 }
 
 /// Whether this event is reported as a kitty escape code.
-fn kitty_applies(event: &KeyEvent, flags: KeyboardFlags, legacy_c0: bool) -> bool {
+///
+/// `reportable` is rung 1's answer to "may this event carry an event type at
+/// all": it is what keeps a held letter key typing that letter under
+/// `REPORT_EVENT_TYPES` alone.
+fn kitty_applies(
+    event: &KeyEvent,
+    flags: KeyboardFlags,
+    legacy_c0: bool,
+    reportable: bool,
+) -> bool {
     if flags.is_empty() {
         return false;
     }
@@ -177,9 +216,12 @@ fn kitty_applies(event: &KeyEvent, flags: KeyboardFlags, legacy_c0: bool) -> boo
     if legacy_c0 {
         return false;
     }
-    // A repeat or a release has no legacy spelling, so the only way to report
-    // one at all is the escape code that carries an event type.
-    if event.kind != KeyEventKind::Press && flags.contains(KeyboardFlags::REPORT_EVENT_TYPES) {
+    // A repeat that may be reported has no legacy spelling, so the only way to
+    // say "repeat" at all is the escape code that carries an event type. A
+    // repeat that may *not* be reported falls through to the legacy rung, which
+    // is the specification's "key repeat events are treated as key press
+    // events".
+    if event.kind != KeyEventKind::Press && reportable {
         return true;
     }
     // "all key events that do not generate text are represented in one of the
@@ -197,11 +239,8 @@ fn generates_text(event: &KeyEvent) -> bool {
 /// The `CSI u`, `CSI ~` and `CSI <letter>` forms, with every field that would
 /// carry its default value dropped.
 fn csi_u(event: &KeyEvent, flags: KeyboardFlags) -> Option<Vec<u8>> {
-    let (form, implies_shift) = form(&event.key)?;
-    let mods = KeyMods {
-        shift: event.mods.shift || implies_shift,
-        ..event.mods
-    };
+    let form = form(&event.key)?;
+    let mods = event.mods;
     let modifier = modifier_byte(mods);
     let kind = if flags.contains(KeyboardFlags::REPORT_EVENT_TYPES) {
         match event.kind {
@@ -266,8 +305,15 @@ fn alternates(event: &KeyEvent, flags: KeyboardFlags, shift: bool) -> String {
 ///
 /// The specification calls associated text undefined without
 /// `REPORT_ALL_KEYS_AS_ESC`, so this engine treats the flag as inert there
-/// rather than guessing. The text the embedder supplies wins; a `Character`
-/// key's own payload is the fallback, because that *is* the text it produced.
+/// rather than guessing.
+///
+/// The text the embedder supplies wins. The fallback is a `Character` key's own
+/// payload, but **only when the modifiers would have let that payload reach the
+/// program**: `ctrl+a` produces `0x01`, which the specification forbids in this
+/// field ("The associated text must not contain control codes"), and `alt+a`
+/// produces no text at all on most platforms. Reporting the bare payload for
+/// either would tell the program that `Ctrl+A` inserted an `a`.
+///
 /// A payload carrying a control code, or longer than [`TEXT_SCALAR_MAX`], drops
 /// the field: the specification forbids the first and nothing needs the second.
 fn text_field(event: &KeyEvent, flags: KeyboardFlags) -> Option<String> {
@@ -278,7 +324,9 @@ fn text_field(event: &KeyEvent, flags: KeyboardFlags) -> Option<String> {
     }
     let text = match (event.text.as_deref(), &event.key) {
         (Some(text), _) => text,
-        (None, KeySpec::Character(payload)) => payload.as_str(),
+        (None, KeySpec::Character(payload)) if !(event.mods.ctrl || event.mods.alt) => {
+            payload.as_str()
+        }
         (None, _) => return None,
     };
     if text.is_empty() || text.chars().count() > TEXT_SCALAR_MAX {
@@ -302,13 +350,29 @@ fn text_field(event: &KeyEvent, flags: KeyboardFlags) -> Option<String> {
 /// xterm's `CSI 27 ; <modifier> ; <code point> ~`, reached only when no kitty
 /// flag applied.
 ///
-/// Level `1` covers the chords with no unambiguous legacy encoding; level `2`
-/// covers every modified key that is not already an unambiguous functional key.
-/// A functional key (an arrow, `F5`, `Home`) already has one, so neither level
-/// touches it.
-fn modify_other_keys(event: &KeyEvent, level: u8) -> Option<Vec<u8>> {
+/// The level decides which chords it covers. xterm's own resource
+/// documentation:
+///
+/// > **1** -- Enables this feature for keys **except** for those with
+/// > well-known behavior, e.g., Tab, Backarrow and some special control
+/// > character cases which are built into the X11 library, e.g., Control-Space
+/// > to make a NUL, or Control-3 to make an Escape character.
+/// >
+/// > **2** -- Enables this feature for keys including the exceptions listed.
+///
+/// So level `1` keeps every chord whose legacy encoding already *is* a control
+/// byte -- `Ctrl+A` stays `0x01`, `Ctrl+Space` stays `0x00`, `Ctrl+3` stays
+/// `ESC`, `Tab` stays `0x09` -- and escapes the rest, which is what makes
+/// `Ctrl+;` reachable without making `Ctrl+I` stop being `Tab`. Level `2`
+/// escapes them all, which is the setting that separates `Ctrl+I` from `Tab`.
+///
+/// Neither level touches a key that already has an unambiguous functional
+/// encoding (an arrow, `F5`, `Home`), and neither fires on shift alone: the
+/// layout has already consumed shift to produce the character, so `Shift+A`
+/// is the letter `A` at every level.
+fn modify_other_keys(event: &KeyEvent, level: u8, modes: &ModeSnapshot) -> Option<Vec<u8>> {
     let mods = event.mods;
-    if level == 0 || !(mods.shift || mods.ctrl || mods.alt) {
+    if level == 0 || !(mods.ctrl || mods.alt) {
         return None;
     }
     let code = match &event.key {
@@ -316,30 +380,28 @@ fn modify_other_keys(event: &KeyEvent, level: u8) -> Option<Vec<u8>> {
         KeySpec::Named(NamedKey::Enter) => 13,
         KeySpec::Named(NamedKey::Tab) => 9,
         KeySpec::Named(NamedKey::Backspace) => 127,
+        KeySpec::Named(NamedKey::Escape) => 27,
         _ => return None,
     };
-    if level == 1 && !ambiguous_in_legacy(&event.key, mods) {
+    if level == 1 && produces_control_byte(event, modes) {
         return None;
     }
     Some(format!("\x1b[27;{};{code}~", modifier_byte(mods)).into_bytes())
 }
 
-/// The chords xterm calls "other" at level `1`: those whose legacy bytes are
-/// already spoken for by a different key.
-fn ambiguous_in_legacy(key: &KeySpec, mods: KeyMods) -> bool {
-    match key {
-        // `Ctrl+a` is `0x01` and unambiguous; `Ctrl+3` is `ESC`, which is not.
-        KeySpec::Character(text) => {
-            mods.ctrl
-                && !text
-                    .chars()
-                    .next()
-                    .is_some_and(|first| first.is_ascii_alphabetic())
-        }
-        // `Ctrl+Enter` is `\r`, `Shift+Enter` is `\r`, `Ctrl+Tab` is `\t`.
-        KeySpec::Named(NamedKey::Enter) => mods.ctrl || mods.shift,
-        KeySpec::Named(NamedKey::Tab) => mods.ctrl,
-        _ => false,
+/// Whether the legacy encoding of this chord is already a control byte, which
+/// is xterm's level-`1` exception in one predicate rather than a list that
+/// drifts away from the table it describes.
+fn produces_control_byte(event: &KeyEvent, modes: &ModeSnapshot) -> bool {
+    match super::key::encode_legacy(&event.key, event.mods, modes) {
+        Some(bytes) => match bytes.as_slice() {
+            [byte] => byte.is_ascii_control() || *byte == 0x7f,
+            // `Alt` prefixes ESC onto the control byte and does not change
+            // whether there is one.
+            [0x1b, byte] => byte.is_ascii_control() || *byte == 0x7f,
+            _ => false,
+        },
+        None => false,
     }
 }
 

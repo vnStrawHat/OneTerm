@@ -1180,16 +1180,19 @@ fn the_keyboard_stack_swaps_with_the_screen() {
 // ── Kitty keyboard ──────────────────────────────────────────────────────────
 
 #[test]
-fn kitty_query_reads_the_stack_top() {
-    // Trap 42: `CSI ? u` reports the stack, which can legitimately differ from
-    // the live flags after `CSI = Ps u`.
+fn kitty_query_reads_the_live_flags() {
+    // `CSI ? u` reports the flags the encoder uses, which `CSI = Ps u` can move
+    // without touching the stack. `US-0105` inverted this test: it used to
+    // assert the stack top, so an application following the specification's own
+    // detection recipe (set with `CSI = Ps u`, then query) was told the terminal
+    // implements nothing.
     let mut session = Session::new(10, 3);
     session.feed(b"\x1b[>1u");
     session.feed(b"\x1b[=6;2u");
 
     assert_eq!(session.term.keyboard_flags().bits(), 1 | 6);
     session.feed(b"\x1b[?u");
-    assert_eq!(session.replies(), "\x1b[?1u");
+    assert_eq!(session.replies(), "\x1b[?7u");
 
     // The three apply behaviours.
     let mut session = Session::new(10, 3);

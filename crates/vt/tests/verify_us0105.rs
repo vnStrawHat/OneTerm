@@ -278,7 +278,28 @@ fn a_release_is_silent_until_it_is_asked_for() {
     event.kind = KeyEventKind::Release;
     assert_eq!(t.encode_key_event(&event), None);
 
+    // `REPORT_EVENT_TYPES` alone is not enough for a key that produces text:
+    // "events are not supported for them, unless the application requests key
+    // report mode". A held letter must keep typing the letter.
     t.feed(b"\x1b[>2u", &mut b, Instant::now());
+    assert_eq!(t.encode_key_event(&event), None);
+    let mut repeat = event.clone();
+    repeat.kind = KeyEventKind::Repeat;
+    assert_eq!(
+        t.encode_key_event(&repeat).as_deref(),
+        Some(b"a".as_slice())
+    );
+
+    // A key that produces no text gets its event types from the flag alone.
+    let mut up = KeyEvent::new(KeySpec::Named(NamedKey::ArrowUp), KeyMods::default());
+    up.kind = KeyEventKind::Release;
+    assert_eq!(
+        t.encode_key_event(&up).as_deref(),
+        Some(b"\x1b[1;1:3A".as_slice())
+    );
+
+    // Key report mode turns the letter into escape codes, releases included.
+    t.feed(b"\x1b[>10u", &mut b, Instant::now());
     assert_eq!(
         t.encode_key_event(&event).as_deref(),
         Some(b"\x1b[97;1:3u".as_slice())

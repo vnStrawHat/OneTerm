@@ -772,13 +772,35 @@ fn encode_key_is_byte_identical_to_main() {
     let snaps = all_snapshots();
     let mut n = 0u64;
     let mut bad = 0u64;
+    let mut moved = 0u64;
     for spec in &specs {
         let o_spec = orig_spec(spec);
         for mods in MODS {
             let o_mods = orig_mods(mods);
+            // The one row `US-0105` deliberately moved: the specification's
+            // legacy ctrl table has `~ -> 30` and `ctrl_bytes` fell through to
+            // `~` itself. Everything else must still be byte-identical, so the
+            // divergence is named here rather than allowed by a slack bound.
+            let divergent = matches!(spec, KeySpec::Character(s) if s == "~") && mods.ctrl;
             for snap in &snaps {
                 let got = encode_key(spec, mods, snap);
                 let want = orig_key::encode_key(&o_spec, o_mods, snap.app_cursor);
+                let event = KeyEvent::new(spec.clone(), mods);
+                let got_event = encode_key_event(&event, snap);
+                if divergent {
+                    // Both entry points answer the corrected byte, and the
+                    // frozen oracle answers the old one. `alt` prefixes ESC
+                    // onto either, as it always did. Counted, not excused.
+                    let prefix: &[u8] = if mods.alt { &[0x1b] } else { &[] };
+                    let now = [prefix, &[0x1e]].concat();
+                    let before = [prefix, &[0x7e]].concat();
+                    assert_eq!(got.as_deref(), Some(now.as_slice()));
+                    assert_eq!(got_event.as_deref(), Some(now.as_slice()));
+                    assert_eq!(want.as_deref(), Some(before.as_slice()));
+                    moved += 2;
+                    n += 2;
+                    continue;
+                }
                 if got != want {
                     bad += 1;
                     if bad < 20 {
@@ -791,8 +813,7 @@ fn encode_key_is_byte_identical_to_main() {
                 // `US-0105`: the richer entry point is the same encoder, so it
                 // owes the same answer on a plain press with nothing
                 // negotiated. Counted as its own comparison.
-                let event = KeyEvent::new(spec.clone(), mods);
-                if encode_key_event(&event, snap) != want {
+                if got_event != want {
                     bad += 1;
                 }
                 n += 1;
@@ -800,12 +821,20 @@ fn encode_key_is_byte_identical_to_main() {
         }
     }
     println!(
-        "encode_key cases compared: {n} (specs {} x mods {} x snapshots {})",
+        "encode_key cases compared: {n} (specs {} x mods {} x snapshots {}), \
+         {moved} deliberately moved (ctrl+~), {bad} mismatches",
         specs.len(),
         MODS.len(),
         snaps.len()
     );
     assert_eq!(bad, 0, "{bad} mismatches");
+    // 4 ctrl-bearing modifier sets x 2560 snapshots x 2 entry points. If this
+    // number changes, a second row moved and nobody wrote it down.
+    assert_eq!(
+        moved,
+        4 * snaps.len() as u64 * 2,
+        "the moved set changed size"
+    );
 }
 
 const MBUTTONS: [TerminalMouseButton; 3] = [
