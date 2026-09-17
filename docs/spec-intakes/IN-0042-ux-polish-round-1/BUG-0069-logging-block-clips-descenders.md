@@ -9,9 +9,9 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -155,11 +155,11 @@ None.
    exactly this reason; do the same.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -177,8 +177,155 @@ None.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### The root cause, named
+
+`Checkbox` and `Radio` in `gpui-component` wrap a `.label(...)` in
+`div().line_height(relative(1.))` — `checkbox.rs:329` and `radio.rs:245` in
+`gpui-component-0.6.0`. A line box exactly as tall as the font is shorter than the
+font's ascent plus descent (about 1.35 em for the UI fonts here), so the tail of a
+`g`, a `p` or a `y` falls outside its own text line and is never drawn. That line
+height is hard-coded inside the control and cannot be overridden from the outside —
+`Radio::label` takes a `Text`, not an element.
+
+`IN-0004`'s cause (a label-level `overflow_hidden` content mask) was tried first and
+is **not** this: no element in the dialog's chain sets an overflow, and a rectangular
+content mask would clip only the bottom-most line, not one line in the middle of the
+form.
+
+### The finding's diagnosis was wrong, and it matters
+
+`F19` says *"Adjacent labels ('Jump host', 'Group') render their `p`s intact, so it is
+specific to that block."* They do not differ, and it is not specific to that block —
+the difference is the **control**, not the position. Measured on
+`research/before/11-session-property-dialog.png` as the number of pixel rows a glyph
+occupies below the baseline (a full descender at this size is 3 rows):
+
+| Text | Control | Rows below baseline, before |
+|---|---|---|
+| "Jump host" | `labelled_field` label | 3 — whole |
+| "Group" | `labelled_field` label | 3 — whole |
+| "Logging" | `labelled_field` label | 3 — **whole; it was never clipped** |
+| "Select or type group…" | combobox placeholder | 3 — whole |
+| status bar path, session subtitles | plain labels | 3 — whole |
+| **"Use global"** | `Radio::label` | **1 — clipped** |
+| **"Forward the SSH agent…"** | `Checkbox::label` | **1 — clipped** |
+
+So the block the finding named contains exactly one broken label, and the label the
+finding thought was broken ("Logging") never was. Reading it as "the Logging block"
+would have produced a fix in the wrong place; reading it as "the kit's checkbox and
+radio labels" also fixes the `y` of "Private Key" in the Authentication row, which the
+walkthrough never noticed, and every other checkbox and radio in these dialogs.
+
+### The fix
+
+`oneterm_state::form_dialog::control_label` — the label text as a **child** of the
+control, in a line box of `CONTROL_LABEL_LINE_HEIGHT` (1.5) times the font size, with
+`accessibility_label` carrying the screen-reader name that `.label(...)` used to
+provide. It is relative, not an absolute pixel value, so it holds at any UI font size.
+
+Applied at every checkbox and radio in `crates/session-ui`:
+`session_dialog.rs` (the three Logging radios, the agent-forwarding checkbox),
+`auth_form.rs` (the Password / Private Key / SSH Agent radio group, shared by all
+three dialogs), `connect_dialog.rs` ("Save username to session" — a clipped `y`) and
+`quick_connect_dialog.rs` ("Save to SSH Sessions" — no descender today, latent
+tomorrow).
+
+### Commands and measurements
+
+Same measurement on the captured after frames:
+
+| Text | Rows below baseline, after, 16 px UI font | after, 20 px UI font |
+|---|---|---|
+| "Use global" | 4 | 5 |
+| "Forward the SSH agent…" | 4 | 5 |
+| "Private Key" | 4 | — |
+| "Logging" (unchanged control) | 3 | — |
+
+- `cargo clippy -p oneterm-session-ui -p oneterm-state --all-targets -- -D warnings` — clean.
+- `cargo test --workspace` — passed.
+- `pwsh scripts/ci-local.ps1` — "ci-local: all checks passed".
+
+### Evidence frames
+
+- `evidence/BUG-0069-11-session-property-dialog.png` — the dialog, after.
+- `evidence/BUG-0069-11b-logging-block-3x.png` — the Logging block at 3x.
+- `evidence/BUG-0069-11c-before-above-after.png` — before above after, 3x, the same
+  crop. The flat `g` of "agent" and of "Use global" in the top half have their tails in
+  the bottom half.
+- `evidence/BUG-0069-12-session-dialog-privatekey.png` — the Private Key variant.
+- `evidence/BUG-0069-11d-largest-ui-font.png` — the same dialog at a 20 px UI font.
+
+### Documentation
+
+No contract change, as planned. `docs/ssh-client-connect.md` §4 describes the dialog's
+fields and specifies no height; `docs/terminal-logging.md` and `DEC-0003` describe what
+the Logging control means, which is untouched; `docs/PROJECT.md` carries no invariant
+about text rendering. The one sentence worth keeping lives in the rustdoc on
+`control_label`, next to the code that must not be undone.
+
+### Gaps
+
+- **No unit-level proof, as the packet predicted.** Glyph paint is not queryable from
+  the gpui element tree. The proof is the pixel-row measurement above, taken from the
+  captured frames; it is quantitative rather than a visual claim.
+- **The Appearance page offers no UI font size.** It offers theme mode and the theme
+  list only (`crates/settings-ui/src/appearance.rs`), so the acceptance's "largest UI
+  font size the Appearance page offers" has no control behind it. The check was made
+  instead by setting `ui_font_size` to 20 in `target/ui_config.json` — the same value
+  the page would persist — and re-capturing.
+- **Two crates, not three, still have a `.label(...)` checkbox or radio.** The original entry
+  named settings-ui, sftp-ui and terminal-view; `crates/settings-ui` and `crates/terminal-view`
+  contain no `Checkbox`, `Radio`, `RadioGroup` or `Switch` at all. The only remaining sites are
+  `crates/sftp-ui/src/render.rs:276` and `crates/sftp-ui/src/edit.rs:588`. `control_label` is in
+  the shared `form_dialog` module and is ready for them; fixing them belongs to `US-0124` and to
+  `US-0126`'s sweep.
+- **`Button::label` needs nothing.** The claim that Browse, Add and Cancel were "latent" clips
+  was wrong in the same way `B69-MAJOR-1` was: a button label has no vertical clip around it.
+  Nothing to do, now or later.
+- **`CONTROL_LABEL_LINE_HEIGHT = 1.5` is pinned by nothing.** No test and no check catches a
+  change back to 1.0; the value's justification lives only in its rustdoc.
 
 ## Handoff
 
 Use only across actors or sessions: current state, next owner/action, and blockers.
+
+## Rework after independent verification
+
+Verdict **PASS with findings**. The outcome held and the root cause was proven, but the
+verifier found the same cause unfixed on a sibling control and two wrong crate names in Gaps.
+
+- **B69-MAJOR-1 was a false finding, and the correction matters more than the finding did.**
+  It reported that `Button::label` clips descenders like `Checkbox` and `Radio` do, and that
+  the Connect button's "Connectin**g**" had lost its tail. A second verifier **measured** the
+  frames rather than reading them, and the button has the same 4 descender rows in all three
+  captures — `research/before/15-connect-inflight.png` (pre-`IN-0042`),
+  `evidence/US-0118-15-connect-inflight.png` (`f4ea1765`, still `.label(...)`) and
+  `evidence/BUG-0069-rw-15-connecting-button.png` (with the child label). The first verifier's
+  own 6x crop shows 4 rows too. **`Button::label` never clipped anything.**
+
+  I took the finding on trust and repeated its "zero rows before" in this packet without
+  measuring the before-frame myself, which is the same mistake `BUG-0069` exists to correct:
+  `F19` was also a confident diagnosis that the pixels did not support.
+
+  **The mechanism, corrected.** The line height alone is not the cause. `Checkbox` and `Radio`
+  put their label inside `v_flex().flex_1().overflow_hidden()` whose height is that one-em line
+  box (`checkbox.rs:315-318`, `radio.rs:236-245`) — it is the **clip** that removes the tail.
+  `Button` sets the same `line_height(relative(1.))` on its label
+  (`button.rs:679-687`) but hangs it in an `h_flex().size_full()` sized to the whole button with
+  nothing clipping it vertically, so the glyph paints outside its own box unharmed. The
+  rustdoc on `control_label` now says this.
+
+  **The remedy is reverted.** The three button labels converted to `control_label` children
+  (`common.rs`'s Connect, `group_combo.rs`'s `Create "<typed text>"`, `FormDialog`'s confirm)
+  are back on `.label(...)`. The conversion fixed nothing and cost something: `.label(...)`
+  wraps the text in `min_w_0 / whitespace_nowrap / text_ellipsis`, so an over-long label ends
+  in an ellipsis; a plain child in the button's `overflow_hidden` content row is hard-clipped
+  at the button edge instead (`R-m4`). The footer's label is arbitrary user text, so that is
+  the site where it would have shown.
+
+  The original outcome is untouched: the checkbox and radio labels in these dialogs still
+  render their descenders whole, re-measured by both verifiers on
+  `evidence/BUG-0069-11c-before-above-after.png`.
+- **B69-m2.** Gaps corrected: see above.
+- **B69-m3.** Recorded in Gaps rather than fixed — a test that pins a line height needs the
+  laid-out glyph box, which is the same thing the packet already records as unavailable.

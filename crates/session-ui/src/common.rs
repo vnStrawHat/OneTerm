@@ -9,7 +9,7 @@
 //!
 //! Form field rendering lives in `oneterm_state::form_dialog::labelled_field`.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -27,6 +27,7 @@ use gpui_component::{
     ActiveTheme, Disableable as _, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::DialogButtonProps,
+    input::{InputEvent, InputState},
     notification::NotificationType,
 };
 use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
@@ -85,6 +86,111 @@ impl Render for ConnectButton {
                 // The dialog closes itself once the connection attempt settles.
                 let _ = action(window, cx);
             })
+    }
+}
+
+/// The text shown to the user when a connection attempt fails.
+///
+/// An error names itself once. `AppError::Connect` renders as
+/// `"SSH <phase> failed: <message>"` and the two host-key variants name SSH and
+/// the host, so they are shown verbatim — prefixing them again produced
+/// `"SSH connect failed: SSH connect failed: timed out after 20 s"`. Every
+/// other error (`Cancelled`, `Io`, `Other`, …) names only the failure and would
+/// reach the user as a bare `"operation cancelled"`, so it still gets the
+/// subject.
+pub(crate) fn connect_failure_message(error: &AppError) -> String {
+    match error {
+        AppError::Connect { .. }
+        | AppError::HostKeyUnknown { .. }
+        | AppError::HostKeyChanged { .. } => error.to_string(),
+        other => format!("SSH connect failed: {other}"),
+    }
+}
+
+/// The failure of the last connect attempt, shown inside the dialog.
+///
+/// The toast appears in the opposite corner from the modal and dismisses itself,
+/// so a user who looked away came back to an empty-looking form with a
+/// re-enabled button and no explanation (`F4`). This puts the same text — the
+/// very same value, so the two cannot disagree — where the user is looking.
+///
+/// It clears when the user presses Connect again and when any of the fields it
+/// was created with is edited: an error standing beside a corrected form is
+/// worse than no error at all. A successful connect closes the dialog, which
+/// drops this along with everything else.
+#[derive(Clone)]
+pub(crate) struct InlineError {
+    message: Rc<RefCell<Option<SharedString>>>,
+    /// Kept alive for as long as the dialog is: dropping a `Subscription`
+    /// cancels it. Grows when a dialog builds more inputs later — a quick
+    /// connect rebuilds its jump-hop credential blocks whenever the picker's
+    /// selection moves.
+    edits: Rc<RefCell<Vec<gpui::Subscription>>>,
+}
+
+impl InlineError {
+    /// An empty error that clears itself when any of `inputs` is edited.
+    ///
+    /// `InputEvent::Change`, not `cx.observe`: an `InputState` notifies on
+    /// every focus change and every cursor blink, which would wipe the error a
+    /// few hundred milliseconds after it appeared.
+    pub(crate) fn new(inputs: &[gpui::Entity<InputState>], cx: &mut App) -> Self {
+        let error = Self {
+            message: Rc::new(RefCell::new(None)),
+            edits: Rc::new(RefCell::new(Vec::new())),
+        };
+        error.watch(inputs, cx);
+        error
+    }
+
+    /// Also clear when any of `inputs` is edited. Additive, so a dialog that
+    /// builds inputs after the error exists — the jump-hop credential blocks a
+    /// quick connect rebuilds when its picker moves — can hand them over then.
+    pub(crate) fn watch(&self, inputs: &[gpui::Entity<InputState>], cx: &mut App) {
+        for input in inputs {
+            let message = self.message.clone();
+            let subscription = cx.subscribe(input, move |_, event: &InputEvent, _| {
+                if matches!(event, InputEvent::Change) {
+                    message.borrow_mut().take();
+                }
+            });
+            self.edits.borrow_mut().push(subscription);
+        }
+    }
+
+    pub(crate) fn set(&self, message: impl Into<SharedString>) {
+        *self.message.borrow_mut() = Some(message.into());
+    }
+
+    pub(crate) fn clear(&self) {
+        self.message.borrow_mut().take();
+    }
+
+    /// The error block for the dialog body, or `None` while nothing has failed.
+    ///
+    /// `note` is the consequence the user also needs — "not saved to SSH
+    /// Sessions, …" — in muted text under the message.
+    pub(crate) fn render(&self, note: Option<&str>, cx: &App) -> Option<impl IntoElement> {
+        let message = self.message.borrow().clone()?;
+        let theme = cx.theme();
+        Some(
+            div()
+                .w_full()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(theme.danger.opacity(0.1))
+                .text_sm()
+                .text_color(theme.danger)
+                .child(message)
+                .children(note.map(|note| {
+                    div()
+                        .pt_1()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(note.to_string())
+                })),
+        )
     }
 }
 
@@ -275,6 +381,13 @@ pub(crate) struct SshConnectRequest {
     /// Runs once the session is authenticated, before the tab opens — e.g. the
     /// quick-connect "save this session" option (CORR-54: never saved on failure).
     pub on_connected: Option<Rc<dyn Fn(&mut App)>>,
+    /// Runs when the attempt failed, with the same text the notification shows.
+    ///
+    /// The dialog stays open on failure, so it echoes the message inline where
+    /// the user is looking; the toast is in the opposite corner and dismisses
+    /// itself (`US-0118`). Both strings come from this one value, so they cannot
+    /// drift.
+    pub on_failed: Option<Rc<dyn Fn(SharedString, &mut App)>>,
     /// Saved-session automatic logging override.
     pub logging_override: SshLoggingOverride,
 }
@@ -286,6 +399,7 @@ impl SshConnectRequest {
             initial_cwd: None,
             completion: None,
             on_connected: None,
+            on_failed: None,
             logging_override: SshLoggingOverride::Inherit,
         }
     }
@@ -355,6 +469,7 @@ pub(crate) fn connect_ssh_session(
                         initial_cwd,
                         completion,
                         on_connected,
+                        on_failed: _,
                         logging_override: _,
                     } = request;
                     connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -411,15 +526,14 @@ pub(crate) fn connect_ssh_session(
                 }
                 Err(error) => {
                     connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
+                    // The dialog is still open: the user can correct a field and
+                    // press Connect again without re-typing the password.
+                    let message = SharedString::from(connect_failure_message(&error));
+                    if let Some(on_failed) = &request.on_failed {
+                        on_failed(message.clone(), cx);
+                    }
                     window.refresh();
-                    window.push_notification(
-                        notify(
-                            NotificationType::Error,
-                            format!("SSH connect failed: {error}"),
-                            cx,
-                        ),
-                        cx,
-                    );
+                    window.push_notification(notify(NotificationType::Error, message, cx), cx);
                 }
             });
         })
@@ -602,6 +716,48 @@ mod tests {
             UserHostPortError::InvalidPort("x".into())
                 .to_string()
                 .contains("65535")
+        );
+    }
+
+    /// BUG-0068: an error that already names SSH is shown verbatim, so the
+    /// subject appears exactly once, and the failing phase survives.
+    #[test]
+    fn a_connect_error_names_the_failure_once() {
+        let message = connect_failure_message(&AppError::Connect {
+            phase: oneterm_core::ConnectPhase::Transport,
+            message: "timed out after 20 s".into(),
+        });
+        assert_eq!(message, "SSH connect failed: timed out after 20 s");
+        assert_eq!(message.matches("failed").count(), 1);
+
+        let authentication = connect_failure_message(&AppError::Connect {
+            phase: oneterm_core::ConnectPhase::Authentication,
+            message: "rejected by the server".into(),
+        });
+        assert_eq!(
+            authentication,
+            "SSH authentication failed: rejected by the server"
+        );
+
+        let host_key = connect_failure_message(&AppError::HostKeyChanged {
+            host: "10.10.10.10".into(),
+            port: 22,
+            fingerprint: "SHA256:abc".into(),
+        });
+        assert!(host_key.starts_with("SSH host key changed"), "{host_key}");
+    }
+
+    /// BUG-0068: an error with no subject of its own still gets one, so the
+    /// user never reads a bare "operation cancelled".
+    #[test]
+    fn an_error_without_a_subject_still_gets_one() {
+        assert_eq!(
+            connect_failure_message(&AppError::Cancelled),
+            "SSH connect failed: operation cancelled"
+        );
+        assert_eq!(
+            connect_failure_message(&AppError::msg("host unreachable")),
+            "SSH connect failed: host unreachable"
         );
     }
 

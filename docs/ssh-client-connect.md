@@ -62,6 +62,10 @@ the app opens an SSH session to the target server using the info in `SshSession`
 username). Before connecting, if credentials are missing (username or password), the app shows
 a dialog for the user to enter them.
 
+A session is *created* from the `+` in the right dock's "Session" header, from the context menu
+on the blank area below the list, or from the tree's own "New Session" row — all three open the
+same full session dialog (§6.5).
+
 Since `IN-0033` the same saved sessions are also listed in the centre tab bar's `+` (New
 Terminal) dropdown, and picking one there enters this flow at exactly the same point with the
 same `SshSessionId`. Since `US-0114` that dropdown also closes with both connect entry
@@ -135,14 +139,14 @@ both surfaces.
 
 | # | Decision | Rationale |
 |---|---|---|
-| 1 | **Password is NOT persisted** to `ssh_session.json` | Security — the password lives only in RAM during the session, never written to disk. |
+| 1 | **Password is NOT persisted** to `ssh_session.json` | Security — the password lives only in RAM during the session, never written to disk. Since `US-0118` it also survives a failed connect **in the open dialog's own state**, so a retry costs no re-typing; closing the dialog drops it, and it still reaches no store, no config file and no log ([`DEC-0001`](decisions/0001-ssh-key-secret-persistence.md)). |
 | 2 | **Username is persisted** to `ssh_session.json` (the field already exists) | Convenience — the user only enters a password next time. The username is less sensitive than the password. |
 | 3 | **Use `LocalTerminalView`** for SSH too (via `dyn TerminalSession`) | The view is already backend-agnostic — it only needs `Entity<Box<dyn TerminalSession>>`. No separate `SshTerminalView` needed. |
 | 4 | **Dialog uses `window.open_dialog`** (gpui-component Dialog) | Matches the pattern already used for the "New/Edit SSH Session" dialog in `session_tabs/tabs.rs`. |
 | 5 | **Password field uses `InputState::masked(true)` + `.mask_toggle()`** | Shows `•••••`, with an eye-icon button to reveal/hide. API already available in gpui-component. |
 | 6 | **Footer: Cancel (left) + Connect (right), right-aligned** | `DialogFooter` defaults to `justify_end` → buttons auto-align right. Matches the requirement. |
-| 7 | **Connect runs async** — the dialog closes immediately, the connection runs in the background | Avoids blocking the UI. If connect fails → `window.push_notification` reports the error. |
-| 8 | **Left-click = Open**, right-click keeps the context menu (Open/Delete/Property). Since `IN-0033` the centre tab bar's `+` menu is a second surface that opens the same dialog by session id | Keeps the current context-menu behavior, adds a left-click shortcut. The `+` menu reuses `open_connect_dialog` rather than duplicating the connect path, so the two surfaces cannot drift. |
+| 7 | **Connect runs async** — the dialog closes on success, the connection runs in the background | Avoids blocking the UI. On failure the dialog **stays open** with the form intact and shows the error inline as well as pushing the notification (`US-0118`, §4.7); connect itself is unchanged. |
+| 8 | **Left-click = Open**, right-click keeps the context menu (Open / Properties / New Session / Delete, §6.5). Since `IN-0033` the centre tab bar's `+` menu is a second surface that opens the same dialog by session id | Keeps the current context-menu behavior, adds a left-click shortcut. The `+` menu reuses `open_connect_dialog` rather than duplicating the connect path, so the two surfaces cannot drift. |
 | 9 | **Saved-session logging is tri-state** (`inherit` / `on` / `off`) | A saved session can use the global SSH policy or explicitly force either outcome; see [`DEC-0003`](decisions/DEC-0003-define-terminal-logging-capture-and-override-semantics.md). |
 
 ---
@@ -388,6 +392,49 @@ div()
 |---|---|---|
 | Username (if asked) | Not empty after trim | `window.push_notification("Username is required.")`, return `false` (don't close dialog) |
 | Password | Not empty after trim | `window.push_notification("Password is required.")`, return `false` |
+
+### 4.7. After a failed connect (`US-0118`)
+
+The dialog stays open — it always did — and now it is usable when it does. This holds for
+both credential dialogs (Connect SSH and SSH Quick Connect) and for the Duplicate dialog,
+because all three share `SshAuthForm` and `connect_ssh_session`.
+
+- **The credential fields keep what the user typed.** `SshAuthForm::take_auth` used to blank
+  the password and the passphrase as it read them, so a failure 20 s later left an empty box, a
+  re-enabled button and no explanation. It no longer clears; a successful connect closes the
+  dialog, and closing it drops the form and its `InputState` entities. `DEC-0001` and §1.3
+  decision 1 are untouched: the secret reaches no store, no config file and no log (checked on
+  disk after a failed attempt with Save ticked), and an open modal's own state is not
+  persistence.
+- **One path has no inline error: an unknown host key.** `AppError::HostKeyUnknown` closes the
+  dialog and opens the host-key prompt (§9.3), so a failure on the *retried* connect has no
+  dialog to echo into and only the toast survives. That is the intended shape — the retry is a
+  new attempt from a different surface — and it is why `connect_ssh_session` sets the inline
+  error only on the arm that leaves the dialog open.
+- **The failure is shown inline as well as in the toast.** `SshConnectRequest::on_failed`
+  carries the message the notification shows — the same `SharedString`, so the two cannot
+  drift — to an `InlineError` the dialog body renders under its fields. It clears when the user
+  presses Connect again and on `InputEvent::Change` from any field it watches, so a corrected
+  form never stands beside a stale error. This is a second channel beside the notification, not
+  a replacement: §1.3 decision 7 stands and connect is still asynchronous.
+- **A ticked "Save to SSH Sessions" says what happened.** `CORR-54` holds — a quick-connect
+  session is saved only once the connection is authenticated — but the drop is no longer
+  silent: the inline error carries a second line saying the session was not saved, that a
+  session is saved once its connection succeeds, and that the tick is still on. The next
+  successful attempt saves it.
+- **The Group combobox commits with Enter.** Typing a name no group matches and pressing Enter
+  creates it, selects it, and closes the dropdown; with a row on screen Enter still belongs to
+  the list. The decision is `group_combo::group_commit(query, match_count)`. The handler is a
+  **capture**-phase `Confirm` listener, because gpui stops an action after the first
+  bubble-phase listener and the list would otherwise swallow the key.
+  Creating clears the kit's **own** search input through `ComboboxState::set_query`, which
+  re-runs the search and so refreshes every derived value at once. Clearing a private copy of
+  the query instead left the box showing the spent text while the empty area claimed there were
+  no groups and the footer offered to create nothing — and the next keystroke appended, so
+  "Lab" followed by "inf" created a group called "Labinf".
+  The no-match area names the group it would create instead of showing a bare icon, and it
+  distinguishes "no groups exist" from "none match what you typed"
+  (`group_combo::empty_message`).
 
 ---
 
@@ -893,6 +940,72 @@ fn get_dock_area(cx: &App) -> WeakEntity<DockArea> {
 > **Recommend Option B** — simpler, doesn't require changing the
 > `SessionPanel::new` + `register_panel` + `reset_default_layout` signatures.
 
+### 6.5. Entry points and menus as they stand (`US-0119`)
+
+The sections above describe how the panel was built. What it offers today:
+
+| Surface | Action |
+|---|---|
+| The `+` in the "Session" section header (`SessionPanel::title_suffix`, drawn by `SshClientPanel::render_session_header`) | The full New SSH Session dialog, `open_session_dialog(window, cx, None)`. |
+| Right-click the blank area below the list | One row, "New Session" — the same dialog. |
+| The empty-list hint | Unchanged: "No SSH session yet. Right-click → New Session." |
+| Double-click a session, or its "Open" row | `open_connect_dialog` for that session. |
+| Right-click a session | `Open`, `Properties`, separator, `New Session`, separator, `Delete`. |
+| Right-click a group | `Rename Group…`, separator, `New Session`. |
+
+Three rules hold across them:
+
+- **One dialog.** Every "new session" surface — the header `+`, the blank-area menu, the
+  tree's own menu and the centre tab bar's `+` (§1.1) — calls `open_session_dialog`. There is
+  no second new-session dialog to drift.
+- **The global action is not in the first slot** of an item menu, where a misclick lands.
+- **Delete confirms and is styled destructive.** It is last, behind its own separator, drawn in
+  the theme's danger colour, and it opens the same confirmation the rebindable `DeleteSession`
+  action opens — one function, `panel::confirm_delete_session`, so the two cannot diverge. What
+  it takes from the SFTP browser is the **confirmation**: the thing being deleted named in the
+  question and a danger confirm button. SFTP's menu *row* is not red; this one is, which is a
+  deliberate step further and leaves the two menus differing on that point.
+
+The list container and each tree row both carry a context menu. Both hitboxes are hovered over
+a row and gpui runs the container's handler first, so the container's builder checks a flag the
+row's right mouse-down sets and returns an empty menu — which renders nothing — when the click
+landed on a row. See `SessionPanel::row_was_right_clicked`. The container's menu covers the
+empty-list state too, so the empty-state element carries none of its own.
+
+### 6.6. The New / Edit SSH Session dialog (`US-0120`)
+
+Top to bottom: **Label**, **Color**, **Host**, **Port**, **Username**, **Authentication**,
+the **Advanced** disclosure, **Group**, **Logging**.
+
+- **Advanced** folds away Jump host, agent forwarding and port forwards — most of the form's
+  height, and fields most sessions never use. It is collapsed for a new session and **open**
+  when the session being edited already sets any of them
+  (`session_dialog::advanced_is_configured`): a user who set a jump host and then sees no jump
+  host concludes it was lost.
+  It is a **button**, not a styled row: it is the only route to those three fields, and all
+  three were plain Tab stops before they were folded away, so a `div` with a click handler would
+  have put them out of a keyboard user's reach entirely. It is a tab stop, announces its state,
+  and toggles on **Space**. Not Enter: the dialog binds Enter to submit, and a keymap binding is
+  dispatched before any element's key listener, so Enter never reaches it — exactly as for
+  Browse, Cancel and Save in the same dialog.
+  Save validates the forwards and the jump chain whether or not they are on screen, so a
+  refused Save **opens the disclosure and focuses the offending field** before it shows the
+  message; a message about a basic field leaves the disclosure alone
+  (`session_dialog::reveals_advanced`).
+- **Color** is a labelled row of eight swatches — `US-0110`'s `#56B6C2` default first, then
+  theme colours — followed by the full picker, whose trigger carries the words "Custom…" so the
+  text itself opens it. `session_dialog::swatch_colors` is the one place the eight are defined:
+  the kit exposes no accessor for the picker's own featured row, only the
+  `ColorPicker::featured_colors` setter, so the row is defined here and handed to the picker,
+  and the eight swatches and the eight along the top of the popup are the same eight. A swatch
+  writes through the same `ColorPickerState` the picker writes and Save still stores
+  `state.value().to_hex()`, so both produce exactly the value `session_color_hex` already
+  accepted and the tree and the `+` menu cannot disagree.
+- **The body scrolls** when it outgrows the window. That belongs to `FormDialog`
+  (`crates/state/src/form_dialog.rs`), not to this dialog: the footer sits outside the capped
+  box, so Cancel and Save are reachable at any window height, and a form that fits keeps its
+  natural height and shows no scrollbar.
+
 ---
 
 ## 7. File structure
@@ -1023,6 +1136,25 @@ once per hop before the target's. Failures are typed (ARCH-06):
 | A jump hop failed | The hop's `Connect` error with its message prefixed `jump host user@host:port: …` (`route::hop_error`); host-key errors and `Cancelled` are passed through unchanged because they already name the hop or belong to no hop. |
 | Host-key problems | `AppError::HostKeyUnknown` / `AppError::HostKeyChanged` (see §9.3). |
 | User pressed Cancel | `AppError::Cancelled` — `ConnectionCancellation::cancelled()` is a waker-driven future, so a phase in flight is woken immediately instead of polled every 25 ms (PERF-22). |
+
+A failure reaches the user twice, from one value: the bottom-right notification, and — while
+the dialog is still open — an inline block under its fields (`US-0118`, §4.7). Both render the
+same `SharedString`, handed to the dialog through `SshConnectRequest::on_failed`.
+
+The reporting text is built in one place,
+`crates/session-ui/src/common.rs::connect_failure_message` (`BUG-0068`): the
+variants above that already **name SSH and what failed** — `Connect`
+(`SSH <phase> failed: …`), `HostKeyChanged` (`SSH host key changed for …`) and
+`HostKeyUnknown` (`Unknown SSH host key for …`, which names SSH without leading
+with it) — are shown verbatim, so the subject appears once and the failing phase
+stays visible; every other error (`Cancelled`, `Io`, `Other`) is prefixed
+`SSH connect failed: …` so it never reaches the user as a bare "operation
+cancelled".
+
+The `HostKeyUnknown` arm is defensive: the only caller matches that variant first
+and opens the **Unknown SSH Host Key** dialog (§9.3), so it never reaches the
+notification from here. It is kept so the function is total over the variants a
+connect can produce, rather than correct only by the order of the arms above it.
 
 Blocking work on the connect path (`known_hosts` read/append in
 `check_server_key`, private-key loading/decryption) runs on

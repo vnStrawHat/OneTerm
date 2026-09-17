@@ -9,9 +9,9 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -196,11 +196,11 @@ than setting a new rule.
    store is untouched.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -222,8 +222,117 @@ than setting a new rule.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### What was built, and the one choice that needed making
+
+- **The add control is the header's `title_suffix` slot**, not a second button in the panel's
+  search row. `SshClientPanel::render_header` already draws that slot for the SFTP Browser's
+  toggle, framed like the centre tab bar's trailing buttons, and the packet's Documentation
+  section named it. `SessionPanel` now implements `Panel::title_suffix` and
+  `SshClientPanel::render_session_header` passes it through — two lines outside
+  `crates/session-ui`, in the composition root that already owns both headers.
+- **The blank-area menu needed a mechanism, not just a call.** The list container and every
+  tree row carry a context menu; both hitboxes are hovered over a row (`HitboxBehavior::Normal`
+  blocks nothing), and gpui dispatches bubble-phase listeners in reverse registration order, so
+  the container's handler — registered last, by `ContextMenu::paint` after its subtree — always
+  runs **first**. A row cannot `stop_propagation` its way out. The kit defers building the menu
+  to the next frame, though, so the row's right mouse-down sets
+  `SessionPanel::row_was_right_clicked` during the same dispatch and the container's builder
+  reads and clears it. A `PopupMenu` with no items renders nothing
+  (`ContextMenu::request_layout` checks `!menu.is_empty()`), so a right-click on a row shows
+  only the row's menu. Exactly one builder run per right-click and one flag set per row hit,
+  so the pair cannot drift.
+- **Delete confirms.** The decision the packet asked to record: *yes*, and by reuse.
+  `SessionPanel::on_delete_session` already confirmed with a danger-styled button — the
+  rebindable action was safe and the context menu was not, deleting silently on one click. The
+  confirmation moved into `panel::confirm_delete_session` and both surfaces call it, so the
+  menu now has the safety the action had rather than a second, separate dialog. Nothing new was
+  invented; the SFTP browser's shape (name the thing, danger the confirm button) was already
+  what the action used.
+- **Wording.** "Property" → "Properties" for a session; the group's "Property" → "Rename Group…",
+  which names the dialog it actually opens (`open_rename_group_dialog`).
+- **Row order.** `Open`, `Properties`, separator, `New Session`, separator, `Delete`. The global
+  action leaves the top slot; the destructive row is last and alone in its section.
+- **The chevron.** `IconName::ChevronDown` / `ChevronRight` from the kit's Lucide set — no new
+  SVG, as the packet required. The maximise arrow is gone from the tree. The tint is
+  `muted_foreground` for both states: the direction carries the state, so the old info/success
+  colour pair said the same thing twice.
+
+### Commands
+
+- `cargo test -p oneterm-session-ui --lib tree_render::` — 2 passed:
+  `the_session_menu_leads_with_the_session_and_ends_with_delete` and
+  `delete_is_destructive_and_stands_behind_a_separator`, over `SESSION_MENU_ROWS` as data.
+- `cargo clippy -p oneterm-session-ui -p oneterm-app --all-targets -- -D warnings` — clean.
+- `cargo test --workspace` — passed.
+- `pwsh scripts/ci-local.ps1` — "ci-local: all checks passed".
+
+### Evidence frames
+
+Walked against a seeded `target/ssh_session.json` with two ungrouped sessions and an `infra`
+group of two, in the worktree's own `target/` config directory.
+
+- `evidence/US-0119-01-first-launch.png` — the "Session" header with its `+`, sessions present.
+- `evidence/US-0119-10-session-context-menu.png` — Open / Properties / — / New Session / — /
+  Delete, Delete in the theme's danger colour. Only this menu opens: the blank-area menu is
+  empty for the same right-click.
+- `evidence/US-0119-10b-delete-confirm.png` — "Delete the saved SSH session "DevServer"? This
+  cannot be undone." with a danger Delete button, beside `research/before/46-sftp-delete-confirm.png`
+  for comparison.
+- `evidence/US-0119-52-session-empty-area-menu.png` — right-clicking below the last row now
+  produces a menu, where before there was none.
+- `evidence/US-0119-53-new-session-from-header.png` — the header `+` opens **New SSH Session**,
+  the full dialog, not the quick-connect one.
+- `evidence/US-0119-57-session-tree-with-group.png` — `infra` collapsed, showing the right
+  chevron; `US-0119-01` shows it expanded with the down chevron.
+
+### Documentation
+
+- `docs/ssh-client-connect.md` §1.1 — names the three surfaces that create a session.
+- `docs/ssh-client-connect.md` §6.5 — **new**: the entry points and both menus as they stand,
+  the three rules they hold to, and the container/row context-menu mechanism. §6.1–6.4 are the
+  original "how to build it" notes and were left as the historical record they are.
+- `docs/gui-layout.md` §Dock composition — the section header's control group now also carries
+  the Session `+`, and why it is the unconditional affordance.
+
+### Gaps
+
+- **Duplicate and Move to Group are still absent** (`F24` notes them; `P10` did not propose
+  them). They are new capabilities, each independently acceptable, and belong in their own
+  packets if the owner wants them.
+- **`US-0114` had not landed when this was built.** The packet expected to reuse its
+  workspace-level command; inside `crates/session-ui` the dialog is reachable directly
+  (`open_session_dialog`), which is the same function `US-0114`'s command will call, so the two
+  surfaces open the same dialog either way. Nothing to reconcile, but worth re-checking after
+  `US-0114` merges.
+- **Header crowding at a narrow dock width was not captured.** The `+` is an `xsmall` ghost
+  icon button in the same fixed-width control group the SFTP header already uses, and the title
+  beside it is `flex_1`, so it shrinks rather than colliding; but the narrow-width frame
+  `US-0113` will settle was not taken here.
 
 ## Handoff
 
 Use only across actors or sessions: current state, next owner/action, and blockers.
+
+## Rework after independent verification
+
+Verdict **PASS with findings** — every acceptance line held in the verifier's walk except the
+wording one.
+
+- **U119-m1 — the wording acceptance was not met.** "the same wording is used wherever else
+  that action appears" and three places still said "Property":
+  `crates/settings-ui/src/key_bindings/key_bindings_actions.rs:309` (the user-visible row on
+  the Keybindings page), `crates/session-ui/src/tree_render.rs:58` (rustdoc in the file this
+  packet rewrote) and `docs/ssh-client-connect.md` §1.3 decision 8. All three now read
+  "Properties", and the two menu listings now give the real row order.
+- **U119-m2 — two identical context menus on an empty list.** The empty-state element kept its
+  own one-row menu while the new list-container menu covers the same area, so both fired for
+  one right-click. The empty state's is gone; the container's covers the empty list too, which
+  is why the hint text still tells the user to right-click. Frame:
+  `evidence/US-0119-rw-52b-empty-list-single-menu.png` — one menu, no sessions.
+- **U119-m3 — §6.5 overstated what SFTP matches.** The SFTP browser's Delete *row* is not red;
+  what this packet copied is its **confirmation** (the thing named, a danger confirm button).
+  §6.5 now says that, and says the red row is a deliberate step further that leaves the two
+  menus differing on that point.
+- The verifier could not reproduce a `row_was_right_clicked` race with back-to-back
+  right-clicks, and proved by construction why the ordering holds. It remains a `bool` rather
+  than a counter; recorded, not changed.

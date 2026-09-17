@@ -324,7 +324,7 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
     },
     BindableAction {
         id: "session_property",
-        label: "Session Property",
+        label: "Session Properties",
         group: "Session Tabs Context Menu",
         default: None,
         context: None,

@@ -9,11 +9,11 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -195,11 +195,11 @@ local to one dialog.
    scrollbar appeared. List them in Evidence.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -221,8 +221,225 @@ local to one dialog.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### The scroll, and the three shapes that did not work
+
+The cap is `form_body_max_height(window_height)` = window height minus 260 px of chrome,
+floored at 240 px, in `crates/state/src/form_dialog.rs`. The form goes into a box carrying
+that `max_h` and `overflow_y_scroll`, with the kit's `Scrollbar` on a `relative()` wrapper
+outside the scrolling box. The dialog's footer is a sibling of the whole content block in the
+kit's own layout, so capping the body is exactly what keeps Cancel and Save on screen.
+
+Getting there took three GUI walks, and the reasons are worth keeping because they are all
+about **definite heights**:
+
+1. `max_h` on the element handed to the kit's `overflow_y_scrollbar`. `Scrollable::render`
+   *copies* the size styles onto its wrapper (`root_style_from`) and leaves them on the
+   content, so the content was capped too, measured the same as its container, and produced
+   neither scrolling nor a bar. The body just clipped.
+2. `v_flex().max_h(cap)` with the scroll area as `flex_1().min_h_0()` inside it. A zero
+   flex-basis in an auto-height column resolves to a zero-height body: the dialog rendered as a
+   title and a footer with nothing between them.
+3. The kit's `Scrollable` at all: its wrapper is `size_full()`, and `height: 100%` of the
+   dialog box — which has no height of its own — is indefinite.
+
+What works is the plain one: the cap on the scroll container itself, so its height is
+`min(content, cap)` from a clamp, with no percentage and no flex basis anywhere. The scrollbar
+sits outside the scrolling box so it does not scroll away with the form, and it draws nothing
+while `scroll_area_size <= container_size` (`gpui-base/src/scrollbar.rs:1293`) — which is the
+answer to the packet's largest risk: **the theme's always-visible mode makes a bar visible, not
+present**. A dialog that fits has no bar.
+
+### The regression sweep
+
+| Dialog | Result |
+|---|---|
+| New / Edit SSH Session, Advanced collapsed | No scrollbar; footer in place. `US-0120-11`. |
+| New / Edit SSH Session, Advanced expanded | Bar appears, body capped, footer outside it. `US-0120-11b`. |
+| ...scrolled with the wheel | Logging row fully reached, Save still outside. `US-0120-12`. |
+| SSH Quick Connect | No scrollbar, unchanged. `US-0120-sweep-quick-connect`. |
+| Rename Group | No scrollbar, unchanged. `US-0120-sweep-rename-group`. |
+
+### Advanced
+
+`advanced_is_configured(jump_host, port_forwards, agent_forwarding)` decides the initial state
+and is unit-tested. Collapsed, the dialog is about 660 px instead of about 820 px, which is why
+the collapsed case no longer scrolls at all in a 1000 px window.
+
+### The colour row
+
+Eight swatches — `US-0110`'s `#56B6C2` default first so a new session's colour is one of them,
+then theme colours, no hard-coded values — a "Custom…" square that opens the full picker, and a
+visible **Color** label (the spelling the rest of the UI uses: "Color Theme", "Cursor Color"). The swatches write through the very same `ColorPickerState` the
+picker writes, and `submit` still stores `color_state.read(cx).value().map(|h| h.to_hex())`.
+**There is no new value format and no second code path**, which is why this packet adds no
+colour test: `US-0110`'s resolver tests already cover the only value that is produced. The
+captured picker shows `#56B6C2` in its hex field with the first swatch ringed, from the same
+state.
+
+### Commands
+
+- `cargo test -p oneterm-state --lib form_dialog` — 1 passed
+  (`the_body_cap_follows_the_window_and_has_a_floor`: follows the window, has a floor, and is
+  monotonic).
+- `cargo test -p oneterm-session-ui` — 69 passed, including
+  `advanced_opens_only_when_the_session_already_uses_it`.
+- `cargo clippy -p oneterm-state -p oneterm-session-ui --all-targets -- -D warnings` — clean.
+- `cargo test --workspace` — passed.
+- `pwsh scripts/ci-local.ps1` — "ci-local: all checks passed".
+
+### Evidence frames
+
+- `evidence/US-0120-11-session-property-dialog.png` — the labelled colour row, the collapsed
+  Advanced, no scrollbar.
+- `evidence/US-0120-54c-colour-row-4x.png` — the row at 4x, the default swatch ringed.
+- `evidence/US-0120-11b-advanced-expanded.png` — Advanced open, the body capped and the bar
+  present, footer below it.
+- `evidence/US-0120-12-session-dialog-scrolled.png` — **the acceptance frame**: scrolled to the
+  bottom of the form with Cancel and Save on screen and no window resize.
+- `evidence/US-0120-54b-session-color-picker.png` — the full picker behind "Custom…" showing
+  the same hex. (`US-0120-54-session-color-row.png` was a byte-identical copy of
+  `US-0120-11-…` and was deleted; `US-0120-54c-colour-row-4x.png` is the colour-row evidence.)
+- `evidence/US-0120-sweep-rename-group.png`, `US-0120-sweep-quick-connect.png` — the sweep.
+
+### Documentation
+
+- `crates/state/src/form_dialog.rs` module doc — **updated**: what the body does now, and why
+  a dialog that fits shows no bar. Every feature crate builds on this.
+- `docs/ssh-client-connect.md` 6.6 — **new**: the session dialog's field order, the Advanced
+  rule, the colour row, and where the scroll lives.
+- `docs/gui-layout.md` — its `US-0110` paragraph describes the 8 px **square** and the shared
+  resolver, not the picker. Both are unchanged. **No change**, as the packet allowed.
+- `DEC-0010` and `DEC-0011` — read; folding jump hosts and forwards into a disclosure changes
+  neither their defaults nor their meaning. **No change.**
+- The `ponytail:` note at `session_dialog.rs:424` is gone: its ceiling is lifted.
+
+### Gaps
+
+- **The four SFTP `FormDialog` dialogs were not captured.** `sftp-ui`'s rename, new-folder and
+  edit dialogs need a live SFTP connection to reach, and this walk had none. They are smaller
+  forms than the ones swept and go through the identical code path, but the frames are missing
+  and the sweep is therefore partial. `US-0126`'s full re-capture will cover them.
+- **The port-forward list was not walked with the wheel.** The packet flagged nested scrolling
+  as a risk; the port-forward rows are a plain column with no scroll of their own
+  (`forward_rows.rs`), so there is no inner scroll area to capture the wheel — but that is read
+  from the code, not from a frame.
+- **The eight colour swatches are not tab stops.** They carry `Role::Button` and a hex
+  accessibility label, but reaching a specific swatch by keyboard is not possible; the
+  `ColorPicker` beside them is the keyboard route to every colour, as it was before this packet.
+- **The cap is a constant, not a measurement.** 260 px of chrome and a 240 px floor are tuned
+  to the current dialog shape rather than derived from the laid-out title and footer, which are
+  not knowable while the content closure runs. The unit test pins the shape of the function;
+  a much taller footer would want the number revisited.
 
 ## Handoff
 
 Use only across actors or sessions: current state, next owner/action, and blockers.
+
+## Rework after independent verification
+
+Verdict **FAIL**, on the two new interaction surfaces. The scroll, the cap, the
+expanded-when-configured rule and the swatches writing through one state all held — the
+verifier re-derived the cap from a 700 px window and got exactly 700 − 260.
+
+### U120-MAJOR-1 — the disclosure removed the only keyboard route to three fields
+
+`advanced_header` was an `h_flex().id(…).on_click(…)`: not focusable, no role, no tab stop. Jump
+host, agent forwarding and port forwards were plain Tab stops **before** this packet folded them
+away, so a keyboard-only user could no longer reach them at all. That is a regression the packet
+caused, not a pre-existing limit.
+
+It is now a kit `Button` — a tab stop that announces itself as a button and carries its state in
+its accessibility label ("Advanced, expanded" / "Advanced, collapsed").
+
+| | Frame |
+|---|---|
+| Tab from the key path reaches it: Browse → **Advanced** → Jump host, with a focus ring | `evidence/US-0120-rw-tab-reaches-advanced.png` |
+| **Space** toggles it — collapsed, focus kept | `evidence/US-0120-rw-advanced-toggled-by-space.png` |
+
+**Enter does not toggle it, and must not.** `FormDialog` binds Enter to submit, from every field
+in the form (`on_ok`), and gpui resolves that binding before any element's key listener — walked
+and confirmed, the dialog saved. Space is the disclosure's key; Enter belongs to the form. That
+is consistent with every other control in the dialog rather than an exception to it.
+
+The eight colour swatches are still `div`s and still not tab stops. They now carry
+`Role::Button` and their hex as an accessibility label, and the `ColorPicker` beside them
+remains a full keyboard route to every colour — so that half is a downgrade, not a removal, and
+it is recorded in Gaps rather than claimed fixed.
+
+### U120-MAJOR-2 — a collapsed Advanced could hide the field a refused Save was about
+
+`submit` validates the forwards and the jump chain whether or not they are on screen, and
+nothing opened the disclosure, so the user was blocked by a message naming a row behind a
+collapsed `> Advanced`.
+
+A refused Save now **opens the disclosure and puts the cursor in the offending row before it
+shows the message**. `PortForwardRows::take` returns which row failed (`ForwardError { row,
+message }`) so the focus lands on that row's first field rather than on the list; the jump-chain failure
+focuses the picker. A refused *basic* field leaves the disclosure alone, so the form does not
+jump under the cursor — `session_dialog::reveals_advanced` is that decision, and it is
+unit-tested.
+
+Walked: KeyBox's first forward set to an invalid target port, Advanced collapsed, Save →
+`evidence/US-0120-rw-save-opens-advanced.png`: the disclosure is open, the first field of row 1
+carries the focus ring, and the toast reads "Port forward: the target port must be a number
+0..65535."
+
+### U120-m3 — "Custom…" was inert
+
+It was a bare `div` beside the picker, so clicking the word did nothing and the row read as
+**nine** swatches. The text is now the picker's own trigger label
+(`ColorPicker::label`, which `ColorPickerButton` renders inside the clickable trigger), so the
+word opens the picker.
+
+### U120-m4 — the swatch set is now one list, and the claim is accurate
+
+The row was eight colours while the picker's own featured row was a different twelve. The kit
+exposes no accessor for its default featured row — only the `ColorPicker::featured_colors`
+setter — so `session_dialog::swatch_colors` is the one definition and it is **given** to the
+picker: the eight swatches and the eight along the top of the popup are the same eight. The
+packet's old claim that "no colour is hard-coded here" is corrected in the rustdoc: the first
+entry is `SshSession::DEFAULT_COLOR_HEX`, hard-coded in `session_state.rs`, and deliberately
+first so a new session's colour is one of the eight.
+
+### U120-m6 and the acceptance frame
+
+The frame labelled "the acceptance frame" showed **Password** auth and **zero** forwards, not
+the acceptance's "Private Key selected and three port forwards configured". Re-taken against a
+seeded `KeyBox` session — Private Key, agent forwarding on, three forwards — at 1000 px:
+`evidence/US-0120-rw-12-privatekey-3-forwards-1000.png`. Advanced opens by itself because the
+session uses it, the body is capped and scrolling, and Cancel and Save are on screen without a
+resize.
+
+`US-0120-54-session-color-row.png` was byte-identical to `US-0120-11-session-property-dialog.png`
+and has been removed; `US-0120-54c-colour-row-4x.png` is the colour-row evidence.
+
+### U120-m5
+
+`DIALOG_CHROME_HEIGHT = 260` is about 170 px more than the chrome needs. Conservative and
+therefore safe, and the packet already records that the constant is tuned rather than measured.
+Unchanged.
+
+## Second rework — `R-m2`, `R-m5`, `R-m6`, from the re-verification of `40fc78d2`
+
+- **`R-m2` — two places said the disclosure toggles on "Enter and Space", which the same commit
+  disproved.** The rustdoc on `advanced_header` and `docs/ssh-client-connect.md` §6.6 both said
+  it; this packet's own rework section said "Enter does not toggle it, and must not", and the
+  re-verifier confirmed the dispatch order that makes that true. Both now say **Space**, and say
+  why Enter cannot reach it: the dialog binds Enter to submit in its key context, and gpui
+  dispatches a keymap binding before any element's key listener. Browse, Cancel and Save in the
+  same dialog behave identically, so this is the rule rather than an exception.
+- **`R-m5` — the row still drew nine squares.** "Custom…" became the picker's trigger label, so
+  the word opens the picker, but the trigger's own current-value square stayed beside the eight
+  and was indistinguishable from swatch 1 whenever the default colour was selected.
+  `ColorPickerButton` draws that square only when the trigger has no icon
+  (`gpui-component-0.6.0/src/color_picker.rs:578-604`), so the trigger now carries
+  `IconName::Palette`: eight swatches, a palette icon, "Custom…".
+  `evidence/US-0120-rv-colour-row-eight-4x.png`.
+- **`R-m6` — `U120-m4` was correct in code and unevidenced.** Frame taken:
+  `evidence/US-0120-rv-picker-featured-row.png` — opened by clicking the words "Custom…", and
+  the row along the top of the popup is the same eight as the row under the label, in the same
+  order. That is `swatch_colors` reaching both surfaces from one definition.
+- **`R-m8` nit.** "puts the cursor in the offending field" now reads "that row's first field",
+  which is what `focus_row` does and what its own rustdoc already said. `advanced_header`'s
+  ineffective `.justify_start()` is gone; the kit centres a button's label and the disclosure
+  renders centred and full-width.

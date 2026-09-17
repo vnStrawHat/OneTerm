@@ -3,19 +3,51 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{Hsla, IntoElement, MouseButton, ParentElement as _, SharedString, Styled, div, px};
 use gpui_component::{
-    ActiveTheme as _, Colorize as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex,
-    list::ListItem, menu::PopupMenuItem, notification::NotificationType, tree::tree,
+    ActiveTheme as _, Colorize as _, Icon, IconName, Sizable as _, h_flex, list::ListItem,
+    menu::PopupMenuItem, tree::tree,
 };
 
 use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_actions::{DeleteSession, NewSession, OpenSession, SessionProperty};
-use oneterm_theme::notif_ext::notify;
 
 use super::connect_dialog::open_connect_dialog;
-use super::panel::SessionPanel;
+use super::panel::{SessionPanel, confirm_delete_session};
 use super::rename_group::open_rename_group_dialog;
 use super::session_dialog::open_session_dialog;
 use super::tree_builder::{parse_group_id, parse_session_id, session_color_hex, session_subtitle};
+
+/// One row of the context menu for a session leaf, in the order they appear.
+///
+/// The menu itself is not queryable once built, so the rows and their order
+/// live here as data and are covered by a test (`US-0119`). The destructive
+/// styling of `Delete` is proved by the captured frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionMenuRow {
+    /// Open the connect dialog for the right-clicked session.
+    Open,
+    /// Edit the right-clicked session.
+    Properties,
+    /// Create a session — global, so it does not sit in the first slot.
+    NewSession,
+    /// Delete the right-clicked session, after a confirmation.
+    Delete,
+    Separator,
+}
+
+/// The session leaf's context menu, top to bottom.
+///
+/// The two actions that act on the right-clicked session come first; the global
+/// "New Session" no longer occupies the most-misclicked slot (`F24`); and Delete
+/// is last, behind its own separator and styled destructive, which is the shape
+/// the SFTP browser's delete already uses.
+pub(crate) const SESSION_MENU_ROWS: [SessionMenuRow; 6] = [
+    SessionMenuRow::Open,
+    SessionMenuRow::Properties,
+    SessionMenuRow::Separator,
+    SessionMenuRow::NewSession,
+    SessionMenuRow::Separator,
+    SessionMenuRow::Delete,
+];
 
 impl SessionPanel {
     /// Render the tree widget — item renderer + context menu.
@@ -23,16 +55,19 @@ impl SessionPanel {
     /// Contains 2 large closures:
     /// 1. Item renderer — renders a folder (group) or leaf (session) with
     ///    icon, label, subtitle, and mouse handlers.
-    /// 2. Context menu — right-click on an item → the appropriate menu (Open/Delete/Property).
+    /// 2. Context menu — right-click on an item → the appropriate menu
+    ///    (Open / Properties / New Session / Delete).
     pub(crate) fn render_tree_widget(&self) -> impl IntoElement {
         let store = self.store.clone();
         let right_clicked_ix = self.right_clicked_ix.clone();
+        let row_was_right_clicked = self.row_was_right_clicked.clone();
         let tree_state = self.tree_state.clone();
         let focus = self.focus_handle.clone();
 
         tree(&tree_state, {
             let store = store.clone();
             let right_clicked_ix = right_clicked_ix.clone();
+            let row_was_right_clicked = row_was_right_clicked.clone();
             let tree_state = tree_state.clone();
             move |ix, entry, _selected, _window, cx| {
                 let item = entry.item();
@@ -41,13 +76,17 @@ impl SessionPanel {
                 let hover_bg = cx.theme().tokens.list_hover;
 
                 if entry.is_folder() {
-                    // Group folder — open folders use the theme's info tint,
-                    // closed ones its success tint (no hard-coded colours).
-                    let (icon, icon_color) = if entry.is_expanded() {
-                        (IconName::Maximize, cx.theme().info)
+                    // A tree disclosure reads as a chevron: down when the group
+                    // is open, right when it is closed (`F23`). It used to be
+                    // the diagonal maximise arrow, which the app also uses for
+                    // "zoom panel" — one glyph for two unrelated meanings. The
+                    // direction carries the state, so the tint stays muted.
+                    let icon = if entry.is_expanded() {
+                        IconName::ChevronDown
                     } else {
-                        (IconName::Minimize, cx.theme().success)
+                        IconName::ChevronRight
                     };
+                    let icon_color = cx.theme().muted_foreground;
                     ListItem::new(ix)
                         .w_full()
                         .py_0()
@@ -68,9 +107,13 @@ impl SessionPanel {
                         })
                         .on_mouse_down(MouseButton::Right, {
                             let right_clicked_ix = right_clicked_ix.clone();
+                            let row_was_right_clicked = row_was_right_clicked.clone();
                             let tree_state = tree_state.clone();
                             move |_, _, cx| {
                                 right_clicked_ix.set(Some(ix));
+                                // The blank-area menu must stay empty for this
+                                // right-click; see `row_was_right_clicked`.
+                                row_was_right_clicked.set(true);
                                 tree_state.update(cx, |s, cx| s.set_selected_index(Some(ix), cx));
                             }
                         })
@@ -160,9 +203,13 @@ impl SessionPanel {
                         })
                         .on_mouse_down(MouseButton::Right, {
                             let right_clicked_ix = right_clicked_ix.clone();
+                            let row_was_right_clicked = row_was_right_clicked.clone();
                             let tree_state = tree_state.clone();
                             move |_, _, cx| {
                                 right_clicked_ix.set(Some(ix));
+                                // The blank-area menu must stay empty for this
+                                // right-click; see `row_was_right_clicked`.
+                                row_was_right_clicked.set(true);
                                 tree_state.update(cx, |s, cx| s.set_selected_index(Some(ix), cx));
                             }
                         })
@@ -184,76 +231,110 @@ impl SessionPanel {
                 // Clear the old highlight, highlight only the right-clicked item.
                 right_clicked_ix.set(Some(ix));
                 if entry.is_folder() {
-                    // Group folder → context menu: New Session, Property.
+                    // Group folder → rename the group, then the global action.
                     let group = parse_group_id(&entry.item().id);
                     let focus = focus.clone();
                     menu.action_context(focus)
-                        .menu("New Session", Box::new(NewSession))
-                        .separator()
                         .item(
-                            PopupMenuItem::new("Property").on_click(move |_, window, cx| {
+                            PopupMenuItem::new("Rename Group…").on_click(move |_, window, cx| {
                                 if let Some(group_name) = &group {
                                     open_rename_group_dialog(window, cx, group_name.clone());
                                 }
                             }),
                         )
+                        .separator()
+                        .menu("New Session", Box::new(NewSession))
                 } else {
-                    // Session leaf → context menu: New Session, Open, Delete, Property.
+                    // Session leaf → the rows of `SESSION_MENU_ROWS`, in order.
                     let Some(session_id) = parse_session_id(&entry.item().id) else {
                         return menu;
                     };
-                    let focus = focus.clone();
-
-                    menu.action_context(focus)
-                        .menu("New Session", Box::new(NewSession))
-                        .separator()
-                        .item(
-                            PopupMenuItem::new("Open")
-                                .action(Box::new(OpenSession))
-                                .on_click(move |_, window, cx| {
-                                    if let Some(s) = SshSessionStore::global(cx)
-                                        .read(cx)
-                                        .get(session_id)
-                                        .cloned()
-                                    {
-                                        open_connect_dialog(s, session_id, window, cx);
-                                    }
-                                }),
-                        )
-                        .separator()
-                        .item(
-                            PopupMenuItem::new("Delete")
+                    let mut menu = menu.action_context(focus.clone());
+                    for row in SESSION_MENU_ROWS {
+                        menu = match row {
+                            SessionMenuRow::Separator => menu.separator(),
+                            SessionMenuRow::NewSession => {
+                                menu.menu("New Session", Box::new(NewSession))
+                            }
+                            SessionMenuRow::Open => menu.item(
+                                PopupMenuItem::new("Open")
+                                    .action(Box::new(OpenSession))
+                                    .on_click(move |_, window, cx| {
+                                        if let Some(s) = SshSessionStore::global(cx)
+                                            .read(cx)
+                                            .get(session_id)
+                                            .cloned()
+                                        {
+                                            open_connect_dialog(s, session_id, window, cx);
+                                        }
+                                    }),
+                            ),
+                            SessionMenuRow::Properties => menu.item(
+                                PopupMenuItem::new("Properties")
+                                    .action(Box::new(SessionProperty))
+                                    .on_click(move |_, window, cx| {
+                                        if let Some(s) = SshSessionStore::global(cx)
+                                            .read(cx)
+                                            .get(session_id)
+                                            .cloned()
+                                        {
+                                            open_session_dialog(window, cx, Some((session_id, s)));
+                                        }
+                                    }),
+                            ),
+                            // `PopupMenuItem` has no destructive variant, so the
+                            // row draws its own label in the theme's danger
+                            // colour; the confirmation behind it is the SFTP
+                            // browser's, reused (`US-0119`).
+                            SessionMenuRow::Delete => menu.item(
+                                PopupMenuItem::element(|_, cx| {
+                                    div().text_color(cx.theme().danger).child("Delete")
+                                })
                                 .action(Box::new(DeleteSession))
                                 .on_click(move |_, window, cx| {
-                                    SshSessionStore::global(cx).update(cx, |s, cx| {
-                                        s.remove(session_id, cx);
-                                    });
-                                    window.push_notification(
-                                        notify(
-                                            NotificationType::Success,
-                                            "SSH session deleted.",
-                                            cx,
-                                        ),
-                                        cx,
-                                    );
+                                    let store = SshSessionStore::global(cx);
+                                    confirm_delete_session(store, session_id, window, cx);
                                 }),
-                        )
-                        .separator()
-                        .item(
-                            PopupMenuItem::new("Property")
-                                .action(Box::new(SessionProperty))
-                                .on_click(move |_, window, cx| {
-                                    if let Some(s) = SshSessionStore::global(cx)
-                                        .read(cx)
-                                        .get(session_id)
-                                        .cloned()
-                                    {
-                                        open_session_dialog(window, cx, Some((session_id, s)));
-                                    }
-                                }),
-                        )
+                            ),
+                        };
+                    }
+                    menu
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `F24`: the global "New Session" no longer sits in the top slot of an
+    /// item-specific menu, the two rows that act on the right-clicked session
+    /// come first, and Delete is last.
+    #[test]
+    fn the_session_menu_leads_with_the_session_and_ends_with_delete() {
+        let rows: Vec<SessionMenuRow> = SESSION_MENU_ROWS
+            .into_iter()
+            .filter(|row| *row != SessionMenuRow::Separator)
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                SessionMenuRow::Open,
+                SessionMenuRow::Properties,
+                SessionMenuRow::NewSession,
+                SessionMenuRow::Delete,
+            ]
+        );
+    }
+
+    /// Delete is separated from the rows above it, and it is the only
+    /// destructive row.
+    #[test]
+    fn delete_is_destructive_and_stands_behind_a_separator() {
+        let last = SESSION_MENU_ROWS.len() - 1;
+        assert_eq!(SESSION_MENU_ROWS[last], SessionMenuRow::Delete);
+        assert_eq!(SESSION_MENU_ROWS[last - 1], SessionMenuRow::Separator);
     }
 }
