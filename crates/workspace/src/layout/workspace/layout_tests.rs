@@ -16,7 +16,10 @@ use oneterm_state::dock_persistence::{read_dock_document_from, update_dock_docum
 use oneterm_state::panel_names;
 
 use super::test_panels::{NamedPanel, register_test_panels};
-use super::{MAIN_DOCK_VERSION, OneTermWorkspace, layout, persistence, restore_zoom_in_dock};
+use super::{
+    MAIN_DOCK_VERSION, OneTermWorkspace, layout, persistence, restore_zoom_in_dock,
+    right_dock_mode_for,
+};
 
 /// Removes the per-test directory when the test ends — on failure too.
 struct TempDirGuard(std::path::PathBuf);
@@ -156,6 +159,60 @@ fn switch_right_dock_mode_swaps_panel_and_keeps_width(cx: &mut TestAppContext) {
 
     cx.update(|window, cx| {
         OneTermWorkspace::switch_right_dock_mode(&dock_area, RightDockMode::SshClient, window, cx)
+    });
+    assert_eq!(
+        right_dock(&dock_area, cx),
+        (333., true, panel_names::SSH_CLIENT.to_string())
+    );
+}
+
+/// BUG-0067: the persisted mode follows the dock's open state, so the title
+/// bar's segmented control can never claim a mode over a collapsed dock.
+#[test]
+fn right_dock_mode_follows_the_dock_state() {
+    // Collapsed by a dock button: whatever was persisted, the truth is None.
+    assert_eq!(
+        right_dock_mode_for(false, RightDockMode::SshClient, false),
+        RightDockMode::None
+    );
+    assert_eq!(
+        right_dock_mode_for(false, RightDockMode::Agent, true),
+        RightDockMode::None
+    );
+    // Reopened by the same button: the mode names the panel that came back.
+    assert_eq!(
+        right_dock_mode_for(true, RightDockMode::None, false),
+        RightDockMode::SshClient
+    );
+    assert_eq!(
+        right_dock_mode_for(true, RightDockMode::None, true),
+        RightDockMode::Agent
+    );
+    // An open dock showing the mode it says it shows is left alone.
+    assert_eq!(
+        right_dock_mode_for(true, RightDockMode::Agent, true),
+        RightDockMode::Agent
+    );
+}
+
+/// BUG-0067: a dock collapsed by the tab bar's dock button reopens at the width
+/// it was collapsed at — the reopen path a same-mode `SetRightDockMode` takes.
+#[gpui::test]
+fn reopening_a_collapsed_right_dock_keeps_its_width(cx: &mut TestAppContext) {
+    let (dock_area, cx) = dock_area(cx);
+    set_right_dock(&dock_area, panel_names::SSH_CLIENT, px(333.), true, cx);
+
+    // The tab bar's dock button toggles the dock without touching the mode.
+    dock_area.update_in(cx, |dock_area, window, cx| {
+        dock_area.toggle_dock(DockPlacement::Right, window, cx)
+    });
+    assert_eq!(
+        right_dock(&dock_area, cx),
+        (333., false, panel_names::SSH_CLIENT.to_string())
+    );
+
+    cx.update(|window, cx| {
+        oneterm_state::dock_util::set_right_dock_open(&dock_area, true, window, cx)
     });
     assert_eq!(
         right_dock(&dock_area, cx),

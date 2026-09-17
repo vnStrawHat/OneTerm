@@ -29,7 +29,9 @@ DockArea (id = "main-dock", version = 3)
         └── AgentListView (Agent mode)
 ```
 
-`RightDockMode::None` closes the existing right dock without replacing its content. Selecting SSH Client or Agent mode builds the registered panel, replaces the right-dock layout, preserves its width, and opens it.
+`RightDockMode::None` closes the existing right dock without replacing its content. Selecting SSH Client or Agent mode builds the registered panel, replaces the right-dock layout, preserves its width, and opens it. Selecting the mode that is already selected is an explicit "show me this": it reopens a collapsed dock without rebuilding the panel, and never closes an open one.
+
+The dock buttons in the tab bar and the status bar toggle the dock through the kit, so the workspace mirrors the dock's open state back into `UiConfig.right_dock_mode`: collapsing the dock with either button selects `None` in the title bar's segmented control, and reopening it with the same button reselects the mode of the panel that comes back. The dock's open state is the truth; the persisted mode follows it.
 
 `SshClientPanel` owns a vertical `v_resizable` split containing `SessionPanel` and `SftpPanel`, each with its own header. Its section headers show the hosted panel's `title_suffix` (the SFTP Browser's expand/collapse toggle) in a control group framed like the center tab bar's trailing buttons. It is zoomable: expanding the SFTP Browser (IN-0025) zooms this node so the browser fills the workspace like a zoomed terminal tab, with the Session section hidden until it collapses. The right dock still has a tab-group node internally, but `OneTermDockSkin` suppresses that outer tab bar for the single `ssh_client_panel` or `agent_panel` leaf. Center terminal groups keep the standard GPUI Kit tab chrome.
 
