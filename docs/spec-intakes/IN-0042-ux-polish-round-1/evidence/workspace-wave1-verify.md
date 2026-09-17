@@ -254,3 +254,202 @@ In every one of these runs `reopening_a_collapsed_right_dock_keeps_its_width` an
   touched.
 
 
+
+---
+
+# Re-verification of `aa783f25` — 2026-09-17
+
+Verifier: an independent session that did not write the code and did not write the first
+report above. Target: `worktree-agent-a26570dbee8c60926` at `aa783f25` (the rework commit
+`595965a6` plus a merge of `main` @ `ffc02c19`). Diff read: `git diff ebf33ad7...HEAD`.
+
+## Verdicts
+
+| Packet | First verdict | Now |
+|---|---|---|
+| `BUG-0067` — reselecting the right-dock mode reopens the dock | PASS-WITH-NOTES | **PASS** |
+| `US-0112` — the status bar elides the path from the left | **FAIL** | **PASS** |
+| `US-0113` — the right dock width follows the window | PASS-WITH-NOTES | **PASS** |
+| **Overall** | FAIL | **PASS** |
+
+All three majors are fixed, and each was re-proved here rather than read off the packet: `M1`
+from my own 700 px frame, `M2` by mutating the new decision function and watching the new test
+fail, `M3` by re-running the seeded-preference sequence end to end. Six of the seven minors are
+fixed; `m2` is consciously left and its reason now holds more strongly than before. The seven
+new findings below are all minor or notes — none blocks acceptance.
+
+## Commands (final lines)
+
+| Command | Final line |
+|---|---|
+| `cargo test -p oneterm-workspace` | `test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s` |
+| `pwsh scripts/ci-local.ps1` | `ci-local: all checks passed.` |
+| mutation — `reopen_or_rebuild` always `Rebuild` | `test result: FAILED. 32 passed; 2 failed` |
+| mutation — the `Show` arm secretly rebuilds the panel | `test result: FAILED. 33 passed; 1 failed` (`reopening must not rebuild the panel`) |
+| mutation — `state_with_preferred_width` is a no-op | `test result: FAILED. 33 passed; 1 failed` |
+| mutation — `right_dock_panel_mode` reads `Center` | `test result: FAILED. 33 passed; 1 failed` |
+| mutation — `divide_centre` drops the path floor | `test result: FAILED. 33 passed; 1 failed` |
+| mutation — `divide_centre` ignores the icon chrome | `test result: FAILED. 31 passed; 3 failed` |
+| mutation — `elide_path_left(_, 0)` returns `…` again | `test result: FAILED. 32 passed; 2 failed` |
+| mutation — `status_font_size` measures at `1.0 rem` | `test result: ok. 34 passed` — **no test catches it** (`n2`) |
+| mutation — the drag-cap re-apply branch disabled | `test result: ok. 34 passed` — **no test catches it** (`n3`) |
+
+Every mutation was applied alone and reverted immediately; `git status --short` was empty after
+each one.
+
+## Per-finding status
+
+| Finding | Status | How it was checked here |
+|---|---|---|
+| **M1** — memory unit cut, git branch hard-cut, dock button clipped | **Fixed** | Own 700 px frame (`US-0112-reverify-700-git-cwd.png`): `MEM 175.7 MB` with its unit, the dock-toggle button on the bar, branch `worktree-agent-a26570dbee8c…` elided *with* an ellipsis, path `…\workspace` elided from the left. Same at 1000 px (`US-0113-reverify-1000-legacy-600.png`) and at 1184 px. |
+| **M2** — the reopen rebuilt the panel; the test could not fail | **Fixed** | Mutating `reopen_or_rebuild` to always `Rebuild` fails two tests; a subtler mutation that keeps the returned `DockModeAction::Show` but rebuilds inside the `Show` arm still fails `reopening_a_collapsed_right_dock_keeps_its_panel_instance` at the `PanelId` assertion. The test is no longer bug-independent. |
+| **M3** — the stored width ratcheted down | **Fixed** | Seeded `docks.json` at `400.0`, launched at 1200 px (dock ≈ 400), narrowed to 700 px and waited past the 2 s debounce (dock ≈ 240, the floor), then `Stop-Process -Force` — no exit hook. `docks.json` still read `400.0`, and the relaunch at 1200 px came back at ≈ 400 px (`US-0113-reverify-1200-after-a-700-kill.png`). The first report measured `240.0` here. |
+| **m1** — `shows_agent` not scoped to the right dock | **Fixed, and covered** | `right_dock_panel_mode` reads `dock_area.layout(DockPlacement::Right)` only; pointing it at `Center` fails a test. |
+| **m2** — a legacy `ui_config.json` shows a stale mode briefly | **Left, reason holds** | Still reachable: `sync_right_dock_mode` runs only on a dock notification, and startup skips `switch_right_dock_mode` when the saved mode is `SshClient`. It is now strictly better than before, because clicking the segment that is (wrongly) highlighted takes the `Show` path and opens the dock — the display and the click finally agree. |
+| **m3** — `elide_path_left(_, 0)` returned `…` | **Fixed, and covered** | Both rules return `""` at budget 0; `nothing_ever_comes_back_wider_than_its_budget` sweeps every budget for both, and restoring the old behaviour fails it. `the_cut_lands_on_a_separator_while_one_fits` now asserts the boundary, not just a suffix relation. |
+| **m4** — the tooltip only said "Click to copy" | **Fixed** | `StatusText::render` builds the tooltip from the full sampled text whenever shortening changed it, falling back to "Click to copy". Untested, as the packet's Gaps say. |
+| **m5** — a drag above the ceiling stood until the next resize | **Fixed in code, untested** | `track_preferred_right_dock_width` re-applies the clamp when the reported size is over the ceiling. See `n3`. |
+| **m6** — `docs/gui-layout.md` §Persistence stale | **Fixed** | §Persistence now states that the stored width is the preference and that the clamp applies on load; §Dock composition and §Status bar were rewritten to match the code. |
+| **m7** — the BUG-0067 frames predated the final tree | **Fixed** | Both `BUG-0067-24*.png` are re-captured in the rework commit and show a 420 px dock in a 1200 px window, which is the 35 % ceiling. |
+
+## What was checked against the implementer's claims
+
+- **The kit's zero-basis claim is accurate.**
+  `reference/gpui-kit/crates/component/src/status_bar.rs:97-103` — the centre region is
+  `region().flex_1()`, and `flex_1` (`reference/zed/crates/gpui/src/styled.rs:181-186`) sets
+  `flex_grow = 1`, `flex_shrink = 1`, `flex_basis = relative(0.)`. A zero base size gives the
+  centre a scaled shrink factor of zero, so it is never the item that absorbs shrinkage; while
+  the pinned ends fit, the centre simply grows into what they leave. `n4` records the part of
+  the guarantee the packet does not state.
+- **The measurement font matches the rendered font.** `status_font_size` is
+  `window.rem_size() * 0.75` and `text_xs()` is literally `rems(0.75)`
+  (`reference/zed/crates/gpui/src/styled.rs:545-548`) — the same value, not an approximation.
+  Family and weight come from the same `window.text_style()` stack in both places: `Root` pushes
+  `cx.theme().font_family` (`reference/gpui-kit/crates/component/src/root.rs:591`) above both
+  `OneTermWorkspace::render` (where `build_status_bar` measures) and `StatusText::render` (where
+  the glyphs are shaped), and nothing on the status-bar path overrides the weight. No drift.
+  `style.to_run(text.len())` is correct — `TextRun::len` is in bytes.
+- **`divide_centre` at the extremes.** Swept with a temporary probe test (removed afterwards;
+  the tree was verified clean), four visible indicators, 300 px of fixed labels, a 200 px
+  branch. `shrinkable` is `window − BAR_CHROME − ICON_CHROME·icons − fixed`:
+
+  | `shrinkable` | path | git | sum |
+  |---|---|---|---|
+  | 0 | 0 | 40 | **40 (over)** |
+  | 10 | 0 | 40 | **40 (over)** |
+  | 39 | 0 | 40 | **40 (over)** |
+  | 40 | 0 | 40 | 40 |
+  | 50 | 10 | 40 | 50 |
+  | 119 | 79 | 40 | 119 |
+  | 120 | 80 | 40 | 120 |
+  | 121 | 80 | 41 | 121 |
+  | 280 | 80 | 200 | 280 |
+  | 1 000 000 | 999 800 | 200 | 1 000 000 |
+
+  Monotone, never negative, and exact from 40 px up; below 40 px it over-allocates by at most
+  40 px — see `n1`. With no branch at all the whole centre goes to the path, at every width.
+- **The remaining constants are right at the default.** `ICON_CHROME = 16` is exactly
+  `Icon::xsmall` (`Size::XSmall => size_3()` = 0.75 rem = 12 px,
+  `reference/gpui-kit/crates/component/src/icon.rs:161`) plus `gap_1` (0.25 rem = 4 px).
+  `BAR_CHROME = 116` accounts for the bar's `px_2` (2 × 8), the two outer `gap_2`, the right
+  region's four `gap_2`, the centre's three `gap_2` and four 1 px separators — 92 px — leaving
+  ~24 px for the ghost xsmall dock button. The gap counts are **constant whether or not an
+  indicator is visible**, because a hidden `StatusText` still renders its (empty) root div, so a
+  fixed constant is the right model rather than a lucky one. The larger-UI-font half of the
+  question is not reachable today: nothing in OneTerm calls `set_rem_size`; see `n6`.
+- **Every `docks.json` write is routed through `state_with_preferred_width`.** A grep over
+  `crates/` for `dump(cx)` / `save_state_logged` / `DockAreaState` finds exactly four production
+  call sites — `save_layout_on_exit` (`mod.rs:395-400`, shared by both exit hooks), the
+  debounced save (`mod.rs:420-431`), `reset_center_only` (`layout.rs:22-25`) and
+  `reset_default_layout` (`layout.rs:92-96`) — and all four rewrite the width first. Every write
+  then funnels through the one `save_state_to`. `crates/sftp-ui/src/persistence.rs` also writes
+  `docks.json`, but only the `sftp_table_state` field through `update_dock_document_at`, and
+  never touches `dock_state`.
+- **The startup preference is the raw stored value.** `preferred_right_dock_width` is read
+  (`mod.rs:193-197`) *after* `load_layout` and *before* `reset_center_only`, so it is the
+  document's own number; the clamp is applied later, by `apply_center_reset`. Confirmed live: a
+  legacy `docks.json` at `600.0` opened in a 984 px viewport applies ≈ 344 px (35 %) and leaves
+  `600.0` in the file (`US-0113-reverify-1000-legacy-600.png`). A first launch with no file
+  stores the `480.0` default, not the 414 px it applied.
+- **A preference below the floor is applied as it is.** `clamp_right_dock_width` is a ceiling
+  only — `MIN_RIGHT_DOCK_WIDTH` floors the *ceiling*, never the requested width — so a 150 px
+  preference stays 150 px at any window size, with the kit's own `PANEL_MIN_SIZE = px(100.)` as
+  the only lower bound. That matches the rustdoc and is not a defect.
+- **The sync path does not fight the contains-based decision.**
+  `on_action_set_right_dock_mode` applies the mode first and reads `UiConfig` afterwards, so the
+  dock observer (which runs in the following effect flush) always sees the settled dock and
+  early-returns when `next == current`. Walked by hand through all six (contained, requested)
+  pairs plus collapse-then-reopen and None-twice. The "collapse by key binding, then again"
+  attack has no target: `SetRightDockMode` is dispatched only from the title bar's segmented
+  control (`title_bar.rs:149`) and appears in no keymap.
+- **Click-to-copy still copies the sampled value**, taken before `shorten.apply` in
+  `Render for StatusText`.
+
+## New findings
+
+### Minor
+
+- **`n1` (`US-0112`) — `divide_centre` can hand out 40 px more than the centre has.** When
+  `shrinkable` falls below `MIN_BRANCH_WIDTH`, the branch budget is floored at 40 px without
+  being capped by what is left
+  (`(shrinkable - MIN_PATH_WIDTH).max(MIN_BRANCH_WIDTH).min(git)`), so the two budgets sum to
+  40 px while the region is narrower — see the table above. Harmless in practice: both the kit's
+  `region()` and OneTerm's inner div are `overflow_hidden`, so the excess clips *inside* the
+  centre and cannot reach the pinned ends, and reaching it needs a window under roughly 560 px
+  with every indicator live. The existing test
+  `a_window_too_narrow_for_anything_never_returns_a_negative_budget` asserts non-negativity but
+  not that the budgets fit. One `.min(shrinkable)` on the branch would close it.
+- **`n2` (`US-0112`) — nothing pins the measurement font size.** Changing `status_font_size`
+  from `rem_size * 0.75` to `rem_size * 1.0` leaves all 34 tests green. The value is correct
+  today and the failure mode errs narrow (over-elision, never overflow), but the whole packet
+  rests on measure and render agreeing, and only a comment says they do.
+- **`n3` (`US-0113`) — the new drag-cap branch is uncovered.** Disabling
+  `if clamp_right_dock_width(size, window_width) != size { self.apply_right_dock_width(…) }` in
+  `track_preferred_right_dock_width` leaves all 34 tests green, and a real splitter drag still
+  cannot be driven headlessly or by posted `WM_*` messages. `m5`'s fix therefore rests on code
+  reading alone — the same gap the first report recorded for the drag path, now attached to a
+  behaviour change rather than to unchanged code.
+
+### Notes (no action implied)
+
+- **`n4` (`US-0112`) — the pinned-ends guarantee is load-bearing on `overflow_hidden`, not only
+  on `flex_1`.** `region()` (`status_bar.rs:83`) sets `.overflow_hidden()`, which is what
+  suppresses a flex item's automatic (min-content) minimum size; with `overflow: visible` the
+  zero basis alone would not stop a long centre label pushing the ends. Separately, the left and
+  right regions keep the default `flex-shrink: 1` with an `auto` basis, so once the *pinned*
+  content alone exceeds the window — roughly below 400 px with every indicator live — they do
+  shrink and clip. What is delivered is "the centre can never push the ends", not "the ends
+  never clip"; the code comment and `docs/gui-layout.md` state the stronger form.
+- **`n5` (`BUG-0067`) — two notions of "the mode showing" now coexist.**
+  `right_dock_panel_mode` answers from the panel the dock contains (the click path), while
+  `right_dock_mode_for` prefers the persisted mode whenever the dock is open (the sync path).
+  They agree on every reachable sequence today because `apply_right_dock_mode` makes them agree
+  before persisting. If they diverged, the title bar would highlight one mode while a click
+  rebuilt to another — self-healing in one click. No test pins the agreement.
+- **`n6` — the px constants are exact at the default rem size only.** gpui's spacing tokens are
+  `rems` (`gap_2` = `rems(0.5)`), so `BAR_CHROME` and `ICON_CHROME` drift if a UI zoom is ever
+  added. Nothing calls `set_rem_size` today, so there is no reachable case; the arithmetic above
+  is the record of what the constants stand for.
+- **`n7` — the `f32::MAX` budget seed (`mod.rs:265-278`) is on a dead path.**
+  `build_status_bar` writes both budgets earlier in the same render pass than the indicators
+  read them, so the seeded value is never the one a frame uses. The comment ("they start wide
+  enough that the first frame shows the labels whole") describes a case that cannot occur.
+
+## Gaps in this re-verification
+
+- **No GUI click walk for `BUG-0067`.** The reopen was not re-driven through the title bar in a
+  live window; posted messages do not reach the kit's toggle group. It is covered here by the
+  `PanelId` test (proved to fail under a rebuild, by mutation), by reading the handler, and by
+  the implementer's re-captured frames.
+- **No real splitter drag** (`n3`) — the same limitation both earlier sessions recorded.
+- **The net-speed indicator was hidden in every frame I captured** (an idle terminal samples no
+  traffic), so the `M1` scene with *all five* indicators live was not photographed. The layout
+  argument does not depend on it — `divide_centre` treats net speed as fixed width, and the
+  pinned ends are protected by the flex layout either way — but the widest-content case is
+  reasoned, not seen.
+- **Only Windows, at 100 % DPI.** A 1200 × 800 window gives a 1184 px viewport, so the clamp
+  numbers above are 35 % of 1184 / 984 / 684, not of 1200 / 1000 / 700.
+- **`docks.json` seeding, not dragging**, is how a non-default preference was created — the same
+  substitution the implementer used.
+- The walk used its own build, launched its own pid, addressed only that pid's window and closed
+  only that pid; configuration stayed in `<worktree>/target/`.
