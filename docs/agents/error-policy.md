@@ -18,6 +18,11 @@ errors into process-wide panics.
 
 - Do not use `let _ =` for a runtime operation unless the line has a nearby comment
   explaining why the result is intentionally best effort.
+- An error names itself once. Do not wrap a user-visible error in context the error's
+  own `Display` already carries — `format!("SSH connect failed: {error}")` around an
+  `AppError::Connect` produced "SSH connect failed: SSH connect failed: …". When some
+  errors reaching a site carry their subject and others do not, decide per variant in
+  one place, so no caller is left printing a bare "operation cancelled".
 - Prefer `Result` and typed domain errors at backend and persistence boundaries.
 - UI action handlers convert user-action failures to notifications; they must not
   hide a failed mutation behind an empty/default view.

@@ -27,13 +27,13 @@ use oneterm_core::{
     ConnectionCancellation, HostKeyPolicy, SshConfig, SshDuplicateAuth, SshDuplicateConfig,
 };
 use oneterm_state::commands::SshDuplicateCompletion;
-use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
+use oneterm_state::form_dialog::{FieldRequirement, FormDialog, control_label, labelled_field};
 use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::{
-    ConnectButton, SshConnectRequest, connect_ssh_session, defer_initial_focus_once, parse_port,
-    parse_user_host_port,
+    ConnectButton, InlineError, SshConnectRequest, connect_ssh_session, defer_initial_focus_once,
+    parse_port, parse_user_host_port,
 };
 use super::jump_hops::{HopSpec, JumpHopForms, JumpHostPicker};
 use crate::session_state::{
@@ -65,7 +65,16 @@ impl QuickConnectHops {
     }
 
     /// The forms for the current selection, rebuilt when the selection moved.
-    fn forms(&self, window: &mut Window, cx: &mut App) -> Result<JumpHopForms, String> {
+    ///
+    /// A rebuild replaces the hop credential inputs, so the freshly built ones
+    /// are handed to `inline_error`: a corrected jump-host password clears the
+    /// error like a corrected target password does (`US-0118` rework).
+    fn forms(
+        &self,
+        inline_error: &InlineError,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<JumpHopForms, String> {
         let Some(picker) = &self.picker else {
             return self.built.borrow().1.clone();
         };
@@ -77,6 +86,9 @@ impl QuickConnectHops {
                 .map_err(|error| error.to_string())
                 .and_then(|chain| chain.iter().map(HopSpec::from_entry).collect());
             let forms = specs.map(|specs| JumpHopForms::new(specs, window, cx));
+            if let Ok(forms) = &forms {
+                inline_error.watch(&forms.secret_inputs(), cx);
+            }
             *self.built.borrow_mut() = (selected, forms);
         }
         self.built.borrow().1.clone()
@@ -84,6 +96,19 @@ impl QuickConnectHops {
 
     fn selected(&self, cx: &App) -> Option<SshSessionId> {
         self.picker.as_ref().and_then(|picker| picker.selected(cx))
+    }
+
+    /// The credential inputs of hops that are built once and never rebuilt —
+    /// a duplicate's fixed chain. A picked chain hands its inputs over in
+    /// [`Self::forms`] instead, as it rebuilds them.
+    fn fixed_secret_inputs(&self) -> Vec<gpui::Entity<InputState>> {
+        if self.picker.is_some() {
+            return Vec::new();
+        }
+        match &self.built.borrow().1 {
+            Ok(forms) => forms.secret_inputs(),
+            Err(_) => Vec::new(),
+        }
     }
 }
 
@@ -96,6 +121,20 @@ enum QuickConnectMode {
     },
 }
 
+/// What a ticked "Save to SSH Sessions" means once the connect has failed.
+///
+/// `CORR-54`: a quick-connect session is saved only when the connection is
+/// authenticated, so a typo never becomes a saved session and the store never
+/// holds an entry whose credentials have never worked. The user's tick is not
+/// discarded — it stays on, and the next successful attempt saves the session —
+/// but it is no longer *silently* not honoured (`F5`, `US-0118`).
+fn unsaved_note(save_ticked: bool) -> Option<&'static str> {
+    save_ticked.then_some(
+        "Not saved to SSH Sessions: a session is saved once its connection succeeds. \
+The tick is still on — connect again and it will be saved.",
+    )
+}
+
 /// The "Save to SSH Sessions" checkbox — Quick Connect only; a duplicate
 /// reuses the session it was duplicated from.
 fn save_session_option(
@@ -105,7 +144,8 @@ fn save_session_option(
     (!is_duplicate).then(|| {
         div().pt_1().child(
             Checkbox::new("save-session")
-                .label("Save to SSH Sessions")
+                .accessibility_label("Save to SSH Sessions")
+                .child(control_label("Save to SSH Sessions"))
                 .checked(save_session.get())
                 .on_click(move |checked: &bool, _window, _cx| {
                     save_session.set(*checked);
@@ -222,11 +262,31 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
         QuickConnectHops::picked(picker, window, cx)
     });
 
+    // ── Failure shown in the dialog, beside the toast (`US-0118`) ──────
+    let inline_error = {
+        let mut inputs = vec![
+            host_state.clone(),
+            port_state.clone(),
+            username_state.clone(),
+        ];
+        inputs.extend(auth_form.secret_inputs());
+        // A duplicate's hops are built once, above, and never rebuilt — its
+        // `forms()` returns before the rebuild branch that hands later ones
+        // over — so they are watched here. Without this, duplicating a session
+        // with a jump chain left a corrected hop password beside a stale error:
+        // exactly the defect the rework fixed for every other path.
+        inputs.extend(hops.fixed_secret_inputs());
+        InlineError::new(&inputs, cx)
+    };
+
     // ── Save-to-store checkbox state ───────────────────────────────────
     let save_session = Rc::new(Cell::new(false));
     let connecting = Arc::new(AtomicBool::new(false));
     let connection_cancellation: Rc<RefCell<Option<ConnectionCancellation>>> =
         Rc::new(RefCell::new(None));
+
+    // One clone per closure: the submit path and the body builder both hold it.
+    let content_error = inline_error.clone();
 
     // ── Shared connect logic (Connect button + keyboard Enter) ──
     let connect_logic: Rc<dyn Fn(&mut Window, &mut App) -> bool> = Rc::new({
@@ -240,13 +300,17 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
         let connecting = connecting.clone();
         let initial_cwd = initial_cwd.clone();
         let completion = completion.clone();
+        let inline_error = inline_error.clone();
+        let hop_error = inline_error.clone();
         move |window, cx| {
             if connecting.load(Ordering::Relaxed) {
                 return false;
             }
+            // A retry starts clean; the failure of this attempt replaces it.
+            inline_error.clear();
             let jump_hops = match hops
-                .forms(window, cx)
-                .and_then(|forms| forms.take_hops(window, cx))
+                .forms(&hop_error, window, cx)
+                .and_then(|forms| forms.take_hops(cx))
             {
                 Ok(jump_hops) => jump_hops,
                 Err(message) => {
@@ -266,7 +330,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 }
             };
 
-            let auth = match auth_form.take_auth(window, cx) {
+            let auth = match auth_form.take_auth(cx) {
                 Ok(auth) => auth,
                 Err(message) => {
                     window.push_notification(notify(NotificationType::Warning, message, cx), cx);
@@ -309,6 +373,10 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 initial_cwd: initial_cwd.clone(),
                 completion: completion.clone(),
                 on_connected,
+                on_failed: Some({
+                    let inline_error = inline_error.clone();
+                    Rc::new(move |message, _cx| inline_error.set(message))
+                }),
                 logging_override: SshLoggingOverride::Inherit,
             };
             let cfg = SshConfig {
@@ -345,12 +413,13 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
     let initial_focus = {
         let auth_form = auth_form.clone();
         let hops = hops.clone();
+        let focus_error = inline_error.clone();
         move |window: &mut Window, cx: &mut App| {
             if !is_duplicate {
                 return;
             }
             let hop_focus = hops
-                .forms(window, cx)
+                .forms(&focus_error, window, cx)
                 .ok()
                 .and_then(|forms| forms.first_secret_focus(cx));
             if let Some(focus) = hop_focus.or_else(|| auth_form.secret_focus_handle(cx)) {
@@ -366,7 +435,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
             "SSH Quick Connect"
         },
         move |content, window, cx| {
-            let hop_forms = hops.forms(window, cx);
+            let hop_forms = hops.forms(&content_error, window, cx);
             content
                 .when_some(hop_forms.as_ref().ok(), |content, forms| {
                     content.child(forms.render(cx))
@@ -404,6 +473,11 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 .when_some(
                     save_session_option(is_duplicate, save_session.clone()),
                     |content, option| content.child(option),
+                )
+                // The failure of the last attempt, under the fields it is about.
+                .when_some(
+                    inline_error.render(unsaved_note(save_session.get()), cx),
+                    |content, error| content.child(error),
                 )
         },
         move |window, cx| connect_logic(window, cx),
