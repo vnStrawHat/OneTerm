@@ -362,7 +362,7 @@ that can lie) and the unwalked badge-collision case. Neither has a subject any m
 
 | Where | Change |
 |---|---|
-| `crates/terminal-view/src/space/render.rs` | `space_number_chip` and `space_chip_tooltip` deleted, with their tests and the `Tooltip`/`Stateful`/`SharedString` imports they alone needed. The corner slot goes back to what it was before this packet: the channel badge, absolutely positioned 5 px from the top and right, and nothing else — so a Space with no channel has no corner element at all. `active_cue_ring` and `space_border_color` are untouched. |
+| `crates/terminal-view/src/space/render.rs` | `space_number_chip` and `space_chip_tooltip` deleted, with their tests and the three imports they alone needed — `Tooltip`, `Stateful` and `prelude::FluentBuilder`. (`SharedString` stays: `DragTerminalTab::title` still uses it.) The corner slot goes back to what it was before this packet: the channel badge, absolutely positioned 5 px from the top and right, and nothing else — so a Space with no channel has no corner element at all. `active_cue_ring` and `space_border_color` are untouched. |
 | `docs/terminal-split.md` | Decision 8: the number-chip paragraph is gone; the ring paragraph keeps its own text and gains one sentence recording that the chip was tried, reworked and then removed. |
 | `docs/gui-layout.md` | The broadcast-input-channels paragraph drops the two chip sentences and reads as it did before this packet. |
 

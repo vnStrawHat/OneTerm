@@ -345,9 +345,15 @@ build.
 
 The mechanism this packet's first rework corrected was still one layer short. **gpui clips every
 text line to its own line box**, whatever the containing elements do:
-`gpui-0.2.2/src/text_system/line.rs`, `paint_line` opens `window.paint_layer(line_bounds, …)`
-where `line_bounds` is `line_height` tall, and positions the baseline at `padding_top + ascent`
-with `padding_top = (line_height - ascent - descent) / 2`. A `relative(1.)` line box on a font
+`gpui-pre-0.3.3/src/text_system/line.rs:344-364`, where `paint_line` opens
+`window.paint_layer(line_bounds, …)` with `line_bounds` exactly `line_height` tall, and positions
+the baseline at `padding_top + ascent` with `padding_top = (line_height - ascent - descent) / 2`;
+`paint_layer` pushes that as a scene layer at `gpui-pre-0.3.3/src/window.rs:4134-4143`. (The
+workspace's `gpui` is the **`gpui-pre`** package — `Cargo.toml:40`,
+`gpui = { package = "gpui-pre", version = "0.3" }` — resolved to 0.3.3; there is no `gpui`
+package in `Cargo.lock`. The first draft of this section cited `gpui-0.2.2`, which the project
+does not build: right conclusion, wrong pointer, corrected here and in the rustdoc.)
+A `relative(1.)` line box on a font
 whose ascent plus descent is about 1.2 em therefore has a **negative** `padding_top`: the glyph
 box hangs out of the layer by about 0.1 em at each end and the descender is cut. That is the clip
 — the `overflow_hidden` on `Checkbox`'s label slot (`checkbox.rs:315-318`) sits on top of it but
@@ -367,7 +373,9 @@ than the kit intends — 4 px at a 16 px UI font — and the indicator reads as 
 
 `.items_center()` on the `Radio` and the `Checkbox`. Both implement `Styled`
 (`radio.rs:136-140`, `checkbox.rs:119-123`) and both apply `.refine_style(&self.style)` **after**
-their own `.items_start()`, so a call-site refinement wins with no fork and no patch. The row
+their own `.items_start()` — in `radio.rs` the `h_flex()` chain runs `.items_start()` at `:198`
+and `.refine_style(&self.style)` at `:211`; in `checkbox.rs`, `:257` and `:271` — so a call-site
+refinement wins with no fork and no patch. The row
 then centres the 1.5 em label box against the indicator, which restores exactly the optical
 relationship the kit's own `.label(…)` path has — with `items_start` and a 1 em line box the
 label box and the indicator are both 1 em tall, so the kit is already centring them; it just
@@ -404,44 +412,45 @@ whose content row is already centred; it needs nothing and got nothing.
 
 ### Measurements
 
-Pixel rows read off the captured frames at a 16 px UI font (the walk's default), by scanning
-each row of a narrow column band for ink against the dialog background. "Indicator centre" is the
-middle of the control's own 16 px box. "Cap centre" is halfway between the top of the capitals
-and the baseline — the text's optical centre. "x centre" is halfway between the x-height line and
-the baseline.
+Pixel rows read off the captured frames at a 16 px UI font (the walk's default), by scanning each
+row of a narrow column band for ink against the dialog background. "Indicator centre" is the
+middle of the control's own 16 px box. **"Cap centre" is halfway between the top of the capitals
+and the baseline — the text's optical centre, and the basis the acceptance is read on.**
 
-**Before**, from `evidence/after/13-new-ssh-session-dialog.png` (the round's own capture of the
-same control, built before this rework): indicator rows 463-478, centre **470.5**; text cap top
-470, x-height top 474, baseline 481.
+**The cap top is taken from an unambiguous all-caps run**, not from the whole label. The first
+draft of this table scanned each label's full width and so caught an ascender or a `t`-bar one
+row above the capitals — "Private" tops out on its `t`/`i`-dot, "Use global" on its `l`/`b`. That
+made every number 0.5 px optimistic and the acceptance line read "within 1 px", which does not
+hold literally. The independent verification (`evidence/acceptance-rework-2-verify.md`, B69-m2)
+re-measured against the all-caps runs and got 1.5 px; its bands are pixel-identical to the
+committed frames, so this is a reading correction, not a different result. The table below is the
+corrected reading.
 
-| Measure | Before | After |
-|---|---|---|
-| Indicator centre vs. cap centre | 475.5 - 470.5 = **5.0 px low** | **1.0 px low** |
-| Indicator centre vs. x-height centre | 477.5 - 470.5 = **7.0 px low** | **3.0 px low** |
-
-**After**, the three kinds of control, each from its own frame:
-
-| Row | Control | Indicator rows (centre) | Cap top / x top / baseline | Cap centre off | x centre off | Descender rows |
-|---|---|---|---|---|---|---|
-| Authentication: Private Key | `Radio` | 520-535 (527.5) | 523 / 527 / 534 | **1.0 px** | 3.0 px | 4 (`y`) |
-| Logging: Use global | `Radio` | 690-705 (697.5) | 693 / 697 / 704 | **1.0 px** | 3.0 px | 4 (`g`) |
-| Forward the SSH agent… | `Checkbox` | 663-678 (670.5) | 666 / 670 / 677 | **1.0 px** | 3.0 px | 4 (`g`) |
+| Row | Control | Indicator rows (centre) | Cap top (run) | Baseline | Cap centre | Indicator low by | Descender rows |
+|---|---|---|---|---|---|---|---|
+| Authentication: Private Key | `Radio` | 520-535 (527.5) | 524 (`P`, `SSH`) | 535 | 529.0 | **1.5 px** | 4 (`y`) |
+| Logging: Use global | `Radio` | 690-705 (697.5) | 694 (`U`) | 705 | 699.0 | **1.5 px** | 4 (`g`) |
+| Forward the SSH agent… | `Checkbox` | 663-678 (670.5) | 667 (`SSH`) | 678 | 672.0 | **1.5 px** | 4 (`g`) |
+| **Before**, `evidence/after/13-new-ssh-session-dialog.png` | `Radio` | 463-478 (470.5) | 471 (`SSH`) | 482 | 476.0 | **5.5 px** | — |
 
 Password and SSH Agent share the Authentication row, so they share its numbers; the crop shows
 all three.
 
+**The improvement is exactly 4.0 px — 5.5 px low becomes 1.5 px low.** 4.0 px is 0.25 em at a
+16 px font, which is precisely the half of the extra leading that `items_start` was putting above
+the text: the fix takes back what the explanation says it should, with nothing left over.
+
+**The residual 1.5 px is inherent to centring a line box, not drift.** The box's own centre sits
+`(ascent - descent) / 2` above the baseline while the cap centre sits `cap / 2` above it, and at
+this font and size the difference is 1.5 px. Closing it would mean offsetting the label against
+every other label in the application. The acceptance below is therefore stated as the 4.0 px
+improvement and a 1.5 px residual, not as "within 1 px".
+
 **The descender is whole in every row** — 4 rows below the baseline, the same count this packet
 recorded after its first fix, so the original outcome is unchanged by the rework.
 
-**The cap-height centre is within 1 px on every control**, which is the acceptance. The residual
-1 px is rounding, not drift: a 16 px indicator centres at .5 inside a 24 px row whose own centre
-is a whole pixel.
-
-**The x-height centre is 3 px low, and that is deliberate** — see Gaps. The font's x-height here
-is 7 px against an 11 px cap height, so an x-height-centred label would sit 3 px higher than any
-other label in the application and its capitals would rise above the indicator. What the rework
-removes is the 4 px the tall line box added on top of that: 7 px becomes 3 px, which is the
-kit's own relationship.
+**The x-height centre is further down still** (the x-height here is 7 px against an 11 px cap),
+and deliberately so — see Gaps.
 
 ### Frames
 
@@ -458,6 +467,21 @@ kit's own relationship.
 - `evidence/BUG-0069-rw2-logging-4x.png` — Logging "Use global" at 4x.
 - `evidence/BUG-0069-rw2-agent-forwarding-4x.png` — the agent-forwarding checkbox at 4x.
 
+### Acceptance, reworked
+
+- [x] The descender stays whole: 4 rows below the baseline on every radio and checkbox in these
+      dialogs, unchanged from this packet's first fix.
+- [x] The indicator and the text read as level. Measured on the cap-height (optical) centre:
+      **4.0 px of improvement, from 5.5 px low to 1.5 px low**, on all three kinds of control.
+- [ ] ~~The icon's vertical centre is within 1 px of the text's centre.~~ **Not met as written,
+      and not achievable by centring**: 1.5 px on the cap-height centre, more on the x-height
+      centre. Both residuals are what line-box centring gives and what every other label in the
+      application shows; the reasoning and the alternative are in Gaps. Stated here rather than
+      graded green, because the first reading of these frames made it look met.
+- [x] `control_label`'s line box is unchanged, so the original descender proof still holds.
+- [x] `cargo test -p oneterm-session-ui -p oneterm-state` green; `pwsh scripts/ci-local.ps1` ends
+      with "ci-local: all checks passed".
+
 ### Gaps carried
 
 - **The rule rests on five call sites.** `control_label` cannot centre the row it is a grandchild
@@ -466,13 +490,17 @@ kit's own relationship.
   with the same cause: laid-out glyph boxes are not queryable from the element tree. The upgrade
   path is a `control_radio` / `control_checkbox` pair in `form_dialog` that owns both the child
   and the alignment.
-- **Cap-height, not x-height, is what lands on the indicator's centre — 1.0 px against 3.0 px.**
-  Centring a line box puts the text's optical centre, halfway between the cap top and the
-  baseline, on the indicator's centre, because the box's own centre sits `(ascent - descent) / 2`
-  above the baseline. The x-height centre stays below that by half the difference between the cap
-  height and the x-height, which in this font is 3 px at a 16 px UI font. That is where the kit's
-  own labels sit and what every other checkbox in the application looks like; shifting the text up
-  by another 3 px would raise its capitals above the indicator. The measurement table reports
-  both, and the acceptance is read on the cap-height centre.
+- **The alignment is not exact, and cannot be made exact by centring: 1.5 px of cap-centre
+  residual remains.** Centring a line box puts the box's own centre — `(ascent - descent) / 2`
+  above the baseline — on the indicator's centre, and the text's optical centre is `cap / 2`
+  above the baseline, 1.5 px lower at this font and size. The x-height centre is lower again,
+  because the x-height here is 7 px against an 11 px cap. Both are where the kit's own labels
+  sit and what every other checkbox in the application looks like; pulling the text up to close
+  either would raise its capitals above the indicator and make these five controls the odd ones
+  out. What the rework buys is the 4.0 px the tall line box had added on top of that.
+- **The first reading of the measurements was 0.5 px optimistic** (B69-m2): scanning a whole
+  label for its topmost ink catches an ascender or a `t`-bar, not the capitals. The numbers are
+  corrected above and stated against an all-caps run. The lesson is the same one this packet
+  exists for — measure the thing the claim is about.
 - **`crates/sftp-ui`'s two `.label(…)` sites are still unfixed**, as the original Gaps record.
   They clip, and they are also not centred; nothing here changes them.

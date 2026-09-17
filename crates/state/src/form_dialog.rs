@@ -86,10 +86,12 @@ pub const CONTROL_LABEL_LINE_HEIGHT: f32 = 1.5;
 ///
 /// **The control that carries it must also be given `.items_center()`.** Both
 /// implement `Styled` and both apply `.refine_style(&self.style)` after their
-/// own `.items_start()` (`gpui-component-0.6.0/src/radio.rs:136-140,195-199`,
-/// `checkbox.rs:119-123,255-257`), so the refinement wins. Without it the
-/// indicator is pinned to the top of a label box half an em taller than itself
-/// and reads as sitting high — `BUG-0069`'s acceptance rework.
+/// own `.items_start()`, so the refinement wins:
+/// `gpui-component-0.6.0/src/radio.rs` — `impl Styled` at `:136-140`,
+/// `.items_start()` at `:198`, `.refine_style(&self.style)` at `:211`; and
+/// `checkbox.rs` — `:119-123`, `:257`, `:271`. Without it the indicator is
+/// pinned to the top of a label box half an em taller than itself and reads as
+/// sitting high — `BUG-0069`'s acceptance rework.
 ///
 /// ## Why the tall line box, and why it is the only lever
 ///
@@ -97,7 +99,10 @@ pub const CONTROL_LABEL_LINE_HEIGHT: f32 = 1.5;
 /// `window.paint_layer(line_bounds, …)` with `line_bounds` exactly `line_height`
 /// tall, and puts the baseline at `padding_top + ascent` where `padding_top` is
 /// `(line_height - ascent - descent) / 2`
-/// (`gpui-0.2.2/src/text_system/line.rs`). On a font whose ascent plus descent
+/// (`gpui-pre-0.3.3/src/text_system/line.rs:344-364`; `paint_layer` pushes the
+/// scene layer at `gpui-pre-0.3.3/src/window.rs:4134-4143`. The workspace's
+/// `gpui` is the `gpui-pre` package — see the root `Cargo.toml`). On a font
+/// whose ascent plus descent
 /// is about 1.2 em, a `relative(1.)` line box gives a *negative* `padding_top`:
 /// the glyph hangs out of its own layer and the tail of a `g` or a `p` is cut
 /// off. `BUG-0069`: "Loggin**g**" and "Use glo**b**a**l**" ended flat at the

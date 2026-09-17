@@ -518,10 +518,15 @@ binding it shows that.
   and deliver no `F1`, so "the terminal program now receives `F1`" is a code claim —
   `crates/terminal-view/src/input/keys.rs` maps `f1` and nothing in `BINDABLE_ACTIONS` claims it
   any more — and not a captured one. It is the same gap `DEC-0018`'s first Consequence carries.
-- **A user who bound About to `f1` by hand keeps it.** `ui_config.json` only ever stored an
-  entry that differed from the default, so nobody has `"about": "f1"` from the shipped default;
-  anyone who typed it deliberately keeps their override, which is `DEC-0018`'s migration rule
-  working as written.
+- **A user who bound About to any *other* key keeps it; one who deliberately typed `f1` does
+  not.** `ui_config.json` only ever stored an entry that differed from the default, so while the
+  default *was* `f1` a hand-typed `f1` was dropped by `overrides_from_effective` and never
+  written. That user comes back unbound and rebinds in one click — the same mechanic
+  `evidence/settings-ui-wave1-verify.md` already recorded, and the price `DEC-0018`'s sparse map
+  charges for not distinguishing "never rebound" from "chose the default". Every non-empty
+  override now persists, because no default holds `f1` any more. (Corrected after
+  `evidence/acceptance-rework-2-verify.md`'s `US123-m1`: the first draft of this line claimed the
+  opposite for exactly the user it named.)
 - **The release-notes clause stays NOT MET** for the same reason as before: `release.yml` renders
   commit subjects only.
 

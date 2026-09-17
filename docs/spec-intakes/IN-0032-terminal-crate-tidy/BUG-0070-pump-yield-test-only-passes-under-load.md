@@ -171,6 +171,7 @@ yields for *as long as* the frame waits, not once.
 | `Demand::is_raised` back to the one-shot `swap(0, …)` (the `US-0082` regression) | **FAIL 3/3.** "the pump took 592040 chunks in 20ms with a frame waiting; a pump that keeps yielding fits 81" |
 | The pump stops parking when the demand is raised | **FAIL 3/3**, 533340 / 545746 / 524253 chunks against 81 |
 | The pump never asks at all | The 5 s deadline on the wait for `asked_at` fires. By construction — the probe was not run, because it is the same code path as an unset `asked_at`. |
+| The pump never even reaches its steady state | The **same** 5 s deadline fires on the first wait. Added after the verification (`B70-m2`): that loop was an unbounded `while chunks < 4 { yield_now() }`, so the packet's "fails on the deadline instead of hanging" was true of the second wait only. |
 
 The margin on the first two is about 6500x, so neither is a scheduler-dependent verdict.
 
@@ -217,6 +218,14 @@ inherits them and adds nothing future work must follow.
 3. the renderer then marks the chunk count, takes the lock, reads the count again **under** the
    guard, and the old assertion runs on that delta with the bound left at 8 — now 2 ms of the
    pump's own parks rather than microseconds of an unthrottled loop.
+
+Both waits share **one** deadline, and the measurement runs into an `Option` so that **every
+assertion happens after `stop` and `pump.join()`**. Both of those came from the verification
+(`evidence/acceptance-rework-2-verify.md`, `B70-m1` and `B70-m2`): the first draft left the
+steady-state wait unbounded, and its deadline `assert!` panicked before the join, which detaches a
+thread that spins `while !stop` at full speed until the binary exits — measured at 5.00 s of test
+against 6.74 s of process. Neither can happen on a passing run; both make a failing run cheap and
+honest.
 
 No production line changed: `Demand`, `lock_for_render`, `render_demand_raised` and
 `raise_render_demand` are untouched, and the other four handshake tests are untouched.
