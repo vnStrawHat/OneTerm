@@ -13,13 +13,15 @@
 //! regardless of focus — spawning on `AsyncApp` without holding the window can
 //! be dropped, leaving the timer unfired until a click refreshes the view.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, Hsla,
-    InteractiveElement as _, IntoElement, ParentElement, Render, StatefulInteractiveElement as _,
-    Styled, Task, Window, div,
+    InteractiveElement as _, IntoElement, ParentElement, Pixels, Render,
+    StatefulInteractiveElement as _, Styled, Task, Window, div, px,
 };
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _, tooltip::Tooltip};
 
@@ -80,56 +82,109 @@ impl From<String> for Label {
 /// Produces the label to show, or `None` to hide the indicator.
 pub type Sampler = Box<dyn FnMut(&App) -> Option<Label> + 'static>;
 
+/// The width the status bar has left for one shortening indicator, refreshed
+/// every frame by [`crate::layout::statusbar::build_status_bar`].
+///
+/// A shared cell rather than entity state: the bar is the only place that knows
+/// every label, and it computes the split while building the same frame the
+/// indicator renders in — so this must not mark anything dirty.
+pub type Budget = Rc<Cell<Pixels>>;
+
 /// How an indicator shortens a label the window is too narrow for.
 ///
-/// The status bar does not wrap or scroll: whatever does not fit is clipped at
-/// the window edge, which is how a path lost the directory the user was in and
-/// how `MEM 577.0 MB` lost its unit (`US-0112`). Bounding the one unbounded
-/// indicator keeps the rest on screen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The status bar does not wrap or scroll. The pinned ends never shrink (see
+/// the bar's centre region), so the two indicators that can grow without bound
+/// are the ones that give way: the cwd and the git branch (`US-0112`).
+#[derive(Clone, Debug, PartialEq)]
 pub enum Shorten {
-    /// Show the sampled text as it is. Every fixed-width indicator (clock,
-    /// speeds, CPU/memory) fits by construction.
+    /// Show the sampled text as it is. Every bounded indicator (clock, speeds,
+    /// CPU/memory) fits by construction, and a value and its unit are one token.
     Never,
     /// A filesystem path: drop leading components, keep the tail.
-    PathTail,
+    PathTail(Budget),
+    /// A label the head of which identifies it (a git branch): keep the head.
+    HeadFirst(Budget),
 }
 
-/// Width the status bar's other contents need: the clock and the git status on
-/// the left, the speed and CPU/memory indicators on the right, the separators
-/// and the dock button. Everything left over is the path's.
-const STATUS_BAR_RESERVED: gpui::Pixels = gpui::px(440.);
-
-/// Mean advance of one status-bar character, as a share of the root font size.
-/// The bar renders at `text_xs` (0.75 rem) in a proportional UI font whose mean
-/// advance is about half its size — ~6 px per character at the default 16 px
-/// root font, which is what the before frames measure.
-const CHAR_ADVANCE_PER_REM: f32 = 0.375;
-
-/// How many characters of path the window has room for.
-fn path_budget(window: &Window) -> usize {
-    let available = (window.viewport_size().width - STATUS_BAR_RESERVED).max(gpui::px(120.));
-    let advance = (window.rem_size() * CHAR_ADVANCE_PER_REM).max(gpui::px(1.));
-    (available / advance) as usize
+impl Shorten {
+    fn budget(&self) -> Option<Pixels> {
+        match self {
+            Shorten::Never => None,
+            Shorten::PathTail(budget) | Shorten::HeadFirst(budget) => Some(budget.get()),
+        }
+    }
 }
+
+/// The status bar renders at `text_xs`, three quarters of the root font size.
+fn status_font_size(window: &Window) -> Pixels {
+    window.rem_size() * 0.75
+}
+
+/// The width `text` takes in the status bar's own font.
+///
+/// Measured through the window's text system, not estimated from a character
+/// count: the bar's font is proportional, and an estimate is what let the memory
+/// unit and the git branch fall off the bar (`US-0112`).
+pub(crate) fn measure_status_text(window: &Window, text: &str) -> Pixels {
+    if text.is_empty() {
+        return px(0.);
+    }
+    let font_size = status_font_size(window);
+    let mut style = window.text_style();
+    style.font_size = font_size.into();
+    let run = style.to_run(text.len());
+    window
+        .text_system()
+        .layout_line(text, font_size, &[run], None)
+        .width
+}
+
+/// The longest elision of `text` that fits `max_width`.
+///
+/// `elide` is the shortening rule — which end to keep, where it may cut — and
+/// this only chooses how much of it fits, by measuring. `elide` must never grow
+/// as its budget shrinks, and must fit anything at a budget of zero.
+fn fit_to_width(
+    text: &str,
+    max_width: Pixels,
+    window: &Window,
+    elide: fn(&str, usize) -> String,
+) -> String {
+    if measure_status_text(window, text) <= max_width {
+        return text.to_string();
+    }
+    // Invariant: `fits` fits (zero characters is the empty string), `over` does
+    // not. Bisect until they are adjacent.
+    let (mut fits, mut over) = (0usize, text.chars().count());
+    while fits + 1 < over {
+        let mid = fits + (over - fits) / 2;
+        if measure_status_text(window, &elide(text, mid)) <= max_width {
+            fits = mid;
+        } else {
+            over = mid;
+        }
+    }
+    elide(text, fits)
+}
+
+const ELLIPSIS: char = '…';
 
 /// Shorten `path` to `max_chars` by dropping leading components and keeping the
 /// tail — the directory the user is actually in — behind a leading ellipsis.
 ///
 /// The cut lands on a separator whenever one fits, so a component is never
 /// halved. Only a trailing component longer than the whole budget is cut inside
-/// it, and then from the left so its end still reads.
-///
-/// Characters, not pixels: the status bar font is proportional, so the budget is
-/// an estimate that errs narrow rather than a measurement.
+/// it, and then from the left so its end still reads. The result never exceeds
+/// `max_chars`, the ellipsis included.
 fn elide_path_left(path: &str, max_chars: usize) -> String {
-    const ELLIPSIS: char = '…';
-
     if path.chars().count() <= max_chars {
         return path.to_string();
     }
+    if max_chars == 0 {
+        return String::new();
+    }
     // The ellipsis takes a column of its own.
-    let budget = max_chars.saturating_sub(1);
+    let budget = max_chars - 1;
     // Left to right, so the first separator whose tail fits keeps the most
     // components.
     let at_separator = path
@@ -140,11 +195,27 @@ fn elide_path_left(path: &str, max_chars: usize) -> String {
     match at_separator {
         Some(tail) => format!("{ELLIPSIS}{tail}"),
         None => {
-            let skipped = path.chars().count().saturating_sub(budget);
+            let skipped = path.chars().count() - budget;
             let tail: String = path.chars().skip(skipped).collect();
             format!("{ELLIPSIS}{tail}")
         }
     }
+}
+
+/// Shorten `text` to `max_chars` by keeping its head behind a trailing ellipsis.
+///
+/// For a name whose beginning identifies it — a git branch, where
+/// `worktree-agent-a18…` still says which branch it is. The result never exceeds
+/// `max_chars`, the ellipsis included.
+fn elide_head(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    if max_chars == 0 {
+        return String::new();
+    }
+    let head: String = text.chars().take(max_chars - 1).collect();
+    format!("{head}{ELLIPSIS}")
 }
 
 /// How an indicator presents the label it samples.
@@ -200,6 +271,21 @@ impl StatusText {
         })
     }
 
+    /// The text this indicator sampled, before any shortening. The status bar
+    /// measures it to share out the width it has.
+    pub(crate) fn text(&self) -> Option<String> {
+        self.label.as_ref().map(Label::plain_text)
+    }
+
+    /// Tell this indicator how much width the bar has left for it. No-op for an
+    /// indicator that never shortens.
+    pub(crate) fn set_budget(&self, width: Pixels) {
+        match &self.presentation.shorten {
+            Shorten::Never => {}
+            Shorten::PathTail(budget) | Shorten::HeadFirst(budget) => budget.set(width),
+        }
+    }
+
     fn tick(&mut self, cx: &mut Context<Self>) {
         let label = (self.sample)(cx);
         if label != self.label {
@@ -210,15 +296,30 @@ impl StatusText {
 }
 
 impl Shorten {
-    /// Apply this policy to a sampled label, given the room the window has.
-    fn apply(self, mut label: Label, max_chars: usize) -> Label {
-        // A multi-segment label (the git diffstat) is built from parts that
-        // must stay whole, and none of them is a path. Neither is a value with
-        // its unit: `Shorten::Never` is what keeps `MEM 577.0 MB` intact.
-        if self == Shorten::PathTail
-            && let [segment] = label.0.as_mut_slice()
-        {
-            segment.text = elide_path_left(&segment.text, max_chars);
+    /// Apply this policy to a sampled label, within the width the bar left for
+    /// it. `Shorten::Never` is what keeps `MEM 577.0 MB` whole.
+    fn apply(&self, mut label: Label, window: &Window) -> Label {
+        let Some(budget) = self.budget() else {
+            return label;
+        };
+        match self {
+            Shorten::Never => {}
+            Shorten::PathTail(_) => {
+                if let [segment] = label.0.as_mut_slice() {
+                    segment.text = fit_to_width(&segment.text, budget, window, elide_path_left);
+                }
+            }
+            Shorten::HeadFirst(_) => {
+                // Only the first segment is the name; the rest (a diffstat,
+                // ahead/behind counts) are short and already bounded, so what
+                // they take comes off the name's budget.
+                let Some((name, rest)) = label.0.split_first_mut() else {
+                    return label;
+                };
+                let rest: String = rest.iter().map(|segment| segment.text.as_str()).collect();
+                let budget = (budget - measure_status_text(window, &rest)).max(px(0.));
+                name.text = fit_to_width(&name.text, budget, window, elide_head);
+            }
         }
         label
     }
@@ -227,7 +328,7 @@ impl Shorten {
 impl Render for StatusText {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let copyable = self.presentation.copyable;
-        let shorten = self.presentation.shorten;
+        let shorten = self.presentation.shorten.clone();
         let icon = self.presentation.icon.clone();
         let base_tone = self
             .label
@@ -243,7 +344,15 @@ impl Render for StatusText {
             .when_some(self.label.clone(), |this, label| {
                 // Copy the value the indicator sampled, not the shortened one.
                 let text = label.plain_text();
-                let label = shorten.apply(label, path_budget(window));
+                let label = shorten.apply(label, window);
+                // A shortened label hides part of its value, so hovering has to
+                // show the whole of it; an unshortened one only advertises the
+                // copy (`US-0112`).
+                let tooltip = match label.plain_text() {
+                    shown if shown != text => Some(text.clone()),
+                    _ if copyable => Some("Click to copy".to_string()),
+                    _ => None,
+                };
                 this.children(icon.map(|icon| icon.xsmall()))
                     // Segments sit in their own flex row so the outer `gap_1`
                     // does not open space between them; spacing is in the text.
@@ -255,14 +364,17 @@ impl Render for StatusText {
                                 div().text_color(segment.tone.color(cx)).child(segment.text)
                             })),
                     )
+                    .when_some(tooltip, |this, tooltip| {
+                        this.tooltip(move |window, cx| {
+                            Tooltip::new(tooltip.clone()).build(window, cx)
+                        })
+                    })
                     .when(copyable, |this| {
-                        this.cursor_pointer()
-                            .tooltip(move |window, cx| {
-                                Tooltip::new("Click to copy").build(window, cx)
-                            })
-                            .on_click(move |_: &ClickEvent, _window, cx: &mut App| {
+                        this.cursor_pointer().on_click(
+                            move |_: &ClickEvent, _window, cx: &mut App| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                            })
+                            },
+                        )
                     })
             })
     }
@@ -270,7 +382,10 @@ impl Render for StatusText {
 
 #[cfg(test)]
 mod tests {
-    use super::{Label, Segment, Shorten, Tone, elide_path_left};
+    use super::{
+        Budget, Cell, Context, IntoElement, Label, Pixels, Rc, Render, Segment, Shorten, Tone,
+        Window, div, elide_head, elide_path_left, fit_to_width, measure_status_text, px,
+    };
 
     #[test]
     fn a_path_that_fits_is_shown_whole() {
@@ -278,6 +393,38 @@ mod tests {
         // Exactly the budget is still whole.
         assert_eq!(elide_path_left(r"C:\Users\me", 11), r"C:\Users\me");
         assert_eq!(elide_path_left("", 0), "");
+    }
+
+    #[test]
+    fn nothing_ever_comes_back_wider_than_its_budget() {
+        // The width search bisects down to a zero budget, so an elision that
+        // came back one column over would be picked as "fitting".
+        let path = r"C:\Users\trunglt\scratchpad\ux\home";
+        for budget in 0..=path.chars().count() + 2 {
+            assert!(
+                elide_path_left(path, budget).chars().count() <= budget,
+                "path budget {budget} overflowed"
+            );
+            assert!(
+                elide_head("worktree-agent-a1857284c8b933f27", budget)
+                    .chars()
+                    .count()
+                    <= budget,
+                "head budget {budget} overflowed"
+            );
+        }
+        assert_eq!(elide_path_left(path, 0), "");
+        assert_eq!(elide_head("main", 0), "");
+    }
+
+    #[test]
+    fn a_long_name_keeps_the_head_that_identifies_it() {
+        let branch = "worktree-agent-a1857284c8b933f27";
+        assert_eq!(elide_head(branch, 40), branch);
+        assert_eq!(elide_head(branch, 32), branch);
+        assert_eq!(elide_head(branch, 18), "worktree-agent-a1…");
+        assert_eq!(elide_head(branch, 2), "w…");
+        assert_eq!(elide_head("プロジェクト管理", 4), "プロジ…");
     }
 
     #[test]
@@ -293,15 +440,24 @@ mod tests {
     }
 
     #[test]
-    fn the_cut_never_lands_inside_a_component() {
+    fn the_cut_lands_on_a_separator_while_one_fits() {
         let path = r"C:\Users\trunglt\scratchpad\ux\home";
-        for budget in 1..=path.chars().count() {
+        // The last component is 4 characters, so from budget 6 up there is
+        // always a separator boundary that fits, and the cut must be on it.
+        for budget in 6..=path.chars().count() {
             let elided = elide_path_left(path, budget);
-            assert!(
-                path.ends_with(elided.trim_start_matches('…')),
-                "{elided:?} is not a tail of {path:?}"
-            );
+            let kept = elided.trim_start_matches('…');
+            assert!(path.ends_with(kept), "{elided:?} is not a tail of {path:?}");
+            if elided != path {
+                assert!(
+                    kept.starts_with('\\'),
+                    "budget {budget} cut inside a component: {elided:?}"
+                );
+            }
         }
+        // Below that only the last component's own end can be kept, and then
+        // the cut is inside it — with the ellipsis that says so.
+        assert_eq!(elide_path_left(path, 4), "…ome");
     }
 
     #[test]
@@ -319,26 +475,79 @@ mod tests {
         assert_eq!(elide_path_left("プロジェクト管理", 4), "…ト管理");
     }
 
-    #[test]
-    fn only_a_path_label_is_shortened_and_never_a_value_with_its_unit() {
-        let memory = Label::from("CPU 0.2%  MEM 577.0 MB".to_string());
-        assert_eq!(
-            Shorten::Never.apply(memory.clone(), 8).plain_text(),
-            "CPU 0.2%  MEM 577.0 MB",
-            "a value and its unit are one token; the indicator never cuts it"
-        );
+    /// A view to hang a test window on, so the text system can measure.
+    struct Probe;
 
-        // A diffstat-style multi-segment label is left alone by construction.
-        let git = Label(vec![
-            Segment::new("main", Tone::Foreground),
-            Segment::new(" +12 -3", Tone::Success),
-        ]);
-        assert_eq!(Shorten::PathTail.apply(git.clone(), 4), git);
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
 
-        let path = Label::from(r"C:\Users\me\scratchpad\ux\home".to_string());
-        assert_eq!(
-            Shorten::PathTail.apply(path, 20).plain_text(),
-            r"…\scratchpad\ux\home"
-        );
+    fn budget_of(width: Pixels) -> Budget {
+        Rc::new(Cell::new(width))
+    }
+
+    #[gpui::test]
+    fn the_width_search_picks_the_longest_elision_that_fits(cx: &mut gpui::TestAppContext) {
+        let (_probe, cx) = cx.add_window_view(|_, _| Probe);
+        cx.update(|window, _| {
+            let path = r"C:\Users\me\scratchpad\ux\home";
+            let full = measure_status_text(window, path);
+            assert!(full > px(0.), "the test window must have font metrics");
+
+            // Room for all of it: nothing is elided.
+            assert_eq!(fit_to_width(path, full, window, elide_path_left), path);
+
+            // Half the room: elided at a separator, and it really does fit.
+            let half = fit_to_width(path, full / 2., window, elide_path_left);
+            assert!(half.starts_with('…'), "{half:?}");
+            assert!(path.ends_with(half.trim_start_matches('…')), "{half:?}");
+            assert!(measure_status_text(window, &half) <= full / 2.);
+
+            // No room at all: nothing, rather than something over budget.
+            assert_eq!(fit_to_width(path, px(0.), window, elide_path_left), "");
+        });
+    }
+
+    #[gpui::test]
+    fn only_an_unbounded_label_shortens_and_never_a_value_with_its_unit(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_probe, cx) = cx.add_window_view(|_, _| Probe);
+        cx.update(|window, _| {
+            // A value and its unit are one token, and its policy is `Never`:
+            // no budget can cut `MB` off it.
+            let memory = Label::from("CPU 0.2%  MEM 577.0 MB".to_string());
+            assert_eq!(Shorten::Never.apply(memory.clone(), window), memory);
+
+            // The git label's head is the branch; the diffstat segments stay.
+            let git = Label(vec![
+                Segment::new("worktree-agent-a1857284c8b933f27", Tone::Foreground),
+                Segment::new(" (+12 -3)", Tone::Success),
+            ]);
+            // Room for the diffstat and about half the branch.
+            let room = measure_status_text(window, " (+12 -3)")
+                + measure_status_text(window, "worktree-agent");
+            let narrow = Shorten::HeadFirst(budget_of(room)).apply(git.clone(), window);
+            assert!(
+                narrow.0[0].text.ends_with('…'),
+                "the branch keeps its head: {:?}",
+                narrow.0[0].text
+            );
+            assert!(
+                git.0[0]
+                    .text
+                    .starts_with(narrow.0[0].text.trim_end_matches('…'))
+            );
+            assert_eq!(narrow.0[1], git.0[1], "the diffstat is not touched");
+
+            // A path policy on a multi-segment label leaves it alone: only a
+            // single-run label is a path.
+            assert_eq!(
+                Shorten::PathTail(budget_of(px(1.))).apply(git.clone(), window),
+                git
+            );
+        });
     }
 }

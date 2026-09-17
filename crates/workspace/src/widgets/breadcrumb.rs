@@ -8,11 +8,15 @@ use std::time::Duration;
 use gpui::{App, Entity, WeakEntity, Window};
 use gpui_component::{Icon, IconName, dock::DockArea};
 
-use super::status_text::{Presentation, Shorten, StatusText};
+use super::status_text::{Budget, Presentation, Shorten, StatusText};
 
 /// Indicator showing the breadcrumb (cwd path) of the active terminal session.
+///
+/// `budget` is the width the status bar leaves for the path; the bar refreshes
+/// it every frame.
 pub fn breadcrumb(
     dock_area: WeakEntity<DockArea>,
+    budget: Budget,
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<StatusText> {
@@ -22,9 +26,9 @@ pub fn breadcrumb(
         Presentation {
             icon: Some(Icon::new(IconName::FolderOpen)),
             copyable: true,
-            // The only unbounded indicator: a deep cwd would otherwise push the
-            // right-hand indicators off the window (`US-0112`).
-            shorten: Shorten::PathTail,
+            // A deep cwd is unbounded, so it is the indicator that gives way
+            // (`US-0112`).
+            shorten: Shorten::PathTail(budget),
         },
         Box::new(move |cx| {
             let dock_area = dock_area.upgrade()?;

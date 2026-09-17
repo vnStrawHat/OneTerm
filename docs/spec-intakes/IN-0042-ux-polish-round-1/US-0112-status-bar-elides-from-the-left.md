@@ -50,6 +50,9 @@ Addresses `F10` (medium), quoted from `research/ux-walkthrough-2026-09-16.md`:
     indicator goes through, so the unit is never what gets cut.
   - Every indicator that shares the same helper: fixing it in the helper rather than in the
     breadcrumb alone is the point (see Context).
+  - Added during the rework: `crates/workspace/src/layout/statusbar.rs` (which region each
+    indicator sits in, and the measured split between the two that shorten) and
+    `crates/workspace/src/widgets/git_status.rs` (the branch elides too).
 - [x] Out of scope:
   - Which indicators the status bar shows and in what order.
   - The empty-Space case where the bar collapses to the clock — that is `F27`, documented as
@@ -68,7 +71,11 @@ Addresses `F10` (medium), quoted from `research/ux-walkthrough-2026-09-16.md`:
 - [x] A single path component longer than the available width still renders something
       sensible (its tail, with the ellipsis) rather than an empty string or a panic.
 - [x] The memory indicator shows its unit at every width it is visible at: `MEM 577.0 MB`, or
-      a shorter form that still carries a unit, never `MEM 577.0`.
+      a shorter form that still carries a unit, never `MEM 577.0`. Re-proved at 700, 900 and
+      1200 px after the verification found it cut at 700 px.
+- [x] The dock-toggle button stays on the bar at every width, and the git branch is elided with
+      an ellipsis rather than hard-cut when it does not fit. Added after verification: the
+      first implementation moved the defect onto those two.
 - [x] A focused test covers the elision at several widths, including the two degenerate cases
       (width smaller than the last component; empty path).
 - [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
@@ -97,11 +104,12 @@ and the document currently describes the bar as if it always fits.
 
 ### Reconciliation
 
-Docs changed: `docs/gui-layout.md` §Status bar gained a paragraph — the bar neither wraps nor
-scrolls, the breadcrumb is the only indicator that shortens, it elides from the left at a
-separator, every other indicator is `Shorten::Never` so a value never loses its unit, the
-budget is a character estimate rather than a measurement, and click-to-copy still copies the
-full path. §Source map still resolves (no file moved or was added).
+Docs changed: `docs/gui-layout.md` §Status bar, rewritten with the rework — the centre region
+is what shrinks and the pinned ends never do, the two unbounded indicators are the cwd and the
+branch, the split between them is measured through the window's text system, the path elides
+from the left at a separator and the branch from the right keeping its head, a shortened
+indicator carries a tooltip with its full value, and click-to-copy still copies the sampled
+path. §Source map still resolves (no file moved or was added).
 
 ## Context
 
@@ -182,6 +190,44 @@ answer once someone looks at the frame.
 
 ## Evidence and Gaps
 
+### Rework after independent verification (M1, m3, m4)
+
+`evidence/workspace-wave1-verify.md` **failed** this packet: the first implementation reserved
+a fixed 440 px for "everything else", which ignored the git-status and net-speed indicators.
+At 700 px that still cut `MEM 174.1 M` and clipped the dock button away, and at 700/900/1200 px
+the git branch was hard-cut mid-token with no ellipsis (`worktree-ager`). `F10`'s defect had
+been moved onto the next unbounded indicator, not removed. The estimate also erred *wide* —
+~6.2 px per character measured against the 6.0 px modelled — the opposite of what this section
+claimed.
+
+Fixed at the root, in two parts:
+
+1. **The layout guarantees the pinned ends.** The breadcrumb and git status moved from the
+   bar's left region into its **centre** region, which GPUI Kit lays out as `flex-1` with a
+   zero basis (`reference/gpui-kit/crates/component/src/status_bar.rs`): it takes what is left
+   and can never push the ends. The clock, the speeds, the CPU/memory indicator and the dock
+   button therefore keep their width at every window size — `MB` and the button cannot be
+   clipped by a long path any more, whatever the arithmetic does.
+2. **The budget is measured, not estimated.** `measure_status_text` shapes a string through
+   the window's text system at the bar's own font size (`text_xs`, 0.75 rem).
+   `build_status_bar` measures every label, subtracts the bar's fixed pieces (icons,
+   separators, the button, padding — the only constants left, and none of them depends on the
+   text), and divides the rest: the branch gets what it asks for while the path keeps at least
+   80 px, and below that the branch gives way down to 40 px. Each indicator then picks the
+   longest elision that fits its budget by bisecting over the character budget and measuring
+   (`fit_to_width`), so the character rules stay pure and testable while the fitting is exact.
+3. **The branch elides too**, keeping the head that identifies it (`elide_head`:
+   `worktree-agent-aa…`), through the same helper.
+
+Also from the verification: **m3** — `elide_path_left(_, 0)` returned `…`, one column over
+budget, which the new bisection would have accepted as "fitting"; both elisions now return
+`""` at a budget of zero, and a test sweeps every budget to prove nothing ever comes back wider
+than its budget. The `the_cut_never_lands_inside_a_component` test only asserted a suffix
+relation, which the over-long-component branch satisfies while cutting inside a component; it
+is now `the_cut_lands_on_a_separator_while_one_fits` and asserts the boundary itself. **m4** —
+a shortened indicator now carries a tooltip with its full value; an unshortened copyable one
+still reads "Click to copy".
+
 ### What the packet assumed, and what was actually there
 
 `status_text.rs` had **no shortening helper**. Nothing in OneTerm truncated anything: the
@@ -193,23 +239,34 @@ not truncated. `format_memory` already produced `MEM 577.0 MB` correctly.
 So the fix bounds the one unbounded indicator, which is still "fix it where the callers route
 through" as the packet asked — building the helper rather than correcting it:
 
-- `crates/workspace/src/widgets/status_text.rs` — `elide_path_left(path, max_chars)` (pure:
-  drops leading components, cuts at a separator whenever one fits, falls back to the tail of
-  an over-long single component), a `Shorten { Never, PathTail }` policy applied at render
-  where the window width is known, and `path_budget(window)` = (viewport width - 440 px
-  reserved for the bar's other contents) / (root font size x 0.375). The presentation
+- `crates/workspace/src/widgets/status_text.rs` — the shortening rules
+  (`elide_path_left`, `elide_head`), the measurement (`measure_status_text`), the width search
+  (`fit_to_width`), and a `Shorten { Never, PathTail(Budget), HeadFirst(Budget) }` policy whose
+  budget is a shared `Rc<Cell<Pixels>>` the bar refreshes each frame. The presentation
   arguments moved into a `Presentation { icon, copyable, shorten }` struct, because an eighth
   parameter tripped `clippy::too_many_arguments`.
-- `crates/workspace/src/widgets/breadcrumb.rs` — the only `Shorten::PathTail` caller.
-- `datetime_clock.rs`, `git_status.rs`, `net_speed.rs`, `resource.rs` — `Shorten::Never`,
-  behaviour unchanged. Those are the callers the packet asked to be listed; each was re-read
-  in the 900 px and 1900 px frames below and reads correctly.
+- `crates/workspace/src/layout/statusbar.rs` — the layout change and `divide_centre`, the one
+  place that sees every label at once.
+- `crates/workspace/src/widgets/breadcrumb.rs` (`PathTail`) and `git_status.rs` (`HeadFirst`).
+- `datetime_clock.rs`, `net_speed.rs`, `resource.rs` — `Shorten::Never`, behaviour unchanged.
+  Those are the callers the packet asked to be listed; each was re-read in the 700/900/1200 px
+  frames below and reads correctly.
 
 Click-to-copy still copies the **sampled** path, not the elided one.
 
 ### Commands
 
-- `cargo test -p oneterm-workspace` — 24 passed, six of them new:
+- `cargo test -p oneterm-workspace` — 34 passed. This packet's, after the rework:
+  `a_path_that_fits_is_shown_whole`, `nothing_ever_comes_back_wider_than_its_budget`
+  (every budget from 0 up, both rules), `a_long_name_keeps_the_head_that_identifies_it`,
+  `a_long_path_keeps_its_tail_from_a_separator`,
+  `the_cut_lands_on_a_separator_while_one_fits`,
+  `a_single_component_longer_than_the_budget_keeps_its_end`,
+  `multi_byte_components_are_never_cut_mid_character`,
+  `the_width_search_picks_the_longest_elision_that_fits` (measured, in a test window),
+  `only_an_unbounded_label_shortens_and_never_a_value_with_its_unit`, and the four
+  `statusbar::tests::*` over `divide_centre`.
+- Superseded (first implementation) — 24 passed, six of them new:
   `a_path_that_fits_is_shown_whole` (fits, exactly fitting, empty),
   `a_long_path_keeps_its_tail_from_a_separator` (three budgets, Windows and POSIX
   separators), `the_cut_never_lands_inside_a_component` (every budget from 1 to the full
@@ -219,7 +276,21 @@ Click-to-copy still copies the **sampled** path, not the elided one.
   `only_a_path_label_is_shortened_and_never_a_value_with_its_unit`.
 - `pwsh scripts/ci-local.ps1` — ended with "ci-local: all checks passed".
 
-### GUI walk
+### GUI walk, after the rework
+
+Own build, own pid, `PrintWindow`, shell cwd deep inside this worktree so the git indicator is
+live and the branch is long (`worktree-agent-aac9bb2c34fe0673d`, 36 characters).
+
+- `evidence/US-0112-rework-700-git-cwd.png` — 700 px, the width the verification failed on:
+  path `…\workspace`, branch `worktree-agent-aa… (+703 -149)`, **`MEM 197.7 MB`** with its unit
+  and the dock button both on the bar. Compare `evidence/verify-US-0112-700-git-cwd.png`.
+- `evidence/US-0112-rework-900-git-cwd.png` — 900 px: path `…\workspace\src\layout\workspace`,
+  the branch whole, `MEM 198.0 MB`, dock button present.
+- `evidence/US-0112-rework-1200-git-cwd.png` — 1200 px: a longer tail of the path, the branch
+  whole, `MEM 186.4 MB`, dock button present.
+- In all three: every shortened value carries an ellipsis, and nothing is cut without one.
+
+### GUI walk (first implementation, superseded)
 
 - `evidence/US-0112-50-narrow-900.png` — 900 px window. The bar reads
   `...\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\ux2\home` behind a leading ellipsis,
@@ -233,14 +304,19 @@ Click-to-copy still copies the **sampled** path, not the elided one.
 
 ### Gaps
 
-- The budget is in **characters**, derived from the window width and the root font size, not a
-  text measurement: the status bar font is proportional, so the elision point drifts with the
-  font and with unusually wide glyphs. The constants (440 px reserved, 0.375 rem mean advance)
-  were calibrated against the before frames — about 6 px per character at the default 16 px
-  root font — and err narrow. Measuring would mean laying the text out during render for one
-  indicator.
-- `Shorten::apply` and `path_budget` are separately testable, but the render call that joins
-  them is not covered by a test; the two frames are its proof.
+- The bar's **non-text chrome** is still constants (`BAR_CHROME`, `ICON_CHROME`): icon size,
+  separator width, the dock button and the bar's padding are read off the kit's styles rather
+  than measured. They do not depend on the text, and an error in them now only makes the centre
+  region's two labels slightly shorter or longer than they had to be — it can no longer reach
+  the pinned ends, which is the half that mattered.
+- **Shaping runs per frame.** `fit_to_width` bisects, so a path takes about seven `layout_line`
+  calls per frame, plus one per other label. `layout_line` is cached by gpui, and this was not
+  profiled; if the status bar ever shows up in a profile, caching the result per (text, budget)
+  is the next step.
+- The tooltip shows the full sampled value, but there is no test for it — it is a render-time
+  branch, like the elision call itself.
+- Only Windows was walked; the elision rules treat `/` and `\` alike, and the measurement is
+  platform-independent, but no macOS or Linux frame was taken.
 
 ## Handoff
 

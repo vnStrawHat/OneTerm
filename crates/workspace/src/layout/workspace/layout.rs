@@ -9,12 +9,17 @@ use super::{DEFAULT_RIGHT_DOCK_WIDTH, MAIN_DOCK_VERSION};
 
 /// Reset the center (terminal tabs) and re-apply the right-dock panel while
 /// preserving the loaded right-dock size and open state.
+///
+/// `preferred_right_dock_width` is the width the saved layout asked for; it is
+/// what gets written back, while the clamp decides what is applied (`US-0113`).
 pub(crate) fn reset_center_only(
     dock_area: gpui::WeakEntity<DockArea>,
+    preferred_right_dock_width: gpui::Pixels,
     window: &mut Window,
     cx: &mut App,
 ) {
     if let Some(state) = apply_center_reset(dock_area, window, cx) {
+        let state = super::state_with_preferred_width(state, preferred_right_dock_width);
         cx.background_executor()
             .spawn(async move {
                 super::persistence::save_state_logged(&state, None, "reset_center_only");
@@ -81,7 +86,10 @@ pub(crate) fn reset_default_layout(
             view.set_dock_collapsible(DockPlacement::Right, true, window, cx);
             view.dump(cx)
         })
-        .ok();
+        .ok()
+        // The default width is the preference a first launch starts from, even
+        // when this window is too narrow to apply it (`US-0113`).
+        .map(|state| super::state_with_preferred_width(state, DEFAULT_RIGHT_DOCK_WIDTH));
     if let Some(state) = saved_state {
         cx.background_executor()
             .spawn(async move {

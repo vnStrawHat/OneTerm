@@ -76,7 +76,9 @@ Addresses `F9` (**high**), quoted from `research/ux-walkthrough-2026-09-16.md`:
       packet chose (auto-collapse or minimum width), it is stated in this packet, and it is
       recoverable in one click.
 - [x] A restart with a saved width above the ceiling applies the ceiling, and nothing in
-      `docks.json` is corrupted or quarantined.
+      `docks.json` is corrupted or quarantined. Added after verification: a session spent at a
+      narrow window must not rewrite the saved width down — the preference is what is stored,
+      the clamp only decides what is applied.
 - [x] The clamp is covered by a focused test at several window widths.
 - [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
@@ -224,6 +226,27 @@ inherits, and it would deserve a decision record.
 
 ## Evidence and Gaps
 
+### Rework after independent verification (M3, m5, m6)
+
+`evidence/workspace-wave1-verify.md` passed this packet with notes and named the stored width
+as the item to reopen: the *applied* width was what reached `docks.json`, so one session at a
+narrow window rewrote the user's preference permanently and monotonically — measured at 240 px
+after a 700 px session, and still 240 px on the next wide launch. The packet's own Risk line
+said exactly that must not happen.
+
+- **M3 — `docks.json` now stores the preference.** `state_with_preferred_width` rebuilds the
+  dumped `DockState` with `preferred_right_dock_width` before every save (the debounced save,
+  both exit hooks, and the two startup layout builders), and the clamp still decides what is
+  applied. The kit's `DockState` is rebuilt through its own `new(panel, placement, size, open)`
+  constructor, so nothing else in the document changes and **no schema change** is needed — the
+  width is still the kit's own flattened field.
+- **m5 — a drag past the ceiling is capped where it happens.**
+  `track_preferred_right_dock_width` records the dragged width as the preference (so it comes
+  back when the window is wide enough) and re-applies the clamp immediately, instead of leaving
+  an over-ceiling dock standing until the next window resize snapped it back.
+- **m6 — `docs/gui-layout.md` §Persistence** now says the stored width is the preference and
+  the applied width is clamped.
+
 ### What was built
 
 The HLD's design held: a pure clamp at the seams that already call `set_dock_size`, and no
@@ -253,7 +276,10 @@ Seams, all four as the packet listed them:
 
 ### Commands
 
-- `cargo test -p oneterm-workspace` — 25 passed, including the new
+- `cargo test -p oneterm-workspace` — 34 passed, including
+  `the_saved_layout_carries_the_preferred_width_not_the_clamped_one` (a dumped layout whose
+  right dock is at the clamped 245 px comes back carrying the 480 px preference, with its
+  panel, placement, open state and centre untouched) and
   `the_right_dock_width_is_clamped_to_a_share_of_the_window` (490 px at 900 px window -> 315;
   the first-launch 480 px default -> 315; 490 at 1900 -> unchanged; a width at the ceiling ->
   unchanged; a narrow dock is never widened; 490 at a 500 px window -> the 240 px floor; an
@@ -265,7 +291,21 @@ Seams, all four as the packet listed them:
   their original numbers and all still pass. No fixture number was changed.
 - `pwsh scripts/ci-local.ps1` — ended with "ci-local: all checks passed".
 
-### GUI walk, with measurements
+### GUI walk after the rework: the ratchet is gone
+
+The sequence the verification asked for, own build, own pid, `PrintWindow`:
+
+1. `docks.json` seeded with `"size": 400.0` — a width a user would have dragged.
+2. `evidence/US-0113-rework-1200-preference-400.png` — launched at 1200 px: the dock is 400 px
+   (under the 420 px ceiling, so the preference is applied as it is).
+3. `evidence/US-0113-rework-700-clamped-240.png` — the window narrowed to 700 px and left there
+   long enough for the 2 s debounced save to run: the dock is at the 240 px floor.
+4. The process was killed at 700 px — no exit hook, the harsher case — and `docks.json` then
+   read **`"size": 400.0`**. Before the rework the verifier measured 240 px here.
+5. `evidence/US-0113-rework-1200-after-a-narrow-session.png` — relaunched at 1200 px: the dock
+   is back at ~400 px, not 240 px.
+
+### GUI walk, with measurements (first implementation)
 
 Window widths are the captured frame widths; dock widths are read off the splitter position.
 
@@ -292,11 +332,12 @@ Window widths are the captured frame widths; dock widths are read off the splitt
   nothing to snap a live drag back — and by simulating a dragged width through `docks.json`,
   which exercises the same preference path from the load side. Left unverified: that the
   splitter feels absolute while held.
-- **The preference does not survive a restart taken while the window is narrow.** What
-  `docks.json` stores is the applied width, by design (no new field, no migration). Close the
-  app at 900 px and the next launch starts from the clamped 315 px rather than the 600 px the
-  user once chose. Fixing that means OneTerm naming the width field or adding one of its own,
-  which the packet's scope and risks rule out.
+- ~~The preference does not survive a restart taken while the window is narrow.~~ **Fixed in
+  the rework (M3):** `docks.json` stores the preference and the clamp applies on load. No
+  schema change was needed after all — the kit's own width field carries it.
+- A window narrower than ~685 px gives the dock the 240 px floor rather than 35 %, so below
+  that the terminal no longer keeps the majority. That is the packet's stated choice (no
+  auto-collapse), documented in `docs/gui-layout.md`, and visible in the 700 px frame.
 - The clamp is not applied to a `set_dock_size` performed by any other crate; there is none
   today: a search for `set_dock_size` across `crates/` returns the three layout seams, the new resize seam, and the tests.
 

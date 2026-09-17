@@ -13,6 +13,34 @@ use oneterm_actions::{
     SetRightDockMode,
 };
 
+/// What an explicit right-dock mode click has to do to the dock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DockModeAction {
+    /// Show the panel that is already there. No rebuild, so everything the
+    /// panel holds — an SFTP connection, a scroll position — survives.
+    Show,
+    /// Hide the dock, keeping its content for the next `Show`.
+    Hide,
+    /// Build the mode's panel and replace the dock's content.
+    Rebuild,
+}
+
+/// Whether a click on `requested` must rebuild the right dock's panel or only
+/// change its visibility, given the mode the dock currently contains.
+///
+/// An explicit click always means "show me this", never "hide this": only
+/// `None` hides.
+pub(crate) fn reopen_or_rebuild(
+    contained: Option<RightDockMode>,
+    requested: RightDockMode,
+) -> DockModeAction {
+    match requested {
+        RightDockMode::None => DockModeAction::Hide,
+        mode if contained == Some(mode) => DockModeAction::Show,
+        _ => DockModeAction::Rebuild,
+    }
+}
+
 impl super::OneTermWorkspace {
     /// Add `panel` to the center dock area.
     ///
@@ -99,17 +127,12 @@ impl super::OneTermWorkspace {
         (commands(cx).open_new_session_dialog)(window, cx);
     }
 
-    /// Action handler: ensure the right dock (which hosts the combined Side
-    /// panel) is open. The Side panel always contains the Session section, so
     /// Action handler: switch the right dock to the panels for the given
     /// [`RightDockMode`] (SSH Client = Session + SFTP, Agent = Agent panels).
     ///
-    /// Rebuilds the right dock as a single-tab `DockLayout` containing the
-    /// mode's registered panel, preserving the dock's current width + open/collapsed
-    /// state. Persists the choice to `ui_config.json` so it survives restarts.
-    ///
-    /// Dispatched by the title bar mode toggle group. No-op if the right dock
-    /// is already showing that mode (read from `UiConfig`, the source of truth).
+    /// Dispatched by the title bar mode toggle group, for every click including
+    /// one on the segment already selected. Persists the choice to
+    /// `ui_config.json` so it survives restarts.
     pub(crate) fn on_action_set_right_dock_mode(
         &mut self,
         action: &SetRightDockMode,
@@ -117,25 +140,45 @@ impl super::OneTermWorkspace {
         cx: &mut Context<Self>,
     ) {
         let new_mode = action.0;
+        Self::apply_right_dock_mode(&self.dock_area, new_mode, window, cx);
+
+        // Persist the new mode to ui_config.json and notify the title bar so the
+        // segmented control re-renders before the next click.
         let current = oneterm_settings::UiConfig::global(cx)
             .read(cx)
             .right_dock_mode;
         if current == new_mode {
-            // Same mode clicked — still apply the requested visibility: hide for
-            // None, force-open for SSH Client / Agent (the click is explicit).
-            super::set_right_dock_open(&self.dock_area, !new_mode.is_none(), window, cx);
             return;
         }
-        Self::switch_right_dock_mode(&self.dock_area, new_mode, window, cx);
-
-        // Persist the new mode to ui_config.json and notify the title bar so the
-        // segmented control re-renders before the next click.
         oneterm_settings::UiConfig::global(cx).update(cx, |cfg, cx| {
             cfg.right_dock_mode = new_mode;
             cx.notify();
         });
         self.title_bar.update(cx, |_, cx| cx.notify());
         oneterm_settings::UiConfig::persist(cx);
+    }
+
+    /// Apply an explicit mode click to the right dock, and say what it did.
+    ///
+    /// The decision is made against what the dock **contains**, not against the
+    /// persisted mode: after the tab bar's dock button collapses an SSH Client
+    /// dock, the persisted mode is `None` (`BUG-0067`) but the panel is still
+    /// there, and reopening it must not rebuild it — a rebuild would drop the
+    /// SFTP connection and the session list's state.
+    pub(crate) fn apply_right_dock_mode(
+        dock_area: &Entity<DockArea>,
+        mode: RightDockMode,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> DockModeAction {
+        let contained = super::right_dock_panel_mode(dock_area.read(cx), cx);
+        let action = reopen_or_rebuild(contained, mode);
+        match action {
+            DockModeAction::Show => super::set_right_dock_open(dock_area, true, window, cx),
+            DockModeAction::Hide => super::set_right_dock_open(dock_area, false, window, cx),
+            DockModeAction::Rebuild => Self::switch_right_dock_mode(dock_area, mode, window, cx),
+        }
+        action
     }
 
     /// Apply `mode` to the right dock. For `None` the dock is hidden (collapsed)

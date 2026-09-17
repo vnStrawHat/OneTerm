@@ -15,6 +15,7 @@ use oneterm_core::SftpTableState;
 use oneterm_state::dock_persistence::{read_dock_document_from, update_dock_document_at};
 use oneterm_state::panel_names;
 
+use super::actions::{DockModeAction, reopen_or_rebuild};
 use super::test_panels::{NamedPanel, register_test_panels};
 use super::{
     DEFAULT_RIGHT_DOCK_WIDTH, MAIN_DOCK_VERSION, OneTermWorkspace, clamp_right_dock_width, layout,
@@ -84,6 +85,21 @@ fn count_terminal_builds(cx: &mut VisualTestContext) -> Rc<Cell<usize>> {
         });
     });
     builds
+}
+
+/// The `PanelId` of the right dock's panel — a new id means it was rebuilt.
+fn right_dock_panel_id(
+    dock_area: &Entity<DockArea>,
+    cx: &mut VisualTestContext,
+) -> gpui_component::dock::PanelId {
+    dock_area.read_with(cx, |dock_area, _| {
+        dock_area
+            .layout(DockPlacement::Right)
+            .expect("right dock")
+            .panels()
+            .next()
+            .expect("right dock panel")
+    })
 }
 
 /// `(size, open, panel name)` of the right dock.
@@ -219,12 +235,48 @@ fn right_dock_mode_follows_the_dock_state() {
     );
 }
 
-/// BUG-0067: a dock collapsed by the tab bar's dock button reopens at the width
-/// it was collapsed at — the reopen path a same-mode `SetRightDockMode` takes.
+/// BUG-0067: an explicit mode click decides against what the dock *contains*,
+/// not against the persisted mode, so reopening never rebuilds.
+#[test]
+fn a_mode_click_only_rebuilds_a_panel_the_dock_does_not_have() {
+    // Collapsed by a dock button: the dock still holds the SSH Client panel, so
+    // clicking SSH Client shows it — the persisted mode is None by then.
+    assert_eq!(
+        reopen_or_rebuild(Some(RightDockMode::SshClient), RightDockMode::SshClient),
+        DockModeAction::Show
+    );
+    assert_eq!(
+        reopen_or_rebuild(Some(RightDockMode::Agent), RightDockMode::Agent),
+        DockModeAction::Show
+    );
+    // A different mode is the only thing that builds a panel.
+    assert_eq!(
+        reopen_or_rebuild(Some(RightDockMode::SshClient), RightDockMode::Agent),
+        DockModeAction::Rebuild
+    );
+    assert_eq!(
+        reopen_or_rebuild(None, RightDockMode::SshClient),
+        DockModeAction::Rebuild
+    );
+    // None always hides, whatever is in there — an explicit click never toggles.
+    assert_eq!(
+        reopen_or_rebuild(Some(RightDockMode::SshClient), RightDockMode::None),
+        DockModeAction::Hide
+    );
+    assert_eq!(
+        reopen_or_rebuild(None, RightDockMode::None),
+        DockModeAction::Hide
+    );
+}
+
+/// BUG-0067: a dock collapsed by the tab bar's dock button reopens with the
+/// *same panel instance* and the same width — a rebuild would drop the SFTP
+/// connection and the session list's state.
 #[gpui::test]
-fn reopening_a_collapsed_right_dock_keeps_its_width(cx: &mut TestAppContext) {
+fn reopening_a_collapsed_right_dock_keeps_its_panel_instance(cx: &mut TestAppContext) {
     let (dock_area, cx) = dock_area(cx);
     set_right_dock(&dock_area, panel_names::SSH_CLIENT, px(333.), true, cx);
+    let panel_before = right_dock_panel_id(&dock_area, cx);
 
     // The tab bar's dock button toggles the dock without touching the mode.
     dock_area.update_in(cx, |dock_area, window, cx| {
@@ -235,13 +287,57 @@ fn reopening_a_collapsed_right_dock_keeps_its_width(cx: &mut TestAppContext) {
         (333., false, panel_names::SSH_CLIENT.to_string())
     );
 
-    cx.update(|window, cx| {
-        oneterm_state::dock_util::set_right_dock_open(&dock_area, true, window, cx)
+    let action = cx.update(|window, cx| {
+        OneTermWorkspace::apply_right_dock_mode(&dock_area, RightDockMode::SshClient, window, cx)
     });
+    assert_eq!(action, DockModeAction::Show);
     assert_eq!(
         right_dock(&dock_area, cx),
         (333., true, panel_names::SSH_CLIENT.to_string())
     );
+    assert_eq!(
+        right_dock_panel_id(&dock_area, cx),
+        panel_before,
+        "reopening must not rebuild the panel"
+    );
+
+    // Switching to another mode is what builds a new panel.
+    let action = cx.update(|window, cx| {
+        OneTermWorkspace::apply_right_dock_mode(&dock_area, RightDockMode::Agent, window, cx)
+    });
+    assert_eq!(action, DockModeAction::Rebuild);
+    assert_ne!(right_dock_panel_id(&dock_area, cx), panel_before);
+}
+
+/// US-0113: what reaches `docks.json` is the user's preferred width, not the
+/// width the clamp applied to this window.
+#[gpui::test]
+fn the_saved_layout_carries_the_preferred_width_not_the_clamped_one(cx: &mut TestAppContext) {
+    let (dock_area, cx) = dock_area(cx);
+    // What a 700 px window would have applied to a 480 px preference.
+    set_right_dock(&dock_area, panel_names::SSH_CLIENT, px(245.), true, cx);
+
+    let state = dock_area.read_with(cx, |dock_area, cx| dock_area.dump(cx));
+    assert_eq!(
+        state.right_dock.as_ref().map(|dock| dock.size()),
+        Some(px(245.))
+    );
+
+    let rewritten = super::state_with_preferred_width(state.clone(), px(480.));
+    assert_eq!(
+        rewritten.right_dock.as_ref().map(|dock| dock.size()),
+        Some(px(480.)),
+        "the preference is what survives the session"
+    );
+    // Nothing else about the layout is rewritten.
+    let (before, after) = (
+        state.right_dock.expect("right dock"),
+        rewritten.right_dock.expect("right dock"),
+    );
+    assert_eq!(after.open(), before.open());
+    assert_eq!(after.placement(), before.placement());
+    assert_eq!(after.panel(), before.panel());
+    assert_eq!(rewritten.center, state.center);
 }
 
 /// A pre-migration layout keeps its panel tree, active tabs, dock size/open
