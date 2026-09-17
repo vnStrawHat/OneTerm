@@ -686,6 +686,27 @@ impl SftpPanel {
         state
     }
 
+    /// The width the file list has to draw its columns in, measured during
+    /// layout. Only a real change refreshes the table, so the measurement
+    /// cannot drive an endless re-render.
+    pub(crate) fn set_table_available_width(
+        &mut self,
+        width: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = self.table.update(cx, |table, cx| {
+            let changed = table.delegate_mut().set_available_width(width.as_f32());
+            if changed {
+                table.refresh(cx);
+                cx.notify();
+            }
+            changed
+        });
+        if changed {
+            cx.notify();
+        }
+    }
+
     /// Debounce 1s, snapshot the browser state (column widths + visibility,
     /// expanded flag, local directory) on the UI thread, then write it to
     /// docks.json on the background executor.

@@ -204,9 +204,34 @@ impl SortColumn {
     }
 }
 
-/// Column resize limits (px), the same for every column.
+/// Column resize limits (px), the same for every resizable column.
 pub(crate) const COLUMN_MIN_WIDTH: f32 = 40.0;
 pub(crate) const COLUMN_MAX_WIDTH: f32 = 800.0;
+
+/// Natural widths of the two fixed columns of the default set, shared by the
+/// remote and the local table so the two panes line up.
+pub(crate) const SIZE_COLUMN_WIDTH: f32 = 72.0;
+pub(crate) const MODIFIED_COLUMN_WIDTH: f32 = 116.0;
+
+/// Name never shrinks below this, even when the panel is too narrow for the
+/// whole set — below that the table scrolls sideways, which is the honest
+/// answer to "more columns than fit".
+pub(crate) const NAME_COLUMN_MIN_WIDTH: f32 = 100.0;
+
+/// What the table needs beyond the sum of its columns: `render_last_empty_col`
+/// (`w_3`) plus the cell border.
+const TABLE_TRAILING_GUTTER: f32 = 16.0;
+
+/// Width of the Name column: the panel width the other visible columns do not
+/// take (US-0124 / F29).
+///
+/// Name is the flexible column of both tables. That is what keeps the docked
+/// browser free of a horizontal scrollbar at its shipped width, and what keeps
+/// a wide dual pane free of the blank strip that used to look like an extra,
+/// always-empty column.
+pub(crate) fn name_column_width(available_width: f32, other_columns_width: f32) -> f32 {
+    (available_width - other_columns_width - TABLE_TRAILING_GUTTER).max(NAME_COLUMN_MIN_WIDTH)
+}
 
 /// Definition of a column in the file list — display config + resize/visibility
 /// state (persisted to `docks.json`).
@@ -233,20 +258,35 @@ impl SftpColumnConfig {
             width: default_width,
         }
     }
+
+    fn shown(mut self, visible: bool) -> Self {
+        self.visible = visible;
+        self
+    }
 }
 
 /// Canonical column list (order left → right). Name is always visible.
 ///
-/// Name gets the largest width priority — DataTable uses fixed-width columns,
-/// so assign Name a large width to take up the most space (resizable).
+/// Only Name, Size and Date Modified are shown by default: they are what fits
+/// the panel the browser ships in (US-0124 / F29). Permissions, Owner and Group
+/// stay one click away in the toolbar menu's Columns section, and the choice is
+/// persisted. Name's width is derived from the panel width
+/// ([`name_column_width`]), so its configured width is only the fallback used
+/// before the first measurement.
 pub(crate) fn default_column_configs() -> Vec<SftpColumnConfig> {
     vec![
-        SftpColumnConfig::new(SortColumn::Name, "Name", 320.0, false),
-        SftpColumnConfig::new(SortColumn::Modified, "Date Modified", 140.0, false),
-        SftpColumnConfig::new(SortColumn::Permissions, "Permissions", 150.0, false),
-        SftpColumnConfig::new(SortColumn::Size, "Size", 80.0, true),
-        SftpColumnConfig::new(SortColumn::Owner, "Owner", 90.0, false),
-        SftpColumnConfig::new(SortColumn::Group, "Group", 90.0, false),
+        SftpColumnConfig::new(SortColumn::Name, "Name", 200.0, false).shown(true),
+        SftpColumnConfig::new(SortColumn::Size, "Size", SIZE_COLUMN_WIDTH, true).shown(true),
+        SftpColumnConfig::new(
+            SortColumn::Modified,
+            "Date Modified",
+            MODIFIED_COLUMN_WIDTH,
+            false,
+        )
+        .shown(true),
+        SftpColumnConfig::new(SortColumn::Permissions, "Permissions", 150.0, false).shown(false),
+        SftpColumnConfig::new(SortColumn::Owner, "Owner", 90.0, false).shown(false),
+        SftpColumnConfig::new(SortColumn::Group, "Group", 90.0, false).shown(false),
     ]
 }
 
@@ -314,6 +354,39 @@ mod tests {
 
     fn names(entries: &[FileEntry]) -> Vec<&str> {
         entries.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    /// F29: the docked panel is ~317 px after US-0113 at a 900 px window and
+    /// ~420-490 px at wider ones. The default set has to fit all of those
+    /// without a horizontal scrollbar, which means Name absorbs what is left.
+    #[test]
+    fn the_default_columns_fit_the_docked_panel() {
+        let others = SIZE_COLUMN_WIDTH + MODIFIED_COLUMN_WIDTH;
+        for available in [317.0, 420.0, 490.0, 1900.0] {
+            let name = name_column_width(available, others);
+            assert!(
+                name + others + TABLE_TRAILING_GUTTER <= available,
+                "the default set overflows a {available} px panel"
+            );
+            assert!(name >= NAME_COLUMN_MIN_WIDTH);
+        }
+        // Wider panel, wider Name: no blank strip masquerading as a column.
+        assert!(name_column_width(1900.0, others) > name_column_width(490.0, others));
+        // Default visibility is exactly Name + Size + Date Modified.
+        let shown: Vec<&str> = default_column_configs()
+            .iter()
+            .filter(|c| c.visible)
+            .map(|c| c.col.key())
+            .collect();
+        assert_eq!(shown, vec!["name", "size", "modified"]);
+    }
+
+    /// Too narrow for the set: Name stops at its minimum and the table scrolls
+    /// rather than squeezing names into nothing.
+    #[test]
+    fn name_stops_shrinking_at_its_minimum() {
+        assert_eq!(name_column_width(120.0, 188.0), NAME_COLUMN_MIN_WIDTH);
+        assert_eq!(name_column_width(0.0, 0.0), NAME_COLUMN_MIN_WIDTH);
     }
 
     #[test]

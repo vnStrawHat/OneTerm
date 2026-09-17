@@ -17,13 +17,15 @@ use gpui_component::{
     menu::{ContextMenuExt as _, PopupMenu},
     table::{Column, ColumnFixed, ColumnSort, TableDelegate, TableState},
 };
-use oneterm_core::{FileEntry, SftpTableState};
+use oneterm_core::{FileEntry, SFTP_TABLE_STATE_VERSION, SftpTableState};
 use oneterm_theme::icon::AppIcon;
 
 use super::panel::SftpPanel;
+use super::table_delegate_menu::{ENTRY_MENU, build_menu, empty_area_entries};
 use super::types::{
-    COLUMN_MAX_WIDTH, COLUMN_MIN_WIDTH, SftpColumnConfig, SortColumn, SortDir, format_date,
-    format_owner, format_permissions, format_size, sort_dir_to_column_sort, sort_entries,
+    COLUMN_MAX_WIDTH, COLUMN_MIN_WIDTH, NAME_COLUMN_MIN_WIDTH, SftpColumnConfig, SortColumn,
+    SortDir, format_date, format_owner, format_permissions, format_size, name_column_width,
+    sort_dir_to_column_sort, sort_entries,
 };
 
 /// Indices into `col_configs` of the currently visible columns (display order).
@@ -67,6 +69,9 @@ pub(crate) struct SftpTableDelegate {
     entries: Arc<[FileEntry]>,
     pub(crate) col_configs: Vec<SftpColumnConfig>,
     visible_indices: VisibleIndices,
+    /// Width of the list area, measured by the panel. `None` until the first
+    /// frame has been laid out; Name then uses its configured fallback width.
+    available_width: Option<f32>,
     /// `None` = default sort (Name asc, folder-first).
     pub(crate) sort: Option<(SortColumn, SortDir)>,
     pub(crate) loading: bool,
@@ -79,6 +84,7 @@ impl SftpTableDelegate {
             entries: Arc::from([]),
             col_configs: super::types::default_column_configs(),
             visible_indices: Vec::new(),
+            available_width: None,
             sort: None,
             loading: false,
             panel,
@@ -100,17 +106,66 @@ impl SftpTableDelegate {
             .collect();
     }
 
+    /// The width the list area currently has. Returns whether it changed, so
+    /// the caller can skip a refresh when the measurement is the same.
+    pub(crate) fn set_available_width(&mut self, width: f32) -> bool {
+        if self
+            .available_width
+            .is_some_and(|known| (known - width).abs() < 0.5)
+        {
+            return false;
+        }
+        self.available_width = Some(width);
+        true
+    }
+
+    /// Width of the Name column: what the other visible columns leave over.
+    fn name_width(&self) -> f32 {
+        let Some(available) = self.available_width else {
+            // Before the first measurement, the configured fallback width.
+            return self
+                .col_configs
+                .iter()
+                .find(|cfg| cfg.col == SortColumn::Name)
+                .map_or(NAME_COLUMN_MIN_WIDTH, |cfg| cfg.width);
+        };
+        let others: f32 = self
+            .visible_indices
+            .iter()
+            .filter_map(|&ix| self.col_configs.get(ix))
+            .filter(|cfg| cfg.col != SortColumn::Name)
+            .map(|cfg| cfg.width)
+            .sum();
+        name_column_width(available, others)
+    }
+
     /// Apply the persisted column state (width + visibility) read from
     /// `docks.json`; the panel applies the dual-pane fields itself.
-    /// Ignores invalid keys; Name is always visible.
+    /// Ignores invalid keys; Name is always visible and its width is derived,
+    /// never restored.
+    ///
+    /// A document written before US-0124 carries no version. Its column layout
+    /// is the old default — every column visible, Name 320 px wide — which is
+    /// exactly what did not fit the panel, so it is dropped in favour of the
+    /// new defaults. `expanded` and `local_dir` are the panel's to apply and
+    /// are not versioned.
     pub(crate) fn apply_persisted_state(&mut self, state: &SftpTableState) {
+        if state.version < SFTP_TABLE_STATE_VERSION {
+            log::info!(
+                "SftpTableDelegate: ignoring column state from schema v{} — using the current defaults",
+                state.version
+            );
+            return;
+        }
         log::debug!(
             "SftpTableDelegate: apply persisted state — {} widths, {} visibility",
             state.column_widths.len(),
             state.column_visibility.len()
         );
         for cfg in &mut self.col_configs {
-            if let Some(&w) = state.column_widths.get(cfg.col.key()) {
+            if let Some(&w) = state.column_widths.get(cfg.col.key())
+                && cfg.col != SortColumn::Name
+            {
                 if w >= COLUMN_MIN_WIDTH && w <= COLUMN_MAX_WIDTH {
                     cfg.width = w;
                 }
@@ -129,10 +184,15 @@ impl SftpTableDelegate {
         let mut column_widths = HashMap::new();
         let mut column_visibility = HashMap::new();
         for cfg in &self.col_configs {
-            column_widths.insert(cfg.col.key().to_string(), cfg.width);
+            // Name's width follows the panel; storing it would only resurrect a
+            // width that never fits some other window size.
+            if cfg.col != SortColumn::Name {
+                column_widths.insert(cfg.col.key().to_string(), cfg.width);
+            }
             column_visibility.insert(cfg.col.key().to_string(), cfg.visible);
         }
         SftpTableState {
+            version: SFTP_TABLE_STATE_VERSION,
             column_widths,
             column_visibility,
             ..SftpTableState::default()
@@ -145,6 +205,10 @@ impl SftpTableDelegate {
         for (vis_ix, w) in widths.iter().enumerate() {
             if let Some(&cfg_ix) = self.visible_indices.get(vis_ix) {
                 let cfg = &mut self.col_configs[cfg_ix];
+                // Name is not resizable: its width is the panel's leftover.
+                if cfg.col == SortColumn::Name {
+                    continue;
+                }
                 cfg.width = w.as_f32().clamp(COLUMN_MIN_WIDTH, COLUMN_MAX_WIDTH);
             }
         }
@@ -222,11 +286,22 @@ impl TableDelegate for SftpTableDelegate {
             return Column::new(format!("col-{col_ix}"), "");
         };
 
+        let is_name = cfg.col == SortColumn::Name;
         let mut col = Column::new(cfg.col.key(), cfg.label)
-            .width(cfg.width)
-            .min_width(COLUMN_MIN_WIDTH)
+            .width(px(if is_name {
+                self.name_width()
+            } else {
+                cfg.width
+            }))
+            .min_width(if is_name {
+                NAME_COLUMN_MIN_WIDTH
+            } else {
+                COLUMN_MIN_WIDTH
+            })
             .max_width(COLUMN_MAX_WIDTH)
-            .resizable(true)
+            // Name fills whatever the other columns leave over, so there is
+            // nothing for the user to drag it to.
+            .resizable(!is_name)
             .movable(false)
             .sortable();
 
@@ -241,7 +316,7 @@ impl TableDelegate for SftpTableDelegate {
         };
 
         // Pin the Name column to the left (won't scroll out of view on horizontal scroll).
-        if cfg.col == SortColumn::Name {
+        if is_name {
             col = col.fixed(ColumnFixed::Left);
         }
 
@@ -415,12 +490,12 @@ impl TableDelegate for SftpTableDelegate {
             });
         }
 
-        let Some(entry) = self.entries.get(row_ix).cloned() else {
+        if self.entries.get(row_ix).is_none() {
             return menu;
-        };
-        let is_dir = entry.is_dir;
+        }
 
-        super::table_delegate_menu::build_entry_menu(menu, &self.panel, row_ix, is_dir)
+        // The same list the toolbar's menu renders (F30).
+        build_menu(menu, &self.panel, ENTRY_MENU)
     }
 
     fn render_empty(
@@ -439,9 +514,7 @@ impl TableDelegate for SftpTableDelegate {
             .justify_center()
             .text_color(theme.muted_foreground)
             .child("Empty directory.")
-            .context_menu(move |menu, _window, _cx| {
-                super::table_delegate_menu::build_empty_menu(menu, &panel)
-            })
+            .context_menu(move |menu, _window, _cx| build_menu(menu, &panel, &empty_area_entries()))
     }
 }
 
@@ -471,71 +544,112 @@ mod tests {
             .collect()
     }
 
+    fn width_of(delegate: &SftpTableDelegate, key: &str) -> f32 {
+        delegate
+            .col_configs
+            .iter()
+            .find(|c| c.col.key() == key)
+            .map(|c| c.width)
+            .unwrap()
+    }
+
     #[gpui::test]
     fn persisted_state_round_trips_and_ignores_invalid_values(cx: &mut TestAppContext) {
         let mut delegate = delegate(cx);
-        let mut state = SftpTableState::default();
+        let mut state = SftpTableState {
+            version: oneterm_core::SFTP_TABLE_STATE_VERSION,
+            ..SftpTableState::default()
+        };
         state.column_widths.insert("size".into(), 120.0);
         // Below the minimum width and an unknown key: both ignored.
         state.column_widths.insert("owner".into(), 1.0);
         state.column_widths.insert("bogus".into(), 50.0);
-        state.column_visibility.insert("group".into(), false);
+        state.column_visibility.insert("group".into(), true);
         // Name can never be hidden.
         state.column_visibility.insert("name".into(), false);
 
         delegate.apply_persisted_state(&state);
 
-        let width = |key: &str| {
-            delegate
-                .col_configs
-                .iter()
-                .find(|c| c.col.key() == key)
-                .map(|c| c.width)
-                .unwrap()
-        };
-        assert_eq!(width("size"), 120.0);
-        assert_eq!(width("owner"), 90.0);
+        assert_eq!(width_of(&delegate, "size"), 120.0);
+        assert_eq!(width_of(&delegate, "owner"), 90.0);
         assert_eq!(
             visible_keys(&delegate),
-            vec!["name", "modified", "permissions", "size", "owner"]
+            vec!["name", "size", "modified", "group"]
         );
 
         let persisted = delegate.to_persisted_state();
+        assert_eq!(persisted.version, oneterm_core::SFTP_TABLE_STATE_VERSION);
         assert_eq!(persisted.column_widths["size"], 120.0);
-        assert!(!persisted.column_visibility["group"]);
+        assert!(persisted.column_visibility["group"]);
         assert!(persisted.column_visibility["name"]);
         assert!(!persisted.column_widths.contains_key("bogus"));
+        // Name's width is derived from the panel, so it is not stored.
+        assert!(!persisted.column_widths.contains_key("name"));
+    }
+
+    /// US-0124: a state saved before this packet has every column visible and a
+    /// 320 px Name — the layout that needed a horizontal scrollbar. It is
+    /// dropped, so an existing user gets the new defaults too.
+    #[gpui::test]
+    fn a_pre_version_state_falls_back_to_the_new_defaults(cx: &mut TestAppContext) {
+        let mut delegate = delegate(cx);
+        let mut state = SftpTableState::default(); // version 0: written before US-0124
+        for key in ["name", "modified", "permissions", "size", "owner", "group"] {
+            state.column_visibility.insert(key.into(), true);
+            state.column_widths.insert(key.into(), 320.0);
+        }
+
+        delegate.apply_persisted_state(&state);
+
+        assert_eq!(visible_keys(&delegate), vec!["name", "size", "modified"]);
+        assert_eq!(width_of(&delegate, "size"), 72.0);
+    }
+
+    /// Name takes what the other visible columns leave over, so the table fits
+    /// the panel it is drawn in instead of scrolling sideways.
+    #[gpui::test]
+    fn name_fills_the_measured_panel_width(cx: &mut TestAppContext) {
+        let mut delegate = delegate(cx);
+        assert!(delegate.set_available_width(317.0));
+        assert!(
+            !delegate.set_available_width(317.2),
+            "same width, no refresh"
+        );
+
+        let others = 72.0 + 116.0;
+        assert_eq!(delegate.name_width(), 317.0 - others - 16.0);
+        delegate.set_available_width(1900.0);
+        assert_eq!(delegate.name_width(), 1900.0 - others - 16.0);
+
+        // A hidden column stops taking room from Name.
+        delegate.toggle_visibility(SortColumn::Modified);
+        assert_eq!(delegate.name_width(), 1900.0 - 72.0 - 16.0);
     }
 
     #[gpui::test]
     fn toggling_visibility_never_hides_name(cx: &mut TestAppContext) {
         let mut delegate = delegate(cx);
         assert!(!delegate.toggle_visibility(SortColumn::Name));
-        assert!(delegate.toggle_visibility(SortColumn::Owner));
         assert!(!visible_keys(&delegate).contains(&"owner"));
         assert!(delegate.toggle_visibility(SortColumn::Owner));
         assert!(visible_keys(&delegate).contains(&"owner"));
+        assert!(delegate.toggle_visibility(SortColumn::Owner));
+        assert!(!visible_keys(&delegate).contains(&"owner"));
     }
 
     #[gpui::test]
     fn widths_apply_in_visible_order_and_are_clamped(cx: &mut TestAppContext) {
         let mut delegate = delegate(cx);
-        delegate.toggle_visibility(SortColumn::Modified);
-        // Visible order is now: name, permissions, size, owner, group.
-        delegate.apply_widths(&[px(500.), px(10.), px(9999.)]);
-        let width = |key: &str| {
-            delegate
-                .col_configs
-                .iter()
-                .find(|c| c.col.key() == key)
-                .map(|c| c.width)
-                .unwrap()
-        };
-        assert_eq!(width("name"), 500.0);
-        assert_eq!(width("permissions"), 40.0);
-        assert_eq!(width("size"), 800.0);
+        delegate.toggle_visibility(SortColumn::Permissions);
+        // Visible order is now: name, size, modified, permissions.
+        delegate.apply_widths(&[px(500.), px(10.), px(9999.), px(120.)]);
+        assert_eq!(width_of(&delegate, "size"), 40.0);
+        assert_eq!(width_of(&delegate, "modified"), 800.0);
+        assert_eq!(width_of(&delegate, "permissions"), 120.0);
+        // Name is not resizable — a width for it is ignored, not stored.
+        assert_eq!(width_of(&delegate, "name"), 200.0);
         // The hidden column keeps its default width.
-        assert_eq!(width("modified"), 140.0);
+        assert_eq!(width_of(&delegate, "owner"), 90.0);
     }
 
     /// CORR-30: the selection names an entry, not a row number — after a

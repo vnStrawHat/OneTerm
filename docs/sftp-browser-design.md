@@ -1010,6 +1010,27 @@ impl Render for SftpPanel {
 }
 ```
 
+**Table shape as built (US-0124).** The list is a `gpui_component` `DataTable`
+with six columns — Name, Size, Date Modified, Permissions, Owner, Group, in that
+order — of which the first three are shown by default. Permissions, Owner and
+Group are one click away in the toolbar menu's **Columns** section, and the
+choice is persisted.
+
+Columns are fixed-width, so the panel measures the list area (a `gpui::canvas`
+probe next to the table) and **Name takes whatever the other visible columns
+leave over**, down to a 100 px floor. That is what keeps the docked browser free
+of a horizontal scrollbar at the width it ships in (~317 px at a 900 px window
+after US-0113, ~420–490 px wider) and a wide dual pane free of the blank strip
+that used to look like an extra, always-empty column. Name is therefore not
+resizable and its width is not persisted; every other column is both. The Local
+pane's table follows the same rule and the same widths, so the two panes line up.
+
+`docks.json`'s `sftp_table_state` carries a `version`. A document written before
+US-0124 has none, reads back as `0`, and its stored column widths and visibility
+are ignored in favour of the current defaults — otherwise the users who had
+already opened the browser would be the only ones left with a table that does not
+fit. `expanded` and `local_dir` are not versioned and are always applied.
+
 ### 4.6. File operations — UI flow
 
 | Operation | Trigger | Flow |
@@ -1081,35 +1102,32 @@ fn on_upload(&mut self, local: PathBuf, cx: &mut Context<Self>) {
 }
 ```
 
-### 4.8. Context menu (right-click)
+### 4.8. Menus — one action list, two renderings
+
+The toolbar's `⋮` menu and the table's right-click menu render the **same list**,
+`ENTRY_MENU` in `crates/sftp-ui/src/table_delegate_menu.rs`: same items, same
+order, same icons, same keyboard-shortcut hints (US-0124 / F30 — the two used to
+drift, and only the right-click menu offered Edit and Refresh).
 
 ```
-Right-click on a file:
-┌──────────────────┐
-│ ⬇ Download       │
-│ ✏ Rename         │
-│ 🗑 Delete         │
-│ ─────────────── │
-│ 📋 Properties    │
-└──────────────────┘
-
-Right-click on a folder:
-┌──────────────────┐
-│ 📂 Open           │
-│ ⬇ Download       │
-│ ✏ Rename         │
-│ 🗑 Delete         │
-│ ─────────────── │
-│ 📋 Properties    │
-└──────────────────┘
-
-Right-click on empty space:
-┌──────────────────┐
-│ ⬆ Upload         │
-│ 📁 New Folder    │
-│ ⟳ Refresh        │
-└──────────────────┘
+Open / Edit / Download
+───
+Upload Files / Upload Folder / New Folder
+───
+Rename / Delete
+───
+Properties / Refresh
 ```
+
+Right-clicking a row selects it first, so both menus act on one selection; an
+action invoked without one reports that instead of doing nothing. Delete keeps
+its confirmation dialog with the danger-styled button.
+
+The empty-area menu (right-click below the rows) renders the subset of the same
+list that needs no selection — Upload Files, Upload Folder, New Folder, Refresh —
+with dangling separators dropped. Below the shared actions the `⋮` menu adds the
+two rows that configure the browser rather than act on it: the **Follow Terminal
+Cwd** checkbox and the **Columns** chooser.
 
 ### 4.9. File detail dialog
 
@@ -1291,8 +1309,12 @@ two states in step. The Local pane
 (`crates/sftp-ui/src/local_pane.rs`) is a `std::fs` browser on the background
 executor with its own `DataTable` (Name / Date Modified / Size), path box, back,
 refresh, and New Folder / Rename / Delete; it never touches `SftpBackend`.
-Transfers between the panes reuse `do_upload_paths` (local selection → remote
-cwd via button, menu, double-click, or dragging a row onto the remote list) and
+Each pane's toolbar carries its half of the transfer controls at the edge facing
+the other pane — the Local pane's **Upload** button and the Remote pane's
+**Download** button, both labelled, both acting on that pane's selection and both
+disabled while it has none (US-0124 / F30). Transfers between the panes reuse
+`do_upload_paths` (local selection → remote cwd via button, menu, double-click,
+or dragging a row onto the remote list) and
 `download_to` (remote selection → the Local pane's directory, without a save
 dialog, confirming before an existing file is replaced; also the drop target of
 a remote row). `docks.json` `sftp_table_state` carries `expanded` and

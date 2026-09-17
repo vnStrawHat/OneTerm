@@ -17,10 +17,10 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement,
     Render, StatefulInteractiveElement as _, Styled, Subscription, TextAlign, WeakEntity, Window,
-    div,
+    div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::{DialogButtonProps, DialogFooter},
     h_flex,
@@ -40,7 +40,9 @@ use super::panel::SftpPanel;
 use super::table_delegate::name_cell;
 use super::table_delegate_menu::on_click_entity;
 use super::types::{
-    COLUMN_MAX_WIDTH, COLUMN_MIN_WIDTH, SortDir, format_date, format_size, sort_dir_to_column_sort,
+    COLUMN_MAX_WIDTH, COLUMN_MIN_WIDTH, MODIFIED_COLUMN_WIDTH, NAME_COLUMN_MIN_WIDTH,
+    SIZE_COLUMN_WIDTH, SortDir, format_date, format_size, name_column_width,
+    sort_dir_to_column_sort,
 };
 
 // ── Entries ──────────────────────────────────────────────────
@@ -55,7 +57,8 @@ pub(crate) struct LocalEntry {
     pub modified: Option<SystemTime>,
 }
 
-/// Columns of the local table.
+/// Columns of the local table. Same set, same order and the same widths as the
+/// remote table's default set, so the two panes line up (US-0124).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum LocalColumn {
     Name,
@@ -64,7 +67,7 @@ pub(crate) enum LocalColumn {
 }
 
 impl LocalColumn {
-    const ALL: [LocalColumn; 3] = [LocalColumn::Name, LocalColumn::Modified, LocalColumn::Size];
+    const ALL: [LocalColumn; 3] = [LocalColumn::Name, LocalColumn::Size, LocalColumn::Modified];
 
     fn key(self) -> &'static str {
         match self {
@@ -82,11 +85,12 @@ impl LocalColumn {
         }
     }
 
+    /// Fallback width, used for Name only until the pane has been measured.
     fn default_width(self) -> f32 {
         match self {
-            LocalColumn::Name => 260.0,
-            LocalColumn::Modified => 140.0,
-            LocalColumn::Size => 80.0,
+            LocalColumn::Name => 200.0,
+            LocalColumn::Modified => MODIFIED_COLUMN_WIDTH,
+            LocalColumn::Size => SIZE_COLUMN_WIDTH,
         }
     }
 }
@@ -154,6 +158,9 @@ pub(crate) fn initial_local_dir(persisted: Option<PathBuf>) -> PathBuf {
 pub(crate) struct LocalTableDelegate {
     entries: Vec<LocalEntry>,
     widths: [f32; 3],
+    /// Width of the list area, measured by the pane; `None` until the first
+    /// frame has been laid out.
+    available_width: Option<f32>,
     sort: Option<(LocalColumn, SortDir)>,
     pub(crate) loading: bool,
     pane: WeakEntity<LocalPane>,
@@ -164,13 +171,38 @@ impl LocalTableDelegate {
         Self {
             entries: Vec::new(),
             widths: [
-                LocalColumn::Name.default_width(),
-                LocalColumn::Modified.default_width(),
-                LocalColumn::Size.default_width(),
+                LocalColumn::ALL[0].default_width(),
+                LocalColumn::ALL[1].default_width(),
+                LocalColumn::ALL[2].default_width(),
             ],
+            available_width: None,
             sort: None,
             loading: false,
             pane,
+        }
+    }
+
+    /// Record the measured width of the list area; returns whether it changed.
+    fn set_available_width(&mut self, width: f32) -> bool {
+        if self
+            .available_width
+            .is_some_and(|known| (known - width).abs() < 0.5)
+        {
+            return false;
+        }
+        self.available_width = Some(width);
+        true
+    }
+
+    /// Width of a column: Name fills what Size and Date Modified leave over, so
+    /// a wide pane has no blank strip at its right edge (US-0124 / F29).
+    fn column_width(&self, col_ix: usize) -> f32 {
+        if LocalColumn::ALL[col_ix] != LocalColumn::Name {
+            return self.widths[col_ix];
+        }
+        match self.available_width {
+            Some(available) => name_column_width(available, self.widths[1] + self.widths[2]),
+            None => self.widths[col_ix],
         }
     }
 
@@ -195,11 +227,17 @@ impl TableDelegate for LocalTableDelegate {
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
         let col = LocalColumn::ALL[col_ix];
+        let is_name = col == LocalColumn::Name;
         let mut column = Column::new(col.key(), col.label())
-            .width(self.widths[col_ix])
-            .min_width(COLUMN_MIN_WIDTH)
+            .width(px(self.column_width(col_ix)))
+            .min_width(if is_name {
+                NAME_COLUMN_MIN_WIDTH
+            } else {
+                COLUMN_MIN_WIDTH
+            })
             .max_width(COLUMN_MAX_WIDTH)
-            .resizable(true)
+            // Name fills the pane, so there is nothing to drag it to.
+            .resizable(!is_name)
             .movable(false)
             .sortable();
         if col == LocalColumn::Size {
@@ -963,14 +1001,6 @@ impl LocalPane {
                     .on_click(cx.listener(|this, _, _, cx| this.navigate_parent(cx))),
             )
             .child(
-                Button::new("local-upload")
-                    .icon(Icon::new(IconName::ArrowRight).small())
-                    .small()
-                    .ghost()
-                    .tooltip("Upload the selected entry to the remote directory")
-                    .on_click(cx.listener(|this, _, window, cx| this.upload_selected(window, cx))),
-            )
-            .child(
                 Button::new("local-refresh")
                     .icon(Icon::new(AppIcon::Refresh).small())
                     .small()
@@ -978,6 +1008,36 @@ impl LocalPane {
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
             .child(more_btn)
+            // The visible way to move the selected local entry to the remote
+            // side, at the edge the Remote pane's Download button faces
+            // (US-0124 / F30).
+            .child(
+                Button::new("local-upload")
+                    .icon(Icon::new(IconName::ArrowUp).small())
+                    .label("Upload")
+                    .small()
+                    .ghost()
+                    .flex_shrink_0()
+                    .disabled(self.selected.is_none())
+                    .tooltip("Upload the selected entry to the remote directory")
+                    .on_click(cx.listener(|this, _, window, cx| this.upload_selected(window, cx))),
+            )
+    }
+
+    /// The width the file list has to draw its columns in, measured during
+    /// layout. Only a real change refreshes the table.
+    fn set_table_available_width(&mut self, width: gpui::Pixels, cx: &mut Context<Self>) {
+        let changed = self.table.update(cx, |table, cx| {
+            let changed = table.delegate_mut().set_available_width(width.as_f32());
+            if changed {
+                table.refresh(cx);
+                cx.notify();
+            }
+            changed
+        });
+        if changed {
+            cx.notify();
+        }
     }
 
     fn render_file_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -998,11 +1058,25 @@ impl LocalPane {
                 ))
         });
         let panel = self.panel.clone();
+        let pane = cx.entity();
         v_flex()
             .id("local-file-list")
             .flex_1()
             .min_h_0()
+            .relative()
             .children(error_banner)
+            .child(
+                gpui::canvas(
+                    move |bounds, _, cx| {
+                        pane.update(cx, |this, cx| {
+                            this.set_table_available_width(bounds.size.width, cx);
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(
                 DataTable::new(&self.table)
                     .bordered(false)
