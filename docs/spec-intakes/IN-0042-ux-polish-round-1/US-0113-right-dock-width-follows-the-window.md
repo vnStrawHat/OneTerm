@@ -298,7 +298,7 @@ Window widths are the captured frame widths; dock widths are read off the splitt
   user once chose. Fixing that means OneTerm naming the width field or adding one of its own,
   which the packet's scope and risks rule out.
 - The clamp is not applied to a `set_dock_size` performed by any other crate; there is none
-  today (`rtk proxy grep` over `crates/` finds the four seams and the tests only).
+  today: a search for `set_dock_size` across `crates/` returns the three layout seams, the new resize seam, and the tests.
 
 ## Handoff
 
