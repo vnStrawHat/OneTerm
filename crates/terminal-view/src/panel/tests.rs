@@ -458,7 +458,8 @@ fn duplicate_test_commands() -> WorkspaceCommands {
 
     WorkspaceCommands {
         new_terminal_with_shell: terminal,
-        open_new_session_dialog: window,
+        open_quick_connect_dialog: window,
+        open_new_saved_session_dialog: window,
         saved_ssh_sessions: saved_sessions,
         open_saved_ssh_session: open_saved_session,
         open_duplicate_ssh_dialog: duplicate_ssh,

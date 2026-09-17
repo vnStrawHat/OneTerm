@@ -9,9 +9,9 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -48,31 +48,35 @@ Addresses `F2` (**high**), quoted from `research/ux-walkthrough-2026-09-16.md`:
 
 ## Scope
 
-- [ ] In scope:
+- [x] In scope:
   - `crates/workspace/src/layout/title_bar.rs:141-154` — the `on_click` guard that swallows a
     click on the already-selected toggle.
   - Whatever the chosen fix needs on the action side
     (`crates/workspace/src/layout/workspace/actions.rs`) and at the dock-collapse button.
   - A focused regression test for the state machine.
-- [ ] Out of scope:
+- [x] Out of scope:
   - The set of modes, their order, their labels and their widths.
   - The dock width (`US-0113`) and what the dock contains.
   - The `RightDockMode` persistence format in `ui_config.json`.
 
 ## Acceptance
 
-- [ ] Close the right dock with the tab bar's dock button, then click the title bar's
-      already-highlighted mode: the dock reopens with the same content and the same width.
-- [ ] After closing the dock with that button, the title bar no longer claims a mode is
+- [x] Close the right dock with the tab bar's dock button — the segmented control moves to
+      **None** — then click **SSH Client**: the dock reopens with the *same panel instance*
+      (no rebuild, so an SFTP connection and the session list keep their state) and the same
+      width. Rewritten after verification: under fix (b) the highlighted mode after a collapse
+      is None, so the click that reopens is a mode change, and what matters is that it does not
+      rebuild.
+- [x] After closing the dock with that button, the title bar no longer claims a mode is
       showing when it is not — either the toggle reflects the closed dock, or clicking it
       reopens the dock, and the packet says which rule it implements.
-- [ ] Clicking a mode that is already selected while the dock is **open** does not close it,
-      toggle it, or rebuild its panel. The only effect of an explicit mode click is "show me
+- [x] Clicking a mode whose panel the dock already holds — open or collapsed — does not close
+      it, toggle it, or rebuild its panel. The only effect of an explicit mode click is "show me
       this", never "hide this".
-- [ ] Clicking **None** while None is selected leaves the dock closed.
-- [ ] The persisted `right_dock_mode` after each of the above is what the title bar shows on
+- [x] Clicking **None** while None is selected leaves the dock closed.
+- [x] The persisted `right_dock_mode` after each of the above is what the title bar shows on
       the next launch.
-- [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
+- [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
 
@@ -106,7 +110,14 @@ wrong.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+Docs changed: `docs/gui-layout.md` §Dock composition, two sentences — that reselecting the
+current mode is an explicit "show me this" that reopens a collapsed dock, and that the tab-bar
+and status-bar dock buttons now drive `UiConfig.right_dock_mode` (the dock's open state is the
+truth, the persisted mode follows it). This packet took fix **(b)** as well as **(a)**, which
+is the change the packet said would need that sentence.
+
+No other owning doc changed: `actions.rs`'s contract is unchanged, `layout_tests.rs` gained
+tests rather than changing behaviour, and `docs/PROJECT.md` has nothing to say about it.
 
 ## Context
 
@@ -140,15 +151,18 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Plan
 
-- [ ] Write the regression test first, against the current code, and watch it fail on the
+- [x] Write the regression test first, against the current code, and watch it fail on the
       "collapse, then click the selected mode" sequence.
-- [ ] Apply fix (a); re-run.
-- [ ] Decide on the residual toggle-shows-a-lie half and record the decision here.
-- [ ] Re-capture the three scenes.
+- [x] Apply fix (a); re-run.
+- [x] Decide on the residual toggle-shows-a-lie half and record the decision here.
+- [x] Re-capture the three scenes.
 
 ## Decisions
 
-None expected. If the packet ends up taking fix (b) — making the collapse button a mode
+Fix (b) was taken. It redefines the dock buttons as mode changes, which is recorded in
+`docs/gui-layout.md` and here, not as a `DEC` — no future work inherits a constraint from it.
+
+Original note: If the packet ends up taking fix (b) — making the collapse button a mode
 change — that redefines a control's meaning and is worth a line in `docs/gui-layout.md`, but
 it is not a constraint future work must inherit, so it stays here rather than becoming a
 `DEC`.
@@ -175,11 +189,11 @@ it is not a constraint future work must inherit, so it stays here rather than be
      clicked again.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -198,7 +212,91 @@ it is not a constraint future work must inherit, so it stays here rather than be
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### Rework after independent verification (M2, m1)
+
+`evidence/workspace-wave1-verify.md` passed this packet with notes, and two of them are fixed
+here:
+
+- **M2 — the reopen took the rebuild branch.** Under fix (b) the control shows **None** after a
+  dock-button collapse, so the click that reopens the dock is a *mode change*, which went
+  through `switch_right_dock_mode` and **rebuilt** the panel — the path this packet's own Risks
+  section said to keep a reopen away from. The handler now decides against what the dock
+  **contains** rather than against the persisted mode
+  (`actions.rs`: `reopen_or_rebuild(contained, requested) -> DockModeAction`, applied by
+  `apply_right_dock_mode`): `None` hides, a mode whose panel is already in the dock is shown,
+  and only a mode the dock does not have is built. Acceptance row 1 is rewritten above to
+  describe the flow that actually happens.
+- **M2 — the gpui test could not fail.** The old
+  `reopening_a_collapsed_right_dock_keeps_its_width` drove only kit functions the diff never
+  touched, and the verifier showed it staying green through every mutation. It is replaced by
+  `reopening_a_collapsed_right_dock_keeps_its_panel_instance`, which drives
+  `apply_right_dock_mode` and asserts the right dock's `PanelId` is **unchanged** across the
+  collapse and reopen — it fails the moment a reopen rebuilds — plus the pure
+  `a_mode_click_only_rebuilds_a_panel_the_dock_does_not_have` over all six
+  (contained, requested) combinations.
+- **m1 — `shows_agent` was not scoped to the right dock.** `sync_right_dock_mode` now reads
+  `right_dock_panel_mode`, which looks only at `DockPlacement::Right`, instead of the
+  centre-first whole-tree search.
+
+m2 (a legacy `ui_config.json` showing a stale mode until the first dock notification) is left
+as the verifier described it: self-correcting, one dock notification away, and not worth an
+extra startup write.
+
+### What the fix turned out to be
+
+Both halves, and **(a) alone would not have worked**. `ToggleGroup` is multi-select at the
+kit level: its outer `on_click` hands over the check vector with *the clicked toggle
+inverted* (`reference/gpui-kit/crates/component/src/button/toggle.rs`, `RenderOnce for
+ToggleGroup`: `next[ix] = !next[ix]`). A click on the already-selected segment therefore
+arrives as **every toggle unchecked**, so the old loop's `checked &&` half would have
+swallowed it even with `ix != current_ix` deleted. The clicked segment is instead recovered
+by comparing the post-click vector with the single-select state the group was rendered with:
+
+- `crates/workspace/src/layout/title_bar.rs` — `clicked_mode_index(checks, current_ix)`, a
+  pure function, replaces the guard loop; every click now dispatches `SetRightDockMode`, and
+  the already-correct same-mode branch in `actions.rs` does the rest. Unchanged there.
+- `crates/workspace/src/layout/workspace/mod.rs` — fix (b): `right_dock_mode_for(open,
+  current, shows_agent)` (pure) plus `sync_right_dock_mode`, called from the existing dock
+  observer. It mirrors the dock's open state into `UiConfig.right_dock_mode`, so collapsing
+  the dock selects **None** in the segmented control and reopening it with the same button
+  reselects the panel that came back. This covers the status bar's dock button too, which had
+  the same bug and which the finding did not mention.
+
+Rule implemented, for the acceptance row that asks which: **the toggle reflects the closed
+dock** *and* clicking a mode always means "show me this".
+
+### Commands
+
+- `cargo test -p oneterm-workspace` — 34 passed, including this packet's:
+  `title_bar::tests::{clicking_another_segment_reports_that_segment,
+  clicking_the_selected_segment_reports_it_too, an_unchanged_vector_reports_no_click}` and
+  `layout_tests::{right_dock_mode_follows_the_dock_state,
+  a_mode_click_only_rebuilds_a_panel_the_dock_does_not_have,
+  reopening_a_collapsed_right_dock_keeps_its_panel_instance}`.
+- `pwsh scripts/ci-local.ps1` — ended with "ci-local: all checks passed".
+
+### GUI walk (pid-scoped, PrintWindow, 1200x800 window)
+
+Re-captured on the final tree, after the rework — the first frames predated `US-0113` and
+showed a dock width the clamp has since made impossible (m7).
+
+- `evidence/BUG-0067-24a-dock-collapsed-via-button.png` — the tab bar's dock button collapsed
+  the dock; the segmented control has moved to **None** in the same frame.
+- `evidence/BUG-0067-24b-after-clicking-sshclient-again.png` — clicking **SSH Client** reopens
+  the dock at the same width (420 px, the 35 % ceiling at 1200 px) with the same content, and
+  the control shows SSH Client.
+- Regression clicks, checked in-session and not kept as frames: SSH Client clicked again while
+  the dock is open leaves it open and does not rebuild the panel; **None** clicked twice
+  leaves the dock closed; `target/ui_config.json` then reads `"right_dock_mode": "none"`.
+
+### Gaps
+
+- The guard removal itself is not reachable from a headless test — `ToggleGroup`'s `on_click`
+  needs a real click. The unit test covers the pure index recovery that replaced it; the GUI
+  frames are the proof that the click reaches the action.
+- No test drives `OneTermWorkspace::sync_right_dock_mode` end to end: building the workspace
+  entity needs the app's globals, which no test in this crate stands up. Its decision function
+  is unit-tested and its one call site is one line in the existing dock observer.
 
 ## Handoff
 
