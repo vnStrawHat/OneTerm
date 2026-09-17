@@ -35,7 +35,7 @@ use oneterm_theme::notif_ext::notify;
 use super::auth_form::SshAuthForm;
 use super::common::parse_port;
 use super::forward_rows::PortForwardRows;
-use super::group_combo::{GroupComboDelegate, SharedCell, group_combobox};
+use super::group_combo::{GroupComboDelegate, MatchCount, SharedCell, group_combobox};
 use super::jump_hops::JumpHostPicker;
 use crate::session_state::{
     SshAuthPreference, SshLoggingOverride, SshSession, SshSessionEntry, SshSessionId,
@@ -210,6 +210,9 @@ pub(crate) fn open_session_dialog(
     // ── Shared cells for the Group Combobox ────────────────────────────
     let group_value: SharedCell = Rc::new(std::cell::RefCell::new(group_val.clone()));
     let query_cell: SharedCell = Rc::new(std::cell::RefCell::new(String::new()));
+    // How many rows the dropdown's search left, so Enter can tell "nothing to
+    // select, create it" from "the list has a match and Enter is its key".
+    let match_count: MatchCount = Rc::new(Cell::new(0));
 
     // Find the selected index if group_val matches an existing group.
     let selected_indices: Vec<IndexPath> = existing_groups
@@ -267,6 +270,7 @@ pub(crate) fn open_session_dialog(
         let delegate = GroupComboDelegate::new(
             existing_groups.clone(),
             query_cell.clone(),
+            match_count.clone(),
             group_value.clone(),
         );
         ComboboxState::new(delegate, selected_indices, window, cx).searchable(true)
@@ -393,7 +397,13 @@ pub(crate) fn open_session_dialog(
                 .child(labelled_field(
                     "Group",
                     FieldRequirement::Optional,
-                    group_combobox(&group_combo_state, &group_value, &query_cell, cx),
+                    group_combobox(
+                        &group_combo_state,
+                        &group_value,
+                        &query_cell,
+                        &match_count,
+                        cx,
+                    ),
                     cx,
                 ))
                 .child(labelled_field(

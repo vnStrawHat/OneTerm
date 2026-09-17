@@ -32,8 +32,8 @@ use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::{
-    ConnectButton, SshConnectRequest, connect_ssh_session, defer_initial_focus_once, parse_port,
-    parse_user_host_port,
+    ConnectButton, InlineError, SshConnectRequest, connect_ssh_session, defer_initial_focus_once,
+    parse_port, parse_user_host_port,
 };
 use super::jump_hops::{HopSpec, JumpHopForms, JumpHostPicker};
 use crate::session_state::{
@@ -94,6 +94,20 @@ enum QuickConnectMode {
         initial_cwd: Option<std::path::PathBuf>,
         completion: SshDuplicateCompletion,
     },
+}
+
+/// What a ticked "Save to SSH Sessions" means once the connect has failed.
+///
+/// `CORR-54`: a quick-connect session is saved only when the connection is
+/// authenticated, so a typo never becomes a saved session and the store never
+/// holds an entry whose credentials have never worked. The user's tick is not
+/// discarded — it stays on, and the next successful attempt saves the session —
+/// but it is no longer *silently* not honoured (`F5`, `US-0118`).
+fn unsaved_note(save_ticked: bool) -> Option<&'static str> {
+    save_ticked.then_some(
+        "Not saved to SSH Sessions: a session is saved once its connection succeeds. \
+The tick is still on — connect again and it will be saved.",
+    )
 }
 
 /// The "Save to SSH Sessions" checkbox — Quick Connect only; a duplicate
@@ -223,6 +237,17 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
         QuickConnectHops::picked(picker, window, cx)
     });
 
+    // ── Failure shown in the dialog, beside the toast (`US-0118`) ──────
+    let inline_error = {
+        let mut inputs = vec![
+            host_state.clone(),
+            port_state.clone(),
+            username_state.clone(),
+        ];
+        inputs.extend(auth_form.secret_inputs());
+        InlineError::new(&inputs, cx)
+    };
+
     // ── Save-to-store checkbox state ───────────────────────────────────
     let save_session = Rc::new(Cell::new(false));
     let connecting = Arc::new(AtomicBool::new(false));
@@ -241,13 +266,16 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
         let connecting = connecting.clone();
         let initial_cwd = initial_cwd.clone();
         let completion = completion.clone();
+        let inline_error = inline_error.clone();
         move |window, cx| {
             if connecting.load(Ordering::Relaxed) {
                 return false;
             }
+            // A retry starts clean; the failure of this attempt replaces it.
+            inline_error.clear();
             let jump_hops = match hops
                 .forms(window, cx)
-                .and_then(|forms| forms.take_hops(window, cx))
+                .and_then(|forms| forms.take_hops(cx))
             {
                 Ok(jump_hops) => jump_hops,
                 Err(message) => {
@@ -267,7 +295,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 }
             };
 
-            let auth = match auth_form.take_auth(window, cx) {
+            let auth = match auth_form.take_auth(cx) {
                 Ok(auth) => auth,
                 Err(message) => {
                     window.push_notification(notify(NotificationType::Warning, message, cx), cx);
@@ -310,6 +338,10 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 initial_cwd: initial_cwd.clone(),
                 completion: completion.clone(),
                 on_connected,
+                on_failed: Some({
+                    let inline_error = inline_error.clone();
+                    Rc::new(move |message, _cx| inline_error.set(message))
+                }),
                 logging_override: SshLoggingOverride::Inherit,
             };
             let cfg = SshConfig {
@@ -405,6 +437,11 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 .when_some(
                     save_session_option(is_duplicate, save_session.clone()),
                     |content, option| content.child(option),
+                )
+                // The failure of the last attempt, under the fields it is about.
+                .when_some(
+                    inline_error.render(unsaved_note(save_session.get()), cx),
+                    |content, error| content.child(error),
                 )
         },
         move |window, cx| connect_logic(window, cx),

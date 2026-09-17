@@ -209,17 +209,21 @@ impl SshAuthForm {
             })
     }
 
-    /// Build the backend authentication config and clear credential input state.
-    pub(crate) fn take_auth(
-        &self,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Result<SshAuthMethod, String> {
+    /// Build the backend authentication config from the credential fields.
+    ///
+    /// The fields are **not** cleared. They used to be, which meant a connect
+    /// that failed 20 s later left an empty password box and a re-enabled
+    /// button, and every retry cost a full re-type (`F4`). The secret now lives
+    /// as long as the dialog does and no longer: a successful connect closes the
+    /// dialog, and closing it drops this form and its `InputState` entities.
+    /// Nothing on either path writes the value to `ssh_session.json`, to any
+    /// other config file or to the log — `DEC-0001` / `docs/ssh-client-connect.md`
+    /// §1.3 decision 1 stands, because keeping a secret in an open modal's own
+    /// state is not persistence.
+    pub(crate) fn take_auth(&self, cx: &App) -> Result<SshAuthMethod, String> {
         match self.method() {
             SshAuthPreference::Password => {
                 let password = self.password.read(cx).value().to_string();
-                self.password
-                    .update(cx, |state, cx| state.set_value("", window, cx));
                 if password.is_empty() {
                     Ok(SshAuthMethod::None)
                 } else {
@@ -232,8 +236,6 @@ impl SshAuthForm {
                 let key_path = self.key_path.read(cx).value().trim().to_string();
                 let key_path = validate_private_key_path(&key_path)?;
                 let passphrase = self.passphrase.read(cx).value().to_string();
-                self.passphrase
-                    .update(cx, |state, cx| state.set_value("", window, cx));
                 Ok(SshAuthMethod::PrivateKey {
                     key_path,
                     passphrase: (!passphrase.is_empty()).then(|| SecretString::new(passphrase)),
@@ -241,6 +243,12 @@ impl SshAuthForm {
             }
             SshAuthPreference::Agent => Ok(SshAuthMethod::Agent),
         }
+    }
+
+    /// The credential inputs, so a caller can clear an inline error when the
+    /// user starts correcting one of them.
+    pub(crate) fn secret_inputs(&self) -> Vec<gpui::Entity<InputState>> {
+        vec![self.password.clone(), self.passphrase.clone()]
     }
 }
 
@@ -451,7 +459,7 @@ mod tests {
         assert!(view.read_with(cx, |view, cx| view.form.focus_handle(cx).is_none()));
         assert!(view.read_with(cx, |view, cx| view.form.secret_focus_handle(cx).is_none()));
         let form = view.read_with(cx, |view, _| view.form.clone());
-        let auth = cx.update(|window, cx| form.take_auth(window, cx));
+        let auth = cx.update(|_, cx| form.take_auth(cx));
         assert!(matches!(auth, Ok(SshAuthMethod::Agent)), "{auth:?}");
     }
 

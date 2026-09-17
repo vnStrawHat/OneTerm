@@ -134,18 +134,15 @@ impl JumpHopForms {
             }))
     }
 
-    /// Collect every hop's credential (clearing the fields) into the
-    /// backend's hop list, outermost first.
-    pub(crate) fn take_hops(
-        &self,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Result<Vec<SshHop>, String> {
+    /// Collect every hop's credential into the backend's hop list, outermost
+    /// first. The fields keep their values so a failed attempt can be retried
+    /// without re-typing every hop's password (`US-0118`).
+    pub(crate) fn take_hops(&self, cx: &App) -> Result<Vec<SshHop>, String> {
         self.hops
             .iter()
             .map(|(spec, form)| {
                 let auth = form
-                    .take_auth(window, cx)
+                    .take_auth(cx)
                     .map_err(|message| format!("Jump host \"{}\": {message}", spec.label))?;
                 Ok(SshHop {
                     host: spec.host.clone(),

@@ -133,13 +133,13 @@ both surfaces.
 
 | # | Decision | Rationale |
 |---|---|---|
-| 1 | **Password is NOT persisted** to `ssh_session.json` | Security — the password lives only in RAM during the session, never written to disk. |
+| 1 | **Password is NOT persisted** to `ssh_session.json` | Security — the password lives only in RAM during the session, never written to disk. Since `US-0118` it also survives a failed connect **in the open dialog's own state**, so a retry costs no re-typing; closing the dialog drops it, and it still reaches no store, no config file and no log ([`DEC-0001`](decisions/0001-ssh-key-secret-persistence.md)). |
 | 2 | **Username is persisted** to `ssh_session.json` (the field already exists) | Convenience — the user only enters a password next time. The username is less sensitive than the password. |
 | 3 | **Use `LocalTerminalView`** for SSH too (via `dyn TerminalSession`) | The view is already backend-agnostic — it only needs `Entity<Box<dyn TerminalSession>>`. No separate `SshTerminalView` needed. |
 | 4 | **Dialog uses `window.open_dialog`** (gpui-component Dialog) | Matches the pattern already used for the "New/Edit SSH Session" dialog in `session_tabs/tabs.rs`. |
 | 5 | **Password field uses `InputState::masked(true)` + `.mask_toggle()`** | Shows `•••••`, with an eye-icon button to reveal/hide. API already available in gpui-component. |
 | 6 | **Footer: Cancel (left) + Connect (right), right-aligned** | `DialogFooter` defaults to `justify_end` → buttons auto-align right. Matches the requirement. |
-| 7 | **Connect runs async** — the dialog closes immediately, the connection runs in the background | Avoids blocking the UI. If connect fails → `window.push_notification` reports the error. |
+| 7 | **Connect runs async** — the dialog closes on success, the connection runs in the background | Avoids blocking the UI. On failure the dialog **stays open** with the form intact and shows the error inline as well as pushing the notification (`US-0118`, §4.7); connect itself is unchanged. |
 | 8 | **Left-click = Open**, right-click keeps the context menu (Open/Delete/Property). Since `IN-0033` the centre tab bar's `+` menu is a second surface that opens the same dialog by session id | Keeps the current context-menu behavior, adds a left-click shortcut. The `+` menu reuses `open_connect_dialog` rather than duplicating the connect path, so the two surfaces cannot drift. |
 | 9 | **Saved-session logging is tri-state** (`inherit` / `on` / `off`) | A saved session can use the global SSH policy or explicitly force either outcome; see [`DEC-0003`](decisions/DEC-0003-define-terminal-logging-capture-and-override-semantics.md). |
 
@@ -386,6 +386,37 @@ div()
 |---|---|---|
 | Username (if asked) | Not empty after trim | `window.push_notification("Username is required.")`, return `false` (don't close dialog) |
 | Password | Not empty after trim | `window.push_notification("Password is required.")`, return `false` |
+
+### 4.7. After a failed connect (`US-0118`)
+
+The dialog stays open — it always did — and now it is usable when it does. This holds for
+both credential dialogs (Connect SSH and SSH Quick Connect) and for the Duplicate dialog,
+because all three share `SshAuthForm` and `connect_ssh_session`.
+
+- **The credential fields keep what the user typed.** `SshAuthForm::take_auth` used to blank
+  the password and the passphrase as it read them, so a failure 20 s later left an empty box, a
+  re-enabled button and no explanation. It no longer clears; a successful connect closes the
+  dialog, and closing it drops the form and its `InputState` entities. `DEC-0001` and §1.3
+  decision 1 are untouched: the secret reaches no store, no config file and no log (checked on
+  disk after a failed attempt with Save ticked), and an open modal's own state is not
+  persistence.
+- **The failure is shown inline as well as in the toast.** `SshConnectRequest::on_failed`
+  carries the message the notification shows — the same `SharedString`, so the two cannot
+  drift — to an `InlineError` the dialog body renders under its fields. It clears when the user
+  presses Connect again and on `InputEvent::Change` from any field it watches, so a corrected
+  form never stands beside a stale error. This is a second channel beside the notification, not
+  a replacement: §1.3 decision 7 stands and connect is still asynchronous.
+- **A ticked "Save to SSH Sessions" says what happened.** `CORR-54` holds — a quick-connect
+  session is saved only once the connection is authenticated — but the drop is no longer
+  silent: the inline error carries a second line saying the session was not saved, that a
+  session is saved once its connection succeeds, and that the tick is still on. The next
+  successful attempt saves it.
+- **The Group combobox commits with Enter.** Typing a name no group matches and pressing Enter
+  creates it, selects it, and closes the dropdown; with a row on screen Enter still belongs to
+  the list. The decision is `group_combo::group_commit(query, match_count)`. The handler is a
+  **capture**-phase `Confirm` listener, because gpui stops an action after the first
+  bubble-phase listener and the list would otherwise swallow the key. The dropdown's no-match
+  area names the group it would create instead of showing a bare icon.
 
 ---
 
@@ -1050,6 +1081,10 @@ once per hop before the target's. Failures are typed (ARCH-06):
 | A jump hop failed | The hop's `Connect` error with its message prefixed `jump host user@host:port: …` (`route::hop_error`); host-key errors and `Cancelled` are passed through unchanged because they already name the hop or belong to no hop. |
 | Host-key problems | `AppError::HostKeyUnknown` / `AppError::HostKeyChanged` (see §9.3). |
 | User pressed Cancel | `AppError::Cancelled` — `ConnectionCancellation::cancelled()` is a waker-driven future, so a phase in flight is woken immediately instead of polled every 25 ms (PERF-22). |
+
+A failure reaches the user twice, from one value: the bottom-right notification, and — while
+the dialog is still open — an inline block under its fields (`US-0118`, §4.7). Both render the
+same `SharedString`, handed to the dialog through `SshConnectRequest::on_failed`.
 
 The reporting text is built in one place,
 `crates/session-ui/src/common.rs::connect_failure_message` (`BUG-0068`): the

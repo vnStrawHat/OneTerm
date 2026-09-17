@@ -9,7 +9,7 @@
 //!
 //! Form field rendering lives in `oneterm_state::form_dialog::labelled_field`.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -27,6 +27,7 @@ use gpui_component::{
     ActiveTheme, Disableable as _, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::DialogButtonProps,
+    input::{InputEvent, InputState},
     notification::NotificationType,
 };
 use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
@@ -103,6 +104,86 @@ pub(crate) fn connect_failure_message(error: &AppError) -> String {
         | AppError::HostKeyUnknown { .. }
         | AppError::HostKeyChanged { .. } => error.to_string(),
         other => format!("SSH connect failed: {other}"),
+    }
+}
+
+/// The failure of the last connect attempt, shown inside the dialog.
+///
+/// The toast appears in the opposite corner from the modal and dismisses itself,
+/// so a user who looked away came back to an empty-looking form with a
+/// re-enabled button and no explanation (`F4`). This puts the same text — the
+/// very same value, so the two cannot disagree — where the user is looking.
+///
+/// It clears when the user presses Connect again and when any of the fields it
+/// was created with is edited: an error standing beside a corrected form is
+/// worse than no error at all. A successful connect closes the dialog, which
+/// drops this along with everything else.
+#[derive(Clone)]
+pub(crate) struct InlineError {
+    message: Rc<RefCell<Option<SharedString>>>,
+    /// Kept alive for as long as the dialog is: dropping a `Subscription`
+    /// cancels it.
+    _edits: Rc<Vec<gpui::Subscription>>,
+}
+
+impl InlineError {
+    /// An empty error that clears itself when any of `inputs` is edited.
+    ///
+    /// `InputEvent::Change`, not `cx.observe`: an `InputState` notifies on
+    /// every focus change and every cursor blink, which would wipe the error a
+    /// few hundred milliseconds after it appeared.
+    pub(crate) fn new(inputs: &[gpui::Entity<InputState>], cx: &mut App) -> Self {
+        let message: Rc<RefCell<Option<SharedString>>> = Rc::new(RefCell::new(None));
+        let edits = inputs
+            .iter()
+            .map(|input| {
+                let message = message.clone();
+                cx.subscribe(input, move |_, event: &InputEvent, _| {
+                    if matches!(event, InputEvent::Change) {
+                        message.borrow_mut().take();
+                    }
+                })
+            })
+            .collect();
+        Self {
+            message,
+            _edits: Rc::new(edits),
+        }
+    }
+
+    pub(crate) fn set(&self, message: impl Into<SharedString>) {
+        *self.message.borrow_mut() = Some(message.into());
+    }
+
+    pub(crate) fn clear(&self) {
+        self.message.borrow_mut().take();
+    }
+
+    /// The error block for the dialog body, or `None` while nothing has failed.
+    ///
+    /// `note` is the consequence the user also needs — "not saved to SSH
+    /// Sessions, …" — in muted text under the message.
+    pub(crate) fn render(&self, note: Option<&str>, cx: &App) -> Option<impl IntoElement> {
+        let message = self.message.borrow().clone()?;
+        let theme = cx.theme();
+        Some(
+            div()
+                .w_full()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(theme.danger.opacity(0.1))
+                .text_sm()
+                .text_color(theme.danger)
+                .child(message)
+                .children(note.map(|note| {
+                    div()
+                        .pt_1()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(note.to_string())
+                })),
+        )
     }
 }
 
@@ -293,6 +374,13 @@ pub(crate) struct SshConnectRequest {
     /// Runs once the session is authenticated, before the tab opens — e.g. the
     /// quick-connect "save this session" option (CORR-54: never saved on failure).
     pub on_connected: Option<Rc<dyn Fn(&mut App)>>,
+    /// Runs when the attempt failed, with the same text the notification shows.
+    ///
+    /// The dialog stays open on failure, so it echoes the message inline where
+    /// the user is looking; the toast is in the opposite corner and dismisses
+    /// itself (`US-0118`). Both strings come from this one value, so they cannot
+    /// drift.
+    pub on_failed: Option<Rc<dyn Fn(SharedString, &mut App)>>,
     /// Saved-session automatic logging override.
     pub logging_override: SshLoggingOverride,
 }
@@ -304,6 +392,7 @@ impl SshConnectRequest {
             initial_cwd: None,
             completion: None,
             on_connected: None,
+            on_failed: None,
             logging_override: SshLoggingOverride::Inherit,
         }
     }
@@ -373,6 +462,7 @@ pub(crate) fn connect_ssh_session(
                         initial_cwd,
                         completion,
                         on_connected,
+                        on_failed: _,
                         logging_override: _,
                     } = request;
                     connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -429,13 +519,15 @@ pub(crate) fn connect_ssh_session(
                 }
                 Err(error) => {
                     connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
+                    // The dialog is still open: the user can correct a field and
+                    // press Connect again without re-typing the password.
+                    let message = SharedString::from(connect_failure_message(&error));
+                    if let Some(on_failed) = &request.on_failed {
+                        on_failed(message.clone(), cx);
+                    }
                     window.refresh();
                     window.push_notification(
-                        notify(
-                            NotificationType::Error,
-                            connect_failure_message(&error),
-                            cx,
-                        ),
+                        notify(NotificationType::Error, message, cx),
                         cx,
                     );
                 }
