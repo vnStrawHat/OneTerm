@@ -68,7 +68,7 @@ cargo test --workspace
 
 ### 3.4. Theme & icon
 
-- Theme: create a JSON file in `crates/theme/themes/`, then add it to the `BUILTIN_THEMES` list in `crates/theme/src/theme.rs`.
+- Theme: create a JSON file in `crates/theme/themes/`, then add it to the `EMBEDDED_THEME_FILES` list in `crates/theme/src/theme.rs`. Secondary text must stay readable: `python scripts/check-theme-contrast.py` fails when `muted.foreground`, `tab.foreground` or `table.head.foreground` falls below 4.5:1 on any surface the script's `SURFACES` table lists for it (that table is the contract — if you draw one of those tokens on a background it does not list, add the surface). Aim for about 5:1 — a secondary token at 13:1 is no longer secondary.
 - Icon: OneTerm ships its own `AppIcon` enum (see `crates/theme/src/icon.rs`). Drop an SVG into `crates/theme/assets/icons/<name>.svg` — `crates/theme/build.rs` + the `icon_named!` macro auto-generate the `AppIcon::<PascalName>` variant (e.g. `arrow-right.svg` → `AppIcon::ArrowRight`). The gpui-component `IconName` (Lucide) set is also available for built-in icons (see `reference/gpui-kit/crates/component/src/icon.rs`).
 - Do not hardcode colors in a component — read from `cx.theme()` / `TerminalTheme`.
 
@@ -132,6 +132,7 @@ python scripts/check-doc-paths.py             # architecture doc paths
 python -m unittest scripts/test_check_english.py
 python scripts/check-english.py               # English-only contributor text
 python scripts/completion-catalog.py validate # completion catalogs vs schema
+python scripts/check-theme-contrast.py        # secondary text >= 4.5:1 in every built-in theme
 python scripts/third-party-notices.py --check # THIRD-PARTY-NOTICES.md matches Cargo.lock
 ```
 
