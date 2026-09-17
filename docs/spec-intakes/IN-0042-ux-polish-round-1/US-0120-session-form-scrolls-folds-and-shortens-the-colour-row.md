@@ -296,8 +296,9 @@ state.
   present, footer below it.
 - `evidence/US-0120-12-session-dialog-scrolled.png` — **the acceptance frame**: scrolled to the
   bottom of the form with Cancel and Save on screen and no window resize.
-- `evidence/US-0120-54-session-color-row.png`, `US-0120-54b-session-color-picker.png` — the
-  short row, and the full 130-swatch picker behind "Custom…" showing the same hex.
+- `evidence/US-0120-54b-session-color-picker.png` — the full picker behind "Custom…" showing
+  the same hex. (`US-0120-54-session-color-row.png` was a byte-identical copy of
+  `US-0120-11-…` and was deleted; `US-0120-54c-colour-row-4x.png` is the colour-row evidence.)
 - `evidence/US-0120-sweep-rename-group.png`, `US-0120-sweep-quick-connect.png` — the sweep.
 
 ### Documentation
@@ -371,9 +372,9 @@ it is recorded in Gaps rather than claimed fixed.
 nothing opened the disclosure, so the user was blocked by a message naming a row behind a
 collapsed `> Advanced`.
 
-A refused Save now **opens the disclosure and puts the cursor in the offending field before it
+A refused Save now **opens the disclosure and puts the cursor in the offending row before it
 shows the message**. `PortForwardRows::take` returns which row failed (`ForwardError { row,
-message }`) so the focus lands on that row rather than on the list; the jump-chain failure
+message }`) so the focus lands on that row's first field rather than on the list; the jump-chain failure
 focuses the picker. A refused *basic* field leaves the disclosure alone, so the form does not
 jump under the cursor — `session_dialog::reveals_advanced` is that decision, and it is
 unit-tested.
@@ -417,3 +418,28 @@ and has been removed; `US-0120-54c-colour-row-4x.png` is the colour-row evidence
 `DIALOG_CHROME_HEIGHT = 260` is about 170 px more than the chrome needs. Conservative and
 therefore safe, and the packet already records that the constant is tuned rather than measured.
 Unchanged.
+
+## Second rework — `R-m2`, `R-m5`, `R-m6`, from the re-verification of `40fc78d2`
+
+- **`R-m2` — two places said the disclosure toggles on "Enter and Space", which the same commit
+  disproved.** The rustdoc on `advanced_header` and `docs/ssh-client-connect.md` §6.6 both said
+  it; this packet's own rework section said "Enter does not toggle it, and must not", and the
+  re-verifier confirmed the dispatch order that makes that true. Both now say **Space**, and say
+  why Enter cannot reach it: the dialog binds Enter to submit in its key context, and gpui
+  dispatches a keymap binding before any element's key listener. Browse, Cancel and Save in the
+  same dialog behave identically, so this is the rule rather than an exception.
+- **`R-m5` — the row still drew nine squares.** "Custom…" became the picker's trigger label, so
+  the word opens the picker, but the trigger's own current-value square stayed beside the eight
+  and was indistinguishable from swatch 1 whenever the default colour was selected.
+  `ColorPickerButton` draws that square only when the trigger has no icon
+  (`gpui-component-0.6.0/src/color_picker.rs:578-604`), so the trigger now carries
+  `IconName::Palette`: eight swatches, a palette icon, "Custom…".
+  `evidence/US-0120-rv-colour-row-eight-4x.png`.
+- **`R-m6` — `U120-m4` was correct in code and unevidenced.** Frame taken:
+  `evidence/US-0120-rv-picker-featured-row.png` — opened by clicking the words "Custom…", and
+  the row along the top of the popup is the same eight as the row under the label, in the same
+  order. That is `swatch_colors` reaching both surfaces from one definition.
+- **`R-m8` nit.** "puts the cursor in the offending field" now reads "that row's first field",
+  which is what `focus_row` does and what its own rustdoc already said. `advanced_header`'s
+  ineffective `.justify_start()` is gone; the kit centres a button's label and the disclosure
+  renders centred and full-width.

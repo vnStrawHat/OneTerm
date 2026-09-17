@@ -97,6 +97,19 @@ impl QuickConnectHops {
     fn selected(&self, cx: &App) -> Option<SshSessionId> {
         self.picker.as_ref().and_then(|picker| picker.selected(cx))
     }
+
+    /// The credential inputs of hops that are built once and never rebuilt —
+    /// a duplicate's fixed chain. A picked chain hands its inputs over in
+    /// [`Self::forms`] instead, as it rebuilds them.
+    fn fixed_secret_inputs(&self) -> Vec<gpui::Entity<InputState>> {
+        if self.picker.is_some() {
+            return Vec::new();
+        }
+        match &self.built.borrow().1 {
+            Ok(forms) => forms.secret_inputs(),
+            Err(_) => Vec::new(),
+        }
+    }
 }
 
 enum QuickConnectMode {
@@ -257,6 +270,12 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
             username_state.clone(),
         ];
         inputs.extend(auth_form.secret_inputs());
+        // A duplicate's hops are built once, above, and never rebuilt — its
+        // `forms()` returns before the rebuild branch that hands later ones
+        // over — so they are watched here. Without this, duplicating a session
+        // with a jump chain left a corrected hop password beside a stale error:
+        // exactly the defect the rework fixed for every other path.
+        inputs.extend(hops.fixed_secret_inputs());
         InlineError::new(&inputs, cx)
     };
 

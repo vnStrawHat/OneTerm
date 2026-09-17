@@ -985,7 +985,9 @@ the **Advanced** disclosure, **Group**, **Logging**.
   It is a **button**, not a styled row: it is the only route to those three fields, and all
   three were plain Tab stops before they were folded away, so a `div` with a click handler would
   have put them out of a keyboard user's reach entirely. It is a tab stop, announces its state,
-  and toggles on Enter and Space.
+  and toggles on **Space**. Not Enter: the dialog binds Enter to submit, and a keymap binding is
+  dispatched before any element's key listener, so Enter never reaches it — exactly as for
+  Browse, Cancel and Save in the same dialog.
   Save validates the forwards and the jump chain whether or not they are on screen, so a
   refused Save **opens the disclosure and focuses the offending field** before it shows the
   message; a message about a basic field leaves the disclosure alone

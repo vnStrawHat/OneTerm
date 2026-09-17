@@ -75,24 +75,31 @@ pub fn form_body_max_height(window_height: Pixels) -> Pixels {
 
 /// Line box for a checkbox or radio label, as a multiple of the font size.
 ///
-/// A glyph is painted inside the line box of its own text line; anything the
-/// font draws below that box is lost. The UI fonts OneTerm ships with need up to
-/// about 1.35 em for ascent plus descent, and gpui's own default (the golden
-/// ratio, ~1.618) clears that comfortably — which is why every ordinary label in
-/// the application renders its descenders whole.
+/// The UI fonts OneTerm ships with need up to about 1.35 em for ascent plus
+/// descent; this clears that, and so does gpui's own default (the golden ratio,
+/// ~1.618), which is why an ordinary label needs nothing from this module.
 pub const CONTROL_LABEL_LINE_HEIGHT: f32 = 1.5;
 
 /// The label text for a [`gpui_component::checkbox::Checkbox`] or
 /// [`gpui_component::radio::Radio`], passed as a **child** rather than through
 /// `.label(...)`.
 ///
-/// The kit wraps a `.label(...)` in `line_height(relative(1.))` — a line box
-/// exactly as tall as the font — so the tail of a `g` or a `p` falls outside it
-/// and is never drawn (`BUG-0069`: "Loggin**g**" and "Use glo**b**a**l**" ended
-/// flat at the baseline). That line height is hard-coded inside the control and
-/// cannot be overridden from the outside, so the text goes in as a child with a
-/// line box that has room for the descender. Pass the same text to
-/// `accessibility_label` to keep the name a screen reader announces.
+/// Both controls put a `.label(...)` inside
+/// `v_flex().flex_1().overflow_hidden().line_height(relative(1.2))` wrapping a
+/// label div of `line_height(relative(1.))`
+/// (`gpui-component-0.6.0/src/checkbox.rs:315-318,329`, `radio.rs:236-245`).
+/// The box is therefore exactly one em tall and it **clips**, so the tail of a
+/// `g` or a `p` is cut off — `BUG-0069`: "Loggin**g**" and "Use glo**b**a**l**"
+/// ended flat at the baseline. The clip is what does the damage, not the line
+/// height on its own: `Button` uses the same `relative(1.)` on its label with no
+/// vertical clip around it and renders descenders whole, so a button needs none
+/// of this.
+///
+/// The inner line height is hard-coded inside the control and cannot be
+/// overridden from outside, so the text goes in as a child instead, in a line
+/// box tall enough that the glyph fits inside the clipping box. Pass the same
+/// text to `accessibility_label`: both controls derive the announced name from
+/// `.label(...)`, so a child alone would lose it.
 pub fn control_label(text: impl Into<SharedString>) -> Div {
     div()
         .line_height(relative(CONTROL_LABEL_LINE_HEIGHT))
@@ -282,11 +289,7 @@ impl FormDialog {
             None => {
                 let submit = self.submit.clone();
                 Button::new("confirm")
-                    // The label is the caller's text, so it can hold a
-                    // descender; the kit clips a button label's line box the
-                    // same way it clips a checkbox's (`BUG-0069`).
-                    .accessibility_label(self.confirm_label.clone())
-                    .child(control_label(self.confirm_label.clone()))
+                    .label(self.confirm_label.clone())
                     .on_click(move |_, window, cx| {
                         if submit(window, cx) {
                             window.close_dialog(cx);

@@ -144,7 +144,10 @@ fn advanced_is_configured(
 /// Tab stops before they were folded away. A `div` with an `on_click` is not
 /// focusable, so a keyboard-only user could no longer reach them at all
 /// (`US-0120` rework). A `Button` is a tab stop, announces itself as a button,
-/// and toggles on Enter and Space.
+/// and toggles on **Space**. Not Enter: `FormDialog` binds Enter to submit in
+/// the dialog's key context, and gpui dispatches a keymap binding before any
+/// element's key listener, so Enter never reaches the button — the same as for
+/// Browse, Cancel and Save in this dialog.
 fn advanced_header(expanded: Rc<Cell<bool>>, cx: &App) -> impl IntoElement {
     let open = expanded.get();
     let icon = if open {
@@ -162,7 +165,6 @@ fn advanced_header(expanded: Rc<Cell<bool>>, cx: &App) -> impl IntoElement {
             "Advanced, collapsed"
         })
         .child(control_label("Advanced"))
-        .justify_start()
         .text_color(cx.theme().muted_foreground)
         .on_click(move |_, window, _| {
             expanded.set(!expanded.get());
@@ -261,14 +263,18 @@ fn color_row(state: &gpui::Entity<ColorPickerState>, cx: &App) -> impl IntoEleme
                 }),
         )
         .child(
-            // "Custom…" belongs *inside* the picker's trigger. It used to be a
-            // bare `div` beside it, so clicking the word did nothing and the row
-            // read as nine swatches (`US-0120` rework). The picker's own
+            // "Custom…" belongs *inside* the picker's trigger, so clicking the
+            // word opens the picker; it used to be a bare `div` beside it. The
+            // icon replaces the trigger's current-value square, which made a
+            // ninth square in a row of eight — indistinguishable from swatch 1
+            // whenever the default colour was selected. `ColorPickerButton`
+            // draws that square only when it has no icon. The picker's own
             // featured row is set from `swatch_colors`, so the short row and the
             // top of the popup are one list.
             ColorPicker::new(state)
                 .small()
                 .featured_colors(swatch_colors(cx).to_vec())
+                .icon(Icon::new(IconName::Palette))
                 .label("Custom\u{2026}")
                 .accessibility_label("Custom colour\u{2026}"),
         )

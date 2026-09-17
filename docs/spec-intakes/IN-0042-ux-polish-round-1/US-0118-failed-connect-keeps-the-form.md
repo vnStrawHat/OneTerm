@@ -317,7 +317,8 @@ Connecting to `10.10.10.10` with Save ticked, as the walkthrough did.
   there, Connect re-enabled, the error inline, and the Save note under it.
 - `evidence/US-0118-16c-error-cleared-on-edit.png` - one character typed into the password and
   the error is gone, the password kept and extended.
-- `evidence/BUG-0068-17b-connect-timeout-22s.png` - the toast, single-prefixed, same text.
+- The toast, single-prefixed and carrying the same text, is in the same frame as the inline
+  error above; the separate `BUG-0068-17b-…` file was a byte-identical copy and was deleted.
 - `evidence/US-0118-55-group-combobox.png`, `US-0118-56-group-typed.png` - the dropdown and the
   no-match text.
 - `evidence/US-0118-56b-group-created-on-enter.png` - after Enter: "Lab" selected in the
@@ -428,3 +429,25 @@ intended shape — the retry is a new attempt from a different surface — and
 The acceptance line "a successful connect still clears the password" is met in the sense the
 packet always stated (the dialog closes and its state is dropped), and the verifier's loopback
 frame now demonstrates it rather than the packet arguing it.
+
+## Second rework — `R-M1`, from the re-verification of `40fc78d2`
+
+**`U118-m2` was fixed on two of its three paths.** `InlineError::watch` is called from
+`QuickConnectHops::forms`, but only inside the branch that rebuilds the hop forms when the
+picker's selection moves — and `forms()` returns before that branch when there is no picker.
+A **duplicate** has no picker: its chain is fixed, built once by `QuickConnectHops::fixed(...)`
+before the dialog opens. So duplicating a session that has a jump chain still left a corrected
+jump-host password standing beside a stale inline error, which is exactly the defect the rework
+closed everywhere else. The path is a real one — `initial_focus` deliberately puts the cursor
+in the first hop secret for a duplicate.
+
+Fixed by watching those inputs where they are created: `QuickConnectHops::fixed_secret_inputs`
+returns the fixed chain's credential inputs (and nothing for a picked chain, which hands its
+own over as it rebuilds them), and `InlineError::new` is given them along with host, port,
+username and the target's own secrets. The two paths now both hand over exactly once.
+
+**No pure piece to test.** The decision is `self.picker.is_some()` — a duplicate's hops are
+fixed, a picked chain's are rebuilt — and everything either side of it is `Entity<InputState>`
+values and gpui subscriptions. A test would assert `is_some()`. The behaviour is reachable only
+by duplicating a session with a jump chain in the GUI, which this rework did not walk: the gap
+was found by reading the call graph and is closed the same way. Recorded rather than claimed.

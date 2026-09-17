@@ -17,7 +17,6 @@ use gpui_component::{
     h_flex,
     searchable_list::{SearchableListDelegate, SearchableListItem, SearchableVec},
 };
-use oneterm_state::form_dialog::control_label;
 
 /// Shared mutable cell for the query text and group value.
 /// Uses `Rc<RefCell<>>` so the delegate (inside ComboboxState) and the footer
@@ -295,11 +294,12 @@ pub(crate) fn group_combobox(
 
                         Button::new("create-group")
                             .ghost()
-                            // `control_label`, not `.label(...)`: the kit clips a
-                            // button label's descenders, and this one carries
-                            // arbitrary typed text (`BUG-0069` rework).
-                            .accessibility_label(label.clone())
-                            .child(control_label(label))
+                            // `.label(...)`, not a child: the kit's label wraps
+                            // the text in `min_w_0 / whitespace_nowrap /
+                            // text_ellipsis`, and this one carries arbitrary
+                            // typed text, so an over-long group name ends in an
+                            // ellipsis rather than being cut at the button edge.
+                            .label(label)
                             .icon(Icon::new(IconName::Plus))
                             .text_color(cx.theme().foreground)
                             .w_full()

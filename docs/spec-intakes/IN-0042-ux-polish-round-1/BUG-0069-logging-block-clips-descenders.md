@@ -279,9 +279,9 @@ about text rendering. The one sentence worth keeping lives in the rustdoc on
   `crates/sftp-ui/src/render.rs:276` and `crates/sftp-ui/src/edit.rs:588`. `control_label` is in
   the shared `form_dialog` module and is ready for them; fixing them belongs to `US-0124` and to
   `US-0126`'s sweep.
-- **`Button::label` sites with no descender today are left alone**: "Browse" (`auth_form.rs`),
-  "Add" (`forward_rows.rs`) and `FormDialog`'s fixed "Cancel". They are latent — a future
-  wording change reintroduces the clip — and the remedy is one line each.
+- **`Button::label` needs nothing.** The claim that Browse, Add and Cancel were "latent" clips
+  was wrong in the same way `B69-MAJOR-1` was: a button label has no vertical clip around it.
+  Nothing to do, now or later.
 - **`CONTROL_LABEL_LINE_HEIGHT = 1.5` is pinned by nothing.** No test and no check catches a
   change back to 1.0; the value's justification lives only in its rustdoc.
 
@@ -294,25 +294,38 @@ Use only across actors or sessions: current state, next owner/action, and blocke
 Verdict **PASS with findings**. The outcome held and the root cause was proven, but the
 verifier found the same cause unfixed on a sibling control and two wrong crate names in Gaps.
 
-- **B69-MAJOR-1 — `Button::label` has the identical defect, in these same dialogs.**
-  `gpui-component-0.6.0/src/button/button.rs:679-687` wraps a button's label in
-  `line_height(relative(1.))`, exactly as `checkbox.rs:329` and `radio.rs:245` do, so the
-  Connect button's in-flight label lost the tail of "Connectin**g**". The packet's Scope
-  covers it ("any sibling that shares the same cause") and its Risks section named this failure
-  mode, so it is in scope, not a new packet. Fixed by the same remedy — the text as a child
-  with `control_label`, plus `accessibility_label`, because `Button` derives its screen-reader
-  name from `.label(...)` the way the other two controls do — at the three sites whose text can
-  carry a descender:
-  - `common.rs` — the Connect button ("Connecting").
-  - `group_combo.rs` — the dropdown footer's `Create "<typed text>"`, which takes arbitrary
-    user text.
-  - `crates/state/src/form_dialog.rs` — `FormDialog`'s confirm button, whose label is the
-    caller's.
-  Measured on the after frame: the `g` of "Connecting" occupies 4 pixel rows below the
-  baseline, against the zero the verifier measured on the same button at `f4ea1765`.
-  Frames: `evidence/BUG-0069-rw-15-connecting-button.png` and
-  `evidence/BUG-0069-rw-15b-connecting-button-6x.png`, beside the verifier's
-  `evidence/BUG-0069-verify-15-connecting-button-6x.png`.
+- **B69-MAJOR-1 was a false finding, and the correction matters more than the finding did.**
+  It reported that `Button::label` clips descenders like `Checkbox` and `Radio` do, and that
+  the Connect button's "Connectin**g**" had lost its tail. A second verifier **measured** the
+  frames rather than reading them, and the button has the same 4 descender rows in all three
+  captures — `research/before/15-connect-inflight.png` (pre-`IN-0042`),
+  `evidence/US-0118-15-connect-inflight.png` (`f4ea1765`, still `.label(...)`) and
+  `evidence/BUG-0069-rw-15-connecting-button.png` (with the child label). The first verifier's
+  own 6x crop shows 4 rows too. **`Button::label` never clipped anything.**
+
+  I took the finding on trust and repeated its "zero rows before" in this packet without
+  measuring the before-frame myself, which is the same mistake `BUG-0069` exists to correct:
+  `F19` was also a confident diagnosis that the pixels did not support.
+
+  **The mechanism, corrected.** The line height alone is not the cause. `Checkbox` and `Radio`
+  put their label inside `v_flex().flex_1().overflow_hidden()` whose height is that one-em line
+  box (`checkbox.rs:315-318`, `radio.rs:236-245`) — it is the **clip** that removes the tail.
+  `Button` sets the same `line_height(relative(1.))` on its label
+  (`button.rs:679-687`) but hangs it in an `h_flex().size_full()` sized to the whole button with
+  nothing clipping it vertically, so the glyph paints outside its own box unharmed. The
+  rustdoc on `control_label` now says this.
+
+  **The remedy is reverted.** The three button labels converted to `control_label` children
+  (`common.rs`'s Connect, `group_combo.rs`'s `Create "<typed text>"`, `FormDialog`'s confirm)
+  are back on `.label(...)`. The conversion fixed nothing and cost something: `.label(...)`
+  wraps the text in `min_w_0 / whitespace_nowrap / text_ellipsis`, so an over-long label ends
+  in an ellipsis; a plain child in the button's `overflow_hidden` content row is hard-clipped
+  at the button edge instead (`R-m4`). The footer's label is arbitrary user text, so that is
+  the site where it would have shown.
+
+  The original outcome is untouched: the checkbox and radio labels in these dialogs still
+  render their descenders whole, re-measured by both verifiers on
+  `evidence/BUG-0069-11c-before-above-after.png`.
 - **B69-m2.** Gaps corrected: see above.
 - **B69-m3.** Recorded in Gaps rather than fixed — a test that pins a line height needs the
   laid-out glyph box, which is the same thing the packet already records as unavailable.

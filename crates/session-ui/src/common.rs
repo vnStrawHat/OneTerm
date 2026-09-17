@@ -35,7 +35,6 @@ use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
 use crate::session_state::SshLoggingOverride;
 use oneterm_settings::TerminalSettings;
 use oneterm_state::commands::SshDuplicateCompletion;
-use oneterm_state::form_dialog::control_label;
 use oneterm_state::{AppServices, AppState};
 use oneterm_terminal::PtySize;
 use oneterm_terminal_view::{PanelSpec, TerminalPanel};
@@ -78,14 +77,8 @@ impl Render for ConnectButton {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let connecting = self.connecting.load(Ordering::Relaxed);
         let action = self.action.clone();
-        let label = if connecting { "Connecting" } else { "Connect" };
         Button::new("connect")
-            // `control_label`, not `.label(...)`: the kit wraps a button label in
-            // `line_height(relative(1.))` exactly as it wraps a checkbox's
-            // (`button.rs:685`), so "Connectin*g*" lost its tail (`BUG-0069`
-            // rework).
-            .accessibility_label(label)
-            .child(control_label(label))
+            .label(if connecting { "Connecting" } else { "Connect" })
             .primary()
             .loading(connecting)
             .disabled(connecting)
