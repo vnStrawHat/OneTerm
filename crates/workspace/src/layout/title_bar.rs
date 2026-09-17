@@ -101,10 +101,12 @@ impl Render for AppTitleBar {
 /// Tab" action it used to host is still reachable via its key binding
 /// (`Ctrl-T`) and the terminal context menu.
 ///
-/// The three toggles act as a single-select segmented control: clicking any
-/// dispatches `SetRightDockMode` for that mode. (`ToggleGroup` is multi-select
-/// by nature, so the click handler ignores the check vector and instead keys
-/// off *which* toggle was clicked via the group's outer `on_click`.)
+/// The three toggles act as a single-select segmented control: clicking any of
+/// them — including the one already selected — dispatches `SetRightDockMode`
+/// for that mode, which is what reopens a dock the tab bar's dock button
+/// collapsed (`BUG-0067`). (`ToggleGroup` is multi-select by nature, so the
+/// clicked segment is recovered from the check vector by
+/// [`clicked_mode_index`].)
 pub fn mode_toggle_group(cx: &App) -> AnyElement {
     let current = oneterm_settings::UiConfig::global(cx)
         .read(cx)
@@ -140,15 +142,48 @@ pub fn mode_toggle_group(cx: &App) -> AnyElement {
                 .checked(current_ix == 2),
         )
         .on_click(move |checks, window, cx| {
-            // Single-select: pick the first toggle that is now checked and
-            // differs from the current mode. `checks` is the post-click state
-            // of every toggle in the group.
-            for (ix, &checked) in checks.iter().enumerate() {
-                if checked && ix != current_ix {
-                    window.dispatch_action(Box::new(SetRightDockMode(modes[ix])), cx);
-                    return;
-                }
-            }
+            let Some(mode) = clicked_mode_index(checks, current_ix).and_then(|ix| modes.get(ix))
+            else {
+                return;
+            };
+            window.dispatch_action(Box::new(SetRightDockMode(*mode)), cx);
         })
         .into_any_element()
+}
+
+/// Which segment the user clicked, from the group's post-click check vector.
+///
+/// `ToggleGroup` is multi-select: it inverts exactly the clicked toggle and
+/// hands the result over. The group was rendered single-select — only
+/// `current_ix` checked — so the clicked segment is the one whose post-click
+/// state differs from that. Reading it this way (rather than looking for a
+/// newly checked toggle) is what lets a click on the already-selected segment
+/// dispatch at all: that click arrives as *every* toggle unchecked.
+fn clicked_mode_index(checks: &[bool], current_ix: usize) -> Option<usize> {
+    (0..checks.len()).find(|&ix| checks[ix] != (ix == current_ix))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clicked_mode_index;
+
+    #[test]
+    fn clicking_another_segment_reports_that_segment() {
+        // "Agent" clicked while "SSH Client" was selected.
+        assert_eq!(clicked_mode_index(&[true, true, false], 0), Some(1));
+    }
+
+    #[test]
+    fn clicking_the_selected_segment_reports_it_too() {
+        // The bug: the group unchecks the selected segment, so nothing is
+        // checked — the click must still resolve to that segment.
+        assert_eq!(clicked_mode_index(&[false, false, false], 0), Some(0));
+        assert_eq!(clicked_mode_index(&[false, false, false], 2), Some(2));
+    }
+
+    #[test]
+    fn an_unchanged_vector_reports_no_click() {
+        assert_eq!(clicked_mode_index(&[true, false, false], 0), None);
+        assert_eq!(clicked_mode_index(&[], 0), None);
+    }
 }
