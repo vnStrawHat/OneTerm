@@ -307,3 +307,183 @@ a defect in this branch. Re-run with `CARGO_BUILD_JOBS=2` and it passed.
   `description_list.label.foreground` also inherit `muted.foreground` in the kit but appear
   unused by OneTerm; not measured.
 - `cfg(unix)`/macOS rendering not exercised.
+
+
+---
+
+# Re-verification of 57fd345d — 2026-09-17
+
+Second pass, scoped to the rework. Target: `feat/us-0111-secondary-text-contrast-floor`
+@ `57fd345d`, one commit on top of this report's own `a5f289b8`. Same method: the surface
+model was re-implemented from the kit's `schema.rs` semantics in a scratch file and the
+numbers below come from that implementation, not from running the packet's script.
+
+## Verdict: **PASS**
+
+Both majors are fixed, all six minors are fixed, and the fixes hold under an independent
+re-derivation of the whole 702-pairing model. Three trivia remain (two wrong line numbers and
+one missing citation), none of which changes a measured value. Nothing regressed: of the 702
+pairings, **0** are worse than on `main`.
+
+## Per-finding status
+
+| # | Round-1 finding | Status | Evidence |
+| --- | --- | --- | --- |
+| 1 | **MAJOR** `SURFACES` omits `muted.background`, `list.hover.background`, `table.hover.background`; 20 pairings below the floor | **FIXED** | `muted.foreground` now lists **15** surfaces (`scripts/check-theme-contrast.py:43-106`) including all three, plus `accent.background` and `tab.active.background` that I had not found. Independent re-derivation: **702 pairings, 0 below 4.5:1** on the branch; **492 below** on `main`. Both numbers match the packet exactly. |
+| 2 | **MAJOR** `docs/gui-layout.md` ships the "every surface it is composited over" claim | **FIXED** | `docs/gui-layout.md:110-127` now says "every surface the `SURFACES` table in `scripts/check-theme-contrast.py` lists for it", enumerates them, and adds "that table is the contract, and it is only as complete as its last review". `AGENTS.md:71` carries the same scoping and tells a theme author to add a surface rather than assume coverage. |
+| 3 | **MINOR** `sidebar.background` fallback does not mirror the kit | **FIXED** | `FALLBACKS` (`:134`) is now `("blend", "background", "border", 0.15)`. Verified numerically on a hand-made theme in my scratch dir: `background #202020`, `border #c0c0c0` → script `#383838`, my own `0xc0/255*0.15 + 0x20/255*0.85` → `#383838`. |
+| 4 | **MINOR** a missing `muted.foreground` raises an unhandled traceback | **FIXED** | `FALLBACKS["muted.foreground"] = ("blend", "muted.background", "foreground", 0.7)` (`:150`), matching `schema.rs:777-779`; verified `#202020`/`#ffffff` → `#bcbcbc` against my own arithmetic. A token with no value *and* no kit-expressible fallback now reports by name: feeding `{"background": "#000000", "foreground": "#ffffff"}` gives `ValueError: muted.background: the theme does not define it and the kit has no fallback` instead of a bare traceback. |
+| 5 | **MINOR** translucent surfaces composited over `background`, not their parent | **FIXED** | New `PARENTS` table (`:110-126`) and `surface()` (`:223-231`). Verified on a hand-made theme: `tab.background #ffffff80` on a white `tab_bar` over a **black** body resolves to `#ffffff` (the old model would have given `#808080`), and `#767676` on it measures 4.5422 — my independent value for that grey on pure white. |
+| 6 | **MINOR** the chip evidence row measured against the window body | **FIXED** | Re-measured `US-0111-27-settings-keybindings.png` myself: chip fill `#1e2227`, glyph `#9aa1ac`, **6.14:1** — which is what the packet's table now reports for `Zed One Dark` `muted.foreground` on `muted.background`. |
+| 7 | **MINOR** "sits between 4.5:1 and about 6:1" is false for shipped themes | **FIXED** | Sentence gone. `docs/gui-layout.md:124-127` now says raised values land near 5:1 while some untouched tokens sit far higher, citing `Molokai Light`'s inherited `tab.foreground` at 19:1 — I measure 19.10:1. `AGENTS.md:71` says "Aim for about 5:1". |
+| 8 | **TRIVIAL** `theme.rs:27-61` | **FIXED** | Both citations now read `28-61` (packet `:60`, `:137`); the constant is at `crates/theme/src/theme.rs:28`. |
+| 9 | **NOTE** focused proof is a Python script, not the unit test `IN-0042.md:210` planned | Unchanged, accepted | Still the right call; `cargo test -p oneterm-theme` continues to prove only that the edited JSON parses and registers. |
+
+## Checks asked for this round
+
+### 1. Surface list and inventory — CONFIRMED
+
+- 15 surfaces for `muted.foreground` (`scripts/check-theme-contrast.py:82-98`), containing
+  `muted.background`, `list.hover.background`, `table.hover.background`, `accent.background`
+  and `tab.active.background`. 15 + 2 (`tab.foreground`) + 1 (`table.head.foreground`) = 18
+  per variant × 39 variants = **702**, which is what `pairings()` reports.
+- **Independent inventory:** branch → `39 variants, 702 pairings, 0 below 4.5:1`; `main` →
+  `39 variants, 702 pairings, 492 below 4.5:1`. Exactly the claimed figures.
+- **New draw sites verified in source, not taken on trust:**
+  - `accent.background`: the hovered menu row is `this.bg(cx.theme().tokens.accent)`
+    (`reference/gpui-kit/crates/component/src/menu/menu_item.rs:115`) and the shortcut `Kbd`
+    on it is forced transparent — `.bg(gpui::transparent_white())`
+    (`menu/popup_menu.rs:1114`) — so its `muted_foreground` text lands straight on the accent
+    fill. Both citations are exact.
+  - `tab.active.background`: `let muted = cx.theme().muted_foreground;`
+    (`crates/terminal-view/src/panel/tab_title.rs:110`) in `render_tab_strip`. Exact.
+  - `muted.background`: `kbd.rs:223-225` with `outline: false` at `kbd.rs:35`. Exact.
+  - `list.hover` / `table.hover`: `crates/sftp-ui/src/table_delegate.rs:284-285` and `:317`;
+    `crates/theme/src/theme.rs:69-77`. Exact.
+  - `background` for the Settings pages: `GroupBoxVariant::Outline` resolves to
+    `(None, Some(border), true)` — no fill (`reference/gpui-kit/crates/component/src/group_box.rs:133-135`). Correct.
+- **The two exclusions are true.** `apply_list_style_override` (`crates/theme/src/theme.rs:69-77`)
+  sets `list_active = list_hover` and `table_active = transparent`, so the JSON
+  `list.active.background` / `table.active.background` are never painted. Every
+  `apply_config` / `Theme::change` call site in the workspace is followed by that override
+  (`crates/theme/src/theme.rs:101-102`, `:113-114`, `:149-150`, `:176`;
+  `crates/settings-ui/src/appearance.rs:56-57`, `:92-93`), so there is no path that leaves the
+  JSON values live.
+- **Value count:** 51 changed token values across **37 of 39** variants, independently
+  recounted from the theme JSON — matching the commit message.
+- **Spot checks** (independent, `main` → branch):
+
+  | Variant | Surface | main | now | why it matters |
+  | --- | --- | --- | --- | --- |
+  | Zed One Dark | `muted.background` `#1e2227` | 2.65 | **6.14** | the chip fill |
+  | Zed One Dark | `accent.background` `#2c313c` | 2.16 | **5.01** | hovered menu row |
+  | Zed One Dark | `table.hover.background` `#2c313c` | 2.16 | **5.01** | selected SFTP row |
+  | Zed One Dark | `tab.active.background` `#23272e` | 2.48 | **5.76** | active tab subtitle |
+  | Catppuccin Mocha | `muted.background` `#302d41` | 2.73 | **5.01** | the 4.06:1 chip from round 1 |
+  | Tokyo Storm | `list.hover.background` (derived) | 1.77 | **6.15** | derived `accent × 0.6` surface |
+  | Ayu Light | `table.even.background` (derived) | 2.12 | **5.59** | derived alternating row |
+  | Matrix | `accent.background` `#002d00` | 2.65 | **5.02** | a saturated theme |
+
+- **No regression:** all 702 pairings compared `main` → branch, **0 got worse**.
+- **Hue/saturation still constant** across the 51 values: max saturation drift **0.0063**, max
+  hue drift **3.09°** on any colour with S > 0.07.
+
+### 2. Model mechanics — CONFIRMED
+
+`python scripts/check-theme-contrast.py --self-test` → `check-theme-contrast: self-test passed`
+(exit 0), and the self-test now covers the parent-compositing case, the three derived
+fallbacks and the missing-token diagnosis (`:296-317`). I did not rely on it: the four
+mechanics above were re-derived on hand-made themes held **only** in my scratch directory
+(`scratchpad/badtheme.py`, `scratchpad/scratch-bad-theme.json`); nothing was written into
+`crates/theme/themes/` and `git status --porcelain` stayed empty throughout. A hand-made theme
+carrying the original `#5c6370` fails **18 of 18** pairings, worst `muted.foreground` on
+`accent.background` at 2.16:1 — i.e. the enlarged list does bite.
+
+### 3. Docs — CONFIRMED, with one trivium
+
+`docs/gui-layout.md:110-127` and `AGENTS.md:71` no longer overclaim; the 4.5–6:1 sentence is
+gone; the `EMBEDDED_THEME_FILES` line reference is corrected. See the table above.
+
+### 4. New evidence PNG — CONFIRMED
+
+`evidence/US-0111-hover-menu-row.png` shows the `+` menu with `New SSH Session` hovered.
+Sampled by me:
+
+| Sample | Background | Glyph core | Ratio |
+| --- | --- | --- | --- |
+| `Ctrl+S` hint on the hovered row | `#2c313c` (`accent.background`) | `#9aa1ac` | **5.01:1** |
+| `New SSH Session` label, same row | `#2c313c` | `#efefef` (`accent.foreground`) | 11.33:1 |
+| `PowerShell`, unhovered row | `#1e2227` (`popover.background`) | `#efefef` | 13.91:1 |
+
+The hint's claimed 5.01:1 is exact, it agrees with the value the script derives from the JSON,
+and the row shows the hint keeping `muted_foreground` while the label takes
+`accent_foreground` — which is the behaviour the `popup_menu.rs:1114` citation predicts. The
+three re-captured scenes also carry the new values (host text 5.76:1, chip 6.14:1, light-theme
+inactive tab 5.00:1).
+
+### 5. Gate — GREEN
+
+## New findings (all trivial, none affects a measured value)
+
+1. **Wrong draw site for `table.head.foreground`.** `scripts/check-theme-contrast.py:103-105`
+   cites `crates/sftp-ui/src/table_delegate.rs:440`, which is the `"Empty directory."`
+   empty-state label in `muted_foreground` — not a column header and not
+   `table.head.foreground`. The pair is really drawn at
+   `reference/gpui-kit/crates/component/src/table/state.rs:1753-1754`
+   (`.bg(cx.theme().tokens.table_head).text_color(cx.theme().table_head_foreground)`), with
+   OneTerm's header content coming from `render_th` (`table_delegate.rs:251`). The pairing is
+   correct; only the pointer is.
+2. **Off-by-one on `panel.rs`.** Both `scripts/check-theme-contrast.py:49` and the packet
+   (`:274`) cite `crates/settings-ui/src/panel.rs:29`; `SETTINGS_GROUP_VARIANT` is at line 28.
+3. **One surface has no citation.** The script states "Every entry below therefore cites the
+   source line that draws that pair" (`:13`), but `sidebar.background` (`:64`) carries only a
+   prose note, and `list.even.background` / `table.even.background` lean on their neighbour's
+   line. The surface itself is legitimate — the Settings window wraps the kit's sidebar+page
+   `Settings` widget (`crates/settings-ui/src/panel.rs:3`) and the kit's sidebar paints
+   `tokens.sidebar` — so this is a documentation gap, not a measurement one.
+
+## Commands
+
+```text
+python scripts/check-theme-contrast.py
+  -> check-theme-contrast: 702 foreground/surface pairings across 117 token/variant rows, all >= 4.5:1   (exit 0)
+
+python scripts/check-theme-contrast.py --self-test
+  -> check-theme-contrast: self-test passed                                     (exit 0)
+
+# independent re-implementation of the reworked model (scratch, not the repo's script)
+branch -> 39 variants, 702 pairings, 0 below 4.5:1
+main   -> 39 variants, 702 pairings, 492 below 4.5:1
+702 pairings compared; 0 regressed; 0 below floor after
+51 changed values; max saturation drift 0.0063; max hue drift on non-neutral colours 3.09 deg
+
+# hand-made themes, scratch dir only
+PARENTS: tab.background #ffffff80 over white tab_bar over black body -> #ffffff (4.5422 for #767676)
+sidebar fallback  -> #383838 (independent #383838)
+muted.foreground  -> #bcbcbc (independent #bcbcbc)
+list.hover        -> #333333 (independent #333333)
+missing token     -> ValueError: muted.background: the theme does not define it and the kit has no fallback
+a theme carrying the original #5c6370 -> 18 of 18 pairings below the floor
+
+pwsh scripts/ci-local.ps1        # CARGO_BUILD_JOBS=3
+  -> ==> python scripts/check-theme-contrast.py
+  -> check-theme-contrast: 702 foreground/surface pairings across 117 token/variant rows, all >= 4.5:1
+  -> ci-local: all checks passed.
+```
+
+Gate note: the first run of `ci-local.ps1` aborted in `cargo test --workspace` with
+`rustc-LLVM ERROR: IO failure on output stream: no space on device` — the shared `D:` volume
+hit 0 bytes free while several agents were building. `cargo fmt` and both `clippy` steps had
+already passed. Clearing `target/debug/incremental` and re-running with `CARGO_INCREMENTAL=0`
+completed green. Not a property of this branch.
+
+## Gaps in this re-verification
+
+- The hovered-row, chip and active-tab surfaces were photographed on `Zed One Dark` only; the
+  other 38 variants rest on the theme JSON plus the source citations above, as the packet's
+  own Gaps section says.
+- I did not re-audit for a *sixteenth* missing surface beyond the sweep in round 1 plus the
+  kit's `Kbd`, `PopupMenu`, `tooltip`, `notification`, `GroupBox` and `Table` head paths. The
+  script's own framing — the table is the contract and may be incomplete — is now the honest
+  statement of that residual risk.
+- `cfg(unix)`/macOS rendering still not exercised.
