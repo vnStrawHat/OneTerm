@@ -14,7 +14,7 @@ use std::time::Duration;
 use gpui::{
     App, AppContext, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
     KeyDownEvent, MouseButton, ParentElement as _, SharedString, Styled, Subscription, Task,
-    Window, div, px,
+    Window, div, px, rems,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{
@@ -416,7 +416,15 @@ impl TerminalView {
                         // Reserved width: the counter appears, changes width and
                         // empties again as the user types, and a bar whose
                         // buttons jump on every keystroke is worse than `0/0`.
-                        .min_w(px(66.0))
+                        //
+                        // In `rems`, not pixels, with headroom over the widest
+                        // state. The kit sets the window's rem size from the
+                        // theme's font size (`component/src/root.rs:579`), which
+                        // the user sets as `ui_font_size`, so `text_xs` below
+                        // scales with it: a fixed 66px floor held "No matches"
+                        // at the default font with nothing to spare and started
+                        // moving the buttons again one setting away.
+                        .min_w(rems(4.75))
                         .text_center()
                         .text_xs()
                         .text_color(counter_color)

@@ -76,18 +76,23 @@ fn resolve_tab_label(live: Option<&str>, fallback: &str) -> String {
     }
 }
 
-/// The static tab label of a local-shell tab: the shell kind's display name,
-/// or for a custom shell the program's file stem (`US-0114`). A live OSC 0/2
-/// title still wins over this — see [`resolve_tab_label`].
+/// The static tab label of a local-shell tab: the program's file stem when the
+/// settings name one, otherwise the shell kind's display name (`US-0114`). A
+/// live OSC 0/2 title still wins over this — see [`resolve_tab_label`].
+///
+/// An explicit `program` wins for **every** kind, not only `Custom`, because
+/// `resolve_shell` honours it for every kind: `kind: cmd` with
+/// `program: nu.exe` runs nushell, and labelling that tab "Command Prompt"
+/// would be the same untruth `F1` is about, in a rarer configuration
+/// (`F-114.2`). The "+" menu clears `program` for an explicit kind, so only the
+/// default-shell path can reach this.
 pub(super) fn shell_tab_title(kind: ShellKind, program: Option<&Path>) -> String {
+    if let Some(stem) = program.and_then(|p| p.file_stem()).and_then(|s| s.to_str()) {
+        return stem.to_string();
+    }
     if kind == ShellKind::Custom {
-        return program
-            .and_then(|p| p.file_stem())
-            .and_then(|s| s.to_str())
-            .map_or_else(
-                || super::terminal_panel::DEFAULT_TAB_TITLE.to_string(),
-                str::to_string,
-            );
+        // A custom shell with no program has nothing to be named after.
+        return super::terminal_panel::DEFAULT_TAB_TITLE.to_string();
     }
     kind.display_name().to_string()
 }
@@ -313,10 +318,12 @@ fn tabs_of(
     Some((tabs, position))
 }
 
-/// Close every tab in `victims`, after a confirmation when more than one
-/// running shell would go: the `×`, middle-click and Close all destroy exactly
-/// one tab and are unconfirmed, but a single menu row that ends nine shells is
-/// the case the application confirms elsewhere too (`CORR-34`).
+/// Close every tab in `victims`, after a confirmation when more than one **tab**
+/// would go — tabs, not live shells: a tab whose shell already exited counts the
+/// same, which is what the dialog's own wording says. The `×`, middle-click and
+/// Close all destroy exactly one tab and are unconfirmed, but a single menu row
+/// that ends nine of them is the case the application confirms elsewhere too
+/// (`CORR-34`).
 fn close_tabs(victims: Vec<Entity<TerminalPanel>>, window: &mut Window, cx: &mut App) {
     fn close_all(victims: &[Entity<TerminalPanel>], window: &mut Window, cx: &mut App) {
         for tab in victims {
@@ -418,7 +425,8 @@ fn tab_context_menu(
 /// one marked, clicking a row shows that tab (`US-0116`, `F11`/`F13`).
 ///
 /// It lives in the `...` menu because that is the one menu a panel can add rows
-/// to (`component/src/dock/tab_panel.rs:334-336`), and because the menu
+/// to, above the kit's own separator (`component/src/dock/tab_panel.rs:333-337`),
+/// and because the menu
 /// otherwise held a single row duplicating the zoom button beside it.
 ///
 /// `panel` is the group's active panel and is already borrowed by the caller
@@ -628,6 +636,22 @@ mod tests {
         );
         // Nothing to name it after — the reset-tab fallback.
         assert_eq!(shell_tab_title(ShellKind::Custom, None), "Terminal");
+    }
+
+    #[test]
+    fn an_explicit_program_wins_over_the_kinds_name() {
+        // `resolve_shell` honours `program` for every kind, so `kind: cmd` with
+        // `program: nu.exe` runs nushell — and must not read "Command Prompt".
+        assert_eq!(
+            shell_tab_title(ShellKind::Cmd, Some(Path::new("C:\\tools\\nu.exe"))),
+            "nu"
+        );
+        assert_eq!(
+            shell_tab_title(ShellKind::Bash, Some(Path::new("/usr/bin/fish"))),
+            "fish"
+        );
+        // ...and with no program the kind still names the tab.
+        assert_eq!(shell_tab_title(ShellKind::Cmd, None), "Command Prompt");
     }
 
     #[test]

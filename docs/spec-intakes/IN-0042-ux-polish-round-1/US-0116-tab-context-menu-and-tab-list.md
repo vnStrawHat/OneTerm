@@ -227,7 +227,7 @@ raise it rather than burying it in Gaps.
 
 ### Evidence
 
-Branch `ux/tabs-spaces-menus`, commit `feat(terminal-view): give tabs a context menu, the strip
+Branch `worktree-agent-a8b32ce5d4725a1f5`, commit `feat(terminal-view): give tabs a context menu, the strip
 a tab list, and every tab its label`.
 
 **Reference read first, as the plan required.** The pinned kit lives at
@@ -277,14 +277,19 @@ GUI walk:
 - `evidence/US-0116-58-tab-rename-dialog.png` — Rename from that menu opens the dialog
   prefilled with **"Command Prompt"**, the tab that was right-clicked, not the active one. This
   is the frame that proves the rows carry the right-clicked tab's identity.
-- `evidence/US-0116-20-tabbar-more-menu.png` — the `...` menu: "Terminal Tabs" and ten rows,
-  the active one checked, then the kit's separator and its "Zoom In Shift+Esc".
+- `evidence/US-0116-20-tabbar-more-menu.png` — the `...` menu: "Terminal Tabs" and **nine**
+  rows, the active one checked, then the kit's separator and its "Zoom In Shift+Esc".
 - `evidence/US-0116-20b-tab-list-activates-a-hidden-tab.png` — clicking the first row activates
   tab 1, which had scrolled off the left; the strip scrolls back to it.
-- `evidence/US-0116-19-many-tabs.png` — ten tabs at 1400 px: the leftmost visible tab reads
-  "PowerShell 7" in full. **No bare `x`.**
-- `evidence/US-0116-51-large-1900.png` — widened to 1900 px: nine tabs visible, every one fully
-  labelled, free space to the right of the strip and nothing clipped.
+- `evidence/US-0116-19-many-tabs.png` — **nine** tabs at 1400 px, more than the strip holds:
+  the leftmost visible tab reads **"PowerShell"** in full. **No bare `x`.**
+- `evidence/US-0116-51-large-1900.png` — widened to 1900 px: all nine tabs visible, every one
+  fully labelled, free space to the right of the strip and nothing clipped.
+
+Tab count, corrected in the rework round (`F-116.1`): the walk opened **nine** tabs, not ten.
+The before scene had ten because one of them was SSH (`research/before/51-large-1900.png`:
+nine "Terminal" tabs plus `dev@127.0.0.1:22...`), and no host is reachable here. Nine still
+overflows the 1400 px strip, so every claim the frames support is unaffected.
 
 **Acceptance rows, with the behaviour each shipped with** (the packet asked for these to be
 listed rather than left implicit):
@@ -307,6 +312,20 @@ A double-lease panic was found and fixed during the walk: `Panel::dropdown_menu`
 borrowed `&mut self`, so the tab list must not read the active panel back through its entity.
 `tabs_of` takes the already-borrowed panel; `sibling_tabs` is the wrapper for callers that hold
 nothing. The crash frame is not kept as evidence — the fixed build is what the captures show.
+
+### Rework round (after independent verification)
+
+- **`F-116.1`** — the two sentences that said "ten" now say nine, and the leftmost tab in
+  `19-many-tabs.png` is named correctly ("PowerShell", not "PowerShell 7"). This was the only
+  place a frame contradicted the text.
+- **`F-116.2`** — the in-code citation at `tab_title.rs` is now `tab_panel.rs:333-337`, the
+  range that carries the full sense (rows *above* the kit's separator), matching the table above.
+- **`F-116.4`** — `close_tabs`' doc comment said the confirmation fires for more than one
+  *running shell*; the code counts **tabs**, and so does the dialog's own wording. The comment
+  now says tabs and notes that a tab whose shell already exited counts the same.
+- `F-116.3` (the in-code `tab.rs:715-718,794-800` range against the table's `794-802`) is left
+  as it is: both contain the load-bearing `:800 .flex_shrink_0()` and the in-code range is the
+  tighter one, which the verifier also concluded.
 
 ### Gaps
 

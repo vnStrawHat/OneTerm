@@ -33,6 +33,9 @@ is visible without measuring pixels, and each Space says which shell it holds.
 `P20` (effort M) — *"Strengthen the active-Space cue: widen the accent gutter to 2 px and give
 each Space a small corner label (shell name or `#N`), reusing the channel-badge slot."*
 
+`P20`'s "shell name or `#N`" was resolved to **`#N`, on inactive Spaces only, with the shell
+name on the chip's tooltip** by the `F-117.1` ruling — see the rework round in Evidence.
+
 Addresses `F26` (medium), quoted from `research/ux-walkthrough-2026-09-16.md`:
 
 > | F26 | split Spaces | The active Space is marked by a **single 1-pixel accent line** on one
@@ -67,17 +70,25 @@ change it; `US-0126` reports it as an observation.
 
 - [x] With two Spaces side by side, a reviewer looking at a screenshot at 100 % identifies the
       active one without measuring. This is the acceptance; the exact width is the means.
-- [x] Each Space carries a small label naming what it holds, legible at the default font size.
+- [x] Each **inactive** Space in a split carries a small chip saying *which* Space it is
+      (`#N`), legible at the default font size, with what it holds on the chip's tooltip.
+      (Reworded by the `F-117.1` ruling: the original "a small label naming what it holds"
+      was met by a 160px chip that covered live output. The active Space carries no chip —
+      the ring already answers it.)
 - [x] A single Space stays borderless and unlabelled — nothing appears where nothing appeared
       before.
-- [ ] The label does not collide with, hide, or replace the channel badge when a Space belongs
-      to a broadcast channel.
-- [x] The cue and the label take their colours from the theme; no colour literal is added to
+- [ ] The chip does not collide with, hide, or replace the channel badge when a Space belongs
+      to a broadcast channel. (True by construction — one row, chip left of badge — but
+      **unwalked**; see Gaps.)
+- [x] The cue and the chip take their colours from the theme; no colour literal is added to
       `crates/terminal-view`.
-- [ ] The cue is visible in both a light and a dark theme, and after `US-0111` raises the
-      secondary-text tokens.
-- [x] The terminal grid does not lose a row or a column to the label — the label overlays or
-      sits in existing chrome, it does not push content.
+- [x] The cue is visible in both a light and a dark theme, and after `US-0111` raises the
+      secondary-text tokens — `evidence/US-0117-09-light-split-two-terminals.png` and its
+      focus-moved twin, measured at 2 px of `#526fff` on `Zed One Light`.
+- [x] The terminal grid does not lose a row or a column to the chip — it overlays, it does not
+      push content — **and** (added by the `F-117.1` ruling, because the first attempt met the
+      letter of this and not its point) the first prompt line is readable under the chip in
+      every captured frame.
 - [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
@@ -112,7 +123,9 @@ exists, and the next reader would "restore" it.
 Changed: `docs/terminal-split.md` decision 8 — **amended, not reversed**, with the reason the
 amendment does not contradict it (the frame is still 1 px + 1 px for every Space and a lone
 Space is still borderless; what got stronger is the *active cue*, painted over that frame as an
-overlay so no geometry changes with focus) and the corner label recorded beside it.
+overlay so no geometry changes with focus), what the ring actually paints over (the gutter
+and one pixel of terminal edge, **not** the outer border — an absolute child is laid out
+against the padding box), and the inactive-Space number chip recorded beside it.
 `docs/gui-layout.md` §Broadcast input channels — the badge slot now carries the Space label
 beside the badge, in one row, so neither can hide the other.
 
@@ -202,13 +215,14 @@ decision would scatter the rule across two files.
 
 ### Evidence
 
-Branch `ux/tabs-spaces-menus`, commit `feat(terminal-view): make the active Space unmistakable
+Branch `worktree-agent-a8b32ce5d4725a1f5`, commit `feat(terminal-view): make the active Space unmistakable
 and name each Space`.
 
 Changed:
 
-- `crates/terminal-view/src/space/render.rs` — `active_cue_ring`, `space_corner_label`, the
-  corner slot that now carries the label and the badge in one row, plus a test.
+- `crates/terminal-view/src/space/render.rs` — `active_cue_ring`, `space_number_chip` and
+  `space_chip_tooltip`, the corner slot that carries the chip and the badge in one row,
+  plus a test.
 - `docs/terminal-split.md` decision 8 (amended, not reversed) and `docs/gui-layout.md`
   §Broadcast input channels.
 - No colour literal was added: the ring takes the colour `space_border_color` already returns,
@@ -216,11 +230,11 @@ Changed:
 
 Checks:
 
-- `cargo test -p oneterm-terminal-view --lib` — 351 passed, 0 failed. The pure logic is
-  `space_corner_label`: an SSH-style title keeps its text, a shell that announces itself as a
-  path is named (`C:\WINDOWS\system32\cmd.exe` -> `#1 cmd.exe`), and a silent shell still
-  reads `#N`. `space_border_color`'s existing tests still pass, so the channel rule is
-  unchanged. **The ring's width and colour are element properties and are not queryable in the
+- `cargo test -p oneterm-terminal-view --lib` — 352 passed, 0 failed. The pure logic is
+  `space_chip_tooltip`: an SSH-style title keeps its text, a shell that announces itself as a
+  path is named (`C:\WINDOWS\system32\cmd.exe` -> `cmd.exe`), and a silent shell has nothing
+  to say rather than an empty tooltip. `space_border_color`'s existing tests still pass, so
+  the channel rule is unchanged. **The ring's width and colour are element properties and are not queryable in the
   panel tests; they are proved by the measurement below.**
 - `pwsh scripts/ci-local.ps1` — see below.
 
@@ -232,43 +246,95 @@ scale, so capture scale is 1.0 and a pixel in the file is a pixel on screen):
 | before (walkthrough `research/before/09-split-two-terminals.png`) | 1 px, x=561 | `rgb(82,139,255)` |
 | `evidence/US-0117-09-split-two-terminals.png` | **2 px, x=461-462** | `rgb(82,139,255)` |
 | `evidence/US-0117-09b-split-two-terminals-focus-moved.png` | **2 px, x=457-458** | `rgb(82,139,255)` |
+| `evidence/US-0117-09-light-split-two-terminals.png` (Zed One Light) | **2 px, x=461-462** | `rgb(82,111,255)` = `#526fff` |
+
+The numbers are unchanged by the rework round — the ring was never what `F-117.1` was about —
+and were re-measured on the reworked build; the independent verifier measured the same runs
+from the same pixels (`evidence/terminal-view-wave1-verify.md`).
 
 Same colour, twice the width, and the two frames show the cue **moving** with focus: in `09`
 the accent sits on the right Space's left edge, in `09b` on the left Space's right edge, with
 the 3 px neutral separator (`rgb(62,68,81)`) beside it in both.
 
-GUI walk:
+GUI walk (all frames re-captured on the reworked build except `05`, which the rework does not
+touch; the app ran from a throwaway working directory, so its `target/ui_config.json` was the
+scratch one and no repository file was changed):
 
 - `evidence/US-0117-09-split-two-terminals.png` — two Spaces, the active one obvious at 100 %
-  without measuring. Each carries its label: `#0 cmd.exe` and `#1 cmd.exe`.
-- `evidence/US-0117-09b-split-two-terminals-focus-moved.png` — the same frame after focus moved.
+  without measuring. Only the **inactive** Space carries a chip, reading `#0`; the active one
+  carries the ring and nothing else. Both first prompt lines are fully legible, and they wrap
+  at the same column, so the chip covers no glyph.
+- `evidence/US-0117-09b-split-two-terminals-focus-moved.png` — focus moved: the ring is on the
+  left Space and the chip has moved to the right one, now reading `#1`. The cue and the chip
+  are never on the same Space.
+- `evidence/US-0117-09-light-split-two-terminals.png` and `-09b-light-split-focus-moved.png`
+  — the same pair in **Zed One Light**. This is the light-theme frame the packet owed.
 - `evidence/US-0117-07-split-right-empty-space.png` — a terminal Space plus an empty one: the
-  empty Space keeps only its placeholder, the terminal Space carries `#0 cmd.exe`.
-- `evidence/US-0117-05-single-space.png` — a single Space: still borderless, still unlabelled.
+  empty Space keeps only its placeholder, the terminal Space (inactive) carries `#0`.
+- `evidence/US-0117-05-single-space.png` — a single Space: still borderless, still unmarked.
   Nothing appears where nothing appeared before.
 - The terminal grid loses no row or column: the ring is an absolutely-positioned overlay inside
   the Space's existing padding box, and the padding is unchanged at 1 px, so the content box is
   identical whether the Space is active or not.
 
+### Rework round — `F-117.1`, the corner label covered live output
+
+Independent verification (`evidence/terminal-view-wave1-verify.md`) raised one major: the corner
+label as first shipped was `#N` **plus the live session title**, in a chip up to 160 px wide with
+a `background.opacity(0.75)` backdrop, on **every** Space in a split including the active one —
+parked over the top-right of the terminal's own viewport. Its own captures showed the first
+prompt line washed out under `#0 cmd.exe`. The packet's acceptance ("the terminal grid does not
+lose a row or a column to the label") was satisfied literally, since nothing reflows, while
+failing its intent: the top row of a running shell is not chrome, it is wherever the output is.
+
+Reworked on a coordinator ruling, no owner round-trip:
+
+| | before | after |
+| --- | --- | --- |
+| face | `#N` + session title | `#N` only |
+| width | up to 160 px | ~18 px (glyph box measured 12x9 px in a 16 px-tall box with 3 px padding) |
+| backdrop | `background` at 0.75 alpha | opaque `background`, chip-sized |
+| shown on | every Space in a split | **inactive** Spaces only |
+| what it holds | on the face | on the chip's **tooltip** |
+
+The active Space gets no chip at all, because the 2 px ring already answers "where does my
+typing go"; the chip carries the one thing the ring cannot, which is *which* Space this is. The
+chip keeps the channel badge's own 16 px footprint and its place in the badge row, left of the
+badge, so the row behaviour is unchanged. `background` under `muted_foreground` is the pairing
+`scripts/check-theme-contrast.py` already holds at >= 4.5:1 in every built-in theme, so the chip
+needs no private colour and stays legible on light.
+
+`space_corner_label` is gone; `space_chip_tooltip` replaces it and is the tested pure piece.
+`docs/terminal-split.md` decision 8 records the rework and why the first attempt was wrong.
+
+Verified on the re-captured frames: in `US-0117-09-split-two-terminals.png` and its light twin,
+the two Spaces' first prompt lines wrap at the same column and both read in full, so the chip
+covers no glyph — which the 160 px label demonstrably did.
+
 ### Gaps
 
-- **No light-theme capture.** The acceptance asks for one and it was not taken: switching theme
-  needs several Settings-window steps the posted-message driver makes slow. What can be said
-  honestly is narrower than the acceptance: the cue uses the **same theme token as before**
-  (`table_active_border`, or the channel colour), only two pixels wide instead of one, so any
-  theme in which the old cue was visible now shows a strictly more visible one — but "visible
-  in a light theme" is **unverified here**, not proven. A light-theme frame is the one thing
-  this packet still owes.
-- **No broadcast-channel collision frame.** The label and the badge share one `h_flex` row,
-  label left of badge, so neither can overlay the other by construction, and a Space with no
-  channel simply has no badge in the row. That is the design, not a capture: joining a channel
-  needs a second Space and two menu hops the walk did not take. The collision case is
-  **unwalked**.
+- **`F-117.4` is not fixed, deliberately.** The chip's tooltip reads `session.title()` raw, so it
+  ignores `TabTitleMode::Default` (the setting that says "do not use OSC titles") and a manual
+  tab rename, both of which the tab label honours. Routing it through `tab_label_with_title`
+  would mean reading the `TerminalPanel` entity from inside `SpaceTree::render`, which runs while
+  that panel is already leased — the same double-lease class of bug the `US-0116` walk hit. It
+  needs the setting passed down the render call instead, which is more than a tooltip is worth
+  here. The face (`#N`) cannot lie; only the hover detail can.
+- **No broadcast-channel collision frame.** The chip and the badge share one `h_flex` row, chip
+  left of badge, so neither can overlay the other by construction, and a Space with no channel
+  simply has no badge in the row. That is the design, not a capture: joining a channel needs a
+  second Space and two menu hops the walk did not take. The collision case is **unwalked** —
+  though the chip is now ~18 px rather than up to 160 px, so the verifier's related note (a wide
+  label plus a badge overrunning a narrow Space) no longer has a mechanism.
 - **No two-by-two split frame.** Only the side-by-side case was captured, so the "chrome creep"
   risk the packet names is only half checked.
-- Space numbers are 0-based (`#0`, `#1`), which is what `SpaceId::display_number` already
-  returns and what the empty-Space placeholder already prints. Consistent, if slightly odd to
-  read; changing it would be a separate decision about an existing surface.
+- `#N` is the Space's **stable `SpaceId`**, not a positional index: `display_number` returns
+  the raw id (`crates/terminal-view/src/space/tree.rs:24-29`), which is allocated
+  monotonically and never reused, so after a few split/close cycles a two-Space split can
+  read `#0` and `#5`. It matches what the empty-Space placeholder already prints, so the
+  surfaces agree; changing the numbering would be a separate decision about an existing
+  surface. (Corrected in the rework round — this sentence previously said "0-based",
+  which implies a positional numbering the code does not provide.)
 
 ## Handoff
 

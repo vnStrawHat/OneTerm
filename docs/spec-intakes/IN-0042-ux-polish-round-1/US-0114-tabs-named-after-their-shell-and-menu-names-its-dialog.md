@@ -251,13 +251,15 @@ None. The row text is wording inside an owner-fixed order, and the seam is the o
 
 ### Evidence
 
-Branch `ux/tabs-spaces-menus`, commit `feat(terminal-view): name local tabs after their shell
+Branch `worktree-agent-a8b32ce5d4725a1f5`, commit `feat(terminal-view): name local tabs after their shell
 and the "+" menu after its dialogs`.
 
 Changed:
 
 - `crates/core/src/config/shell.rs` — `ShellKind::display_name`, the one list the "+" menu's
-  rows and the tab labels both read.
+  rows, the Settings shell dropdown and the tab labels all read.
+- `crates/settings-ui/src/terminal/shell.rs` — folded in during the rework round: its own
+  `SHELL_KINDS` wording is gone and the dropdown reads `display_name`.
 - `crates/terminal-view/src/panel/tab_title.rs` — `shell_tab_title` plus its tests.
 - `crates/terminal-view/src/panel/terminal_panel.rs` — both local-shell arms of `from_spec`,
   the shell rows built from `display_name`, the two closing menu rows, `FIXED_ROWS` 6 -> 7.
@@ -288,13 +290,33 @@ GUI walk (own binary, own pid, `fast-dev`, 1400x900, PrintWindow):
   "New Saved Session..."; the three shells, the "SSH Sessions" heading and the disabled
   "No saved sessions" hint are all still above the closing separator, unmoved.
 - `evidence/US-0114-04-two-tabs.png` — "Command Prompt" and "PowerShell", two labels.
-- `evidence/US-0114-19-many-tabs.png` — ten tabs, each naming its shell; the frame that used
-  to read "Terminal" ten times.
+- `evidence/US-0114-19-many-tabs.png` — nine tabs, each naming its shell; the after frame of
+  the strip that used to read "Terminal" all the way across. (The before scene had ten, one
+  of them SSH; no host is reachable here, so the after walk has nine local ones.)
 - `evidence/US-0114-13-quick-connect-dialog.png` — the renamed row opens **SSH Quick Connect**.
 - `evidence/US-0114-53-new-saved-session-dialog.png` — the new row opens the full **New SSH
   Session** dialog, the same one the session tree opens.
 - The startup tab is named after the shell settings actually spawned: every capture shows the
   first tab as "Command Prompt", never "Terminal".
+
+### Rework round (after independent verification)
+
+Two findings from `evidence/terminal-view-wave1-verify.md` were fixed here rather than left
+standing:
+
+- **`F-114.1` — the "one list" claim was not true.** `crates/settings-ui/src/terminal/shell.rs`
+  kept a fourth wording (`"cmd.exe (Windows)"`, `"Windows PowerShell 5.x"`, `"PowerShell 7+
+  (pwsh)"`), so the Settings dropdown a user picks their default shell from disagreed with the
+  tab it produced. `SHELL_KINDS` is now a list of kinds and the labels come from
+  `display_name`; the label was never persisted (the setter maps it back to the enum), so this
+  changes only the widget's text. `oneterm-settings-ui` already depended on `oneterm-core`, so
+  no crate edge is added — `verify-dependency-graph.py` in the gate confirms it. The claim is
+  now true, and the comment in `shell.rs` names all three consumers instead of hand-waving.
+- **`F-114.2` — an explicit `program` under a non-`Custom` kind produced a lying label.**
+  `resolve_shell` honours `cfg.program` for every kind, so `kind: cmd, program: nu.exe` ran
+  nushell in a tab reading "Command Prompt" — the same untruth `F1` is about. `shell_tab_title`
+  now prefers the program's file stem for **every** kind and falls back to the kind's name only
+  when no program is set. New test: `an_explicit_program_wins_over_the_kinds_name`.
 
 ### Gaps
 

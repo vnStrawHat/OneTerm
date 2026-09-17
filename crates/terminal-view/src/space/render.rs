@@ -3,15 +3,17 @@
 //! and the [`DragTerminalTab`] payload dragged from a tab title onto a Space.
 
 use gpui::{
-    AnyElement, App, Axis, Context, ElementId, Entity, Hsla, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
-    Styled as _, WeakEntity, Window, div, px,
+    AnyElement, App, Axis, Context, Div, ElementId, Entity, Hsla, InteractiveElement as _,
+    IntoElement, MouseButton, ParentElement as _, Render, Role, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, Sizable as _,
     dock::ClosePanel,
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     resizable::{h_resizable, resizable_panel, v_resizable},
+    tooltip::Tooltip,
     v_flex,
 };
 use oneterm_state::InputChannelRegistry;
@@ -127,40 +129,32 @@ fn render_leaf(
     };
     // The badge names the channel; the Space border below repeats its colour.
     let badge = channel.map(|channel| channel_chip(channel, ("space-channel", id.0 as usize), cx));
-    // ...and beside it, in a split, a label saying what this Space holds
-    // (`US-0117`). A single Space stays unlabelled: nothing appears where
-    // nothing appeared before. An empty Space is already named by its
-    // placeholder, so only a terminal gets one.
-    let label = match (&leaf.content, single) {
-        (SpaceContent::Terminal(view), false) => Some(space_corner_label(
+    // ...and beside it, in a split, the Space's number — but only on the Spaces
+    // the 2px cue does *not* mark (`US-0117`, rework). A single Space stays
+    // unmarked, an empty Space is already named by its placeholder, and the
+    // active Space needs no chip because the ring already answers "where does my
+    // typing go". What a Space holds moves to the chip's tooltip, because the
+    // top-right of a terminal is not chrome: it is wherever the output is.
+    let chip = match (&leaf.content, single) {
+        (SpaceContent::Terminal(view), false) if id != active => Some(space_number_chip(
             id.display_number(),
-            view.read(cx).session.read(cx).title().as_deref(),
+            space_chip_tooltip(view.read(cx).session.read(cx).title().as_deref()),
+            ("space-number", id.0 as usize),
+            cx,
         )),
         _ => None,
     };
     // One corner slot, 5 px from both edges (the owner's placement), holding
-    // both in a row so the label can never hide the badge; it overlaps the
+    // both in a row so the chip can never hide the badge; it overlaps the
     // scrollbar track, which is empty at the top unless the view is scrolled up.
-    let corner = (badge.is_some() || label.is_some()).then(|| {
-        let muted = cx.theme().muted_foreground;
-        let backdrop = cx.theme().background.opacity(0.75);
+    let corner = (badge.is_some() || chip.is_some()).then(|| {
         gpui_component::h_flex()
             .absolute()
             .top(px(5.))
             .right(px(5.))
             .items_center()
             .gap_1()
-            .children(label.map(|text| {
-                div()
-                    .max_w(px(160.))
-                    .truncate()
-                    .px_1()
-                    .rounded_sm()
-                    .bg(backdrop)
-                    .text_xs()
-                    .text_color(muted)
-                    .child(text)
-            }))
+            .children(chip)
             .children(badge)
     });
     let content: AnyElement = match &leaf.content {
@@ -214,7 +208,13 @@ fn render_leaf(
 }
 
 /// The active Space's cue: a 2px ring in the cue colour, painted over the
-/// Space's own 1px border and 1px gutter (`US-0117`, `P20`).
+/// Space's own 1px gutter and the outermost pixel of the terminal's content
+/// area (`US-0117`, `P20`).
+///
+/// An absolutely-positioned child is laid out against the **padding box**, so
+/// `inset_0` starts *inside* the 1px outer border: the border is never
+/// overpainted and stays the neutral separator decision 8 fixed, while the
+/// 2px ring covers the 1px gutter plus one pixel of terminal edge.
 ///
 /// An overlay rather than a wider border or a wider padding, because
 /// `terminal-split.md` decision 8 fixes the Space frame at 1px outer border +
@@ -223,25 +223,53 @@ fn render_leaf(
 /// pixel on every focus switch, which can cost the grid a column. The ring has
 /// no id and no mouse handler, so it creates no hitbox and the terminal below
 /// still receives every click.
-fn active_cue_ring(color: Hsla) -> gpui::Div {
+fn active_cue_ring(color: Hsla) -> Div {
     div().absolute().inset_0().border_2().border_color(color)
 }
 
-/// The corner label of a Space in a split: its stable number, plus the live
-/// session title when the session sets one — so an SSH Space reads
-/// `#2 dev@host` and a silent local shell still reads `#2` rather than nothing.
-/// A title that is nothing but an absolute path is shortened to its last
-/// component, exactly as the tab label does it — `cmd.exe` announces itself as
-/// `C:\WINDOWS\system32\cmd.exe`, which is a path, not a name.
-fn space_corner_label(number: u64, session_title: Option<&str>) -> String {
-    match session_title
+/// The number chip of an inactive Space in a split: `#N` and nothing else,
+/// with the same 16px footprint as the channel badge beside it (`US-0117`).
+///
+/// `#N` only, because the wider label this replaced sat over the top-right of a
+/// running shell and washed out live output. `background` under
+/// `muted_foreground` is the pairing `scripts/check-theme-contrast.py` already
+/// holds at >= 4.5:1 in every built-in theme, so the chip stays legible without
+/// a private colour — and it is opaque, so the few cells it does cover are
+/// covered honestly rather than smeared.
+fn space_number_chip(
+    number: u64,
+    tooltip: Option<SharedString>,
+    id: impl Into<ElementId>,
+    cx: &App,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .h(px(16.))
+        .min_w(px(16.))
+        .px(px(3.))
+        .line_height(px(16.))
+        .text_center()
+        .text_xs()
+        .bg(cx.theme().background)
+        .text_color(cx.theme().muted_foreground)
+        .when_some(tooltip, |this, title| {
+            this.tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
+        })
+        .child(format!("#{number}"))
+}
+
+/// What the number chip says on hover: what the Space holds, or nothing when
+/// the session names itself nothing. A title that is only an absolute path is
+/// shortened to its last component, exactly as the tab label does it —
+/// `cmd.exe` announces itself as `C:\WINDOWS\system32\cmd.exe`, which is a
+/// path, not a name.
+fn space_chip_tooltip(session_title: Option<&str>) -> Option<SharedString> {
+    session_title
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .map(crate::panel::trim_path_title)
-    {
-        Some(title) => format!("#{number} {title}"),
-        None => format!("#{number}"),
-    }
+        .map(|title| SharedString::from(title.to_string()))
 }
 
 /// The 1px frame color of a Space. Only the active Space is highlighted: in
@@ -363,24 +391,24 @@ fn placeholder_menu(
 mod tests {
     use gpui::hsla;
 
-    use super::{space_border_color, space_corner_label};
+    use super::{space_border_color, space_chip_tooltip};
 
     #[test]
-    fn a_space_label_names_its_session_and_always_carries_its_number() {
+    fn the_number_chips_tooltip_names_what_the_space_holds() {
         assert_eq!(
-            space_corner_label(2, Some("dev@127.0.0.1: ~")),
-            "#2 dev@127.0.0.1: ~"
+            space_chip_tooltip(Some("dev@127.0.0.1: ~")).as_deref(),
+            Some("dev@127.0.0.1: ~")
         );
         // A shell that announces itself as a path is named, not pathed.
         assert_eq!(
-            space_corner_label(1, Some("C:\\WINDOWS\\system32\\cmd.exe")),
-            "#1 cmd.exe"
+            space_chip_tooltip(Some("C:\\WINDOWS\\system32\\cmd.exe")).as_deref(),
+            Some("cmd.exe")
         );
-        // A local shell that sets no title still identifies itself.
-        assert_eq!(space_corner_label(3, None), "#3");
-        // Whitespace-only titles are no title.
-        assert_eq!(space_corner_label(1, Some("   ")), "#1");
-        assert_eq!(space_corner_label(1, Some("")), "#1");
+        // Nothing to say rather than an empty tooltip: the chip still shows
+        // `#N`, which is the part the cue cannot carry.
+        assert_eq!(space_chip_tooltip(None), None);
+        assert_eq!(space_chip_tooltip(Some("   ")), None);
+        assert_eq!(space_chip_tooltip(Some("")), None);
     }
 
     #[test]

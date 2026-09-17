@@ -7,30 +7,36 @@ use oneterm_settings::TerminalSettings;
 
 use super::set;
 
-/// Shell presets shown in the dropdown (label is used as both key and value).
-const SHELL_KINDS: &[(ShellKind, &str)] = &[
-    (ShellKind::Cmd, "cmd.exe (Windows)"),
-    (ShellKind::PowerShell, "Windows PowerShell 5.x"),
-    (ShellKind::Pwsh, "PowerShell 7+ (pwsh)"),
-    (ShellKind::Bash, "Bash"),
-    (ShellKind::Zsh, "Zsh"),
-    (ShellKind::Sh, "Sh"),
-    (ShellKind::Custom, "Custom"),
+/// Shell presets shown in the dropdown, in the order it offers them.
+///
+/// The labels come from [`ShellKind::display_name`] — the one list the tab bar's
+/// "+" menu rows and the tab labels also read — so the dropdown a user picks
+/// their default shell from can no longer name it one thing while the tab it
+/// produces names it another (`US-0114`, `F-114.1`). Until this list was folded
+/// in, picking "cmd.exe (Windows)" here opened a tab reading "Command Prompt".
+///
+/// The label is the dropdown's key as well as its value, but it is **not**
+/// persisted: the setter below maps the label back to a `ShellKind` and stores
+/// the enum, so the wording is the widget's alone.
+const SHELL_KINDS: &[ShellKind] = &[
+    ShellKind::Cmd,
+    ShellKind::PowerShell,
+    ShellKind::Pwsh,
+    ShellKind::Bash,
+    ShellKind::Zsh,
+    ShellKind::Sh,
+    ShellKind::Custom,
 ];
 
 fn shell_label(kind: ShellKind) -> SharedString {
-    SHELL_KINDS
-        .iter()
-        .find(|(candidate, _)| *candidate == kind)
-        .map(|(_, label)| SharedString::from(*label))
-        .unwrap_or_else(|| "Custom".into())
+    SharedString::from(kind.display_name())
 }
 
 /// Build the "Shell" settings group.
 pub(super) fn group() -> SettingGroup {
     let options: Vec<(SharedString, SharedString)> = SHELL_KINDS
         .iter()
-        .map(|(_, label)| (SharedString::from(*label), SharedString::from(*label)))
+        .map(|kind| (shell_label(*kind), shell_label(*kind)))
         .collect();
 
     SettingGroup::new()
@@ -45,8 +51,8 @@ pub(super) fn group() -> SettingGroup {
                     |val: SharedString, cx: &mut App| {
                         let kind = SHELL_KINDS
                             .iter()
-                            .find(|(_, label)| *label == val.as_ref())
-                            .map(|(k, _)| *k)
+                            .copied()
+                            .find(|kind| kind.display_name() == val.as_ref())
                             .unwrap_or(ShellKind::Custom);
                         set(cx, |s| s.set_kind(kind));
                     },

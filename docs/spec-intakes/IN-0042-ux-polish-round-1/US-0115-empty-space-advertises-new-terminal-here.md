@@ -209,7 +209,7 @@ scope call inside one surface, not a rule future work inherits.
 
 ### Evidence
 
-Branch `ux/tabs-spaces-menus`, commit `feat(terminal-view): the empty Space names New Terminal
+Branch `worktree-agent-a8b32ce5d4725a1f5`, commit `feat(terminal-view): the empty Space names New Terminal
 Here and the search bar is quiet until used`.
 
 Changed:
@@ -254,6 +254,20 @@ there changes. No doc update needed.
 The `Aa` and `W` toggles **already carried tooltips** ("Match case", "Match whole word",
 `search.rs`), so `P14`'s tooltip half needed no change. `F34` recorded them as bare because the
 walkthrough never hovered them.
+
+### Rework round (after independent verification)
+
+- **`F-115.1` — the reserved counter width was exact, with no headroom.** The verifier measured
+  `No matches` at x=756-822 in `US-0115-41b-search-no-matches.png`: 66 px in a 66 px slot. The
+  floor was in pixels while the text is not — the kit sets the window's rem size from the
+  theme's font size (`reference/gpui-kit/crates/component/src/root.rs:579`), which the user
+  sets as `ui_font_size`, so `text_xs` scales and a fixed floor does not. It is now
+  `min_w(rems(4.75))`: 76 px at the default 16 px rem (a sixth of headroom over the widest
+  state) and it grows with the font instead of being overflowed by it.
+- `evidence/US-0115-07-split-right-empty-space.png` and `-08-empty-space-menu.png` were
+  re-captured on the reworked build, because `US-0117`'s corner label changed in the same
+  round and those frames carry it. The placeholder copy and the menu row are unchanged and
+  still byte-identical to each other.
 
 ### Gaps
 

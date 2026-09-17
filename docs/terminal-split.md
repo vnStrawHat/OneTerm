@@ -90,17 +90,31 @@ The owning design is
     **Amended by `US-0117`, not reversed.** The frame is still 1px + 1px for every Space, and
     a lone Space is still borderless — what changed is the *active* cue, which one pixel
     answered too quietly for "where does my typing go" (`F26`). The active Space now also
-    carries a **2px ring in the cue colour**, painted as an absolutely-positioned overlay on
-    top of its own border and gutter (`active_cue_ring`). An overlay because a wider border or
-    a wider padding would move the terminal's content box by a pixel every time focus changed
-    Spaces, which can cost the grid a column; the overlay has no id and no mouse handler, so
-    it creates no hitbox and clicks still reach the terminal. The ring's colour is the same
-    one the gutter uses — the channel colour for a member Space, `table_active_border`
-    otherwise — so nothing new is hardcoded and the channel rule is unchanged. Each Space in
-    a split also carries a small corner label, `#N` plus the live session title when the
-    session sets one, in the channel-badge slot and left of the badge, so a split's halves are
-    told apart by name and not only by the cue; an empty Space keeps only its placeholder and
-    a lone Space stays unlabelled.
+    carries a **2px ring in the cue colour** (`active_cue_ring`), painted as an
+    absolutely-positioned overlay. An absolute child is laid out against the **padding box**,
+    so `inset_0` starts *inside* the 1px outer border: the ring never overpaints that border,
+    which stays the neutral separator this decision fixed, and covers the 1px gutter plus the
+    outermost pixel of the terminal's own content area. An overlay rather than a wider border
+    or a wider padding because geometry that changed with focus would move the terminal's
+    content box by a pixel every time focus changed Spaces, which can cost the grid a column;
+    the overlay has no id and no mouse handler, so it creates no hitbox and clicks, hover and
+    scroll still reach the terminal. The ring's colour is the same one the gutter uses — the
+    channel colour for a member Space, `table_active_border` otherwise — so nothing new is
+    hardcoded and the channel rule is unchanged.
+
+    Each **inactive** Space in a split also carries a small **number chip** — `#N` and nothing
+    else, with the channel badge's own 16px footprint, in the channel-badge slot and left of
+    the badge. What the Space holds is on the chip's **tooltip**, not on its face. The first
+    shipped attempt put `#N` *plus the live session title* on the face, in a chip up to 160px
+    wide with a translucent backdrop, on **every** Space including the active one; independent
+    verification found it permanently washing out the first prompt line of every running
+    shell, because the top-right of a terminal is not chrome — it is wherever the output
+    currently is. The chip is therefore `#N` only, and only where the ring is not: the active
+    Space is already answered by its cue, so the chip carries the one thing the cue cannot,
+    which is which Space this is. `#N` is the Space's stable `SpaceId`, allocated
+    monotonically and never reused — not a positional index, so a split whose Spaces have been
+    closed and re-split can read `#0` and `#5`. An empty Space keeps only its placeholder
+    (which already prints `Space #N`) and a lone Space stays unmarked.
 9. **New Terminal Here**: the empty-Space menu can spawn a local shell in place
    (in MVP scope). It spawns the **default** shell, with no shell picker — the
    empty Space is a placement action, and a user who wants a specific shell

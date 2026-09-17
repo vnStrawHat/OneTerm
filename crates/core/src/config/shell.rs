@@ -32,9 +32,11 @@ pub enum ShellKind {
 }
 
 impl ShellKind {
-    /// The name the UI shows for this kind — the "+" menu's row and the tab
-    /// label of a local-shell tab (`US-0114`). One list, so a menu row and the
-    /// tab it opens can never disagree.
+    /// The name the UI shows for this kind — the "+" menu's row, the Settings
+    /// shell dropdown, and the tab label of a local-shell tab (`US-0114`). One
+    /// list, so the row you pick, the dropdown you set and the tab you get can
+    /// never disagree. `crates/settings-ui` kept a fourth wording until the
+    /// `US-0114` rework folded it in here.
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Cmd => "Command Prompt",
