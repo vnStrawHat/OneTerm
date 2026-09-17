@@ -37,9 +37,11 @@ pub(crate) fn apply_center_reset(
 
     dock_area
         .update(cx, |view, cx| {
-            let right_size = view
-                .dock_size(DockPlacement::Right)
-                .unwrap_or(DEFAULT_RIGHT_DOCK_WIDTH);
+            let right_size = super::clamp_right_dock_width(
+                view.dock_size(DockPlacement::Right)
+                    .unwrap_or(DEFAULT_RIGHT_DOCK_WIDTH),
+                window.viewport_size().width,
+            );
             view.set_center(center, window, cx);
             view.set_dock(DockPlacement::Right, right, window, cx);
             view.set_dock_size(DockPlacement::Right, right_size, window, cx);
@@ -68,12 +70,14 @@ pub(crate) fn reset_default_layout(
     let center = DockLayout::v_split().child(DockLayout::tabs().panel_view(center_panel, cx), None);
     let right = DockLayout::tabs().panel_view(right_panel, cx);
 
+    let default_size =
+        super::clamp_right_dock_width(DEFAULT_RIGHT_DOCK_WIDTH, window.viewport_size().width);
     let saved_state = dock_area
         .update(cx, |view, cx| {
             view.set_version(Some(MAIN_DOCK_VERSION), cx);
             view.set_center(center, window, cx);
             view.set_dock(DockPlacement::Right, right, window, cx);
-            view.set_dock_size(DockPlacement::Right, DEFAULT_RIGHT_DOCK_WIDTH, window, cx);
+            view.set_dock_size(DockPlacement::Right, default_size, window, cx);
             view.set_dock_collapsible(DockPlacement::Right, true, window, cx);
             view.dump(cx)
         })

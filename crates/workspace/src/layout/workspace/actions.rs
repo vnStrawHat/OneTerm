@@ -165,9 +165,11 @@ impl super::OneTermWorkspace {
             // Snapshot the current right dock's size so the swap preserves the
             // user's last dock width. Force the dock open — selecting SSH Client /
             // Agent is an explicit request to show the right dock.
-            let right_size = view
-                .dock_size(UiDockPlacement::Right)
-                .unwrap_or(super::DEFAULT_RIGHT_DOCK_WIDTH);
+            let right_size = super::clamp_right_dock_width(
+                view.dock_size(UiDockPlacement::Right)
+                    .unwrap_or(super::DEFAULT_RIGHT_DOCK_WIDTH),
+                window.viewport_size().width,
+            );
             view.set_dock(UiDockPlacement::Right, right, window, cx);
             view.set_dock_size(UiDockPlacement::Right, right_size, window, cx);
             if !view.is_dock_open(UiDockPlacement::Right) {

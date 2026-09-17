@@ -32,6 +32,34 @@ pub const MAIN_DOCK_ID: &str = "main-dock";
 /// a layout without a right dock).
 pub(crate) const DEFAULT_RIGHT_DOCK_WIDTH: gpui::Pixels = gpui::px(480.);
 
+/// Share of the window the right dock may take. The terminal is the primary
+/// surface and keeps the majority at laptop widths (`US-0113`): at 900 px the
+/// dock stops at ~315 px instead of the ~490 px it used to hold.
+const RIGHT_DOCK_MAX_SHARE: f32 = 0.35;
+
+/// Floor for the ceiling above. On a window so narrow that a third of it is not
+/// a usable panel, the dock keeps this much rather than collapsing — a dock the
+/// user did not close stays on screen, and the splitter is still theirs to drag.
+const MIN_RIGHT_DOCK_WIDTH: gpui::Pixels = gpui::px(240.);
+
+/// The width the right dock may actually take in a window this wide.
+///
+/// A ceiling, not a proportion: a requested width that already fits is returned
+/// untouched, so the user's own dragged width wins inside the allowed range.
+/// Only a width that would leave the terminal with less than its share is
+/// capped. A window of unknown width (before the first layout pass) constrains
+/// nothing.
+pub(crate) fn clamp_right_dock_width(
+    requested: gpui::Pixels,
+    window_width: gpui::Pixels,
+) -> gpui::Pixels {
+    if window_width <= gpui::px(0.) {
+        return requested;
+    }
+    let ceiling = (window_width * RIGHT_DOCK_MAX_SHARE).max(MIN_RIGHT_DOCK_WIDTH);
+    requested.min(ceiling)
+}
+
 pub(crate) use oneterm_state::dock_util::set_right_dock_open;
 
 /// Construct a fresh feature panel by its registered name, via the gpui-component
@@ -87,6 +115,12 @@ pub struct OneTermWorkspace {
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
     _save_layout_task: Option<Task<()>>,
 
+    /// The right-dock width the user last asked for, before any clamping. The
+    /// applied width is `clamp_right_dock_width` of this against the current
+    /// window, so narrowing the window narrows the dock and widening it brings
+    /// the user's width back (`US-0113`).
+    preferred_right_dock_width: gpui::Pixels,
+
     /// Name of the panel currently zoomed (fullscreen), mirrored into docks.json.
     zoomed_panel: Option<String>,
     /// Set once the exit-time layout write has run, so the two exit hooks
@@ -130,6 +164,14 @@ impl OneTermWorkspace {
         let loaded = document
             .and_then(|document| persistence::load_layout(&dock_area, &document, window, cx).ok())
             .is_some();
+
+        // The width the saved layout carries is the user's preference; the
+        // builders below apply whatever this window has room for.
+        let preferred_right_dock_width = dock_area
+            .read(cx)
+            .dock_size(gpui_component::dock::DockPlacement::Right)
+            .unwrap_or(DEFAULT_RIGHT_DOCK_WIDTH);
+
         if loaded {
             layout::reset_center_only(weak_dock_area, window, cx);
         } else {
@@ -160,7 +202,15 @@ impl OneTermWorkspace {
                 this.zoomed_panel = zoomed_panel;
             }
             this.sync_right_dock_mode(&dock_area, cx);
+            this.track_preferred_right_dock_width(&dock_area, window, cx);
             this.save_layout(&dock_area, window, cx);
+        })
+        .detach();
+
+        // The dock keeps an absolute width, so only a window resize can make it
+        // outgrow its share of the window (`US-0113`).
+        cx.observe_window_bounds(window, |this, window, cx| {
+            this.apply_right_dock_width(window, cx);
         })
         .detach();
 
@@ -207,6 +257,7 @@ impl OneTermWorkspace {
             resource,
             last_layout_state: None,
             _save_layout_task: None,
+            preferred_right_dock_width,
             zoomed_panel: None,
             layout_saved_on_exit: false,
         };
@@ -253,6 +304,52 @@ impl OneTermWorkspace {
         });
         self.title_bar.update(cx, |_, cx| cx.notify());
         oneterm_settings::UiConfig::persist(cx);
+    }
+
+    /// Remember a width the user set themselves.
+    ///
+    /// The dock area reports one width; anything other than the one this
+    /// workspace would have applied came from the splitter, and that is the
+    /// width to come back to once the window has room for it again.
+    fn track_preferred_right_dock_width(
+        &mut self,
+        dock_area: &Entity<DockArea>,
+        window: &Window,
+        cx: &App,
+    ) {
+        let Some(size) = dock_area
+            .read(cx)
+            .dock_size(gpui_component::dock::DockPlacement::Right)
+        else {
+            return;
+        };
+        let applied = clamp_right_dock_width(
+            self.preferred_right_dock_width,
+            window.viewport_size().width,
+        );
+        if size != applied {
+            self.preferred_right_dock_width = size;
+        }
+    }
+
+    /// Re-apply the preferred width against the window's current size.
+    ///
+    /// Called on window resize only — never per frame and never during a drag,
+    /// so the splitter is not fought while the user is holding it.
+    fn apply_right_dock_width(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_component::dock::DockPlacement;
+
+        let width = clamp_right_dock_width(
+            self.preferred_right_dock_width,
+            window.viewport_size().width,
+        );
+        self.dock_area.clone().update(cx, |dock_area, cx| {
+            if dock_area.has_dock(DockPlacement::Right)
+                && dock_area.dock_size(DockPlacement::Right) != Some(width)
+            {
+                dock_area.set_dock_size(DockPlacement::Right, width, window, cx);
+            }
+        });
     }
 
     /// Write the current layout synchronously at exit; the first hook to run wins.

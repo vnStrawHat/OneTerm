@@ -17,8 +17,8 @@ use oneterm_state::panel_names;
 
 use super::test_panels::{NamedPanel, register_test_panels};
 use super::{
-    MAIN_DOCK_VERSION, OneTermWorkspace, layout, persistence, restore_zoom_in_dock,
-    right_dock_mode_for,
+    DEFAULT_RIGHT_DOCK_WIDTH, MAIN_DOCK_VERSION, OneTermWorkspace, clamp_right_dock_width, layout,
+    persistence, restore_zoom_in_dock, right_dock_mode_for,
 };
 
 /// Removes the per-test directory when the test ends — on failure too.
@@ -164,6 +164,30 @@ fn switch_right_dock_mode_swaps_panel_and_keeps_width(cx: &mut TestAppContext) {
         right_dock(&dock_area, cx),
         (333., true, panel_names::SSH_CLIENT.to_string())
     );
+}
+
+/// US-0113: the dock's width is bounded by a share of the window, so the
+/// terminal keeps the majority at laptop widths.
+#[test]
+fn the_right_dock_width_is_clamped_to_a_share_of_the_window() {
+    // The ~900 px window of `research/before/50-narrow-900.png`: the saved
+    // ~490 px dock comes back as 35% of the window, leaving the terminal 585.
+    assert_eq!(clamp_right_dock_width(px(490.), px(900.)), px(315.));
+    assert_eq!(
+        clamp_right_dock_width(DEFAULT_RIGHT_DOCK_WIDTH, px(900.)),
+        px(315.)
+    );
+    // Wide window: the user's dragged width is under the ceiling and survives.
+    assert_eq!(clamp_right_dock_width(px(490.), px(1900.)), px(490.));
+    // A width at the ceiling is not moved.
+    assert_eq!(clamp_right_dock_width(px(315.), px(900.)), px(315.));
+    // A narrow dock is never widened — the clamp only caps.
+    assert_eq!(clamp_right_dock_width(px(120.), px(1900.)), px(120.));
+    // Too narrow for a third of the window to be a usable panel: the floor
+    // wins over the share, and the dock stays on screen.
+    assert_eq!(clamp_right_dock_width(px(490.), px(500.)), px(240.));
+    // Before the first layout pass the window has no size and constrains nothing.
+    assert_eq!(clamp_right_dock_width(px(490.), px(0.)), px(490.));
 }
 
 /// BUG-0067: the persisted mode follows the dock's open state, so the title
