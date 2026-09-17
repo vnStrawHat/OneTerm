@@ -6,6 +6,16 @@ Date: 2026-09-17
 
 Proposed (owner acceptance required before `US-0123` merges — `IN-0042`)
 
+`US-0123` is implemented against this record and is waiting on that acceptance;
+it has not been accepted by the owner, and the first Consequence below is
+unverified by design — see the packet's Evidence.
+
+Where it landed: the four defaults in
+`crates/settings-ui/src/key_bindings/key_bindings_actions.rs`, the rule itself
+as `key_bindings_actions::tests::no_app_level_default_sits_on_a_single_ctrl_control_character`,
+and the collision rule as `key_bindings/state.rs`'s `collisions_with_overrides`
+called from `resolve_default_collisions` at the head of `apply_key_bindings`.
+
 ## Context
 
 OneTerm is a terminal. A keystroke the user presses with a remote program in the foreground

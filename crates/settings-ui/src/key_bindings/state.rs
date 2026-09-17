@@ -86,6 +86,8 @@ pub(crate) fn init_state(cx: &mut App) {
 /// cleanly. Bindings for non-rebindable actions (combobox, dialog, etc.) are
 /// preserved as-is.
 pub(crate) fn apply_key_bindings(cx: &mut App) {
+    resolve_default_collisions(cx);
+
     let mut snapshot = cx.global::<KeyBindingsSnapshotGlobal>().0.clone();
     let effective = KeyBindingsState::global(cx).read(cx).effective.clone();
 
@@ -117,6 +119,83 @@ pub(super) fn save_key_bindings(cx: &mut App) {
     };
     UiConfig::global(cx).update(cx, |cfg, _| cfg.key_bindings = map);
     UiConfig::persist(cx);
+}
+
+/// Settle `DEC-0018`'s collision rule before the keymap is built: a shipped
+/// default that a surviving user override already holds loses.
+///
+/// This is the one place [`apply_key_bindings`] decides rather than registers.
+/// It is here, and not in [`init_state`], because it must also catch a collision
+/// that **Reset** reintroduces — resetting an action writes its default straight
+/// into `effective` without passing through the capture UI's
+/// [`conflicting_action`] check — and `apply_key_bindings` runs after every
+/// rebind and every reset as well as at startup.
+///
+/// The displaced action is emptied rather than merely skipped when binding, so
+/// the keymap and the Key Bindings page tell the same story: the row shows the
+/// action as unbound and is one click from being rebound. Any future source of
+/// bindings must route through this function or the guarantee stops holding.
+fn resolve_default_collisions(cx: &mut App) {
+    let displaced = {
+        let effective = &KeyBindingsState::global(cx).read(cx).effective;
+        collisions_with_overrides(effective)
+    };
+    if displaced.is_empty() {
+        return;
+    }
+    for (losing_id, winning_id) in &displaced {
+        log::warn!(
+            "key binding: the default for `{losing_id}` is held by your own binding for \
+             `{winning_id}`; `{losing_id}` is left unbound and can be rebound from \
+             Settings > Key Bindings."
+        );
+    }
+    KeyBindingsState::global(cx).update(cx, |state, cx| {
+        for (losing_id, _) in displaced {
+            state.effective.insert(losing_id.to_owned(), String::new());
+        }
+        cx.notify();
+    });
+}
+
+/// Actions still sitting on their shipped default whose keystroke a *different*
+/// action holds as a user override, in the same key context.
+///
+/// Returns `(displaced action id, overriding action id)`. Pure over
+/// `(BINDABLE_ACTIONS, effective)`, which is what makes `DEC-0018`'s rule
+/// testable without a window.
+fn collisions_with_overrides(
+    effective: &HashMap<String, String>,
+) -> Vec<(&'static str, &'static str)> {
+    let keystroke_of = |id: &str| {
+        effective
+            .get(id)
+            .map(|binding| binding.as_str())
+            .unwrap_or("")
+    };
+    BINDABLE_ACTIONS
+        .iter()
+        .filter_map(|action| {
+            let binding = keystroke_of(action.id);
+            // An unbound action holds no keystroke, so nobody can take it from
+            // it. (`Keystroke::parse("")` succeeds, so this guard is load-
+            // bearing: without it every unbound action would "collide" with
+            // every other unbound one.)
+            if binding.is_empty() || !is_at_default(binding, action.default) {
+                return None;
+            }
+            let wanted = Keystroke::parse(binding).ok()?;
+            let winner = BINDABLE_ACTIONS.iter().find(|other| {
+                other.id != action.id && other.context == action.context && {
+                    let theirs = keystroke_of(other.id);
+                    !theirs.is_empty()
+                        && !is_at_default(theirs, other.default)
+                        && Keystroke::parse(theirs).is_ok_and(|stroke| stroke == wanted)
+                }
+            })?;
+            Some((action.id, winner.id))
+        })
+        .collect()
 }
 
 /// Whether `effective` is still the built-in default for an action whose
@@ -283,6 +362,86 @@ mod tests {
         // Unbound / different keys are free.
         assert!(conflicting_action(&effective, first.id, "ctrl-shift-y").is_none());
         assert!(conflicting_action(&effective, first.id, "").is_none());
+    }
+
+    /// `effective` as `init_state` builds it: `override.or(default)`.
+    fn effective_with(overrides: &[(&str, &str)]) -> HashMap<String, String> {
+        BINDABLE_ACTIONS
+            .iter()
+            .map(|action| {
+                let binding = overrides
+                    .iter()
+                    .find(|(id, _)| *id == action.id)
+                    .map(|(_, keystroke)| (*keystroke).to_owned())
+                    .unwrap_or_else(|| action.default.unwrap_or("").to_owned());
+                (action.id.to_owned(), binding)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_profile_with_no_entries_lands_on_the_new_defaults_and_collides_with_nothing() {
+        // The common case: the table edit *is* the migration.
+        let effective = effective_with(&[]);
+        assert_eq!(effective["new_ssh_session"], "ctrl-shift-n");
+        assert_eq!(effective["quit"], "ctrl-shift-q");
+        assert_eq!(effective["about"], "f1");
+        assert_eq!(effective["toggle_gutter"], "");
+        assert!(collisions_with_overrides(&effective).is_empty());
+        // ...and nothing was written back, because nothing differs.
+        assert!(overrides_from_effective(&effective).is_empty());
+    }
+
+    #[test]
+    fn an_override_that_differs_from_every_default_is_left_alone() {
+        let effective = effective_with(&[("quit", "ctrl-alt-q")]);
+        assert!(collisions_with_overrides(&effective).is_empty());
+        assert_eq!(overrides_from_effective(&effective)["quit"], "ctrl-alt-q");
+    }
+
+    #[test]
+    fn a_surviving_override_beats_a_new_default_and_unbinds_the_displaced_action() {
+        // The user bound Quit to what is now New SSH Session's default.
+        let effective = effective_with(&[("quit", "ctrl-shift-n")]);
+        assert_eq!(
+            collisions_with_overrides(&effective),
+            vec![("new_ssh_session", "quit")]
+        );
+
+        // Applying the rule leaves the user's choice intact and the displaced
+        // action unbound, which is what the Key Bindings page then shows.
+        let mut resolved = effective.clone();
+        for (losing_id, _) in collisions_with_overrides(&resolved) {
+            resolved.insert(losing_id.to_owned(), String::new());
+        }
+        assert_eq!(resolved["quit"], "ctrl-shift-n");
+        assert_eq!(resolved["new_ssh_session"], "");
+        // Stable: re-applying finds nothing left to resolve.
+        assert!(collisions_with_overrides(&resolved).is_empty());
+    }
+
+    #[test]
+    fn modifier_order_does_not_hide_a_collision() {
+        let effective = effective_with(&[("quit", "shift-ctrl-n")]);
+        assert_eq!(
+            collisions_with_overrides(&effective),
+            vec![("new_ssh_session", "quit")]
+        );
+    }
+
+    #[test]
+    fn an_action_left_unbound_by_its_own_override_displaces_nobody() {
+        let effective = effective_with(&[("new_ssh_session", "")]);
+        assert!(collisions_with_overrides(&effective).is_empty());
+    }
+
+    #[test]
+    fn two_actions_both_at_their_defaults_never_displace_each_other() {
+        // Only a *user* override can win, so a table-internal clash would be a
+        // bug in the table, not something this rule papers over. The table test
+        // in `key_bindings_actions` is what catches that.
+        let effective = effective_with(&[]);
+        assert!(collisions_with_overrides(&effective).is_empty());
     }
 
     #[test]
