@@ -7,6 +7,13 @@ Date: 2026-09-17
 Accepted 2026-09-17 by the owner, with the explicit ruling that `ctrl-w` (Close Panel) and
 `ctrl-t` (New Terminal Tab) stay as they are. `US-0123` (`IN-0042`) implements it.
 
+**Amended 2026-09-17 by the owner**, after trying the built round: **About OneTerm ships with no
+default binding at all.** `f1` was accepted before an independent verification of `US-0123`
+established that a bound `F1` never reaches the foreground program, and the owner's ruling on
+reading that is to give the key back to `mc`, `nano`, `htop` and `vim` rather than spend it on a
+dialog. The Decision table and the Consequences below are amended to match; `US-0123`'s
+acceptance rework carries the code.
+
 Where it landed: the four defaults in
 `crates/settings-ui/src/key_bindings/key_bindings_actions.rs`, the rule itself as
 `key_bindings_actions::tests::the_only_bare_ctrl_defaults_are_the_ones_dec_0018_accepted`,
@@ -73,14 +80,23 @@ key, or a punctuation key the terminal does not use.
 | --- | --- | --- |
 | New SSH Session | `ctrl-s` | `ctrl-shift-n` |
 | Quit | `ctrl-q` | `ctrl-shift-q` |
-| About OneTerm | `ctrl-space` | `f1` |
+| About OneTerm | `ctrl-space` | unbound *(amended 2026-09-17; shipped as `f1` first)* |
 | Toggle Gutter | `ctrl-g` | unbound |
 
 `ctrl-shift-n` rather than `P18`'s alternative `ctrl-shift-s`, because `ctrl-shift-s`
 conventionally means "Save As" and this action creates rather than saves, and because it
 keeps `New Terminal Tab` and `New SSH Session` on the same letterless mnemonic family
-(`Ctrl-T` / `Ctrl-Shift-N`). `f1` rather than `ctrl-shift-/`, because `F1` is the platform's
-help key, is unambiguous to type, and is not a chord a terminal program receives by accident.
+(`Ctrl-T` / `Ctrl-Shift-N`).
+
+About first shipped on `f1` — the platform's help key, unambiguous to type, and not a chord a
+terminal program receives by accident. The **amendment of 2026-09-17** removes it: "not received
+by accident" was true and beside the point, because `F1` is received *on purpose* by `mc`,
+`nano`, `htop`, `vim` and `less`, and OneTerm swallows it before their key map sees it (the
+Consequences below trace the dispatch). About therefore ships **unbound**, for Toggle Gutter's
+reason: a dialog reachable from the first item of the application menu buys nothing with a
+default keystroke, and the row stays in `BINDABLE_ACTIONS` with `default: None` so any user who
+wants a key can bind one from the Key Bindings page.
+
 Toggle Gutter ships **unbound** rather than moved: it is a view toggle with no discoverable
 entry point outside this table, so a default keystroke buys nothing; the row stays in
 `BINDABLE_ACTIONS` with `default: None`, so any user who wants it can bind it from the Key
@@ -175,17 +191,21 @@ fifth cannot appear without amending this record.
 - [ ] Follow-up: `ctrl-w`, `ctrl-t` and `ctrl-f` remain on readline keys by explicit
   exception. If a user reports losing `^W`, `^T` or `^F` in a shell, that is this decision's
   soft spot surfacing, and it is an amendment here plus a packet — not a new argument.
-- [ ] Tradeoff, confirmed after acceptance rather than before it: `f1` is taken from the
-  foreground program too. Every `BINDABLE_ACTIONS` row has `context: None`, and gpui
-  dispatches a matched binding before any key-down listener
+- [x] Resolved by the amendment of 2026-09-17: About takes no key at all, so nothing is taken
+  from the foreground program. The cost that forced it: every `BINDABLE_ACTIONS` row has
+  `context: None`, and gpui dispatches a matched binding before any key-down listener
   (`reference/zed/crates/gpui/src/window.rs:4901-4923`; the `skip_bindings` escape at
-  `:4886-4899` needs a `key_char`, which `F1` has none), so while OneTerm is focused `F1` no
-  longer reaches the terminal view's key map (`crates/terminal-view/src/input/keys.rs:350`).
-  A user loses F1 help in `mc`, `nano`, `htop`, `vim` and `less`. This is the same class of
-  cost the record set out to remove from `^S`, `^Q`, `^G` and `^@`, on a key used by fewer
-  programs; it is recorded here because it was established by an independent verification of
-  `US-0123` **after** the owner accepted `f1`, and it is an amendment here plus a packet if
-  the owner now wants About moved again.
+  `:4886-4899` needs a `key_char`, which `F1` has none), so while OneTerm was focused `F1` did
+  not reach the terminal view's key map (`crates/terminal-view/src/input/keys.rs:350`) and a
+  user lost F1 help in `mc`, `nano`, `htop`, `vim` and `less` — the same class of cost this
+  record set out to remove from `^S`, `^Q`, `^G` and `^@`. An independent verification of
+  `US-0123` established it **after** the owner had accepted `f1`; the owner read it and unbound
+  the action. The lesson this leaves for future work: a function key is not free just because
+  it carries no control character — check what the foreground program does with it before
+  binding it globally, because `context: None` means globally.
+- [ ] Tradeoff of the amendment: About has no keyboard route. It is one click from the first
+  item of the application menu, and a user who wants a key binds one from the Key Bindings page
+  — which is what Toggle Gutter, Clear and Duplicate Session already ask of them.
 - [ ] Follow-up: `apply_key_bindings` gains the collision rule, which is the first time it
   makes a decision rather than registering what it is given. Any future work that adds a
   second source of bindings must route through the same rule or this guarantee stops holding.
