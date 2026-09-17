@@ -30,6 +30,7 @@ use oneterm_state::AppServices;
 use oneterm_terminal::{PtySize, SessionKind, TerminalSession};
 use std::path::PathBuf;
 
+use super::tab_title::shell_tab_title;
 use crate::input::edit;
 use crate::security::security_policy_from_settings;
 use crate::space::{SpaceId, SpaceTree, SplitContext, SplitDir};
@@ -109,7 +110,8 @@ fn saved_session_row(title: String, color_hex: String) -> PopupMenuItem {
 /// the real grid on the first prepaint.
 pub(super) const INITIAL_PTY_SIZE: PtySize = PtySize::INITIAL;
 
-/// Tab label for a local shell, and the label a reset tab falls back to.
+/// The label a reset tab, or a custom shell with no program, falls back to.
+/// A local-shell tab is named after its shell — see `shell_tab_title`.
 pub(super) const DEFAULT_TAB_TITLE: &str = "Terminal";
 
 /// Panel displaying a Terminal Tab (a tree of Spaces).
@@ -127,7 +129,8 @@ pub struct TerminalPanel {
     pub(super) tab_panel: Option<WeakEntity<TabGroup>>,
     /// Whether this panel is the currently selected tab in the `TabGroup`.
     pub(super) is_active: bool,
-    /// Tab title fallback — "Terminal" for local, session label for SSH.
+    /// Tab title fallback — the shell's display name for local, the session
+    /// label for SSH. A live OSC 0/2 title wins over it.
     pub(super) tab_title: String,
     /// Manual tab title override selected by the user (wins over OSC 0/2).
     pub(super) tab_title_override: Option<String>,
@@ -176,14 +179,24 @@ impl TerminalPanel {
         // views get them handed down (ARCH-20).
         let deps = TerminalDeps::from_globals(cx);
         let (view, tab_title, workspace_id) = match spec {
-            PanelSpec::DefaultShell { workspace } => (
-                Self::spawn_local_view(&deps, None, window, cx),
-                DEFAULT_TAB_TITLE.to_string(),
-                workspace.or(primary),
-            ),
+            PanelSpec::DefaultShell { workspace } => {
+                // Name the tab after the shell settings actually spawn, so ten
+                // local tabs are ten distinguishable tabs (`US-0114`).
+                let title = {
+                    let shell = &deps.settings.read(cx).shell;
+                    shell_tab_title(shell.kind, shell.program.as_deref())
+                };
+                (
+                    Self::spawn_local_view(&deps, None, window, cx),
+                    title,
+                    workspace.or(primary),
+                )
+            }
             PanelSpec::Shell(kind) => (
                 Self::spawn_local_view(&deps, Some(kind), window, cx),
-                DEFAULT_TAB_TITLE.to_string(),
+                // `spawn_local_view` clears `program` for an explicit kind, so
+                // the label is the kind's own name.
+                shell_tab_title(kind, None),
                 primary,
             ),
             PanelSpec::Session {
@@ -665,25 +678,15 @@ impl Panel for TerminalPanel {
             .dropdown_menu(|menu, window, cx| {
                 let mut menu = menu;
                 // Platform-specific shells.
+                // Row labels come from `ShellKind::display_name`, the same list
+                // the tab the row opens is named after (`US-0114`).
                 #[cfg(windows)]
-                {
-                    menu = menu
-                        .menu(
-                            "Command Prompt",
-                            Box::new(AddPanelWithShell(ShellKind::Cmd)),
-                        )
-                        .menu(
-                            "PowerShell",
-                            Box::new(AddPanelWithShell(ShellKind::PowerShell)),
-                        )
-                        .menu("PowerShell 7", Box::new(AddPanelWithShell(ShellKind::Pwsh)));
-                }
+                const SHELLS: [ShellKind; 3] =
+                    [ShellKind::Cmd, ShellKind::PowerShell, ShellKind::Pwsh];
                 #[cfg(not(windows))]
-                {
-                    menu = menu
-                        .menu("Bash", Box::new(AddPanelWithShell(ShellKind::Bash)))
-                        .menu("Sh", Box::new(AddPanelWithShell(ShellKind::Sh)))
-                        .menu("Zsh", Box::new(AddPanelWithShell(ShellKind::Zsh)));
+                const SHELLS: [ShellKind; 3] = [ShellKind::Bash, ShellKind::Sh, ShellKind::Zsh];
+                for kind in SHELLS {
+                    menu = menu.menu(kind.display_name(), Box::new(AddPanelWithShell(kind)));
                 }
                 // The sessions saved in `ssh_session.json`, so a saved host
                 // opens from the same place a local shell does. This closure
@@ -711,9 +714,18 @@ impl Panel for TerminalPanel {
                     }
                 }
 
+                // Each closing row names the dialog it opens (`US-0114`, `F7`):
+                // the action row still reaches quick connect, so the
+                // `NewSession` key binding does not change meaning, and the new
+                // row reaches the full session dialog the session tree opens.
+                let open_saved_dialog = commands.open_new_saved_session_dialog;
                 menu = menu
                     .separator()
-                    .menu("New SSH Session", Box::new(NewSession));
+                    .menu("Quick Connect...", Box::new(NewSession))
+                    .item(
+                        PopupMenuItem::new("New Saved Session...")
+                            .on_click(move |_, window, cx| open_saved_dialog(window, cx)),
+                    );
 
                 // A saved list can be longer than the window, and the kit
                 // applies its height cap (half the window, at most 450px) only
@@ -732,8 +744,9 @@ impl Panel for TerminalPanel {
                 // is being built.
                 const ROW_HEIGHT: f32 = 28.;
                 // 3 shells + the "SSH Sessions" heading + the closing separator
-                // and "New SSH Session".
-                const FIXED_ROWS: usize = 6;
+                // and the two closing rows ("Quick Connect...", "New Saved
+                // Session...").
+                const FIXED_ROWS: usize = 7;
                 let cap = (window.window_bounds().get_bounds().size.height * 0.5).min(px(450.));
                 menu.scrollable(px((FIXED_ROWS + session_rows) as f32 * ROW_HEIGHT) > cap)
             })

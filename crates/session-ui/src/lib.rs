@@ -44,6 +44,16 @@ pub fn saved_ssh_sessions(cx: &App) -> oneterm_state::commands::SavedSshSessionS
     tree_builder::menu_entries(SshSessionStore::global(cx).read(cx).sessions())
 }
 
+/// `WorkspaceCommands::open_new_saved_session_dialog` — open the full "New SSH
+/// Session" dialog, the same one the session tree's context menu opens.
+///
+/// The terminal feature's "+" menu reaches it through the command registry for
+/// the same reason `saved_ssh_sessions` does: the reverse crate edge is a cycle
+/// (`US-0114`).
+pub fn open_new_saved_session_dialog(window: &mut Window, cx: &mut App) {
+    session_dialog::open_session_dialog(window, cx, None);
+}
+
 /// `WorkspaceCommands::open_saved_ssh_session` — open the connect dialog for a
 /// saved session, exactly as `SessionPanel` does.
 ///

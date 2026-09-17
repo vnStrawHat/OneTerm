@@ -3,6 +3,7 @@
 //! (recording dot, active bar, drag source, middle-click / × close,
 //! double-click rename).
 
+use std::path::Path;
 use std::rc::Rc;
 
 use gpui::{
@@ -17,6 +18,7 @@ use gpui_component::{
     input::{Input, InputState},
     notification::NotificationType,
 };
+use oneterm_core::ShellKind;
 use oneterm_terminal::TerminalLogState;
 use oneterm_theme::notif_ext::notify;
 
@@ -71,6 +73,22 @@ fn resolve_tab_label(live: Option<&str>, fallback: &str) -> String {
         Some(t) => t.to_string(),
         None => fallback.to_string(),
     }
+}
+
+/// The static tab label of a local-shell tab: the shell kind's display name,
+/// or for a custom shell the program's file stem (`US-0114`). A live OSC 0/2
+/// title still wins over this — see [`resolve_tab_label`].
+pub(super) fn shell_tab_title(kind: ShellKind, program: Option<&Path>) -> String {
+    if kind == ShellKind::Custom {
+        return program
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .map_or_else(
+                || super::terminal_panel::DEFAULT_TAB_TITLE.to_string(),
+                str::to_string,
+            );
+    }
+    kind.display_name().to_string()
 }
 
 /// Shorten a title that is just an absolute path to its last path component.
@@ -303,7 +321,65 @@ fn open_tab_title_dialog(
 mod tests {
     use gpui::Styled as _;
 
-    use super::{resolve_tab_label, tab_title_label, trim_path_title};
+    use std::path::Path;
+
+    use oneterm_core::ShellKind;
+
+    use super::{resolve_tab_label, shell_tab_title, tab_title_label, trim_path_title};
+
+    #[test]
+    fn each_shell_kind_gets_its_own_tab_label() {
+        let kinds = [
+            ShellKind::Cmd,
+            ShellKind::PowerShell,
+            ShellKind::Pwsh,
+            ShellKind::Bash,
+            ShellKind::Zsh,
+            ShellKind::Sh,
+        ];
+        let labels: Vec<String> = kinds
+            .iter()
+            .map(|k| shell_tab_title(*k, None))
+            .collect();
+
+        assert_eq!(labels[0], "Command Prompt");
+        assert_eq!(labels[1], "PowerShell");
+        assert_eq!(labels[2], "PowerShell 7");
+        // F1 is precisely that ten local tabs read alike: no two kinds may
+        // share a label.
+        let mut unique = labels.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), labels.len(), "duplicate shell labels: {labels:?}");
+        assert!(!labels.iter().any(|l| l == "Terminal"));
+    }
+
+    #[test]
+    fn custom_shell_is_named_after_its_program() {
+        assert_eq!(
+            shell_tab_title(
+                ShellKind::Custom,
+                Some(Path::new("C:\\Program Files\\Git\\bin\\bash.exe"))
+            ),
+            "bash"
+        );
+        assert_eq!(
+            shell_tab_title(ShellKind::Custom, Some(Path::new("/usr/bin/fish"))),
+            "fish"
+        );
+        // Nothing to name it after — the reset-tab fallback.
+        assert_eq!(shell_tab_title(ShellKind::Custom, None), "Terminal");
+    }
+
+    #[test]
+    fn a_live_osc_title_still_wins_over_the_shell_name() {
+        let fallback = shell_tab_title(ShellKind::PowerShell, None);
+
+        assert_eq!(resolve_tab_label(Some("vim - main.rs"), &fallback), "vim - main.rs");
+        // ...and with no live title the shell name is what shows.
+        assert_eq!(resolve_tab_label(None, &fallback), "PowerShell");
+        assert_eq!(resolve_tab_label(Some(""), &fallback), "PowerShell");
+    }
 
     #[test]
     fn tab_title_label_does_not_create_a_content_mask() {

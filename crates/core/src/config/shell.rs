@@ -31,6 +31,23 @@ pub enum ShellKind {
     Custom,
 }
 
+impl ShellKind {
+    /// The name the UI shows for this kind — the "+" menu's row and the tab
+    /// label of a local-shell tab (`US-0114`). One list, so a menu row and the
+    /// tab it opens can never disagree.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Cmd => "Command Prompt",
+            Self::PowerShell => "PowerShell",
+            Self::Pwsh => "PowerShell 7",
+            Self::Bash => "Bash",
+            Self::Zsh => "Zsh",
+            Self::Sh => "Sh",
+            Self::Custom => "Custom Shell",
+        }
+    }
+}
+
 impl Default for ShellKind {
     #[cfg(windows)]
     fn default() -> Self {
