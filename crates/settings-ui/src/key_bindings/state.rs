@@ -26,6 +26,12 @@ pub(crate) struct KeyBindingsState {
     /// Why the last captured keystroke was rejected (shown in the capture row
     /// until the next key press), e.g. a conflict with another action (CORR-55).
     pub(super) capture_rejection: Option<String>,
+    /// A message pinned under one row: `(action id, text)`. Used when a click
+    /// has an outcome the row alone does not explain — today, a **Reset** that
+    /// `DEC-0018`'s collision rule immediately undoes. It lives in the page
+    /// rather than in a notification because the Settings window cannot draw a
+    /// notification above its own page content (see `panel.rs`).
+    pub(super) notice: Option<(String, String)>,
     /// Keystroke interceptor alive while capturing. It runs before gpui's key
     /// binding dispatch, so the captured key can never trigger an action bound
     /// in the settings window (CORR-56).
@@ -73,6 +79,7 @@ pub(crate) fn init_state(cx: &mut App) {
         capture_focus,
         capture_rejection: None,
         capture_interceptor: None,
+        notice: None,
     });
     cx.set_global(KeyBindingsStateGlobal(entity));
 }

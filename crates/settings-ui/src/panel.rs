@@ -22,13 +22,26 @@
 //! The view is hosted by [`super::window`] inside a [`gpui_component::Root`];
 //! it is not a dock panel and is deliberately not registered with the
 //! `PanelRegistry` (ARCH-39).
+//!
+//! **This window has no notification layer, on purpose.** `Root::render` draws
+//! none of its own, so a `push_notification` from a settings control goes into a
+//! layer nobody renders and is never seen. Rendering one here — exactly as
+//! `OneTermWorkspace::render` does — makes the toast appear but *under* the page:
+//! the kit's `SettingPage` paints its chips, switches and buttons into a scene
+//! layer, and `Scene::insert_primitive` orders every primitive by the enclosing
+//! layer before anything else (`reference/zed/crates/gpui/src/scene.rs:74-101`),
+//! so a card drawn later still loses. Two probes settled that it is not a
+//! paint-order contest a caller can win: `deferred` at `POPUP_PRIORITY + 1`, and
+//! again at 10_000, both left the rows printing through the card (`US-0123`
+//! Evidence, `F-R6`). A settings control that needs to say something says it
+//! **in the page**, beside the control — see the Key Bindings row's notice line.
 
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, Role, StatefulInteractiveElement as _, Styled as _, Window,
 };
 use gpui_component::{
-    Root, TitleBar,
+    TitleBar,
     group_box::GroupBoxVariant,
     setting::{SettingPage, Settings},
     v_flex,
@@ -111,15 +124,7 @@ impl Focusable for SettingsPanel {
 }
 
 impl Render for SettingsPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The Settings window is its own `Root`, and `Root::render` draws no
-        // notification layer of its own — the hosting view has to ask for one, as
-        // the main window does. Without this a `push_notification` from a
-        // settings control is pushed into a layer nobody renders and is simply
-        // never seen; the Key Bindings Reset message was exactly that until
-        // `US-0123`'s rework walked it.
-        let notification_layer = Root::render_notification_layer(window, cx);
-
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .id("settings-panel")
             .role(SETTINGS_PANEL_ROLE)
@@ -132,7 +137,6 @@ impl Render for SettingsPanel {
                     .with_group_variant(SETTINGS_GROUP_VARIANT)
                     .pages(self.pages(cx)),
             )
-            .children(notification_layer)
     }
 }
 

@@ -14,9 +14,12 @@
 //! `(value, label)` pairs, so a section heading would have to be a selectable row
 //! that does nothing. Building the menu here lets the headings be
 //! [`PopupMenuItem::label`], which the kit renders disabled and excludes from
-//! clicking and from keyboard navigation. `crates/settings-ui` already escapes a
-//! kit field's limits this way five times over (see `terminal/font.rs`'s Line
-//! Height field).
+//! clicking, and skips in `select_up`/`select_down` once a row is selected. It
+//! does **not** skip them from a standing start: the first Down-arrow sets index
+//! 0 without asking whether row 0 is clickable (`popup_menu.rs:906-911`), so it
+//! still lands on the heading — inertly, since `confirm` ignores a label.
+//! `crates/settings-ui` already escapes a kit field's limits this way five times
+//! over (see `terminal/font.rs`'s Line Height field).
 //!
 //! The rows come from [`theme_rows`], which sections the ~40 registered themes
 //! into Light and Dark and puts the selected theme on the first selectable row.
@@ -44,7 +47,9 @@ const DEFAULT_THEME_NAME: &str = "Zed One Dark";
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ThemeRow {
     /// A section heading. Rendered as a `PopupMenuItem::label`, which the kit
-    /// draws disabled and skips when clicking and when navigating by keyboard.
+    /// draws disabled and never treats as clickable. Keyboard navigation steps
+    /// over it once a row is selected, but the very first Down-arrow still
+    /// highlights it (`popup_menu.rs:906-911`); Enter there does nothing.
     Section(&'static str),
     /// A selectable theme, by registry name.
     Theme(SharedString),

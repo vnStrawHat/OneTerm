@@ -284,13 +284,69 @@ This packet implements it and does not restate its rationale.
 > the explicit ruling that `ctrl-w` and `ctrl-t` stay as they are.** Both merge gates in the
 > Acceptance above are therefore closed.
 
+### Second rework, after the re-verification of `dab9cac4`
+
+The re-verification returned **PASS with findings** for this packet: `DEC-0018` carries the
+owner's Accepted line with no contradiction, the rule test runs over the whole registry and pins
+the exact exception set, and Reset on a displaced row says so. One finding was a defect in the
+new work.
+
+**`F-R6` (major) — the message was drawn under the page. Fixed, but not by fixing the
+z-order.** The verifier was right about the symptom and right that the first rework's own
+evidence frame showed it and presented it as working: the toast appeared, and the page's chips,
+`Edit`/`Reset` buttons and switches printed straight through the card, on any `SettingPage`.
+
+The obvious repair was tried twice and **does not work**:
+
+| Probe | Frame | Result |
+| --- | --- | --- |
+| `deferred(layer).with_priority(POPUP_PRIORITY + 1)` — the same priority the kit's own shell gives its toasts (`gpui-kit/crates/shell/src/root.rs:58`, `:756`) | `evidence/US-0123-fr6-probe-a-deferred-popup-priority.png` | No change. |
+| The same, at priority `10_000` | `evidence/US-0123-fr6-probe-b-deferred-priority-10000.png` | No change, pixel for pixel. |
+
+So it is not a paint-order contest a caller can win, which is also why the verifier's own probe
+(adding `.relative()`) changed nothing. Deferred draws are painted last and in priority order
+(`reference/zed/crates/gpui/src/window.rs:3058-3102`), but painting last is not the same as
+being on top: `Scene::insert_primitive` gives every primitive the `order` of its enclosing
+**layer** and sorts by that (`reference/zed/crates/gpui/src/scene.rs:74-101`), so page content
+inside a pushed layer outranks a card drawn afterwards outside one. Nothing `SettingsPanel` can
+put in its own subtree beats that.
+
+The fix is therefore to stop trying to float a message over the page and to put it **in** the
+page, beside the control that was pressed:
+
+- `SettingsPanel::render` no longer renders a notification layer, and `panel.rs`'s module doc
+  says why, with both probes, so the next agent does not add one back and re-inherit the bug.
+  The `gpui-base` dependency added for `POPUP_PRIORITY` is gone with it.
+- `KeyBindingsState` gains `notice: Option<(String, String)>` — a message pinned under one row
+  — and the Key Bindings row renders it in the theme's warning colour under the `Default:`
+  line. It is cleared by the next Edit, Reset or page Reset All.
+
+Walked: `evidence/US-0123-40e-reset-on-a-displaced-row-says-so.png` — Reset on the displaced
+**New SSH Session** row leaves it unbound and the row now reads
+*"Still unbound: Quit holds this key. Rebind either one to free it."*, fully legible, with
+nothing printed through it. It is also better placed than the toast was: it is beside the button
+that produced it, and it survives until the user does something else rather than timing out.
+
+This is a deviation from the instruction to fix the z-order, taken because the z-order does not
+move; both probes are kept as evidence rather than summarised away.
+
+**`F-R5` (minor) — the accepted exception set was widened from two to four.** Left as it stands,
+on the coordinator's instruction: they have put it to the owner. The record is transparent about
+it (`DEC-0018` §"What future work inherits" names all four and argues `find`'s case in the
+record's own voice) and the alternative — moving `find`, a fifth default change — was correctly
+refused as out of scope. `ctrl-,` is in the list only because the test's `is_one_key` predicate
+deliberately does not discriminate punctuation; `ctrl-f` is the real widening. If the owner
+declines it, the fix is to move `find` under an amended `DEC-0018`, not to narrow the test back
+to the App Menu group, which is what hid it in the first place.
+
+
 ### Commands
 
 | Command | Result |
 | --- | --- |
-| `cargo test -p oneterm-settings-ui` | `test result: ok. 48 passed; 0 failed` |
+| `cargo test -p oneterm-settings-ui` | `test result: ok. 52 passed; 0 failed` |
 | `cargo clippy -p oneterm-settings-ui --all-targets -- -D warnings` | clean |
-| `cargo test --workspace` | 2105 passed, 12 ignored |
+| `cargo test --workspace` | 2109 passed, 12 ignored |
 | `pwsh scripts/ci-local.ps1` | **`ci-local: all checks passed.`** |
 
 Focused tests:

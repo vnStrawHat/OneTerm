@@ -262,13 +262,30 @@ line in `docs/gui-layout.md`, not a rule future work inherits.
 > were wrong and one reachable improvement was written off as unreachable. Both are fixed
 > below, and the frames are re-captured on the reworked build.
 
+### Second rework, after the re-verification of `dab9cac4`
+
+The re-verification returned **PASS** for this packet: both withdrawn Gaps were withdrawn
+correctly, the theme picker's headings are real `PopupMenuItem::label`s with the dead click
+gone, the persisted shape is unchanged, and the rewritten agreement test fails under the
+mutation it names. One finding, a prose defect.
+
+**`F-R1` (minor) — three prose sites claimed more than the kit does. Fixed.** `appearance.rs`'s
+module doc, the `ThemeRow::Section` doc comment and `docs/gui-layout.md` §Settings window all
+said `PopupMenuItem::label` is excluded "from clicking **and from keyboard navigation**". The
+first half is true; the second is not, and this packet's own Gap already said so — three places
+asserting what a fourth refuted. All three now say what actually holds: excluded from clicking,
+stepped over by `select_up`/`select_down` once a row is selected, but the very first Down-arrow
+still lands on row 0 because the kit sets index 0 without checking
+(`popup_menu.rs:906-911`); Enter there does nothing.
+
+
 ### Commands
 
 | Command | Result |
 | --- | --- |
-| `cargo test -p oneterm-settings-ui` | `test result: ok. 48 passed; 0 failed` |
+| `cargo test -p oneterm-settings-ui` | `test result: ok. 52 passed; 0 failed` |
 | `cargo clippy -p oneterm-settings-ui --all-targets -- -D warnings` | clean |
-| `cargo test --workspace` | 2105 passed, 12 ignored |
+| `cargo test --workspace` | 2109 passed, 12 ignored |
 | `pwsh scripts/ci-local.ps1` | **`ci-local: all checks passed.`** |
 
 Focused tests:

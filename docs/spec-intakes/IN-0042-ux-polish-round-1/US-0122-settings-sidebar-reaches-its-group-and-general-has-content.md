@@ -331,13 +331,95 @@ deserves a `DEC`. Raise it rather than leaving it in a packet.
 > into several short **pages** — was named, priced at zero and never built, while the packet
 > closed on the escape clause. It is built now, and the headline acceptance is met.
 
+### Second rework, after the re-verification of `dab9cac4`
+
+The re-verification (`evidence/settings-ui-wave1-verify.md` §"Re-verification") returned
+**PASS with findings**: the split is real, the headline acceptance is met, every sub-item lands,
+and the false build-guard claim is gone. Three of its findings were defects in the new work.
+
+**`F-R2` (major) — `Reset All` reached across pages. Fixed.** The split created it: before it,
+one page carried all thirty-seven rows and one `Reset All` meant what it looked like. After it,
+the single registry-wide handler still sat on `BINDABLE_ACTIONS[0]`, which is an App Menu row
+and therefore only ever on page 1 — so page 1 showed a destructive button while all of its own
+rows were clean, one click silently reverted twenty-four rows the user could not see from
+there, and pages 2 and 3 had no `Reset All` at all.
+
+Each page now carries its own, scoped to the groups that page shows: `pages()` hands the first
+group of each page its `reset_scope`, `binding_group` puts `on_reset` on that group's first row,
+and `page_bindings_are_dirty` / `reset_page_key_bindings` work through `actions_reset_by`, the
+pure decision function. Three tests:
+`each_page_resets_exactly_the_actions_it_shows` (each page's set equals the ids it shows, no
+page resets nothing, and the three pages **partition** the registry),
+`a_pages_reset_all_does_not_reach_another_pages_bindings` (the regression by name: page 1 must
+not contain `split_right`, `join_input_channel_a` or `sftp_open`, and the page that shows Split
+Right is the one that resets it), and the existing coverage test. Checked by mutation: dropping
+the `page_groups` filter — which is exactly the old behaviour — turns `52 passed` into
+`50 passed; 2 failed`, and both failures are the new tests. Reverted.
+
+Walked, on the reworked build:
+
+| Step | Frame | Result |
+| --- | --- | --- |
+| Split Right rebound to `F7` on **Key Bindings: Terminal** | `evidence/US-0122-fr2-01-page2-dirty.png` | That page now shows its own `Reset All` (it had none before) and the row reads `F7` with "Default: ctrl-shift-right". |
+| **Key Bindings** opened while page 2 is dirty | `evidence/US-0122-fr2-02-page1-clean-no-undo.png` | **No undo icon.** Page 1's rows are all clean and it no longer answers for another page's state. |
+| Page 1's `Reset All` — pressed anyway, with page 2 still dirty | `evidence/US-0122-fr2-03-page1-reset-leaves-f7.png` | Split Right is **still `F7`**. |
+| Page 2's `Reset All` | `evidence/US-0122-fr2-04-page2-reset-reverts-f7.png` | Split Right back to `Ctrl+Shift+Right`, and `ui_config.json` back to no `key_bindings` key. |
+
+**`F-R3` (minor) — the coverage claim was true of one table, not both. Corrected.**
+`KEY_BINDING_PAGES` really is checked against `BINDABLE_ACTIONS` itself. `TERMINAL_PAGES` has no
+enumerable source to check against — each group is a function in its own module — so the claim
+"both are asserted against their own group source" was wrong. The test is now
+`no_terminal_group_is_placed_on_two_pages`, which asserts what it can (no duplicate placement,
+and the walked composition of nine), and its comment states the real guard for coverage: a
+builder left off the table has no caller and `cargo clippy -- -D warnings` fails it as dead
+code, which is how the verifier's mutation C was caught. The `>1 group` property is enforced
+only for `KEY_BINDING_PAGES`, where it is true; `no_terminal_page_carries_more_groups_than_have_been_walked`
+now says only what holds for terminal pages — at least one group, at most three.
+
+**`F-R4` (minor) — "Completion" was stated three times. Fixed.** Sidebar row, page header and
+group heading all said it; Terminal Logging was one step from the same. Both are single-group
+pages created by the split, after the naming sweep's reasoning was written. The group is now
+untitled on both and the page carries the description instead, so the name is printed twice and
+the prose survives: `evidence/US-0122-28d-settings-completion.png`,
+`evidence/US-0122-28c-settings-terminal-logging.png`.
+`a_single_group_page_describes_itself_instead_of_repeating_its_name` holds the rule for any
+single-group terminal page added later.
+
+**`F-R7` (minor, upstream) — search blanks the content pane.** Not caused here and not fixable
+here: `Settings::render_active_page` indexes `selected_index.page_ix` into the **filtered** page
+list (`settings.rs:145-163`), so a query that filters out the selected page renders the fallback
+empty `div`, and clearing the query re-points the same integer at a different page. The split
+raised the exposure from six pages to twelve, so it travels with the scroll defect: it is now
+**upstream report 2 of 2** in Handoff, written out the same way.
+
+**`F-R8` (trivial, process) — a code change shipped inside a docs commit.** True.
+`SettingsPanel::render`'s notification layer (`panel.rs`, +13) landed in `dab9cac4`, whose
+subject is `docs(harness): …`. No history is rewritten; the commit list below records it so the
+change is findable by someone reading the log rather than the packet.
+
+### Commits
+
+| Commit | Contents |
+| --- | --- |
+| `8653b76c` | records: `US-0121` opened, decisions taken before code |
+| `4796dcfa` | `US-0121` implementation + docs |
+| `b85f9267` | records: `US-0122` opened, the reference read |
+| `9673e0cf` | `US-0122` first implementation (General, the fold, the naming sweep) + docs |
+| `433a9fbd` | records: `US-0123` opened, the old→new table |
+| `62562385` | `US-0123` implementation + `DEC-0018` + docs |
+| `9b1b2ca9` | records: all three closed, first evidence |
+| `c19018a0` | first rework: the page split, and `US-0121`/`US-0123` verification fixes |
+| `dab9cac4` | first rework records and evidence — **and one code change**: `panel.rs`'s notification layer (`F-R8`) |
+| *(this one)* | second rework: per-page `Reset All` (`F-R2`), the notification layer's paint order (`F-R6`), and the four minors |
+
+
 ### Commands
 
 | Command | Result |
 | --- | --- |
-| `cargo test -p oneterm-settings-ui` | `test result: ok. 48 passed; 0 failed` |
+| `cargo test -p oneterm-settings-ui` | `test result: ok. 52 passed; 0 failed` |
 | `cargo clippy -p oneterm-settings-ui --all-targets -- -D warnings` | clean |
-| `cargo test --workspace` | 2105 passed, 12 ignored |
+| `cargo test --workspace` | 2109 passed, 12 ignored |
 | `pwsh scripts/ci-local.ps1` | **`ci-local: all checks passed.`** |
 
 ### What the split is
@@ -453,7 +535,7 @@ filed from here** — this session has no issue tracker access and does not open
 project's behalf. Everything else in this packet is complete; this is the "follow-up raised
 upstream" half of `IN-0042.md:201-203`, written out so filing it is a copy and a paste.
 
-### Upstream report, ready to file
+### Upstream report 1 of 2, ready to file
 
 **Title:** `setting::Settings` — a sidebar sub-item cannot scroll to a group below the fold of
 a freshly opened page
@@ -527,6 +609,61 @@ a freshly opened page
 > whose groups all fall inside the measured window is measured in full, and then
 > `scroll_to_reveal_item` is exact too. It is not a fix — it is a constraint on page
 > composition that consumers have to keep obeying.
+
+### Upstream report 2 of 2, ready to file
+
+Found by the second independent verification (`F-R7`). Nothing in this round caused it and
+nothing in this round can fix it, but the split raised the exposure from six pages to twelve,
+so it travels with the first report.
+
+**Title:** `setting::Settings` — searching blanks the content pane, and clearing the query
+lands on the wrong page
+
+**Body:**
+
+> **What happens**
+>
+> With a page selected, type a query that the current page does not match. The sidebar
+> correctly narrows to the pages that *do* match — search does reach across pages — but the
+> content pane goes **empty**, including for the page still shown as selected. Clicking a page
+> in the filtered sidebar and then clearing the query lands on a different page than the one
+> that was clicked.
+>
+> Walked on a twelve-page `Settings`: from page 7 of 12, typing `gutter` narrowed the sidebar
+> to two pages and blanked the pane; clicking the second of them and clearing the query landed
+> on the unfiltered list's page 1.
+>
+> **Why**
+>
+> `selected_index.page_ix` is an index into the **filtered** list, but it survives a change of
+> filter:
+>
+> ```rust
+> // crates/component/src/setting/settings.rs:145-163
+> fn render_active_page(&self, state, pages: &Vec<SettingPage>, ...) {
+>     let selected_index = state.read(cx).selected_index;
+>     for (ix, page) in pages.into_iter().enumerate() {
+>         if selected_index.page_ix == ix { return page.render(...); }
+>     }
+>     return div().into_any_element();   // <- the blank pane
+> }
+> ```
+>
+> `filtered_pages` (`settings.rs:112-140`) drops every page with no matching item, so the list
+> `render_active_page` walks is shorter than the one the index was chosen from. When the
+> selected page is filtered out, no `ix` matches and the fallback empty `div` is rendered; when
+> the query is cleared, the same integer now addresses a different page.
+>
+> **Possible fix**
+>
+> Select by identity rather than by position — keep the page's title (or a stable id) in
+> `SelectIndex` and resolve it against whichever list is being rendered — or, more cheaply,
+> render the selected page unfiltered when it is not in the filtered list, and remap
+> `page_ix` through the filter whenever the query changes.
+>
+> **Severity**
+>
+> Cosmetic on a small `Settings`; on a twelve-page one it reads as the window having broken.
 
 ### If the owner wants the wrapper instead
 

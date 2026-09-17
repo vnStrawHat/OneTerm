@@ -29,189 +29,188 @@ fn count_field(
     .default_value(default as f64)
 }
 
-/// Build the "Completion" settings group.
+/// Build the Completion settings group.
+///
+/// Untitled on purpose: it is the only group on the Completion page, so a title
+/// would print "Completion" a third time under the sidebar row and the page
+/// header (`F-R4`, the shape `F16` filed). The page carries the description.
 pub(super) fn group() -> SettingGroup {
-    SettingGroup::new()
-        .title("Completion")
-        .description("The suggestion overlay and the history it draws on.")
-        .items(vec![
-            SettingItem::new(
-                "Enabled",
-                SettingField::switch(
-                    |cx: &App| TerminalSettings::global(cx).read(cx).completion.enabled,
-                    |val: bool, cx: &mut App| {
-                        update(cx, move |c| c.enabled = val);
-                    },
-                )
-                .default_value(true),
+    SettingGroup::new().items(vec![
+        SettingItem::new(
+            "Enabled",
+            SettingField::switch(
+                |cx: &App| TerminalSettings::global(cx).read(cx).completion.enabled,
+                |val: bool, cx: &mut App| {
+                    update(cx, move |c| c.enabled = val);
+                },
             )
-            .description("Master switch for the overlay and the history capture."),
-            SettingItem::new(
-                "Accept With Tab",
-                SettingField::switch(
-                    |cx: &App| TerminalSettings::global(cx).read(cx).completion.accept_tab,
-                    |val: bool, cx: &mut App| update(cx, move |c| c.accept_tab = val),
-                )
-                .default_value(true),
+            .default_value(true),
+        )
+        .description("Master switch for the overlay and the history capture."),
+        SettingItem::new(
+            "Accept With Tab",
+            SettingField::switch(
+                |cx: &App| TerminalSettings::global(cx).read(cx).completion.accept_tab,
+                |val: bool, cx: &mut App| update(cx, move |c| c.accept_tab = val),
             )
-            .description("When off, Tab is forwarded to the shell."),
-            SettingItem::new(
-                "Max Command History",
-                count_field(
-                    |cx| TerminalSettings::global(cx).read(cx).completion.max_history,
-                    |v, cx| update(cx, move |c| c.max_history = v),
-                    500,
-                    100_000.0,
-                ),
-            )
-            .description("Per-family in-session history capacity (0 disables history)."),
-            SettingItem::new(
-                "Min Characters Before Suggesting",
-                count_field(
-                    |cx| {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .completion
-                            .min_prefix_len
-                    },
-                    |v, cx| update(cx, move |c| c.min_prefix_len = v),
-                    1,
-                    16.0,
-                ),
-            )
-            .description("Command suggestions appear after this many typed characters."),
-            SettingItem::new(
-                "Visible Suggestions",
-                count_field(
-                    |cx| {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .completion
-                            .max_visible_items
-                    },
-                    |v, cx| update(cx, move |c| c.max_visible_items = v.max(1)),
-                    8,
-                    50.0,
-                ),
-            )
-            .description("Rows shown in the overlay before scrolling."),
-            SettingItem::new(
-                "Source: History",
-                SettingField::switch(
-                    |cx: &App| {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .completion
-                            .sources
-                            .memory
-                    },
-                    |val: bool, cx: &mut App| update(cx, move |c| c.sources.memory = val),
-                )
-                .default_value(true),
-            )
-            .description("Suggest commands you ran this session."),
-            SettingItem::new(
-                "Source: Manual",
-                SettingField::switch(
-                    |cx: &App| {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .completion
-                            .sources
-                            .manual
-                    },
-                    |val: bool, cx: &mut App| update(cx, move |c| c.sources.manual = val),
-                )
-                .default_value(true),
-            )
-            .description("Hand-authored bundled catalogs (git, cargo, …)."),
-            SettingItem::new(
-                "Source: External",
-                SettingField::switch(
-                    |cx: &App| {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .completion
-                            .sources
-                            .external
-                    },
-                    |val: bool, cx: &mut App| update(cx, move |c| c.sources.external = val),
-                )
-                .default_value(true),
-            )
-            .description("Generated catalogs (Windows commands, coreutils)."),
-            SettingItem::new(
-                "Fuzzy Matching",
-                SettingField::switch(
-                    |cx: &App| TerminalSettings::global(cx).read(cx).completion.fuzzy,
-                    |val: bool, cx: &mut App| update(cx, move |c| c.fuzzy = val),
-                )
-                .default_value(true),
-            )
-            .description("Secondary subsequence matching."),
-            SettingItem::new(
-                "Disable Inside Full-Screen Apps",
-                SettingField::switch(
-                    |cx: &App| {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .completion
-                            .disable_in_alt_screen
-                    },
-                    |val: bool, cx: &mut App| update(cx, move |c| c.disable_in_alt_screen = val),
-                )
-                .default_value(true),
-            )
-            .description("Suppress suggestions in vim/less/htop (alternate screen)."),
-            SettingItem::new(
-                "Allow Coreutils On Windows",
-                SettingField::switch(
-                    |cx: &App| {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .completion
-                            .windows_allow_coreutils
-                    },
-                    |val: bool, cx: &mut App| update(cx, move |c| c.windows_allow_coreutils = val),
-                )
-                .default_value(false),
-            )
-            .description(
-                "Also suggest coreutils/linux commands in cmd/PowerShell (Git-Bash users).",
+            .default_value(true),
+        )
+        .description("When off, Tab is forwarded to the shell."),
+        SettingItem::new(
+            "Max Command History",
+            count_field(
+                |cx| TerminalSettings::global(cx).read(cx).completion.max_history,
+                |v, cx| update(cx, move |c| c.max_history = v),
+                500,
+                100_000.0,
             ),
-            SettingItem::new(
-                "Force Shell Family",
-                SettingField::dropdown(
-                    vec![
-                        ("".into(), "Auto-detect".into()),
-                        ("cmd".into(), "cmd".into()),
-                        ("powershell".into(), "PowerShell".into()),
-                        ("unix".into(), "Unix".into()),
-                    ],
-                    |cx: &App| -> SharedString {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .completion
-                            .force_family
-                            .clone()
-                            .unwrap_or_default()
-                            .into()
-                    },
-                    |val: SharedString, cx: &mut App| {
-                        let value = val.to_string();
-                        update(cx, move |c| {
-                            c.force_family = if value.is_empty() {
-                                None
-                            } else {
-                                Some(value.clone())
-                            };
-                        });
-                    },
-                )
-                .default_value(SharedString::default()),
+        )
+        .description("Per-family in-session history capacity (0 disables history)."),
+        SettingItem::new(
+            "Min Characters Before Suggesting",
+            count_field(
+                |cx| {
+                    TerminalSettings::global(cx)
+                        .read(cx)
+                        .completion
+                        .min_prefix_len
+                },
+                |v, cx| update(cx, move |c| c.min_prefix_len = v),
+                1,
+                16.0,
+            ),
+        )
+        .description("Command suggestions appear after this many typed characters."),
+        SettingItem::new(
+            "Visible Suggestions",
+            count_field(
+                |cx| {
+                    TerminalSettings::global(cx)
+                        .read(cx)
+                        .completion
+                        .max_visible_items
+                },
+                |v, cx| update(cx, move |c| c.max_visible_items = v.max(1)),
+                8,
+                50.0,
+            ),
+        )
+        .description("Rows shown in the overlay before scrolling."),
+        SettingItem::new(
+            "Source: History",
+            SettingField::switch(
+                |cx: &App| {
+                    TerminalSettings::global(cx)
+                        .read(cx)
+                        .completion
+                        .sources
+                        .memory
+                },
+                |val: bool, cx: &mut App| update(cx, move |c| c.sources.memory = val),
             )
-            .description("Override the detected shell family for suggestions."),
-        ])
+            .default_value(true),
+        )
+        .description("Suggest commands you ran this session."),
+        SettingItem::new(
+            "Source: Manual",
+            SettingField::switch(
+                |cx: &App| {
+                    TerminalSettings::global(cx)
+                        .read(cx)
+                        .completion
+                        .sources
+                        .manual
+                },
+                |val: bool, cx: &mut App| update(cx, move |c| c.sources.manual = val),
+            )
+            .default_value(true),
+        )
+        .description("Hand-authored bundled catalogs (git, cargo, …)."),
+        SettingItem::new(
+            "Source: External",
+            SettingField::switch(
+                |cx: &App| {
+                    TerminalSettings::global(cx)
+                        .read(cx)
+                        .completion
+                        .sources
+                        .external
+                },
+                |val: bool, cx: &mut App| update(cx, move |c| c.sources.external = val),
+            )
+            .default_value(true),
+        )
+        .description("Generated catalogs (Windows commands, coreutils)."),
+        SettingItem::new(
+            "Fuzzy Matching",
+            SettingField::switch(
+                |cx: &App| TerminalSettings::global(cx).read(cx).completion.fuzzy,
+                |val: bool, cx: &mut App| update(cx, move |c| c.fuzzy = val),
+            )
+            .default_value(true),
+        )
+        .description("Secondary subsequence matching."),
+        SettingItem::new(
+            "Disable Inside Full-Screen Apps",
+            SettingField::switch(
+                |cx: &App| {
+                    TerminalSettings::global(cx)
+                        .read(cx)
+                        .completion
+                        .disable_in_alt_screen
+                },
+                |val: bool, cx: &mut App| update(cx, move |c| c.disable_in_alt_screen = val),
+            )
+            .default_value(true),
+        )
+        .description("Suppress suggestions in vim/less/htop (alternate screen)."),
+        SettingItem::new(
+            "Allow Coreutils On Windows",
+            SettingField::switch(
+                |cx: &App| {
+                    TerminalSettings::global(cx)
+                        .read(cx)
+                        .completion
+                        .windows_allow_coreutils
+                },
+                |val: bool, cx: &mut App| update(cx, move |c| c.windows_allow_coreutils = val),
+            )
+            .default_value(false),
+        )
+        .description("Also suggest coreutils/linux commands in cmd/PowerShell (Git-Bash users)."),
+        SettingItem::new(
+            "Force Shell Family",
+            SettingField::dropdown(
+                vec![
+                    ("".into(), "Auto-detect".into()),
+                    ("cmd".into(), "cmd".into()),
+                    ("powershell".into(), "PowerShell".into()),
+                    ("unix".into(), "Unix".into()),
+                ],
+                |cx: &App| -> SharedString {
+                    TerminalSettings::global(cx)
+                        .read(cx)
+                        .completion
+                        .force_family
+                        .clone()
+                        .unwrap_or_default()
+                        .into()
+                },
+                |val: SharedString, cx: &mut App| {
+                    let value = val.to_string();
+                    update(cx, move |c| {
+                        c.force_family = if value.is_empty() {
+                            None
+                        } else {
+                            Some(value.clone())
+                        };
+                    });
+                },
+            )
+            .default_value(SharedString::default()),
+        )
+        .description("Override the detected shell family for suggestions."),
+    ])
 }
 
 /// Update the live completion settings + persist.

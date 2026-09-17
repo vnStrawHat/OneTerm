@@ -9,15 +9,13 @@ use gpui::{
     StatefulInteractiveElement as _, Styled, Window, div,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     kbd::Kbd,
-    notification::NotificationType,
     setting::{SettingGroup, SettingItem, SettingPage},
     v_flex,
 };
-use oneterm_theme::notif_ext::notify_with_title;
 
 use super::key_bindings_actions::{BINDABLE_ACTIONS, BindableAction};
 use super::state::{
@@ -59,11 +57,21 @@ pub(crate) fn pages() -> Vec<SettingPage> {
     KEY_BINDING_PAGES
         .iter()
         .map(|(title, group_titles)| {
-            group_titles.iter().fold(
+            group_titles.iter().enumerate().fold(
                 SettingPage::new(*title)
                     .resettable(true)
                     .icon(Icon::new(IconName::Menu)),
-                |page, group_title| page.group(binding_group(group_title)),
+                |page, (group_ix, group_title)| {
+                    // The kit shows a page's `Reset All` when any item on it is
+                    // resettable and fires it by resetting every item
+                    // (`setting/page.rs:111-119`), so one handler per page is
+                    // enough and one is all we want: it is scoped to the groups
+                    // *that* page shows. Putting it on the first item of the
+                    // page's first group means each of the three pages has its
+                    // own button, and none of them reaches the other two.
+                    let reset_scope = (group_ix == 0).then_some(*group_titles);
+                    page.group(binding_group(group_title, reset_scope))
+                },
             )
         })
         .collect()
@@ -71,12 +79,23 @@ pub(crate) fn pages() -> Vec<SettingPage> {
 
 /// One `SettingGroup` holding every action whose registry `group` is `title`,
 /// in registry order.
-fn binding_group(title: &'static str) -> SettingGroup {
-    BINDABLE_ACTIONS
+///
+/// `reset_scope` is `Some` for the first group of a page and carries that
+/// page's group titles; the group's first row then hosts the page's
+/// `Reset All`, scoped to those groups.
+fn binding_group(
+    title: &'static str,
+    reset_scope: Option<&'static [&'static str]>,
+) -> SettingGroup {
+    let actions: Vec<&'static BindableAction> = BINDABLE_ACTIONS
         .iter()
         .filter(|action| action.group == title)
+        .collect();
+    let first_row = actions.first().map(|action| action.id);
+
+    actions
+        .into_iter()
         .fold(SettingGroup::new().title(title), |group, action| {
-            let action: &'static BindableAction = action;
             // The row is a custom element, so its "Default: ..." line is
             // rendered by the row itself; `SettingItem::description` only
             // applies to value items and `SettingGroup::description` would label
@@ -84,15 +103,30 @@ fn binding_group(title: &'static str) -> SettingGroup {
             let item =
                 SettingItem::render(move |_, window, cx| render_binding_row(action, window, cx))
                     .keywords([action.label]);
-            // The first row of the registry carries the "reset every binding"
-            // handler, so Reset All on its page restores the whole registry and
-            // not just that page's groups.
-            group.item(if action.id == BINDABLE_ACTIONS[0].id {
-                item.on_reset(key_bindings_are_dirty, reset_all_key_bindings)
-            } else {
-                item
+            group.item(match reset_scope {
+                Some(scope) if first_row == Some(action.id) => item.on_reset(
+                    move |cx| page_bindings_are_dirty(scope, cx),
+                    move |_, cx| reset_page_key_bindings(scope, cx),
+                ),
+                _ => item,
             })
         })
+}
+
+/// The action ids a page's `Reset All` restores: every action in the groups that
+/// page shows, in registry order, and no other.
+///
+/// This is the decision `F-R2` found wrong. Before the page split one page
+/// carried all thirty-seven rows and one `Reset All` meant what it looked like;
+/// after it, a single registry-wide handler put a destructive button on a page
+/// whose visible rows were all clean and silently reverted twenty-four rows the
+/// user could not see from there.
+fn actions_reset_by(page_groups: &[&str]) -> Vec<&'static str> {
+    BINDABLE_ACTIONS
+        .iter()
+        .filter(|action| page_groups.contains(&action.group))
+        .map(|action| action.id)
+        .collect()
 }
 
 /// The "Default: \u2026" line under a row's label, or `None` when the row is at
@@ -119,13 +153,18 @@ fn render_binding_row(
     _window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let (capturing, eff, handle, rejection) = {
+    let (capturing, eff, handle, rejection, notice) = {
         let state = KeyBindingsState::global(cx).read(cx);
         (
             state.capturing.as_deref() == Some(a.id),
             state.effective.get(a.id).cloned().unwrap_or_default(),
             state.capture_focus.clone(),
             state.capture_rejection.clone(),
+            state
+                .notice
+                .as_ref()
+                .filter(|(id, _)| id == a.id)
+                .map(|(_, message)| message.clone()),
         )
     };
 
@@ -166,6 +205,16 @@ fn render_binding_row(
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(line)
+                    }))
+                    // Said here, not in a toast: the Settings window cannot draw
+                    // a notification above its own page content (`panel.rs`),
+                    // and beside the button that was pressed is where it belongs
+                    // anyway.
+                    .children(notice.map(|message| {
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().warning)
+                            .child(message)
                     })),
             )
             .child(
@@ -185,7 +234,7 @@ fn render_binding_row(
                             .ghost()
                             .small()
                             .label("Reset")
-                            .on_click(move |_, window, cx| on_reset(a.id, window, cx)),
+                            .on_click(move |_, _, cx| on_reset(a.id, cx)),
                     ),
             )
             .into_any_element()
@@ -235,6 +284,7 @@ fn on_edit(id: &'static str, window: &mut Window, cx: &mut App) {
         s.capturing = Some(id.to_string());
         s.capture_rejection = None;
         s.capture_interceptor = Some(interceptor);
+        s.notice = None;
         cx.notify();
     });
     handle.focus(window, cx);
@@ -254,34 +304,31 @@ fn end_capture(s: &mut KeyBindingsState) {
 /// and the row snaps straight back to "—". Without a word from the application
 /// that reads as a button that does nothing, so the outcome is said out loud
 /// (`US-0123` rework).
-fn on_reset(id: &'static str, window: &mut Window, cx: &mut App) {
-    let action = BINDABLE_ACTIONS.iter().find(|a| a.id == id);
-    let default = action
+fn on_reset(id: &'static str, cx: &mut App) {
+    let default = BINDABLE_ACTIONS
+        .iter()
+        .find(|a| a.id == id)
         .and_then(|a| a.default)
         .map(|s| s.to_string())
         .unwrap_or_default();
     KeyBindingsState::global(cx).update(cx, |s, cx| {
         s.effective.insert(id.to_string(), default);
+        s.notice = None;
         end_capture(s);
         cx.notify();
     });
     save_key_bindings(cx);
     apply_key_bindings(cx);
+
     if let Some(winner) = displacing_action(id, cx) {
-        window.push_notification(
-            notify_with_title(
-                NotificationType::Warning,
-                format!(
-                    "{} is left unbound: its default is your own binding for {}. \
-                     Rebind either one to free the key.",
-                    action.map(|a| a.label).unwrap_or(id),
-                    winner.label
-                ),
-                "Key already taken",
-                cx,
-            ),
-            cx,
+        let message = format!(
+            "Still unbound: {} holds this key. Rebind either one to free it.",
+            winner.label
         );
+        KeyBindingsState::global(cx).update(cx, |s, cx| {
+            s.notice = Some((id.to_owned(), message));
+            cx.notify();
+        });
     }
 }
 
@@ -296,21 +343,33 @@ fn displacing_action(id: &str, cx: &App) -> Option<&'static BindableAction> {
     conflicting_action(&state.effective, id, default)
 }
 
-fn key_bindings_are_dirty(cx: &App) -> bool {
+/// Whether any row this page shows differs from its shipped default — which is
+/// exactly when the page's `Reset All` appears.
+fn page_bindings_are_dirty(page_groups: &[&str], cx: &App) -> bool {
     let state = KeyBindingsState::global(cx).read(cx);
-    BINDABLE_ACTIONS.iter().any(|action| {
-        state
+    actions_reset_by(page_groups).into_iter().any(|id| {
+        let effective = state
             .effective
-            .get(action.id)
+            .get(id)
             .map(String::as_str)
-            .unwrap_or_default()
-            != action.default.unwrap_or_default()
+            .unwrap_or_default();
+        let default = BINDABLE_ACTIONS
+            .iter()
+            .find(|action| action.id == id)
+            .and_then(|action| action.default);
+        !is_at_default(effective, default)
     })
 }
 
-fn reset_all_key_bindings(_window: &mut Window, cx: &mut App) {
+/// Restore the shipped default for every row this page shows, and nothing else.
+fn reset_page_key_bindings(page_groups: &[&str], cx: &mut App) {
+    let ids = actions_reset_by(page_groups);
     KeyBindingsState::global(cx).update(cx, |state, cx| {
+        state.notice = None;
         for action in BINDABLE_ACTIONS {
+            if !ids.contains(&action.id) {
+                continue;
+            }
             state.effective.insert(
                 action.id.to_string(),
                 action.default.unwrap_or_default().to_string(),
@@ -388,6 +447,56 @@ mod tests {
         registered.dedup();
 
         assert_eq!(placed, registered);
+    }
+
+    #[test]
+    fn each_page_resets_exactly_the_actions_it_shows() {
+        let mut reset_by_some_page: Vec<&str> = Vec::new();
+
+        for (title, groups) in KEY_BINDING_PAGES {
+            let reset = actions_reset_by(groups);
+            let shown: Vec<&str> = BINDABLE_ACTIONS
+                .iter()
+                .filter(|action| groups.contains(&action.group))
+                .map(|action| action.id)
+                .collect();
+            assert_eq!(reset, shown, "{title} resets something it does not show");
+            assert!(
+                !reset.is_empty(),
+                "{title} has a Reset All that resets nothing"
+            );
+            reset_by_some_page.extend(reset);
+        }
+
+        // The three pages partition the registry: every action is reset by
+        // exactly one page, so no row is unreachable and none is reset twice.
+        let mut unique = reset_by_some_page.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            reset_by_some_page.len(),
+            unique.len(),
+            "an action is reset by two pages"
+        );
+        assert_eq!(unique.len(), BINDABLE_ACTIONS.len());
+    }
+
+    #[test]
+    fn a_pages_reset_all_does_not_reach_another_pages_bindings() {
+        // The `F-R2` regression, named: Reset All on "Key Bindings" used to
+        // revert Split Right, which is on "Key Bindings: Terminal", and the
+        // SFTP rows, which are on "Key Bindings: Sessions".
+        let first_page = actions_reset_by(KEY_BINDING_PAGES[0].1);
+        assert!(first_page.contains(&"new_ssh_session"));
+        assert!(first_page.contains(&"terminal_copy"));
+        assert!(!first_page.contains(&"split_right"));
+        assert!(!first_page.contains(&"join_input_channel_a"));
+        assert!(!first_page.contains(&"sftp_open"));
+
+        // ...and the page that does show Split Right is the one that resets it.
+        let terminal_page = actions_reset_by(KEY_BINDING_PAGES[1].1);
+        assert!(terminal_page.contains(&"split_right"));
+        assert!(!terminal_page.contains(&"new_ssh_session"));
     }
 
     #[test]
