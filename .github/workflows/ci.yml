@@ -62,6 +62,11 @@ jobs:
         run: python scripts/verify-dependency-graph.py
       - name: Validate completion catalogs
         run: python scripts/completion-catalog.py validate
+      - name: Verify secondary text contrast in the built-in themes
+        # `US-0111`: `muted.foreground`, `tab.foreground` and
+        # `table.head.foreground` must clear WCAG AA (4.5:1) on every surface
+        # they are drawn on, in every variant of every built-in theme.
+        run: python scripts/check-theme-contrast.py
       - name: Verify architecture documentation paths
         run: python scripts/check-doc-paths.py
       - name: Verify THIRD-PARTY-NOTICES.md is current

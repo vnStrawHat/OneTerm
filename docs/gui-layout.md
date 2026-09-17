@@ -107,6 +107,19 @@ so a `Close Channel` performed in one tab repaints the others.
 
 The status bar contains the clock, breadcrumb, git status of the active local terminal's cwd (branch, `*` when dirty, `(+added -removed)` line counts against `HEAD` in the success/danger colours, ahead/behind counts; polled every 2 s on the background executor, hidden for SSH sessions and non-repositories), active-terminal network speed, CPU/memory indicator, and right-dock controls. Each text indicator carries a leading icon (clock, folder, git branch, network, CPU) that hides with its label, and all indicator text uses the theme foreground colour (only the diffstat counts are coloured). Terminal-derived widgets resolve the active panel through the dock tree and then the active Space inside `TerminalPanel`; an empty Space yields no terminal metrics.
 
+## Secondary text contrast floor
+
+Secondary text — host addresses, search placeholders, empty-state copy, key-binding chips,
+`Default:` hints, SFTP dates, column headers, inactive tab labels — is drawn in one of three
+theme tokens: `muted.foreground`, `tab.foreground` and `table.head.foreground`. In every
+variant of every built-in theme each of those clears **4.5:1** (WCAG AA for body text)
+against *every* surface it is composited over: the window body, popovers, the sidebar, the
+title and status bars, list and table rows including their alternating even rows, and the
+tab strip. `scripts/check-theme-contrast.py` measures it and the quality gate runs it, so a
+new theme in `crates/theme/themes/` cannot ship below the floor. The floor is a minimum, not
+a target: secondary text sits between 4.5:1 and about 6:1 while primary text runs far higher,
+which is what keeps the hierarchy readable as a hierarchy.
+
 ## Source map
 
 - Workspace state and zoom: `crates/workspace/src/layout/workspace/mod.rs`
@@ -123,3 +136,4 @@ The status bar contains the clock, breadcrumb, git status of the active local te
 - Channel submenu, chips, and Space badge: `crates/terminal-view/src/input/menu.rs`,
   `crates/terminal-view/src/panel/tab_title.rs`, `crates/terminal-view/src/space/render.rs`
 - Focused layout regressions: `crates/workspace/src/layout/workspace/layout_tests.rs`
+- Built-in themes and the contrast floor: `crates/theme/themes/`, `scripts/check-theme-contrast.py`
