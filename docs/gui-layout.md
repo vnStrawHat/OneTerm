@@ -112,13 +112,20 @@ The status bar contains the clock, breadcrumb, git status of the active local te
 Secondary text — host addresses, search placeholders, empty-state copy, key-binding chips,
 `Default:` hints, SFTP dates, column headers, inactive tab labels — is drawn in one of three
 theme tokens: `muted.foreground`, `tab.foreground` and `table.head.foreground`. In every
-variant of every built-in theme each of those clears **4.5:1** (WCAG AA for body text)
-against *every* surface it is composited over: the window body, popovers, the sidebar, the
-title and status bars, list and table rows including their alternating even rows, and the
-tab strip. `scripts/check-theme-contrast.py` measures it and the quality gate runs it, so a
-new theme in `crates/theme/themes/` cannot ship below the floor. The floor is a minimum, not
-a target: secondary text sits between 4.5:1 and about 6:1 while primary text runs far higher,
-which is what keeps the hierarchy readable as a hierarchy.
+variant of every built-in theme each of those clears **4.5:1** (WCAG AA for body text) on
+every surface the `SURFACES` table in `scripts/check-theme-contrast.py` lists for it — for
+`muted.foreground` that is the window body, popovers and a hovered menu row, the key-binding
+chip's own fill, the sidebar, the title and status bars, list and table rows in their plain,
+alternating and hovered/selected states, and both an inactive and the active tab. The quality
+gate runs the check, so a new theme in `crates/theme/themes/` cannot ship below the floor.
+
+That table is the contract, and it is only as complete as its last review: a surface missing
+from it is not measured, so a component that starts drawing one of these tokens on a new
+background adds the surface there (each entry cites the line that draws the pair) instead of
+assuming an existing entry covers it. The floor is also a minimum, not a target — raised
+values land near 5:1 so that secondary text still reads as secondary, while a few themes
+carry untouched tokens far above the floor (`Molokai Light`'s `tab.foreground` inherits the
+primary `foreground` at 19:1).
 
 ## Source map
 

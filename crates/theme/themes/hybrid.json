@@ -166,7 +166,7 @@
         "list.active.border": "#15678a",
         "list.even.background": "#282A2E",
         "muted.background": "#282A2E99",
-        "muted.foreground": "#949494",
+        "muted.foreground": "#a9a9a9",
         "panel.background": "#1D1F21",
         "popover.background": "#1D1F21",
         "popover.foreground": "#e8e8e8",
