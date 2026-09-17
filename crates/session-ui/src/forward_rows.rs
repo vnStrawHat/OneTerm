@@ -8,7 +8,8 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, Entity, IntoElement, ParentElement as _, Styled, Window, div, px,
+    App, AppContext as _, Entity, Focusable as _, IntoElement, ParentElement as _, Styled, Window,
+    div, px,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _,
@@ -148,6 +149,15 @@ impl ForwardRow {
     }
 }
 
+/// A refused forward, and the row it is about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ForwardError {
+    /// Index into the rendered rows.
+    pub(crate) row: usize,
+    /// The corrective message shown to the user.
+    pub(crate) message: String,
+}
+
 /// The editable forward list of one session dialog.
 #[derive(Clone)]
 pub(crate) struct PortForwardRows {
@@ -169,25 +179,45 @@ impl PortForwardRows {
     }
 
     /// Parse every row; the first invalid row or duplicate listener is the error.
-    pub(crate) fn take(&self, cx: &App) -> Result<Vec<PortForward>, String> {
-        let forwards: Vec<PortForward> = self
-            .rows
-            .borrow()
-            .iter()
-            .map(|row| row.parse(cx))
-            .collect::<Result<_, _>>()?;
-        for (index, forward) in forwards.iter().enumerate() {
-            if forwards[..index]
+    ///
+    /// The error carries **which row** it is about, so a caller that folded the
+    /// rows away can open the disclosure and put the cursor in the offending
+    /// field instead of naming a field the user cannot see (`US-0120` rework).
+    pub(crate) fn take(&self, cx: &App) -> Result<Vec<PortForward>, ForwardError> {
+        let mut forwards: Vec<PortForward> = Vec::new();
+        for (row, entry) in self.rows.borrow().iter().enumerate() {
+            match entry.parse(cx) {
+                Ok(forward) => forwards.push(forward),
+                Err(message) => return Err(ForwardError { row, message }),
+            }
+        }
+        for (row, forward) in forwards.iter().enumerate() {
+            if forwards[..row]
                 .iter()
                 .any(|earlier| earlier.bind_key() == forward.bind_key())
             {
-                return Err(format!(
-                    "Port forward {}: the same listener is used twice.",
-                    forward.summary()
-                ));
+                return Err(ForwardError {
+                    row,
+                    message: format!(
+                        "Port forward {}: the same listener is used twice.",
+                        forward.summary()
+                    ),
+                });
             }
         }
         Ok(forwards)
+    }
+
+    /// Put the cursor in the first field of `row`, if it still exists.
+    pub(crate) fn focus_row(&self, row: usize, window: &mut Window, cx: &mut App) {
+        let focus = self
+            .rows
+            .borrow()
+            .get(row)
+            .map(|entry| entry.bind.read(cx).focus_handle(cx));
+        if let Some(focus) = focus {
+            focus.focus(window, cx);
+        }
     }
 
     pub(crate) fn render(&self, cx: &App) -> impl IntoElement {

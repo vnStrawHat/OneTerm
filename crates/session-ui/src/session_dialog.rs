@@ -16,9 +16,14 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui::{App, AppContext, Hsla, ParentElement as _, SharedString, Styled, Window, px};
+use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    App, AppContext, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Role,
+    SharedString, StatefulInteractiveElement as _, Styled, Window, div, px,
+};
 use gpui_component::{
-    ActiveTheme, Colorize as _, IndexPath, Sizable as _, WindowExt as _,
+    ActiveTheme, Colorize as _, Icon, IconName, IndexPath, Sizable as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     color_picker::{ColorPicker, ColorPickerState},
     combobox::ComboboxState,
@@ -29,13 +34,13 @@ use gpui_component::{
 };
 
 use oneterm_core::PortForward;
-use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
+use oneterm_state::form_dialog::{FieldRequirement, FormDialog, control_label, labelled_field};
 use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::parse_port;
 use super::forward_rows::PortForwardRows;
-use super::group_combo::{GroupComboDelegate, SharedCell, group_combobox};
+use super::group_combo::{GroupComboDelegate, MatchCount, SharedCell, group_combobox};
 use super::jump_hops::JumpHostPicker;
 use crate::session_state::{
     SshAuthPreference, SshLoggingOverride, SshSession, SshSessionEntry, SshSessionId,
@@ -119,14 +124,172 @@ fn existing_group_names(sessions: &[SshSessionEntry]) -> Vec<SharedString> {
     groups.into_iter().map(SharedString::from).collect()
 }
 
+/// Whether the session already uses one of the Advanced fields.
+///
+/// The disclosure starts open when it does: a user who set a jump host and then
+/// sees no jump host concludes it was lost, which is worse than a long form
+/// (`US-0120`).
+fn advanced_is_configured(
+    jump_host: Option<SshSessionId>,
+    port_forwards: &[PortForward],
+    agent_forwarding: bool,
+) -> bool {
+    jump_host.is_some() || !port_forwards.is_empty() || agent_forwarding
+}
+
+/// The "Advanced" disclosure header.
+///
+/// A kit [`Button`], not a styled `h_flex`: the disclosure is the **only** route
+/// to jump host, agent forwarding and port forwards, and those three were plain
+/// Tab stops before they were folded away. A `div` with an `on_click` is not
+/// focusable, so a keyboard-only user could no longer reach them at all
+/// (`US-0120` rework). A `Button` is a tab stop, announces itself as a button,
+/// and toggles on **Space**. Not Enter: `FormDialog` binds Enter to submit in
+/// the dialog's key context, and gpui dispatches a keymap binding before any
+/// element's key listener, so Enter never reaches the button — the same as for
+/// Browse, Cancel and Save in this dialog.
+fn advanced_header(expanded: Rc<Cell<bool>>, cx: &App) -> impl IntoElement {
+    let open = expanded.get();
+    let icon = if open {
+        IconName::ChevronDown
+    } else {
+        IconName::ChevronRight
+    };
+    Button::new("advanced-disclosure")
+        .ghost()
+        .small()
+        .icon(Icon::new(icon).xsmall())
+        .accessibility_label(if open {
+            "Advanced, expanded"
+        } else {
+            "Advanced, collapsed"
+        })
+        .child(control_label("Advanced"))
+        .text_color(cx.theme().muted_foreground)
+        .on_click(move |_, window, _| {
+            expanded.set(!expanded.get());
+            window.refresh();
+        })
+}
+
+/// Which part of the form a refused Save is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InvalidField {
+    /// A port-forward row — behind the Advanced disclosure.
+    PortForward,
+    /// The jump-host picker — behind the Advanced disclosure.
+    JumpHost,
+    /// Label, Host, Port, Username, the key path: always on screen.
+    Basic,
+}
+
+/// Whether a refused Save must open the Advanced disclosure before it shows the
+/// message.
+///
+/// `submit` validates the forwards and the jump chain whether or not they are on
+/// screen, so a collapsed disclosure could leave the user blocked by a message
+/// naming a field they cannot see (`US-0120` rework). Opening it first is the
+/// whole fix; a basic field is already visible and must not make the form jump.
+fn reveals_advanced(field: InvalidField) -> bool {
+    matches!(field, InvalidField::PortForward | InvalidField::JumpHost)
+}
+
+/// The eight colours the short row offers, and the full picker's featured row.
+///
+/// **This is the one place the set is defined.** The kit exposes no accessor for
+/// its own default featured row — only a setter, `ColorPicker::featured_colors`
+/// — so the row is defined here and *given* to the picker, which is why the
+/// eight swatches and the eight along the top of the picker are the same eight
+/// (`US-0120` rework; before, the row was eight and the picker's own was a
+/// different twelve).
+///
+/// The first entry is `US-0110`'s default so a new session's colour is one of
+/// the eight; it is the one hard-coded value, and it is hard-coded in
+/// `session_state.rs`, not here. The rest come from the theme.
+fn swatch_colors(cx: &App) -> [Hsla; 8] {
+    let theme = cx.theme();
+    [
+        Hsla::parse_hex(SshSession::DEFAULT_COLOR_HEX).unwrap_or(theme.cyan),
+        theme.red,
+        theme.yellow,
+        theme.green,
+        theme.blue,
+        theme.magenta,
+        theme.red_light,
+        theme.blue_light,
+    ]
+}
+
+/// The session colour row: eight swatches and a route to the full picker.
+///
+/// A swatch writes through the same `ColorPickerState` the full picker writes,
+/// and `submit` still reads `state.value().to_hex()`, so both surfaces produce
+/// exactly the value `session_color_hex` already accepted (`US-0110`). Choosing
+/// a colour costs one click instead of a decision among 130 swatches, and the
+/// control finally says what it is.
+fn color_row(state: &gpui::Entity<ColorPickerState>, cx: &App) -> impl IntoElement {
+    let selected = state.read(cx).value();
+    let theme = cx.theme();
+    let border = theme.primary;
+    h_flex()
+        .gap_2()
+        .items_center()
+        .flex_wrap()
+        .children(
+            swatch_colors(cx)
+                .into_iter()
+                .enumerate()
+                .map(|(ix, color)| {
+                    let is_selected =
+                        selected.is_some_and(|value| value.to_hex() == color.to_hex());
+                    let state = state.clone();
+                    div()
+                        .id(("session-color", ix))
+                        .w_5()
+                        .h_5()
+                        .rounded_sm()
+                        .bg(color)
+                        .border_2()
+                        .border_color(if is_selected {
+                            border
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .role(Role::Button)
+                        .aria_label(color.to_hex())
+                        .on_click(move |_, window, cx| {
+                            state.update(cx, |state, cx| state.set_value(color, window, cx));
+                        })
+                }),
+        )
+        .child(
+            // "Custom…" belongs *inside* the picker's trigger, so clicking the
+            // word opens the picker; it used to be a bare `div` beside it. The
+            // icon replaces the trigger's current-value square, which made a
+            // ninth square in a row of eight — indistinguishable from swatch 1
+            // whenever the default colour was selected. `ColorPickerButton`
+            // draws that square only when it has no icon. The picker's own
+            // featured row is set from `swatch_colors`, so the short row and the
+            // top of the popup are one list.
+            ColorPicker::new(state)
+                .small()
+                .featured_colors(swatch_colors(cx).to_vec())
+                .icon(Icon::new(IconName::Palette))
+                .label("Custom\u{2026}")
+                .accessibility_label("Custom colour\u{2026}"),
+        )
+}
+
 fn logging_radio(
     id: &'static str,
     label: &'static str,
     value: SshLoggingOverride,
     selected: Rc<Cell<SshLoggingOverride>>,
 ) -> Radio {
+    // `control_label` instead of `.label(label)` — see BUG-0069.
     Radio::new(id)
-        .label(label)
+        .accessibility_label(label)
+        .child(control_label(label))
         .checked(selected.get() == value)
         .on_click(move |checked, window, _| {
             if *checked {
@@ -198,6 +361,11 @@ pub(crate) fn open_session_dialog(
     let agent_forwarding = Rc::new(Cell::new(
         edit.as_ref().is_some_and(|(_, s)| s.agent_forwarding),
     ));
+    let advanced_expanded = Rc::new(Cell::new(advanced_is_configured(
+        jump_host_val,
+        &saved_forwards,
+        agent_forwarding.get(),
+    )));
 
     // ── Collect existing groups from the store ──────────────────────────
     let existing_groups: Vec<SharedString> = {
@@ -205,9 +373,16 @@ pub(crate) fn open_session_dialog(
         existing_group_names(store.read(cx).sessions())
     };
 
+    // Whether the store holds any group at all, so the dropdown's no-match
+    // area can tell "none exist" from "none match what you typed".
+    let has_any_group = !existing_groups.is_empty();
+
     // ── Shared cells for the Group Combobox ────────────────────────────
     let group_value: SharedCell = Rc::new(std::cell::RefCell::new(group_val.clone()));
     let query_cell: SharedCell = Rc::new(std::cell::RefCell::new(String::new()));
+    // How many rows the dropdown's search left, so Enter can tell "nothing to
+    // select, create it" from "the list has a match and Enter is its key".
+    let match_count: MatchCount = Rc::new(Cell::new(0));
 
     // Find the selected index if group_val matches an existing group.
     let selected_indices: Vec<IndexPath> = existing_groups
@@ -265,6 +440,7 @@ pub(crate) fn open_session_dialog(
         let delegate = GroupComboDelegate::new(
             existing_groups.clone(),
             query_cell.clone(),
+            match_count.clone(),
             group_value.clone(),
         );
         ComboboxState::new(delegate, selected_indices, window, cx).searchable(true)
@@ -283,17 +459,33 @@ pub(crate) fn open_session_dialog(
         let jump_host_picker = jump_host_picker.clone();
         let forward_rows = forward_rows.clone();
         let agent_forwarding = agent_forwarding.clone();
+        let advanced_expanded = advanced_expanded.clone();
         move |window: &mut Window, cx: &mut App| {
             let store = SshSessionStore::global(cx);
+            // A refused Save must never name a field the disclosure is hiding:
+            // open it and put the cursor in the field first, then say why
+            // (`US-0120` rework).
+            let reveal = |field: InvalidField| {
+                if reveals_advanced(field) {
+                    advanced_expanded.set(true);
+                }
+            };
             let port_forwards = match forward_rows.take(cx) {
                 Ok(forwards) => forwards,
-                Err(message) => {
-                    window.push_notification(notify(NotificationType::Warning, message, cx), cx);
+                Err(error) => {
+                    reveal(InvalidField::PortForward);
+                    forward_rows.focus_row(error.row, window, cx);
+                    window.push_notification(
+                        notify(NotificationType::Warning, error.message, cx),
+                        cx,
+                    );
                     return false;
                 }
             };
             let jump_host = jump_host_picker.selected(cx);
             if let Err(error) = store.read(cx).jump_chain(jump_host, edit_id) {
+                reveal(InvalidField::JumpHost);
+                jump_host_picker.focus(window, cx);
                 window.push_notification(
                     notify(NotificationType::Warning, error.to_string(), cx),
                     cx,
@@ -317,6 +509,8 @@ pub(crate) fn open_session_dialog(
             let session = match form.into_session() {
                 Ok(session) => session,
                 Err(message) => {
+                    // A basic field is already on screen; the form must not jump.
+                    reveal(InvalidField::Basic);
                     window.push_notification(notify(NotificationType::Warning, message, cx), cx);
                     return false;
                 }
@@ -350,11 +544,13 @@ pub(crate) fn open_session_dialog(
                 .child(labelled_field(
                     "Label",
                     FieldRequirement::Required,
-                    h_flex()
-                        .gap_2()
-                        .w_full()
-                        .child(Input::new(&label_state).flex_1())
-                        .child(ColorPicker::new(&color_state).small()),
+                    Input::new(&label_state),
+                    cx,
+                ))
+                .child(labelled_field(
+                    "Color",
+                    FieldRequirement::Optional,
+                    color_row(&color_state, cx),
                     cx,
                 ))
                 .child(labelled_field(
@@ -376,21 +572,38 @@ pub(crate) fn open_session_dialog(
                     cx,
                 ))
                 .child(auth_form.render(false, cx))
-                .child(jump_host_picker.render(cx))
-                .child(
-                    Checkbox::new("agent-forwarding")
-                        .label("Forward the SSH agent to the remote host")
-                        .checked(agent_forwarding.get())
-                        .on_click({
-                            let agent_forwarding = agent_forwarding.clone();
-                            move |checked: &bool, _window, _cx| agent_forwarding.set(*checked)
-                        }),
-                )
-                .child(forward_rows.render(cx))
+                // Jump host, agent forwarding and port forwards fold away: most
+                // sessions use none of them, and the three of them are most of
+                // the form's height (`US-0120`).
+                .child(advanced_header(advanced_expanded.clone(), cx))
+                .when(advanced_expanded.get(), |content| {
+                    content
+                        .child(jump_host_picker.render(cx))
+                        .child(
+                            Checkbox::new("agent-forwarding")
+                                .accessibility_label("Forward the SSH agent to the remote host")
+                                .child(control_label("Forward the SSH agent to the remote host"))
+                                .checked(agent_forwarding.get())
+                                .on_click({
+                                    let agent_forwarding = agent_forwarding.clone();
+                                    move |checked: &bool, _window, _cx| {
+                                        agent_forwarding.set(*checked)
+                                    }
+                                }),
+                        )
+                        .child(forward_rows.render(cx))
+                })
                 .child(labelled_field(
                     "Group",
                     FieldRequirement::Optional,
-                    group_combobox(&group_combo_state, &group_value, &query_cell, cx),
+                    group_combobox(
+                        &group_combo_state,
+                        &group_value,
+                        &query_cell,
+                        &match_count,
+                        has_any_group,
+                        cx,
+                    ),
                     cx,
                 ))
                 .child(labelled_field(
@@ -421,9 +634,8 @@ pub(crate) fn open_session_dialog(
         },
         submit,
     )
-    // Wide enough for one port-forward row per line. ponytail: FormDialog does
-    // not scroll; a session with more than about five forwards outgrows a
-    // 1080p window, make the dialog body scroll when that happens.
+    // Wide enough for one port-forward row per line. The body scrolls when it
+    // outgrows the window; `FormDialog` owns that now (`US-0120`).
     .width(px(560.))
     .open(window, cx);
 }
@@ -529,6 +741,32 @@ mod tests {
         let session = agent_auth.into_session().unwrap();
         assert_eq!(session.auth_method, SshAuthPreference::Agent);
         assert_eq!(session.key_path, None);
+    }
+
+    /// `US-0120`: the disclosure is collapsed for a new session and open for a
+    /// session that already uses any of the three fields behind it.
+    #[test]
+    fn advanced_opens_only_when_the_session_already_uses_it() {
+        let id = SshSessionId::parse("7").unwrap();
+        let forward = PortForward::Dynamic {
+            bind: oneterm_core::loopback(),
+            bind_port: 1080,
+        };
+        assert!(!advanced_is_configured(None, &[], false));
+        assert!(advanced_is_configured(Some(id), &[], false));
+        assert!(advanced_is_configured(None, &[forward], false));
+        assert!(advanced_is_configured(None, &[], true));
+    }
+
+    /// `US-0120` rework: a refused Save opens the disclosure when, and only
+    /// when, the field it names is behind it.
+    #[test]
+    fn a_refused_save_opens_the_disclosure_only_for_a_field_it_hides() {
+        assert!(reveals_advanced(InvalidField::PortForward));
+        assert!(reveals_advanced(InvalidField::JumpHost));
+        // Label, Host, Port, Username, the key path: visible already, so the
+        // form must not jump under the user's cursor.
+        assert!(!reveals_advanced(InvalidField::Basic));
     }
 
     #[test]

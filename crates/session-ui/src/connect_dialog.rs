@@ -30,12 +30,12 @@ use gpui_component::{
 };
 
 use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SshConfig};
-use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
+use oneterm_state::form_dialog::{FieldRequirement, FormDialog, control_label, labelled_field};
 use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::{
-    ConnectButton, SshConnectRequest, connect_ssh_session, defer_initial_focus_once,
+    ConnectButton, InlineError, SshConnectRequest, connect_ssh_session, defer_initial_focus_once,
     parse_user_host_port, server_info_banner,
 };
 use super::jump_hops::{HopSpec, JumpHopForms};
@@ -98,6 +98,15 @@ pub(crate) fn open_connect_dialog(
         None
     };
 
+    // Failure shown in the dialog, beside the toast (`US-0118`).
+    let inline_error = {
+        let mut inputs = auth_form.secret_inputs();
+        // A corrected jump-host password must clear the error too.
+        inputs.extend(hop_forms.secret_inputs());
+        inputs.extend(username_state.clone());
+        InlineError::new(&inputs, cx)
+    };
+
     // Save-username flag — defaults to NOT saving (the user must tick the checkbox).
     let save_username = Rc::new(Cell::new(false));
     let connecting = Arc::new(AtomicBool::new(false));
@@ -113,10 +122,13 @@ pub(crate) fn open_connect_dialog(
         let save_username = save_username.clone();
         let connection_cancellation = connection_cancellation.clone();
         let connecting = connecting.clone();
+        let inline_error = inline_error.clone();
         move |window, cx| {
             if connecting.load(Ordering::Relaxed) {
                 return false;
             }
+            // A retry starts clean; the failure of this attempt replaces it.
+            inline_error.clear();
             on_connect_click(
                 &session,
                 id,
@@ -126,6 +138,7 @@ pub(crate) fn open_connect_dialog(
                 save_username.get(),
                 &connection_cancellation,
                 connecting.clone(),
+                inline_error.clone(),
                 window,
                 cx,
             )
@@ -184,7 +197,8 @@ pub(crate) fn open_connect_dialog(
                     content.child(
                         div().pt_1().child(
                             Checkbox::new("save-username")
-                                .label("Save username to session")
+                                .accessibility_label("Save username to session")
+                                .child(control_label("Save username to session"))
                                 .checked(save_username.get())
                                 .on_click({
                                     let save_username = save_username.clone();
@@ -194,6 +208,10 @@ pub(crate) fn open_connect_dialog(
                                 }),
                         ),
                     )
+                })
+                // The failure of the last attempt, under the fields it is about.
+                .when_some(inline_error.render(None, cx), |content, error| {
+                    content.child(error)
                 })
         },
         move |window, cx| connect_logic(window, cx),
@@ -215,6 +233,7 @@ fn on_connect_click(
     save_username: bool,
     connection_cancellation: &Rc<RefCell<Option<ConnectionCancellation>>>,
     connecting: Arc<AtomicBool>,
+    inline_error: InlineError,
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
@@ -254,14 +273,14 @@ fn on_connect_click(
     };
 
     // 2. Validate and collect the selected authentication material, hops first.
-    let jump_hops = match hop_forms.take_hops(window, cx) {
+    let jump_hops = match hop_forms.take_hops(cx) {
         Ok(hops) => hops,
         Err(message) => {
             window.push_notification(notify(NotificationType::Warning, message, cx), cx);
             return false;
         }
     };
-    let auth = match auth_form.take_auth(window, cx) {
+    let auth = match auth_form.take_auth(cx) {
         Ok(auth) => auth,
         Err(message) => {
             window.push_notification(notify(NotificationType::Warning, message, cx), cx);
@@ -299,6 +318,7 @@ fn on_connect_click(
         cfg,
         SshConnectRequest {
             logging_override: session.logging,
+            on_failed: Some(Rc::new(move |message, _cx| inline_error.set(message))),
             ..SshConnectRequest::new(session.label.clone())
         },
         connecting,
