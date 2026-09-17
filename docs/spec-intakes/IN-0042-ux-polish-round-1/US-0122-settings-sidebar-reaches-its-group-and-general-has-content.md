@@ -10,8 +10,8 @@ Created: 2026-09-17
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -298,9 +298,9 @@ deserves a `DEC`. Raise it rather than leaving it in a packet.
    comparable.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
 - [ ] Platform proof
 - [ ] Verify command passed
 <!-- HARNESS:PROOF:END -->
@@ -323,7 +323,88 @@ deserves a `DEC`. Raise it rather than leaving it in a packet.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p oneterm-settings-ui` | 46 passed |
+| `cargo clippy -p oneterm-settings-ui --all-targets -- -D warnings` | clean |
+| `cargo test --workspace` | 2069 passed, 12 ignored |
+| `pwsh scripts/ci-local.ps1` | see the closing note below |
+
+Focused tests added: `panel::tests` —
+`an_all_titled_page_scrolls_to_the_group_the_sidebar_names` (a nine-group page, every index),
+`untitled_groups_kept_last_leave_every_sidebar_item_aligned` (OneTerm's ordering rule) and
+`an_untitled_group_before_a_titled_one_desynchronises_the_two_indexes` (the failure mode the
+rule exists to prevent). `about::tests::identity_group_leads_the_about_page` was reviewed, not
+merely kept green: after `US-0121` the About page is `[Identity, Links, Updates]`, all titled,
+so the alignment the test guards still holds for the same reason it did before.
+
+### Acceptance, walked
+
+1016x708, `gui.ps1`, own pid only.
+
+| Acceptance | Frame | Result |
+| --- | --- | --- |
+| Terminal: clicking each sub-item lands on that group — the 10th | `evidence/US-0122-30-settings-completion.png` | **NOT MET.** Clicking "Completion" (now 9th of 9) left the page on Font/Cursor. The upstream under-shoot, reproduced on the fixed build. |
+| ...and the 5th | `evidence/US-0122-30b-settings-sidebar-logging.png` | **NOT MET.** "Logging" (now 4th) landed on Cursor/Layout — two groups short. |
+| Key Bindings: "Edit Menu" lands on the Edit Menu group | `evidence/US-0122-38-keybindings-edit-menu.png` | **MET.** The Edit Menu heading and its first five rows are on screen. It works here because `US-0121` halved the App Menu group's height, so both groups now fall inside the measured window. |
+| Gaps record the upstream item with file and line | §"The reference read" above, and Gaps below | done, with a reproduction |
+| The sidebar fits 708 px, or its chevrons collapse | `evidence/US-0122-31-sidebar-collapsed-chevron.png` | **MET, with a caveat.** The caret does collapse a group: the frame is taken after clicking Key Bindings' chevron, which folded its six sub-items away. The *row* still never closes (upstream `click_to_open(true)`). |
+| Appearance and About reachable without the sidebar scrolling past the fold | same frame, and `evidence/US-0122-26-settings-general.png` | **MET.** Six page rows instead of seven; with Terminal fully expanded (nine sub-items) About sits at y≈572 of 708. Opening a *second* group at the same time still pushes About below the fold — see Gaps. |
+| General has content worth a landing page | `evidence/US-0122-26-settings-general.png` | **MET.** Theme (Mode, Color Theme), Interface (UI Font Size), Shell (Shell, Custom Program). |
+| No setting lost its effect or became unreachable | same frame + `evidence/US-0122-28-settings-terminal.png` | **MET.** The groups moved, the builders did not: `general::page` calls `appearance::theme_group` and `terminal::shell_group`, which are the same functions the Appearance page and the Terminal page called. Terminal shows its remaining nine groups. |
+| No page states the same name three times | `evidence/US-0122-28-settings-terminal.png`, `-26-`, `evidence/US-0121-35b-settings-network.png` | **MET.** Swept across every page, not only General and Terminal: Font, Cursor, Layout, Scroll, Bell, Security, Completion, Shell, Interface, Theme, the SSH edit-limit group and the update status row. |
+
+### Docs reconciled
+
+- `docs/gui-layout.md` §Settings window — rewritten. The page list is six pages with General as
+  the landing page and no Appearance page; the two-level naming rule is stated; and the
+  untitled-group paragraph is replaced by §"Sidebar navigation, and the two things upstream
+  owns", which keeps the index rule (now with a test behind it) and adds the scroll defect with
+  the `reference/` files and lines that show it, plus the chevron's true behaviour.
+- `docs/PROJECT.md` — read for the "no patching `gpui-component`" rule, which bounded the
+  packet. **No change.**
+- `reference/gpui-kit/crates/component/src/setting/`, `.../sidebar/menu.rs` and
+  `reference/zed/crates/gpui/src/elements/list.rs` — read only, cited by line. **Not changed,
+  and must not be.**
+- `docs/gui-layout.md` §Panel registration — read for consistency with `US-0116`, which meets
+  the same upstream boundary from the tab strip's side. **No change:** both conclusions are the
+  same shape (ship what is reachable, cite the private state).
+
+### Gaps
+
+- **`F14`'s scroll is not fixed and cannot be fixed from this side.** The mechanism, the
+  citations and the rejected OneTerm-side option are in §"The reference read" above; the
+  reproduction is `evidence/US-0122-30-settings-completion.png`. The one-line statement of the
+  upstream item: *`gpui_component::setting::SettingPage::render` asks a gpui `list` to reveal a
+  group that the list has not measured, once, and `ListState::scroll_to_reveal_item`'s forward
+  branch treats an unmeasured item as zero-height, so the jump lands short in proportion to how
+  far down the page the group is.* A fix upstream is small — retry the deferred scroll while
+  the target is still not visible, or scroll to the item's top with `ListState::scroll_to`
+  instead of revealing it, which needs no measurement — but it is a change to a published
+  crate, and `docs/PROJECT.md` forbids patching it here. **Follow-up: raise it with GPUI Kit,
+  quoting `setting/page.rs:152-158`.**
+- **The under-shoot converges with repeated clicks**, which is the diagnosis showing itself:
+  `evidence/US-0122-30c-completion-second-click.png` is a second click on "Completion" after
+  the first had caused more groups to be measured, and it lands further down. A user can reach
+  the group by clicking the same sub-item repeatedly. That is not a fix and is not documented
+  as a workaround; it is recorded because it confirms the cause.
+- **The chevron is only half honest, and that half is upstream.** The caret collapses
+  (`sidebar/menu.rs:312-333`); clicking the row forces the group open and never closes it,
+  because `Settings` hard-codes `click_to_open(true)` (`settings.rs:193`) and exposes no way to
+  pass `click_to_toggle` instead. `F15`'s complaint is exactly that mismatch. This packet
+  reduced the row count (one page and one group fewer) rather than fixing the affordance.
+- **Two groups open at once still overflows the sidebar.** Key Bindings (6 sub-items) plus
+  Terminal (9) plus six page rows is 21 rows, and Network and About fall below 708 px until one
+  is collapsed with its caret. Fully fixing this needs the row toggle above.
+- **`US-0122` did not attempt the page wrapper.** It was scoped and rejected for the three
+  capabilities it would cost (sub-items, per-item search, page-level Reset All). If a future
+  packet decides those are worth losing on one page, that is a `DEC`, not a retry of this one.
+- **Not re-captured: `31-settings-appearance.png`.** The Appearance page no longer exists; its
+  contents are the first group of `evidence/US-0122-26-settings-general.png`. The before/after
+  report should pair scene 31 with that frame rather than with a missing page.
+
 
 ## Handoff
 

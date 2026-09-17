@@ -10,8 +10,8 @@ Created: 2026-09-17
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -170,7 +170,7 @@ needed updating.
 
 ### Decisions taken before writing code
 
-- **Network becomes its own page, not a group elsewhere.** `docs/auto-update.md` Â§"Data
+- **Network becomes its own page, not a group elsewhere.** `docs/auto-update.md` §"Data
   ownership" line 221 owns `proxy_url` and `verify_certificates` as *update* preferences
   (`UpdateConfig`, persisted to `update_config.json`). `docs/ssh-authentication.md` and
   `docs/ssh-client-connect.md` were read and neither names a proxy or a certificate setting:
@@ -180,10 +180,10 @@ needed updating.
   About. No change to what reads them.
 - **The About page keeps every group titled.** Removing `Network` leaves
   `[Identity, Links, Updates]`, all titled, so the untitled-group ordering rule in
-  `docs/gui-layout.md` Â§Settings window still holds and
+  `docs/gui-layout.md` §Settings window still holds and
   `about::tests::identity_group_leads_the_about_page` still guards it.
 - **The theme dropdown opens on the current theme by ordering, not by scrolling.** The kit
-  cannot open a popup scrolled to its checked row â€” see Gaps for the file and line. The list is
+  cannot open a popup scrolled to its checked row — see Gaps for the file and line. The list is
   therefore built so the current theme is the first selectable row: the current theme's mode
   section comes first, and inside it the current theme leads. Sections are header rows in the
   option list itself (the dropdown field only accepts `(value, label)` pairs), carrying a
@@ -229,9 +229,9 @@ line in `docs/gui-layout.md`, not a rule future work inherits.
    the walkthrough did.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
 - [ ] Platform proof
 - [ ] Verify command passed
 <!-- HARNESS:PROOF:END -->
@@ -257,7 +257,86 @@ line in `docs/gui-layout.md`, not a rule future work inherits.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p oneterm-settings-ui` | 46 passed (with `US-0122`/`US-0123` in the same crate) |
+| `cargo clippy -p oneterm-settings-ui --all-targets -- -D warnings` | clean |
+| `cargo test --workspace` | 2069 passed, 12 ignored |
+| `pwsh scripts/ci-local.ps1` | see the closing note below |
+
+Focused tests added by this packet:
+
+- `appearance::tests` — the list's ordering and sectioning, the index it opens at for a dark
+  and a light selection, the fallback when the selected theme is not registered, that a header
+  row can never collide with a theme name, and that an empty section contributes no header.
+- `key_bindings::key_bindings_ui::tests` — the row's `Default:` predicate, including
+  `the_default_line_agrees_with_what_is_persisted_as_an_override`, which asserts the line
+  appears exactly when `is_at_default` says the action would be written to `ui_config.json`.
+  That is the "must agree with `overrides_from_effective`" clause in the Verification Plan,
+  as an assertion rather than a claim.
+- `about::tests::identity_group_leads_the_about_page` — the existing About-page ordering guard,
+  read before the page was edited and still green afterwards. It still means what it says:
+  after removing `Network` the page is `[Identity, Links, Updates]`, every group titled, so
+  the sidebar's titled-group numbering and the page's every-group indexing still line up.
+
+### Acceptance, walked
+
+Captured on `target/fast-dev` at 1016x708 (the walkthrough's window size), driven by
+`gui.ps1` (PrintWindow + posted `WM_*`, own pid only).
+
+| Acceptance | Frame | Result |
+| --- | --- | --- |
+| About offers a manual check that performs the About dialog's check | `evidence/US-0121-36-settings-about-updates.png` | **Check Now** sits in the Updates group, under "Check for Updates / Ask GitHub Releases now, whatever the interval says." |
+| ...and its result is visible on the page | `evidence/US-0121-36b-settings-about-check-result.png` | after the click, Update Status reads "OneTerm 0.6.0 is up to date." — a live GitHub round trip |
+| Proxy / Verify Certificates are no longer under About | `evidence/US-0121-35-settings-about.png` | About is Application, Links, Updates |
+| ...and are under a heading a user would look for | `evidence/US-0121-35b-settings-network.png` | Settings > **Network** > GitHub Connection |
+| ...and still drive the update check | `evidence/US-0121-36b-...` | the check ran with `verify_certificates` on and an empty proxy, both read from the same `UpdateConfig` entity the moved group writes; the round trip succeeding is the proof the move did not orphan them |
+| The theme dropdown shows the current theme, tick visible, without scrolling | `evidence/US-0121-32-theme-dropdown.png` | opens on "Dark themes" then "✓ Zed One Dark" — the checked row is the first selectable one |
+| Light and dark are visually separated | same frame | "Dark themes" header; "Light themes" heads the other block |
+| A row at its default shows its binding once | `evidence/US-0121-27-settings-keybindings.png` | every App Menu row is a single line |
+| A row that differs still shows its default | `evidence/US-0121-39b-keybinding-differs.png` | New Terminal Tab rebound to `F5` keeps "Default: ctrl-t"; Reset restores it |
+| The capture row is unchanged | `evidence/US-0121-39-keybinding-capture.png` | "Press keys…  (Esc to cancel)" |
+
+### Docs reconciled
+
+- `docs/auto-update.md` — the manual check's second entry point (Settings > About > **Check
+  Now**), a table saying which Settings page owns which update setting, and the reason the two
+  network fields have their own page. The smoke-test list names the new entry point.
+- `docs/gui-layout.md` §Settings window — the page list including `Network`, how the theme list
+  is ordered and why, and the key-binding row's single-print rule with the predicate it shares
+  with `overrides_from_effective`.
+- `docs/ssh-authentication.md`, `docs/ssh-client-connect.md` — read, **no change**: neither
+  names a proxy or a certificate setting, so the fields this packet moved are the update
+  client's alone and there is no second "network" concept they could have joined.
+- `docs/PROJECT.md` — read for invariants, **no change**.
+- The About-page group-ordering rule still holds and its guard test needed no edit.
+
+### Gaps
+
+- **The kit cannot open a dropdown scrolled to its checked row, and this packet works around
+  it rather than fixing it.** `PopupMenu::selected_index` starts `None`
+  (`reference/gpui-kit/crates/component/src/menu/popup_menu.rs:332`,
+  `:339` for `scroll_handle`), the only code that scrolls is the private
+  `set_selected_index` (`:879-886`), and it is reached only from keyboard navigation
+  (`select_up`/`select_down`). `DropdownField` (`.../setting/fields/dropdown.rs:64-84`) hands
+  the menu nothing but `(value, label)` pairs and `scrollable`. So OneTerm cannot pre-scroll
+  the popup and instead orders the list so no scrolling is needed. A kit that gained
+  "open on the checked item" would let the list return to plain alphabetical order.
+- **Section headers are selectable rows that do nothing.** They are ordinary `PopupMenuItem`s,
+  because that is all the dropdown field accepts; clicking one dismisses the menu and changes
+  nothing (its sentinel value is not a theme name). A disabled or element row — which
+  `PopupMenu` supports but `DropdownField` does not expose — would read better.
+- **Mode and Color Theme can still contradict each other.** Sectioning makes the disagreement
+  visible; it does not remove it. Choosing a light theme while Mode says Dark is still
+  possible, and `F18`'s second half stands as a design question this packet did not answer.
+- **`F32`'s third symptom is untouched**, as scoped: entering capture still replaces the whole
+  row rather than just the chip (`evidence/US-0121-39-keybinding-capture.png`). Not proposed by
+  `P11`; recorded here so the before/after report can mark it "not fixed, not attempted".
+- **The 35b and check-result frames are new scene numbers**, not re-captures: the walkthrough
+  had no Network page and never ran a manual check from Settings.
+
 
 ## Handoff
 

@@ -10,8 +10,8 @@ Created: 2026-09-17
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -250,9 +250,9 @@ This packet implements it and does not restate its rationale.
    cannot be done, say so in Evidence and mark `F31` as verified only at the table level.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
 - [ ] Platform proof
 - [ ] Verify command passed
 <!-- HARNESS:PROOF:END -->
@@ -277,7 +277,108 @@ This packet implements it and does not restate its rationale.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p oneterm-settings-ui` | 46 passed |
+| `cargo clippy -p oneterm-settings-ui --all-targets -- -D warnings` | clean |
+| `cargo test --workspace` | 2069 passed, 12 ignored |
+| `pwsh scripts/ci-local.ps1` | see the closing note below |
+
+Focused tests, which are where this packet's confidence comes from:
+
+- `key_bindings_actions::tests::the_app_defaults_are_the_ones_dec_0018_records` — the four
+  moved rows hold exactly what `DEC-0018` records, the two exceptions are unchanged, and the
+  two out-of-scope App Menu rows are unchanged. No fifth default moved.
+- `key_bindings_actions::tests::no_app_level_default_sits_on_a_single_ctrl_control_character` —
+  the *rule*, not just this instance of it: any future App Menu default on `ctrl-<letter |
+  digit | space>` fails the build unless it is one of the two recorded exceptions.
+- `key_bindings_actions::tests::no_two_shipped_defaults_share_a_keystroke_in_one_context` —
+  the table-wide assertion, over parsed keystrokes so modifier order cannot hide a clash.
+- `key_bindings::state::tests` — the three migration cases as a pure function over
+  `(BINDABLE_ACTIONS, overrides)`: no entry lands on the new default and collides with nothing;
+  a differing entry is untouched; a colliding entry wins and the displaced action resolves to
+  unbound, stably (re-applying finds nothing). Plus `modifier_order_does_not_hide_a_collision`
+  and `an_action_left_unbound_by_its_own_override_displaces_nobody`.
+
+### Acceptance, walked
+
+1016x708, `gui.ps1`, own pid only. Three seeded `ui_config.json` profiles, one launch each.
+
+| Acceptance | Frame | Result |
+| --- | --- | --- |
+| The four defaults are exactly what `DEC-0018` records, no fifth moved | `evidence/US-0123-27-settings-keybindings.png` | **MET.** New SSH Session `Ctrl+Shift+N`, Toggle Gutter `—`, About OneTerm `F1`, Quit `Ctrl+Shift+Q`; Zoom `Shift+Esc`, Close Panel `Ctrl+W`, New Terminal Tab `Ctrl+T`, Open Settings `Ctrl+,` unchanged. |
+| ...and they reach the running application, not just the table | `evidence/US-0123-25-app-menu.png` | **MET.** The OneTerm menu now advertises **About F1** and **Quit Ctrl+Shift+Q**; the before frame `research/before/25-app-menu.png` shows `Ctrl+Space` and `Ctrl+Q`. |
+| (a) A profile with no entry resolves to the new keystroke, nothing rewritten | `evidence/US-0123-27-settings-keybindings.png` | **MET.** Launched with no `key_bindings` key at all; after the walk `ui_config.json` still had none. |
+| (b) An entry that differs is untouched | `evidence/US-0123-40b-differing-override-untouched.png` | **MET.** Seeded `{"quit": "ctrl-alt-q"}`; Quit shows `Ctrl+Alt+Q` with "Default: ctrl-shift-q". |
+| (c) A surviving override colliding with a new default wins; the displaced action is unbound | `evidence/US-0123-40c-collision-override-wins.png` | **MET.** Seeded `{"quit": "ctrl-shift-n"}`; Quit keeps `Ctrl+Shift+N`, New SSH Session shows `—` with "Default: ctrl-shift-n", one click from rebound. |
+| ...and exactly one `warn` names both action ids | `app-stderr.log` | **MET**, quoted below; `grep -c` over the whole run returns `1`. |
+| No two shipped defaults share a keystroke in one context | unit test | **MET**, asserted over the whole table. |
+| Resetting a moved action restores the **new** default | `evidence/US-0123-40d-reset-restores-the-new-default.png` | **MET.** From the (b) profile, Reset on Quit yields `Ctrl+Shift+Q` and the `Default:` line disappears. `evidence/US-0123-39c-reset-restores-new-default.png` is the same for an unmoved action. |
+| The release notes list the four moved defaults | this packet's commit | **PARTIAL** — see Gaps. |
+| `DEC-0018` Accepted and the owner has accepted the defaults | — | **NOT MET.** See Gaps; this is a merge gate, not an implementation gate. |
+
+The `warn` line, verbatim:
+
+```text
+WARN oneterm_settings_ui::key_bindings::state] key binding: the default for `new_ssh_session`
+is held by your own binding for `quit`; `new_ssh_session` is left unbound and can be rebound
+from Settings > Key Bindings.
+```
+
+`f1` against the kit snapshot: `grep` for `"f1"` over all of `reference/gpui-kit/crates/`
+returns nothing, so no snapshot binding survives `apply_key_bindings`'s name-based filter to
+shadow it. This is the check this packet's Risks required before shipping `f1`.
+
+### Docs reconciled
+
+- `DEC-0018` — its Status section now records that `US-0123` is implemented against it and
+  still waiting on the owner, and names the three places the decision landed in code. Status
+  stays **Proposed**; the Consequences checkboxes stay unticked, because the first one is
+  unverifiable here by design.
+- `crates/settings-ui/src/key_bindings/mod.rs` module doc — the rule, why the table edit is the
+  whole migration, and the collision rule with why it lives in `apply_key_bindings` rather than
+  `init_state`. This was the only place the strategy was written down, as the packet said.
+- `crates/settings/src/ui_config.rs:44-46` — the load-bearing sentence, quoted in §"The
+  migration" above. **No change.**
+- `docs/gui-layout.md` — checked: its §Panel registration paragraph mentions `Ctrl-T` for
+  `AddPanel`, which this packet does not move. **No change**, as expected.
+- `docs/PROJECT.md` — read for invariants. **No change.**
+
+### Gaps
+
+- **"`Ctrl-S` now reaches the shell" is unverified, deliberately.** The walk drives the
+  application with posted `WM_*` messages, which set no modifier state, so no Ctrl chord can be
+  delivered — the same ceiling `F31` and `DEC-0018`'s first Consequence record. What is proven
+  is the table (test + the app menu frame + the Key Bindings page) and the migration rule
+  (test + three seeded launches). What is **not** proven is that a real `Ctrl-S` at a real
+  keyboard now reaches the foreground program. That needs a human at the keyboard and has not
+  been done. `F31` is verified at the table level only.
+- **The release notes carry the four defaults in the commit, not in a file.**
+  `.github/workflows/release.yml:271-360` builds the notes from Conventional Commit *subjects*;
+  a body is read only for a `BREAKING CHANGE:` trailer, which promotes that same subject into a
+  "Breaking Changes" section. There is no application changelog. This packet's commit therefore
+  uses a `feat(key-bindings)!:` subject with a `BREAKING CHANGE:` trailer listing old → new, so
+  the release calls the change out; the table itself is in the commit body and in `DEC-0018`.
+  If the owner wants the four keystrokes in the rendered notes, the generator needs to emit
+  breaking-change bodies — a separate, small change to `release.yml`.
+- **`DEC-0018` is still Proposed and the owner has not accepted the new defaults.** Both are
+  explicit merge gates in this packet's Acceptance. The implementation is complete and proved;
+  it must not merge until the owner accepts.
+- **`f1` is a key TUI programs do use.** `DEC-0018` chose it as "not a chord a terminal program
+  receives by accident", and this packet implements the decision as written. But `F1` is the
+  help key inside `mc`, `nano`, `htop` and others, and OneTerm's terminal view does map it
+  (`crates/terminal-view/src/input/keys.rs:350`), so a global `f1` binding takes it from those
+  programs the same way `ctrl-space` took `^@`. This is an observation against the decision,
+  not a deviation from it: recorded here so the owner sees it before accepting, and so that a
+  future amendment has somewhere to start.
+- **The collision resolution becomes a persisted unbind.** Emptying the displaced action in
+  `effective` means the next `save_key_bindings` writes `"new_ssh_session": ""` into
+  `ui_config.json`. That matches what the user is shown and is stable across restarts, but it
+  does mean removing the colliding override later does not bring the displaced default back by
+  itself — the user resets that row, which is the same one click.
+
 
 ## Handoff
 
