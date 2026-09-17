@@ -309,6 +309,55 @@ fn reopening_a_collapsed_right_dock_keeps_its_panel_instance(cx: &mut TestAppCon
     assert_ne!(right_dock_panel_id(&dock_area, cx), panel_before);
 }
 
+/// US-0113: a drag inside the allowed range is left alone and remembered; one
+/// past the ceiling is remembered *and* capped on the spot, not left standing
+/// until the next window resize.
+#[gpui::test]
+fn a_drag_past_the_ceiling_is_capped_where_it_happens(cx: &mut TestAppContext) {
+    let (dock_area, cx) = dock_area(cx);
+    let window_width = cx.update(|window, _| window.viewport_size().width);
+    let ceiling = clamp_right_dock_width(px(f32::MAX), window_width);
+    let inside = ceiling - px(40.);
+
+    // A drag inside the range: the dock keeps exactly what was dragged.
+    set_right_dock(&dock_area, panel_names::SSH_CLIENT, inside, true, cx);
+    let preferred = cx.update(|window, cx| {
+        OneTermWorkspace::absorb_dragged_right_dock_width(
+            &dock_area,
+            DEFAULT_RIGHT_DOCK_WIDTH,
+            window,
+            cx,
+        )
+    });
+    assert_eq!(preferred, inside, "the dragged width is the preference");
+    assert_eq!(right_dock(&dock_area, cx).0, inside.as_f32());
+
+    // A drag past the ceiling: remembered whole, but the dock is capped now.
+    let past = ceiling + px(100.);
+    dock_area.update_in(cx, |dock_area, window, cx| {
+        dock_area.set_dock_size(DockPlacement::Right, past, window, cx)
+    });
+    let preferred = cx.update(|window, cx| {
+        OneTermWorkspace::absorb_dragged_right_dock_width(&dock_area, preferred, window, cx)
+    });
+    assert_eq!(
+        preferred, past,
+        "the width the user asked for is remembered"
+    );
+    assert_eq!(
+        right_dock(&dock_area, cx).0,
+        ceiling.as_f32(),
+        "the dock is held to the ceiling without waiting for a resize"
+    );
+
+    // Nothing more to do once the dock already holds the applied width.
+    let settled = cx.update(|window, cx| {
+        OneTermWorkspace::absorb_dragged_right_dock_width(&dock_area, preferred, window, cx)
+    });
+    assert_eq!(settled, preferred);
+    assert_eq!(right_dock(&dock_area, cx).0, ceiling.as_f32());
+}
+
 /// US-0113: what reaches `docks.json` is the user's preferred width, not the
 /// width the clamp applied to this window.
 #[gpui::test]

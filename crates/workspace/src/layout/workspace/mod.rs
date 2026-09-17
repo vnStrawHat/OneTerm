@@ -348,22 +348,44 @@ impl OneTermWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.preferred_right_dock_width = Self::absorb_dragged_right_dock_width(
+            dock_area,
+            self.preferred_right_dock_width,
+            window,
+            cx,
+        );
+    }
+
+    /// Take a width the dock reports as the user's own, and hold it to the
+    /// ceiling. Returns the preference to remember.
+    ///
+    /// A width equal to the one this workspace would have applied is its own
+    /// doing and changes nothing. Any other width came from the splitter: it
+    /// becomes the preference — so the dock returns to it once the window has
+    /// room — and a drag past the ceiling is capped **here**, rather than left
+    /// standing until the next window resize snaps it back.
+    pub(crate) fn absorb_dragged_right_dock_width(
+        dock_area: &Entity<DockArea>,
+        preferred: gpui::Pixels,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> gpui::Pixels {
+        use gpui_component::dock::DockPlacement;
+
         let window_width = window.viewport_size().width;
-        let Some(size) = dock_area
-            .read(cx)
-            .dock_size(gpui_component::dock::DockPlacement::Right)
-        else {
-            return;
+        let Some(size) = dock_area.read(cx).dock_size(DockPlacement::Right) else {
+            return preferred;
         };
-        if size == clamp_right_dock_width(self.preferred_right_dock_width, window_width) {
-            return;
+        if size == clamp_right_dock_width(preferred, window_width) {
+            return preferred;
         }
-        self.preferred_right_dock_width = size;
-        // A drag past the ceiling is capped where it happens, rather than left
-        // standing until the next window resize snaps it back.
-        if clamp_right_dock_width(size, window_width) != size {
-            self.apply_right_dock_width(window, cx);
+        let capped = clamp_right_dock_width(size, window_width);
+        if capped != size {
+            dock_area.update(cx, |dock_area, cx| {
+                dock_area.set_dock_size(DockPlacement::Right, capped, window, cx);
+            });
         }
+        size
     }
 
     /// Re-apply the preferred width against the window's current size.

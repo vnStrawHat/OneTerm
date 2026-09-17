@@ -51,7 +51,8 @@ struct CentreBudgets {
 /// `fixed` are the measured widths of the labels that never shorten, `git` the
 /// width the git label wants. The path takes the rest; when that would leave it
 /// under [`MIN_PATH_WIDTH`], the branch gives way first, down to
-/// [`MIN_BRANCH_WIDTH`].
+/// [`MIN_BRANCH_WIDTH`] — and never past what the centre actually has, or the
+/// two budgets together would promise more room than exists.
 fn divide_centre(window_width: Pixels, icons: usize, fixed: Pixels, git: Pixels) -> CentreBudgets {
     let chrome = BAR_CHROME + ICON_CHROME * (icons as f32);
     let shrinkable = (window_width - chrome - fixed).max(px(0.));
@@ -61,9 +62,12 @@ fn divide_centre(window_width: Pixels, icons: usize, fixed: Pixels, git: Pixels)
             git,
         };
     }
-    let git = (shrinkable - MIN_PATH_WIDTH).max(MIN_BRANCH_WIDTH).min(git);
+    let git = (shrinkable - MIN_PATH_WIDTH)
+        .max(MIN_BRANCH_WIDTH)
+        .min(git)
+        .min(shrinkable);
     CentreBudgets {
-        path: (shrinkable - git).max(px(0.)),
+        path: shrinkable - git,
         git,
     }
 }
@@ -198,5 +202,24 @@ mod tests {
         let budgets = divide_centre(px(200.), 4, px(300.), px(200.));
         assert!(budgets.path >= px(0.), "{:?}", budgets.path);
         assert!(budgets.git >= px(0.), "{:?}", budgets.git);
+    }
+
+    #[test]
+    fn the_two_budgets_never_promise_more_room_than_the_centre_has() {
+        // The branch floor is not a floor the centre can pay for once the
+        // centre is smaller than it: below 40 px the two budgets used to add
+        // up to 40 px of room that does not exist, and both labels were then
+        // fitted against a width the region could not give them.
+        let chrome = BAR_CHROME + ICON_CHROME * 4.;
+        for shrinkable in [0., 10., 39., 40., 79., 80., 119., 400.] {
+            let budgets = divide_centre(chrome + px(shrinkable), 4, px(0.), px(200.));
+            assert!(
+                budgets.path + budgets.git <= px(shrinkable),
+                "{shrinkable} px of centre handed out {:?} + {:?}",
+                budgets.path,
+                budgets.git
+            );
+            assert!(budgets.path >= px(0.) && budgets.git >= px(0.));
+        }
     }
 }
