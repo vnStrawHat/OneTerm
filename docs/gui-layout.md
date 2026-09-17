@@ -109,6 +109,8 @@ so a `Close Channel` performed in one tab repaints the others.
 
 The status bar contains the clock, breadcrumb, git status of the active local terminal's cwd (branch, `*` when dirty, `(+added -removed)` line counts against `HEAD` in the success/danger colours, ahead/behind counts; polled every 2 s on the background executor, hidden for SSH sessions and non-repositories), active-terminal network speed, CPU/memory indicator, and right-dock controls. Each text indicator carries a leading icon (clock, folder, git branch, network, CPU) that hides with its label, and all indicator text uses the theme foreground colour (only the diffstat counts are coloured). Terminal-derived widgets resolve the active panel through the dock tree and then the active Space inside `TerminalPanel`; an empty Space yields no terminal metrics.
 
+The bar does not wrap or scroll, so the one indicator that can grow without bound — the cwd breadcrumb — is the one that shortens. It elides the path from the **left**, at a path separator, behind a leading ellipsis (`…\scratchpad\ux\home`), keeping the directory the user is in; only a single component longer than the whole budget is cut inside itself. Every other indicator is `Shorten::Never`: a value and its unit (`MEM 577.0 MB`) are one token and are never split, and bounding the path is what keeps them on screen at laptop widths. The budget is a character estimate from the window width and the root font size, not a text measurement, so the elision point drifts slightly with the font. Click-to-copy still copies the full sampled path, not the shortened one.
+
 ## Source map
 
 - Workspace state and zoom: `crates/workspace/src/layout/workspace/mod.rs`

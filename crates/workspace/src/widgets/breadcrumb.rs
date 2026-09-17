@@ -8,7 +8,7 @@ use std::time::Duration;
 use gpui::{App, Entity, WeakEntity, Window};
 use gpui_component::{Icon, IconName, dock::DockArea};
 
-use super::status_text::StatusText;
+use super::status_text::{Presentation, Shorten, StatusText};
 
 /// Indicator showing the breadcrumb (cwd path) of the active terminal session.
 pub fn breadcrumb(
@@ -19,8 +19,13 @@ pub fn breadcrumb(
     StatusText::new_entity(
         "breadcrumb-indicator",
         Duration::from_millis(500),
-        true,
-        Some(Icon::new(IconName::FolderOpen)),
+        Presentation {
+            icon: Some(Icon::new(IconName::FolderOpen)),
+            copyable: true,
+            // The only unbounded indicator: a deep cwd would otherwise push the
+            // right-hand indicators off the window (`US-0112`).
+            shorten: Shorten::PathTail,
+        },
         Box::new(move |cx| {
             let dock_area = dock_area.upgrade()?;
             oneterm_state::active_terminal::breadcrumb(&dock_area, cx).map(Into::into)

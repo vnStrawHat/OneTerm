@@ -25,7 +25,7 @@ use gpui::{App, Entity, WeakEntity, Window};
 use gpui_component::{Icon, dock::DockArea};
 use oneterm_theme::AppIcon;
 
-use super::status_text::{Label, Segment, StatusText, Tone};
+use super::status_text::{Label, Presentation, Segment, Shorten, StatusText, Tone};
 
 /// Minimum time between two git runs for the same cwd.
 // ponytail: 2s polling; switch to a file-system watcher if it shows up in profiles.
@@ -48,8 +48,11 @@ pub fn git_status(
     StatusText::new_entity(
         "git-status-indicator",
         Duration::from_millis(500),
-        false,
-        Some(Icon::new(AppIcon::GitBranch)),
+        Presentation {
+            icon: Some(Icon::new(AppIcon::GitBranch)),
+            copyable: false,
+            shorten: Shorten::Never,
+        },
         Box::new(move |cx| {
             let dock_area = dock_area.upgrade()?;
             let cwd = oneterm_state::active_terminal::local_cwd(&dock_area, cx)?;

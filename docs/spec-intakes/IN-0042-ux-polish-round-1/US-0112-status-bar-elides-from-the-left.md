@@ -10,8 +10,8 @@ Created: 2026-09-17
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -43,14 +43,14 @@ Addresses `F10` (medium), quoted from `research/ux-walkthrough-2026-09-16.md`:
 
 ## Scope
 
-- [ ] In scope:
+- [x] In scope:
   - `crates/workspace/src/widgets/breadcrumb.rs` — the cwd display. Truncate from the left,
     at a path separator, with a leading ellipsis.
   - `crates/workspace/src/widgets/status_text.rs` — the shared shortening helper the memory
     indicator goes through, so the unit is never what gets cut.
   - Every indicator that shares the same helper: fixing it in the helper rather than in the
     breadcrumb alone is the point (see Context).
-- [ ] Out of scope:
+- [x] Out of scope:
   - Which indicators the status bar shows and in what order.
   - The empty-Space case where the bar collapses to the clock — that is `F27`, documented as
     intended in `docs/gui-layout.md`, and not packeted.
@@ -60,18 +60,18 @@ Addresses `F10` (medium), quoted from `research/ux-walkthrough-2026-09-16.md`:
 
 ## Acceptance
 
-- [ ] At a window width where the cwd does not fit, the displayed path ends with the current
+- [x] At a window width where the cwd does not fit, the displayed path ends with the current
       directory name and begins with an ellipsis at a separator boundary — for example
       `…\scratchpad\ux\home`, never `…\fa2d0135-9c28-4`.
-- [ ] The truncation never cuts in the middle of a path component.
-- [ ] A path that fits is shown whole, with no ellipsis.
-- [ ] A single path component longer than the available width still renders something
+- [x] The truncation never cuts in the middle of a path component.
+- [x] A path that fits is shown whole, with no ellipsis.
+- [x] A single path component longer than the available width still renders something
       sensible (its tail, with the ellipsis) rather than an empty string or a panic.
-- [ ] The memory indicator shows its unit at every width it is visible at: `MEM 577.0 MB`, or
+- [x] The memory indicator shows its unit at every width it is visible at: `MEM 577.0 MB`, or
       a shorter form that still carries a unit, never `MEM 577.0`.
-- [ ] A focused test covers the elision at several widths, including the two degenerate cases
+- [x] A focused test covers the elision at several widths, including the two degenerate cases
       (width smaller than the last component; empty path).
-- [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
+- [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
 
@@ -97,7 +97,11 @@ and the document currently describes the bar as if it always fits.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+Docs changed: `docs/gui-layout.md` §Status bar gained a paragraph — the bar neither wraps nor
+scrolls, the breadcrumb is the only indicator that shortens, it elides from the left at a
+separator, every other indicator is `Shorten::Never` so a value never loses its unit, the
+budget is a character estimate rather than a measurement, and click-to-copy still copies the
+full path. §Source map still resolves (no file moved or was added).
 
 ## Context
 
@@ -123,12 +127,12 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Plan
 
-- [ ] Read `status_text.rs` and list its callers before changing anything; the caller list
+- [x] Read `status_text.rs` and list its callers before changing anything; the caller list
       decides whether the fix is one function or two.
-- [ ] Add the focused tests (they are pure string-and-width functions, so they come first).
-- [ ] Implement the left elision and the keep-the-unit rule.
-- [ ] Update `docs/gui-layout.md`.
-- [ ] Re-capture the scene at the same window width the walkthrough used.
+- [x] Add the focused tests (they are pure string-and-width functions, so they come first).
+- [x] Implement the left elision and the keep-the-unit rule.
+- [x] Update `docs/gui-layout.md`.
+- [x] Re-capture the scene at the same window width the walkthrough used.
 
 ## Decisions
 
@@ -153,11 +157,11 @@ answer once someone looks at the frame.
      fits.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -178,7 +182,65 @@ answer once someone looks at the frame.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### What the packet assumed, and what was actually there
+
+`status_text.rs` had **no shortening helper**. Nothing in OneTerm truncated anything: the
+status bar let the breadcrumb grow to the full cwd, and the window clipped whatever ran past
+its edge. That is why the head survived and the tail was lost, why there was no ellipsis, and
+why `MB` disappeared — the right-hand indicators were pushed off the window by the left group,
+not truncated. `format_memory` already produced `MEM 577.0 MB` correctly.
+
+So the fix bounds the one unbounded indicator, which is still "fix it where the callers route
+through" as the packet asked — building the helper rather than correcting it:
+
+- `crates/workspace/src/widgets/status_text.rs` — `elide_path_left(path, max_chars)` (pure:
+  drops leading components, cuts at a separator whenever one fits, falls back to the tail of
+  an over-long single component), a `Shorten { Never, PathTail }` policy applied at render
+  where the window width is known, and `path_budget(window)` = (viewport width - 440 px
+  reserved for the bar's other contents) / (root font size x 0.375). The presentation
+  arguments moved into a `Presentation { icon, copyable, shorten }` struct, because an eighth
+  parameter tripped `clippy::too_many_arguments`.
+- `crates/workspace/src/widgets/breadcrumb.rs` — the only `Shorten::PathTail` caller.
+- `datetime_clock.rs`, `git_status.rs`, `net_speed.rs`, `resource.rs` — `Shorten::Never`,
+  behaviour unchanged. Those are the callers the packet asked to be listed; each was re-read
+  in the 900 px and 1900 px frames below and reads correctly.
+
+Click-to-copy still copies the **sampled** path, not the elided one.
+
+### Commands
+
+- `cargo test -p oneterm-workspace` — 24 passed, six of them new:
+  `a_path_that_fits_is_shown_whole` (fits, exactly fitting, empty),
+  `a_long_path_keeps_its_tail_from_a_separator` (three budgets, Windows and POSIX
+  separators), `the_cut_never_lands_inside_a_component` (every budget from 1 to the full
+  length yields a tail of the original),
+  `a_single_component_longer_than_the_budget_keeps_its_end`,
+  `multi_byte_components_are_never_cut_mid_character` (CJK), and
+  `only_a_path_label_is_shortened_and_never_a_value_with_its_unit`.
+- `pwsh scripts/ci-local.ps1` — ended with "ci-local: all checks passed".
+
+### GUI walk
+
+- `evidence/US-0112-50-narrow-900.png` — 900 px window. The bar reads
+  `...\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\ux2\home` behind a leading ellipsis,
+  cut at a separator, the current directory still visible — and `MEM 202.8 MB` keeps its unit.
+  Compare `research/before/50-narrow-900.png`, which read `...\fa2d0135-9c28-4` and
+  `MEM 577.0`.
+- `evidence/US-0112-51-large-1900.png` — 1900 px window: the same path whole, no ellipsis.
+- The walk ran under its own scratch `HOME` (`...\scratchpad\ux2\home`), so the path differs
+  from the walkthrough's `...\ux\home` by one component; the shape of the elision is what the
+  frames compare.
+
+### Gaps
+
+- The budget is in **characters**, derived from the window width and the root font size, not a
+  text measurement: the status bar font is proportional, so the elision point drifts with the
+  font and with unusually wide glyphs. The constants (440 px reserved, 0.375 rem mean advance)
+  were calibrated against the before frames — about 6 px per character at the default 16 px
+  root font — and err narrow. Measuring would mean laying the text out during render for one
+  indicator.
+- `Shorten::apply` and `path_budget` are separately testable, but the render call that joins
+  them is not covered by a test; the two frames are its proof.
 
 ## Handoff
 
