@@ -15,15 +15,25 @@ mod security;
 mod shell;
 
 use gpui::App;
-use gpui_component::{Icon, IconName, setting::SettingPage};
+use gpui_component::{
+    Icon, IconName,
+    setting::{SettingGroup, SettingPage},
+};
 use oneterm_settings::TerminalSettings;
+
+/// The "Shell" group, hosted by the General page (`US-0122`): the shell new
+/// local terminals start is one of the first settings a new user looks for, so
+/// it sits on the page the Settings window opens on rather than tenth down the
+/// Terminal page.
+pub(super) fn shell_group() -> SettingGroup {
+    shell::group()
+}
 
 /// Build the "Terminal" settings page.
 pub(crate) fn page() -> SettingPage {
     SettingPage::new("Terminal")
         .resettable(true)
         .icon(Icon::new(IconName::SquareTerminal))
-        .group(shell::group())
         .group(font::group())
         .group(cursor::group())
         .group(layout::group())

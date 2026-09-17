@@ -35,12 +35,12 @@ pub(super) fn group() -> SettingGroup {
 
     SettingGroup::new()
         .title("Font")
-        .description("Family, size, and weight.")
+        .description("Applies to terminal text only.")
         .items(vec![
-            SettingItem::new("Font Family", font_family_field())
-                .description("Use \"Default\" for theme font."),
+            SettingItem::new("Family", font_family_field())
+                .description("Use \"Default\" for the theme's monospace font."),
             SettingItem::new(
-                "Font Size",
+                "Size",
                 SettingField::number_input(
                     NumberFieldOptions {
                         min: 6.0,
@@ -63,9 +63,9 @@ pub(super) fn group() -> SettingGroup {
                 )
                 .default_value(15.0),
             )
-            .description("Size in px (6–72)."),
+            .description("In px (6–72)."),
             SettingItem::new(
-                "Font Weight",
+                "Weight",
                 SettingField::dropdown(
                     weight_options,
                     |cx: &App| SharedString::from(weight_to_string(cx)),
@@ -75,10 +75,9 @@ pub(super) fn group() -> SettingGroup {
                     },
                 )
                 .default_value("normal"),
-            )
-            .description("Font weight."),
+            ),
             SettingItem::new("Line Height", line_height_field())
-                .description("Line height multiplier."),
+                .description("Multiplier on the font size."),
             SettingItem::new(
                 "Fallback Fonts",
                 SettingField::input(

@@ -19,6 +19,6 @@ pub(super) fn group() -> SettingGroup {
             )
             .default_value(false),
         )
-        .description("Allow OSC 52 clipboard reads."),
+        .description("A remote program can read your clipboard while this is on."),
     )
 }

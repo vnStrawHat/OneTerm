@@ -10,7 +10,7 @@ use super::set;
 pub(super) fn group() -> SettingGroup {
     SettingGroup::new().title("Bell").item(
         SettingItem::new(
-            "Bell Enabled",
+            "Enabled",
             SettingField::switch(
                 |cx: &App| TerminalSettings::global(cx).read(cx).bell_enabled,
                 |val: bool, cx: &mut App| {
@@ -19,6 +19,6 @@ pub(super) fn group() -> SettingGroup {
             )
             .default_value(true),
         )
-        .description("Show terminal bell indicator."),
+        .description("Show an indicator when a program rings the bell."),
     )
 }

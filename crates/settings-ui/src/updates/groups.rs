@@ -273,7 +273,6 @@ fn status_item(state: UpdateUiState) -> SettingItem {
             },
         ),
     )
-    .description("GitHub Releases status.")
 }
 
 #[cfg(test)]

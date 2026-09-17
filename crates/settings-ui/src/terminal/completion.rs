@@ -33,10 +33,10 @@ fn count_field(
 pub(super) fn group() -> SettingGroup {
     SettingGroup::new()
         .title("Completion")
-        .description("Command auto-completion overlay + in-session history.")
+        .description("The suggestion overlay and the history it draws on.")
         .items(vec![
             SettingItem::new(
-                "Enable Auto-Completion",
+                "Enabled",
                 SettingField::switch(
                     |cx: &App| TerminalSettings::global(cx).read(cx).completion.enabled,
                     |val: bool, cx: &mut App| {
@@ -45,7 +45,7 @@ pub(super) fn group() -> SettingGroup {
                 )
                 .default_value(true),
             )
-            .description("Master switch for the completion overlay + history capture."),
+            .description("Master switch for the overlay and the history capture."),
             SettingItem::new(
                 "Accept With Tab",
                 SettingField::switch(

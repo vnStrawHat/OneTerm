@@ -1,4 +1,8 @@
-//! "Appearance" settings page — theme mode (Light/Dark) + theme list.
+//! The "Theme" settings group — theme mode (Light/Dark) + theme list.
+//!
+//! The group lives on the General page (`US-0122` folded the separate Appearance
+//! page away, since two controls did not earn a page of their own and the theme
+//! is one of the first things a new user goes looking for).
 //!
 //! Mirrors the OneTerm ▸ Appearance / Theme menus. Switching the theme here
 //! reuses the same logic as the [`SwitchTheme`] / [`SwitchThemeMode`] actions
@@ -13,8 +17,8 @@
 
 use gpui::{App, SharedString};
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Theme, ThemeMode, ThemeRegistry,
-    setting::{SettingField, SettingGroup, SettingItem, SettingPage},
+    ActiveTheme as _, Theme, ThemeMode, ThemeRegistry,
+    setting::{SettingField, SettingGroup, SettingItem},
 };
 
 use oneterm_theme::theme::apply_list_style_override;
@@ -27,47 +31,41 @@ const DEFAULT_THEME_NAME: &str = "Zed One Dark";
 /// ignores a click on a header without a special case.
 const SECTION_VALUE_PREFIX: &str = "\u{1}section:";
 
-/// Build the "Appearance" settings page.
-pub(crate) fn page(cx: &App) -> SettingPage {
-    SettingPage::new("Appearance")
-        .resettable(true)
-        .icon(Icon::new(IconName::Palette))
-        .group(theme_mode_group())
-        .group(theme_group(cx))
+/// "Theme" group — light or dark, and which colour theme.
+pub(super) fn theme_group(cx: &App) -> SettingGroup {
+    SettingGroup::new()
+        .title("Theme")
+        .item(mode_item())
+        .item(color_theme_item(cx))
 }
 
-/// "Theme Mode" group — switch between Light and Dark.
-fn theme_mode_group() -> SettingGroup {
-    SettingGroup::new()
-        .title("Theme Mode")
-        .description("Light or dark mode.")
-        .item(
-            SettingItem::new(
-                "Mode",
-                SettingField::dropdown(
-                    mode_options(),
-                    |cx: &App| {
-                        SharedString::from(if cx.theme().mode.is_dark() {
-                            "dark"
-                        } else {
-                            "light"
-                        })
-                    },
-                    |val: SharedString, cx: &mut App| {
-                        let mode = if val.as_ref() == "light" {
-                            ThemeMode::Light
-                        } else {
-                            ThemeMode::Dark
-                        };
-                        Theme::change(mode, None, cx);
-                        apply_list_style_override(cx);
-                        cx.refresh_windows();
-                    },
-                )
-                .default_value(DEFAULT_THEME_MODE),
-            )
-            .description("Light or dark."),
+/// The Light/Dark switch.
+fn mode_item() -> SettingItem {
+    SettingItem::new(
+        "Mode",
+        SettingField::dropdown(
+            mode_options(),
+            |cx: &App| {
+                SharedString::from(if cx.theme().mode.is_dark() {
+                    "dark"
+                } else {
+                    "light"
+                })
+            },
+            |val: SharedString, cx: &mut App| {
+                let mode = if val.as_ref() == "light" {
+                    ThemeMode::Light
+                } else {
+                    ThemeMode::Dark
+                };
+                Theme::change(mode, None, cx);
+                apply_list_style_override(cx);
+                cx.refresh_windows();
+            },
         )
+        .default_value(DEFAULT_THEME_MODE),
+    )
+    .description("Applies to the whole application, terminals included.")
 }
 
 fn mode_options() -> Vec<(SharedString, SharedString)> {
@@ -77,8 +75,8 @@ fn mode_options() -> Vec<(SharedString, SharedString)> {
     ]
 }
 
-/// "Theme" group — pick a color theme from the registry (built-in + loaded).
-fn theme_group(cx: &App) -> SettingGroup {
+/// The colour-theme picker: every theme in the registry (built-in + loaded).
+fn color_theme_item(cx: &App) -> SettingItem {
     let registered: Vec<(SharedString, ThemeMode)> = ThemeRegistry::global(cx)
         .sorted_themes()
         .iter()
@@ -86,21 +84,16 @@ fn theme_group(cx: &App) -> SettingGroup {
         .collect();
     let options = theme_entries(&registered, cx.theme().theme_name());
 
-    SettingGroup::new()
-        .title("Theme")
-        .description("App color theme.")
-        .item(
-            SettingItem::new(
-                "Color Theme",
-                SettingField::scrollable_dropdown(
-                    options,
-                    |cx: &App| cx.theme().theme_name().clone(),
-                    |val: SharedString, cx: &mut App| apply_theme_named(&val, cx),
-                )
-                .default_value(DEFAULT_THEME_NAME),
-            )
-            .description("Choose a built-in theme."),
+    SettingItem::new(
+        "Color Theme",
+        SettingField::scrollable_dropdown(
+            options,
+            |cx: &App| cx.theme().theme_name().clone(),
+            |val: SharedString, cx: &mut App| apply_theme_named(&val, cx),
         )
+        .default_value(DEFAULT_THEME_NAME),
+    )
+    .description("Built-in and loaded themes, grouped Light / Dark.")
 }
 
 /// Apply the theme with this name, if the registry knows it. A section header's
