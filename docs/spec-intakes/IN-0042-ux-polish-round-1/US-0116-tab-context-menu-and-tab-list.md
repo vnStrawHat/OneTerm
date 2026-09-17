@@ -83,7 +83,7 @@ Addresses `F11`, `F12` (medium) and `F13` (low), quoted from
       are recorded in Gaps with the reason, not silently dropped.
 - [x] Rename is reachable from the menu, not only from an unadvertised double-click. If the
       double-click stays, both routes open the same dialog.
-- [x] With ten tabs open, there is a discoverable way to reach a tab that does not fit the
+- [x] With nine tabs open (the walk's count), there is a discoverable way to reach a tab that does not fit the
       strip, and using it activates that tab.
 - [ ] The `…` menu no longer duplicates the zoom control beside it, and any zoom wording it
       keeps says what it does (zoom the panel, not the font).
@@ -189,7 +189,7 @@ raise it rather than burying it in Gaps.
 4. **Platform:** `pwsh scripts/ci-local.ps1`.
 5. **E2E (GUI walk, re-capture these scenes):**
    - `59-tab-context-menu.png` — the right-click that previously only activated the tab.
-   - `19-many-tabs.png` — ten tabs; the after frame must show the tab list reachable and the
+   - `19-many-tabs.png` — nine tabs (the before scene's tenth was SSH, no host here); the after frame must show the tab list reachable and the
      leftmost tab identifiable (or the frame that documents the limit).
    - `51-large-1900.png` — the widened window; the clipping either gone or recorded.
    - `20-tabbar-more-menu.png` — the `…` menu, no longer duplicating the zoom control.
