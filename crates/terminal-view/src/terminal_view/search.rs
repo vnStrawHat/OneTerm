@@ -30,6 +30,42 @@ use crate::render::overlay::SearchHighlight;
 /// full-grid scan (typing must not fire a search per character).
 const SEARCH_DEBOUNCE_MS: u64 = 150;
 
+/// What the search bar's counter slot says. Three states, because "nothing has
+/// been searched yet" and "nothing was found" are different answers and `0/0`
+/// collapsed them into one that made the bar look broken before it was ever
+/// used (`US-0115`, `F34`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MatchCount {
+    /// The bar is open but no query has been entered.
+    Idle,
+    /// A query is entered and matched nothing.
+    NoMatches,
+    /// Match `n` of `total`, counted as the user counts them (1-based).
+    Nth(usize, usize),
+}
+
+impl MatchCount {
+    /// The text rendered in the counter slot; empty while idle.
+    fn label(self) -> SharedString {
+        match self {
+            Self::Idle => SharedString::default(),
+            Self::NoMatches => "No matches".into(),
+            Self::Nth(n, total) => format!("{n}/{total}").into(),
+        }
+    }
+}
+
+/// Pick the counter state from the query and the match list.
+fn match_count(has_query: bool, total: usize, active_idx: Option<usize>) -> MatchCount {
+    if !has_query {
+        return MatchCount::Idle;
+    }
+    if total == 0 {
+        return MatchCount::NoMatches;
+    }
+    MatchCount::Nth(active_idx.unwrap_or(0) + 1, total)
+}
+
 /// In-buffer search state owned by the view.
 #[derive(Default)]
 pub(super) struct SearchState {
@@ -301,12 +337,15 @@ impl TerminalView {
         };
         let input_state = self.search.input.clone()?;
         let view = cx.entity();
-        let total = self.search.matches.len();
-        let current = self.search.active_idx.map(|i| i + 1).filter(|_| total > 0);
-        let counter: SharedString = if total == 0 {
-            "0/0".into()
-        } else {
-            format!("{}/{}", current.unwrap_or(0), total).into()
+        let count = match_count(
+            self.search.has_query(),
+            self.search.matches.len(),
+            self.search.active_idx,
+        );
+        let counter: SharedString = count.label();
+        let counter_color = match count {
+            MatchCount::NoMatches => cx.theme().muted_foreground,
+            _ => foreground,
         };
         let case_on = self.search.options.case_sensitive;
         let word_on = self.search.options.whole_word;
@@ -374,8 +413,13 @@ impl TerminalView {
                     div()
                         .id("search-counter")
                         .px_1()
+                        // Reserved width: the counter appears, changes width and
+                        // empties again as the user types, and a bar whose
+                        // buttons jump on every keystroke is worse than `0/0`.
+                        .min_w(px(66.0))
+                        .text_center()
                         .text_xs()
-                        .text_color(foreground)
+                        .text_color(counter_color)
                         .child(counter),
                 )
                 .child(
@@ -436,7 +480,32 @@ impl TerminalView {
 mod tests {
     use oneterm_terminal::{RowId, SearchMatch};
 
-    use super::{SearchHighlight, SearchState, centered_offset};
+    use super::{MatchCount, SearchHighlight, SearchState, centered_offset, match_count};
+
+    #[test]
+    fn the_counter_is_silent_until_a_query_exists() {
+        // Bar just opened: no query, so nothing is claimed about matches.
+        assert_eq!(match_count(false, 0, None), MatchCount::Idle);
+        assert_eq!(MatchCount::Idle.label(), "");
+        // A stale match list cannot resurrect the counter.
+        assert_eq!(match_count(false, 7, Some(2)), MatchCount::Idle);
+    }
+
+    #[test]
+    fn nothing_found_is_not_the_same_state_as_nothing_searched() {
+        assert_eq!(match_count(true, 0, None), MatchCount::NoMatches);
+        assert_eq!(MatchCount::NoMatches.label(), "No matches");
+    }
+
+    #[test]
+    fn a_match_list_counts_from_one() {
+        assert_eq!(match_count(true, 3, Some(0)), MatchCount::Nth(1, 3));
+        assert_eq!(match_count(true, 3, Some(2)), MatchCount::Nth(3, 3));
+        assert_eq!(MatchCount::Nth(2, 3).label(), "2/3");
+        // Matches but no active index yet (a refresh dropped it): still 1-based
+        // and never `0/n`.
+        assert_eq!(match_count(true, 3, None), MatchCount::Nth(1, 3));
+    }
 
     /// The row the viewport top sits on at `display_offset == 0`. Far enough
     /// from zero that a negative grid line is a real row id.

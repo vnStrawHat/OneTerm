@@ -88,7 +88,15 @@ The owning design is
 8. **Border**: originally a uniform 4px frame; shipped as a neutral **1px outer border +
     1px inner gutter** per Space (`space/render.rs`), see [05](terminal-split/05-rendering-theme.md).
 9. **New Terminal Here**: the empty-Space menu can spawn a local shell in place
-   (in MVP scope).
+   (in MVP scope). It spawns the **default** shell, with no shell picker — the
+   empty Space is a placement action, and a user who wants a specific shell
+   opens it from the tab bar's `+` menu and drags the tab in. Amended by
+   `US-0115`: the placeholder names that action first and in the menu row's own
+   words, so the copy promises exactly what the menu does. It reads, under the
+   `Space #N` line, `Right-click → New Terminal Here` and then
+   `or split, or drag a terminal tab here`; the drag and the split keep their
+   mention, but the likeliest action is no longer the hidden one
+   (`crates/terminal-view/src/space/render.rs`).
 10. **Keyboard shortcuts** for Split / Close Space: deferred for the MVP; the
     `SplitRight/Left/Up/Down` and `CloseSpace` actions are now rebindable in the
     Settings key-binding UI (`crates/settings-ui/src/key_bindings/`).

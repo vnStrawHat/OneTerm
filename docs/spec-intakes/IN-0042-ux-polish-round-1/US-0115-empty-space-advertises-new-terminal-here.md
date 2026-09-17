@@ -10,7 +10,7 @@ Created: 2026-09-17
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
+- [x] In progress
 - [ ] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
@@ -144,9 +144,14 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Decisions
 
-None expected. If the empty Space's menu gains a shell submenu, that is a second entry point
-for shell choice and worth a sentence in `docs/terminal-split.md`, but it is not a rule future
-work inherits.
+**The empty Space's menu keeps spawning the default shell; no shell submenu.** Taken before
+the copy was written, as the packet requires. The empty Space is a *placement* action ("put a
+terminal here"), the `+` menu already owns shell *choice*, and a tab opened there drags into
+the Space. Adding a second shell-picking surface would duplicate a list that `US-0114` has
+just made authoritative in one place (`ShellKind::display_name`). The placeholder copy is
+therefore written to promise exactly what the menu does — it names the row, not a picker.
+Recorded as a sentence in `docs/terminal-split.md` decision 9; not a `DEC`, because it is a
+scope call inside one surface, not a rule future work inherits.
 
 ## Verification Plan
 

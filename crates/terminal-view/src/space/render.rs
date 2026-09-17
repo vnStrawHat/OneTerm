@@ -237,8 +237,13 @@ fn render_placeholder(
                 .text_color(oneterm_theme::brand_accent()),
         )
         .child(format!("Space #{number}"))
-        .child("Drag a terminal tab here")
-        .child("or right-click to split")
+        // The likeliest action first, worded exactly as the context-menu row it
+        // points at; the two rarer ones keep their mention (`US-0115`, `F25`).
+        // "New Terminal Here" spawns the default shell, with no picker: the
+        // empty Space is a placement action, and a user who wants a specific
+        // shell opens it from the "+" menu and drags the tab in.
+        .child("Right-click \u{2192} New Terminal Here")
+        .child("or split, or drag a terminal tab here")
         // Clicking the placeholder activates this Space.
         .on_mouse_down(MouseButton::Left, activate_space(panel.clone(), id))
         // Visual affordance while a valid tab-drag hovers this empty Space.
