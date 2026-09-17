@@ -13,9 +13,10 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
-    button::{Button, ButtonVariants as _},
+    button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{DialogButtonProps, DialogFooter},
     input::{Input, InputState},
+    menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     notification::NotificationType,
 };
 use oneterm_core::ShellKind;
@@ -140,14 +141,24 @@ pub(super) fn render_tab_strip(
     let tab_label = panel.tab_label(cx);
     let drag_title: SharedString = tab_label.clone().into();
     let rename_title = tab_label.clone();
+    let menu_title = tab_label.clone();
+    let menu_panel = panel_entity.clone();
     let title_label_id = SharedString::from(format!("tab-title-label-{panel_entity:?}"));
 
     gpui_component::h_flex()
         .id("tab-title")
         .relative()
         .h_full()
-        .w_full()
+        // No `w_full()`: the kit's `Tab` is content-sized and `flex_shrink_0`
+        // (`component/src/tab/tab.rs:715-718,794-800`), so a percentage width
+        // against it contributes nothing to intrinsic sizing and every tab
+        // collapsed to `min_w` whatever its label said — which is how the
+        // leftmost tab ended up clipped to a bare `×` with free space beside
+        // the strip (`US-0116`, `F11`). Sized by the label between a floor and
+        // a ceiling instead: no tab loses its name, and one long OSC title
+        // elides rather than eating the strip.
         .min_w(px(100.))
+        .max_w(px(220.))
         .items_center()
         .gap_1()
         .when(is_active, |this| {
@@ -232,6 +243,192 @@ pub(super) fn render_tab_strip(
                     .child(Icon::new(IconName::Close).xsmall().text_color(muted)),
             )
         })
+        // The kit attaches no right-click handler to a tab and stops only left
+        // mouse-down (`base/src/tabs.rs:172`), so the tab's own menu lives here,
+        // on the content OneTerm renders (`US-0116`, `F12`).
+        .context_menu(move |menu, _window, cx| {
+            tab_context_menu(menu, menu_panel.clone(), menu_title.clone(), cx)
+        })
+}
+
+/// Which sibling tabs a bulk close acts on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum CloseScope {
+    /// Every tab but the one the menu was opened on.
+    Others,
+    /// Every tab after the one the menu was opened on.
+    ToTheRight,
+}
+
+/// The tabs a bulk close removes, as positions in the tab list, in the order
+/// they must be closed: right to left, so removing one never shifts a position
+/// still to come.
+pub(super) fn tabs_to_close(total: usize, target: usize, scope: CloseScope) -> Vec<usize> {
+    if target >= total {
+        return Vec::new();
+    }
+    let mut victims: Vec<usize> = match scope {
+        CloseScope::Others => (0..total).filter(|ix| *ix != target).collect(),
+        CloseScope::ToTheRight => (target + 1..total).collect(),
+    };
+    victims.reverse();
+    victims
+}
+
+/// The terminal tabs of `panel`'s tab group, each with its index in the group,
+/// plus `panel`'s own position in that list.
+///
+/// The group can in principle hold panels of other kinds; those are dropped, so
+/// a position in the returned list is not always the group index — which is why
+/// both are carried.
+pub(super) fn sibling_tabs(
+    panel: &Entity<TerminalPanel>,
+    cx: &App,
+) -> Option<(Vec<(usize, Entity<TerminalPanel>)>, usize)> {
+    let group = panel.read(cx).tab_panel.as_ref()?.upgrade()?;
+    let tabs: Vec<(usize, Entity<TerminalPanel>)> = group
+        .read(cx)
+        .panels()
+        .iter()
+        .enumerate()
+        .filter_map(|(ix, p)| Some((ix, p.view().downcast::<TerminalPanel>().ok()?)))
+        .collect();
+    let position = tabs.iter().position(|(_, tab)| tab == panel)?;
+    Some((tabs, position))
+}
+
+/// Close every tab in `victims`, after a confirmation when more than one
+/// running shell would go: the `×`, middle-click and Close all destroy exactly
+/// one tab and are unconfirmed, but a single menu row that ends nine shells is
+/// the case the application confirms elsewhere too (`CORR-34`).
+fn close_tabs(victims: Vec<Entity<TerminalPanel>>, window: &mut Window, cx: &mut App) {
+    fn close_all(victims: &[Entity<TerminalPanel>], window: &mut Window, cx: &mut App) {
+        for tab in victims {
+            tab.update(cx, |tab, cx| tab.close_tab(window, cx));
+        }
+    }
+
+    match victims.len() {
+        0 => {}
+        1 => close_all(&victims, window, cx),
+        n => {
+            let description = format!("Close {n} terminal tabs? Their sessions end.");
+            window.open_alert_dialog(cx, move |alert, _, _| {
+                let victims = victims.clone();
+                alert
+                    .confirm()
+                    .title("Close Tabs")
+                    .description(description.clone())
+                    .button_props(
+                        DialogButtonProps::default()
+                            .ok_text("Close")
+                            .ok_variant(ButtonVariant::Danger)
+                            .cancel_text("Cancel")
+                            .show_cancel(true),
+                    )
+                    .on_ok(move |_, window, cx| {
+                        close_all(&victims, window, cx);
+                        true
+                    })
+            });
+        }
+    }
+}
+
+/// A bulk-close row, disabled when it would close nothing.
+fn close_scope_row(
+    label: &'static str,
+    panel: Entity<TerminalPanel>,
+    scope: CloseScope,
+    cx: &App,
+) -> PopupMenuItem {
+    let victims: Vec<Entity<TerminalPanel>> = sibling_tabs(&panel, cx)
+        .map(|(tabs, position)| {
+            tabs_to_close(tabs.len(), position, scope)
+                .into_iter()
+                .map(|ix| tabs[ix].1.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let empty = victims.is_empty();
+    PopupMenuItem::new(label)
+        .disabled(empty)
+        .on_click(move |_, window, cx| close_tabs(victims.clone(), window, cx))
+}
+
+/// The tab's right-click menu (`US-0116`). Every row acts on `panel` — the tab
+/// that was right-clicked — and not on whichever tab happens to be active.
+fn tab_context_menu(
+    menu: PopupMenu,
+    panel: Entity<TerminalPanel>,
+    label: String,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    menu.item(PopupMenuItem::new("Rename...").on_click({
+        let panel = panel.clone();
+        move |_, window, cx| open_tab_title_dialog(panel.clone(), label.clone(), window, cx)
+    }))
+    .item(PopupMenuItem::new("Duplicate").on_click({
+        let panel = panel.clone();
+        move |_, window, cx| {
+            panel.update(cx, |panel, cx| {
+                let space = panel.tree.active();
+                panel.duplicate_session(space, window, cx);
+            });
+        }
+    }))
+    .separator()
+    .item(PopupMenuItem::new("Close").on_click({
+        let panel = panel.clone();
+        move |_, window, cx| {
+            panel.update(cx, |panel, cx| panel.close_tab(window, cx));
+        }
+    }))
+    .item(close_scope_row(
+        "Close Others",
+        panel.clone(),
+        CloseScope::Others,
+        cx,
+    ))
+    .item(close_scope_row(
+        "Close to the Right",
+        panel,
+        CloseScope::ToTheRight,
+        cx,
+    ))
+}
+
+/// The tab list the `...` menu opens with: one row per terminal tab, the active
+/// one marked, clicking a row shows that tab (`US-0116`, `F11`/`F13`).
+///
+/// It lives in the `...` menu because that is the one menu a panel can add rows
+/// to (`component/src/dock/tab_panel.rs:334-336`), and because the menu
+/// otherwise held a single row duplicating the zoom button beside it.
+pub(super) fn tab_list_menu(
+    menu: PopupMenu,
+    panel: &Entity<TerminalPanel>,
+    cx: &App,
+) -> PopupMenu {
+    let Some((tabs, _)) = sibling_tabs(panel, cx) else {
+        return menu;
+    };
+    let Some(group) = panel.read(cx).tab_panel.as_ref().and_then(|g| g.upgrade()) else {
+        return menu;
+    };
+    let active = group.read(cx).active_ix();
+    let mut menu = menu.label("Terminal Tabs");
+    for (ix, tab) in tabs {
+        let label = tab.read(cx).tab_label(cx);
+        let group = group.downgrade();
+        menu = menu.item(
+            PopupMenuItem::new(label)
+                .checked(ix == active)
+                .on_click(move |_, window, cx| {
+                    let _ = group.update(cx, |group, cx| group.select_tab(ix, window, cx));
+                }),
+        );
+    }
+    menu.separator()
 }
 
 /// Open the rename-tab dialog for a terminal panel. An empty title keeps the
@@ -325,7 +522,45 @@ mod tests {
 
     use oneterm_core::ShellKind;
 
-    use super::{resolve_tab_label, shell_tab_title, tab_title_label, trim_path_title};
+    use super::{
+        CloseScope, resolve_tab_label, shell_tab_title, tab_title_label, tabs_to_close,
+        trim_path_title,
+    };
+
+    #[test]
+    fn close_others_keeps_the_right_clicked_tab_and_closes_right_to_left() {
+        // Right-clicked the third of five. Descending order matters: closing
+        // left to right would shift every position still to come.
+        assert_eq!(
+            tabs_to_close(5, 2, CloseScope::Others),
+            vec![4, 3, 1, 0],
+            "must never contain the target, and must descend"
+        );
+        // A lone tab has no others.
+        assert_eq!(tabs_to_close(1, 0, CloseScope::Others), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn close_to_the_right_stops_at_the_right_clicked_tab() {
+        assert_eq!(tabs_to_close(5, 2, CloseScope::ToTheRight), vec![4, 3]);
+        // The last tab has nothing to its right, so the row closes nothing.
+        assert_eq!(
+            tabs_to_close(5, 4, CloseScope::ToTheRight),
+            Vec::<usize>::new()
+        );
+        assert_eq!(tabs_to_close(3, 0, CloseScope::ToTheRight), vec![2, 1]);
+    }
+
+    #[test]
+    fn a_target_outside_the_list_closes_nothing() {
+        // A tab removed between the menu opening and the row being clicked.
+        assert_eq!(tabs_to_close(3, 3, CloseScope::Others), Vec::<usize>::new());
+        assert_eq!(tabs_to_close(0, 0, CloseScope::Others), Vec::<usize>::new());
+        assert_eq!(
+            tabs_to_close(3, 9, CloseScope::ToTheRight),
+            Vec::<usize>::new()
+        );
+    }
 
     #[test]
     fn each_shell_kind_gets_its_own_tab_label() {

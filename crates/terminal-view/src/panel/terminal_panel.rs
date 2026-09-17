@@ -661,6 +661,20 @@ impl Panel for TerminalPanel {
         Some(PanelControl::Both)
     }
 
+    /// Rows this panel adds to the tab bar's `...` menu, above the kit's own
+    /// separator: the tab list, so a tab that does not fit the strip is still
+    /// reachable (`US-0116`). The kit's zoom and close rows below it are its
+    /// own — their wording and their presence are not ours to change (see
+    /// `docs/gui-layout.md`).
+    fn dropdown_menu(
+        &mut self,
+        menu: gpui_component::menu::PopupMenu,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_component::menu::PopupMenu {
+        super::tab_title::tab_list_menu(menu, &cx.entity(), cx)
+    }
+
     /// "+" button next to the zoom button — dropdown to spawn a new terminal tab
     /// with a specific shell, open the New SSH Session dialog, or open one of
     /// the saved SSH sessions (`IN-0033`).
