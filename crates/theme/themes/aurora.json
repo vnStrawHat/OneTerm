@@ -76,7 +76,7 @@
         "list.head.background": "#F8FAFC",
         "list.hover.background": "#F1F5F9",
         "muted.background": "#F1F5F9",
-        "muted.foreground": "#64748B",
+        "muted.foreground": "#5c6a7f",
         "popover.background": "#FFFFFF",
         "popover.foreground": "#020617",
         "primary.background": "linear-gradient(180deg, #1E293B, #0F172A)",
