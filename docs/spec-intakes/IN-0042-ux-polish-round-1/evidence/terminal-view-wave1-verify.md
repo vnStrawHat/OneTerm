@@ -347,3 +347,257 @@ split, "Close Others" and its confirmation dialog, and keyboard navigation into 
 - "Close Others" / "Close to the Right" were exercised only as pure functions plus a source trace of
   the close path; the confirmation dialog is still uncaptured, here as in the packet.
 - Keyboard navigation into either popup is still unexercised, for the same posted-message reason.
+
+---
+
+# Re-verification of `d14a2597` — 2026-09-17
+
+Second, independent pass by a verifier that wrote neither the work nor the first report. Scope: the
+rework commit `d8672546` ("the Space chip stops covering live output, and four labels stop lying")
+and the `main` merge `d14a2597` on top of it. Everything below was re-derived from the source, the
+pixels and a re-run of the tests; nothing is taken from the packet's own rework section.
+
+- Base: `d14a2597` (`d8672546` + merge of `main` `0395135e`).
+- Reviewed: `git diff 430b0e54...d8672546` in full (18 files, +354/-149), `AGENTS.md`, the first
+  report above, the `US-0117` rework section and Gaps, `US-0116`'s Evidence,
+  `docs/terminal-split.md` decision 8, `docs/gui-layout.md`, `crates/terminal-view/src/space/render.rs`,
+  `crates/terminal-view/src/panel/tab_title.rs`, `crates/terminal-view/src/panel/terminal_panel.rs`,
+  `crates/terminal-view/src/terminal_view/search.rs`, `crates/core/src/config/shell.rs`,
+  `crates/settings-ui/src/terminal/shell.rs`.
+- Not re-run here by instruction (the implementer ran the full gate green after the merge, and this
+  machine's disk and CPU are shared): `ci-local`, the workspace build, the app binary.
+
+| command | final line |
+| --- | --- |
+| `cargo test -p oneterm-terminal-view --lib` | `test result: ok. 352 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.80s` |
+| `cargo test -p oneterm-settings-ui --lib` | `test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out` |
+
+`352` is `351` + the one new test. Working tree verified clean before and after the mutation run.
+
+## Verdict
+
+**PASS.** The major is resolved to the coordinator's ruling — in the source *and* in the pixels —
+and all three minors named in the first report are fixed with the corrections written where the
+wrong sentences were. The one remaining gap (`F-117.4`) is declined on reasoning this verifier
+independently confirmed to be real. Three small new observations are recorded below; none of them
+holds the round.
+
+| finding | status |
+| --- | --- |
+| `F-117.1` — corner label covered live output | **FIXED** — chip is `#N` only, badge-sized, opaque, inactive Spaces only; title moved to the tooltip. Verified in source and in four frames. |
+| `F-117.2` — what the ring paints over | **FIXED** — code comment and `terminal-split.md` decision 8 now both say *padding box*, matching the 3 px neutral run the pixels still show. |
+| `F-117.3` — `#N` called "0-based" | **FIXED** — packet Gaps and decision 8 now both say *stable `SpaceId`, allocated monotonically and never reused, not a positional index*. |
+| `F-117.4` — tooltip ignores `TabTitleMode` / manual rename | **OPEN, deliberately; the reasoning is real.** See below. |
+| `F-114.1` — a third shell-name list | **FIXED** — `crates/settings-ui` now reads `ShellKind::display_name`. |
+| `F-114.2` — explicit `program` under a non-`Custom` kind | **FIXED** — `shell_tab_title` prefers the program stem for every kind, with a new test that is mutation-proof. |
+| `F-116.1` — "ten tabs" | **FIXED in Evidence**; one stale "ten" remains in an acceptance line (new minor `R-3`). |
+| `F-116.4` — `close_tabs` doc said "running shell" | **FIXED** — the comment now says *tabs, not live shells*. |
+| counter slot in `px` | **FIXED** — `min_w(rems(4.75))`. |
+
+## 1. `space_number_chip` — read from the source
+
+`crates/terminal-view/src/space/render.rs:239-265`:
+
+```
+.h(px(16.)) .min_w(px(16.)) .px(px(3.)) .line_height(px(16.)) .text_center() .text_xs()
+.bg(cx.theme().background) .text_color(cx.theme().muted_foreground)
+.when_some(tooltip, …Tooltip::new(title)…) .child(format!("#{number}"))
+```
+
+Every element of the ruling holds, and each was checked against the code rather than the report:
+
+- **16 px high, ~18 px wide.** `h(px(16.))` fixed; width is `max(16, glyph + 6)` from
+  `min_w(px(16.))` + `px(px(3.))` — 18 px for `#1`, 20 px for `#0` (measured below). `flex_shrink_0()`
+  keeps it from being squeezed. The channel badge's footprint is the same 16 px
+  (`crates/terminal-view/src/theme/input_channel.rs:38-48`, `.size(px(16.))`), so the two match as claimed.
+- **Opaque `background`.** `.bg(cx.theme().background)` with no `.opacity(…)` anywhere in the
+  function; the old `background.opacity(0.75)` is gone from the file. `muted_foreground` on
+  `background` is the pairing `scripts/check-theme-contrast.py` already enforces at >= 4.5:1, so no
+  private colour was added — confirmed: `git diff` introduces no colour literal.
+- **Inactive Spaces in a split only.** `render.rs:138-146`:
+  `match (&leaf.content, single) { (SpaceContent::Terminal(view), false) if id != active => Some(…), _ => None }`.
+  Three guards, all load-bearing: `single == false` (a lone Space is `SpaceNode::Leaf` at the root,
+  `space/tree.rs:163-165`, and `render_node` hard-codes `false` for every child, `render.rs:107`), so
+  **never on a single Space**; `id != active`, so **never on the active one**; and
+  `SpaceContent::Terminal`, so an empty Space keeps only its `Space #N` placeholder. The `single`
+  fast path at `render.rs:168-179` can therefore only ever wrap a badge.
+- **Tooltip carries the title.** `space_chip_tooltip` (`render.rs:267-273`) trims, drops
+  whitespace-only titles, and routes an absolute path through `crate::panel::trim_path_title`, so
+  `C:\WINDOWS\system32\cmd.exe` hovers as `cmd.exe`. Tested by
+  `the_number_chips_tooltip_names_what_the_space_holds` (`render.rs:397-411`), which now asserts
+  `None` for the three empty cases instead of a bare `#N` string.
+- **One `h_flex`, chip + badge.** `render.rs:150-159` — a single `gpui_component::h_flex()`,
+  `absolute().top(px(5.)).right(px(5.))`, `.children(chip).children(badge)`. Chip left of badge, no
+  overlap possible by construction, and the row is built only when at least one of the two exists.
+
+Two things worth stating that neither the packet nor the first report does:
+
+- The chip has an `ElementId` and a tooltip, so unlike the ring it **does** insert a hitbox
+  (`should_insert_hitbox` includes `tooltip_builder`). It is a `Normal` hitbox with no listeners and
+  no `.occlude()`, so by the same hit-test walk the first report traced (`window.rs:1094-1114`) the
+  terminal under it still receives every click, drag and scroll; the only new behaviour in those
+  ~20x16 px is that hovering shows the tooltip. Correct, and cheap.
+- `space_border_color`, the ring and the `single` fast path are untouched by this diff, so the
+  cue itself was not re-risked while fixing the label.
+
+## 2. The frames, measured
+
+`PIL`, colours as `rgb`, at the captures' own 1:1 scale (1400x900). Terminal ground is
+`rgb(35,39,46)` = `#23272e` on dark and `rgb(250,250,250)` = `#fafafa` on light.
+
+**The ring is still 2 px, and it still moves.** Colour runs across `y=500`:
+
+| frame | left Space's right edge (x≈457-462) | right Space's right edge (x≈909-912) | accent is on |
+| --- | --- | --- | --- |
+| `US-0117-09-split-two-terminals.png` | 3 px `rgb(62,68,81)` + **2 px `rgb(82,139,255)`** | **2 px `rgb(82,139,255)`** + 2 px `rgb(62,68,81)` | right Space |
+| `US-0117-09b-split-two-terminals-focus-moved.png` | **2 px `rgb(82,139,255)`** + 3 px `rgb(62,68,81)` | 3 px `rgb(62,68,81)` | left Space |
+| `US-0117-09-light-split-two-terminals.png` | 3 px `rgb(220,223,232)` + **2 px `rgb(82,111,255)`** | **2 px `rgb(82,111,255)`** + 2 px `rgb(220,223,232)` | right Space |
+| `US-0117-09b-light-split-focus-moved.png` | **2 px `rgb(82,111,255)`** + 3 px `rgb(220,223,232)` | 3 px `rgb(220,223,232)` | left Space |
+
+Exactly 2 px in every frame, on all four edges (the `09b` frames also show it at `x=100` as
+`y=67-68` on top and `y=860-861` on the bottom), and the neutral run beside it stays 3 px — the
+outer border is still not overpainted, which is what `F-117.2`'s correction now says.
+
+**The chip is on the inactive Space only, and it follows focus.** Ink in the band `y=69..88`,
+scanned separately over each half:
+
+| frame | left half | right half |
+| --- | --- | --- |
+| `US-0117-09-split-two-terminals.png` | `#0` at **x=437..450 (w=14), y=76..84 (h=9)** | none |
+| `US-0117-09b-split-two-terminals-focus-moved.png` | none | `#1` at **x=889..900 (w=12), y=76..84 (h=9)** |
+| `US-0117-09-light-split-two-terminals.png` | `#0` at **x=437..450, y=76..84** | none |
+| `US-0117-09b-light-split-focus-moved.png` | none | `#1` at **x=889..900, y=76..84** |
+
+In each frame the half carrying the chip is the half *without* the accent ring, and the pair
+`09`/`09b` shows both swapping when focus moves. Glyph colour is `rgb(154,161,172)` = `#9aa1ac`
+(dark) and `rgb(93,103,122)` = `#5d677a` (light) — `muted.foreground` in both, no private colour.
+
+**Chip box, derived from the ink.** The left Space's padding box ends at `x≈458` and starts at
+`y=68` (border at `y=66-67`). `.top(px(5.))` puts the box at `y=73..88`, and the ink at `y=76..84`
+is centred in that 16 px box to the pixel — consistent with `h(px(16.))` + `line_height(px(16.))`.
+Horizontally, ink + `3 px` padding gives **20 px for `#0`** and **18 px for `#1`**, ending ~5 px in
+from the padding box, as `.right(px(5.))` requires. The packet's table says "~18 px (glyph box
+measured 12x9)"; that is its `#1` measurement — `#0` is 14x9 ink in a 20 px box. Both are
+badge-sized; the packet's number is the narrow case, not the typical one.
+
+The chip's *box* cannot be measured directly, and this is worth recording: `theme.background` is
+`#23272e` in Zed One Dark and `#fafafa` in Zed One Light — **the same value as each theme's terminal
+ground** — so the opaque backdrop is invisible in these two themes and only the glyphs show. The
+opacity claim is therefore verified from the source, not from these pixels; in a theme whose
+terminal ground differs from `background` the chip will read as a solid 16 px box.
+
+**The first prompt line is intact.** Row pitch is 18 px and the first text row's ink is `y=89..102`
+in both halves. Aligning the two Spaces on their first glyph (`x=20` left, `x=472` right, offset
+452) and comparing the whole first-line band `y=88..102` out to the Space's right edge:
+**0 differing pixels out of 6048, in all four frames.** The left line and the right line are
+byte-identical rasters — the tail that the 160 px label washed out is back. The same holds in
+`US-0117-07-split-right-empty-space.png` and its `US-0115` twin (re-captured in this diff): chip ink
+on the inactive terminal Space at `x=437..450, y=76..84`, none on the empty Space, ring 2 px.
+
+One honest qualification the packet overstates (new minor `R-1`): the chip box `y=73..88` **does**
+sit over terminal row 0 (`y=68..85`, the grid starts at the padding box — default
+`PaddingConfig { top: 0.0, right: 5.0, bottom: 0.0, left: 10.0 }`,
+`crates/settings/src/terminal_config/layout.rs:92-101`) and covers its rightmost ~2 cells
+(cell width ≈ 9.2 px). In every capture row 0 happens to be blank — `cmd.exe` emits a newline
+before its prompt — so the comparison above cannot distinguish "covers nothing" from "row 0 was
+empty". What the frames prove is the *prompt* line is untouched and the covered area fell from
+~17 cells to ~2, on half the Spaces. The in-code comment is the accurate record of this
+("the few cells it does cover are covered honestly rather than smeared", `render.rs:237-238`);
+`docs/gui-layout.md:106-109`'s "neither is wide enough to cover live output" is the sentence that
+overstates.
+
+## 3. The minors, confirmed at `file:line`
+
+- **`F-114.1`, the third shell list is gone.** `crates/settings-ui/src/terminal/shell.rs:21-29` is
+  now `const SHELL_KINDS: &[ShellKind]` with no labels; `shell_label` (`:31-33`) is
+  `SharedString::from(kind.display_name())`; the dropdown's options (`:37-40`) and its reverse
+  lookup (`:52-56`, `.find(|kind| kind.display_name() == val.as_ref())`) both go through it. Picking
+  the row that used to read "cmd.exe (Windows)" now reads "Command Prompt", the same string the tab
+  gets. `crates/core/src/config/shell.rs:35-40` records the history rather than repeating the old
+  claim. The label is still the widget's key, but `set_kind` stores the enum (`:57`), so the
+  persisted value did not change — no migration, which is the right call.
+- **`F-114.2`, an explicit program wins for every kind.**
+  `crates/terminal-view/src/panel/tab_title.rs:89-98`: the `file_stem` branch now runs before the
+  `kind == Custom` check, so `kind: cmd, program: nu.exe` labels the tab `nu`. Test
+  `an_explicit_program_wins_over_the_kinds_name` at `tab_title.rs:641-655` covers the Windows path,
+  a POSIX path, and the no-program case.
+  **Mutation:** restoring the old guard (`if kind == ShellKind::Custom && let Some(stem) = …`) gives
+  `test result: FAILED. 351 passed; 1 failed`, the single failure being
+  `an_explicit_program_wins_over_the_kinds_name` at `tab_title.rs:647` —
+  `custom_shell_is_named_after_its_program` and `each_shell_kind_gets_its_own_tab_label` correctly
+  stayed green, so the new test pins exactly the new rule and nothing else. Restored; tree clean;
+  `352 passed` again.
+- **`F-116.4`, `close_tabs`' comment.** `tab_title.rs:321-326` now reads "more than one **tab** …
+  tabs, not live shells: a tab whose shell already exited counts the same", which is what
+  `tab_title.rs`'s body, which counts `victims.len()` does.
+- **`F-116.2`, the kit citation.** `tab_title.rs:428` now cites `tab_panel.rs:333-337` and adds the
+  sense the range carries ("above the kit's own separator").
+- **`F-116.1`, "ten tabs".** The Evidence bullets (`US-0116-…md:280-289`) say **nine**, the leftmost
+  tab is quoted as **"PowerShell"**, and `:289-293` records the correction and why the before scene
+  had ten. See new minor `R-3` for the one line that was missed.
+- **Counter slot.** `crates/terminal-view/src/terminal_view/search.rs:427` is `min_w(rems(4.75))`,
+  with `rems` added to the `gpui` import at `search.rs:17`. The reasoning in the comment is checkable and
+  correct: the kit sets the window rem from the theme font size, `text_xs` scales with it, so a
+  fixed 66 px floor was a floor for one font size only. 4.75 rem is 76 px at the 16 px default —
+  10 px of headroom over the measured 66 px of "No matches".
+
+## 4. `F-117.4` — the double-lease reasoning is real
+
+Confirmed, and the packet's wording is honest.
+
+`SpaceTree::render` is called from inside `Render for TerminalPanel::render`
+(`crates/terminal-view/src/panel/terminal_panel.rs:550-551`), i.e. while the `TerminalPanel` entity
+is leased. `tab_label_with_title` is an inherent method on `TerminalPanel`
+(`terminal_panel.rs:443-449`), so reaching it from `render_leaf` means
+`panel.upgrade()?.read(cx)` on the `WeakEntity` that is already in scope — a re-entrant
+`entity_map::read` on a leased entity, which panics. This is not a theoretical class: the codebase
+already documents the exact failure two functions up, at `terminal_panel.rs:418-424` ("it would
+re-enter the view's lease and panic (`entity_map::read` double-lease)"), and `tab_label_with_title`
+exists *because* of it. The naive one-line fix the first report suggested ("routing the label
+through `tab_label_with_title` would cost one line") would therefore crash the app on first paint of
+any split. **The first report's own estimate was the wrong one, and the packet is right to reject it.**
+
+Two qualifications, so the record is complete rather than flattering:
+
+- The fix is not impossible, only not one line. `self.tree.render(…)` and `&*self` are both shared
+  borrows, so threading a `&TerminalPanel` (or just the resolved `TabTitleMode` plus the override)
+  through `render` / `render_node` / `render_leaf` compiles and needs no entity read. The packet
+  says as much — "it needs the setting passed down the render call instead, which is more than a
+  tooltip is worth here" — so this is a declared judgement call on a hover detail, not a hidden
+  limitation. Accepted at this size; it is the obvious shape if the tooltip ever grows.
+- The face cannot lie, as the packet says: `#N` is the `SpaceId` and is independent of every title
+  setting. Only the hover text can disagree with the tab, and only in `TabTitleMode::Default` or
+  after a manual rename.
+
+## New minors from this pass
+
+- **`R-1` — `docs/gui-layout.md:106-109` overstates.** "neither is wide enough to cover live output"
+  — the chip is ~20 px of opaque `background` over the terminal's own row 0, so it covers about two
+  cells of it when that row has content. "much narrower than the label it replaced, ~2 cells rather
+  than ~17, and only on inactive Spaces" would be true. The in-code comment at `render.rs:237-238`
+  already says the honest version; only this doc sentence does not. Cosmetic, one line.
+- **`R-2` — the tooltip is never captured.** The whole title moved onto a tooltip that no frame in
+  `evidence/` shows. It is code-verified and unit-tested here, which is why this is a minor and not
+  a reservation, but the packet's Gaps list the channel collision and the 2x2 split as unwalked and
+  does not list the tooltip. It should.
+- **`R-3` — one stale "ten" survives `F-116.1`.**
+  `US-0116-tab-context-menu-and-tab-list.md:86` is a **ticked** acceptance box reading "With ten
+  tabs open…", and `:192` is the verification plan's "ten tabs"; both describe a walk that opened
+  nine. `:289` corrects the count in prose, so the file does not lie overall, but a ticked
+  acceptance line naming a count the evidence does not show is the kind of thing `F-116.1` was
+  about. (`:217`, "Close Others on ten tabs destroys nine running shells", is a risk statement about
+  a hypothetical and is fine as written.)
+
+## Gaps in this re-verification
+
+- No GUI walk was run in this pass: the four frames re-captured by the implementer were measured
+  instead, on instruction, to keep the shared disk and CPU free. So the chip's *tooltip*, the ring
+  under a broadcast channel colour, a 2x2 split and the channel/chip collision remain unwalked here
+  exactly as they were after the first pass.
+- Only the two named test targets were run. `cargo fmt`, `clippy`, the workspace test run and the
+  rest of `ci-local` are taken from the implementer's post-merge run, not re-executed.
+- The chip's opaque backdrop could not be measured, because `theme.background` equals the terminal
+  ground in both themes captured. A frame in a theme where the two differ would settle it; the
+  source is unambiguous.
+- `#N` covering row 0 is inferred from the grid geometry (18 px pitch, `padding.top = 0`), not from
+  a capture in which row 0 has text at the right edge. Such a capture would be the direct proof.
