@@ -6,7 +6,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Context, ExternalPaths, Focusable as _, InteractiveElement as _, IntoElement, ParentElement,
-    Render, Role, StatefulInteractiveElement as _, Styled, Window, div,
+    Render, Role, StatefulInteractiveElement as _, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
@@ -29,7 +29,7 @@ use oneterm_theme::notif_ext::notify;
 
 use super::drag::LocalRowDrag;
 use super::panel::SftpPanel;
-use super::table_delegate_menu::on_click_entity;
+use super::table_delegate_menu::{MenuEntry, MenuTarget, build_menu, menu_entries};
 use super::types::SortColumn;
 
 impl Render for SftpPanel {
@@ -80,14 +80,7 @@ impl Render for SftpPanel {
             .size_full()
             .track_focus(self.panel_focus_handle())
             // SFTP context-menu action handlers — also fired by global key bindings.
-            .on_action(cx.listener(|this, _: &SftpOpen, w, cx| {
-                // Open = navigate into a directory, download a file.
-                match (this.browser().selected(), this.selected_entry(cx)) {
-                    (Some(ix), Some(entry)) if entry.is_dir => this.navigate_into(ix, cx),
-                    (Some(_), Some(_)) => this.do_download(w, cx),
-                    _ => {}
-                }
-            }))
+            .on_action(cx.listener(|this, _: &SftpOpen, w, cx| this.do_open(w, cx)))
             .on_action(cx.listener(|this, _: &SftpDownload, w, cx| this.do_download(w, cx)))
             .on_action(cx.listener(|this, _: &SftpEdit, w, cx| this.do_edit(w, cx)))
             .on_action(cx.listener(|this, _: &SftpRename, w, cx| this.do_rename(w, cx)))
@@ -210,58 +203,33 @@ impl SftpPanel {
             .collect::<Vec<_>>();
 
         let follow_terminal_cwd = self.follow().enabled();
+        // The same rule the row menu applies to the same entry, so the two
+        // menus offer the same actions for the same selection (M2). With no
+        // selection the whole list is offered and each action reports what it
+        // needs, which is what this menu always did.
+        let menu_target =
+            MenuTarget::for_selection(self.selected_entry(cx).is_some_and(|entry| entry.is_dir));
+        let entries = menu_entries(menu_target);
+        let entry_count = (
+            entries
+                .iter()
+                .filter(|entry| matches!(entry, MenuEntry::Action(_)))
+                .count(),
+            entries
+                .iter()
+                .filter(|entry| matches!(entry, MenuEntry::Separator))
+                .count(),
+        );
+        let column_rows = col_configs.len();
 
         let more_btn = Button::new("sftp-more")
             .icon(Icon::new(IconName::EllipsisVertical).small())
             .small()
             .ghost()
-            .dropdown_menu(move |menu, _window, _cx| {
-                let mut menu = menu
-                    .item(
-                        PopupMenuItem::new("New Folder")
-                            .icon(Icon::new(IconName::Plus))
-                            .on_click(on_click_entity(
-                                panel_weak.clone(),
-                                SftpPanel::do_new_folder,
-                            )),
-                    )
-                    .item(
-                        PopupMenuItem::new("Upload Files")
-                            .icon(Icon::new(IconName::ArrowUp))
-                            .on_click(on_click_entity(panel_weak.clone(), |this, window, cx| {
-                                this.do_upload(false, window, cx)
-                            })),
-                    )
-                    .item(
-                        PopupMenuItem::new("Upload Folder")
-                            .icon(Icon::new(IconName::ArrowUp))
-                            .on_click(on_click_entity(panel_weak.clone(), |this, window, cx| {
-                                this.do_upload(true, window, cx)
-                            })),
-                    )
-                    .item(
-                        PopupMenuItem::new("Download")
-                            .icon(Icon::new(IconName::ArrowDown))
-                            .on_click(on_click_entity(panel_weak.clone(), SftpPanel::do_download)),
-                    )
-                    .item(
-                        PopupMenuItem::new("Rename")
-                            .icon(Icon::new(IconName::Replace))
-                            .on_click(on_click_entity(panel_weak.clone(), SftpPanel::do_rename)),
-                    )
-                    .item(
-                        PopupMenuItem::new("Delete")
-                            .icon(Icon::new(IconName::Delete))
-                            .on_click(on_click_entity(panel_weak.clone(), SftpPanel::do_delete)),
-                    )
-                    .item(
-                        PopupMenuItem::new("Properties")
-                            .icon(Icon::new(IconName::Info))
-                            .on_click(on_click_entity(
-                                panel_weak.clone(),
-                                SftpPanel::do_properties,
-                            )),
-                    )
+            .dropdown_menu(move |menu, window, _cx| {
+                // The same list the right-click menu renders (F30); the
+                // rows below configure the browser rather than act on it.
+                let mut menu = build_menu(menu, &panel_weak, &entries)
                     .separator()
                     .item({
                         let panel = panel.clone();
@@ -286,7 +254,10 @@ impl SftpPanel {
                             )
                         })
                     })
-                    .separator();
+                    .separator()
+                    // Names the chooser, so the columns the default set leaves
+                    // out are findable (US-0124).
+                    .item(PopupMenuItem::new("Columns").disabled(true));
 
                 // Columns config — a checkbox for each column (Name is always checked + disabled).
                 for (col, label, visible) in &col_configs {
@@ -308,10 +279,27 @@ impl SftpPanel {
                     menu = menu.item(item);
                 }
 
-                menu
+                // The unified action list made this menu four rows taller, and
+                // the kit applies its own height cap only when `scrollable` is
+                // set: without it the last Columns row runs off the bottom of a
+                // short window, unreachable by mouse and by keyboard (m6). The
+                // same estimate the "+" menu uses, for the same reason.
+                //
+                // ponytail: rows are counted, not measured — the popup has no
+                // laid-out bounds while it is being built — so a menu within a
+                // row of the cap can guess wrong by one row.
+                const ROW_HEIGHT: f32 = 28.;
+                const SEPARATOR_HEIGHT: f32 = 9.;
+                let separators = entry_count.1 + 2;
+                // Actions + Follow Terminal Cwd + the Columns label + a row per column.
+                let rows = entry_count.0 + 2 + column_rows;
+                let estimated = px(rows as f32 * ROW_HEIGHT + separators as f32 * SEPARATOR_HEIGHT);
+                let cap = (window.window_bounds().get_bounds().size.height * 0.5).min(px(450.));
+                menu.scrollable(estimated > cap)
             });
 
         let expanded = self.expanded();
+        let has_selection = self.browser().selected().is_some();
 
         h_flex()
             .w_full()
@@ -323,8 +311,22 @@ impl SftpPanel {
             .py_5()
             .border_b_1()
             .border_color(theme.border)
+            // Dual pane: the visible way to move the selected remote entry to
+            // the Local pane, sitting next to the Local pane's Upload button on
+            // the other side of the split (US-0124 / F30).
             .when(expanded, |this| {
                 this.child(
+                    Button::new("sftp-download-to-local")
+                        .icon(Icon::new(IconName::ArrowDown).small())
+                        .label("Download")
+                        .small()
+                        .ghost()
+                        .flex_shrink_0()
+                        .disabled(!has_selection)
+                        .tooltip("Download the selected entry into the Local pane's directory")
+                        .on_click(cx.listener(|this, _, window, cx| this.do_download(window, cx))),
+                )
+                .child(
                     div()
                         .flex_shrink_0()
                         .text_xs()
@@ -403,11 +405,27 @@ impl SftpPanel {
                 ))
         });
 
+        // The table's columns are fixed widths, so the panel measures the area
+        // it gives them and the delegate lets Name absorb the rest (US-0124).
+        let panel = cx.entity();
         v_flex()
             .id("sftp-file-list")
             .flex_1()
             .min_h_0()
+            .relative()
             .children(error_banner)
+            .child(
+                gpui::canvas(
+                    move |bounds, _, cx| {
+                        panel.update(cx, |this, cx| {
+                            this.set_table_available_width(bounds.size.width, cx);
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(
                 DataTable::new(self.table())
                     .bordered(false)

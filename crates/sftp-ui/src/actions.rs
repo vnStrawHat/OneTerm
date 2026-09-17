@@ -96,6 +96,25 @@ impl SftpPanel {
         }
     }
 
+    /// Open the selection: enter a directory, download a file. The menus and
+    /// the `SftpOpen` binding share this.
+    pub(crate) fn do_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match (self.browser().selected(), self.selected_entry(cx)) {
+            (Some(ix), Some(entry)) if entry.is_dir => self.navigate_into(ix, cx),
+            (Some(_), Some(_)) => self.do_download(window, cx),
+            _ => {
+                window.push_notification(
+                    notify(
+                        NotificationType::Warning,
+                        "Select a file or folder to open.",
+                        cx,
+                    ),
+                    cx,
+                );
+            }
+        }
+    }
+
     /// Rename selected entry.
     /// Opens a dialog with an InputState pre-filled with the current name → sftp.rename().
     pub(crate) fn do_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {

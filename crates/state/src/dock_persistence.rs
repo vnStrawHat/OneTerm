@@ -9,8 +9,8 @@ use std::io;
 use std::path::PathBuf;
 
 use oneterm_core::{
-    AppError, SftpTableState, migrate_json_value, quarantine_file, set_schema_version,
-    update_json_file,
+    AppError, SFTP_TABLE_COLUMNS, SftpTableState, migrate_json_value, quarantine_file,
+    set_schema_version, update_json_file,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -24,7 +24,7 @@ pub fn state_file() -> std::path::PathBuf {
     oneterm_core::config_dir().join("docks.json")
 }
 
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+const CURRENT_SCHEMA_VERSION: u32 = 2;
 const DOCUMENT_NAME: &str = "docks.json";
 
 /// Complete OneTerm-owned `docks.json` document.
@@ -60,17 +60,66 @@ impl Default for DockDocument {
 }
 
 fn parse_document(value: Value) -> io::Result<DockDocument> {
-    let value = migrate_json_value(value, CURRENT_SCHEMA_VERSION, "docks.json", |_, value| {
-        if !value.is_object() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "docks.json schema must be an object",
-            ));
-        }
-        Ok(value)
-    })?;
+    let value = migrate_json_value(
+        value,
+        CURRENT_SCHEMA_VERSION,
+        "docks.json",
+        |from_version, mut value| {
+            if !value.is_object() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "docks.json schema must be an object",
+                ));
+            }
+            if from_version <= 1 {
+                migrate_sftp_table_state_to_v2(&mut value);
+            }
+            Ok(value)
+        },
+    )?;
     serde_json::from_value(value).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
+
+/// `docks.json` v1 -> v2: the SFTP table's column layout (US-0124).
+///
+/// **Lossy by design, and the only lossy part: every stored column width is
+/// dropped.** A v1 width was measured against a table whose Name column was a
+/// fixed 320 px; Name is now derived from the panel width and is never stored,
+/// and the other columns' v1 widths were the v1 defaults, so nothing a user
+/// chose is lost by re-defaulting them. What is left is presentation state that
+/// the browser rebuilds on its next frame, which is why the drop needs no
+/// recovery path of its own beyond the `.bak` every shared write keeps.
+///
+/// Visibility is migrated, not dropped: under the v1 defaults every column was
+/// visible, so `true` records nothing the user did, while `false` is a column
+/// they hid by hand. Explicit hides are kept (for columns that still exist) and
+/// everything else falls back to the v2 defaults — which is what keeps the
+/// narrow dock free of a horizontal scrollbar for an existing user too.
+/// `expanded` and `local_dir` are not column layout and are carried over
+/// untouched.
+///
+/// A document whose `sftp_table_state` is not an object is left alone: the
+/// typed parse below rejects it and the owner's recovery path quarantines it.
+fn migrate_sftp_table_state_to_v2(document: &mut Value) {
+    let Some(state) = document
+        .get_mut("sftp_table_state")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    state.remove("column_widths");
+    // The private field the first cut of US-0124 added, before this migration
+    // replaced it; remove it so a v2 document has one version, the document's.
+    state.remove("version");
+    if let Some(Value::Object(visibility)) = state.get_mut("column_visibility") {
+        visibility.retain(|key, value| value == &Value::Bool(false) && is_known_sftp_column(key));
+    }
+}
+
+fn is_known_sftp_column(key: &str) -> bool {
+    SFTP_TABLE_COLUMNS.contains(&key)
+}
+
 impl DockDocument {
     /// Create a document from a serializable dock layout.
     pub fn from_dock_state<T: Serialize>(state: &T) -> serde_json::Result<Self> {
@@ -209,13 +258,17 @@ mod tests {
         right_dock_open: bool,
     }
 
+    /// Straight deserialization of a shipped 0.5.2 document, without the
+    /// migration step: every field of that schema still has somewhere to land.
+    /// What the migration then does to its column layout is
+    /// `v1_document_migrates_the_sftp_table_layout`.
     #[test]
     fn pre_migration_dock_fixture_preserves_document_fields() {
         let document: DockDocument =
             serde_json::from_str(include_str!("fixtures/docks-0.5.2.json")).unwrap();
         let state: gpui_component::dock::DockAreaState = document.dock_state().unwrap();
 
-        assert_eq!(document.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(document.schema_version, 1, "the fixture is a v1 document");
         assert_eq!(state.version, Some(3));
         assert_eq!(state.center.panel_name, "StackPanel");
         assert_eq!(state.center.children.len(), 1);
@@ -391,6 +444,115 @@ mod persistence_tests {
                 .schema_version,
             CURRENT_SCHEMA_VERSION
         );
+    }
+
+    /// US-0124: a v1 document's SFTP column layout is migrated, not read as is.
+    /// The widths go (they were measured against a fixed-width Name column), the
+    /// user's explicit hides stay, and the fields that are not column layout are
+    /// untouched.
+    #[test]
+    fn v1_document_migrates_the_sftp_table_layout() {
+        let directory = temp_directory("sftp-v1");
+        let path = directory.join("docks.json");
+        std::fs::write(
+            &path,
+            include_str!("../tests/fixtures/persistence/docks-v1.json"),
+        )
+        .unwrap();
+
+        let document = read_dock_document_from(&path)
+            .unwrap()
+            .expect("document exists");
+
+        assert_eq!(document.schema_version, CURRENT_SCHEMA_VERSION);
+        let sftp = document.sftp_table_state.as_ref().expect("SFTP state");
+        assert!(
+            sftp.column_widths.is_empty(),
+            "v1 widths are dropped, not carried over: {:?}",
+            sftp.column_widths
+        );
+        // Only the two columns the user hid by hand survive; the `true` entries
+        // were the v1 default and say nothing, so the v2 defaults decide.
+        let mut kept: Vec<(String, bool)> = sftp
+            .column_visibility
+            .iter()
+            .map(|(key, visible)| (key.clone(), *visible))
+            .collect();
+        kept.sort();
+        assert_eq!(
+            kept,
+            vec![("group".to_string(), false), ("owner".to_string(), false)]
+        );
+        assert!(sftp.expanded, "the dual-pane mode is not column layout");
+        assert_eq!(
+            sftp.local_dir.as_deref(),
+            Some(std::path::Path::new(r"C:\Users\example\projects"))
+        );
+        // The dock layout itself is untouched by the migration.
+        assert_eq!(document.zoomed_panel.as_deref(), Some("terminal"));
+    }
+
+    /// The migration reaches a version-less document too (it is older than v1),
+    /// and writing it back leaves a v2 document that migrates no further.
+    #[test]
+    fn version_less_document_migrates_and_round_trips() {
+        let directory = temp_directory("sftp-v0");
+        let path = directory.join("docks.json");
+        std::fs::write(
+            &path,
+            br#"{"right_dock_open":true,"sftp_table_state":{
+                 "column_widths":{"name":320.0,"size":80.0},
+                 "column_visibility":{"name":true,"owner":false,"bogus":false},
+                 "expanded":false}}"#,
+        )
+        .unwrap();
+
+        let document = read_dock_document_from(&path)
+            .unwrap()
+            .expect("document exists");
+        let sftp = document.sftp_table_state.as_ref().expect("SFTP state");
+        assert!(sftp.column_widths.is_empty());
+        // An unknown column key is dropped with the widths.
+        assert_eq!(sftp.column_visibility.len(), 1);
+        assert_eq!(sftp.column_visibility.get("owner"), Some(&false));
+
+        // Writing it back stores the migrated document at the current version,
+        // keeps the pre-migration bytes as the backup, and is then idempotent.
+        update_dock_document_at(&path, |_| Ok(())).unwrap();
+        let written: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["schema_version"], CURRENT_SCHEMA_VERSION);
+        assert!(
+            written["sftp_table_state"]["column_widths"]
+                .as_object()
+                .is_some_and(|widths| widths.is_empty())
+        );
+        assert!(
+            written["sftp_table_state"].get("version").is_none(),
+            "the field-level version of the first US-0124 cut is removed"
+        );
+        assert!(
+            std::fs::read_to_string(directory.join("docks.bak"))
+                .unwrap()
+                .contains("320.0"),
+            "the pre-migration document survives as the backup"
+        );
+        let first = std::fs::read_to_string(&path).unwrap();
+        update_dock_document_at(&path, |_| Ok(())).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+    }
+
+    /// A document from a future version is refused rather than read with
+    /// unknown-schema fields applied.
+    #[test]
+    fn future_schema_version_is_refused() {
+        let directory = temp_directory("future");
+        let path = directory.join("docks.json");
+        std::fs::write(&path, br#"{"schema_version":99,"right_dock_open":true}"#).unwrap();
+        assert!(matches!(
+            read_dock_document_from(&path),
+            Err(AppError::ConfigLoad { document, .. }) if document == "docks.json"
+        ));
     }
 
     /// Removes the per-test directory when the test ends — on failure too, so a

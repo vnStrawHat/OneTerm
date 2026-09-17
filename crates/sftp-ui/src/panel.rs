@@ -592,6 +592,11 @@ impl SftpPanel {
                 let widths: Vec<_> = widths.iter().map(|p| *p).collect();
                 self.table.update(cx, |t, cx| {
                     t.delegate_mut().apply_widths(&widths);
+                    // `refresh` is the only thing that re-reads `column()`, and
+                    // therefore the only thing that re-derives Name from the
+                    // panel width. Without it a widened column leaves the table
+                    // overflowing its panel until the next listing (M1).
+                    t.refresh(cx);
                     cx.notify();
                 });
                 self.mark_state_dirty();
@@ -686,6 +691,27 @@ impl SftpPanel {
         state
     }
 
+    /// The width the file list has to draw its columns in, measured during
+    /// layout. Only a real change refreshes the table, so the measurement
+    /// cannot drive an endless re-render.
+    pub(crate) fn set_table_available_width(
+        &mut self,
+        width: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = self.table.update(cx, |table, cx| {
+            let changed = table.delegate_mut().set_available_width(width.as_f32());
+            if changed {
+                table.refresh(cx);
+                cx.notify();
+            }
+            changed
+        });
+        if changed {
+            cx.notify();
+        }
+    }
+
     /// Debounce 1s, snapshot the browser state (column widths + visibility,
     /// expanded flag, local directory) on the UI thread, then write it to
     /// docks.json on the background executor.
@@ -752,11 +778,47 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use gpui::TestAppContext;
+    use gpui::{TestAppContext, px};
     use oneterm_core::RemotePath;
 
     use super::SftpPanel;
     use crate::test_backend::FakeSftpBackend;
+
+    /// M1: the width the kit reports on mouse-up reaches the delegate, so the
+    /// next `column()` — which `refresh` is what forces the kit to re-read —
+    /// derives Name against the dragged width instead of the old one.
+    #[gpui::test]
+    fn a_column_resize_reaches_the_delegate(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(oneterm_state::AppState::init);
+        cx.update(crate::browser_state::SftpBrowserStore::init);
+        let (panel, cx) = cx.add_window_view(|window, cx| SftpPanel::new(window, cx));
+        let table = panel.read_with(cx, |panel, _| panel.table().clone());
+
+        // Visible order is Name, Size, Date Modified; the kit reports every
+        // visible column's width, with Size dragged 88 px wider.
+        table.update(cx, |_, cx| {
+            cx.emit(gpui_component::table::TableEvent::ColumnWidthsChanged(
+                vec![px(109.), px(160.), px(116.)],
+            ));
+        });
+        cx.run_until_parked();
+
+        let widths: Vec<(&str, f32)> = table.read_with(cx, |table, _| {
+            table
+                .delegate()
+                .col_configs
+                .iter()
+                .filter(|cfg| cfg.visible)
+                .map(|cfg| (cfg.col.key(), cfg.width))
+                .collect()
+        });
+        assert_eq!(
+            widths,
+            vec![("name", 100.0), ("size", 160.0), ("modified", 116.0)],
+            "the dragged width is kept and Name keeps its derived fallback"
+        );
+    }
 
     /// CORR-67: the 500 ms poll timer runs only while a backend is active.
     #[gpui::test]

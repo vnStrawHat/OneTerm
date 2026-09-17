@@ -172,8 +172,21 @@ pub struct FileEntry {
     pub group: Option<String>,
 }
 
+/// Every column key the SFTP table knows, in display order.
+///
+/// The browser's own `SortColumn` owns what the columns mean; the key list
+/// lives here because `docks.json`'s owner (`oneterm-state`) migrates the
+/// persisted column map and may not depend on the feature crate. A test in
+/// `oneterm-sftp-ui` keeps the two in step.
+pub const SFTP_TABLE_COLUMNS: [&str; 6] =
+    ["name", "size", "modified", "permissions", "owner", "group"];
+
 /// SFTP browser presentation state persisted with the dock document: the
 /// remote table's column layout plus the dual-pane (Local + Remote) mode.
+///
+/// The document's own `schema_version` covers this field; it carries no version
+/// of its own. `docks.json` v1 -> v2 migrates the column layout US-0124
+/// changed (see `oneterm_state::dock_persistence`).
 #[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SftpTableState {
     #[serde(default)]

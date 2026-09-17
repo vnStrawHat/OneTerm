@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "version": 3,
+  "right_dock_open": true,
+  "zoomed_panel": "terminal",
+  "sftp_table_state": {
+    "column_widths": {
+      "name": 320.0,
+      "modified": 140.0,
+      "permissions": 150.0,
+      "size": 80.0,
+      "owner": 90.0,
+      "group": 90.0
+    },
+    "column_visibility": {
+      "name": true,
+      "modified": true,
+      "permissions": true,
+      "size": true,
+      "owner": false,
+      "group": false
+    },
+    "expanded": true,
+    "local_dir": "C:\\Users\\example\\projects"
+  }
+}

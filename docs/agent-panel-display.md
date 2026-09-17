@@ -25,7 +25,12 @@ The display implementation lives in `crates/agent-ui`:
 - `src/view.rs` owns `AgentListView`: registry subscriptions, filters, the
   refresh task (spinner tick, relative-time refresh, stale refresh), and renders
   the panel header, filter chips, tab groups, group badges, the empty state, and
-  the scroll column.
+  the scroll column. The header is drawn in every state, including the empty one,
+  and uses the same shape as the `Session` and `SFTP Browser` section headers of
+  SSH Client mode (`SshClientPanel::render_header`): a `h_8` bar on the `tab_bar`
+  token, one bottom border, the plain title, and a framed trailing control group.
+  The dock skin still suppresses the outer tab bar for the single `agent_panel`
+  leaf, so the panel shows one header and no tab bar (US-0125 / F28).
 - `src/card.rs` renders compact agent cards.
 
 `crates/agent-ui` does not parse OSC bytes and does not know terminal protocol
@@ -169,8 +174,14 @@ The current panel is a simple vertical view:
 
 Current behavior:
 
-1. Empty registry: show the centered empty state `No agents reporting` and
-   `Agents that emit OSC 20308 appear here.`
+1. Empty registry: show the header, then a centered empty state: the bot icon,
+   the headline `No agents are running`, the sentence `A coding agent that reports
+   its status shows up here on its own while it works in one of your terminals.`
+   (the condition is the point: an agent appears only if it emits the sequence),
+   and one dimmed footnote naming the protocol for the
+   curious: `Agents report through the OSC 20308 status sequence.` The copy is a
+   single `EMPTY_STATE` constant in `view.rs`; a unit test holds the protocol
+   identifier to the footnote.
 2. Non-empty registry: show header, filter chips, and a scrolling list.
 3. Tab groups are rendered for groups with at least one card passing the current
    filter.
@@ -341,7 +352,9 @@ Not currently implemented in `agent-ui`:
 
 ## 8. Header, summary, and filters
 
-The header title is `Agents` with a bot icon. The filter row always contains:
+The header title is the plain text `Agents`, matching the `Session` and `SFTP
+Browser` section headers of SSH Client mode; the bot icon now appears only in the
+empty state. The filter row always contains:
 
 | Label | Filter |
 |---|---|

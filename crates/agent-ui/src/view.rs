@@ -23,6 +23,31 @@ const RELATIVE_TIME_TICK: Duration = Duration::from_secs(1);
 /// How often the registry is polled to mark idle cards stale (§9).
 const STALE_TICK: Duration = Duration::from_secs(15);
 
+/// Section header title. The right dock's other mode draws "Session" and
+/// "SFTP Browser" headers in the same shape, so Agent mode names itself the
+/// same way (`docs/agent-panel-display.md` §1.1).
+const HEADER_TITLE: &str = "Agents";
+
+/// Empty-state copy (`docs/agent-panel-display.md` §4).
+///
+/// Whoever is reading an empty panel is the least likely to know what OSC 20308
+/// is, so the headline and the body describe the thing running in the terminal
+/// and the footnote names the protocol once, for the curious.
+struct EmptyStateCopy {
+    headline: &'static str,
+    body: &'static str,
+    footnote: &'static str,
+}
+
+const EMPTY_STATE: EmptyStateCopy = EmptyStateCopy {
+    headline: "No agents are running",
+    // "that reports its status" is the precondition, not decoration: an agent
+    // appears only if it emits the sequence, and most do not (m7).
+    body: "A coding agent that reports its status shows up here on its own \
+           while it works in one of your terminals.",
+    footnote: "Agents report through the OSC 20308 status sequence.",
+};
+
 /// Card-state filter for the header chips (§8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Filter {
@@ -281,57 +306,78 @@ struct StatusChipSpec {
 }
 
 impl AgentListView {
+    /// The panel's section header. Same shape as `SshClientPanel::render_header`
+    /// (`h_8`, tab-bar background, one bottom border, a trailing control group),
+    /// so the right dock's two modes read as siblings.
+    fn render_title_bar(&self, pal: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let ended = self.ended_count();
+        h_flex()
+            .w_full()
+            .h_8()
+            .flex_shrink_0()
+            .items_center()
+            .bg(pal.tab_bar)
+            .border_b_1()
+            .border_color(pal.border)
+            .child(
+                div()
+                    .flex_1()
+                    .px_2()
+                    .text_sm()
+                    .text_color(pal.foreground)
+                    .child(HEADER_TITLE),
+            )
+            // Ended cards are kept for review but never pruned on their own
+            // (CORR-70); this is the one place that drops them.
+            .when(ended > 0, |this| {
+                this.child(
+                    h_flex()
+                        .h_full()
+                        .items_center()
+                        .flex_shrink_0()
+                        .border_l_1()
+                        .border_color(pal.border)
+                        .px_2()
+                        .child(
+                            div()
+                                .id("agent-clear-ended")
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(pal.muted)
+                                .hover(|this| this.bg(pal.muted.opacity(0.12)))
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    AgentRegistry::global(cx)
+                                        .update(cx, |reg, cx| reg.clear_ended(cx));
+                                }))
+                                .child(format!("Clear ended ({ended})")),
+                        ),
+                )
+            })
+    }
+
     fn render_header(
         &self,
         counts: &AgentStateCounts,
         pal: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let ended = self.ended_count();
-        let title = h_flex()
-            .w_full()
-            .items_center()
-            .gap_1()
-            .child(Icon::new(IconName::Bot).small().text_color(pal.foreground))
-            .child(
-                div()
-                    .font_weight(FontWeight::BOLD)
-                    .text_sm()
-                    .text_color(pal.foreground)
-                    .child("Agents"),
-            )
-            .child(div().flex_1())
-            // Ended cards are kept for review but never pruned on their own
-            // (CORR-70); this is the one place that drops them.
-            .when(ended > 0, |this| {
-                this.child(
-                    div()
-                        .id("agent-clear-ended")
-                        .px_1p5()
-                        .py_0p5()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(pal.muted)
-                        .hover(|this| this.bg(pal.muted.opacity(0.12)))
-                        .on_click(cx.listener(|_, _, _, cx| {
-                            AgentRegistry::global(cx).update(cx, |reg, cx| reg.clear_ended(cx));
-                        }))
-                        .child(format!("Clear ended ({ended})")),
-                )
-            });
-
         v_flex()
             .w_full()
             .flex_shrink_0()
-            .px_2()
-            .py_1()
-            .gap_1()
-            .bg(pal.tab_bar)
-            .border_b_1()
-            .border_color(pal.border)
-            .child(title)
-            .child(self.filter_chips(counts, pal, cx))
+            .child(self.render_title_bar(pal, cx))
+            .child(
+                v_flex()
+                    .w_full()
+                    .px_2()
+                    .py_1()
+                    .bg(pal.tab_bar)
+                    .border_b_1()
+                    .border_color(pal.border)
+                    .child(self.filter_chips(counts, pal, cx)),
+            )
     }
 
     fn filter_chips(
@@ -485,6 +531,8 @@ impl Render for AgentListView {
         let counts = self.counts;
 
         if cards.is_empty() {
+            // The header is drawn in this state too: it is what makes Agent mode
+            // look like SSH Client mode rather than like a bare leaf (F28).
             return v_flex()
                 .id("agent-list-empty")
                 .role(Role::Pane)
@@ -492,21 +540,36 @@ impl Render for AgentListView {
                 .size_full()
                 .track_focus(&self.focus_handle)
                 .bg(pal.background)
-                .items_center()
-                .justify_center()
-                .gap_1()
-                .child(Icon::new(IconName::Bot).large().text_color(pal.muted))
+                .child(self.render_title_bar(&pal, cx))
                 .child(
-                    div()
-                        .text_sm()
-                        .text_color(pal.foreground)
-                        .child("No agents reporting"),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(pal.muted)
-                        .child("Agents that emit OSC 20308 appear here."),
+                    v_flex()
+                        .w_full()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .gap_1()
+                        .px_4()
+                        .child(Icon::new(IconName::Bot).large().text_color(pal.muted))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(pal.foreground)
+                                .child(EMPTY_STATE.headline),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_center()
+                                .text_color(pal.muted)
+                                .child(EMPTY_STATE.body),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_center()
+                                .text_color(pal.muted)
+                                .child(EMPTY_STATE.footnote),
+                        ),
                 )
                 .into_any_element();
         }
@@ -616,6 +679,25 @@ mod tests {
         let working = card(AgentState::Working, Lifecycle::Live);
         assert!(card_passes_filter(Filter::Working, &working));
         assert!(!card_passes_filter(Filter::Done, &working));
+    }
+
+    /// F28: the empty state must be readable by someone who has never heard of
+    /// the protocol. The headline and the body name no protocol identifier; the
+    /// footnote names it exactly once.
+    #[test]
+    fn empty_state_copy_keeps_the_protocol_in_the_footnote() {
+        for line in [EMPTY_STATE.headline, EMPTY_STATE.body] {
+            assert!(!line.contains("OSC"), "{line:?} names the protocol");
+            assert!(!line.contains("20308"), "{line:?} names the protocol");
+        }
+        assert_eq!(EMPTY_STATE.footnote.matches("OSC 20308").count(), 1);
+        // What an agent is here, that it arrives by itself, and the condition
+        // it arrives under — the panel must not promise more than that (m7).
+        assert!(EMPTY_STATE.body.contains("terminals"));
+        assert!(EMPTY_STATE.body.contains("shows up here"));
+        assert!(EMPTY_STATE.body.contains("reports its status"));
+        // The panel names itself in both states.
+        assert_eq!(HEADER_TITLE, "Agents");
     }
 
     /// An ended card never drives the spinner cadence, whatever its last state.

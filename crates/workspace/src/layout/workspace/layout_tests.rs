@@ -445,21 +445,22 @@ fn pre_migration_fixture_loads_and_saves_without_semantic_drift(cx: &mut TestApp
         stored_document.zoomed_panel.as_deref(),
         Some(expected_zoom.as_str())
     );
-    assert_eq!(
-        stored_document
-            .sftp_table_state
-            .as_ref()
-            .expect("saved SFTP table state")
-            .column_widths,
-        expected_sftp.column_widths
+    // Reading the saved document migrates its SFTP column layout (docks.json
+    // v1 -> v2, US-0124): the widths go and only the columns the user hid by
+    // hand survive. The fixture hides `owner` and shows `permissions`, so one
+    // entry is kept and the other falls back to the current defaults.
+    let stored_sftp = stored_document
+        .sftp_table_state
+        .as_ref()
+        .expect("saved SFTP table state");
+    assert!(
+        !expected_sftp.column_widths.is_empty(),
+        "fixture has widths"
     );
+    assert!(stored_sftp.column_widths.is_empty());
     assert_eq!(
-        stored_document
-            .sftp_table_state
-            .as_ref()
-            .expect("saved SFTP table state")
-            .column_visibility,
-        expected_sftp.column_visibility
+        stored_sftp.column_visibility,
+        std::collections::HashMap::from([("owner".to_string(), false)])
     );
     let stored = stored_document.dock_state::<DockAreaState>().unwrap();
     assert_eq!(stored.right_dock, expected.right_dock);
