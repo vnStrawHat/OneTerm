@@ -144,9 +144,28 @@ machine-readable index for the assets attached to that release.
 Entry points:
 
 - Automatic background check after startup when enabled.
+- Manual **Check Now** on Settings ▸ About, in the Updates group beside the
+  update preferences and the status line the check writes to. It runs the same
+  action the About dialog's **Check for Updates** button runs and is disabled
+  while a check, download or install is already running.
+- Manual `Check for Updates` from the AppMenuBar ▸ About dialog.
 - Manual `Install Update` action from the AppMenuBar ▸ About dialog when an
   update is already available.
 - Optional update notification when a newer version is available.
+
+Where the settings live:
+
+| Setting | Settings page |
+|---|---|
+| `auto_check`, `check_interval_hours`, `channel`, `skipped_version`, the status line and **Check Now** | About ▸ Updates |
+| `proxy_url`, `verify_certificates` and the insecure-certificate banner | Network ▸ GitHub Connection |
+
+The two network preferences have their own page rather than a group on the SSH
+page: they belong to the update client, not the SSH client, which has no proxy
+or certificate setting of its own (`US-0121`, `IN-0042`). They still reach the
+same `UpdateConfig` entity and the same `update_config.json` fields, so the
+check and the download read exactly what they did when the group sat under
+About.
 
 Default settings:
 
@@ -407,7 +426,9 @@ Manual smoke tests:
 - Windows portable directory update.
 - Linux user-writable portable directory update.
 - macOS `.app` bundle replacement or documented fallback.
-- Manual check from Settings/About.
+- Manual check from Settings ▸ About (**Check Now**) and from the About dialog.
+- Proxy and certificate settings edited on Settings ▸ Network take effect on
+  the next check.
 - Startup auto-check does not block opening the main window.
 
 ## Release workflow requirements

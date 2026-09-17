@@ -119,6 +119,17 @@ pub(super) fn save_key_bindings(cx: &mut App) {
     UiConfig::persist(cx);
 }
 
+/// Whether `effective` is still the built-in default for an action whose
+/// shipped default is `default` (an unbound action with no default included).
+///
+/// This is the one definition of "unchanged": [`overrides_from_effective`] uses
+/// it to decide what reaches `ui_config.json`, and the Key Bindings row uses it
+/// to decide whether printing the default under the chip would say anything
+/// (`US-0121`).
+pub(super) fn is_at_default(effective: &str, default: Option<&str>) -> bool {
+    effective == default.unwrap_or("")
+}
+
 /// Reduce the effective bindings to the persisted override map: only entries
 /// that differ from the built-in default are kept, and an unbound action whose
 /// default is bound is stored as an empty string.
@@ -127,8 +138,7 @@ fn overrides_from_effective(effective: &HashMap<String, String>) -> HashMap<Stri
         .iter()
         .filter_map(|a| {
             let eff = effective.get(a.id).map(|s| s.as_str()).unwrap_or("");
-            let def = a.default.unwrap_or("");
-            if eff == def {
+            if is_at_default(eff, a.default) {
                 None
             } else {
                 Some((a.id.to_string(), eff.to_string()))

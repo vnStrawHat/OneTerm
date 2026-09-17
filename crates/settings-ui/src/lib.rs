@@ -9,6 +9,8 @@
 //! - [`key_bindings`] — configurable key bindings (grouped by origin).
 //! - [`terminal`] — shell, font, cursor, layout, scroll, bell, security.
 //! - [`ssh`] — SSH connection keepalive and the SFTP browser editor workflow.
+//! - [`updates`] — the Network page (updater proxy + TLS) and the About page's
+//!   update preferences, status and manual check.
 //! - [`appearance`] — theme mode + theme list.
 //! - [`about`] — version info + links.
 //!

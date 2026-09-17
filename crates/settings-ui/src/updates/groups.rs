@@ -2,11 +2,13 @@
 
 use gpui::{App, IntoElement, ParentElement as _, SharedString, Styled, Window};
 use gpui_component::{
-    ActiveTheme as _, Sizable as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     label::Label,
-    setting::{NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem},
+    setting::{
+        NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
+    },
     v_flex,
 };
 use oneterm_update::{MAX_CHECK_INTERVAL_HOURS, UpdateChannel, UpdateConfig};
@@ -28,18 +30,34 @@ pub(crate) fn group(cx: &App) -> SettingGroup {
     if let Some(skipped) = config.skipped_version.clone() {
         items.push(skipped_version_item(skipped));
     }
+    items.push(check_now_item(state.clone()));
     items.push(status_item(state));
     SettingGroup::new().title("Updates").items(items)
 }
 
-/// Build the About-page update network group.
-pub(crate) fn network_group(cx: &App) -> SettingGroup {
+/// Build the "Network" settings page — how the updater reaches GitHub.
+///
+/// These are the update client's settings, not the SSH client's
+/// (`docs/auto-update.md` §Data ownership), which is why they have their own
+/// page rather than a group on the SSH page (`US-0121`).
+pub(crate) fn network_page(cx: &App) -> SettingPage {
+    SettingPage::new("Network")
+        .resettable(true)
+        .icon(Icon::new(IconName::Globe))
+        .group(network_group(cx))
+}
+
+/// The update client's network group — proxy and TLS verification.
+fn network_group(cx: &App) -> SettingGroup {
     let config = UpdateUiState::config(cx).read(cx).clone();
     let mut items = vec![proxy_item(config.clone()), certificate_item(config.clone())];
     if !config.verify_certificates {
         items.push(insecure_certificates_warning());
     }
-    SettingGroup::new().title("Network").items(items)
+    SettingGroup::new()
+        .title("GitHub Connection")
+        .description("How OneTerm reaches GitHub Releases to check for and download updates.")
+        .items(items)
 }
 
 fn auto_check_item(config: UpdateConfig) -> SettingItem {
@@ -214,6 +232,32 @@ fn insecure_certificates_warning() -> SettingItem {
         },
     )
     .keywords(["insecure", "certificate", "tls"])
+}
+
+/// The manual check, running the same action the About dialog's
+/// "Check for Updates" button runs, so the update settings and the update
+/// action finally live on one surface (`US-0121`).
+fn check_now_item(state: UpdateUiState) -> SettingItem {
+    let busy = state.is_busy();
+    SettingItem::new(
+        "Check for Updates",
+        SettingField::element(
+            move |_options: &RenderOptions, _window: &mut Window, _cx: &mut App| {
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .child(
+                        Button::new("settings-check-update")
+                            .label("Check Now")
+                            .disabled(busy)
+                            .on_click(|_, window, cx| super::check_now(window, cx)),
+                    )
+                    .into_any_element()
+            },
+        ),
+    )
+    .description("Ask GitHub Releases now, whatever the interval says.")
+    .keywords(["update", "check"])
 }
 
 fn status_item(state: UpdateUiState) -> SettingItem {

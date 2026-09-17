@@ -1,10 +1,11 @@
 //! [`SettingsPanel`] — the General Settings view shown in its own window.
 //!
 //! Wraps the gpui-component [`Settings`] widget (a sidebar + page layout) with
-//! six pages: General (UI font), Key Bindings (configurable shortcuts grouped by
-//! origin), Terminal (shell/font/cursor/layout/scroll/bell/security), SSH
-//! (connection keepalive + the SFTP editor workflow), Appearance
-//! (theme mode + theme list), and About. The Terminal page reads/writes the global
+//! seven pages: General (UI font), Key Bindings (configurable shortcuts grouped
+//! by origin), Terminal (shell/font/cursor/layout/scroll/bell/security), SSH
+//! (connection keepalive + the SFTP editor workflow), Network (how the updater
+//! reaches GitHub), Appearance (theme mode + theme list), and About. The
+//! Terminal page reads/writes the global
 //! [`TerminalSettings`] and persists changes to `terminal.json`; the Appearance
 //! page drives the gpui-component [`Theme`] / [`ThemeRegistry`].
 //!
@@ -88,6 +89,7 @@ impl SettingsPanel {
             key_bindings::page(),
             terminal::page(),
             ssh::page(cx),
+            updates::network_page(cx),
             appearance::page(cx),
             about::page(cx),
         ]

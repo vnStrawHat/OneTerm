@@ -11,6 +11,6 @@ mod notify;
 mod state;
 
 pub(crate) use actions::{check_now, skip_offered_version, start_auto_check};
-pub(crate) use groups::{group, network_group};
+pub(crate) use groups::{group, network_page};
 pub(crate) use install::download_and_install_update;
 pub(crate) use state::UpdateUiState;

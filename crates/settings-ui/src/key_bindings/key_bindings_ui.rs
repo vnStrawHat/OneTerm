@@ -19,7 +19,7 @@ use gpui_component::{
 
 use super::key_bindings_actions::{BINDABLE_ACTIONS, BindableAction};
 use super::state::{
-    KeyBindingsState, apply_key_bindings, conflicting_action, is_modifier_only,
+    KeyBindingsState, apply_key_bindings, conflicting_action, is_at_default, is_modifier_only,
     keystroke_to_string, save_key_bindings,
 };
 
@@ -70,12 +70,19 @@ pub(crate) fn page() -> SettingPage {
     page
 }
 
-/// Description line showing the built-in default keystroke (or "(unbound)").
-fn show_default(default: Option<&str>) -> String {
-    match default {
+/// The "Default: \u2026" line under a row's label, or `None` when the row is at
+/// its default and the line would only repeat the chip beside it (`US-0121`).
+///
+/// A row that differs keeps the line, because that is what makes **Reset**
+/// mean something: it names the keystroke Reset would restore.
+fn show_default(effective: &str, default: Option<&str>) -> Option<String> {
+    if is_at_default(effective, default) {
+        return None;
+    }
+    Some(match default {
         Some(default) => format!("Default: {default}"),
         None => "Default: (unbound)".to_owned(),
-    }
+    })
 }
 
 // ── Row rendering ─────────────────────────────────────────────────────
@@ -126,12 +133,15 @@ fn render_binding_row(
             .justify_between()
             .items_center()
             .child(
-                v_flex().gap_0p5().child(a.label).child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(show_default(a.default)),
-                ),
+                v_flex()
+                    .gap_0p5()
+                    .child(a.label)
+                    .children(show_default(&eff, a.default).map(|line| {
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(line)
+                    })),
             )
             .child(
                 h_flex()
@@ -304,8 +314,47 @@ mod tests {
     }
 
     #[test]
-    fn default_line_names_the_keystroke_or_unbound() {
-        assert_eq!(show_default(Some("ctrl-shift-t")), "Default: ctrl-shift-t");
-        assert_eq!(show_default(None), "Default: (unbound)");
+    fn a_row_at_its_default_prints_its_binding_once() {
+        // Chip and line would say the same thing, so the line goes.
+        assert_eq!(show_default("ctrl-shift-t", Some("ctrl-shift-t")), None);
+        // An action that ships unbound and is still unbound: nothing to say.
+        assert_eq!(show_default("", None), None);
+    }
+
+    #[test]
+    fn a_rebound_row_still_names_the_default_reset_would_restore() {
+        assert_eq!(
+            show_default("ctrl-alt-t", Some("ctrl-shift-t")),
+            Some("Default: ctrl-shift-t".to_owned())
+        );
+        // Unbound by the user, but the action ships with a default.
+        assert_eq!(
+            show_default("", Some("ctrl-shift-t")),
+            Some("Default: ctrl-shift-t".to_owned())
+        );
+        // Bound by the user, but the action ships unbound.
+        assert_eq!(
+            show_default("ctrl-alt-t", None),
+            Some("Default: (unbound)".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_default_line_agrees_with_what_is_persisted_as_an_override() {
+        // The line appears exactly when the action would be written to
+        // `ui_config.json`, so the two can never disagree about "changed".
+        for (effective, default) in [
+            ("ctrl-t", Some("ctrl-t")),
+            ("ctrl-t", Some("ctrl-w")),
+            ("", Some("ctrl-t")),
+            ("", None),
+            ("ctrl-t", None),
+        ] {
+            assert_eq!(
+                show_default(effective, default).is_none(),
+                is_at_default(effective, default),
+                "{effective:?} vs {default:?}"
+            );
+        }
     }
 }

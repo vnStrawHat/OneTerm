@@ -114,7 +114,6 @@ pub(crate) fn open_about_dialog(window: &mut Window, cx: &mut App) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AboutGroup {
     Links,
-    Network,
     Updates,
     Identity,
 }
@@ -122,12 +121,8 @@ enum AboutGroup {
 // GPUI Kit 0.6 numbers sidebar entries after filtering out untitled groups,
 // while scroll targets index every group. Every group here carries a title so
 // the identity block can lead the page without desynchronising the sidebar.
-const ABOUT_GROUP_ORDER: [AboutGroup; 4] = [
-    AboutGroup::Identity,
-    AboutGroup::Links,
-    AboutGroup::Network,
-    AboutGroup::Updates,
-];
+const ABOUT_GROUP_ORDER: [AboutGroup; 3] =
+    [AboutGroup::Identity, AboutGroup::Links, AboutGroup::Updates];
 
 /// Build the "About" settings page.
 pub(crate) fn page(cx: &gpui::App) -> SettingPage {
@@ -139,7 +134,6 @@ pub(crate) fn page(cx: &gpui::App) -> SettingPage {
             page.group(match group {
                 AboutGroup::Identity => about_group(),
                 AboutGroup::Links => links_group(),
-                AboutGroup::Network => updates::network_group(cx),
                 AboutGroup::Updates => updates::group(cx),
             })
         },
