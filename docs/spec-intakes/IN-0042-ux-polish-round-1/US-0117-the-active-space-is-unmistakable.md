@@ -13,7 +13,7 @@ Created: 2026-09-17
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -70,16 +70,15 @@ change it; `US-0126` reports it as an observation.
 
 - [x] With two Spaces side by side, a reviewer looking at a screenshot at 100 % identifies the
       active one without measuring. This is the acceptance; the exact width is the means.
-- [x] Each **inactive** Space in a split carries a small chip saying *which* Space it is
-      (`#N`), legible at the default font size, with what it holds on the chip's tooltip.
-      (Reworded by the `F-117.1` ruling: the original "a small label naming what it holds"
-      was met by a 160px chip that covered live output. The active Space carries no chip —
-      the ring already answers it.)
+- [ ] ~~Each **inactive** Space in a split carries a small chip saying *which* Space it is
+      (`#N`), legible at the default font size, with what it holds on the chip's tooltip.~~
+      **Withdrawn by the owner on 2026-09-17** — see "Acceptance rework" below. The chip is
+      removed entirely; the 2 px ring is the whole cue.
 - [x] A single Space stays borderless and unlabelled — nothing appears where nothing appeared
       before.
-- [ ] The chip does not collide with, hide, or replace the channel badge when a Space belongs
-      to a broadcast channel. (True by construction — one row, chip left of badge — but
-      **unwalked**; see Gaps.)
+- [x] The chip does not collide with, hide, or replace the channel badge when a Space belongs
+      to a broadcast channel. **Moot since the rework**: there is no chip, and the badge is
+      back in the corner on its own, exactly as before this packet.
 - [x] The cue and the chip take their colours from the theme; no colour literal is added to
       `crates/terminal-view`.
 - [x] The cue is visible in both a light and a dark theme, and after `US-0111` raises the
@@ -335,6 +334,67 @@ covers no glyph — which the 160 px label demonstrably did.
   surfaces agree; changing the numbering would be a separate decision about an existing
   surface. (Corrected in the rework round — this sentence previously said "0-based",
   which implies a positional numbering the code does not provide.)
+
+## Acceptance rework 2026-09-17 — the ring is the whole cue, the chip is gone
+
+The owner tried the built round and ruled: **remove the `#N` chip on split Spaces entirely.
+Keep the 2 px active-Space ring.**
+
+This is acceptance rework of this packet: the chip is this packet's own addition, and the
+ruling came while trying this round's build.
+
+### The reasoning the ruling settles
+
+The chip answered "which Space is this?" — a question the ring already answers in the only form
+that matters ("this one is taking my typing"), and that nothing else in the application asks the
+user to know. `#N` is a stable `SpaceId`, so it is not even a position: a split can read `#0` and
+`#5`, which is a number with no meaning outside the code. Against that, the chip paints opaque
+theme background over the first two cells of a running shell's top row, permanently, on every
+inactive Space. The first attempt at it was already reworked once for exactly this
+(`F-117.1`, the 160 px label); the ruling finishes the job rather than shrinking it a second
+time.
+
+Removing it also removes two open items the packet was carrying: `F-117.4` (the chip's tooltip
+read `session.title()` raw and ignored `TabTitleMode::Default` and manual renames — a tooltip
+that can lie) and the unwalked badge-collision case. Neither has a subject any more.
+
+### What changed
+
+| Where | Change |
+|---|---|
+| `crates/terminal-view/src/space/render.rs` | `space_number_chip` and `space_chip_tooltip` deleted, with their tests and the `Tooltip`/`Stateful`/`SharedString` imports they alone needed. The corner slot goes back to what it was before this packet: the channel badge, absolutely positioned 5 px from the top and right, and nothing else — so a Space with no channel has no corner element at all. `active_cue_ring` and `space_border_color` are untouched. |
+| `docs/terminal-split.md` | Decision 8: the number-chip paragraph is gone; the ring paragraph keeps its own text and gains one sentence recording that the chip was tried, reworked and then removed. |
+| `docs/gui-layout.md` | The broadcast-input-channels paragraph drops the two chip sentences and reads as it did before this packet. |
+
+`crate::panel::trim_path_title` stays — the tab label is its other caller.
+
+### Frames
+
+Re-taken on this session's own `fast-dev` build, in the default dark theme, at 1600x1000, with
+`USERPROFILE`/`HOME` and the working directory pointed at a scratch tree so the configuration is
+isolated. Same walk as the round's scenes 07-09: right-click the terminal, Split Right,
+right-click the empty Space, New Terminal Here.
+
+- `evidence/US-0117-rw2-09-split-two-terminals.png` — **scene 09.** Two terminals side by side,
+  the 2 px ring on the right Space. **Neither Space carries a `#N` chip**; compare with
+  `evidence/after/09-split-two-terminals.png`, where the left Space's top-right reads `#0` over
+  the first line of the shell's output.
+- `evidence/US-0117-rw2-09b-split-focus-moved.png` — **scene 09b.** After clicking the left
+  Space: the ring has moved, and again neither Space carries a chip. The ring alone says which
+  Space is active, in both frames.
+
+The empty-Space step was captured too and shows the same thing at the moment the chip was most
+visible before: in `evidence/after/08-empty-space-menu.png` the left Space reads `#0`; in this
+walk it reads nothing.
+
+### Gaps carried
+
+- **`F-117.4` and the badge-collision case are closed by deletion, not by a fix.** If a
+  per-Space label is ever wanted again it inherits both problems fresh, and it should start from
+  why the ring was not enough rather than from this packet's chip.
+- **The two-by-two split is still uncaptured**, as the original Gaps record. Removing the chip
+  removes the only thing that made a narrow Space's chrome grow, so the "chrome creep" risk the
+  packet named has no mechanism left.
 
 ## Handoff
 

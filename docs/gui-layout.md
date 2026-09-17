@@ -138,11 +138,9 @@ text node rather than by flex so the glyph sits in the middle of the square. Eac
 Space carries the same chip as a badge in its top-right corner, inset past the 12 px
 scrollbar track, including the lone Space of an unsplit tab. While a member Space is the
 selected one, its active-Space highlight takes the channel colour; unselected Spaces keep
-the plain border, and the single Space of an unsplit tab stays borderless. Since `US-0117` the badge shares that corner with the Space's own number chip — `#N`, the
-same 16px footprint as the badge, on inactive Spaces only, with what the Space holds on its
-tooltip: one row, the chip left of the badge, so neither hides the other. The chip sits over
-the first two cells of the Space's top row, on inactive Spaces only; the prompt line is
-untouched. The
+the plain border, and the single Space of an unsplit tab stays borderless. The badge is the
+only thing in that corner — `US-0117` briefly put a `#N` chip beside it and the owner removed
+the chip on 2026-09-17, leaving the active-Space ring as the whole cue. The
 badge takes no focus and its clicks activate the Space like any other click in it. Both read the `InputChannelRegistry`, and every `TerminalPanel` observes it,
 so a `Close Channel` performed in one tab repaints the others.
 

@@ -20,5 +20,4 @@ mod terminal_panel;
 mod tests;
 
 pub(crate) use duplicate::DuplicateDestination;
-pub(crate) use tab_title::trim_path_title;
 pub use terminal_panel::{PanelSpec, TerminalPanel};
