@@ -116,9 +116,12 @@ impl SshAuthForm {
                 FieldRequirement::Required,
                 RadioGroup::horizontal("ssh-auth-method")
                     // `control_label` instead of `Radio::from(&str)`, whose
-                    // `.label(…)` clips the `y` of "Private Key" (BUG-0069).
+                    // `.label(…)` clips the `y` of "Private Key" (BUG-0069);
+                    // `items_center` because that taller label box would
+                    // otherwise hang below the radio's indicator.
                     .children(["Password", "Private Key", "SSH Agent"].map(|label| {
                         Radio::new(label)
+                            .items_center()
                             .accessibility_label(label)
                             .child(control_label(label))
                     }))

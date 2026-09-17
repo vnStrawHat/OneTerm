@@ -306,64 +306,165 @@ mod tests {
     /// only reason the renderer gets in within a bounded number of chunks is
     /// that the pump asks the flag and parks. The payload is deliberately not a
     /// terminal — the subject is the flag, not the engine.
+    ///
+    /// It is in three steps, and the order is the whole point (`BUG-0070`):
+    ///
+    /// 1. the frame raises and **waits for the pump to publish the chunk it
+    ///    asked at**, so everything after this is provably behind the pump's
+    ///    first yield rather than racing it. Every wait here is bounded by one
+    ///    deadline, and every assertion runs after the pump is stopped and
+    ///    joined — a panic that skips the join leaves a thread spinning at full
+    ///    speed for the rest of the binary;
+    /// 2. with the demand standing and nobody taking the lock, the pump's chunk
+    ///    rate over a fixed window must collapse to its park — *keeps* yielding,
+    ///    not yielded once;
+    /// 3. only then does the frame take the lock, and the chunks it costs are
+    ///    counted from the mark taken immediately before, against a pump that is
+    ///    already throttled to one `PUMP_PARK` per chunk.
+    ///
+    /// The version this replaced counted from the **raise**, which measured the
+    /// scheduler: until the raise is visible to it the pump is unthrottled — an
+    /// uncontended `lock`/`unlock` plus two atomics, tens of nanoseconds — while
+    /// the renderer's own path to being queued on the mutex is microseconds, so
+    /// on an idle machine it got through 65 and 149 chunks before it could know
+    /// anything, and the test passed only when `cargo test --workspace`
+    /// descheduled it. Every bound below is now measured across the pump's own
+    /// parks, which makes each of them milliseconds of slack rather than a race.
     #[test]
     fn a_pump_yields_to_the_demand_within_a_bounded_number_of_chunks() {
         use std::sync::Mutex;
         use std::sync::atomic::{AtomicBool, AtomicU64};
 
+        /// `asked_at` before the pump has asked once with the demand raised.
+        const NOT_ASKED: u64 = u64::MAX;
+        /// What the pump does at a chunk boundary where a frame is waiting.
+        const PUMP_PARK: std::time::Duration = std::time::Duration::from_micros(250);
+        /// Chunks the pump may still take once the frame starts contending. One
+        /// park each, so this is 2 ms for the renderer to reach the mutex.
+        const BOUND: u64 = 8;
+        /// How long the frame holds the demand up without taking the lock, to
+        /// watch what the pump does with a demand that stands.
+        const STANDING_WINDOW: std::time::Duration = std::time::Duration::from_millis(20);
+
         let engine = Arc::new(Mutex::new(0u64));
         let demand = Demand::new();
         let stop = Arc::new(AtomicBool::new(false));
         let chunks = Arc::new(AtomicU64::new(0));
+        let asked_at = Arc::new(AtomicU64::new(NOT_ASKED));
 
         let pump = {
             let engine = Arc::clone(&engine);
             let demand = demand.clone();
             let stop = Arc::clone(&stop);
             let chunks = Arc::clone(&chunks);
+            let asked_at = Arc::clone(&asked_at);
             std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     {
                         let mut engine = engine.lock().expect("the engine lock was poisoned");
                         *engine += 1;
                     }
-                    chunks.fetch_add(1, Ordering::Relaxed);
+                    let chunk = chunks.fetch_add(1, Ordering::Relaxed) + 1;
                     // The contract: replies first, then the demand check, then
                     // the next lock. The ask takes nothing away — the demand
                     // stands until the renderer holds the lock and releases it
                     // itself.
                     if demand.is_raised() {
-                        std::thread::sleep(std::time::Duration::from_micros(250));
+                        let _ = asked_at.compare_exchange(
+                            NOT_ASKED,
+                            chunk,
+                            Ordering::AcqRel,
+                            Ordering::Relaxed,
+                        );
+                        std::thread::sleep(PUMP_PARK);
                     }
                 }
             })
         };
 
+        // Every wait is bounded, and **nothing below panics before the pump is
+        // stopped and joined**: a panic that skips the join detaches a thread
+        // that spins `while !stop` at full speed until the binary exits, so a
+        // single failing test slows every test after it. Hence the measurement
+        // runs into an `Option` and every assertion waits until after the join.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let wait_for = |ready: &dyn Fn() -> bool| {
+            while !ready() {
+                if std::time::Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::yield_now();
+            }
+            true
+        };
+
         // Let the pump reach its steady state before asking for the lock.
-        while chunks.load(Ordering::Relaxed) < 4 {
-            std::thread::yield_now();
+        let steady = wait_for(&|| chunks.load(Ordering::Relaxed) >= 4);
+        let mut measured = None;
+        if steady {
+            demand.raise();
+            // Do not contend until the pump has provably seen the demand.
+            if wait_for(&|| asked_at.load(Ordering::Acquire) != NOT_ASKED) {
+                let asked = asked_at.load(Ordering::Acquire);
+
+                // The demand stands and nobody is taking the lock: a pump that
+                // yields for as long as a frame is outside pays a park per
+                // chunk, so it cannot get through more than the window holds. A
+                // pump that consumed the demand with its ask, or stopped
+                // asking, is back to full speed here and takes orders of
+                // magnitude more.
+                let before_standing = chunks.load(Ordering::Relaxed);
+                std::thread::sleep(STANDING_WINDOW);
+                let while_standing = chunks.load(Ordering::Relaxed) - before_standing;
+
+                // Now contend. The mark is taken here, not at the raise: from
+                // the ask above the pump is throttled, so this delta is the
+                // frame's own latency measured in parks.
+                let at_contend = chunks.load(Ordering::Relaxed);
+                let waiting = std::time::Instant::now();
+                let chunks_in = {
+                    let _engine = engine.lock().expect("the engine lock was poisoned");
+                    // Read under the lock: outside it the pump adds chunks
+                    // between the acquisition and the load, which is the same
+                    // measurement error one step later.
+                    let chunks_in = chunks.load(Ordering::Relaxed);
+                    // In, so the pump need not yield for this frame any more.
+                    demand.release();
+                    chunks_in
+                };
+                measured = Some((
+                    asked,
+                    while_standing,
+                    at_contend,
+                    chunks_in,
+                    waiting.elapsed(),
+                ));
+            }
         }
-        let at_raise = chunks.load(Ordering::Relaxed);
-        demand.raise();
-        let waiting = std::time::Instant::now();
-        {
-            let _engine = engine.lock().expect("the engine lock was poisoned");
-            // In, so the pump need not yield for this frame any more.
-            demand.release();
-        }
-        let waited = waiting.elapsed();
-        let chunks_waited = chunks.load(Ordering::Relaxed) - at_raise;
 
         stop.store(true, Ordering::Relaxed);
         pump.join().expect("the pump thread panicked");
 
+        assert!(steady, "the pump never reached its steady state");
+        let (asked_at, while_standing, at_contend, chunks_in, waited) =
+            measured.expect("the pump never asked while a frame was waiting");
+        let parks_in_window = (STANDING_WINDOW.as_micros() / PUMP_PARK.as_micros()) as u64 + 1;
+        let chunks_waited = chunks_in.saturating_sub(at_contend);
+
+        assert!(
+            while_standing <= parks_in_window,
+            "the pump took {while_standing} chunks in {STANDING_WINDOW:?} with a frame waiting \
+             (it asked at chunk {asked_at}); a pump that keeps yielding fits \
+             {parks_in_window}"
+        );
         assert!(
             waited < std::time::Duration::from_secs(2),
             "the renderer waited {waited:?} for a pump under sustained output"
         );
         assert!(
-            chunks_waited <= 8,
-            "the renderer waited {chunks_waited} chunks, not one"
+            chunks_waited <= BOUND,
+            "the frame started contending at chunk {at_contend} and only reached the engine at \
+             chunk {chunks_in}"
         );
         assert!(
             !demand.is_raised(),

@@ -197,6 +197,7 @@ pub(crate) fn open_connect_dialog(
                     content.child(
                         div().pt_1().child(
                             Checkbox::new("save-username")
+                                .items_center()
                                 .accessibility_label("Save username to session")
                                 .child(control_label("Save username to session"))
                                 .checked(save_username.get())

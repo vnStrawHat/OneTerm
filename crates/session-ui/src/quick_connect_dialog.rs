@@ -144,6 +144,7 @@ fn save_session_option(
     (!is_duplicate).then(|| {
         div().pt_1().child(
             Checkbox::new("save-session")
+                .items_center()
                 .accessibility_label("Save to SSH Sessions")
                 .child(control_label("Save to SSH Sessions"))
                 .checked(save_session.get())

@@ -84,22 +84,42 @@ pub const CONTROL_LABEL_LINE_HEIGHT: f32 = 1.5;
 /// [`gpui_component::radio::Radio`], passed as a **child** rather than through
 /// `.label(...)`.
 ///
-/// Both controls put a `.label(...)` inside
-/// `v_flex().flex_1().overflow_hidden().line_height(relative(1.2))` wrapping a
-/// label div of `line_height(relative(1.))`
-/// (`gpui-component-0.6.0/src/checkbox.rs:315-318,329`, `radio.rs:236-245`).
-/// The box is therefore exactly one em tall and it **clips**, so the tail of a
-/// `g` or a `p` is cut off — `BUG-0069`: "Loggin**g**" and "Use glo**b**a**l**"
-/// ended flat at the baseline. The clip is what does the damage, not the line
-/// height on its own: `Button` uses the same `relative(1.)` on its label with no
-/// vertical clip around it and renders descenders whole, so a button needs none
-/// of this.
+/// **The control that carries it must also be given `.items_center()`.** Both
+/// implement `Styled` and both apply `.refine_style(&self.style)` after their
+/// own `.items_start()`, so the refinement wins:
+/// `gpui-component-0.6.0/src/radio.rs` — `impl Styled` at `:136-140`,
+/// `.items_start()` at `:198`, `.refine_style(&self.style)` at `:211`; and
+/// `checkbox.rs` — `:119-123`, `:257`, `:271`. Without it the indicator is
+/// pinned to the top of a label box half an em taller than itself and reads as
+/// sitting high — `BUG-0069`'s acceptance rework.
 ///
-/// The inner line height is hard-coded inside the control and cannot be
-/// overridden from outside, so the text goes in as a child instead, in a line
-/// box tall enough that the glyph fits inside the clipping box. Pass the same
-/// text to `accessibility_label`: both controls derive the announced name from
-/// `.label(...)`, so a child alone would lose it.
+/// ## Why the tall line box, and why it is the only lever
+///
+/// **gpui clips every text line to its own line box.** `paint_line` opens
+/// `window.paint_layer(line_bounds, …)` with `line_bounds` exactly `line_height`
+/// tall, and puts the baseline at `padding_top + ascent` where `padding_top` is
+/// `(line_height - ascent - descent) / 2`
+/// (`gpui-pre-0.3.3/src/text_system/line.rs:344-364`; `paint_layer` pushes the
+/// scene layer at `gpui-pre-0.3.3/src/window.rs:4134-4143`. The workspace's
+/// `gpui` is the `gpui-pre` package — see the root `Cargo.toml`). On a font
+/// whose ascent plus descent
+/// is about 1.2 em, a `relative(1.)` line box gives a *negative* `padding_top`:
+/// the glyph hangs out of its own layer and the tail of a `g` or a `p` is cut
+/// off. `BUG-0069`: "Loggin**g**" and "Use glo**b**a**l**" ended flat at the
+/// baseline.
+///
+/// Both controls hard-code `line_height(relative(1.))` on the `.label(...)`
+/// slot, and it cannot be overridden from outside — so the text goes in as a
+/// child instead, in a line box tall enough to contain the glyph. Padding or a
+/// taller wrapper cannot substitute: the clip is the line box, not the element's
+/// box.
+///
+/// `Button` needs none of this — measured whole in every capture `BUG-0069`
+/// took — so do not spread this helper onto button labels; `.label(...)` there
+/// also buys the ellipsis that a bare child loses.
+///
+/// Pass the same text to `accessibility_label`: both controls derive the
+/// announced name from `.label(...)`, so a child alone would lose it.
 pub fn control_label(text: impl Into<SharedString>) -> Div {
     div()
         .line_height(relative(CONTROL_LABEL_LINE_HEIGHT))

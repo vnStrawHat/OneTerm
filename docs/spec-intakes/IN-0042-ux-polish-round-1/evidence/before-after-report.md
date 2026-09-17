@@ -237,7 +237,10 @@ three failures (`crates/terminal/src/handle.rs:364`, "the renderer waited 65 chu
 and recorded: "This is a load-dependent test in `crates/terminal`, which **this diff does not
 touch at all** -- it is pre-existing and unrelated to `US-0124` / `US-0125`. It is worth its own
 `BUG` (the bound, or the test's shape, is wrong -- a test that only passes under contention is not
-a test)." **No `BUG` packet has been opened for it.**
+a test)." ~~**No `BUG` packet has been opened for it.**~~ **Closed 2026-09-17 by
+`BUG-0070`** (`docs/spec-intakes/IN-0032-terminal-crate-tidy/BUG-0070-pump-yield-test-only-passes-under-load.md`),
+which found the test's shape wrong rather than the product: the count started at the renderer's
+raise, which an unthrottled pump outruns before the raise is even visible to it. Test only.
 
 ### 4.4 `F1` is taken from terminal programs
 
@@ -247,6 +250,10 @@ while OneTerm is focused `F1` no longer reaches the terminal view's key map. **A
 in `mc`, `nano`, `htop`, `vim` and `less`.** The record calls this "the same class of cost the
 record set out to remove from `^S`, `^Q`, `^G` and `^@`, on a key used by fewer programs", and says
 moving About again is an amendment to `DEC-0018` plus a packet.
+
+**Closed 2026-09-17 by the owner's ruling**: About ships with **no default binding at all**, so
+`F1` goes back to the foreground program. `DEC-0018` is amended (Status, the Decision table, the
+Consequence above) and `US-0123` carries the code as acceptance rework.
 
 ### 4.5 A live data-loss path left open
 

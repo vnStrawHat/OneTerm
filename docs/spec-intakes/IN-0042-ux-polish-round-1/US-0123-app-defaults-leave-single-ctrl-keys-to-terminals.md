@@ -13,7 +13,7 @@ Created: 2026-09-17
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -159,7 +159,7 @@ table-wide test asserts that no two defaults share a keystroke in one key contex
 |---|---|---|---|---|
 | New SSH Session | `new_ssh_session` | `ctrl-s` | `ctrl-shift-n` | `^S` is XOFF — stops terminal output |
 | Quit | `quit` | `ctrl-q` | `ctrl-shift-q` | `^Q` is XON — resumes terminal output |
-| About OneTerm | `about` | `ctrl-space` | `f1` | `^@`/NUL is set-mark, and the IME toggle on several input methods |
+| About OneTerm | `about` | `ctrl-space` | *(unbound)* | `^@`/NUL is set-mark, and the IME toggle on several input methods. Shipped as `f1` first; the owner unbound it on 2026-09-17 — see "Acceptance rework" below |
 | Toggle Gutter | `toggle_gutter` | `ctrl-g` | *(unbound)* | `^G` is BEL and the readline/Emacs abort; a view toggle earns no default |
 
 Unchanged by explicit exception (`DEC-0018`'s recorded soft spot): `close_panel` = `ctrl-w`,
@@ -453,11 +453,85 @@ It now renders the layer.
   take effect.
 
 
+## Acceptance rework 2026-09-17 — About ships unbound
+
+The owner tried the built round and ruled: **the About action's default binding becomes none.**
+`F1` goes back to the program running in the terminal.
+
+This is acceptance rework of this packet, not a new `BUG`. The Handoff below anticipated the
+opposite routing ("an amendment to `DEC-0018` plus a packet, not a reopening of this one"); the
+owner's ruling came while trying the round's own build, before the shipped default had been
+accepted in use, which `docs/HARNESS.md`'s routing table puts on the owning `US`. The amendment
+to `DEC-0018` is still required and is done; what changes is that this packet carries the code
+instead of a new one.
+
+### Why, in one line
+
+`F1` is the help key of `mc`, `nano`, `htop`, `vim` and `less`. This packet's own Gaps had
+already established — after the owner accepted `f1` — that OneTerm swallows it: every
+`BINDABLE_ACTIONS` row has `context: None`, and gpui dispatches a matched binding before any
+key-down listener, so `F1` never reaches `crates/terminal-view/src/input/keys.rs`. Taking the
+platform help key from every terminal program to reach a dialog opened twice in a product's life
+is the same bad trade `DEC-0018` was written to remove from `^S`, `^Q`, `^G` and `^@`.
+
+### What changed
+
+| Where | Change |
+|---|---|
+| `crates/settings-ui/src/key_bindings/key_bindings_actions.rs` | `about`'s `default` is `None`. Its comment records both moves — `ctrl-space` off by `DEC-0018`, `f1` off by the owner's amendment — and why the row ships unbound rather than moved again. |
+| `key_bindings_actions::tests::the_app_defaults_are_the_ones_dec_0018_records` | `default_for("about")` is `None`, next to `toggle_gutter`'s. |
+| `key_bindings/state.rs::a_profile_with_no_entries_lands_on_the_new_defaults_and_collides_with_nothing` | `effective["about"]` is `""` — the same shape `toggle_gutter` already asserted, so a fresh profile still collides with nothing. |
+| `docs/decisions/DEC-0018-…md` | Amended: the Decision table's About row, an "Amended 2026-09-17" note under Status, and the `f1` Consequence rewritten from a tradeoff into the record of what was done. |
+
+`ACCEPTED_SINGLE_CTRL_DEFAULTS` is untouched — `f1` was never a bare-`Ctrl` default, so the rule
+test's exception set has nothing to lose. The collision rule is untouched and still holds: a user
+who binds About to some keystroke from the Key Bindings page gets an override like any other, it
+is written to `ui_config.json` because it differs from the (now empty) default, and
+`collisions_with_overrides` sees it exactly as it sees every other override. Unbinding a default
+removes a row from the collision space; it removes no rule.
+
+**About stays reachable.** It is the first item of the application menu
+(`crates/workspace/src/layout/app_menus.rs`, `MenuItem::action("About", About)`), which renders
+its keystroke hint from the keymap: with no binding the item shows no hint, and with a user's own
+binding it shows that.
+
+### Frames
+
+- `evidence/US-0123-rw2-app-menu.png` — the application menu (walkthrough scene 25). The About
+  row carries no shortcut hint.
+- `evidence/US-0123-rw2-key-bindings.png` — the Key Bindings page (scene 27). About OneTerm's
+  keystroke cell is empty, like Toggle Gutter's.
+
+### Acceptance, reworked
+
+- [x] `about` ships with no default keystroke.
+- [x] A fresh profile resolves About to unbound and collides with nothing.
+- [x] The bare-`Ctrl` exception set is unchanged and still asserted exactly.
+- [x] About is reachable from the application menu with no shortcut hint.
+- [x] `DEC-0018` records the amendment, dated, under Status and in the Decision table.
+- [x] `cargo test -p oneterm-settings-ui` green; `pwsh scripts/ci-local.ps1` ends with
+      "ci-local: all checks passed".
+
+### Gaps carried
+
+- **Still unverified by keyboard.** The walk posts `WM_*` messages, which set no modifier state
+  and deliver no `F1`, so "the terminal program now receives `F1`" is a code claim —
+  `crates/terminal-view/src/input/keys.rs` maps `f1` and nothing in `BINDABLE_ACTIONS` claims it
+  any more — and not a captured one. It is the same gap `DEC-0018`'s first Consequence carries.
+- **A user who bound About to any *other* key keeps it; one who deliberately typed `f1` does
+  not.** `ui_config.json` only ever stored an entry that differed from the default, so while the
+  default *was* `f1` a hand-typed `f1` was dropped by `overrides_from_effective` and never
+  written. That user comes back unbound and rebinds in one click — the same mechanic
+  `evidence/settings-ui-wave1-verify.md` already recorded, and the price `DEC-0018`'s sparse map
+  charges for not distinguishing "never rebound" from "chose the default". Every non-empty
+  override now persists, because no default holds `f1` any more. (Corrected after
+  `evidence/acceptance-rework-2-verify.md`'s `US123-m1`: the first draft of this line claimed the
+  opposite for exactly the user it named.)
+- **The release-notes clause stays NOT MET** for the same reason as before: `release.yml` renders
+  commit subjects only.
+
 ## Handoff
 
-Complete. `DEC-0018` is Accepted (owner, 2026-09-17) and both merge gates are closed.
-
-One thing for the owner rather than the next agent: `DEC-0018`'s Consequences now record that
-`f1` is taken from the foreground program while OneTerm is focused, traced through gpui's
-dispatch order. That was established after the owner accepted `f1`. Moving About off `F1` is an
-amendment to `DEC-0018` plus a packet, not a reopening of this one.
+Complete. `DEC-0018` is Accepted (owner, 2026-09-17) and both merge gates are closed. Its About
+row was amended the same day by the owner's ruling; see "Acceptance rework 2026-09-17" above,
+which this packet carries.

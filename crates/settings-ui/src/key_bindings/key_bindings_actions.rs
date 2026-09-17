@@ -111,8 +111,13 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         label: "About OneTerm",
         group: "App Menu",
         // `ctrl-space` until `DEC-0018`: `^@` is set-mark, and the IME toggle
-        // on several input methods.
-        default: Some("f1"),
+        // on several input methods. Then `f1` until the owner's amendment of
+        // 2026-09-17: a bound `F1` never reaches the foreground program, so it
+        // was taken from the help key of `mc`, `nano`, `htop`, `vim` and `less`.
+        // Ships unbound rather than moved a second time, for Toggle Gutter's
+        // reason — About is the first item of the application menu, and a
+        // default keystroke buys a twice-in-a-lifetime dialog nothing.
+        default: None,
         context: None,
         make: |ks, ctx| make_binding(ks, About, ctx),
         name_fn: <About as Action>::name_for_type,
@@ -432,7 +437,9 @@ mod tests {
         };
         assert_eq!(default_for("new_ssh_session"), Some("ctrl-shift-n"));
         assert_eq!(default_for("quit"), Some("ctrl-shift-q"));
-        assert_eq!(default_for("about"), Some("f1"));
+        // Both ship unbound: Toggle Gutter by `DEC-0018` as accepted, About by
+        // its amendment of 2026-09-17.
+        assert_eq!(default_for("about"), None);
         assert_eq!(default_for("toggle_gutter"), None);
         // Kept by DEC-0018's explicit exception, not by oversight.
         assert_eq!(default_for("close_panel"), Some("ctrl-w"));

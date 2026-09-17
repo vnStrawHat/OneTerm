@@ -102,19 +102,17 @@ The owning design is
     channel colour for a member Space, `table_active_border` otherwise — so nothing new is
     hardcoded and the channel rule is unchanged.
 
-    Each **inactive** Space in a split also carries a small **number chip** — `#N` and nothing
-    else, with the channel badge's own 16px footprint, in the channel-badge slot and left of
-    the badge. What the Space holds is on the chip's **tooltip**, not on its face. The first
-    shipped attempt put `#N` *plus the live session title* on the face, in a chip up to 160px
-    wide with a translucent backdrop, on **every** Space including the active one; independent
-    verification found it permanently washing out the first prompt line of every running
-    shell, because the top-right of a terminal is not chrome — it is wherever the output
-    currently is. The chip is therefore `#N` only, and only where the ring is not: the active
-    Space is already answered by its cue, so the chip carries the one thing the cue cannot,
-    which is which Space this is. `#N` is the Space's stable `SpaceId`, allocated
-    monotonically and never reused — not a positional index, so a split whose Spaces have been
-    closed and re-split can read `#0` and `#5`. An empty Space keeps only its placeholder
-    (which already prints `Space #N`) and a lone Space stays unmarked.
+    **The ring is the whole cue. A Space carries no number label**, and the only thing in its
+    top-right corner is the channel badge, when it has a channel. `US-0117` also shipped a
+    per-Space label: first `#N` *plus the live session title* in a chip up to 160px wide on
+    every Space, which independent verification found permanently washing out the first prompt
+    line of every running shell — the top-right of a terminal is not chrome, it is wherever
+    the output currently is — and then a 16px `#N`-only chip on inactive Spaces. The owner
+    removed it on 2026-09-17: the ring already answers "where does my typing go", `#N` is the
+    Space's stable `SpaceId` rather than a position (a split can read `#0` and `#5`), and no
+    label is worth an opaque patch over live output for a number with no meaning outside the
+    code. An empty Space still names itself in its own placeholder (`Space #N`), which covers
+    nothing.
 9. **New Terminal Here**: the empty-Space menu can spawn a local shell in place
    (in MVP scope). It spawns the **default** shell, with no shell picker — the
    empty Space is a placement action, and a user who wants a specific shell

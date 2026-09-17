@@ -400,7 +400,7 @@ mod tests {
         let effective = effective_with(&[]);
         assert_eq!(effective["new_ssh_session"], "ctrl-shift-n");
         assert_eq!(effective["quit"], "ctrl-shift-q");
-        assert_eq!(effective["about"], "f1");
+        assert_eq!(effective["about"], "");
         assert_eq!(effective["toggle_gutter"], "");
         assert!(collisions_with_overrides(&effective).is_empty());
         // ...and nothing was written back, because nothing differs.
