@@ -286,8 +286,10 @@ fn logging_radio(
     value: SshLoggingOverride,
     selected: Rc<Cell<SshLoggingOverride>>,
 ) -> Radio {
-    // `control_label` instead of `.label(label)` — see BUG-0069.
+    // `control_label` instead of `.label(label)`, and `items_center` so the
+    // taller label box stays level with the indicator — see BUG-0069.
     Radio::new(id)
+        .items_center()
         .accessibility_label(label)
         .child(control_label(label))
         .checked(selected.get() == value)
@@ -581,6 +583,7 @@ pub(crate) fn open_session_dialog(
                         .child(jump_host_picker.render(cx))
                         .child(
                             Checkbox::new("agent-forwarding")
+                                .items_center()
                                 .accessibility_label("Forward the SSH agent to the remote host")
                                 .child(control_label("Forward the SSH agent to the remote host"))
                                 .checked(agent_forwarding.get())
