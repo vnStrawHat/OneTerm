@@ -9,8 +9,8 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
-- [ ] In progress
+- [ ] Planned
+- [x] In progress
 - [ ] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
@@ -148,6 +148,66 @@ Before completion, list docs changed or confirm the recorded no-change reason re
   reaction to a moved default may well be to press Reset.
 - `research/before/27-settings-keybindings.png` and `38-keybindings-edit-menu.png` show the
   table as shipped; they are the before pictures.
+
+### The shipped table, before and after
+
+`crates/settings-ui/src/key_bindings/key_bindings_actions.rs`, group `App Menu`. Only the four
+rows `DEC-0018` names change; every other default in `BINDABLE_ACTIONS` is untouched, and the
+table-wide test asserts that no two defaults share a keystroke in one key context.
+
+| Action | id | Old default | New default | Why it moved |
+|---|---|---|---|---|
+| New SSH Session | `new_ssh_session` | `ctrl-s` | `ctrl-shift-n` | `^S` is XOFF — stops terminal output |
+| Quit | `quit` | `ctrl-q` | `ctrl-shift-q` | `^Q` is XON — resumes terminal output |
+| About OneTerm | `about` | `ctrl-space` | `f1` | `^@`/NUL is set-mark, and the IME toggle on several input methods |
+| Toggle Gutter | `toggle_gutter` | `ctrl-g` | *(unbound)* | `^G` is BEL and the readline/Emacs abort; a view toggle earns no default |
+
+Unchanged by explicit exception (`DEC-0018`'s recorded soft spot): `close_panel` = `ctrl-w`,
+`new_terminal_tab` = `ctrl-t`. Unchanged because they were never in scope: `toggle_zoom` =
+`shift-escape`, `open_settings` = `ctrl-,`, and every `Edit Menu`, `Terminal Context Menu`,
+`Input Channel`, `Session Tabs Context Menu` and `SFTP Context Menu` row.
+
+`f1` was checked against the gpui-component snapshot before being shipped as a default, as
+this packet's Risks require: no binding, action or keystroke string `f1` exists anywhere under
+`reference/gpui-kit/crates/`, so `apply_key_bindings`'s name-based snapshot filter has nothing
+to miss.
+
+### The migration, and the one case that needs code
+
+The load-bearing fact, quoted as the packet asks — `crates/settings/src/ui_config.rs`:
+
+> Per-action key-binding overrides: action id → keystroke string… Missing entries fall back to
+> the built-in default.
+
+`overrides_from_effective` (`state.rs`) writes only entries that differ from the built-in
+default, and `init_state` resolves `override.or(default)`. So a user still on an old default
+has no entry and the table edit moves them; a user who rebound has an entry and keeps it. No
+migration code, no file rewritten — as `DEC-0018` and the intake's high-level design both say.
+
+The collision is the exception, and it is implemented in `apply_key_bindings`, which is where
+`DEC-0018` puts it. The rule as code: an action still sitting on its shipped default loses that
+keystroke to any *other* action in the same key context whose keystroke is a user override
+parsing to the same key. The displaced action is emptied, so it is unbound both in the keymap
+and on the Key Bindings page — one source of truth rather than a keymap and a page that
+disagree. `apply_key_bindings` runs at startup and after every rebind and reset, so a collision
+reintroduced by **Reset** (which writes a default back without going through the capture UI's
+`conflicting_action` check) is caught too. The `warn` fires only when the resolution actually
+changes something, so it is one line per collision, not one per apply.
+
+The rule is the pure function `collisions_with_overrides(&effective)`, which is where this
+packet's confidence comes from: the three `DEC-0018` cases plus the table-wide assertion are
+unit tests over `(BINDABLE_ACTIONS, overrides)` and need no window.
+
+### Where the release note comes from
+
+`.github/workflows/release.yml` generates the notes from Conventional Commit **subjects** only
+(the body is read solely to detect a `BREAKING CHANGE:` trailer, which promotes the same
+subject line into a "Breaking Changes" section). There is no changelog file for the
+application. The four moved defaults are therefore carried by this packet's commit: a `!`
+subject plus a `BREAKING CHANGE:` trailer listing old → new, so the release names the change in
+its Breaking Changes section and the table itself is one `git show` away. Recorded here because
+"the release notes list the four moved defaults" cannot be satisfied more literally with the
+current generator.
 
 ## Plan
 
