@@ -230,8 +230,15 @@ fn active_cue_ring(color: Hsla) -> gpui::Div {
 /// The corner label of a Space in a split: its stable number, plus the live
 /// session title when the session sets one — so an SSH Space reads
 /// `#2 dev@host` and a silent local shell still reads `#2` rather than nothing.
+/// A title that is nothing but an absolute path is shortened to its last
+/// component, exactly as the tab label does it — `cmd.exe` announces itself as
+/// `C:\WINDOWS\system32\cmd.exe`, which is a path, not a name.
 fn space_corner_label(number: u64, session_title: Option<&str>) -> String {
-    match session_title.map(str::trim).filter(|t| !t.is_empty()) {
+    match session_title
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(crate::panel::trim_path_title)
+    {
         Some(title) => format!("#{number} {title}"),
         None => format!("#{number}"),
     }
@@ -363,6 +370,11 @@ mod tests {
         assert_eq!(
             space_corner_label(2, Some("dev@127.0.0.1: ~")),
             "#2 dev@127.0.0.1: ~"
+        );
+        // A shell that announces itself as a path is named, not pathed.
+        assert_eq!(
+            space_corner_label(1, Some("C:\\WINDOWS\\system32\\cmd.exe")),
+            "#1 cmd.exe"
         );
         // A local shell that sets no title still identifies itself.
         assert_eq!(space_corner_label(3, None), "#3");

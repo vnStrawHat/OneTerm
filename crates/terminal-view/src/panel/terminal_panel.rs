@@ -672,7 +672,7 @@ impl Panel for TerminalPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_component::menu::PopupMenu {
-        super::tab_title::tab_list_menu(menu, &cx.entity(), cx)
+        super::tab_title::tab_list_menu(menu, self, cx)
     }
 
     /// "+" button next to the zoom button — dropdown to spawn a new terminal tab

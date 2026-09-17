@@ -7,7 +7,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use gpui::{
-    App, AppContext as _, ClickEvent, Context, Div, Entity, Focusable as _,
+    App, AppContext as _, ClickEvent, Context, Div, Entity, EntityId, Focusable as _,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
@@ -93,7 +93,7 @@ pub(super) fn shell_tab_title(kind: ShellKind, program: Option<&Path>) -> String
 }
 
 /// Shorten a title that is just an absolute path to its last path component.
-fn trim_path_title(title: &str) -> &str {
+pub(crate) fn trim_path_title(title: &str) -> &str {
     let t = title.trim();
     let bytes = t.as_bytes();
     let is_abs = t.starts_with('/')
@@ -144,9 +144,13 @@ pub(super) fn render_tab_strip(
     let menu_title = tab_label.clone();
     let menu_panel = panel_entity.clone();
     let title_label_id = SharedString::from(format!("tab-title-label-{panel_entity:?}"));
+    // Per-panel, like the label's id below it: the context menu derives its own
+    // element id from this one, and a shared id would give every tab in the
+    // strip the same menu state.
+    let title_row_id = SharedString::from(format!("tab-title-{panel_entity:?}"));
 
     gpui_component::h_flex()
-        .id("tab-title")
+        .id(title_row_id)
         .relative()
         .h_full()
         // No `w_full()`: the kit's `Tab` is content-sized and `flex_shrink_0`
@@ -281,11 +285,21 @@ pub(super) fn tabs_to_close(total: usize, target: usize, scope: CloseScope) -> V
 /// The group can in principle hold panels of other kinds; those are dropped, so
 /// a position in the returned list is not always the group index — which is why
 /// both are carried.
-pub(super) fn sibling_tabs(
+fn sibling_tabs(
     panel: &Entity<TerminalPanel>,
     cx: &App,
 ) -> Option<(Vec<(usize, Entity<TerminalPanel>)>, usize)> {
-    let group = panel.read(cx).tab_panel.as_ref()?.upgrade()?;
+    tabs_of(&panel.read(cx), panel.entity_id(), cx)
+}
+
+/// Same, for a caller that already holds the panel borrowed — reading it back
+/// through its entity there is a double lease and panics.
+fn tabs_of(
+    panel: &TerminalPanel,
+    panel_id: EntityId,
+    cx: &App,
+) -> Option<(Vec<(usize, Entity<TerminalPanel>)>, usize)> {
+    let group = panel.tab_panel.as_ref()?.upgrade()?;
     let tabs: Vec<(usize, Entity<TerminalPanel>)> = group
         .read(cx)
         .panels()
@@ -293,7 +307,9 @@ pub(super) fn sibling_tabs(
         .enumerate()
         .filter_map(|(ix, p)| Some((ix, p.view().downcast::<TerminalPanel>().ok()?)))
         .collect();
-    let position = tabs.iter().position(|(_, tab)| tab == panel)?;
+    let position = tabs
+        .iter()
+        .position(|(_, tab)| tab.entity_id() == panel_id)?;
     Some((tabs, position))
 }
 
@@ -404,29 +420,36 @@ fn tab_context_menu(
 /// It lives in the `...` menu because that is the one menu a panel can add rows
 /// to (`component/src/dock/tab_panel.rs:334-336`), and because the menu
 /// otherwise held a single row duplicating the zoom button beside it.
+///
+/// `panel` is the group's active panel and is already borrowed by the caller
+/// (`Panel::dropdown_menu` takes `&mut self`), so its own row must not read it
+/// back through its entity — that is a double lease and panics.
 pub(super) fn tab_list_menu(
     menu: PopupMenu,
-    panel: &Entity<TerminalPanel>,
-    cx: &App,
+    panel: &TerminalPanel,
+    cx: &mut Context<TerminalPanel>,
 ) -> PopupMenu {
-    let Some((tabs, _)) = sibling_tabs(panel, cx) else {
+    let panel_id = cx.entity_id();
+    let Some((tabs, _)) = tabs_of(panel, panel_id, cx) else {
         return menu;
     };
-    let Some(group) = panel.read(cx).tab_panel.as_ref().and_then(|g| g.upgrade()) else {
+    let Some(group) = panel.tab_panel.as_ref().and_then(|g| g.upgrade()) else {
         return menu;
     };
     let active = group.read(cx).active_ix();
     let mut menu = menu.label("Terminal Tabs");
     for (ix, tab) in tabs {
-        let label = tab.read(cx).tab_label(cx);
+        let label = if tab.entity_id() == panel_id {
+            panel.tab_label(cx)
+        } else {
+            tab.read(cx).tab_label(cx)
+        };
         let group = group.downgrade();
-        menu = menu.item(
-            PopupMenuItem::new(label)
-                .checked(ix == active)
-                .on_click(move |_, window, cx| {
-                    let _ = group.update(cx, |group, cx| group.select_tab(ix, window, cx));
-                }),
-        );
+        menu = menu.item(PopupMenuItem::new(label).checked(ix == active).on_click(
+            move |_, window, cx| {
+                let _ = group.update(cx, |group, cx| group.select_tab(ix, window, cx));
+            },
+        ));
     }
     menu.separator()
 }
@@ -572,10 +595,7 @@ mod tests {
             ShellKind::Zsh,
             ShellKind::Sh,
         ];
-        let labels: Vec<String> = kinds
-            .iter()
-            .map(|k| shell_tab_title(*k, None))
-            .collect();
+        let labels: Vec<String> = kinds.iter().map(|k| shell_tab_title(*k, None)).collect();
 
         assert_eq!(labels[0], "Command Prompt");
         assert_eq!(labels[1], "PowerShell");
@@ -585,7 +605,11 @@ mod tests {
         let mut unique = labels.clone();
         unique.sort();
         unique.dedup();
-        assert_eq!(unique.len(), labels.len(), "duplicate shell labels: {labels:?}");
+        assert_eq!(
+            unique.len(),
+            labels.len(),
+            "duplicate shell labels: {labels:?}"
+        );
         assert!(!labels.iter().any(|l| l == "Terminal"));
     }
 
@@ -610,7 +634,10 @@ mod tests {
     fn a_live_osc_title_still_wins_over_the_shell_name() {
         let fallback = shell_tab_title(ShellKind::PowerShell, None);
 
-        assert_eq!(resolve_tab_label(Some("vim - main.rs"), &fallback), "vim - main.rs");
+        assert_eq!(
+            resolve_tab_label(Some("vim - main.rs"), &fallback),
+            "vim - main.rs"
+        );
         // ...and with no live title the shell name is what shows.
         assert_eq!(resolve_tab_label(None, &fallback), "PowerShell");
         assert_eq!(resolve_tab_label(Some(""), &fallback), "PowerShell");

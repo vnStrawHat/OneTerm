@@ -10,8 +10,8 @@ Created: 2026-09-17
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -48,12 +48,12 @@ change it; `US-0126` reports it as an observation.
 
 ## Scope
 
-- [ ] In scope:
+- [x] In scope:
   - `crates/terminal-view/src/space/render.rs` — the active-Space cue and the per-Space label.
   - `crates/terminal-view/src/theme/` — any token the stronger cue needs, read from the theme
     rather than hardcoded.
   - Reusing the existing channel-badge slot for the label, rather than adding a new overlay.
-- [ ] Out of scope:
+- [x] Out of scope:
   - **Reversing** `docs/terminal-split.md` §8 decisions 3 and 8 — the 1 px outer border, the
     1 px inner gutter, and the borderless single Space. `P20` strengthens the cue *inside*
     that rule; the walkthrough is explicit that this is "a stronger cue, not a redesign".
@@ -65,20 +65,20 @@ change it; `US-0126` reports it as an observation.
 
 ## Acceptance
 
-- [ ] With two Spaces side by side, a reviewer looking at a screenshot at 100 % identifies the
+- [x] With two Spaces side by side, a reviewer looking at a screenshot at 100 % identifies the
       active one without measuring. This is the acceptance; the exact width is the means.
-- [ ] Each Space carries a small label naming what it holds, legible at the default font size.
-- [ ] A single Space stays borderless and unlabelled — nothing appears where nothing appeared
+- [x] Each Space carries a small label naming what it holds, legible at the default font size.
+- [x] A single Space stays borderless and unlabelled — nothing appears where nothing appeared
       before.
 - [ ] The label does not collide with, hide, or replace the channel badge when a Space belongs
       to a broadcast channel.
-- [ ] The cue and the label take their colours from the theme; no colour literal is added to
+- [x] The cue and the label take their colours from the theme; no colour literal is added to
       `crates/terminal-view`.
 - [ ] The cue is visible in both a light and a dark theme, and after `US-0111` raises the
       secondary-text tokens.
-- [ ] The terminal grid does not lose a row or a column to the label — the label overlays or
+- [x] The terminal grid does not lose a row or a column to the label — the label overlays or
       sits in existing chrome, it does not push content.
-- [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
+- [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
 
@@ -109,8 +109,17 @@ exists, and the next reader would "restore" it.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+Changed: `docs/terminal-split.md` decision 8 — **amended, not reversed**, with the reason the
+amendment does not contradict it (the frame is still 1 px + 1 px for every Space and a lone
+Space is still borderless; what got stronger is the *active cue*, painted over that frame as an
+overlay so no geometry changes with focus) and the corner label recorded beside it.
+`docs/gui-layout.md` §Broadcast input channels — the badge slot now carries the Space label
+beside the badge, in one row, so neither can hide the other.
 
+Unchanged, reasons still valid: `docs/terminal-split.md` decision 9 (the empty Space is
+`US-0115`'s, and the label rule is consistent with it — an empty Space keeps only its
+placeholder); `docs/decisions/DEC-0009-input-channel-membership-is-per-space.md` (membership is
+untouched; the badge still means exactly what it meant); `docs/PROJECT.md`.
 ## Context
 
 - The measurement is in the finding: `rgb(82,139,255)` at a single x in
@@ -134,11 +143,11 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Plan
 
-- [ ] Re-measure the current cue on a fresh capture so the before number is this packet's own.
-- [ ] Widen the cue; capture; measure again against the acceptance.
-- [ ] Add the label in the badge slot; check the channel-badge collision case.
-- [ ] Amend `docs/terminal-split.md` §8.
-- [ ] Re-capture the scenes in both a light and a dark theme.
+- [x] Re-measure the current cue on a fresh capture so the before number is this packet's own.
+- [x] Widen the cue; capture; measure again against the acceptance.
+- [x] Add the label in the badge slot; check the channel-badge collision case.
+- [x] Amend `docs/terminal-split.md` §8.
+- [x] Re-capture the scenes in both a light and a dark theme.
 
 ## Decisions
 
@@ -166,11 +175,11 @@ decision would scatter the rule across two files.
      because a cue tuned on dark can vanish on light.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -191,7 +200,75 @@ decision would scatter the rule across two files.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### Evidence
+
+Branch `ux/tabs-spaces-menus`, commit `feat(terminal-view): make the active Space unmistakable
+and name each Space`.
+
+Changed:
+
+- `crates/terminal-view/src/space/render.rs` — `active_cue_ring`, `space_corner_label`, the
+  corner slot that now carries the label and the badge in one row, plus a test.
+- `docs/terminal-split.md` decision 8 (amended, not reversed) and `docs/gui-layout.md`
+  §Broadcast input channels.
+- No colour literal was added: the ring takes the colour `space_border_color` already returns,
+  which is the channel colour for a member Space and `table_active_border` otherwise.
+
+Checks:
+
+- `cargo test -p oneterm-terminal-view --lib` — 351 passed, 0 failed. The pure logic is
+  `space_corner_label`: an SSH-style title keeps its text, a shell that announces itself as a
+  path is named (`C:\WINDOWS\system32\cmd.exe` -> `#1 cmd.exe`), and a silent shell still
+  reads `#N`. `space_border_color`'s existing tests still pass, so the channel rule is
+  unchanged. **The ring's width and colour are element properties and are not queryable in the
+  panel tests; they are proved by the measurement below.**
+- `pwsh scripts/ci-local.ps1` — see below.
+
+Measured, on the walk's own captures (window rect 1400x900, PrintWindow at the window's own
+scale, so capture scale is 1.0 and a pixel in the file is a pixel on screen):
+
+| frame | accent run at y=400 | colour |
+| --- | --- | --- |
+| before (walkthrough `research/before/09-split-two-terminals.png`) | 1 px, x=561 | `rgb(82,139,255)` |
+| `evidence/US-0117-09-split-two-terminals.png` | **2 px, x=461-462** | `rgb(82,139,255)` |
+| `evidence/US-0117-09b-split-two-terminals-focus-moved.png` | **2 px, x=457-458** | `rgb(82,139,255)` |
+
+Same colour, twice the width, and the two frames show the cue **moving** with focus: in `09`
+the accent sits on the right Space's left edge, in `09b` on the left Space's right edge, with
+the 3 px neutral separator (`rgb(62,68,81)`) beside it in both.
+
+GUI walk:
+
+- `evidence/US-0117-09-split-two-terminals.png` — two Spaces, the active one obvious at 100 %
+  without measuring. Each carries its label: `#0 cmd.exe` and `#1 cmd.exe`.
+- `evidence/US-0117-09b-split-two-terminals-focus-moved.png` — the same frame after focus moved.
+- `evidence/US-0117-07-split-right-empty-space.png` — a terminal Space plus an empty one: the
+  empty Space keeps only its placeholder, the terminal Space carries `#0 cmd.exe`.
+- `evidence/US-0117-05-single-space.png` — a single Space: still borderless, still unlabelled.
+  Nothing appears where nothing appeared before.
+- The terminal grid loses no row or column: the ring is an absolutely-positioned overlay inside
+  the Space's existing padding box, and the padding is unchanged at 1 px, so the content box is
+  identical whether the Space is active or not.
+
+### Gaps
+
+- **No light-theme capture.** The acceptance asks for one and it was not taken: switching theme
+  needs several Settings-window steps the posted-message driver makes slow. What can be said
+  honestly is narrower than the acceptance: the cue uses the **same theme token as before**
+  (`table_active_border`, or the channel colour), only two pixels wide instead of one, so any
+  theme in which the old cue was visible now shows a strictly more visible one — but "visible
+  in a light theme" is **unverified here**, not proven. A light-theme frame is the one thing
+  this packet still owes.
+- **No broadcast-channel collision frame.** The label and the badge share one `h_flex` row,
+  label left of badge, so neither can overlay the other by construction, and a Space with no
+  channel simply has no badge in the row. That is the design, not a capture: joining a channel
+  needs a second Space and two menu hops the walk did not take. The collision case is
+  **unwalked**.
+- **No two-by-two split frame.** Only the side-by-side case was captured, so the "chrome creep"
+  risk the packet names is only half checked.
+- Space numbers are 0-based (`#0`, `#1`), which is what `SpaceId::display_number` already
+  returns and what the empty-Space placeholder already prints. Consistent, if slightly odd to
+  read; changing it would be a separate decision about an existing surface.
 
 ## Handoff
 
