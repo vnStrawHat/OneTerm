@@ -35,6 +35,7 @@ use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
 use crate::session_state::SshLoggingOverride;
 use oneterm_settings::TerminalSettings;
 use oneterm_state::commands::SshDuplicateCompletion;
+use oneterm_state::form_dialog::control_label;
 use oneterm_state::{AppServices, AppState};
 use oneterm_terminal::PtySize;
 use oneterm_terminal_view::{PanelSpec, TerminalPanel};
@@ -77,8 +78,14 @@ impl Render for ConnectButton {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let connecting = self.connecting.load(Ordering::Relaxed);
         let action = self.action.clone();
+        let label = if connecting { "Connecting" } else { "Connect" };
         Button::new("connect")
-            .label(if connecting { "Connecting" } else { "Connect" })
+            // `control_label`, not `.label(...)`: the kit wraps a button label in
+            // `line_height(relative(1.))` exactly as it wraps a checkbox's
+            // (`button.rs:685`), so "Connectin*g*" lost its tail (`BUG-0069`
+            // rework).
+            .accessibility_label(label)
+            .child(control_label(label))
             .primary()
             .loading(connecting)
             .disabled(connecting)
@@ -122,8 +129,10 @@ pub(crate) fn connect_failure_message(error: &AppError) -> String {
 pub(crate) struct InlineError {
     message: Rc<RefCell<Option<SharedString>>>,
     /// Kept alive for as long as the dialog is: dropping a `Subscription`
-    /// cancels it.
-    _edits: Rc<Vec<gpui::Subscription>>,
+    /// cancels it. Grows when a dialog builds more inputs later — a quick
+    /// connect rebuilds its jump-hop credential blocks whenever the picker's
+    /// selection moves.
+    edits: Rc<RefCell<Vec<gpui::Subscription>>>,
 }
 
 impl InlineError {
@@ -133,21 +142,26 @@ impl InlineError {
     /// every focus change and every cursor blink, which would wipe the error a
     /// few hundred milliseconds after it appeared.
     pub(crate) fn new(inputs: &[gpui::Entity<InputState>], cx: &mut App) -> Self {
-        let message: Rc<RefCell<Option<SharedString>>> = Rc::new(RefCell::new(None));
-        let edits = inputs
-            .iter()
-            .map(|input| {
-                let message = message.clone();
-                cx.subscribe(input, move |_, event: &InputEvent, _| {
-                    if matches!(event, InputEvent::Change) {
-                        message.borrow_mut().take();
-                    }
-                })
-            })
-            .collect();
-        Self {
-            message,
-            _edits: Rc::new(edits),
+        let error = Self {
+            message: Rc::new(RefCell::new(None)),
+            edits: Rc::new(RefCell::new(Vec::new())),
+        };
+        error.watch(inputs, cx);
+        error
+    }
+
+    /// Also clear when any of `inputs` is edited. Additive, so a dialog that
+    /// builds inputs after the error exists — the jump-hop credential blocks a
+    /// quick connect rebuilds when its picker moves — can hand them over then.
+    pub(crate) fn watch(&self, inputs: &[gpui::Entity<InputState>], cx: &mut App) {
+        for input in inputs {
+            let message = self.message.clone();
+            let subscription = cx.subscribe(input, move |_, event: &InputEvent, _| {
+                if matches!(event, InputEvent::Change) {
+                    message.borrow_mut().take();
+                }
+            });
+            self.edits.borrow_mut().push(subscription);
         }
     }
 

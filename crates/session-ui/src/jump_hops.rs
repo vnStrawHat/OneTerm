@@ -10,6 +10,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, IndexPath,
+    input::InputState,
     select::{Select, SelectState},
     v_flex,
 };
@@ -106,6 +107,17 @@ impl JumpHopForms {
             .find_map(|(_, form)| form.secret_focus_handle(cx))
     }
 
+    /// Every credential input of every hop, so a caller can clear an inline
+    /// error as soon as one of them is corrected (`US-0118` rework): a stale
+    /// error beside a fixed jump-host password is the same defect the packet
+    /// fixed for the target's own password.
+    pub(crate) fn secret_inputs(&self) -> Vec<Entity<InputState>> {
+        self.hops
+            .iter()
+            .flat_map(|(_, form)| form.secret_inputs())
+            .collect()
+    }
+
     /// Render every hop as "Jump host <label> (user@host:port)" followed by
     /// its credential fields; nothing when there is no hop.
     pub(crate) fn render(&self, cx: &App) -> impl IntoElement {
@@ -197,6 +209,11 @@ impl JumpHostPicker {
         let state =
             cx.new(|cx| SelectState::new(items, selected_index, window, cx).searchable(true));
         Self { state, ids }
+    }
+
+    /// Put the cursor on the picker, so a refused Save can point at it.
+    pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.state.update(cx, |picker, cx| picker.focus(window, cx));
     }
 
     pub(crate) fn selected(&self, cx: &App) -> Option<SshSessionId> {

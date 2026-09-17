@@ -18,11 +18,12 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled, Window, div, px,
+    App, AppContext, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Role,
+    SharedString, StatefulInteractiveElement as _, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Colorize as _, Icon, IconName, IndexPath, Sizable as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     color_picker::{ColorPicker, ColorPickerState},
     combobox::ComboboxState,
@@ -136,33 +137,73 @@ fn advanced_is_configured(
     jump_host.is_some() || !port_forwards.is_empty() || agent_forwarding
 }
 
-/// The "Advanced" disclosure header: a chevron and the word, as one click target.
+/// The "Advanced" disclosure header.
+///
+/// A kit [`Button`], not a styled `h_flex`: the disclosure is the **only** route
+/// to jump host, agent forwarding and port forwards, and those three were plain
+/// Tab stops before they were folded away. A `div` with an `on_click` is not
+/// focusable, so a keyboard-only user could no longer reach them at all
+/// (`US-0120` rework). A `Button` is a tab stop, announces itself as a button,
+/// and toggles on Enter and Space.
 fn advanced_header(expanded: Rc<Cell<bool>>, cx: &App) -> impl IntoElement {
-    let icon = if expanded.get() {
+    let open = expanded.get();
+    let icon = if open {
         IconName::ChevronDown
     } else {
         IconName::ChevronRight
     };
-    h_flex()
-        .id("advanced-disclosure")
-        .gap_1()
-        .items_center()
-        .text_sm()
+    Button::new("advanced-disclosure")
+        .ghost()
+        .small()
+        .icon(Icon::new(icon).xsmall())
+        .accessibility_label(if open {
+            "Advanced, expanded"
+        } else {
+            "Advanced, collapsed"
+        })
+        .child(control_label("Advanced"))
+        .justify_start()
         .text_color(cx.theme().muted_foreground)
-        .child(Icon::new(icon).xsmall())
-        .child("Advanced")
         .on_click(move |_, window, _| {
             expanded.set(!expanded.get());
             window.refresh();
         })
 }
 
-/// The eight colours the short row offers, before the full picker.
+/// Which part of the form a refused Save is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InvalidField {
+    /// A port-forward row — behind the Advanced disclosure.
+    PortForward,
+    /// The jump-host picker — behind the Advanced disclosure.
+    JumpHost,
+    /// Label, Host, Port, Username, the key path: always on screen.
+    Basic,
+}
+
+/// Whether a refused Save must open the Advanced disclosure before it shows the
+/// message.
 ///
-/// The first is `US-0110`'s default, so a new session's square is one of the
-/// eight rather than an unlisted value; the rest come from the theme, which is
-/// also where the full picker's own featured row comes from — no colour is
-/// hard-coded here.
+/// `submit` validates the forwards and the jump chain whether or not they are on
+/// screen, so a collapsed disclosure could leave the user blocked by a message
+/// naming a field they cannot see (`US-0120` rework). Opening it first is the
+/// whole fix; a basic field is already visible and must not make the form jump.
+fn reveals_advanced(field: InvalidField) -> bool {
+    matches!(field, InvalidField::PortForward | InvalidField::JumpHost)
+}
+
+/// The eight colours the short row offers, and the full picker's featured row.
+///
+/// **This is the one place the set is defined.** The kit exposes no accessor for
+/// its own default featured row — only a setter, `ColorPicker::featured_colors`
+/// — so the row is defined here and *given* to the picker, which is why the
+/// eight swatches and the eight along the top of the picker are the same eight
+/// (`US-0120` rework; before, the row was eight and the picker's own was a
+/// different twelve).
+///
+/// The first entry is `US-0110`'s default so a new session's colour is one of
+/// the eight; it is the one hard-coded value, and it is hard-coded in
+/// `session_state.rs`, not here. The rest come from the theme.
 fn swatch_colors(cx: &App) -> [Hsla; 8] {
     let theme = cx.theme();
     [
@@ -187,7 +228,7 @@ fn swatch_colors(cx: &App) -> [Hsla; 8] {
 fn color_row(state: &gpui::Entity<ColorPickerState>, cx: &App) -> impl IntoElement {
     let selected = state.read(cx).value();
     let theme = cx.theme();
-    let (border, muted) = (theme.primary, theme.muted_foreground);
+    let border = theme.primary;
     h_flex()
         .gap_2()
         .items_center()
@@ -212,13 +253,25 @@ fn color_row(state: &gpui::Entity<ColorPickerState>, cx: &App) -> impl IntoEleme
                         } else {
                             gpui::transparent_black()
                         })
+                        .role(Role::Button)
+                        .aria_label(color.to_hex())
                         .on_click(move |_, window, cx| {
                             state.update(cx, |state, cx| state.set_value(color, window, cx));
                         })
                 }),
         )
-        .child(ColorPicker::new(state).small())
-        .child(div().text_xs().text_color(muted).child("Custom\u{2026}"))
+        .child(
+            // "Custom…" belongs *inside* the picker's trigger. It used to be a
+            // bare `div` beside it, so clicking the word did nothing and the row
+            // read as nine swatches (`US-0120` rework). The picker's own
+            // featured row is set from `swatch_colors`, so the short row and the
+            // top of the popup are one list.
+            ColorPicker::new(state)
+                .small()
+                .featured_colors(swatch_colors(cx).to_vec())
+                .label("Custom\u{2026}")
+                .accessibility_label("Custom colour\u{2026}"),
+        )
 }
 
 fn logging_radio(
@@ -314,6 +367,10 @@ pub(crate) fn open_session_dialog(
         existing_group_names(store.read(cx).sessions())
     };
 
+    // Whether the store holds any group at all, so the dropdown's no-match
+    // area can tell "none exist" from "none match what you typed".
+    let has_any_group = !existing_groups.is_empty();
+
     // ── Shared cells for the Group Combobox ────────────────────────────
     let group_value: SharedCell = Rc::new(std::cell::RefCell::new(group_val.clone()));
     let query_cell: SharedCell = Rc::new(std::cell::RefCell::new(String::new()));
@@ -396,17 +453,33 @@ pub(crate) fn open_session_dialog(
         let jump_host_picker = jump_host_picker.clone();
         let forward_rows = forward_rows.clone();
         let agent_forwarding = agent_forwarding.clone();
+        let advanced_expanded = advanced_expanded.clone();
         move |window: &mut Window, cx: &mut App| {
             let store = SshSessionStore::global(cx);
+            // A refused Save must never name a field the disclosure is hiding:
+            // open it and put the cursor in the field first, then say why
+            // (`US-0120` rework).
+            let reveal = |field: InvalidField| {
+                if reveals_advanced(field) {
+                    advanced_expanded.set(true);
+                }
+            };
             let port_forwards = match forward_rows.take(cx) {
                 Ok(forwards) => forwards,
-                Err(message) => {
-                    window.push_notification(notify(NotificationType::Warning, message, cx), cx);
+                Err(error) => {
+                    reveal(InvalidField::PortForward);
+                    forward_rows.focus_row(error.row, window, cx);
+                    window.push_notification(
+                        notify(NotificationType::Warning, error.message, cx),
+                        cx,
+                    );
                     return false;
                 }
             };
             let jump_host = jump_host_picker.selected(cx);
             if let Err(error) = store.read(cx).jump_chain(jump_host, edit_id) {
+                reveal(InvalidField::JumpHost);
+                jump_host_picker.focus(window, cx);
                 window.push_notification(
                     notify(NotificationType::Warning, error.to_string(), cx),
                     cx,
@@ -430,6 +503,8 @@ pub(crate) fn open_session_dialog(
             let session = match form.into_session() {
                 Ok(session) => session,
                 Err(message) => {
+                    // A basic field is already on screen; the form must not jump.
+                    reveal(InvalidField::Basic);
                     window.push_notification(notify(NotificationType::Warning, message, cx), cx);
                     return false;
                 }
@@ -520,6 +595,7 @@ pub(crate) fn open_session_dialog(
                         &group_value,
                         &query_cell,
                         &match_count,
+                        has_any_group,
                         cx,
                     ),
                     cx,
@@ -674,6 +750,17 @@ mod tests {
         assert!(advanced_is_configured(Some(id), &[], false));
         assert!(advanced_is_configured(None, &[forward], false));
         assert!(advanced_is_configured(None, &[], true));
+    }
+
+    /// `US-0120` rework: a refused Save opens the disclosure when, and only
+    /// when, the field it names is behind it.
+    #[test]
+    fn a_refused_save_opens_the_disclosure_only_for_a_field_it_hides() {
+        assert!(reveals_advanced(InvalidField::PortForward));
+        assert!(reveals_advanced(InvalidField::JumpHost));
+        // Label, Host, Port, Username, the key path: visible already, so the
+        // form must not jump under the user's cursor.
+        assert!(!reveals_advanced(InvalidField::Basic));
     }
 
     #[test]

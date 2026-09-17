@@ -55,7 +55,8 @@ impl SessionPanel {
     /// Contains 2 large closures:
     /// 1. Item renderer — renders a folder (group) or leaf (session) with
     ///    icon, label, subtitle, and mouse handlers.
-    /// 2. Context menu — right-click on an item → the appropriate menu (Open/Delete/Property).
+    /// 2. Context menu — right-click on an item → the appropriate menu
+    ///    (Open / Properties / New Session / Delete).
     pub(crate) fn render_tree_widget(&self) -> impl IntoElement {
         let store = self.store.clone();
         let right_clicked_ix = self.right_clicked_ix.clone();

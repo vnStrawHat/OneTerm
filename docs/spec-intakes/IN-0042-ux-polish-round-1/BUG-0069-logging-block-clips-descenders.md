@@ -273,11 +273,46 @@ about text rendering. The one sentence worth keeping lives in the rustdoc on
   font size the Appearance page offers" has no control behind it. The check was made
   instead by setting `ui_font_size` to 20 in `target/ui_config.json` — the same value
   the page would persist — and re-capturing.
-- **Checkboxes and radios outside `crates/session-ui` still use `.label(...)`** and
-  still clip: settings-ui, sftp-ui and terminal-view. `control_label` is in the shared
-  `form_dialog` module and is ready for them; fixing them belongs to `US-0121`…`US-0125`
-  and to `US-0126`'s sweep, not to this packet.
+- **Two crates, not three, still have a `.label(...)` checkbox or radio.** The original entry
+  named settings-ui, sftp-ui and terminal-view; `crates/settings-ui` and `crates/terminal-view`
+  contain no `Checkbox`, `Radio`, `RadioGroup` or `Switch` at all. The only remaining sites are
+  `crates/sftp-ui/src/render.rs:276` and `crates/sftp-ui/src/edit.rs:588`. `control_label` is in
+  the shared `form_dialog` module and is ready for them; fixing them belongs to `US-0124` and to
+  `US-0126`'s sweep.
+- **`Button::label` sites with no descender today are left alone**: "Browse" (`auth_form.rs`),
+  "Add" (`forward_rows.rs`) and `FormDialog`'s fixed "Cancel". They are latent — a future
+  wording change reintroduces the clip — and the remedy is one line each.
+- **`CONTROL_LABEL_LINE_HEIGHT = 1.5` is pinned by nothing.** No test and no check catches a
+  change back to 1.0; the value's justification lives only in its rustdoc.
 
 ## Handoff
 
 Use only across actors or sessions: current state, next owner/action, and blockers.
+
+## Rework after independent verification
+
+Verdict **PASS with findings**. The outcome held and the root cause was proven, but the
+verifier found the same cause unfixed on a sibling control and two wrong crate names in Gaps.
+
+- **B69-MAJOR-1 — `Button::label` has the identical defect, in these same dialogs.**
+  `gpui-component-0.6.0/src/button/button.rs:679-687` wraps a button's label in
+  `line_height(relative(1.))`, exactly as `checkbox.rs:329` and `radio.rs:245` do, so the
+  Connect button's in-flight label lost the tail of "Connectin**g**". The packet's Scope
+  covers it ("any sibling that shares the same cause") and its Risks section named this failure
+  mode, so it is in scope, not a new packet. Fixed by the same remedy — the text as a child
+  with `control_label`, plus `accessibility_label`, because `Button` derives its screen-reader
+  name from `.label(...)` the way the other two controls do — at the three sites whose text can
+  carry a descender:
+  - `common.rs` — the Connect button ("Connecting").
+  - `group_combo.rs` — the dropdown footer's `Create "<typed text>"`, which takes arbitrary
+    user text.
+  - `crates/state/src/form_dialog.rs` — `FormDialog`'s confirm button, whose label is the
+    caller's.
+  Measured on the after frame: the `g` of "Connecting" occupies 4 pixel rows below the
+  baseline, against the zero the verifier measured on the same button at `f4ea1765`.
+  Frames: `evidence/BUG-0069-rw-15-connecting-button.png` and
+  `evidence/BUG-0069-rw-15b-connecting-button-6x.png`, beside the verifier's
+  `evidence/BUG-0069-verify-15-connecting-button-6x.png`.
+- **B69-m2.** Gaps corrected: see above.
+- **B69-m3.** Recorded in Gaps rather than fixed — a test that pins a line height needs the
+  laid-out glyph box, which is the same thing the packet already records as unavailable.

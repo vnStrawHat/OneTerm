@@ -101,6 +101,8 @@ pub(crate) fn open_connect_dialog(
     // Failure shown in the dialog, beside the toast (`US-0118`).
     let inline_error = {
         let mut inputs = auth_form.secret_inputs();
+        // A corrected jump-host password must clear the error too.
+        inputs.extend(hop_forms.secret_inputs());
         inputs.extend(username_state.clone());
         InlineError::new(&inputs, cx)
     };

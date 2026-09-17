@@ -140,7 +140,7 @@ both surfaces.
 | 5 | **Password field uses `InputState::masked(true)` + `.mask_toggle()`** | Shows `•••••`, with an eye-icon button to reveal/hide. API already available in gpui-component. |
 | 6 | **Footer: Cancel (left) + Connect (right), right-aligned** | `DialogFooter` defaults to `justify_end` → buttons auto-align right. Matches the requirement. |
 | 7 | **Connect runs async** — the dialog closes on success, the connection runs in the background | Avoids blocking the UI. On failure the dialog **stays open** with the form intact and shows the error inline as well as pushing the notification (`US-0118`, §4.7); connect itself is unchanged. |
-| 8 | **Left-click = Open**, right-click keeps the context menu (Open/Delete/Property). Since `IN-0033` the centre tab bar's `+` menu is a second surface that opens the same dialog by session id | Keeps the current context-menu behavior, adds a left-click shortcut. The `+` menu reuses `open_connect_dialog` rather than duplicating the connect path, so the two surfaces cannot drift. |
+| 8 | **Left-click = Open**, right-click keeps the context menu (Open / Properties / New Session / Delete, §6.5). Since `IN-0033` the centre tab bar's `+` menu is a second surface that opens the same dialog by session id | Keeps the current context-menu behavior, adds a left-click shortcut. The `+` menu reuses `open_connect_dialog` rather than duplicating the connect path, so the two surfaces cannot drift. |
 | 9 | **Saved-session logging is tri-state** (`inherit` / `on` / `off`) | A saved session can use the global SSH policy or explicitly force either outcome; see [`DEC-0003`](decisions/DEC-0003-define-terminal-logging-capture-and-override-semantics.md). |
 
 ---
@@ -400,6 +400,11 @@ because all three share `SshAuthForm` and `connect_ssh_session`.
   decision 1 are untouched: the secret reaches no store, no config file and no log (checked on
   disk after a failed attempt with Save ticked), and an open modal's own state is not
   persistence.
+- **One path has no inline error: an unknown host key.** `AppError::HostKeyUnknown` closes the
+  dialog and opens the host-key prompt (§9.3), so a failure on the *retried* connect has no
+  dialog to echo into and only the toast survives. That is the intended shape — the retry is a
+  new attempt from a different surface — and it is why `connect_ssh_session` sets the inline
+  error only on the arm that leaves the dialog open.
 - **The failure is shown inline as well as in the toast.** `SshConnectRequest::on_failed`
   carries the message the notification shows — the same `SharedString`, so the two cannot
   drift — to an `InlineError` the dialog body renders under its fields. It clears when the user
@@ -415,8 +420,15 @@ because all three share `SshAuthForm` and `connect_ssh_session`.
   creates it, selects it, and closes the dropdown; with a row on screen Enter still belongs to
   the list. The decision is `group_combo::group_commit(query, match_count)`. The handler is a
   **capture**-phase `Confirm` listener, because gpui stops an action after the first
-  bubble-phase listener and the list would otherwise swallow the key. The dropdown's no-match
-  area names the group it would create instead of showing a bare icon.
+  bubble-phase listener and the list would otherwise swallow the key.
+  Creating clears the kit's **own** search input through `ComboboxState::set_query`, which
+  re-runs the search and so refreshes every derived value at once. Clearing a private copy of
+  the query instead left the box showing the spent text while the empty area claimed there were
+  no groups and the footer offered to create nothing — and the next keystroke appended, so
+  "Lab" followed by "inf" created a group called "Labinf".
+  The no-match area names the group it would create instead of showing a bare icon, and it
+  distinguishes "no groups exist" from "none match what you typed"
+  (`group_combo::empty_message`).
 
 ---
 
@@ -943,13 +955,16 @@ Three rules hold across them:
 - **The global action is not in the first slot** of an item menu, where a misclick lands.
 - **Delete confirms and is styled destructive.** It is last, behind its own separator, drawn in
   the theme's danger colour, and it opens the same confirmation the rebindable `DeleteSession`
-  action opens — one function, `panel::confirm_delete_session`, so the two cannot diverge. This
-  matches the SFTP browser's delete, which the walkthrough named as the pattern to copy.
+  action opens — one function, `panel::confirm_delete_session`, so the two cannot diverge. What
+  it takes from the SFTP browser is the **confirmation**: the thing being deleted named in the
+  question and a danger confirm button. SFTP's menu *row* is not red; this one is, which is a
+  deliberate step further and leaves the two menus differing on that point.
 
 The list container and each tree row both carry a context menu. Both hitboxes are hovered over
 a row and gpui runs the container's handler first, so the container's builder checks a flag the
 row's right mouse-down sets and returns an empty menu — which renders nothing — when the click
-landed on a row. See `SessionPanel::row_was_right_clicked`.
+landed on a row. See `SessionPanel::row_was_right_clicked`. The container's menu covers the
+empty-list state too, so the empty-state element carries none of its own.
 
 ### 6.6. The New / Edit SSH Session dialog (`US-0120`)
 
@@ -961,9 +976,21 @@ the **Advanced** disclosure, **Group**, **Logging**.
   when the session being edited already sets any of them
   (`session_dialog::advanced_is_configured`): a user who set a jump host and then sees no jump
   host concludes it was lost.
+  It is a **button**, not a styled row: it is the only route to those three fields, and all
+  three were plain Tab stops before they were folded away, so a `div` with a click handler would
+  have put them out of a keyboard user's reach entirely. It is a tab stop, announces its state,
+  and toggles on Enter and Space.
+  Save validates the forwards and the jump chain whether or not they are on screen, so a
+  refused Save **opens the disclosure and focuses the offending field** before it shows the
+  message; a message about a basic field leaves the disclosure alone
+  (`session_dialog::reveals_advanced`).
 - **Color** is a labelled row of eight swatches — `US-0110`'s `#56B6C2` default first, then
-  theme colours — plus the full picker behind a "Custom…" square. A swatch writes through the
-  same `ColorPickerState` the picker writes and Save still stores
+  theme colours — followed by the full picker, whose trigger carries the words "Custom…" so the
+  text itself opens it. `session_dialog::swatch_colors` is the one place the eight are defined:
+  the kit exposes no accessor for the picker's own featured row, only the
+  `ColorPicker::featured_colors` setter, so the row is defined here and handed to the picker,
+  and the eight swatches and the eight along the top of the popup are the same eight. A swatch
+  writes through the same `ColorPickerState` the picker writes and Save still stores
   `state.value().to_hex()`, so both produce exactly the value `session_color_hex` already
   accepted and the tree and the `+` menu cannot disagree.
 - **The body scrolls** when it outgrows the window. That belongs to `FormDialog`
@@ -1108,11 +1135,18 @@ same `SharedString`, handed to the dialog through `SshConnectRequest::on_failed`
 
 The reporting text is built in one place,
 `crates/session-ui/src/common.rs::connect_failure_message` (`BUG-0068`): the
-variants above that already begin with `SSH` — `Connect`, `HostKeyUnknown`,
-`HostKeyChanged` — are shown verbatim, so the subject appears once and the failing
-phase stays visible; every other error (`Cancelled`, `Io`, `Other`) is prefixed
+variants above that already **name SSH and what failed** — `Connect`
+(`SSH <phase> failed: …`), `HostKeyChanged` (`SSH host key changed for …`) and
+`HostKeyUnknown` (`Unknown SSH host key for …`, which names SSH without leading
+with it) — are shown verbatim, so the subject appears once and the failing phase
+stays visible; every other error (`Cancelled`, `Io`, `Other`) is prefixed
 `SSH connect failed: …` so it never reaches the user as a bare "operation
 cancelled".
+
+The `HostKeyUnknown` arm is defensive: the only caller matches that variant first
+and opens the **Unknown SSH Host Key** dialog (§9.3), so it never reaches the
+notification from here. It is kept so the function is total over the variants a
+connect can produce, rather than correct only by the order of the arms above it.
 
 Blocking work on the connect path (`known_hosts` read/append in
 `check_server_key`, private-key loading/decryption) runs on

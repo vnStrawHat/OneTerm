@@ -312,3 +312,27 @@ group of two, in the worktree's own `target/` config directory.
 ## Handoff
 
 Use only across actors or sessions: current state, next owner/action, and blockers.
+
+## Rework after independent verification
+
+Verdict **PASS with findings** — every acceptance line held in the verifier's walk except the
+wording one.
+
+- **U119-m1 — the wording acceptance was not met.** "the same wording is used wherever else
+  that action appears" and three places still said "Property":
+  `crates/settings-ui/src/key_bindings/key_bindings_actions.rs:309` (the user-visible row on
+  the Keybindings page), `crates/session-ui/src/tree_render.rs:58` (rustdoc in the file this
+  packet rewrote) and `docs/ssh-client-connect.md` §1.3 decision 8. All three now read
+  "Properties", and the two menu listings now give the real row order.
+- **U119-m2 — two identical context menus on an empty list.** The empty-state element kept its
+  own one-row menu while the new list-container menu covers the same area, so both fired for
+  one right-click. The empty state's is gone; the container's covers the empty list too, which
+  is why the hint text still tells the user to right-click. Frame:
+  `evidence/US-0119-rw-52b-empty-list-single-menu.png` — one menu, no sessions.
+- **U119-m3 — §6.5 overstated what SFTP matches.** The SFTP browser's Delete *row* is not red;
+  what this packet copied is its **confirmation** (the thing named, a danger confirm button).
+  §6.5 now says that, and says the red row is a deliberate step further that leaves the two
+  menus differing on that point.
+- The verifier could not reproduce a `row_was_right_clicked` race with back-to-back
+  right-clicks, and proved by construction why the ordering holds. It remains a `bool` rather
+  than a counter; recorded, not changed.

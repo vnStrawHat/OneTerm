@@ -65,7 +65,16 @@ impl QuickConnectHops {
     }
 
     /// The forms for the current selection, rebuilt when the selection moved.
-    fn forms(&self, window: &mut Window, cx: &mut App) -> Result<JumpHopForms, String> {
+    ///
+    /// A rebuild replaces the hop credential inputs, so the freshly built ones
+    /// are handed to `inline_error`: a corrected jump-host password clears the
+    /// error like a corrected target password does (`US-0118` rework).
+    fn forms(
+        &self,
+        inline_error: &InlineError,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<JumpHopForms, String> {
         let Some(picker) = &self.picker else {
             return self.built.borrow().1.clone();
         };
@@ -77,6 +86,9 @@ impl QuickConnectHops {
                 .map_err(|error| error.to_string())
                 .and_then(|chain| chain.iter().map(HopSpec::from_entry).collect());
             let forms = specs.map(|specs| JumpHopForms::new(specs, window, cx));
+            if let Ok(forms) = &forms {
+                inline_error.watch(&forms.secret_inputs(), cx);
+            }
             *self.built.borrow_mut() = (selected, forms);
         }
         self.built.borrow().1.clone()
@@ -254,6 +266,9 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
     let connection_cancellation: Rc<RefCell<Option<ConnectionCancellation>>> =
         Rc::new(RefCell::new(None));
 
+    // One clone per closure: the submit path and the body builder both hold it.
+    let content_error = inline_error.clone();
+
     // ── Shared connect logic (Connect button + keyboard Enter) ──
     let connect_logic: Rc<dyn Fn(&mut Window, &mut App) -> bool> = Rc::new({
         let host_state = host_state.clone();
@@ -267,13 +282,17 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
         let initial_cwd = initial_cwd.clone();
         let completion = completion.clone();
         let inline_error = inline_error.clone();
+        let hop_error = inline_error.clone();
         move |window, cx| {
             if connecting.load(Ordering::Relaxed) {
                 return false;
             }
             // A retry starts clean; the failure of this attempt replaces it.
             inline_error.clear();
-            let jump_hops = match hops.forms(window, cx).and_then(|forms| forms.take_hops(cx)) {
+            let jump_hops = match hops
+                .forms(&hop_error, window, cx)
+                .and_then(|forms| forms.take_hops(cx))
+            {
                 Ok(jump_hops) => jump_hops,
                 Err(message) => {
                     window.push_notification(notify(NotificationType::Warning, message, cx), cx);
@@ -375,12 +394,13 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
     let initial_focus = {
         let auth_form = auth_form.clone();
         let hops = hops.clone();
+        let focus_error = inline_error.clone();
         move |window: &mut Window, cx: &mut App| {
             if !is_duplicate {
                 return;
             }
             let hop_focus = hops
-                .forms(window, cx)
+                .forms(&focus_error, window, cx)
                 .ok()
                 .and_then(|forms| forms.first_secret_focus(cx));
             if let Some(focus) = hop_focus.or_else(|| auth_form.secret_focus_handle(cx)) {
@@ -396,7 +416,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
             "SSH Quick Connect"
         },
         move |content, window, cx| {
-            let hop_forms = hops.forms(window, cx);
+            let hop_forms = hops.forms(&content_error, window, cx);
             content
                 .when_some(hop_forms.as_ref().ok(), |content, forms| {
                     content.child(forms.render(cx))

@@ -65,14 +65,10 @@ impl Render for SessionPanel {
             .justify_center()
             .text_color(theme.muted_foreground)
             .text_sm()
-            .child("No SSH session yet. Right-click → New Session.")
-            .context_menu({
-                let focus = focus.clone();
-                move |menu, _window, _cx| {
-                    menu.action_context(focus.clone())
-                        .menu("New Session", Box::new(NewSession))
-                }
-            });
+            .child("No SSH session yet. Right-click → New Session.");
+        // No `context_menu` here: the list container below carries one for the
+        // whole area, empty list included, so this element had a second,
+        // identical menu that fired for the same right-click (`US-0119` rework).
 
         // No-results state — sessions exist but the search matches none.
         let no_results = h_flex()

@@ -235,8 +235,16 @@ therefore a per-variant decision in one function,
 
 ### Evidence frames
 
-- `evidence/BUG-0068-16-connect-failed.png`
-- `evidence/BUG-0068-17b-connect-timeout-22s.png`
+- `evidence/US-0118-16-connect-failed.png` — the quick-connect dialog after the 20 s
+  timeout: the toast bottom-right reads `SSH connect failed: timed out after 20 s`, once,
+  and the inline block above the footer carries the same string.
+- `evidence/BUG-0068-verify-16-connect-failed.png` — the **Connect** dialog (saved session)
+  on the same path, taken by the verifier, which this packet's own walk never reached.
+
+Two filenames were removed in rework: `BUG-0068-16-connect-failed.png` and
+`BUG-0068-17b-connect-timeout-22s.png` were byte-identical copies of
+`US-0118-16-connect-failed.png`, and the "22 s" in the second was unsupported — the toast in
+that image says 20 s. One capture is now presented as one frame.
 
 ### Gaps
 
@@ -246,3 +254,17 @@ therefore a per-variant decision in one function,
 ## Handoff
 
 Use only across actors or sessions: current state, next owner/action, and blockers.
+
+## Rework after independent verification
+
+Verdict **PASS**; three minor findings, all addressed.
+
+- **B68-m1.** `docs/ssh-client-connect.md` §9.2 said the verbatim variants "already begin with
+  `SSH`". `AppError::HostKeyUnknown` renders `Unknown SSH host key for …`, which names SSH
+  without leading with it. The behaviour was right and the rustdoc already said it correctly;
+  §9.2 now says "name SSH and what failed" and spells out all three renderings.
+- **B68-m2.** The `HostKeyUnknown` arm of `connect_failure_message` is unreachable from its only
+  caller, which matches that variant first and opens the host-key dialog. §9.2 now says so, and
+  says why the arm stays: the function is total over the variants a connect can produce rather
+  than correct only by the order of the arms above it.
+- **B68-m3.** Three evidence filenames, one capture. Two removed; see Evidence frames.

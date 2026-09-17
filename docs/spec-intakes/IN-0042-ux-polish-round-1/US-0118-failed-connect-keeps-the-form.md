@@ -13,7 +13,7 @@ Created: 2026-09-17
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -359,3 +359,72 @@ Connecting to `10.10.10.10` with Save ticked, as the walkthrough did.
 ## Handoff
 
 Use only across actors or sessions: current state, next owner/action, and blockers.
+
+## Rework after independent verification
+
+Verdict **FAIL**, on the combobox only. Everything else in the packet held, and the verifier
+closed the packet's own "a successful connect was not walked" gap with
+`evidence/US-0118-verify-success-connect-loopback.png`.
+
+### U118-MAJOR-1 — the combobox was left in a state the user could see was wrong
+
+The Enter path cleared **a private copy of the query** (`query_cell`) and not the kit's search
+input. The two then disagreed, and the verifier walked the consequence:
+
+1. Type "Lab", Enter → created. Correct.
+2. Reopen: the search box still held "Lab", the empty area read *"No groups yet"* although
+   `infra` existed, and the footer read the disabled *"Type to create new group"* although text
+   was visibly in the box. Three surfaces, three stories.
+3. Reopen and type "inf": the text **appended** to the stale query, and Enter created a group
+   called **"Labinf"** that the user never typed.
+
+Step 3 is the one that matters. Before this packet Enter did nothing, so a stale query could
+only produce a group the user clicked and could read in full; the new Enter path turned it into
+a one-keystroke mistake.
+
+**Fixed at the source.** Creating now calls `ComboboxState::set_query("")`, which writes the
+kit's input *and* re-runs the search — and it is `perform_search` that writes `query_cell` and
+`match_count`. So one call refreshes every derived value at once and the four cannot disagree.
+The footer's Create button takes the same path.
+
+Two things the fix had to respect, both found by walking:
+
+- **The render closures must not read the entity.** `Combobox::empty` and `Combobox::footer`
+  run inside `ComboboxState`'s own render, so `state.read(cx)` there panics with *"cannot read
+  … while it is already being updated"* — reproduced, then fixed. They read `query_cell`, which
+  is now genuinely the live value because every path that changes the query goes through
+  `perform_search`.
+- **"No groups yet" was a second, smaller lie.** It was shown whenever the filtered list came
+  back empty. `group_combo::empty_message(query, has_any_group)` now distinguishes "the store
+  holds none" from "none match what you typed", and is unit-tested.
+
+### Walked, exactly the sequence the verifier used
+
+| Step | Frame | Result |
+|---|---|---|
+| Type "Lab", Enter | `evidence/US-0118-rw-56b-enter-created-lab.png` | Created and selected; dropdown closed. |
+| Reopen | `evidence/US-0118-rw-56c-reopened-clean.png` | Search box **empty**, `infra` listed, footer correctly disabled. No stale query, no "No groups yet". |
+| Type "inf" | `evidence/US-0118-rw-56d-typed-inf-not-labinf.png` | The box reads **"inf"**, the footer offers `Create "inf"`. Not "Labinf". |
+| Enter | `evidence/US-0118-rw-56e-enter-selects-infra.png` | **infra** selected — the list had a match and took its own Enter. "Labinf" is unreachable. |
+
+### U118-m2 — the inline error now clears on a jump-hop edit
+
+`InlineError` watched only the target's own credentials, so a corrected jump-host password
+stood beside a stale error. It now watches the hop inputs too. Two shapes were needed because
+the two dialogs differ: the Connect dialog resolves its hops once at open, so they are handed
+over at construction; a Quick Connect **rebuilds** its hop credential blocks whenever the
+picker's selection moves, so `InlineError::watch` is additive and `QuickConnectHops::forms`
+hands each freshly built set over as it creates it.
+
+### U118-m3 — the host-key path has no dialog to echo into
+
+Recorded rather than changed: `AppError::HostKeyUnknown` closes the dialog before prompting, so
+a failure on the *retried* connect has no dialog left and only the toast survives. That is the
+intended shape — the retry is a new attempt from a different surface — and
+`docs/ssh-client-connect.md` §4.7 now says so instead of leaving it to be discovered.
+
+### U118-m4
+
+The acceptance line "a successful connect still clears the password" is met in the sense the
+packet always stated (the dialog closes and its state is dropped), and the verifier's loopback
+frame now demonstrates it rather than the packet arguing it.

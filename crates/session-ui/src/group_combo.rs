@@ -17,6 +17,7 @@ use gpui_component::{
     h_flex,
     searchable_list::{SearchableListDelegate, SearchableListItem, SearchableVec},
 };
+use oneterm_state::form_dialog::control_label;
 
 /// Shared mutable cell for the query text and group value.
 /// Uses `Rc<RefCell<>>` so the delegate (inside ComboboxState) and the footer
@@ -27,6 +28,44 @@ pub(crate) type SharedCell = Rc<RefCell<String>>;
 /// handler outside the delegate can tell "nothing to select" from "the list has
 /// a match and Enter belongs to it".
 pub(crate) type MatchCount = Rc<Cell<usize>>;
+
+/// What the dropdown's no-match area says.
+///
+/// Derived from the same live values the rest of the control reads, so the three
+/// surfaces — search box, empty area, footer — cannot tell three different
+/// stories (`US-0118` rework).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EmptyMessage {
+    /// The store holds no groups at all, or nothing is typed yet.
+    NoGroupsYet,
+    /// Groups exist, but the typed query matches none of them.
+    NoMatch(String),
+}
+
+impl EmptyMessage {
+    pub(crate) fn text(&self) -> String {
+        match self {
+            Self::NoGroupsYet => "No groups yet. Type a name to create one.".to_string(),
+            Self::NoMatch(query) => {
+                format!("No group matches \"{query}\". Press Enter to create it.")
+            }
+        }
+    }
+}
+
+/// Decide the no-match text from the live query and whether the store holds any
+/// group at all.
+///
+/// "No groups yet" is true only when there are none. It used to be shown
+/// whenever the filtered list came back empty, which claimed there were no
+/// groups while `infra` sat one keystroke away.
+pub(crate) fn empty_message(query: &str, has_any_group: bool) -> EmptyMessage {
+    let query = query.trim();
+    if query.is_empty() || !has_any_group {
+        return EmptyMessage::NoGroupsYet;
+    }
+    EmptyMessage::NoMatch(query.to_string())
+}
 
 /// What pressing Enter in the group combobox should do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +164,7 @@ pub(crate) fn group_combobox(
     group_value: &SharedCell,
     query_cell: &SharedCell,
     match_count: &MatchCount,
+    has_any_group: bool,
     cx: &App,
 ) -> impl IntoElement {
     let group_value = group_value.clone();
@@ -151,6 +191,7 @@ pub(crate) fn group_combobox(
             let query_cell = query_cell.clone();
             let match_count = match_count.clone();
             let is_open = is_open.clone();
+            let enter_state = state.clone();
             move |_: &Confirm, window, cx| {
                 if !is_open.get() {
                     return;
@@ -158,8 +199,15 @@ pub(crate) fn group_combobox(
                 let query = query_cell.borrow().clone();
                 if let GroupCommit::Create(group) = group_commit(&query, match_count.get()) {
                     *group_value.borrow_mut() = group;
-                    // The query is spent: a second Enter must not create it again.
-                    query_cell.borrow_mut().clear();
+                    // Clear the *kit's* search input, not a private copy of the
+                    // query. `set_query` writes the input and re-runs the search,
+                    // so the box, `query_cell`, `match_count` and the footer stay
+                    // one value. Clearing only the copy left the box showing the
+                    // spent query, the empty area claiming there were no groups,
+                    // the footer offering to create nothing — and the next
+                    // keystroke appending to the stale text, so "Lab" then "inf"
+                    // created "Labinf" (`US-0118` rework).
+                    enter_state.update(cx, |combobox, cx| combobox.set_query("", window, cx));
                     window.defer(cx, |window, cx| {
                         window.dispatch_action(Box::new(Cancel), cx);
                     });
@@ -228,8 +276,15 @@ pub(crate) fn group_combobox(
                 })
                 .footer({
                     let group_value = group_value.clone();
+                    let footer_state = state.clone();
                     let query_cell = query_cell.clone();
                     move |_, cx| {
+                        // `query_cell`, not `state.read(cx)`: this closure runs
+                        // inside the combobox's own render, and reading the
+                        // entity there panics ("already being updated"). The
+                        // cell is written by `perform_search`, and every path
+                        // that changes the query — typing, and the `set_query`
+                        // below — goes through it, so it is the live value.
                         let query = query_cell.borrow().trim().to_string();
                         let label = if query.is_empty() {
                             "Type to create new group".to_string()
@@ -240,7 +295,11 @@ pub(crate) fn group_combobox(
 
                         Button::new("create-group")
                             .ghost()
-                            .label(label)
+                            // `control_label`, not `.label(...)`: the kit clips a
+                            // button label's descenders, and this one carries
+                            // arbitrary typed text (`BUG-0069` rework).
+                            .accessibility_label(label.clone())
+                            .child(control_label(label))
                             .icon(Icon::new(IconName::Plus))
                             .text_color(cx.theme().foreground)
                             .w_full()
@@ -249,8 +308,13 @@ pub(crate) fn group_combobox(
                             .when(enabled, |this| {
                                 let gv = group_value.clone();
                                 let q = query.clone();
+                                let click_state = footer_state.clone();
                                 this.on_click(move |_, window, cx| {
                                     *gv.borrow_mut() = q.clone();
+                                    // Same single source as the Enter path.
+                                    click_state.update(cx, |combobox, cx| {
+                                        combobox.set_query("", window, cx)
+                                    });
                                     // Close the dropdown: it used to stay open still
                                     // offering to create the group it had just created.
                                     window.dispatch_action(Box::new(Cancel), cx);
@@ -263,18 +327,15 @@ pub(crate) fn group_combobox(
                 .empty({
                     let query_cell = query_cell.clone();
                     move |_, cx| {
-                        let query = query_cell.borrow().trim().to_string();
+                        // Same reason as the footer: no entity read in render.
+                        let query = query_cell.borrow().clone();
                         div()
                             .w_full()
                             .py_4()
                             .px_3()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(if query.is_empty() {
-                                "No groups yet. Type a name to create one.".to_string()
-                            } else {
-                                format!("No group matches \"{query}\". Press Enter to create it.")
-                            })
+                            .child(empty_message(&query, has_any_group).text())
                     }
                 }),
         )
@@ -298,5 +359,41 @@ mod tests {
         // Nothing typed: Enter has nothing to create.
         assert_eq!(group_commit("", 0), GroupCommit::Ignore);
         assert_eq!(group_commit("   ", 0), GroupCommit::Ignore);
+    }
+
+    /// `US-0118` rework: the empty area stops claiming there are no groups when
+    /// the list is empty only because of the typed filter.
+    #[test]
+    fn the_empty_area_tells_no_groups_from_no_match() {
+        assert_eq!(
+            empty_message("Lab", true),
+            EmptyMessage::NoMatch("Lab".into())
+        );
+        assert_eq!(
+            empty_message("  Lab  ", true).text(),
+            empty_message("Lab", true).text()
+        );
+        // Nothing typed: the list is empty because the store is.
+        assert_eq!(empty_message("", true), EmptyMessage::NoGroupsYet);
+        // No groups at all: "no match" would be pedantic and unhelpful.
+        assert_eq!(empty_message("Lab", false), EmptyMessage::NoGroupsYet);
+        assert!(
+            empty_message("Lab", true)
+                .text()
+                .contains("Press Enter to create it")
+        );
+        assert!(empty_message("", false).text().contains("No groups yet"));
+    }
+
+    /// The point of the rework: once the query is cleared at its source, the
+    /// next Enter cannot build a second group out of leftover text.
+    #[test]
+    fn a_spent_query_cannot_create_again() {
+        // What the control looks like right after `set_query("")`: the input is
+        // empty and the search has been re-run over every group.
+        assert_eq!(group_commit("", 1), GroupCommit::Ignore);
+        assert_eq!(group_commit("", 0), GroupCommit::Ignore);
+        // ...so the next thing the user types stands alone.
+        assert_eq!(group_commit("inf", 0), GroupCommit::Create("inf".into()));
     }
 }

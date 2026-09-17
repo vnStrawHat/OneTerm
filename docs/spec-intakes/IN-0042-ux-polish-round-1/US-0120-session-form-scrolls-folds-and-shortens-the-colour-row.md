@@ -13,7 +13,7 @@ Created: 2026-09-17
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -322,6 +322,9 @@ state.
   as a risk; the port-forward rows are a plain column with no scroll of their own
   (`forward_rows.rs`), so there is no inner scroll area to capture the wheel — but that is read
   from the code, not from a frame.
+- **The eight colour swatches are not tab stops.** They carry `Role::Button` and a hex
+  accessibility label, but reaching a specific swatch by keyboard is not possible; the
+  `ColorPicker` beside them is the keyboard route to every colour, as it was before this packet.
 - **The cap is a constant, not a measurement.** 260 px of chrome and a 240 px floor are tuned
   to the current dialog shape rather than derived from the laid-out title and footer, which are
   not knowable while the content closure runs. The unit test pins the shape of the function;
@@ -330,3 +333,87 @@ state.
 ## Handoff
 
 Use only across actors or sessions: current state, next owner/action, and blockers.
+
+## Rework after independent verification
+
+Verdict **FAIL**, on the two new interaction surfaces. The scroll, the cap, the
+expanded-when-configured rule and the swatches writing through one state all held — the
+verifier re-derived the cap from a 700 px window and got exactly 700 − 260.
+
+### U120-MAJOR-1 — the disclosure removed the only keyboard route to three fields
+
+`advanced_header` was an `h_flex().id(…).on_click(…)`: not focusable, no role, no tab stop. Jump
+host, agent forwarding and port forwards were plain Tab stops **before** this packet folded them
+away, so a keyboard-only user could no longer reach them at all. That is a regression the packet
+caused, not a pre-existing limit.
+
+It is now a kit `Button` — a tab stop that announces itself as a button and carries its state in
+its accessibility label ("Advanced, expanded" / "Advanced, collapsed").
+
+| | Frame |
+|---|---|
+| Tab from the key path reaches it: Browse → **Advanced** → Jump host, with a focus ring | `evidence/US-0120-rw-tab-reaches-advanced.png` |
+| **Space** toggles it — collapsed, focus kept | `evidence/US-0120-rw-advanced-toggled-by-space.png` |
+
+**Enter does not toggle it, and must not.** `FormDialog` binds Enter to submit, from every field
+in the form (`on_ok`), and gpui resolves that binding before any element's key listener — walked
+and confirmed, the dialog saved. Space is the disclosure's key; Enter belongs to the form. That
+is consistent with every other control in the dialog rather than an exception to it.
+
+The eight colour swatches are still `div`s and still not tab stops. They now carry
+`Role::Button` and their hex as an accessibility label, and the `ColorPicker` beside them
+remains a full keyboard route to every colour — so that half is a downgrade, not a removal, and
+it is recorded in Gaps rather than claimed fixed.
+
+### U120-MAJOR-2 — a collapsed Advanced could hide the field a refused Save was about
+
+`submit` validates the forwards and the jump chain whether or not they are on screen, and
+nothing opened the disclosure, so the user was blocked by a message naming a row behind a
+collapsed `> Advanced`.
+
+A refused Save now **opens the disclosure and puts the cursor in the offending field before it
+shows the message**. `PortForwardRows::take` returns which row failed (`ForwardError { row,
+message }`) so the focus lands on that row rather than on the list; the jump-chain failure
+focuses the picker. A refused *basic* field leaves the disclosure alone, so the form does not
+jump under the cursor — `session_dialog::reveals_advanced` is that decision, and it is
+unit-tested.
+
+Walked: KeyBox's first forward set to an invalid target port, Advanced collapsed, Save →
+`evidence/US-0120-rw-save-opens-advanced.png`: the disclosure is open, the first field of row 1
+carries the focus ring, and the toast reads "Port forward: the target port must be a number
+0..65535."
+
+### U120-m3 — "Custom…" was inert
+
+It was a bare `div` beside the picker, so clicking the word did nothing and the row read as
+**nine** swatches. The text is now the picker's own trigger label
+(`ColorPicker::label`, which `ColorPickerButton` renders inside the clickable trigger), so the
+word opens the picker.
+
+### U120-m4 — the swatch set is now one list, and the claim is accurate
+
+The row was eight colours while the picker's own featured row was a different twelve. The kit
+exposes no accessor for its default featured row — only the `ColorPicker::featured_colors`
+setter — so `session_dialog::swatch_colors` is the one definition and it is **given** to the
+picker: the eight swatches and the eight along the top of the popup are the same eight. The
+packet's old claim that "no colour is hard-coded here" is corrected in the rustdoc: the first
+entry is `SshSession::DEFAULT_COLOR_HEX`, hard-coded in `session_state.rs`, and deliberately
+first so a new session's colour is one of the eight.
+
+### U120-m6 and the acceptance frame
+
+The frame labelled "the acceptance frame" showed **Password** auth and **zero** forwards, not
+the acceptance's "Private Key selected and three port forwards configured". Re-taken against a
+seeded `KeyBox` session — Private Key, agent forwarding on, three forwards — at 1000 px:
+`evidence/US-0120-rw-12-privatekey-3-forwards-1000.png`. Advanced opens by itself because the
+session uses it, the body is capped and scrolling, and Cancel and Save are on screen without a
+resize.
+
+`US-0120-54-session-color-row.png` was byte-identical to `US-0120-11-session-property-dialog.png`
+and has been removed; `US-0120-54c-colour-row-4x.png` is the colour-row evidence.
+
+### U120-m5
+
+`DIALOG_CHROME_HEIGHT = 260` is about 170 px more than the chrome needs. Conservative and
+therefore safe, and the packet already records that the constant is tuned rather than measured.
+Unchanged.

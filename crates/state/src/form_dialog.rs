@@ -282,7 +282,11 @@ impl FormDialog {
             None => {
                 let submit = self.submit.clone();
                 Button::new("confirm")
-                    .label(self.confirm_label.clone())
+                    // The label is the caller's text, so it can hold a
+                    // descender; the kit clips a button label's line box the
+                    // same way it clips a checkbox's (`BUG-0069`).
+                    .accessibility_label(self.confirm_label.clone())
+                    .child(control_label(self.confirm_label.clone()))
                     .on_click(move |_, window, cx| {
                         if submit(window, cx) {
                             window.close_dialog(cx);
