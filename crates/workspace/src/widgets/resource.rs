@@ -38,7 +38,7 @@ use gpui::{App, Entity, Window};
 use gpui_component::{Icon, IconName};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-use super::status_text::{Label, StatusText};
+use super::status_text::{Label, Presentation, Shorten, StatusText};
 
 /// Only the two fields the indicator shows — the default kind also walks
 /// disk usage, the exe path, and (on Windows) every process thread (PERF-28).
@@ -69,8 +69,12 @@ pub fn resource(window: &mut Window, cx: &mut App) -> Entity<StatusText> {
     StatusText::new_entity(
         "resource-indicator",
         Duration::from_secs(2),
-        false,
-        Some(Icon::new(IconName::Cpu)),
+        Presentation {
+            icon: Some(Icon::new(IconName::Cpu)),
+            // `MEM 577.0 MB` is a value and its unit: never shortened.
+            copyable: false,
+            shorten: Shorten::Never,
+        },
         Box::new(move |_| {
             let pid = pid?;
             sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh_kind());
