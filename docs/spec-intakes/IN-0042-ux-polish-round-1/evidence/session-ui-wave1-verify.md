@@ -337,3 +337,252 @@ Frames, all taken by the verifier:
 - **`BUG-0069`'s 20 px UI-font re-check was not repeated**; the implementer's method
   (`ui_font_size` in `target/ui_config.json`) is a real key (`crates/settings/src/ui_config.rs:39`)
   and the Appearance page indeed offers no font-size control, so that gap is honestly stated.
+
+---
+
+# Re-verification of `40fc78d2` — 2026-09-17
+
+Second, independent pass over the rework (`104d5504`, then `main` @ `23d0fc15` merged in as
+`40fc78d2`). Nothing below was written by the implementer or by the first verifier. Every kit
+claim was re-checked against the **registry copy of the dependency**
+(`~/.cargo/registry/src/index.crates.io-*/gpui-component-0.6.0`, `gpui-base-0.6.0`,
+`gpui-pre-0.3.3`), every decision function named in the rework was mutated and the tests re-run,
+and the descender claim was **re-measured pixel by pixel** from the packets' own frames rather
+than read off them.
+
+## Verdicts
+
+| Packet | Verdict |
+|---|---|
+| `BUG-0068` | **PASS** — all three minors addressed; §9.2 now matches the code. |
+| `BUG-0069` | **PASS with findings** — the original checkbox/radio outcome holds, but `B69-MAJOR-1` was a **false finding** and its remedy is inert; the packet now records a measurement its own frames contradict, and the conversion costs the label's ellipsis. |
+| `US-0118` | **PASS with findings** — `M1` is fixed at the source and proven; `U118-m2` is fixed on two of the three paths and still open on the third. |
+| `US-0119` | **PASS** — every minor addressed; no user-visible "Property" left. |
+| `US-0120` | **PASS with findings** — `M2` and `M3` are both properly fixed and mutation-tested; two doc sentences contradict the packet's own rework text, and `U120-m3`/`U120-m4` are half-closed. |
+| **Overall** | **PASS with findings** — no packet needs another code rework. One real code gap remains (`U118-m2` on the Quick Connect duplicate path) plus documentation corrections. |
+
+## The first report's findings, re-checked
+
+| Finding | Status |
+|---|---|
+| **M1** `US-0118` Enter left the kit's search input stale ("Lab" + "inf" → "Labinf") | **FIXED, at the source.** |
+| **M2** `US-0120` the Advanced disclosure had no tab stop | **FIXED.** Space-only is correct; see below. |
+| **M3** `US-0120` Save validated hidden advanced fields without expanding | **FIXED**, and the decision is mutation-tested. |
+| **M4** `BUG-0069` `Button::label` still clipped "Connecting" | **The finding itself was wrong.** The remedy is harmless but inert. |
+| **B68-m1 / m2** §9.2 wording and the unreachable `HostKeyUnknown` arm | **FIXED** (`docs/ssh-client-connect.md` §9.2). |
+| **B68-m3** three filenames, one capture | **FIXED** — two PNGs deleted; see `R-m3` for the reference they left behind. |
+| **B69-m2** wrong crate names in Gaps | **FIXED.** Grep over `crates/` confirms the only remaining `Checkbox`/`Radio`/`Switch` `.label(...)` sites are `crates/sftp-ui/src/render.rs:276` and `crates/sftp-ui/src/edit.rs:588`. |
+| **B69-m3** `CONTROL_LABEL_LINE_HEIGHT` pinned by nothing | Recorded in Gaps, not fixed. Accepted. |
+| **U119-m1** "Property" → "Properties" | **FIXED**, all three sites. |
+| **U119-m2** duplicate empty-list menu | **FIXED.** |
+| **U119-m3** §6.5 overstated what SFTP matches | **FIXED.** |
+| **U118-m2** inline error on jump-hop edits | **PARTLY FIXED** — see `R-M1`. |
+| **U118-m3 / m4** host-key path, "clears the password" | Recorded in §4.7 and in the packet. Accepted. |
+| **U120-m3** inert "Custom…" | **PARTLY FIXED** — see `R-m5`. |
+| **U120-m4** swatch set source | **FIXED in code**, unverified by any frame — see `R-m6`. |
+| **U120-m5** `DIALOG_CHROME_HEIGHT` | Unchanged, recorded. Accepted. |
+| **U120-m6 / the acceptance frame** | **FIXED** — `evidence/US-0120-rw-12-privatekey-3-forwards-1000.png` shows KeyBox (Private Key, agent forwarding, three forwards) at 1000 px with Advanced auto-expanded and Save on screen. |
+
+### M1 — the combobox commit
+
+Mechanism re-derived from the dependency, not from the packet:
+
+- `ComboboxState::set_query` exists — `gpui-component-0.6.0/src/combobox.rs:396`. It delegates to
+  `List::set_query` (`src/list/list.rs:215-223`), which calls `input.set_value(...)` **and then**
+  `start_search(...)` with the comment *"`set_value` does not emit `InputEvent::Change`, so start
+  the search here."*
+- `start_search` calls `self.delegate.perform_search(&query, window, cx)` **synchronously**
+  (`list.rs:291`), so by the time `set_query` returns, `GroupComboDelegate::perform_search`
+  (`crates/session-ui/src/group_combo.rs:138-143`) has already written `query_cell` and
+  `match_count`. One call refreshes all four surfaces; they cannot disagree.
+- `combobox.rs:396` has no "same value" early return (the one in `command/state.rs:215` belongs to
+  a different type), so `set_query("")` always re-runs the search.
+
+The re-entrancy rationale also checks out: `empty`/`footer` run inside the combobox's own render,
+so they read `query_cell` rather than `state.read(cx)`. `group_combo::empty_message` is a pure
+function and is unit-tested.
+
+Walked sequence, on the packet's own frames — the search box, the list and the footer agree in
+all four:
+
+| Step | Frame | What it shows |
+|---|---|---|
+| "Lab" + Enter | `US-0118-rw-56b-enter-created-lab.png` | created and selected |
+| reopen | `US-0118-rw-56c-reopened-clean.png` | box **empty**, `infra` listed, footer disabled "Type to create new group" |
+| type "inf" | `US-0118-rw-56d-typed-inf-not-labinf.png` | box reads **"inf"**, footer offers `Create "inf"` |
+| Enter | `US-0118-rw-56e-enter-selects-infra.png` | **infra** selected — not "Labinf" |
+
+All four frames are distinct files (md5) and carry today's clock in the status bar.
+
+### M2 — the disclosure, and why Space-only is right
+
+Read out of the dependency, in dispatch order:
+
+1. The disclosure is now `Button::new("advanced-disclosure")` (`session_dialog.rs:148`). `Button`
+   defaults to `tab_stop: true` (`gpui-component-0.6.0/src/button/button.rs:267`) and ends its
+   render with `.track_focus(&focus_handle).tab_index(...).tab_stop(self.tab_stop)`
+   (`button.rs:733-735`), with a focus ring at `button.rs:790`. So it is a real tab stop with a
+   visible ring — `evidence/US-0120-rw-tab-reaches-advanced.png`.
+2. **Space** toggles it: the focused `div` records an unmodified `enter`/`space` **key down**
+   (`gpui-pre-0.3.3/src/elements/div.rs:2954-2976`) and turns the matching **key up** into a
+   `ClickEvent::Keyboard` (`div.rs:2978-3020`) — `evidence/US-0120-rw-advanced-toggled-by-space.png`.
+3. **Enter cannot reach it.** `gpui-base-0.6.0/src/dialog.rs:91` binds `enter` → `Confirm` in the
+   `Dialog` key context and `dialog.rs:525` handles it. `Window::dispatch_key_event` dispatches
+   keymap bindings (`window.rs:5740-5746`) **before** `finish_dispatch_key_event` runs any
+   element key listener, and returns as soon as a handler stops propagation — which an action
+   handler does by default. The button's key-down listener therefore never runs,
+   `pending_keyboard_down` stays `None`, and the key-up produces no click.
+
+The implementer's claim is correct and **Space-only is acceptable**: Enter is the dialog's default
+action from every field, so the disclosure behaves exactly like Cancel, Save and Browse in the same
+dialog. It is not an exception; it is the rule. See `R-m2` for the two places that say otherwise.
+
+### M3 — a refused Save reveals what it is about
+
+`PortForwardRows::take` now returns `ForwardError { row, message }` (`forward_rows.rs:153-158,
+182-208`) and `focus_row` puts the cursor in that row (`forward_rows.rs:212-221`); `submit` reveals
+before it notifies (`session_dialog.rs:460-486`). `evidence/US-0120-rw-save-opens-advanced.png`
+shows the disclosure opened, the focus ring on row 1 and the toast
+*"Port forward: the target port must be a number 0..65535."* — which is verbatim
+`forward_rows.rs:120`.
+
+Both reveal paths also move focus, and `Window::focus` refreshes, so the newly expanded rows are
+painted in the same frame.
+
+### M4 — the finding was wrong, and so is its replacement measurement
+
+**`Button::label` never clipped "Connecting".** Measured, not eyeballed, from three pre-rework
+captures at 1x (all 1600x1000, the button's fill is `rgb(42,54,77)`, baseline taken from the
+non-descender glyphs of the same word):
+
+| Frame | Commit | Baseline row | Lowest `g` row | Descender rows |
+|---|---|---|---|---|
+| `research/before/15-connect-inflight.png` | pre-`IN-0042` | 644 | 648 | **4** |
+| `evidence/US-0118-15-connect-inflight.png` | `f4ea1765` (`.label(...)`) | 660 | 664 | **4** |
+| `evidence/BUG-0069-rw-15-connecting-button.png` | `104d5504` (`control_label` child) | 636 | 640 | **4** |
+
+The first verifier's own 6x crop, `evidence/BUG-0069-verify-15-connecting-button-6x.png`, is a
+nearest-neighbour 6x of the `f4ea1765` button: its `g` reaches 24 sub-rows below the baseline —
+**4 device rows**, not zero. Side by side at 6x:
+`evidence/BUG-0069-reverify-connecting-before-6x.png` (`f4ea1765`) and
+`evidence/BUG-0069-reverify-connecting-after-6x.png` (`104d5504`) — the glyphs are pixel-for-pixel
+the same shape.
+
+**Why `Checkbox` clips and `Button` does not.** The checkbox wraps its label in
+`v_flex().flex_1().overflow_hidden().line_height(relative(1.2))` (`checkbox.rs:315-318`) — it is
+the `overflow_hidden()` on a box whose height is the child's 1-em line box that removes the tail.
+`Button`'s label div (`button.rs:679-687`) has the same `line_height(relative(1.))` but sits in an
+`h_flex().size_full()` sized to the whole button, and nothing clips it vertically, so the glyph
+paints outside its own 1-em box unharmed. The original `BUG-0069` outcome is real and unchanged —
+re-measured on `evidence/BUG-0069-11c-before-above-after.png`, where the *before* half cuts the `g`
+of "agent" and "global" flat and the *after* half does not.
+
+So the rework's sentence *"the `g` of 'Connecting' occupies 4 pixel rows below the baseline, against
+the zero the verifier measured on the same button at `f4ea1765`"* is **not supported by any frame in
+the packet**: the before-frames show the same 4 rows.
+
+`.label(` sites across `crates/` were re-grepped. Checkbox/Radio/Switch: only the two `sftp-ui` sites
+the Gaps now names — correct. `Button::label` sites whose text carries a descender and which the
+Gaps does not name: `crates/app/src/crash_report_dialog.rs:113` ("Copy"),
+`crates/sftp-ui/src/transfer.rs:477` ("Replace"),
+`crates/terminal-view/src/terminal_view/input.rs:422` ("Open"),
+`crates/settings-ui/src/about.rs:61` ("Downloading…"). Given the measurement above **none of them is
+clipped**, so the omission is harmless — but the Gaps entry that calls "Browse", "Add" and "Cancel"
+*latent* clips is itself wrong.
+
+## New findings
+
+- **`R-M1`. `U118-m2` is still open on the Quick Connect duplicate path.** `InlineError::watch` is
+  called from `QuickConnectHops::forms` only inside the `if self.built.borrow().0 != selected`
+  rebuild, which is unreachable when `picker` is `None` (`quick_connect_dialog.rs:78-84`; the early
+  return at `:79-81`). A duplicate builds its hops eagerly through
+  `QuickConnectHops::fixed(JumpHopForms::new(duplicate_hops, …))`
+  (`quick_connect_dialog.rs:245-250`), and the dialog's `InlineError::new` is given
+  host/port/username plus the auth form's secrets only (`quick_connect_dialog.rs:252-261`) — never
+  the hop inputs. So duplicating a session that has a jump chain reproduces exactly the defect the
+  rework fixed elsewhere: a corrected jump-host password stands beside a stale inline error. The
+  path is explicitly supported — `initial_focus` even puts the cursor in the first hop secret for a
+  duplicate (`quick_connect_dialog.rs:394-408`). One line fixes it:
+  `inline_error.watch(&forms.secret_inputs(), cx)` after the `fixed(...)` construction, or extend
+  the `InlineError::new` input list.
+- **`R-m2`. Two places now say the disclosure "toggles on Enter and Space", which the same commit
+  disproves.** `crates/session-ui/src/session_dialog.rs:146-147` (rustdoc) and
+  `docs/ssh-client-connect.md` §6.6 both claim Enter toggles it; `US-0120`'s own rework section says
+  *"Enter does not toggle it, and must not"*, and the dispatch order above confirms the rework
+  section. Two of the three statements in one commit are wrong.
+- **`R-m3`. Two Evidence-frame bullets now point at deleted files.**
+  `US-0118-failed-connect-keeps-the-form.md:320` cites `evidence/BUG-0068-17b-connect-timeout-22s.png`
+  and `US-0120-…md:299` cites `evidence/US-0120-54-session-color-row.png`; both were removed by this
+  rework. `US-0120` corrects itself 113 lines later, `US-0118` does not. (The prior report's own
+  citations of those filenames are prose about the duplicates and are fine.)
+- **`R-m4`. `control_label` as a `Button` child drops the label's ellipsis.** `.label(...)` wraps the
+  text in `min_w_0().whitespace_nowrap().text_ellipsis()` (`button.rs:679-687`); `control_label` is a
+  plain `div` with a line height, and the button's content row is
+  `overflow_hidden().whitespace_nowrap()` (`button.rs:658-663`). A flex child without `min_w_0` will
+  not shrink, so an over-long label is now hard-clipped at the button edge instead of ending in "…".
+  One of the three converted sites — `group_combo.rs`'s `Create "<typed text>"` — takes arbitrary
+  user text and is `w_full`.
+- **`R-m5`. `U120-m3` is half-closed: the row still draws nine squares.** "Custom…" is now the
+  picker's own trigger label (`ColorPicker::label` → `ColorPickerButton`,
+  `gpui-component-0.6.0/src/color_picker.rs:103-106, 497`), so the word opens the picker — that half
+  is fixed. But the picker's current-value square is still rendered beside the eight swatches and is
+  still indistinguishable from swatch 1 whenever the default colour is selected:
+  `evidence/US-0120-reverify-colour-row-4x.png` (4x crop of `US-0118-rw-56c-reopened-clean.png`).
+- **`R-m6`. `U120-m4` is correct in code but unevidenced.** `ColorPicker::featured_colors`
+  (`color_picker.rs:86-88`) is read at `color_picker.rs:207` and rendered as the popup's top row at
+  `:226-229`, so passing `swatch_colors(cx).to_vec()` does make the two rows one list. No frame of
+  the **open** picker was taken after the change; the only picker frame in the packet
+  (`US-0120-54b-session-color-picker.png`) predates it and still shows the kit's twelve.
+- **`R-m7`. `InlineError::edits` only grows.** Each Quick Connect picker move pushes a fresh set of
+  subscriptions and drops none (`common.rs:155-168`). Subscriptions to dropped `InputState` entities
+  are inert, so this is a small bounded leak inside one modal's life, not a defect.
+- **`R-m8`. Nits.** `US-0120`'s rework says a refused Save "puts the cursor in the offending field";
+  `focus_row` puts it in the row's **first** field (the bind address) — the code's own rustdoc says
+  so correctly, and the next clause of the packet says "on that row", so only the one phrase
+  overstates. `advanced_header`'s `.justify_start()` has no effect on the label, which the kit
+  centres inside the button's content row; the disclosure renders centred and full-width.
+
+## Mutations (three, all caught, all restored)
+
+| Mutation | Test result |
+|---|---|
+| `reveals_advanced`: drop the `InvalidField::JumpHost` arm | `a_refused_save_opens_the_disclosure_only_for_a_field_it_hides` **FAILED** — `assertion failed: reveals_advanced(InvalidField::JumpHost)` |
+| `reveals_advanced`: add `InvalidField::Basic` | same test **FAILED** — `assertion failed: !reveals_advanced(InvalidField::Basic)` |
+| `empty_message`: drop the `!has_any_group` term | `the_empty_area_tells_no_groups_from_no_match` **FAILED** — `left: NoMatch("Lab") right: NoGroupsYet` |
+
+`git status` clean after restoring all three.
+
+## Commands
+
+```
+cargo test -p oneterm-session-ui
+  test result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+cargo test -p oneterm-state
+  test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+pwsh scripts/ci-local.ps1
+  ci-local: all checks passed.
+```
+
+## Frames taken by this re-verification
+
+| File | Shows |
+|---|---|
+| `BUG-0069-reverify-connecting-before-6x.png` | The Connect button at `f4ea1765`, `.label("Connecting")`, 6x nearest-neighbour: the `g` keeps its full 4-row descender. |
+| `BUG-0069-reverify-connecting-after-6x.png` | The same button at `104d5504` with `control_label`: the same glyph, the same 4 rows. |
+| `US-0120-reverify-colour-row-4x.png` | The colour row after the rework: eight swatches, a ninth square (the picker's value, identical to swatch 1), then the now-clickable "Custom…". |
+
+## Gaps in this re-verification
+
+- **No GUI walk of my own.** No app binary existed in this worktree and building one plus a
+  posted-message driver was not worth the shared disk and CPU, so `M1`, `M2` and `M3` were verified
+  from the dependency source, the unit tests (with mutations) and the rework's own frames, which
+  were checked for distinctness and for internal consistency rather than re-taken. `M4` needed no
+  walk — it was settled by measuring the packets' existing captures.
+- **`R-M1` was found by reading, not by walking.** Duplicating a session with a jump chain was not
+  driven through the UI; the gap is proven by the call graph above, not by a frame.
+- **No screen-reader output was read back.** `accessibility_label` on the disclosure and
+  `aria_label` on the swatches are confirmed set and confirmed to be what the kit forwards; the
+  disclosure carries its state in its name rather than an `aria-expanded`, which no AT client was
+  used to check.
+- **The eight colour swatches are still not tab stops**, as `US-0120`'s Gaps records. Not re-argued.
+- **No `target/fast-dev` was created, so none was deleted.**
