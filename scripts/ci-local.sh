@@ -109,6 +109,10 @@ step python scripts/check-doc-paths.py
 step python -m unittest scripts/test_check_english.py
 step python scripts/check-english.py
 step python scripts/completion-catalog.py validate
+# `US-0111`: secondary text (`muted.foreground`, `tab.foreground`,
+# `table.head.foreground`) must clear WCAG AA on every surface it is drawn on,
+# in every variant of every built-in theme.
+step python scripts/check-theme-contrast.py
 step python scripts/third-party-notices.py --check
 
 if [[ $FULL -eq 1 ]]; then

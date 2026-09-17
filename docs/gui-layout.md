@@ -107,6 +107,26 @@ so a `Close Channel` performed in one tab repaints the others.
 
 The status bar contains the clock, breadcrumb, git status of the active local terminal's cwd (branch, `*` when dirty, `(+added -removed)` line counts against `HEAD` in the success/danger colours, ahead/behind counts; polled every 2 s on the background executor, hidden for SSH sessions and non-repositories), active-terminal network speed, CPU/memory indicator, and right-dock controls. Each text indicator carries a leading icon (clock, folder, git branch, network, CPU) that hides with its label, and all indicator text uses the theme foreground colour (only the diffstat counts are coloured). Terminal-derived widgets resolve the active panel through the dock tree and then the active Space inside `TerminalPanel`; an empty Space yields no terminal metrics.
 
+## Secondary text contrast floor
+
+Secondary text — host addresses, search placeholders, empty-state copy, key-binding chips,
+`Default:` hints, SFTP dates, column headers, inactive tab labels — is drawn in one of three
+theme tokens: `muted.foreground`, `tab.foreground` and `table.head.foreground`. In every
+variant of every built-in theme each of those clears **4.5:1** (WCAG AA for body text) on
+every surface the `SURFACES` table in `scripts/check-theme-contrast.py` lists for it — for
+`muted.foreground` that is the window body, popovers and a hovered menu row, the key-binding
+chip's own fill, the sidebar, the title and status bars, list and table rows in their plain,
+alternating and hovered/selected states, and both an inactive and the active tab. The quality
+gate runs the check, so a new theme in `crates/theme/themes/` cannot ship below the floor.
+
+That table is the contract, and it is only as complete as its last review: a surface missing
+from it is not measured, so a component that starts drawing one of these tokens on a new
+background adds the surface there (each entry cites the line that draws the pair) instead of
+assuming an existing entry covers it. The floor is also a minimum, not a target — raised
+values land near 5:1 so that secondary text still reads as secondary, while a few themes
+carry untouched tokens far above the floor (`Molokai Light`'s `tab.foreground` inherits the
+primary `foreground` at 19:1).
+
 ## Source map
 
 - Workspace state and zoom: `crates/workspace/src/layout/workspace/mod.rs`
@@ -123,3 +143,4 @@ The status bar contains the clock, breadcrumb, git status of the active local te
 - Channel submenu, chips, and Space badge: `crates/terminal-view/src/input/menu.rs`,
   `crates/terminal-view/src/panel/tab_title.rs`, `crates/terminal-view/src/space/render.rs`
 - Focused layout regressions: `crates/workspace/src/layout/workspace/layout_tests.rs`
+- Built-in themes and the contrast floor: `crates/theme/themes/`, `scripts/check-theme-contrast.py`

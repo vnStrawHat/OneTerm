@@ -142,6 +142,10 @@ Invoke-Step @("python", "scripts/check-doc-paths.py")
 Invoke-Step @("python", "-m", "unittest", "scripts/test_check_english.py")
 Invoke-Step @("python", "scripts/check-english.py")
 Invoke-Step @("python", "scripts/completion-catalog.py", "validate")
+# `US-0111`: secondary text (`muted.foreground`, `tab.foreground`,
+# `table.head.foreground`) must clear WCAG AA on every surface it is drawn on,
+# in every variant of every built-in theme.
+Invoke-Step @("python", "scripts/check-theme-contrast.py")
 Invoke-Step @("python", "scripts/third-party-notices.py", "--check")
 
 if ($Full) {
