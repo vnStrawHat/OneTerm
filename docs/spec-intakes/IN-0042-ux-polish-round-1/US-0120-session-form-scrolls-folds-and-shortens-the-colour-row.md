@@ -9,9 +9,9 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -195,11 +195,11 @@ local to one dialog.
    scrollbar appeared. List them in Evidence.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -221,7 +221,111 @@ local to one dialog.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### The scroll, and the three shapes that did not work
+
+The cap is `form_body_max_height(window_height)` = window height minus 260 px of chrome,
+floored at 240 px, in `crates/state/src/form_dialog.rs`. The form goes into a box carrying
+that `max_h` and `overflow_y_scroll`, with the kit's `Scrollbar` on a `relative()` wrapper
+outside the scrolling box. The dialog's footer is a sibling of the whole content block in the
+kit's own layout, so capping the body is exactly what keeps Cancel and Save on screen.
+
+Getting there took three GUI walks, and the reasons are worth keeping because they are all
+about **definite heights**:
+
+1. `max_h` on the element handed to the kit's `overflow_y_scrollbar`. `Scrollable::render`
+   *copies* the size styles onto its wrapper (`root_style_from`) and leaves them on the
+   content, so the content was capped too, measured the same as its container, and produced
+   neither scrolling nor a bar. The body just clipped.
+2. `v_flex().max_h(cap)` with the scroll area as `flex_1().min_h_0()` inside it. A zero
+   flex-basis in an auto-height column resolves to a zero-height body: the dialog rendered as a
+   title and a footer with nothing between them.
+3. The kit's `Scrollable` at all: its wrapper is `size_full()`, and `height: 100%` of the
+   dialog box — which has no height of its own — is indefinite.
+
+What works is the plain one: the cap on the scroll container itself, so its height is
+`min(content, cap)` from a clamp, with no percentage and no flex basis anywhere. The scrollbar
+sits outside the scrolling box so it does not scroll away with the form, and it draws nothing
+while `scroll_area_size <= container_size` (`gpui-base/src/scrollbar.rs:1293`) — which is the
+answer to the packet's largest risk: **the theme's always-visible mode makes a bar visible, not
+present**. A dialog that fits has no bar.
+
+### The regression sweep
+
+| Dialog | Result |
+|---|---|
+| New / Edit SSH Session, Advanced collapsed | No scrollbar; footer in place. `US-0120-11`. |
+| New / Edit SSH Session, Advanced expanded | Bar appears, body capped, footer outside it. `US-0120-11b`. |
+| ...scrolled with the wheel | Logging row fully reached, Save still outside. `US-0120-12`. |
+| SSH Quick Connect | No scrollbar, unchanged. `US-0120-sweep-quick-connect`. |
+| Rename Group | No scrollbar, unchanged. `US-0120-sweep-rename-group`. |
+
+### Advanced
+
+`advanced_is_configured(jump_host, port_forwards, agent_forwarding)` decides the initial state
+and is unit-tested. Collapsed, the dialog is about 660 px instead of about 820 px, which is why
+the collapsed case no longer scrolls at all in a 1000 px window.
+
+### The colour row
+
+Eight swatches — `US-0110`'s `#56B6C2` default first so a new session's colour is one of them,
+then theme colours, no hard-coded values — a "Custom…" square that opens the full picker, and a
+visible **Colour** label. The swatches write through the very same `ColorPickerState` the
+picker writes, and `submit` still stores `color_state.read(cx).value().map(|h| h.to_hex())`.
+**There is no new value format and no second code path**, which is why this packet adds no
+colour test: `US-0110`'s resolver tests already cover the only value that is produced. The
+captured picker shows `#56B6C2` in its hex field with the first swatch ringed, from the same
+state.
+
+### Commands
+
+- `cargo test -p oneterm-state --lib form_dialog` — 1 passed
+  (`the_body_cap_follows_the_window_and_has_a_floor`: follows the window, has a floor, and is
+  monotonic).
+- `cargo test -p oneterm-session-ui` — 69 passed, including
+  `advanced_opens_only_when_the_session_already_uses_it`.
+- `cargo clippy -p oneterm-state -p oneterm-session-ui --all-targets -- -D warnings` — clean.
+- `cargo test --workspace` — passed.
+- `pwsh scripts/ci-local.ps1` — "ci-local: all checks passed".
+
+### Evidence frames
+
+- `evidence/US-0120-11-session-property-dialog.png` — the labelled colour row, the collapsed
+  Advanced, no scrollbar.
+- `evidence/US-0120-54c-colour-row-4x.png` — the row at 4x, the default swatch ringed.
+- `evidence/US-0120-11b-advanced-expanded.png` — Advanced open, the body capped and the bar
+  present, footer below it.
+- `evidence/US-0120-12-session-dialog-scrolled.png` — **the acceptance frame**: scrolled to the
+  bottom of the form with Cancel and Save on screen and no window resize.
+- `evidence/US-0120-54-session-color-row.png`, `US-0120-54b-session-color-picker.png` — the
+  short row, and the full 130-swatch picker behind "Custom…" showing the same hex.
+- `evidence/US-0120-sweep-rename-group.png`, `US-0120-sweep-quick-connect.png` — the sweep.
+
+### Documentation
+
+- `crates/state/src/form_dialog.rs` module doc — **updated**: what the body does now, and why
+  a dialog that fits shows no bar. Every feature crate builds on this.
+- `docs/ssh-client-connect.md` 6.6 — **new**: the session dialog's field order, the Advanced
+  rule, the colour row, and where the scroll lives.
+- `docs/gui-layout.md` — its `US-0110` paragraph describes the 8 px **square** and the shared
+  resolver, not the picker. Both are unchanged. **No change**, as the packet allowed.
+- `DEC-0010` and `DEC-0011` — read; folding jump hosts and forwards into a disclosure changes
+  neither their defaults nor their meaning. **No change.**
+- The `ponytail:` note at `session_dialog.rs:424` is gone: its ceiling is lifted.
+
+### Gaps
+
+- **The four SFTP `FormDialog` dialogs were not captured.** `sftp-ui`'s rename, new-folder and
+  edit dialogs need a live SFTP connection to reach, and this walk had none. They are smaller
+  forms than the ones swept and go through the identical code path, but the frames are missing
+  and the sweep is therefore partial. `US-0126`'s full re-capture will cover them.
+- **The port-forward list was not walked with the wheel.** The packet flagged nested scrolling
+  as a risk; the port-forward rows are a plain column with no scroll of their own
+  (`forward_rows.rs`), so there is no inner scroll area to capture the wheel — but that is read
+  from the code, not from a frame.
+- **The cap is a constant, not a measurement.** 260 px of chrome and a 240 px floor are tuned
+  to the current dialog shape rather than derived from the laid-out title and footer, which are
+  not knowable while the content closure runs. The unit test pins the shape of the function;
+  a much taller footer would want the number revisited.
 
 ## Handoff
 

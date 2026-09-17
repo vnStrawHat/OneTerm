@@ -8,19 +8,30 @@
 //!
 //! [`labelled_field`] renders the matching "label (+ required marker) above
 //! input" row so forms across crates look the same.
+//!
+//! **The body scrolls when it outgrows the window** (`US-0120`). The form sits
+//! in a box capped at [`form_body_max_height`] of the window, so the
+//! Cancel/confirm footer — which is outside that box, in the dialog's own
+//! layout — is reachable at any window height. A body that fits keeps its
+//! natural height and shows no scrollbar: the kit's bar draws nothing while the
+//! content is no taller than its box, even under the application theme's
+//! always-visible scrollbar mode. Nothing is required of a caller; every dialog
+//! built on `FormDialog` gets this.
 
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, Div, IntoElement, ParentElement as _, Pixels, SharedString, Styled, Window,
-    div, px, relative,
+    AnyElement, App, Div, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
+    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled, Window, div, px, relative,
 };
 use gpui_component::{
     ActiveTheme as _, WindowExt as _,
     button::Button,
     dialog::{DialogButtonProps, DialogContent, DialogFooter},
-    h_flex, v_flex,
+    h_flex,
+    scroll::{ScrollableElement as _, ScrollbarAxis},
+    v_flex,
 };
 
 /// Submit callback shared by the confirm button and keyboard `Enter`.
@@ -42,6 +53,24 @@ type ConfirmFn = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 pub enum FieldRequirement {
     Required,
     Optional,
+}
+
+/// Room the dialog needs around its body: title, footer, padding, and a margin
+/// above and below so the dialog does not touch the window edges.
+const DIALOG_CHROME_HEIGHT: Pixels = px(260.);
+
+/// Shortest body worth scrolling. Below this the dialog would be a slot rather
+/// than a form, and an overflowing dialog is the better failure.
+const MIN_BODY_HEIGHT: Pixels = px(240.);
+
+/// The tallest a [`FormDialog`] body may be in a window `window_height` tall.
+///
+/// The footer lives outside this height, in the dialog's own layout, so capping
+/// the body is what keeps **Cancel** and the confirm button on screen — the
+/// point of the whole exercise (`US-0120`). A body shorter than the cap is laid
+/// out at its natural height and shows no scrollbar.
+pub fn form_body_max_height(window_height: Pixels) -> Pixels {
+    (window_height - DIALOG_CHROME_HEIGHT).max(MIN_BODY_HEIGHT)
 }
 
 /// Line box for a checkbox or radio label, as a multiple of the font size.
@@ -103,6 +132,8 @@ pub fn labelled_field(
 pub struct FormDialog {
     title: SharedString,
     width: Pixels,
+    /// Scroll position of the body, shared with its scrollbar.
+    body_scroll: ScrollHandle,
     content: ContentFn,
     submit: SubmitFn,
     confirm_label: SharedString,
@@ -125,6 +156,7 @@ impl FormDialog {
         Self {
             title: title.into(),
             width: Self::DEFAULT_WIDTH,
+            body_scroll: ScrollHandle::new(),
             content: Rc::new(content),
             submit: Rc::new(submit),
             confirm_label: SharedString::from("Save"),
@@ -182,10 +214,43 @@ impl FormDialog {
             let submit_for_keyboard = spec.submit.clone();
             let cancel_for_keyboard = spec.on_cancel.clone();
             let content = spec.content.clone();
+            // One handle for the dialog's life: it is what the scrollbar reads
+            // and what keeps the scroll position across renders.
+            let scroll = spec.body_scroll.clone();
             dialog
                 .title(spec.title.clone())
                 .w(spec.width)
-                .content(move |body, window, cx| content(body, window, cx))
+                .content(move |body, window, cx| {
+                    // The caller's rows go into their own `DialogContent` so
+                    // this one can hold the scroll container; the row gap is
+                    // set here because the dialog only styles the outer one.
+                    let rows = content(DialogContent::new().gap_3(), window, cx);
+                    let max_height =
+                        form_body_max_height(window.window_bounds().get_bounds().size.height);
+                    // The scroll container carries the cap itself, so its height
+                    // is `min(content, cap)` from a clamp rather than from a
+                    // percentage of an ancestor: the dialog box has no height
+                    // of its own, and every shape that asked one of its
+                    // children for `height: 100%` or a zero flex-basis
+                    // collapsed the body to nothing. The scrollbar sits on the
+                    // wrapper, outside the scrolling box, so it does not scroll
+                    // away with the form; it draws itself only when the content
+                    // is taller than the box, which is what keeps it off every
+                    // dialog that fits.
+                    body.child(
+                        div()
+                            .relative()
+                            .child(
+                                div()
+                                    .id("form-dialog-body")
+                                    .max_h(max_height)
+                                    .overflow_y_scroll()
+                                    .track_scroll(&scroll)
+                                    .child(rows),
+                            )
+                            .scrollbar(&scroll, ScrollbarAxis::Vertical),
+                    )
+                })
                 .footer(spec.footer(window, cx))
                 .button_props(
                     DialogButtonProps::default()
@@ -227,5 +292,29 @@ impl FormDialog {
             }
         };
         DialogFooter::new().child(cancel_button).child(confirm)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `US-0120`: the cap follows the window, so the footer stays on screen at
+    /// any height, and it never collapses the body to a slot.
+    #[test]
+    fn the_body_cap_follows_the_window_and_has_a_floor() {
+        assert_eq!(form_body_max_height(px(1000.)), px(740.));
+        assert_eq!(form_body_max_height(px(1440.)), px(1180.));
+        // A window shorter than the chrome would give a negative cap; the floor
+        // wins, and the dialog overflows rather than showing a two-row slot.
+        assert_eq!(form_body_max_height(px(400.)), MIN_BODY_HEIGHT);
+        assert_eq!(form_body_max_height(px(0.)), MIN_BODY_HEIGHT);
+        // Monotonic: a taller window never gives a shorter body.
+        let mut previous = px(0.);
+        for height in [px(0.), px(400.), px(600.), px(900.), px(1600.)] {
+            let cap = form_body_max_height(height);
+            assert!(cap >= previous, "{height:?} gave {cap:?} after {previous:?}");
+            previous = cap;
+        }
     }
 }

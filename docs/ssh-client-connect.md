@@ -951,6 +951,26 @@ a row and gpui runs the container's handler first, so the container's builder ch
 row's right mouse-down sets and returns an empty menu — which renders nothing — when the click
 landed on a row. See `SessionPanel::row_was_right_clicked`.
 
+### 6.6. The New / Edit SSH Session dialog (`US-0120`)
+
+Top to bottom: **Label**, **Colour**, **Host**, **Port**, **Username**, **Authentication**,
+the **Advanced** disclosure, **Group**, **Logging**.
+
+- **Advanced** folds away Jump host, agent forwarding and port forwards — most of the form's
+  height, and fields most sessions never use. It is collapsed for a new session and **open**
+  when the session being edited already sets any of them
+  (`session_dialog::advanced_is_configured`): a user who set a jump host and then sees no jump
+  host concludes it was lost.
+- **Colour** is a labelled row of eight swatches — `US-0110`'s `#56B6C2` default first, then
+  theme colours — plus the full picker behind a "Custom…" square. A swatch writes through the
+  same `ColorPickerState` the picker writes and Save still stores
+  `state.value().to_hex()`, so both produce exactly the value `session_color_hex` already
+  accepted and the tree and the `+` menu cannot disagree.
+- **The body scrolls** when it outgrows the window. That belongs to `FormDialog`
+  (`crates/state/src/form_dialog.rs`), not to this dialog: the footer sits outside the capped
+  box, so Cancel and Save are reachable at any window height, and a form that fits keeps its
+  natural height and shows no scrollbar.
+
 ---
 
 ## 7. File structure
