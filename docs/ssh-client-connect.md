@@ -64,7 +64,13 @@ a dialog for the user to enter them.
 
 Since `IN-0033` the same saved sessions are also listed in the centre tab bar's `+` (New
 Terminal) dropdown, and picking one there enters this flow at exactly the same point with the
-same `SshSessionId`. Everything below the dialog — credential branching, jump chain, host-key
+same `SshSessionId`. Since `US-0114` that dropdown also closes with both connect entry
+points, each named after the dialog it opens: "Quick Connect..." reaches the quick-connect
+dialog (§4, the `NewSession` action and its key binding), and "New Saved Session..." reaches
+the full "New SSH Session" dialog — the same dialog `SessionPanel`'s tree opens, reached
+through the `WorkspaceCommands::open_new_saved_session_dialog` fn pointer rather than a crate
+edge. `WorkspaceCommands::open_quick_connect_dialog` (until `US-0114` named
+`open_new_session_dialog`) is the other one. Everything below the dialog — credential branching, jump chain, host-key
 approval, and where the connected tab lands — is shared, so the rest of this document describes
 both surfaces.
 

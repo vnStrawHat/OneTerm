@@ -11,7 +11,7 @@ Created: 2026-09-17
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -62,7 +62,7 @@ Addresses `F1` and `F7`, both **high**, quoted from
 
 ## Scope
 
-- [ ] In scope:
+- [x] In scope:
   - `crates/terminal-view/src/panel/terminal_panel.rs:113,179-188` — the `DEFAULT_TAB_TITLE`
     fallback for `PanelSpec::DefaultShell` and `PanelSpec::Shell`. Each gets the shell's
     display name instead.
@@ -74,7 +74,7 @@ Addresses `F1` and `F7`, both **high**, quoted from
     session dialog, and the rename of `open_new_session_dialog` to say what it opens.
   - `crates/app/src/init.rs:64-74` — registering both.
   - Every test double that builds a `WorkspaceCommands`.
-- [ ] Out of scope:
+- [x] Out of scope:
   - The `+` menu's row **order**, which is the owner's and fixed at `US-0094` acceptance
     (`docs/gui-layout.md`). This packet renames the last row and adds one beside it; nothing
     above the closing separator moves.
@@ -88,22 +88,22 @@ Addresses `F1` and `F7`, both **high**, quoted from
 
 ## Acceptance
 
-- [ ] Opening "Command Prompt" and "PowerShell" from the `+` menu produces two tabs with two
+- [x] Opening "Command Prompt" and "PowerShell" from the `+` menu produces two tabs with two
       different labels, each naming its shell.
-- [ ] The default-shell tab (the one the application opens at startup) is named after the
+- [x] The default-shell tab (the one the application opens at startup) is named after the
       shell it actually spawned, not "Terminal".
-- [ ] A shell that emits an OSC 0/2 title still overrides the label, exactly as today —
+- [x] A shell that emits an OSC 0/2 title still overrides the label, exactly as today —
       covered by an existing or new `tab_title.rs` test.
-- [ ] An SSH tab's label is unchanged.
-- [ ] The `+` menu's final rows read as the dialogs they open: the existing row names quick
+- [x] An SSH tab's label is unchanged.
+- [x] The `+` menu's final rows read as the dialogs they open: the existing row names quick
       connect, and a new row opens the full "New SSH Session" dialog — the same dialog the
       session tree's context menu opens.
 - [ ] The new row works with nothing saved and with sessions saved; it does not move, hide or
       reorder any row above the closing separator.
 - [ ] Keyboard navigation reaches the new row, and clicking it dismisses the menu.
-- [ ] No crate edge is added: `crates/terminal-view` still does not depend on
+- [x] No crate edge is added: `crates/terminal-view` still does not depend on
       `crates/session-ui`.
-- [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
+- [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
 
@@ -137,8 +137,21 @@ Reason: both changes alter documented UI text and documented entry points.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+Changed: `docs/gui-layout.md` §Panel registration and presentation (the tab-label contract
+and the `+` menu's two closing rows; the "order is the owner's" sentence is untouched because
+the order is untouched) and its source-map line; `docs/ssh-client-connect.md` §1.1 (which `+`
+row reaches which dialog, and the `WorkspaceCommands` field names).
 
+Unchanged, reasons still valid: `docs/agents/crate-dependency-rules.md` — the new command is an
+fn pointer on a `crates/state` type taking only `&mut Window, &mut App`, so no feature type is
+named and no edge appears; `scripts/verify-dependency-graph.py` in the gate confirms it.
+`docs/spec-intakes/IN-0033-.../high-level-design.md` — a historical record of a shipped intake;
+read, and the rename contradicts nothing it settled, because the order it fixed is intact.
+`docs/PROJECT.md` — no change.
+
+The two `IN-0042` records that quote the old field name
+(`high-level-design.md:231,235`, `IN-0042.md:168`) are left as written: they describe the state
+before this packet, which is what they are for.
 ## Context
 
 - The tab-label half is genuinely small: `terminal_panel.rs:179-188` currently writes
@@ -177,11 +190,11 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Plan
 
-- [ ] Tab labels first — smallest half, own tests in `tab_title.rs`.
-- [ ] Rename the existing `WorkspaceCommands` field; let the compiler find the call sites.
-- [ ] Add the new field, register it, add the menu row, bump `FIXED_ROWS`.
-- [ ] Update the two docs.
-- [ ] Re-capture the scenes.
+- [x] Tab labels first — smallest half, own tests in `tab_title.rs`.
+- [x] Rename the existing `WorkspaceCommands` field; let the compiler find the call sites.
+- [x] Add the new field, register it, add the menu row, bump `FIXED_ROWS`.
+- [x] Update the two docs.
+- [x] Re-capture the scenes.
 
 ## Decisions
 
@@ -210,11 +223,11 @@ None. The row text is wording inside an owner-fixed order, and the seam is the o
    - `03-plus-menu-kbdnav.png` — keyboard navigation reaches the new row.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -236,7 +249,90 @@ None. The row text is wording inside an owner-fixed order, and the seam is the o
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### Evidence
+
+Branch `worktree-agent-a8b32ce5d4725a1f5`, commit `feat(terminal-view): name local tabs after their shell
+and the "+" menu after its dialogs`.
+
+Changed:
+
+- `crates/core/src/config/shell.rs` — `ShellKind::display_name`, the one list the "+" menu's
+  rows, the Settings shell dropdown and the tab labels all read.
+- `crates/settings-ui/src/terminal/shell.rs` — folded in during the rework round: its own
+  `SHELL_KINDS` wording is gone and the dropdown reads `display_name`.
+- `crates/terminal-view/src/panel/tab_title.rs` — `shell_tab_title` plus its tests.
+- `crates/terminal-view/src/panel/terminal_panel.rs` — both local-shell arms of `from_spec`,
+  the shell rows built from `display_name`, the two closing menu rows, `FIXED_ROWS` 6 -> 7.
+- `crates/state/src/commands.rs` — `open_new_session_dialog` renamed to
+  `open_quick_connect_dialog`; new `open_new_saved_session_dialog` beside it.
+- `crates/session-ui/src/lib.rs` — `open_new_saved_session_dialog`, one line onto the existing
+  `session_dialog::open_session_dialog`.
+- `crates/app/src/init.rs`, `crates/state/src/services.rs`,
+  `crates/terminal-view/src/panel/tests.rs`, `crates/workspace/src/layout/workspace/actions.rs`
+  — the registration and every test double.
+- `docs/gui-layout.md`, `docs/ssh-client-connect.md` §1.1.
+
+Checks:
+
+- `cargo test -p oneterm-terminal-view --lib` — 351 passed, 0 failed. The label half is covered
+  by three new `tab_title.rs` tests: every `ShellKind` gets its own label and none reads
+  "Terminal"; a custom shell is named after its program's file stem and falls back to
+  `DEFAULT_TAB_TITLE` with no program; and a live OSC 0/2 title still wins over the shell name
+  while `None` / `""` fall back to it.
+- `cargo check --workspace --all-targets` — clean. This is the integration proof for the
+  widened `WorkspaceCommands`: it is a compile check that every double follows the new shape,
+  **not** coverage of the menu itself.
+- `pwsh scripts/ci-local.ps1` — see below.
+
+GUI walk (own binary, own pid, `fast-dev`, 1400x900, PrintWindow):
+
+- `evidence/US-0114-02-plus-menu.png` — the menu closes with "Quick Connect... Ctrl+S" and
+  "New Saved Session..."; the three shells, the "SSH Sessions" heading and the disabled
+  "No saved sessions" hint are all still above the closing separator, unmoved.
+- `evidence/US-0114-04-two-tabs.png` — "Command Prompt" and "PowerShell", two labels.
+- `evidence/US-0114-19-many-tabs.png` — nine tabs, each naming its shell; the after frame of
+  the strip that used to read "Terminal" all the way across. (The before scene had ten, one
+  of them SSH; no host is reachable here, so the after walk has nine local ones.)
+- `evidence/US-0114-13-quick-connect-dialog.png` — the renamed row opens **SSH Quick Connect**.
+- `evidence/US-0114-53-new-saved-session-dialog.png` — the new row opens the full **New SSH
+  Session** dialog, the same one the session tree opens.
+- The startup tab is named after the shell settings actually spawned: every capture shows the
+  first tab as "Command Prompt", never "Terminal".
+
+### Rework round (after independent verification)
+
+Two findings from `evidence/terminal-view-wave1-verify.md` were fixed here rather than left
+standing:
+
+- **`F-114.1` — the "one list" claim was not true.** `crates/settings-ui/src/terminal/shell.rs`
+  kept a fourth wording (`"cmd.exe (Windows)"`, `"Windows PowerShell 5.x"`, `"PowerShell 7+
+  (pwsh)"`), so the Settings dropdown a user picks their default shell from disagreed with the
+  tab it produced. `SHELL_KINDS` is now a list of kinds and the labels come from
+  `display_name`; the label was never persisted (the setter maps it back to the enum), so this
+  changes only the widget's text. `oneterm-settings-ui` already depended on `oneterm-core`, so
+  no crate edge is added — `verify-dependency-graph.py` in the gate confirms it. The claim is
+  now true, and the comment in `shell.rs` names all three consumers instead of hand-waving.
+- **`F-114.2` — an explicit `program` under a non-`Custom` kind produced a lying label.**
+  `resolve_shell` honours `cfg.program` for every kind, so `kind: cmd, program: nu.exe` ran
+  nushell in a tab reading "Command Prompt" — the same untruth `F1` is about. `shell_tab_title`
+  now prefers the program's file stem for **every** kind and falls back to the kind's name only
+  when no program is set. New test: `an_explicit_program_wins_over_the_kinds_name`.
+
+### Gaps
+
+- **Keyboard navigation to the new row is not captured.** The walkthrough driver posts `WM_*`
+  messages and cannot deliver the arrow/Enter sequence into a popup reliably; the row is a
+  plain `PopupMenuItem`, which the kit treats identically to the rows above it for the mouse
+  and the arrow keys, but that is reasoning, not a frame. `03-plus-menu-kbdnav.png` was not
+  taken.
+- **No SSH tab was opened**, so "an SSH tab's label is unchanged" rests on the code path being
+  untouched (`PanelSpec::Session` still takes its `title` argument) rather than on a capture.
+  No reachable host in this environment.
+- **`FIXED_ROWS` is still an estimate.** It is now 7 and the `ponytail:` note above it still
+  stands; the scroll decision was not exercised with a long saved list, because no sessions are
+  saved in the walk profile.
+- Two dialogs still exist. This packet made the labels honest; merging them would be a new
+  outcome and a new packet.
 
 ## Handoff
 

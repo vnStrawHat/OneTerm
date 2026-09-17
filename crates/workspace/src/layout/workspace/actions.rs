@@ -124,7 +124,7 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        (commands(cx).open_new_session_dialog)(window, cx);
+        (commands(cx).open_quick_connect_dialog)(window, cx);
     }
 
     /// Action handler: switch the right dock to the panels for the given
