@@ -25,7 +25,7 @@ use gpui::{App, Entity, WeakEntity, Window};
 use gpui_component::{Icon, dock::DockArea};
 use oneterm_theme::AppIcon;
 
-use super::status_text::{Label, Segment, StatusText, Tone};
+use super::status_text::{Budget, Label, Presentation, Segment, Shorten, StatusText, Tone};
 
 /// Minimum time between two git runs for the same cwd.
 // ponytail: 2s polling; switch to a file-system watcher if it shows up in profiles.
@@ -35,8 +35,12 @@ const POLL: Duration = Duration::from_secs(2);
 type Slot = Arc<Mutex<Option<(PathBuf, Option<Label>)>>>;
 
 /// Indicator showing the git status of the active local terminal's cwd.
+///
+/// `budget` is the width the status bar leaves for the whole label; a branch
+/// name that does not fit keeps its head behind an ellipsis.
 pub fn git_status(
     dock_area: WeakEntity<DockArea>,
+    budget: Budget,
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<StatusText> {
@@ -48,8 +52,13 @@ pub fn git_status(
     StatusText::new_entity(
         "git-status-indicator",
         Duration::from_millis(500),
-        false,
-        Some(Icon::new(AppIcon::GitBranch)),
+        Presentation {
+            icon: Some(Icon::new(AppIcon::GitBranch)),
+            copyable: false,
+            // A branch name is unbounded too, and its head is what identifies
+            // it (`US-0112`).
+            shorten: Shorten::HeadFirst(budget),
+        },
         Box::new(move |cx| {
             let dock_area = dock_area.upgrade()?;
             let cwd = oneterm_state::active_terminal::local_cwd(&dock_area, cx)?;
