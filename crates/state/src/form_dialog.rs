@@ -13,7 +13,8 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, IntoElement, ParentElement as _, Pixels, SharedString, Styled, Window, div, px,
+    AnyElement, App, Div, IntoElement, ParentElement as _, Pixels, SharedString, Styled, Window,
+    div, px, relative,
 };
 use gpui_component::{
     ActiveTheme as _, WindowExt as _,
@@ -41,6 +42,32 @@ type ConfirmFn = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 pub enum FieldRequirement {
     Required,
     Optional,
+}
+
+/// Line box for a checkbox or radio label, as a multiple of the font size.
+///
+/// A glyph is painted inside the line box of its own text line; anything the
+/// font draws below that box is lost. The UI fonts OneTerm ships with need up to
+/// about 1.35 em for ascent plus descent, and gpui's own default (the golden
+/// ratio, ~1.618) clears that comfortably — which is why every ordinary label in
+/// the application renders its descenders whole.
+pub const CONTROL_LABEL_LINE_HEIGHT: f32 = 1.5;
+
+/// The label text for a [`gpui_component::checkbox::Checkbox`] or
+/// [`gpui_component::radio::Radio`], passed as a **child** rather than through
+/// `.label(...)`.
+///
+/// The kit wraps a `.label(...)` in `line_height(relative(1.))` — a line box
+/// exactly as tall as the font — so the tail of a `g` or a `p` falls outside it
+/// and is never drawn (`BUG-0069`: "Loggin**g**" and "Use glo**b**a**l**" ended
+/// flat at the baseline). That line height is hard-coded inside the control and
+/// cannot be overridden from the outside, so the text goes in as a child with a
+/// line box that has room for the descender. Pass the same text to
+/// `accessibility_label` to keep the name a screen reader announces.
+pub fn control_label(text: impl Into<SharedString>) -> Div {
+    div()
+        .line_height(relative(CONTROL_LABEL_LINE_HEIGHT))
+        .child(text.into())
 }
 
 /// Render one form field: label (with `*` when required) above the input.

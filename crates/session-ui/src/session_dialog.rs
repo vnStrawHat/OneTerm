@@ -29,7 +29,7 @@ use gpui_component::{
 };
 
 use oneterm_core::PortForward;
-use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
+use oneterm_state::form_dialog::{FieldRequirement, FormDialog, control_label, labelled_field};
 use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
@@ -125,8 +125,10 @@ fn logging_radio(
     value: SshLoggingOverride,
     selected: Rc<Cell<SshLoggingOverride>>,
 ) -> Radio {
+    // `control_label` instead of `.label(label)` — see BUG-0069.
     Radio::new(id)
-        .label(label)
+        .accessibility_label(label)
+        .child(control_label(label))
         .checked(selected.get() == value)
         .on_click(move |checked, window, _| {
             if *checked {
@@ -379,7 +381,8 @@ pub(crate) fn open_session_dialog(
                 .child(jump_host_picker.render(cx))
                 .child(
                     Checkbox::new("agent-forwarding")
-                        .label("Forward the SSH agent to the remote host")
+                        .accessibility_label("Forward the SSH agent to the remote host")
+                        .child(control_label("Forward the SSH agent to the remote host"))
                         .checked(agent_forwarding.get())
                         .on_click({
                             let agent_forwarding = agent_forwarding.clone();

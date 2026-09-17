@@ -15,11 +15,11 @@ use gpui_component::{
     button::Button,
     h_flex,
     input::{Input, InputState},
-    radio::RadioGroup,
+    radio::{Radio, RadioGroup},
     v_flex,
 };
 use oneterm_core::{SecretString, SshAuthMethod};
-use oneterm_state::form_dialog::{FieldRequirement, labelled_field};
+use oneterm_state::form_dialog::{FieldRequirement, control_label, labelled_field};
 
 use crate::session_state::SshAuthPreference;
 
@@ -115,7 +115,15 @@ impl SshAuthForm {
                 "Authentication",
                 FieldRequirement::Required,
                 RadioGroup::horizontal("ssh-auth-method")
-                    .children(["Password", "Private Key", "SSH Agent"])
+                    // `control_label` instead of `Radio::from(&str)`, whose
+                    // `.label(…)` clips the `y` of "Private Key" (BUG-0069).
+                    .children(
+                        ["Password", "Private Key", "SSH Agent"].map(|label| {
+                            Radio::new(label)
+                                .accessibility_label(label)
+                                .child(control_label(label))
+                        }),
+                    )
                     .selected_index(Some(selected_index))
                     .on_click(move |selected: &usize, window, cx| {
                         let private_key_selected = *selected == 1;

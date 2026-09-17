@@ -27,7 +27,7 @@ use oneterm_core::{
     ConnectionCancellation, HostKeyPolicy, SshConfig, SshDuplicateAuth, SshDuplicateConfig,
 };
 use oneterm_state::commands::SshDuplicateCompletion;
-use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
+use oneterm_state::form_dialog::{FieldRequirement, FormDialog, control_label, labelled_field};
 use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
@@ -105,7 +105,8 @@ fn save_session_option(
     (!is_duplicate).then(|| {
         div().pt_1().child(
             Checkbox::new("save-session")
-                .label("Save to SSH Sessions")
+                .accessibility_label("Save to SSH Sessions")
+                .child(control_label("Save to SSH Sessions"))
                 .checked(save_session.get())
                 .on_click(move |checked: &bool, _window, _cx| {
                     save_session.set(*checked);

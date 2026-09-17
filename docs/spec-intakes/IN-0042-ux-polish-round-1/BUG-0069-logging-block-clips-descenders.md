@@ -9,9 +9,9 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -155,11 +155,11 @@ None.
    exactly this reason; do the same.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -177,7 +177,106 @@ None.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### The root cause, named
+
+`Checkbox` and `Radio` in `gpui-component` wrap a `.label(...)` in
+`div().line_height(relative(1.))` — `checkbox.rs:329` and `radio.rs:245` in
+`gpui-component-0.6.0`. A line box exactly as tall as the font is shorter than the
+font's ascent plus descent (about 1.35 em for the UI fonts here), so the tail of a
+`g`, a `p` or a `y` falls outside its own text line and is never drawn. That line
+height is hard-coded inside the control and cannot be overridden from the outside —
+`Radio::label` takes a `Text`, not an element.
+
+`IN-0004`'s cause (a label-level `overflow_hidden` content mask) was tried first and
+is **not** this: no element in the dialog's chain sets an overflow, and a rectangular
+content mask would clip only the bottom-most line, not one line in the middle of the
+form.
+
+### The finding's diagnosis was wrong, and it matters
+
+`F19` says *"Adjacent labels ('Jump host', 'Group') render their `p`s intact, so it is
+specific to that block."* They do not differ, and it is not specific to that block —
+the difference is the **control**, not the position. Measured on
+`research/before/11-session-property-dialog.png` as the number of pixel rows a glyph
+occupies below the baseline (a full descender at this size is 3 rows):
+
+| Text | Control | Rows below baseline, before |
+|---|---|---|
+| "Jump host" | `labelled_field` label | 3 — whole |
+| "Group" | `labelled_field` label | 3 — whole |
+| "Logging" | `labelled_field` label | 3 — **whole; it was never clipped** |
+| "Select or type group…" | combobox placeholder | 3 — whole |
+| status bar path, session subtitles | plain labels | 3 — whole |
+| **"Use global"** | `Radio::label` | **1 — clipped** |
+| **"Forward the SSH agent…"** | `Checkbox::label` | **1 — clipped** |
+
+So the block the finding named contains exactly one broken label, and the label the
+finding thought was broken ("Logging") never was. Reading it as "the Logging block"
+would have produced a fix in the wrong place; reading it as "the kit's checkbox and
+radio labels" also fixes the `y` of "Private Key" in the Authentication row, which the
+walkthrough never noticed, and every other checkbox and radio in these dialogs.
+
+### The fix
+
+`oneterm_state::form_dialog::control_label` — the label text as a **child** of the
+control, in a line box of `CONTROL_LABEL_LINE_HEIGHT` (1.5) times the font size, with
+`accessibility_label` carrying the screen-reader name that `.label(...)` used to
+provide. It is relative, not an absolute pixel value, so it holds at any UI font size.
+
+Applied at every checkbox and radio in `crates/session-ui`:
+`session_dialog.rs` (the three Logging radios, the agent-forwarding checkbox),
+`auth_form.rs` (the Password / Private Key / SSH Agent radio group, shared by all
+three dialogs), `connect_dialog.rs` ("Save username to session" — a clipped `y`) and
+`quick_connect_dialog.rs` ("Save to SSH Sessions" — no descender today, latent
+tomorrow).
+
+### Commands and measurements
+
+Same measurement on the captured after frames:
+
+| Text | Rows below baseline, after, 16 px UI font | after, 20 px UI font |
+|---|---|---|
+| "Use global" | 4 | 5 |
+| "Forward the SSH agent…" | 4 | 5 |
+| "Private Key" | 4 | — |
+| "Logging" (unchanged control) | 3 | — |
+
+- `cargo clippy -p oneterm-session-ui -p oneterm-state --all-targets -- -D warnings` — clean.
+- `cargo test --workspace` — passed.
+- `pwsh scripts/ci-local.ps1` — "ci-local: all checks passed".
+
+### Evidence frames
+
+- `evidence/BUG-0069-11-session-property-dialog.png` — the dialog, after.
+- `evidence/BUG-0069-11b-logging-block-3x.png` — the Logging block at 3x.
+- `evidence/BUG-0069-11c-before-above-after.png` — before above after, 3x, the same
+  crop. The flat `g` of "agent" and of "Use global" in the top half have their tails in
+  the bottom half.
+- `evidence/BUG-0069-12-session-dialog-privatekey.png` — the Private Key variant.
+- `evidence/BUG-0069-11d-largest-ui-font.png` — the same dialog at a 20 px UI font.
+
+### Documentation
+
+No contract change, as planned. `docs/ssh-client-connect.md` §4 describes the dialog's
+fields and specifies no height; `docs/terminal-logging.md` and `DEC-0003` describe what
+the Logging control means, which is untouched; `docs/PROJECT.md` carries no invariant
+about text rendering. The one sentence worth keeping lives in the rustdoc on
+`control_label`, next to the code that must not be undone.
+
+### Gaps
+
+- **No unit-level proof, as the packet predicted.** Glyph paint is not queryable from
+  the gpui element tree. The proof is the pixel-row measurement above, taken from the
+  captured frames; it is quantitative rather than a visual claim.
+- **The Appearance page offers no UI font size.** It offers theme mode and the theme
+  list only (`crates/settings-ui/src/appearance.rs`), so the acceptance's "largest UI
+  font size the Appearance page offers" has no control behind it. The check was made
+  instead by setting `ui_font_size` to 20 in `target/ui_config.json` — the same value
+  the page would persist — and re-capturing.
+- **Checkboxes and radios outside `crates/session-ui` still use `.label(...)`** and
+  still clip: settings-ui, sftp-ui and terminal-view. `control_label` is in the shared
+  `form_dialog` module and is ready for them; fixing them belongs to `US-0121`…`US-0125`
+  and to `US-0126`'s sweep, not to this packet.
 
 ## Handoff
 

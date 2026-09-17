@@ -30,7 +30,7 @@ use gpui_component::{
 };
 
 use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SshConfig};
-use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
+use oneterm_state::form_dialog::{FieldRequirement, FormDialog, control_label, labelled_field};
 use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
@@ -184,7 +184,8 @@ pub(crate) fn open_connect_dialog(
                     content.child(
                         div().pt_1().child(
                             Checkbox::new("save-username")
-                                .label("Save username to session")
+                                .accessibility_label("Save username to session")
+                                .child(control_label("Save username to session"))
                                 .checked(save_username.get())
                                 .on_click({
                                     let save_username = save_username.clone();
