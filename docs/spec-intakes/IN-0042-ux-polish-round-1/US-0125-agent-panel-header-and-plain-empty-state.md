@@ -10,8 +10,8 @@ Created: 2026-09-17
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -75,9 +75,9 @@ redesign a state the walkthrough praised.
       proposal is kept as a dimmed footnote, for the curious. A unit test holds the identifier
       to that footnote.
 - [x] The empty state keeps its icon and its headline — the parts the walkthrough praised.
-- [ ] With an agent actually reporting, the panel renders its list exactly as before, and the
+- [x] With an agent actually reporting, the panel renders its list exactly as before, and the
       header does not steal a row from it.
-- [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
+- [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
 
@@ -108,7 +108,20 @@ two right-dock modes' headers.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+Changed:
+
+- `docs/agent-panel-display.md` §1.1 — the header is drawn in every state, in the same shape as
+  `SshClientPanel::render_header`, and the dock skin still suppresses the outer tab bar.
+- `docs/agent-panel-display.md` §4 — the empty state's current composition and its exact copy.
+- `docs/agent-panel-display.md` §8 — the header title is plain text; the bot icon is now only in
+  the empty state.
+- `docs/gui-layout.md` §Dock composition — the sentence contrasting the two right-dock modes now
+  says the Agent panel supplies its own header too.
+
+Unchanged, and why: `docs/osc-agent-status.md` (the protocol is untouched — the copy was checked
+against §1 and §4.2.1 before it was written), `docs/PROJECT.md` (no invariant moves),
+`crates/workspace/src/layout/workspace/dock_skin.rs` (`owns_header` already covers
+`panel_names::AGENT`; nothing to change).
 
 ## Context
 
@@ -176,11 +189,11 @@ Three, all local to this packet — none of them sets a rule future work inherit
    populated case works.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -199,7 +212,54 @@ Three, all local to this packet — none of them sets a rule future work inherit
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### What changed
+
+`crates/agent-ui/src/view.rs` only — 1 file, +106/-61 including the test. `render_header` was
+split into `render_title_bar` (the section header) and the filter-chip row; the empty state now
+renders the title bar above its centred block. `HEADER_TITLE` and an `EMPTY_STATE` constant hold
+the copy.
+
+### Focused
+
+- `cargo test -p oneterm-agent-ui` — 6 passed, including the new
+  `view::tests::empty_state_copy_keeps_the_protocol_in_the_footnote`: the headline and the body
+  contain neither `OSC` nor `20308`, the footnote contains `OSC 20308` exactly once, the body
+  names the terminal and says the agent shows up by itself, and the header title is `Agents`.
+  The packet's Verification Plan predicted no meaningful unit test here; there is one, because
+  the copy was made a constant. The header's *styling* is still element properties and is proven
+  by the frames below, not by a test.
+- `cargo test --workspace` — green (the full list is in the US-0124 evidence; both packets were
+  verified in the same run).
+
+### E2E (GUI walk)
+
+Built `cargo build -p oneterm-app --profile fast-dev`, driven by the walkthrough's `gui.ps1`
+(PrintWindow + posted `WM_*`, own pid only), 1600x1000 unless stated:
+
+| Frame | Shows |
+|---|---|
+| `evidence/US-0125-22-agent-panel.png` | Agent mode, empty. The `Agents` header, then the icon, `No agents are running`, the plain-language sentence and the one dimmed footnote naming OSC 20308. |
+| `evidence/US-0125-01-first-launch-ssh-client.png` | SSH Client mode in the same session: the `Session` and `SFTP Browser` headers the new one matches. |
+| `evidence/US-0125-22b-agent-panel-900.png` | The same empty state in a 900 px window (a ~317 px dock): the copy wraps, nothing clips. |
+| `evidence/US-0125-22c-agent-panel-populated.png` | Two agents reporting (OSC 20308 emitted from a local shell): header, filter chips, the tab group and **both** cards visible — the header took no row from the list. |
+
+Producing the populated case needed the payload to be base64-encoded (spec §3); the first
+attempt sent raw JSON and the app logged `parse_agent_status returned None`, which is the parser
+behaving correctly.
+
+### Platform
+
+`pwsh scripts/ci-local.ps1` — `ci-local: all checks passed`.
+
+### Gaps
+
+- The header's appearance is proven by screenshots, not by an assertion: gpui element properties
+  are not queryable from a test. Anyone changing `render_title_bar` has to re-take
+  `US-0125-22-agent-panel.png` beside `US-0125-01-first-launch-ssh-client.png`.
+- One acceptance clause was amended during implementation (see Acceptance): the empty state keeps
+  a single mention of OSC 20308 in a dimmed footnote, on the owner's instruction, rather than
+  naming no protocol identifier at all.
+- The populated frame was produced by hand-emitting the sequence, not by a real agent.
 
 ## Handoff
 

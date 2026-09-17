@@ -10,8 +10,8 @@ Created: 2026-09-17
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -72,20 +72,20 @@ Addresses `F29` and `F30`, both medium, quoted from
 
 ## Acceptance
 
-- [ ] At the default docked width, the table shows Name, Size and a date, with no horizontal
+- [x] At the default docked width, the table shows Name, Size and a date, with no horizontal
       scrollbar.
-- [ ] Columns not shown by default are reachable — a chooser, a menu, or an equivalent — and
+- [x] Columns not shown by default are reachable — a chooser, a menu, or an equivalent — and
       the choice persists across a restart.
-- [ ] Expanded to a wide window, the remote pane does not scroll horizontally, and the local
+- [x] Expanded to a wide window, the remote pane does not scroll horizontally, and the local
       pane has no always-empty column.
-- [ ] The dual pane offers a visible control that transfers the selected item between the two
+- [x] The dual pane offers a visible control that transfers the selected item between the two
       sides, in both directions, and it is usable without knowing a keyboard shortcut or a menu
       path.
-- [ ] The `⋮` menu and the right-click menu offer the same actions, in the same order, built
+- [x] The `⋮` menu and the right-click menu offer the same actions, in the same order, built
       from one list. Anything one has, the other has — including Edit and Refresh.
-- [ ] A saved `sftp_table_state` from before this packet does not leave a user stuck with the
+- [x] A saved `sftp_table_state` from before this packet does not leave a user stuck with the
       old widths. The packet states how that is handled and proves it with a seeded file.
-- [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
+- [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
 
@@ -116,8 +116,33 @@ a documented surface.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
-Include the `sftp_table_state` answer.
+Changed:
+
+- `docs/sftp-browser-design.md` §4.5 — a new "Table shape as built" block: the six columns, the
+  three shown by default, Name as the flexible column measured against the panel, and the
+  `sftp_table_state` version rule.
+- `docs/sftp-browser-design.md` §4.8 — retitled "Menus — one action list, two renderings": the
+  shared `ENTRY_MENU`, the empty-area subset, and the two config rows the `⋮` menu adds.
+- `docs/sftp-browser-design.md` §4.15 — each pane's toolbar carries its half of the transfer
+  controls at the edge facing the other pane.
+- `docs/agents/persistence.md` — the `docks.json.sftp_table_state` row now documents the
+  `version` field, what a version-less document loses, and that Name's width is never stored.
+
+Unchanged, and why: `docs/sftp-follow-terminal-cwd/README.md` (the follow behaviour is untouched;
+re-checked in the walk, frame `US-0124-49-sftp-after-tab-switch.png`),
+`docs/spec-intakes/IN-0025-sftp-dual-pane/` (the pane model and its zoom are unchanged — the
+packet adds buttons in front of the transfer actions that intake already defined),
+`docs/PROJECT.md` (no invariant moves).
+
+**The `sftp_table_state` answer.** `oneterm_core::SftpTableState` gains
+`version: u32` (`SFTP_TABLE_STATE_VERSION = 1`, `#[serde(default)]`). A document written before
+this packet has no version, reads back as `0`, and `SftpTableDelegate::apply_persisted_state`
+ignores its `column_widths`/`column_visibility` and keeps the new defaults. Nothing is migrated:
+the old layout *is* the set of columns that did not fit, so there is nothing in it worth keeping.
+`expanded` and `local_dir` are not versioned and are still applied, so the user's dual-pane mode
+and last local directory survive. Name's width is derived from the panel and is no longer
+written at all. This is a one-off, recorded in `docs/agents/persistence.md` as the schema
+owner's table says; it sets no rule other packets inherit, so it needs no `DEC`.
 
 ## Context
 
@@ -157,9 +182,28 @@ Include the `sftp_table_state` answer.
 
 ## Decisions
 
-Possibly one: if the packet discards or migrates a persisted `sftp_table_state`, that is a
-persisted-state change future work inherits and should be recorded — as a `DEC` if it sets a
-rule, or in `docs/agents/persistence.md` if it is a one-off.
+Four, none of which sets a rule beyond this browser, so no `DEC`:
+
+1. **Name is the flexible column.** The table widget has fixed-pixel columns and no flex mode
+   (`reference/gpui-kit/crates/component/src/table/column.rs` — `width`, `min_width`, `fixed`,
+   no grow), so the panel measures its list area with a `gpui::canvas` probe (the pattern
+   `reference/gpui-kit/crates/webview/src/lib.rs:131` uses) and the delegate gives Name whatever
+   the other visible columns leave over, down to a 100 px floor. One rule fixes both halves of
+   `F29`: nothing overflows at the docked width, and nothing is left over as a blank strip when
+   the pane is wide. Name is consequently **not resizable** and its width is **not persisted**;
+   every other column is still both.
+2. **The default set is Name + Size + Date Modified**, in that order (the high-level design's
+   sketch). Permissions, Owner and Group keep their definitions and move behind the `⋮` menu's
+   Columns section, which gained a label so it can be found.
+3. **A version on the column half of `sftp_table_state`**, with a pre-version document's column
+   fields dropped rather than migrated. See Reconciliation.
+4. **The transfer controls live at the inner edge of each pane's toolbar**, not in the splitter
+   gutter: the gutter belongs to `h_resizable`, and a third resizable child would have added two
+   drag handles around a button strip. Local's `↑ Upload` sits at the right end of its toolbar
+   and Remote's `↓ Download` at the left end of its own, so the pair meets at the split. Each
+   acts on its own pane's selection and is disabled while that pane has none. The Local pane
+   already had an unlabelled arrow button; it is now labelled and disabled-aware, and the Remote
+   pane gained its counterpart, which it never had.
 
 ## Verification Plan
 
@@ -186,11 +230,11 @@ rule, or in `docs/agents/persistence.md` if it is a one-off.
    the change, to show the reconciliation. Capture as `44b`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -212,7 +256,86 @@ rule, or in `docs/agents/persistence.md` if it is a one-off.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### What changed
+
+`crates/sftp-ui/src/{types,table_delegate,table_delegate_menu,render,panel,actions,local_pane}.rs`
+plus `crates/core/src/{sftp,lib}.rs` — 9 files. The menu rewrite is the largest piece:
+`table_delegate_menu.rs` now owns `SftpAction`, `MenuEntry`, the `ENTRY_MENU` list,
+`empty_area_entries()` and one `build_menu` renderer, and `SftpPanel::do_open` was extracted in
+`actions.rs` so the menu row and the `SftpOpen` binding share one behaviour.
+
+### Focused (`cargo test -p oneterm-sftp-ui` — 55 passed)
+
+New, all pure:
+
+- `types::tests::the_default_columns_fit_the_docked_panel` — at 317, 420, 490 and 1900 px of
+  panel the default set's total (Name + Size + Date Modified + the table's trailing gutter) is
+  within the panel; Name never drops below its floor; Name is wider at 1900 than at 490; the
+  default visibility is exactly `name, size, modified`.
+- `types::tests::name_stops_shrinking_at_its_minimum` — too narrow for the set, Name stops at
+  100 px and the table scrolls instead of squeezing names to nothing.
+- `table_delegate::tests::name_fills_the_measured_panel_width` — the measurement is idempotent
+  (a 0.2 px change is not a change, so it cannot drive a re-render loop), Name takes the
+  leftover at 317 and at 1900, and hiding a column gives its width to Name.
+- `table_delegate::tests::a_pre_version_state_falls_back_to_the_new_defaults` — a seeded
+  version-0 state with all six columns visible and a 320 px Name yields the new defaults.
+- `table_delegate_menu::tests::the_shared_action_list_has_one_order` — the exact order both
+  menus render, Edit and Refresh included.
+- `table_delegate_menu::tests::the_empty_area_menu_is_a_subset_of_the_same_list` — the
+  empty-area menu is the same list filtered to the actions that need no selection, with no
+  leading, trailing or doubled separator.
+
+Updated: `persisted_state_round_trips_and_ignores_invalid_values` (now asserts `version`, and
+that no `name` width is stored), `toggling_visibility_never_hides_name`,
+`widths_apply_in_visible_order_and_are_clamped` (Name's width is ignored, not stored).
+
+`cargo test --workspace` — green.
+
+### E2E (GUI walk)
+
+`cargo build -p oneterm-app --profile fast-dev`, the walkthrough's `gui.ps1` driver (PrintWindow
++ posted `WM_*`, own pid only), against the repository's loopback server
+`cargo run -p oneterm-tools --bin sftp-dev-server -- --port 2233 --root <scratch>` (2233, not
+2222: another session was walking concurrently). The server was stopped afterwards.
+
+| Frame | Shows |
+|---|---|
+| `evidence/US-0124-44-sftp-connected-1600.png` | Docked, connected, 1600 px window: **Name / Size / Date Modified**, Size visible, no horizontal scrollbar. |
+| `evidence/US-0124-44a-sftp-connected-900.png` | The same at a 900 px window (~317 px dock): Name shrinks and truncates, still no horizontal scrollbar. |
+| `evidence/US-0124-44d-permissions-on.png` | Permissions switched on from the `⋮` menu's labelled Columns section: four columns, Name gives up the room, still no scrollbar. |
+| `evidence/US-0124-44e-columns-persisted-after-connect.png` | After a restart: Permissions is still on. The written document was `{"version":1, …, "permissions":true}` with no `name` width. |
+| `evidence/US-0124-44b-seeded-old-state-after-connect.png` | A `docks.json` seeded with a pre-US-0124 `sftp_table_state` (no version, all six visible, Name 320): it is ignored and the new defaults are used. |
+| `evidence/US-0124-45-sftp-context-menu.png` | Right-click: Open / Edit / Download — Upload Files / Upload Folder / New Folder — Rename / Delete — Properties / Refresh. |
+| `evidence/US-0124-48-sftp-overflow-menu.png` | The `⋮` menu: the same ten items, same order, same icons, then Follow Terminal Cwd and the Columns chooser. |
+| `evidence/US-0124-47-sftp-expanded.png` | Dual pane, wide: both panes Name / Size / Date Modified, no blank fourth column, no horizontal scroll, `↑ Upload` (disabled, nothing selected locally) and `↓ Download` (enabled) meeting at the split. |
+| `evidence/US-0124-47b-transfer-controls-both-enabled.png` | A selection in each pane: both controls enabled. |
+| `evidence/US-0124-47c-after-upload.png` | `↑ Upload` clicked: `upload-me.txt` is on the remote side, the queue says Done. |
+| `evidence/US-0124-47d-after-download.png` | `↓ Download` clicked on a remote row: `data.csv` is in the Local pane, queue Done. Both directions, buttons only. |
+| `evidence/US-0124-46-sftp-delete-confirm.png` | Regression: Delete still confirms, still danger-styled. |
+| `evidence/US-0124-49-sftp-after-tab-switch.png` | Regression: the browser still follows the active tab. |
+
+### Platform
+
+`pwsh scripts/ci-local.ps1` — `ci-local: all checks passed`.
+
+### Gaps
+
+- **`US-0113` landed while this packet was in flight**, and `main` was merged in before the walk,
+  so the frames are against the real dock width. The flexible-Name rule makes the defaults
+  independent of that width anyway, which is why no column default names a dock size.
+- **Uploading onto an existing remote file still overwrites it without asking**, exactly as the
+  drag-and-drop and menu uploads did before this packet; only the download direction confirms
+  (IN-0025). The button makes the existing action visible, it does not change it. Worth its own
+  packet; not opened here because it is a change to the transfer mechanism, which this packet
+  puts out of scope.
+- **Menu items are never greyed out.** Both menus always render all ten actions; one invoked
+  with nothing selected reports "Select a file or folder to …" rather than being disabled. That
+  is the behaviour the `⋮` menu already had, and `do_open` now warns the same way instead of
+  doing nothing silently.
+- The measurement probe repaints the table when the panel width changes; it is guarded by a
+  0.5 px threshold and was exercised by resizing the window between 900 and 1600 px in the walk,
+  but there is no automated test that a resize cannot loop — the guard itself is unit-tested.
+- No real remote host was used; everything is the loopback `sftp-dev-server`.
 
 ## Handoff
 
