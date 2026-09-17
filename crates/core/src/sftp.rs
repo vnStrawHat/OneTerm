@@ -172,22 +172,23 @@ pub struct FileEntry {
     pub group: Option<String>,
 }
 
-/// Schema version of the column half of [`SftpTableState`].
+/// Every column key the SFTP table knows, in display order.
 ///
-/// A document written before the column defaults changed (US-0124) carries no
-/// version, reads back as `0`, and has its stored column widths and visibility
-/// ignored in favour of the current defaults; `expanded` and `local_dir` are
-/// unaffected and are never versioned.
-pub const SFTP_TABLE_STATE_VERSION: u32 = 1;
+/// The browser's own `SortColumn` owns what the columns mean; the key list
+/// lives here because `docks.json`'s owner (`oneterm-state`) migrates the
+/// persisted column map and may not depend on the feature crate. A test in
+/// `oneterm-sftp-ui` keeps the two in step.
+pub const SFTP_TABLE_COLUMNS: [&str; 6] =
+    ["name", "size", "modified", "permissions", "owner", "group"];
 
 /// SFTP browser presentation state persisted with the dock document: the
 /// remote table's column layout plus the dual-pane (Local + Remote) mode.
+///
+/// The document's own `schema_version` covers this field; it carries no version
+/// of its own. `docks.json` v1 -> v2 migrates the column layout US-0124
+/// changed (see `oneterm_state::dock_persistence`).
 #[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SftpTableState {
-    /// [`SFTP_TABLE_STATE_VERSION`] when the column fields below were written
-    /// by this version of the browser; `0` (absent) for an older document.
-    #[serde(default)]
-    pub version: u32,
     #[serde(default)]
     pub column_widths: HashMap<String, f32>,
     #[serde(default)]

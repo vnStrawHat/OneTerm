@@ -31,7 +31,7 @@ pub use session_duplicate::{
     SessionDuplicateConfig, SshDuplicateAuth, SshDuplicateConfig, SshDuplicateHop,
 };
 pub use sftp::{
-    FileEntry, RemotePath, SFTP_TABLE_STATE_VERSION, SftpBackend, SftpFuture, SftpSessionId,
+    FileEntry, RemotePath, SFTP_TABLE_COLUMNS, SftpBackend, SftpFuture, SftpSessionId,
     SftpTableState, TransferEvent, TransferHandle,
 };
 pub use ssh_config::{

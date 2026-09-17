@@ -175,9 +175,10 @@ The current panel is a simple vertical view:
 Current behavior:
 
 1. Empty registry: show the header, then a centered empty state: the bot icon,
-   the headline `No agents are running`, the sentence `A coding agent working in
-   one of your terminals shows up here on its own, and keeps this panel posted on
-   what it is doing.`, and one dimmed footnote naming the protocol for the
+   the headline `No agents are running`, the sentence `A coding agent that reports
+   its status shows up here on its own while it works in one of your terminals.`
+   (the condition is the point: an agent appears only if it emits the sequence),
+   and one dimmed footnote naming the protocol for the
    curious: `Agents report through the OSC 20308 status sequence.` The copy is a
    single `EMPTY_STATE` constant in `view.rs`; a unit test holds the protocol
    identifier to the footnote.

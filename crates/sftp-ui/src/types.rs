@@ -275,7 +275,10 @@ impl SftpColumnConfig {
 /// before the first measurement.
 pub(crate) fn default_column_configs() -> Vec<SftpColumnConfig> {
     vec![
-        SftpColumnConfig::new(SortColumn::Name, "Name", 200.0, false).shown(true),
+        // Name starts at its floor: the first frame is drawn before the panel
+        // has been measured, and a wider guess would overflow a narrow dock for
+        // that one frame (m5).
+        SftpColumnConfig::new(SortColumn::Name, "Name", NAME_COLUMN_MIN_WIDTH, false).shown(true),
         SftpColumnConfig::new(SortColumn::Size, "Size", SIZE_COLUMN_WIDTH, true).shown(true),
         SftpColumnConfig::new(
             SortColumn::Modified,
@@ -354,6 +357,21 @@ mod tests {
 
     fn names(entries: &[FileEntry]) -> Vec<&str> {
         entries.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    /// `oneterm-state` migrates the persisted column map and cannot see
+    /// `SortColumn`, so it works from `SFTP_TABLE_COLUMNS`. The two must name
+    /// the same columns or the migration would drop a live column's setting.
+    #[test]
+    fn the_persisted_column_keys_match_the_columns() {
+        let mut from_columns: Vec<&str> = default_column_configs()
+            .iter()
+            .map(|cfg| cfg.col.key())
+            .collect();
+        let mut shared: Vec<&str> = oneterm_core::SFTP_TABLE_COLUMNS.to_vec();
+        from_columns.sort_unstable();
+        shared.sort_unstable();
+        assert_eq!(from_columns, shared);
     }
 
     /// F29: the docked panel is ~317 px after US-0113 at a 900 px window and

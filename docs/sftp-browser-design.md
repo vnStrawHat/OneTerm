@@ -1025,11 +1025,16 @@ that used to look like an extra, always-empty column. Name is therefore not
 resizable and its width is not persisted; every other column is both. The Local
 pane's table follows the same rule and the same widths, so the two panes line up.
 
-`docks.json`'s `sftp_table_state` carries a `version`. A document written before
-US-0124 has none, reads back as `0`, and its stored column widths and visibility
-are ignored in favour of the current defaults — otherwise the users who had
-already opened the browser would be the only ones left with a table that does not
-fit. `expanded` and `local_dir` are not versioned and are always applied.
+A pre-US-0124 layout is reconciled by `docks.json`'s own schema migration
+(v1 -> v2, in the document's owner): the stored widths are dropped and only the
+columns the user had hidden by hand are kept, so an existing user gets the new
+defaults minus their own hides instead of a table that does not fit.
+`expanded` and `local_dir` are not column layout and are carried over untouched.
+Design: `docs/spec-intakes/IN-0042-ux-polish-round-1/low-level-design/sftp-table-state-migration.md`.
+
+Dragging a column wider re-derives Name on the same gesture, so the table never
+ends a resize wider than its panel; a width the user drags is kept (Name's is
+not — it has none of its own).
 
 ### 4.6. File operations — UI flow
 
@@ -1119,8 +1124,14 @@ Rename / Delete
 Properties / Refresh
 ```
 
+Availability is part of the list's data, not of either renderer: `Edit` is
+dropped for a directory (there is nothing to open in an editor — `Open` enters
+it), and the empty-area menu keeps the actions that need no selection. Both
+menus ask the same question of the same entry, so they cannot disagree.
+
 Right-clicking a row selects it first, so both menus act on one selection; an
-action invoked without one reports that instead of doing nothing. Delete keeps
+action invoked without one — or reached by a key binding on a directory —
+reports that instead of doing nothing. Delete keeps
 its confirmation dialog with the danger-styled button.
 
 The empty-area menu (right-click below the rows) renders the subset of the same
@@ -1307,7 +1318,8 @@ collapsed (the same button, or any other zoom-out) is the docked single remote p
 described above. `SftpExpandedChanged` and the base `Panel::set_zoomed` hook keep the
 two states in step. The Local pane
 (`crates/sftp-ui/src/local_pane.rs`) is a `std::fs` browser on the background
-executor with its own `DataTable` (Name / Date Modified / Size), path box, back,
+executor with its own `DataTable` (Name / Size / Date Modified, the same order and
+the same widths as the remote table's default set), path box, back,
 refresh, and New Folder / Rename / Delete; it never touches `SftpBackend`.
 Each pane's toolbar carries its half of the transfer controls at the edge facing
 the other pane — the Local pane's **Upload** button and the Remote pane's

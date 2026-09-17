@@ -34,6 +34,29 @@ pub(crate) enum SftpAction {
     Refresh,
 }
 
+/// What a menu is being opened on. Both row menus ask the same question of the
+/// same entry, so they drop the same rows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum MenuTarget {
+    /// Right-click below the rows: only what works on the directory itself.
+    EmptyArea,
+    /// A file row — or the toolbar menu with nothing selected, where every
+    /// action is offered and the ones that need a selection say so when used.
+    File,
+    /// A directory row.
+    Directory,
+}
+
+impl MenuTarget {
+    pub(crate) fn for_selection(is_dir: bool) -> Self {
+        if is_dir {
+            MenuTarget::Directory
+        } else {
+            MenuTarget::File
+        }
+    }
+}
+
 /// A row of a menu: an action or a separator.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum MenuEntry {
@@ -105,6 +128,19 @@ impl SftpAction {
         }
     }
 
+    /// Whether the action is offered for `target`.
+    ///
+    /// Availability is part of the list's data rather than of either renderer,
+    /// so the two menus cannot disagree about which rows a target drops.
+    fn available_for(self, target: MenuTarget) -> bool {
+        match target {
+            MenuTarget::EmptyArea => !self.needs_selection(),
+            // A directory has nothing to open in an editor; `Open` enters it.
+            MenuTarget::Directory => self != SftpAction::Edit,
+            MenuTarget::File => true,
+        }
+    }
+
     /// Whether the action acts on the selected entry. The others work on the
     /// current directory and are the ones the empty-area menu keeps.
     pub(crate) fn needs_selection(self) -> bool {
@@ -138,13 +174,13 @@ impl SftpAction {
     }
 }
 
-/// The empty-area menu: [`ENTRY_MENU`] without the actions that need a
-/// selection, and without the separators that would be left dangling.
-pub(crate) fn empty_area_entries() -> Vec<MenuEntry> {
+/// [`ENTRY_MENU`] filtered for `target`, with the separators that would be left
+/// dangling removed. Every menu in the browser renders one of these.
+pub(crate) fn menu_entries(target: MenuTarget) -> Vec<MenuEntry> {
     let mut entries: Vec<MenuEntry> = Vec::new();
     for entry in ENTRY_MENU {
         match entry {
-            MenuEntry::Action(action) if action.needs_selection() => {}
+            MenuEntry::Action(action) if !action.available_for(target) => {}
             MenuEntry::Separator => {
                 // Never lead with a separator, never repeat one.
                 if matches!(entries.last(), Some(MenuEntry::Action(_))) {
@@ -233,11 +269,39 @@ mod tests {
         );
     }
 
+    /// M2: a directory has no Edit — `do_edit` would have nothing to open — and
+    /// both menus drop it because the list itself says so. Everything else keeps
+    /// its place, and no separator is left dangling.
+    #[test]
+    fn edit_is_not_offered_on_a_directory() {
+        assert_eq!(
+            labels(&menu_entries(MenuTarget::Directory)),
+            vec![
+                "Open",
+                "Download",
+                "---",
+                "Upload Files",
+                "Upload Folder",
+                "New Folder",
+                "---",
+                "Rename",
+                "Delete",
+                "---",
+                "Properties",
+                "Refresh",
+            ]
+        );
+        // A file keeps the whole list.
+        assert_eq!(labels(&menu_entries(MenuTarget::File)), labels(ENTRY_MENU));
+        assert_eq!(MenuTarget::for_selection(true), MenuTarget::Directory);
+        assert_eq!(MenuTarget::for_selection(false), MenuTarget::File);
+    }
+
     /// The empty-area menu is a filtered view of the same list: same relative
     /// order, no action that needs a selection, no dangling separator.
     #[test]
     fn the_empty_area_menu_is_a_subset_of_the_same_list() {
-        let entries = empty_area_entries();
+        let entries = menu_entries(MenuTarget::EmptyArea);
         assert_eq!(
             labels(&entries),
             vec![

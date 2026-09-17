@@ -251,6 +251,21 @@ behaving correctly.
 
 `pwsh scripts/ci-local.ps1` — `ci-local: all checks passed`.
 
+### Rework after independent verification (2026-09-17)
+
+`evidence/sftp-agent-wave1-verify.md` returned **PASS** for this packet, with two copy/test notes:
+
+- `m7` — *"A coding agent working in one of your terminals shows up here on its own"* promised more
+  than the panel can deliver: per `docs/osc-agent-status.md` §1 an agent appears only if it emits
+  the sequence, and most do not. The body now names the condition — *"A coding agent that reports
+  its status shows up here on its own while it works in one of your terminals."* — which is also
+  the phrasing the high-level design sketched. `docs/agent-panel-display.md` §4 quotes the new
+  sentence; the footnote and the headline are unchanged.
+- `m8` — the copy test checked the headline for `OSC` but not for `20308`. Both lines are now
+  checked the same way, and the body is additionally asserted to carry the condition.
+
+Re-taken after the copy change: `evidence/US-0125-22-agent-panel.png`.
+
 ### Gaps
 
 - The header's appearance is proven by screenshots, not by an assertion: gpui element properties

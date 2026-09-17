@@ -208,8 +208,21 @@ impl SftpPanel {
     pub(crate) fn do_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entry = match self.selected_entry(cx) {
             Some(entry) if !entry.is_dir => entry,
-            Some(_) => {
+            Some(entry) => {
+                // The menus drop Edit for a directory (M2); a key binding can
+                // still reach it, and a silent return looks like a broken app.
                 log::debug!("SftpPanel::do_edit: selection is a directory — ignored");
+                window.push_notification(
+                    notify(
+                        NotificationType::Warning,
+                        format!(
+                            "\"{}\" is a folder — open it instead of editing it.",
+                            entry.name
+                        ),
+                        cx,
+                    ),
+                    cx,
+                );
                 return;
             }
             None => {

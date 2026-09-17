@@ -51,9 +51,9 @@ directly on the UI thread.
 | `ui_config.json` | `oneterm-settings` | UI theme/font/key-binding schema. `UiConfig::observe_theme` is the only writer of `theme_name`/`ui_font_size`; it coalesces `Theme` notifications that leave both unchanged. |
 | SSH session store (`ssh_session.json`) | `oneterm-session-ui` | Saved host/session schema, including the default-compatible terminal-logging tri-state (`inherit` / `on` / `off`) and the authentication preference (`password` default, `private_key` with `key_path`, or `agent`; never a secret). `jump_host` (optional) is the `id` of the saved session to connect through first; the chain is resolved at use, so a dangling id is reported, never repaired silently. `port_forwards` (optional, omitted when empty) lists `PortForward` specs (`kind` = `local` / `remote` / `dynamic`; bind addresses default to loopback). `agent_forwarding` (optional, omitted when false) forwards the local SSH agent to the remote host. Schema v2 gives every session a stable `id` and records `next_session_id`; v0/v1 files are migrated in memory and re-saved on load. Whole-document writes are coalesced through a single-flight queue so the newest snapshot always wins. |
 | `update_config.json` | `oneterm-update` | Schema owner. Two field-level writers through `update_json_file`: preferences (`oneterm-settings-ui` persist queue via `UpdateConfig::save_preferences`) and check cache (`UpdateManager` via `UpdateCheckCache::save`). See `docs/auto-update.md`. |
-| `docks.json` document model | `oneterm-state` | `DockDocument` is the typed top-level schema and the only read/update API. |
+| `docks.json` document model | `oneterm-state` | `DockDocument` is the typed top-level schema and the only read/update API. `schema_version` is **2**: v1 -> v2 migrates the SFTP table's column layout (drops the stored widths, keeps only the columns the user hid by hand), in `migrate_sftp_table_state_to_v2` — the field's owner may not migrate a shared document, so the document's owner does it. Fixture: `crates/state/tests/fixtures/persistence/docks-v1.json`. |
 | `docks.json` dock fields | `oneterm-workspace` | Dock layout and the shell-owned `zoomed_panel` field. The exit write runs synchronously from the workspace's `on_app_quit` / `on_release` hooks. |
-| `docks.json.sftp_table_state` | `oneterm-sftp-ui` | SFTP browser field only, represented by `oneterm_core::SftpTableState`: remote column widths/visibility plus the dual-pane mode (`expanded`, default `false`) and the Local pane's last directory (`local_dir`, omitted when unknown; the home directory is used instead). The column half carries its own `version` (`oneterm_core::SFTP_TABLE_STATE_VERSION`, currently `1`): a document written before US-0124 has none, reads back as `0`, and its `column_widths`/`column_visibility` are ignored in favour of the current defaults rather than migrated — the old layout is a set of columns that does not fit the panel, so there is nothing in it worth keeping. `expanded` and `local_dir` are not versioned. The Name column's width is derived from the panel width and is never stored. |
+| `docks.json.sftp_table_state` | `oneterm-sftp-ui` | SFTP browser field only, represented by `oneterm_core::SftpTableState`: remote column widths/visibility plus the dual-pane mode (`expanded`, default `false`) and the Local pane's last directory (`local_dir`, omitted when unknown; the home directory is used instead). It carries **no version of its own** — the document's `schema_version` covers it, and the v1 -> v2 step above is what reconciles a pre-US-0124 layout (US-0124; design: `docs/spec-intakes/IN-0042-ux-polish-round-1/low-level-design/sftp-table-state-migration.md`). The Name column's width is derived from the panel width and is never stored. The column keys the migration filters by are `oneterm_core::SFTP_TABLE_COLUMNS`, kept in step with the browser's own `SortColumn` by a test. |
 
 A crate may mutate only fields it owns. Callers of the shared dock document must
 use `oneterm_state::dock_persistence`; other shared documents must use
@@ -73,7 +73,13 @@ invalid `docks.json` aside, applies the update to a default document, and report
   then persist through the shared atomic-write path.
 - Preserve the pre-migration `.bak`; quarantine input that cannot be parsed or
   migrated without data loss.
-- Never let a feature crate migrate another owner's fields in a shared document.
+- Never let a feature crate migrate another owner's fields in a shared document — and a
+  feature crate may not migrate **its own** field in a shared document either: the document's
+  version is what says which schema the fields are in, so the migration belongs to the document's
+  owner. `docks.json`'s v1 -> v2 step (the SFTP table's column layout) is the worked example.
+- A migration that cannot keep every value must say which values it drops and why they are not
+  worth preserving, in the owning packet or a detail design. The pre-migration document survives
+  one generation as the shared write path's `.bak`.
 
 ## Fixture convention
 

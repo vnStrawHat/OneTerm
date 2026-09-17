@@ -6,7 +6,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Context, ExternalPaths, Focusable as _, InteractiveElement as _, IntoElement, ParentElement,
-    Render, Role, StatefulInteractiveElement as _, Styled, Window, div,
+    Render, Role, StatefulInteractiveElement as _, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
@@ -29,7 +29,7 @@ use oneterm_theme::notif_ext::notify;
 
 use super::drag::LocalRowDrag;
 use super::panel::SftpPanel;
-use super::table_delegate_menu::{ENTRY_MENU, build_menu};
+use super::table_delegate_menu::{MenuEntry, MenuTarget, build_menu, menu_entries};
 use super::types::SortColumn;
 
 impl Render for SftpPanel {
@@ -203,15 +203,33 @@ impl SftpPanel {
             .collect::<Vec<_>>();
 
         let follow_terminal_cwd = self.follow().enabled();
+        // The same rule the row menu applies to the same entry, so the two
+        // menus offer the same actions for the same selection (M2). With no
+        // selection the whole list is offered and each action reports what it
+        // needs, which is what this menu always did.
+        let menu_target =
+            MenuTarget::for_selection(self.selected_entry(cx).is_some_and(|entry| entry.is_dir));
+        let entries = menu_entries(menu_target);
+        let entry_count = (
+            entries
+                .iter()
+                .filter(|entry| matches!(entry, MenuEntry::Action(_)))
+                .count(),
+            entries
+                .iter()
+                .filter(|entry| matches!(entry, MenuEntry::Separator))
+                .count(),
+        );
+        let column_rows = col_configs.len();
 
         let more_btn = Button::new("sftp-more")
             .icon(Icon::new(IconName::EllipsisVertical).small())
             .small()
             .ghost()
-            .dropdown_menu(move |menu, _window, _cx| {
+            .dropdown_menu(move |menu, window, _cx| {
                 // The same list the right-click menu renders (F30); the
                 // rows below configure the browser rather than act on it.
-                let mut menu = build_menu(menu, &panel_weak, ENTRY_MENU)
+                let mut menu = build_menu(menu, &panel_weak, &entries)
                     .separator()
                     .item({
                         let panel = panel.clone();
@@ -261,7 +279,23 @@ impl SftpPanel {
                     menu = menu.item(item);
                 }
 
-                menu
+                // The unified action list made this menu four rows taller, and
+                // the kit applies its own height cap only when `scrollable` is
+                // set: without it the last Columns row runs off the bottom of a
+                // short window, unreachable by mouse and by keyboard (m6). The
+                // same estimate the "+" menu uses, for the same reason.
+                //
+                // ponytail: rows are counted, not measured — the popup has no
+                // laid-out bounds while it is being built — so a menu within a
+                // row of the cap can guess wrong by one row.
+                const ROW_HEIGHT: f32 = 28.;
+                const SEPARATOR_HEIGHT: f32 = 9.;
+                let separators = entry_count.1 + 2;
+                // Actions + Follow Terminal Cwd + the Columns label + a row per column.
+                let rows = entry_count.0 + 2 + column_rows;
+                let estimated = px(rows as f32 * ROW_HEIGHT + separators as f32 * SEPARATOR_HEIGHT);
+                let cap = (window.window_bounds().get_bounds().size.height * 0.5).min(px(450.));
+                menu.scrollable(estimated > cap)
             });
 
         let expanded = self.expanded();

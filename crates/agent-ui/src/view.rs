@@ -41,8 +41,10 @@ struct EmptyStateCopy {
 
 const EMPTY_STATE: EmptyStateCopy = EmptyStateCopy {
     headline: "No agents are running",
-    body: "A coding agent working in one of your terminals shows up here on its \
-           own, and keeps this panel posted on what it is doing.",
+    // "that reports its status" is the precondition, not decoration: an agent
+    // appears only if it emits the sequence, and most do not (m7).
+    body: "A coding agent that reports its status shows up here on its own \
+           while it works in one of your terminals.",
     footnote: "Agents report through the OSC 20308 status sequence.",
 };
 
@@ -684,13 +686,16 @@ mod tests {
     /// footnote names it exactly once.
     #[test]
     fn empty_state_copy_keeps_the_protocol_in_the_footnote() {
-        assert!(!EMPTY_STATE.headline.contains("OSC"));
-        assert!(!EMPTY_STATE.body.contains("OSC"));
-        assert!(!EMPTY_STATE.body.contains("20308"));
+        for line in [EMPTY_STATE.headline, EMPTY_STATE.body] {
+            assert!(!line.contains("OSC"), "{line:?} names the protocol");
+            assert!(!line.contains("20308"), "{line:?} names the protocol");
+        }
         assert_eq!(EMPTY_STATE.footnote.matches("OSC 20308").count(), 1);
-        // What an agent is here, and that it arrives by itself.
+        // What an agent is here, that it arrives by itself, and the condition
+        // it arrives under — the panel must not promise more than that (m7).
         assert!(EMPTY_STATE.body.contains("terminals"));
         assert!(EMPTY_STATE.body.contains("shows up here"));
+        assert!(EMPTY_STATE.body.contains("reports its status"));
         // The panel names itself in both states.
         assert_eq!(HEADER_TITLE, "Agents");
     }

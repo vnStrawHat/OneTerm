@@ -17,11 +17,11 @@ use gpui_component::{
     menu::{ContextMenuExt as _, PopupMenu},
     table::{Column, ColumnFixed, ColumnSort, TableDelegate, TableState},
 };
-use oneterm_core::{FileEntry, SFTP_TABLE_STATE_VERSION, SftpTableState};
+use oneterm_core::{FileEntry, SftpTableState};
 use oneterm_theme::icon::AppIcon;
 
 use super::panel::SftpPanel;
-use super::table_delegate_menu::{ENTRY_MENU, build_menu, empty_area_entries};
+use super::table_delegate_menu::{MenuTarget, build_menu, menu_entries};
 use super::types::{
     COLUMN_MAX_WIDTH, COLUMN_MIN_WIDTH, NAME_COLUMN_MIN_WIDTH, SftpColumnConfig, SortColumn,
     SortDir, format_date, format_owner, format_permissions, format_size, name_column_width,
@@ -144,19 +144,11 @@ impl SftpTableDelegate {
     /// Ignores invalid keys; Name is always visible and its width is derived,
     /// never restored.
     ///
-    /// A document written before US-0124 carries no version. Its column layout
-    /// is the old default — every column visible, Name 320 px wide — which is
-    /// exactly what did not fit the panel, so it is dropped in favour of the
-    /// new defaults. `expanded` and `local_dir` are the panel's to apply and
-    /// are not versioned.
+    /// The state arrives already migrated: `docks.json`'s own schema version is
+    /// what tells a pre-US-0124 layout apart, and `oneterm_state`'s v1 -> v2
+    /// migration drops the widths and keeps only the columns the user hid by
+    /// hand. This function sees a current-schema document and nothing else.
     pub(crate) fn apply_persisted_state(&mut self, state: &SftpTableState) {
-        if state.version < SFTP_TABLE_STATE_VERSION {
-            log::info!(
-                "SftpTableDelegate: ignoring column state from schema v{} — using the current defaults",
-                state.version
-            );
-            return;
-        }
         log::debug!(
             "SftpTableDelegate: apply persisted state — {} widths, {} visibility",
             state.column_widths.len(),
@@ -192,7 +184,6 @@ impl SftpTableDelegate {
             column_visibility.insert(cfg.col.key().to_string(), cfg.visible);
         }
         SftpTableState {
-            version: SFTP_TABLE_STATE_VERSION,
             column_widths,
             column_visibility,
             ..SftpTableState::default()
@@ -490,12 +481,14 @@ impl TableDelegate for SftpTableDelegate {
             });
         }
 
-        if self.entries.get(row_ix).is_none() {
+        let Some(entry) = self.entries.get(row_ix) else {
             return menu;
-        }
+        };
 
-        // The same list the toolbar's menu renders (F30).
-        build_menu(menu, &self.panel, ENTRY_MENU)
+        // The same list the toolbar's menu renders (F30), filtered by the same
+        // rule for the same kind of entry (M2).
+        let target = MenuTarget::for_selection(entry.is_dir);
+        build_menu(menu, &self.panel, &menu_entries(target))
     }
 
     fn render_empty(
@@ -514,7 +507,9 @@ impl TableDelegate for SftpTableDelegate {
             .justify_center()
             .text_color(theme.muted_foreground)
             .child("Empty directory.")
-            .context_menu(move |menu, _window, _cx| build_menu(menu, &panel, &empty_area_entries()))
+            .context_menu(move |menu, _window, _cx| {
+                build_menu(menu, &panel, &menu_entries(MenuTarget::EmptyArea))
+            })
     }
 }
 
@@ -556,10 +551,7 @@ mod tests {
     #[gpui::test]
     fn persisted_state_round_trips_and_ignores_invalid_values(cx: &mut TestAppContext) {
         let mut delegate = delegate(cx);
-        let mut state = SftpTableState {
-            version: oneterm_core::SFTP_TABLE_STATE_VERSION,
-            ..SftpTableState::default()
-        };
+        let mut state = SftpTableState::default();
         state.column_widths.insert("size".into(), 120.0);
         // Below the minimum width and an unknown key: both ignored.
         state.column_widths.insert("owner".into(), 1.0);
@@ -578,7 +570,6 @@ mod tests {
         );
 
         let persisted = delegate.to_persisted_state();
-        assert_eq!(persisted.version, oneterm_core::SFTP_TABLE_STATE_VERSION);
         assert_eq!(persisted.column_widths["size"], 120.0);
         assert!(persisted.column_visibility["group"]);
         assert!(persisted.column_visibility["name"]);
@@ -587,22 +578,20 @@ mod tests {
         assert!(!persisted.column_widths.contains_key("name"));
     }
 
-    /// US-0124: a state saved before this packet has every column visible and a
-    /// 320 px Name — the layout that needed a horizontal scrollbar. It is
-    /// dropped, so an existing user gets the new defaults too.
+    /// US-0124: what a pre-US-0124 document looks like after `oneterm-state`'s
+    /// v1 -> v2 migration — no widths, and only the columns the user hid by
+    /// hand. The delegate then shows the new defaults minus those hides.
     #[gpui::test]
-    fn a_pre_version_state_falls_back_to_the_new_defaults(cx: &mut TestAppContext) {
+    fn a_migrated_pre_version_state_gives_the_new_defaults(cx: &mut TestAppContext) {
         let mut delegate = delegate(cx);
-        let mut state = SftpTableState::default(); // version 0: written before US-0124
-        for key in ["name", "modified", "permissions", "size", "owner", "group"] {
-            state.column_visibility.insert(key.into(), true);
-            state.column_widths.insert(key.into(), 320.0);
-        }
+        let mut state = SftpTableState::default();
+        state.column_visibility.insert("modified".into(), false);
 
         delegate.apply_persisted_state(&state);
 
-        assert_eq!(visible_keys(&delegate), vec!["name", "size", "modified"]);
+        assert_eq!(visible_keys(&delegate), vec!["name", "size"]);
         assert_eq!(width_of(&delegate, "size"), 72.0);
+        assert_eq!(width_of(&delegate, "modified"), 116.0);
     }
 
     /// Name takes what the other visible columns leave over, so the table fits
@@ -626,6 +615,30 @@ mod tests {
         assert_eq!(delegate.name_width(), 1900.0 - 72.0 - 16.0);
     }
 
+    /// M1: widening a column has to come out of Name on the same gesture, or
+    /// the table ends the drag wider than the panel it is drawn in.
+    #[gpui::test]
+    fn a_widened_column_comes_out_of_name(cx: &mut TestAppContext) {
+        let mut delegate = delegate(cx);
+        delegate.set_available_width(317.0);
+        let before = delegate.name_width();
+
+        // The kit reports the visible columns' widths on mouse-up: Size + 88.
+        delegate.apply_widths(&[px(before), px(160.), px(116.)]);
+
+        assert_eq!(width_of(&delegate, "size"), 160.0);
+        assert_eq!(delegate.name_width(), NAME_COLUMN_MIN_WIDTH);
+        assert!(
+            delegate.name_width() + 160.0 + 116.0 + 16.0 >= 317.0,
+            "a drag wider than the panel is allowed to scroll, but only from the floor"
+        );
+
+        // A narrower drag gives the room straight back to Name.
+        delegate.apply_widths(&[px(delegate.name_width()), px(50.), px(116.)]);
+        assert_eq!(delegate.name_width(), 317.0 - 50.0 - 116.0 - 16.0);
+        assert!(delegate.name_width() > before);
+    }
+
     #[gpui::test]
     fn toggling_visibility_never_hides_name(cx: &mut TestAppContext) {
         let mut delegate = delegate(cx);
@@ -647,7 +660,7 @@ mod tests {
         assert_eq!(width_of(&delegate, "modified"), 800.0);
         assert_eq!(width_of(&delegate, "permissions"), 120.0);
         // Name is not resizable — a width for it is ignored, not stored.
-        assert_eq!(width_of(&delegate, "name"), 200.0);
+        assert_eq!(width_of(&delegate, "name"), NAME_COLUMN_MIN_WIDTH);
         // The hidden column keeps its default width.
         assert_eq!(width_of(&delegate, "owner"), 90.0);
     }

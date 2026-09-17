@@ -86,9 +86,11 @@ impl LocalColumn {
     }
 
     /// Fallback width, used for Name only until the pane has been measured.
+    /// Name starts at its floor so the very first frame, drawn before the
+    /// measurement arrives, cannot overflow even the narrowest pane (m5).
     fn default_width(self) -> f32 {
         match self {
-            LocalColumn::Name => 200.0,
+            LocalColumn::Name => NAME_COLUMN_MIN_WIDTH,
             LocalColumn::Modified => MODIFIED_COLUMN_WIDTH,
             LocalColumn::Size => SIZE_COLUMN_WIDTH,
         }
@@ -213,6 +215,19 @@ impl LocalTableDelegate {
     pub(crate) fn set_entries(&mut self, mut entries: Vec<LocalEntry>) {
         sort_local_entries(&mut entries, self.sort);
         self.entries = entries;
+    }
+
+    /// Keep a dragged column width. Name is derived from the pane width, so a
+    /// width offered for it is ignored rather than stored.
+    fn apply_widths(&mut self, widths: &[gpui::Pixels]) {
+        for (col_ix, width) in widths.iter().enumerate() {
+            if LocalColumn::ALL.get(col_ix) == Some(&LocalColumn::Name) {
+                continue;
+            }
+            if let Some(stored) = self.widths.get_mut(col_ix) {
+                *stored = width.as_f32().clamp(COLUMN_MIN_WIDTH, COLUMN_MAX_WIDTH);
+            }
+        }
     }
 }
 
@@ -691,6 +706,16 @@ impl LocalPane {
                     }
                     None => {}
                 }
+            }
+            // Without this the pane both overflowed until its next listing and
+            // threw the dragged width away on the following frame (M1).
+            TableEvent::ColumnWidthsChanged(widths) => {
+                let widths: Vec<_> = widths.to_vec();
+                self.table.update(cx, |table, cx| {
+                    table.delegate_mut().apply_widths(&widths);
+                    table.refresh(cx);
+                    cx.notify();
+                });
             }
             _ => {}
         }
