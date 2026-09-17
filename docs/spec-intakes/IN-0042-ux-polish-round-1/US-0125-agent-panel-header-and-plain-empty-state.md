@@ -9,8 +9,8 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
-- [ ] In progress
+- [ ] Planned
+- [x] In progress
 - [ ] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
@@ -63,14 +63,18 @@ redesign a state the walkthrough praised.
 
 ## Acceptance
 
-- [ ] In Agent mode the right dock shows a header naming the panel, styled like the "Session"
+- [x] In Agent mode the right dock shows a header naming the panel, styled like the "Session"
       and "SFTP Browser" headers in SSH Client mode.
-- [ ] The header does not reintroduce the outer tab bar that `OneTermDockSkin` suppresses for
+- [x] The header does not reintroduce the outer tab bar that `OneTermDockSkin` suppresses for
       the single-leaf case — the two modes must look like siblings, not like one panel and one
       tab group.
-- [ ] The empty state names no raw protocol identifier. A reader who has never seen "OSC 20308"
-      understands what would appear here and roughly what makes it appear.
-- [ ] The empty state keeps its icon and its headline — the parts the walkthrough praised.
+- [x] The empty state does not require the reader to know a raw protocol identifier: the
+      headline and the sentence below it name none, and a reader who has never seen "OSC 20308"
+      understands what would appear here and roughly what makes it appear. **Amended during
+      implementation** (owner instruction, 2026-09-17): one short mention of the OSC 20308
+      proposal is kept as a dimmed footnote, for the curious. A unit test holds the identifier
+      to that footnote.
+- [x] The empty state keeps its icon and its headline — the parts the walkthrough praised.
 - [ ] With an agent actually reporting, the panel renders its list exactly as before, and the
       header does not steal a row from it.
 - [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
@@ -136,7 +140,20 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Decisions
 
-None.
+Three, all local to this packet — none of them sets a rule future work inherits, so no `DEC`:
+
+1. **The header lives in `agent-ui`'s own view**, as the packet preferred.
+   `dock_skin.rs` needs no change at all: `OneTermDockSkin::owns_header` already treats
+   `panel_names::AGENT` like `SSH_CLIENT` and suppresses the outer tab bar for both, and
+   `AgentListView` already drew a header — for the populated state only. The whole fix is that
+   the empty state draws it too.
+2. **The title bar matches `SshClientPanel::render_header` exactly**: `h_8`, `tab_bar`
+   background, one bottom border, plain `text_sm` title, and a framed trailing control group for
+   `Clear ended (n)`. The bot icon and the bold weight the title used to carry are gone — they
+   were what made the two modes look unrelated. The large bot icon stays in the empty state.
+3. **No link out of the application.** `P25` noted the empty state has "no link"; a link to a
+   protocol proposal helps nobody who is looking at an empty panel. The footnote names the
+   sequence so a curious reader can search for it, and that is all.
 
 ## Verification Plan
 
