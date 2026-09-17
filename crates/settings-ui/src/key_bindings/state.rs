@@ -226,6 +226,14 @@ fn overrides_from_effective(effective: &HashMap<String, String>) -> HashMap<Stri
         .collect()
 }
 
+/// [`overrides_from_effective`], for the Key Bindings UI tests: the row's
+/// `Default:` line is asserted against what persistence actually writes rather
+/// than against the predicate the row already calls.
+#[cfg(test)]
+pub(super) fn overrides_for_test(effective: &HashMap<String, String>) -> HashMap<String, String> {
+    overrides_from_effective(effective)
+}
+
 // ── Keystroke helpers ────────────────────────────────────────────────
 
 /// The other action (same key context) already bound to `binding`, if any.

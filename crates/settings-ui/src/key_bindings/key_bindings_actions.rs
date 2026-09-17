@@ -5,11 +5,14 @@
 //! builds a [`KeyBinding`] from a keystroke string. The array order is the
 //! display order in the Key Bindings settings page.
 //!
-//! An app-level default never takes a bare `Ctrl` plus a letter, digit or Space
-//! that carries a terminal control character: in a terminal that keystroke
-//! belongs to the foreground program. `ctrl-w` (Close Panel) and `ctrl-t` (New
-//! Terminal Tab) are the one deliberate exception. Adding a default that breaks
-//! the rule needs
+//! A default never takes a bare `Ctrl` plus a letter, digit or Space that
+//! carries a terminal control character: in a terminal that keystroke belongs to
+//! the foreground program. Every row here has `context: None`, so the rule
+//! reaches every group and not only "App Menu". Four defaults are accepted
+//! exceptions — `ctrl-w` (Close Panel), `ctrl-t` (New Terminal Tab), `ctrl-f`
+//! (Find) and `ctrl-,` (Open Settings) — and
+//! `the_only_bare_ctrl_defaults_are_the_ones_dec_0018_accepted` asserts that set
+//! exactly. A fifth needs
 //! `docs/decisions/DEC-0018-app-shortcuts-leave-single-ctrl-keys-to-the-terminal.md`
 //! amended, not a comment here.
 
@@ -439,30 +442,49 @@ mod tests {
         assert_eq!(default_for("open_settings"), Some("ctrl-,"));
     }
 
+    /// The bare-`Ctrl` defaults `DEC-0018` accepted as exceptions, with the
+    /// keystroke each one keeps.
+    ///
+    /// Every `BINDABLE_ACTIONS` row has `context: None`, so "App Menu" is a
+    /// display heading and not a scope: every default in the registry is global
+    /// and every one of them is in the rule's reach. The list is therefore the
+    /// whole exception set, not the App Menu's share of it — `find` is an Edit
+    /// Menu row and is in it.
+    const ACCEPTED_SINGLE_CTRL_DEFAULTS: [(&str, &str); 4] = [
+        ("close_panel", "ctrl-w"),
+        ("new_terminal_tab", "ctrl-t"),
+        ("find", "ctrl-f"),
+        ("open_settings", "ctrl-,"),
+    ];
+
     #[test]
-    fn no_app_level_default_sits_on_a_single_ctrl_control_character() {
-        // DEC-0018's rule, with its two recorded exceptions.
-        const EXCEPTIONS: [&str; 2] = ["close_panel", "new_terminal_tab"];
-        for action in BINDABLE_ACTIONS {
-            let Some(default) = action.default else {
-                continue;
-            };
-            if action.group != "App Menu" || EXCEPTIONS.contains(&action.id) {
-                continue;
-            }
-            let Some(rest) = default.strip_prefix("ctrl-") else {
-                continue;
-            };
-            // A letter, a digit or Space — the range that carries a terminal
-            // control character. Punctuation such as `ctrl-,` does not.
-            let single_alnum = rest.chars().count() == 1
-                && rest.chars().all(|character| character.is_alphanumeric());
-            assert!(
-                !(single_alnum || rest == "space"),
-                "{} defaults to {default}, a control character the terminal owns",
-                action.id
-            );
-        }
+    fn the_only_bare_ctrl_defaults_are_the_ones_dec_0018_accepted() {
+        let mut found: Vec<(&str, &str)> = BINDABLE_ACTIONS
+            .iter()
+            .filter_map(|action| Some((action.id, action.default?)))
+            .filter(|(_, default)| default.strip_prefix("ctrl-").is_some_and(is_one_key))
+            .collect();
+        found.sort_unstable();
+
+        let mut accepted = ACCEPTED_SINGLE_CTRL_DEFAULTS;
+        accepted.sort_unstable();
+
+        // Not "no row breaks the rule" but "these rows and no others": a fifth
+        // bare-Ctrl default added later fails here, and so does removing one of
+        // the four without amending `DEC-0018`.
+        assert_eq!(
+            found.as_slice(),
+            accepted.as_slice(),
+            "the set of bare-Ctrl defaults changed; amend DEC-0018 rather than this test"
+        );
+    }
+
+    /// Whether what follows `ctrl-` is one key the terminal reads as a control
+    /// character: a letter, a digit, Space, or a punctuation key that produces
+    /// one (`ctrl-,` does not, but it is in the accepted list anyway, so the
+    /// predicate stays simple and the list does the deciding).
+    fn is_one_key(rest: &str) -> bool {
+        rest == "space" || rest.chars().count() == 1
     }
 
     #[test]
