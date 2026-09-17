@@ -229,7 +229,7 @@ OneTerm/
 - **One crate per layer / feature.** Shared logic goes in a low crate (`core` / `terminal` / `actions` / `settings` / `state` / `update` / `theme`); each user-facing feature is its own `*-ui` crate; the shell (`workspace`) is feature-agnostic.
 - **Feature crates never depend on each other's internals** except the acyclic edge `session-ui → terminal-view` (a new SSH session opens a `TerminalPanel`). Cross-cutting helpers live in `state`.
 - **Feature crates never depend on `ssh`/`local-shell`.** They create sessions through the `oneterm_terminal::SessionFactory` process-global that the `app` installs at startup.
-- **Theme JSON** lives at `crates/theme/themes/<name>.json`, loaded via `BUILTIN_THEMES` in `crates/theme/src/theme.rs`. Do not hardcode colors — read from `cx.theme()` / `TerminalTheme`.
+- **Theme JSON** lives at `crates/theme/themes/<name>.json`, loaded via `EMBEDDED_THEME_FILES` in `crates/theme/src/theme.rs`. Do not hardcode colors — read from `cx.theme()` / `TerminalTheme`.
 - **OneTerm icons**: drop an SVG into `crates/theme/assets/icons/<name>.svg`; `crates/theme/build.rs` + the `icon_named!` macro auto-generate the matching `AppIcon::<PascalName>` variant (see `crates/theme/src/icon.rs`).
 - **Do not** put protocol logic (ssh, local) in any UI crate. UI crates only call through trait abstractions (`TerminalSession`, `SftpBackend`, `SessionFactory`).
 - Shell detection (`resolve_shell`, `ShellKind`, `LocalShellConfig`) belongs in `core::config::shell`, **not** in the `local-shell` crate.
