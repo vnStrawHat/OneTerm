@@ -1018,6 +1018,14 @@ once per hop before the target's. Failures are typed (ARCH-06):
 | Host-key problems | `AppError::HostKeyUnknown` / `AppError::HostKeyChanged` (see §9.3). |
 | User pressed Cancel | `AppError::Cancelled` — `ConnectionCancellation::cancelled()` is a waker-driven future, so a phase in flight is woken immediately instead of polled every 25 ms (PERF-22). |
 
+The reporting text is built in one place,
+`crates/session-ui/src/common.rs::connect_failure_message` (`BUG-0068`): the
+variants above that already begin with `SSH` — `Connect`, `HostKeyUnknown`,
+`HostKeyChanged` — are shown verbatim, so the subject appears once and the failing
+phase stays visible; every other error (`Cancelled`, `Io`, `Other`) is prefixed
+`SSH connect failed: …` so it never reaches the user as a bare "operation
+cancelled".
+
 Blocking work on the connect path (`known_hosts` read/append in
 `check_server_key`, private-key loading/decryption) runs on
 `tokio::task::spawn_blocking` so the two shared runtime workers keep serving the

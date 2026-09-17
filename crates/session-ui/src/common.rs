@@ -88,6 +88,24 @@ impl Render for ConnectButton {
     }
 }
 
+/// The text shown to the user when a connection attempt fails.
+///
+/// An error names itself once. `AppError::Connect` renders as
+/// `"SSH <phase> failed: <message>"` and the two host-key variants name SSH and
+/// the host, so they are shown verbatim — prefixing them again produced
+/// `"SSH connect failed: SSH connect failed: timed out after 20 s"`. Every
+/// other error (`Cancelled`, `Io`, `Other`, …) names only the failure and would
+/// reach the user as a bare `"operation cancelled"`, so it still gets the
+/// subject.
+pub(crate) fn connect_failure_message(error: &AppError) -> String {
+    match error {
+        AppError::Connect { .. }
+        | AppError::HostKeyUnknown { .. }
+        | AppError::HostKeyChanged { .. } => error.to_string(),
+        other => format!("SSH connect failed: {other}"),
+    }
+}
+
 /// Server info banner (read-only).
 pub(crate) fn server_info_banner(info: SharedString, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
@@ -415,7 +433,7 @@ pub(crate) fn connect_ssh_session(
                     window.push_notification(
                         notify(
                             NotificationType::Error,
-                            format!("SSH connect failed: {error}"),
+                            connect_failure_message(&error),
                             cx,
                         ),
                         cx,
@@ -602,6 +620,48 @@ mod tests {
             UserHostPortError::InvalidPort("x".into())
                 .to_string()
                 .contains("65535")
+        );
+    }
+
+    /// BUG-0068: an error that already names SSH is shown verbatim, so the
+    /// subject appears exactly once, and the failing phase survives.
+    #[test]
+    fn a_connect_error_names_the_failure_once() {
+        let message = connect_failure_message(&AppError::Connect {
+            phase: oneterm_core::ConnectPhase::Transport,
+            message: "timed out after 20 s".into(),
+        });
+        assert_eq!(message, "SSH connect failed: timed out after 20 s");
+        assert_eq!(message.matches("failed").count(), 1);
+
+        let authentication = connect_failure_message(&AppError::Connect {
+            phase: oneterm_core::ConnectPhase::Authentication,
+            message: "rejected by the server".into(),
+        });
+        assert_eq!(
+            authentication,
+            "SSH authentication failed: rejected by the server"
+        );
+
+        let host_key = connect_failure_message(&AppError::HostKeyChanged {
+            host: "10.10.10.10".into(),
+            port: 22,
+            fingerprint: "SHA256:abc".into(),
+        });
+        assert!(host_key.starts_with("SSH host key changed"), "{host_key}");
+    }
+
+    /// BUG-0068: an error with no subject of its own still gets one, so the
+    /// user never reads a bare "operation cancelled".
+    #[test]
+    fn an_error_without_a_subject_still_gets_one() {
+        assert_eq!(
+            connect_failure_message(&AppError::Cancelled),
+            "SSH connect failed: operation cancelled"
+        );
+        assert_eq!(
+            connect_failure_message(&AppError::msg("host unreachable")),
+            "SSH connect failed: host unreachable"
         );
     }
 

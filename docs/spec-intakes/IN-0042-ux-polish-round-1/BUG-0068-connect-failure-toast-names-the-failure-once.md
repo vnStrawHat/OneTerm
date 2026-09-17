@@ -9,9 +9,9 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -171,11 +171,11 @@ belongs in `docs/agents/error-policy.md` if anywhere.
    A live host is not needed for this path; an unreachable address is the whole test.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -190,7 +190,58 @@ belongs in `docs/agents/error-policy.md` if anywhere.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### Sites checked (the grep the packet made mandatory)
+
+Every user-visible string built from an error in `crates/session-ui`, via
+`push_notification` and `format!("...{error}")`:
+
+| Site | Verdict |
+|---|---|
+| `common.rs:418` (was) — `format!("SSH connect failed: {error}")` over an `AppError` | **The bug.** Fixed. |
+| `common.rs:255` — `format!("Connected, but the terminal tab could not be opened: {reason}.")` | `reason` is a bare `&str` (`"the main workspace is not registered"`), not an error with a prefix. No change. |
+| `quick_connect_dialog.rs:253,264,272`, `connect_dialog.rs:86,228,241,260,267`, `session_dialog.rs:291,297,320`, `rename_group.rs:33` | All push a validation `String` or `UserHostPortError`/`jump_chain` `Display` that carries no subject prefix of its own. No change. |
+| `auth_form.rs:289,293`, `forward_rows.rs:146` | Wrap `std::io::Error` / a parse error, neither of which names its own subject. Correct as written. |
+| `panel.rs:203`, `tree_render.rs:231` | Fixed success strings, no error interpolation. |
+
+So the literal at `common.rs:418` was the only double prefix, but the fix is not
+"delete the literal": the same site also receives `AppError::Cancelled`
+(`"operation cancelled"`), `AppError::Io` and `AppError::Other`, none of which names
+SSH. Deleting the prefix would have produced a bare "operation cancelled". The fix is
+therefore a per-variant decision in one function,
+`common.rs::connect_failure_message`, which is what the notification and (from
+`US-0118`) the inline error both call.
+
+### Commands
+
+- `cargo test -p oneterm-session-ui --lib common::` — 8 passed, including the two new
+  tests `a_connect_error_names_the_failure_once` and
+  `an_error_without_a_subject_still_gets_one`.
+- `cargo test --workspace` — passed (run once at the end of the packet series).
+- `pwsh scripts/ci-local.ps1` — "ci-local: all checks passed".
+
+### Documentation decision
+
+**Update required**, both halves:
+
+- `docs/agents/error-policy.md` — gains the "an error names itself once" review rule.
+  The packet asked for this call explicitly: the mistake is available at every
+  notification site in the application, so the guard belongs in the policy as well as
+  in the test.
+- `docs/ssh-client-connect.md` §9.2 — it *does* quote the message text
+  (`SSH <phase> failed: <message>`), so it gains the paragraph naming
+  `connect_failure_message` as the one place the reporting text is built and what it
+  does with an error that carries no subject.
+- `crates/core/src/error.rs` — unchanged, as scoped.
+
+### Evidence frames
+
+- `evidence/BUG-0068-16-connect-failed.png`
+- `evidence/BUG-0068-17b-connect-timeout-22s.png`
+
+### Gaps
+
+- None for this packet. The toast's own pixels are proved by the frames; the string is
+  proved by the unit tests.
 
 ## Handoff
 
