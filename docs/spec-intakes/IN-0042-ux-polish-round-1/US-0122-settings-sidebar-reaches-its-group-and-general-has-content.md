@@ -9,8 +9,8 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
-- [ ] In progress
+- [ ] Planned
+- [x] In progress
 - [ ] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
@@ -164,6 +164,99 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 - `research/before/26-settings-general.png`, `28-settings-terminal.png` (`F16`),
   `30-settings-completion.png`, `30b-settings-sidebar-logging.png`, `38-keybindings-edit-menu.png`
   (`F14`) and `31-settings-appearance.png` (`F15`) are the before pictures.
+
+### The reference read, written down before any code
+
+`F14` is **two** defects, not one, and the documented quirk is only the second of them.
+
+**1. The deferred scroll under-shoots because the groups below the fold have no measured
+height.** This is what the walkthrough hit.
+
+- `reference/gpui-kit/crates/component/src/setting/settings.rs:222-230` — a sidebar sub-item
+  click sets `state.selected_index` and `state.deferred_scroll_group_ix = Some(group_ix)`
+  (the assignment is line 228).
+- `reference/gpui-kit/crates/component/src/setting/page.rs:139-143` — the page renders its
+  groups into a gpui `list` whose `ListState` is created with
+  `ListState::new(groups_count, ListAlignment::Top, px(100.))` — 100 px of overdraw.
+- `reference/gpui-kit/crates/component/src/setting/page.rs:152-158` — the deferred index is
+  consumed **once** (`deferred_scroll_group_ix = None`, line 155) and handed to
+  `ListState::scroll_to_reveal_item(ix)` (line 157). There is no second attempt on a later
+  frame, so the scroll cannot converge as the list measures more items.
+- `reference/zed/crates/gpui/src/elements/list.rs:664-694` — `scroll_to_reveal_item` has two
+  branches. The backward one (`ix <= scroll_top.item_ix`) sets `item_ix = ix, offset = 0` and
+  is **exact**, needing no measurement. The forward one seeks `state.items` for the summed
+  height above `ix` and derives `goal_top` from it.
+- `reference/zed/crates/gpui/src/elements/list.rs:245-297` — an item the list has not laid out
+  is `ListItem::Unmeasured` and contributes **nothing** to `ListItemSummary::height`
+  (the summary is declared at line 292).
+
+So on a page opened at the top, every group below the viewport plus 100 px is height 0,
+`bottom` collapses to roughly the height of the two or three measured groups, `goal_top`
+clamps to ~0, and the list barely moves. That is exactly the measurement in `F14`:
+*"clicking 'Completion' (10th) landed on Font (2nd); clicking 'Logging' (5th) landed
+mid-Font."* It also explains why scrolling **up** the sidebar feels fine — that is the exact
+branch.
+
+**2. The index misalignment `docs/gui-layout.md` already records.**
+`settings.rs:209-216` enumerates `page.groups.iter().filter(|g| g.title.is_some())`, so the
+sidebar's `group_ix` counts only titled groups, while `page.rs:131-137` indexes every group
+that matches the search query. `F14`'s own note is right: every Terminal group is titled, so
+this is **not** what the walkthrough saw. The documented paragraph is not wrong, it is
+incomplete — it describes the quirk that bites when a page mixes titled and untitled groups
+and says nothing about the scroll itself.
+
+### Why neither is reachable from the OneTerm side
+
+- The `ListState` is private element state: `page.rs:139-145` creates it through
+  `window.use_keyed_state("list-state:{page_ix}")`, which resolves against the kit's own
+  `element_id_stack` (`reference/zed/crates/gpui/src/window.rs:3466-3487`). Reaching the same
+  entity would mean reproducing the kit's entire element-id path from OneTerm's render, during
+  paint, and re-deriving it on every kit upgrade.
+- `SettingsState`, its `deferred_scroll_group_ix` field and `SettingPage::render` are all
+  `pub(super)` (`settings.rs:248-253`, `page.rs:121-128`), so the scroll cannot be requested,
+  repeated or replaced from outside the crate.
+- The one public lever, `Settings::default_selected_index` (`settings.rs:101-104`), writes
+  `selected_index` only; `deferred_scroll_group_ix` is initialised to `None`
+  (`settings.rs:366-377`) and is never set from it, so it cannot pre-scroll either.
+- `docs/PROJECT.md` forbids patching or vendoring `gpui-component`, and there is no `[patch]`
+  section.
+
+The OneTerm-side wrapper `P16` names — rendering the page body inside a container OneTerm
+scrolls itself — was scoped and rejected. It requires collapsing a page into **one**
+`SettingGroup` (otherwise the kit still owns the list), which switches off the kit's sidebar
+sub-items for that page (`settings.rs:209`, gated on `page.groups.len() > 1`), its per-item
+search filtering (`settings.rs:112-140`, which matches `SettingItem`s) and its page-level
+`Reset All` (`page.rs:111-119`). That is the "stop and record the limit instead" line in this
+packet's Risks, so it was not built.
+
+### What this packet ships instead
+
+Navigation is improved by making the pages navigable rather than by fixing the scroll:
+
+- **General gets the content `P21` names** — Appearance's Mode and Color Theme, and the
+  default shell — so the window opens on a page worth opening on.
+- **The Appearance page is folded away**, its two groups now living on General. One fewer page
+  row, and one fewer place to look for the theme.
+- **Terminal drops from ten groups to nine** (Shell moves to General), so its sub-item list is
+  shorter and its content is closer to fitting the fold. A page whose groups fit the viewport
+  is measured in full, and then `scroll_to_reveal_item` is exact — so shortening pages makes
+  the upstream defect bite less often even though it does not remove it.
+- **The triple-naming is cut to two levels on every page**, not only on the two the
+  walkthrough named.
+- **The index-alignment rule becomes a test.** `panel::sidebar_group_to_scroll_index`
+  reproduces the kit's two indexings side by side and the unit tests assert that OneTerm's
+  "untitled groups last" ordering keeps them equal, and that any other ordering breaks them.
+  The rule was prose in `docs/gui-layout.md`; now it fails a build.
+
+### The chevron (`F15`)
+
+Also upstream, and the affordance is half-honest rather than wrong:
+`sidebar/menu.rs:312-333` renders the caret as its own `Button` whose handler calls
+`cx.stop_propagation()` (line 327) and toggles the open state, so **clicking the chevron does
+collapse the group**. What never closes is the row: `settings.rs:193` passes
+`click_to_open(true)`, and `menu.rs:344-350` reads that as "force open", never toggle. OneTerm
+cannot change that argument, so the row count is reduced instead (one page and one group
+fewer), which is what keeps About and the theme settings above the fold in the default window.
 
 ## Plan
 
