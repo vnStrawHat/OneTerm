@@ -87,6 +87,20 @@ The owning design is
 7. **Active after split**: the **new empty** Space becomes active.
 8. **Border**: originally a uniform 4px frame; shipped as a neutral **1px outer border +
     1px inner gutter** per Space (`space/render.rs`), see [05](terminal-split/05-rendering-theme.md).
+    **Amended by `US-0117`, not reversed.** The frame is still 1px + 1px for every Space, and
+    a lone Space is still borderless — what changed is the *active* cue, which one pixel
+    answered too quietly for "where does my typing go" (`F26`). The active Space now also
+    carries a **2px ring in the cue colour**, painted as an absolutely-positioned overlay on
+    top of its own border and gutter (`active_cue_ring`). An overlay because a wider border or
+    a wider padding would move the terminal's content box by a pixel every time focus changed
+    Spaces, which can cost the grid a column; the overlay has no id and no mouse handler, so
+    it creates no hitbox and clicks still reach the terminal. The ring's colour is the same
+    one the gutter uses — the channel colour for a member Space, `table_active_border`
+    otherwise — so nothing new is hardcoded and the channel rule is unchanged. Each Space in
+    a split also carries a small corner label, `#N` plus the live session title when the
+    session sets one, in the channel-badge slot and left of the badge, so a split's halves are
+    told apart by name and not only by the cue; an empty Space keeps only its placeholder and
+    a lone Space stays unlabelled.
 9. **New Terminal Here**: the empty-Space menu can spawn a local shell in place
    (in MVP scope). It spawns the **default** shell, with no shell picker — the
    empty Space is a placement action, and a user who wants a specific shell

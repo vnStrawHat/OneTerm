@@ -126,14 +126,42 @@ fn render_leaf(
         _ => None,
     };
     // The badge names the channel; the Space border below repeats its colour.
-    // Sits in the corner, 5 px from both edges (the owner's placement); it
-    // overlaps the scrollbar track, which is empty at the top unless the view
-    // is scrolled up.
-    let badge = channel.map(|channel| {
-        channel_chip(channel, ("space-channel", id.0 as usize), cx)
+    let badge = channel.map(|channel| channel_chip(channel, ("space-channel", id.0 as usize), cx));
+    // ...and beside it, in a split, a label saying what this Space holds
+    // (`US-0117`). A single Space stays unlabelled: nothing appears where
+    // nothing appeared before. An empty Space is already named by its
+    // placeholder, so only a terminal gets one.
+    let label = match (&leaf.content, single) {
+        (SpaceContent::Terminal(view), false) => Some(space_corner_label(
+            id.display_number(),
+            view.read(cx).session.read(cx).title().as_deref(),
+        )),
+        _ => None,
+    };
+    // One corner slot, 5 px from both edges (the owner's placement), holding
+    // both in a row so the label can never hide the badge; it overlaps the
+    // scrollbar track, which is empty at the top unless the view is scrolled up.
+    let corner = (badge.is_some() || label.is_some()).then(|| {
+        let muted = cx.theme().muted_foreground;
+        let backdrop = cx.theme().background.opacity(0.75);
+        gpui_component::h_flex()
             .absolute()
             .top(px(5.))
             .right(px(5.))
+            .items_center()
+            .gap_1()
+            .children(label.map(|text| {
+                div()
+                    .max_w(px(160.))
+                    .truncate()
+                    .px_1()
+                    .rounded_sm()
+                    .bg(backdrop)
+                    .text_xs()
+                    .text_color(muted)
+                    .child(text)
+            }))
+            .children(badge)
     });
     let content: AnyElement = match &leaf.content {
         SpaceContent::Terminal(view) => view.clone().into_any_element(),
@@ -144,7 +172,7 @@ fn render_leaf(
     // wrapper — visually identical to the pre-split single terminal. A lone
     // member still gets its badge, so it needs a positioned wrapper.
     if single {
-        let Some(badge) = badge else {
+        let Some(corner) = corner else {
             return content;
         };
         return div()
@@ -152,10 +180,16 @@ fn render_leaf(
             .relative()
             .size_full()
             .child(content)
-            .child(badge)
+            .child(corner)
             .into_any_element();
     }
 
+    let cue = space_border_color(
+        id == active,
+        channel.map(|ch| channel_color(ch, cx)),
+        cx.theme().table_active_border,
+        cx.theme().border,
+    );
     div()
         .id(ElementId::from(("space", id.0 as usize)))
         .relative()
@@ -168,18 +202,39 @@ fn render_leaf(
         .border_1()
         .border_color(cx.theme().border)
         .p(px(1.))
-        .bg(space_border_color(
-            id == active,
-            channel.map(|ch| channel_color(ch, cx)),
-            cx.theme().table_active_border,
-            cx.theme().border,
-        ))
+        .bg(cue)
         // Clicking anywhere in the Space makes it the active Space. Bubble phase:
         // the terminal view handles its own selection first, then this fires.
         .on_mouse_down(MouseButton::Left, activate_space(panel, id))
         .child(content)
-        .children(badge)
+        // The cue last, so it paints over the terminal's own edge pixels.
+        .children((id == active).then(|| active_cue_ring(cue)))
+        .children(corner)
         .into_any_element()
+}
+
+/// The active Space's cue: a 2px ring in the cue colour, painted over the
+/// Space's own 1px border and 1px gutter (`US-0117`, `P20`).
+///
+/// An overlay rather than a wider border or a wider padding, because
+/// `terminal-split.md` decision 8 fixes the Space frame at 1px outer border +
+/// 1px inner gutter and this strengthens the *cue*, not the frame — and because
+/// geometry that changed with focus would move the terminal's content box by a
+/// pixel on every focus switch, which can cost the grid a column. The ring has
+/// no id and no mouse handler, so it creates no hitbox and the terminal below
+/// still receives every click.
+fn active_cue_ring(color: Hsla) -> gpui::Div {
+    div().absolute().inset_0().border_2().border_color(color)
+}
+
+/// The corner label of a Space in a split: its stable number, plus the live
+/// session title when the session sets one — so an SSH Space reads
+/// `#2 dev@host` and a silent local shell still reads `#2` rather than nothing.
+fn space_corner_label(number: u64, session_title: Option<&str>) -> String {
+    match session_title.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(title) => format!("#{number} {title}"),
+        None => format!("#{number}"),
+    }
 }
 
 /// The 1px frame color of a Space. Only the active Space is highlighted: in
@@ -301,7 +356,20 @@ fn placeholder_menu(
 mod tests {
     use gpui::hsla;
 
-    use super::space_border_color;
+    use super::{space_border_color, space_corner_label};
+
+    #[test]
+    fn a_space_label_names_its_session_and_always_carries_its_number() {
+        assert_eq!(
+            space_corner_label(2, Some("dev@127.0.0.1: ~")),
+            "#2 dev@127.0.0.1: ~"
+        );
+        // A local shell that sets no title still identifies itself.
+        assert_eq!(space_corner_label(3, None), "#3");
+        // Whitespace-only titles are no title.
+        assert_eq!(space_corner_label(1, Some("   ")), "#1");
+        assert_eq!(space_corner_label(1, Some("")), "#1");
+    }
 
     #[test]
     fn selected_space_uses_active_gutter_color() {

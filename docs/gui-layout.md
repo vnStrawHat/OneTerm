@@ -99,7 +99,8 @@ text node rather than by flex so the glyph sits in the middle of the square. Eac
 Space carries the same chip as a badge in its top-right corner, inset past the 12 px
 scrollbar track, including the lone Space of an unsplit tab. While a member Space is the
 selected one, its active-Space highlight takes the channel colour; unselected Spaces keep
-the plain border, and the single Space of an unsplit tab stays borderless. The
+the plain border, and the single Space of an unsplit tab stays borderless. Since `US-0117` the badge shares that corner with the Space's own label: one row, the label
+left of the badge, so neither hides the other. The
 badge takes no focus and its clicks activate the Space like any other click in it. Both read the `InputChannelRegistry`, and every `TerminalPanel` observes it,
 so a `Close Channel` performed in one tab repaints the others.
 
