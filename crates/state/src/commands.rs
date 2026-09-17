@@ -38,8 +38,14 @@ pub type SavedSshSessionSections = Vec<(String, Vec<(u64, String, String)>)>;
 pub struct WorkspaceCommands {
     /// Construct a terminal panel bound to a specific shell kind.
     pub new_terminal_with_shell: fn(ShellKind, &mut Window, &mut App) -> Arc<dyn PanelView>,
-    /// Open the "New SSH session" quick-connect dialog.
-    pub open_new_session_dialog: fn(&mut Window, &mut App),
+    /// Open the SSH **Quick Connect** dialog (host/port/user/auth, optional
+    /// save). Named after the dialog it opens, not after the action that
+    /// reaches it (`US-0114`).
+    pub open_quick_connect_dialog: fn(&mut Window, &mut App),
+    /// Open the full **New SSH Session** dialog — label, colour, group, jump
+    /// host, port forwards, logging. The same dialog the session tree opens;
+    /// the "+" menu reaches it through this pointer (`US-0114`).
+    pub open_new_saved_session_dialog: fn(&mut Window, &mut App),
     /// The saved SSH sessions, grouped as the "+" menu lists them — see
     /// [`SavedSshSessionSections`].
     ///

@@ -11,7 +11,7 @@ Created: 2026-09-17
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -52,7 +52,7 @@ Addresses `F25` (medium) and `F34` (low), quoted from
 
 ## Scope
 
-- [ ] In scope:
+- [x] In scope:
   - `crates/terminal-view/src/space/render.rs` — the empty-Space placeholder copy, with
     "New Terminal Here" as its first line.
   - Whether the empty Space's context menu offers a shell picker like the `+` menu does, or
@@ -60,7 +60,7 @@ Addresses `F25` (medium) and `F34` (low), quoted from
   - `crates/terminal-view/src/terminal_view/search.rs:300-312` — the match counter, hidden
     until a query exists.
   - Tooltips on the `Aa` (match case) and `W` (whole word) toggles.
-- [ ] Out of scope:
+- [x] Out of scope:
   - A regex toggle in the search bar. `F34` notes `oneterm-vt` ships a `regex` feature, but
     `P14` does not propose exposing it, and turning on an optional engine feature in the
     application is a new capability with its own cost — not polish. Recorded in Gaps as a
@@ -73,17 +73,17 @@ Addresses `F25` (medium) and `F34` (low), quoted from
 
 ## Acceptance
 
-- [ ] The empty Space's placeholder names New Terminal Here first, and still mentions the drag
+- [x] The empty Space's placeholder names New Terminal Here first, and still mentions the drag
       and the split.
-- [ ] The named action is actually reachable from the context menu the placeholder points at,
+- [x] The named action is actually reachable from the context menu the placeholder points at,
       with the same wording in both places.
-- [ ] The search bar shows no match counter before a query is entered, and shows an accurate
+- [x] The search bar shows no match counter before a query is entered, and shows an accurate
       `n/total` from the first character typed.
-- [ ] A query with no matches shows a "no matches" state, not `0/0` — the distinction between
+- [x] A query with no matches shows a "no matches" state, not `0/0` — the distinction between
       "nothing searched" and "nothing found" is visible.
 - [ ] Hovering `Aa` shows what it does; hovering `W` shows what it does.
-- [ ] Clearing the query returns the bar to its quiet state.
-- [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
+- [x] Clearing the query returns the bar to its quiet state.
+- [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
 
@@ -109,8 +109,16 @@ Reason: the placeholder text is the documented contents of a documented surface.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+Changed: `docs/terminal-split.md` decision 9 — the new placeholder copy, quoted, plus the
+shell-picker call recorded in the sentence before it.
 
+Unchanged, reasons still valid: `docs/terminal-split.md` decision 8 (this packet does not touch
+the cue; `US-0117` amends it); `docs/gui-layout.md` §Status bar (the placeholder copy does not
+contradict the documented empty-Space behaviour); `docs/auto-completion.md` (checked as asked —
+the completion overlay shares no widget with the search bar); `docs/PROJECT.md`.
+
+The search bar still has no owning design section anywhere; recorded in Gaps rather than
+inventing a document here, as the packet directed.
 ## Context
 
 - The placeholder half is copy. The only real question is the second sentence of `F25`: the
@@ -136,17 +144,22 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Plan
 
-- [ ] Decide the shell-picker question and record it here before writing the copy.
-- [ ] Placeholder copy; confirm the menu wording matches.
-- [ ] Counter states and tooltips.
-- [ ] Update `docs/terminal-split.md` §9.
-- [ ] Re-capture the scenes.
+- [x] Decide the shell-picker question and record it here before writing the copy.
+- [x] Placeholder copy; confirm the menu wording matches.
+- [x] Counter states and tooltips.
+- [x] Update `docs/terminal-split.md` §9.
+- [x] Re-capture the scenes.
 
 ## Decisions
 
-None expected. If the empty Space's menu gains a shell submenu, that is a second entry point
-for shell choice and worth a sentence in `docs/terminal-split.md`, but it is not a rule future
-work inherits.
+**The empty Space's menu keeps spawning the default shell; no shell submenu.** Taken before
+the copy was written, as the packet requires. The empty Space is a *placement* action ("put a
+terminal here"), the `+` menu already owns shell *choice*, and a tab opened there drags into
+the Space. Adding a second shell-picking surface would duplicate a list that `US-0114` has
+just made authoritative in one place (`ShellKind::display_name`). The placeholder copy is
+therefore written to promise exactly what the menu does — it names the row, not a picker.
+Recorded as a sentence in `docs/terminal-split.md` decision 9; not a `DEC`, because it is a
+scope call inside one surface, not a rule future work inherits.
 
 ## Verification Plan
 
@@ -170,11 +183,11 @@ work inherits.
    same route is used, reset the binding afterwards and say so in Evidence.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -194,7 +207,82 @@ work inherits.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+### Evidence
+
+Branch `worktree-agent-a8b32ce5d4725a1f5`, commit `feat(terminal-view): the empty Space names New Terminal
+Here and the search bar is quiet until used`.
+
+Changed:
+
+- `crates/terminal-view/src/space/render.rs` — the placeholder copy.
+- `crates/terminal-view/src/terminal_view/search.rs` — `MatchCount` + `match_count`, the
+  counter's colour and its reserved width, plus three tests.
+- `docs/terminal-split.md` decision 9.
+
+Checks:
+
+- `cargo test -p oneterm-terminal-view --lib` — 351 passed, 0 failed, including
+  `the_counter_is_silent_until_a_query_exists`, `nothing_found_is_not_the_same_state_as_nothing_searched`
+  and `a_match_list_counts_from_one`. Those three cover the counter's state selection, which is
+  the only pure logic here: **the placeholder copy and the tooltips are element properties and
+  are proved by the captures below, not by the crate's test count.**
+- `pwsh scripts/ci-local.ps1` — see below.
+
+GUI walk:
+
+- `evidence/US-0115-07-split-right-empty-space.png` — the placeholder reads `Space #1`,
+  `Right-click -> New Terminal Here`, `or split, or drag a terminal tab here`. The arrow is
+  U+2192 and renders.
+- `evidence/US-0115-08-empty-space-menu.png` — the context menu the copy points at, with
+  **New Terminal Here** as its first row, worded identically.
+- `evidence/US-0115-40-search-bar.png` — the bar just opened: the counter slot is empty, its
+  width already reserved, so nothing moves when a query arrives.
+- `evidence/US-0115-41-search-matches.png` — `1/2` with both matches highlighted.
+- `evidence/US-0115-41b-search-no-matches.png` — `No matches` in muted text, visibly a
+  different state from the quiet one.
+
+Method note, as the packet requires: posted messages cannot deliver `Ctrl-F`, confirmed again
+here (the `f` landed in the terminal). Rather than drive the Key Bindings page, Find was
+rebound to `F2` by writing `key_bindings: { "find": "f2" }` into `target/ui_config.json`, and
+**the file was restored from its backup afterwards** — it is back to
+`{ "right_dock_mode": "ssh_client" }`, verified after the walk.
+
+`docs/auto-completion.md` was read as the packet asked: the completion overlay shares no widget
+with the search bar (no counter element in `crates/terminal-view/src/completion/`), so nothing
+there changes. No doc update needed.
+
+The `Aa` and `W` toggles **already carried tooltips** ("Match case", "Match whole word",
+`search.rs`), so `P14`'s tooltip half needed no change. `F34` recorded them as bare because the
+walkthrough never hovered them.
+
+### Rework round (after independent verification)
+
+- **`F-115.1` — the reserved counter width was exact, with no headroom.** The verifier measured
+  `No matches` at x=756-822 in `US-0115-41b-search-no-matches.png`: 66 px in a 66 px slot. The
+  floor was in pixels while the text is not — the kit sets the window's rem size from the
+  theme's font size (`reference/gpui-kit/crates/component/src/root.rs:579`), which the user
+  sets as `ui_font_size`, so `text_xs` scales and a fixed floor does not. It is now
+  `min_w(rems(4.75))`: 76 px at the default 16 px rem (a sixth of headroom over the widest
+  state) and it grows with the font instead of being overflowed by it.
+- `evidence/US-0115-07-split-right-empty-space.png` and `-08-empty-space-menu.png` were
+  re-captured on the reworked build, because `US-0117`'s corner label changed in the same
+  round and those frames carry it. The placeholder copy and the menu row are unchanged and
+  still byte-identical to each other.
+
+### Gaps
+
+- **The regex toggle is not shipped, deliberately.** `F34` names three things and this packet
+  fixes two. `oneterm-vt` does ship a `regex` feature, but turning on an optional engine feature
+  in the application is a new capability with its own cost, and `P14` does not propose it.
+  `F34` should be reported as **partially fixed** by `US-0126`, not ticked.
+- **The tooltips are not captured.** A tooltip needs a real hover; posted `WM_MOUSEMOVE` does
+  not hold the pointer still long enough for the kit's delay. Their existence is shown by the
+  source, not by a frame.
+- **The search bar still has no owning design section.** The packet said to note this rather
+  than invent a document: `docs/gui-layout.md` and `docs/terminal-split.md` both describe
+  surfaces around it, neither describes the bar. A future packet could give it one.
+- `F27` (the status bar collapsing to the clock in an empty Space) is visible in
+  `US-0115-07-split-right-empty-space.png` and is unchanged, as scoped.
 
 ## Handoff
 
