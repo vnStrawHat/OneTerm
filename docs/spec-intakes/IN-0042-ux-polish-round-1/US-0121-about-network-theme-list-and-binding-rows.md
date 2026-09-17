@@ -9,8 +9,8 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
-- [ ] In progress
+- [ ] Planned
+- [x] In progress
 - [ ] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
@@ -167,6 +167,27 @@ needed updating.
 - `research/before/35-settings-about.png`, `36-settings-about-updates.png`,
   `36b-settings-about-end.png`, `37-about-dialog.png` (`F17`), `32-theme-dropdown.png` (`F18`)
   and `27-settings-keybindings.png` (`F32`) are the before pictures.
+
+### Decisions taken before writing code
+
+- **Network becomes its own page, not a group elsewhere.** `docs/auto-update.md` Â§"Data
+  ownership" line 221 owns `proxy_url` and `verify_certificates` as *update* preferences
+  (`UpdateConfig`, persisted to `update_config.json`). `docs/ssh-authentication.md` and
+  `docs/ssh-client-connect.md` were read and neither names a proxy or a certificate setting:
+  the SSH client has no "network" concept of its own, so folding the updater's two fields into
+  the SSH page would file them under the wrong client. They keep the group builder they already
+  have (`updates::network_group`), now hosted by a two-field `Network` page between SSH and
+  About. No change to what reads them.
+- **The About page keeps every group titled.** Removing `Network` leaves
+  `[Identity, Links, Updates]`, all titled, so the untitled-group ordering rule in
+  `docs/gui-layout.md` Â§Settings window still holds and
+  `about::tests::identity_group_leads_the_about_page` still guards it.
+- **The theme dropdown opens on the current theme by ordering, not by scrolling.** The kit
+  cannot open a popup scrolled to its checked row â€” see Gaps for the file and line. The list is
+  therefore built so the current theme is the first selectable row: the current theme's mode
+  section comes first, and inside it the current theme leads. Sections are header rows in the
+  option list itself (the dropdown field only accepts `(value, label)` pairs), carrying a
+  sentinel value the setter ignores.
 
 ## Plan
 
