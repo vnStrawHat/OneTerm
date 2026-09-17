@@ -4,7 +4,8 @@ Date: 2026-09-17
 
 ## Status
 
-Proposed (owner acceptance required before `US-0123` merges — `IN-0042`)
+Accepted 2026-09-17 by the owner, with the explicit ruling that `ctrl-w` (Close Panel) and
+`ctrl-t` (New Terminal Tab) stay as they are. `US-0123` (`IN-0042`) implements it.
 
 ## Context
 
