@@ -191,6 +191,16 @@ impl SshClientPanel {
             })
     }
 
+    /// The Session header with its "New Session" button (`US-0119`).
+    fn render_session_header(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let suffix = self.session.update(cx, |session, cx| {
+            session
+                .title_suffix(window, cx)
+                .map(|element| element.into_any_element())
+        });
+        self.render_header("Session", suffix, cx)
+    }
+
     /// The SFTP Browser header with its expand/collapse toggle.
     fn render_sftp_header(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let suffix = self.sftp.update(cx, |sftp, cx| {
@@ -292,7 +302,7 @@ impl Render for SshClientPanel {
                 resizable_panel().child(
                     v_flex()
                         .size_full()
-                        .child(self.render_header("Session", None, cx))
+                        .child(self.render_session_header(window, cx))
                         .child(self.session.clone()),
                 ),
             )

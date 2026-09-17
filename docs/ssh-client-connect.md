@@ -62,6 +62,10 @@ the app opens an SSH session to the target server using the info in `SshSession`
 username). Before connecting, if credentials are missing (username or password), the app shows
 a dialog for the user to enter them.
 
+A session is *created* from the `+` in the right dock's "Session" header, from the context menu
+on the blank area below the list, or from the tree's own "New Session" row — all three open the
+same full session dialog (§6.5).
+
 Since `IN-0033` the same saved sessions are also listed in the centre tab bar's `+` (New
 Terminal) dropdown, and picking one there enters this flow at exactly the same point with the
 same `SshSessionId`. Everything below the dialog — credential branching, jump chain, host-key
@@ -886,6 +890,35 @@ fn get_dock_area(cx: &App) -> WeakEntity<DockArea> {
 
 > **Recommend Option B** — simpler, doesn't require changing the
 > `SessionPanel::new` + `register_panel` + `reset_default_layout` signatures.
+
+### 6.5. Entry points and menus as they stand (`US-0119`)
+
+The sections above describe how the panel was built. What it offers today:
+
+| Surface | Action |
+|---|---|
+| The `+` in the "Session" section header (`SessionPanel::title_suffix`, drawn by `SshClientPanel::render_session_header`) | The full New SSH Session dialog, `open_session_dialog(window, cx, None)`. |
+| Right-click the blank area below the list | One row, "New Session" — the same dialog. |
+| The empty-list hint | Unchanged: "No SSH session yet. Right-click → New Session." |
+| Double-click a session, or its "Open" row | `open_connect_dialog` for that session. |
+| Right-click a session | `Open`, `Properties`, separator, `New Session`, separator, `Delete`. |
+| Right-click a group | `Rename Group…`, separator, `New Session`. |
+
+Three rules hold across them:
+
+- **One dialog.** Every "new session" surface — the header `+`, the blank-area menu, the
+  tree's own menu and the centre tab bar's `+` (§1.1) — calls `open_session_dialog`. There is
+  no second new-session dialog to drift.
+- **The global action is not in the first slot** of an item menu, where a misclick lands.
+- **Delete confirms and is styled destructive.** It is last, behind its own separator, drawn in
+  the theme's danger colour, and it opens the same confirmation the rebindable `DeleteSession`
+  action opens — one function, `panel::confirm_delete_session`, so the two cannot diverge. This
+  matches the SFTP browser's delete, which the walkthrough named as the pattern to copy.
+
+The list container and each tree row both carry a context menu. Both hitboxes are hovered over
+a row and gpui runs the container's handler first, so the container's builder checks a flag the
+row's right mouse-down sets and returns an empty menu — which renders nothing — when the click
+landed on a row. See `SessionPanel::row_was_right_clicked`.
 
 ---
 

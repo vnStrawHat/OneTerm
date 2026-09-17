@@ -109,7 +109,23 @@ impl Render for SessionPanel {
                     .min_h_0()
                     .when(!has_sessions, |t| t.child(empty))
                     .when(has_sessions && !has_results, |t| t.child(no_results))
-                    .when(has_sessions && has_results, |t| t.child(tree_widget)),
+                    .when(has_sessions && has_results, |t| t.child(tree_widget))
+                    // Right-clicking below the last row offers the one action
+                    // that does not need an item (`F8`). The list container
+                    // covers the rows too, so the menu is empty — and an empty
+                    // menu renders nothing — when the click landed on a row and
+                    // the row's own menu is the one that should open.
+                    .context_menu({
+                        let focus = focus.clone();
+                        let suppressed = self.row_was_right_clicked.clone();
+                        move |menu, _window, _cx| {
+                            if suppressed.replace(false) {
+                                return menu;
+                            }
+                            menu.action_context(focus.clone())
+                                .menu("New Session", Box::new(NewSession))
+                        }
+                    }),
             )
     }
 }

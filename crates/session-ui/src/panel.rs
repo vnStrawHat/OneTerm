@@ -7,10 +7,12 @@
 //! - Items with a group → grouped into a folder by group name (sorted by group,
 //!   then by label within the group).
 //! - Double-click a session item → open the SSH connect dialog.
-//! - Right-click an empty area of the panel → "New Session" context menu.
-//! - Right-click a session item → context menu: Open, Delete, Property.
-//! - Right-click a group folder → context menu: Property (rename group).
-//! - "New Session" / "Property" → open a dialog (see [`super::session_dialog`]).
+//! - Right-click the blank area below the list → "New Session" context menu.
+//! - Right-click a session item → context menu: Open, Properties, New Session,
+//!   Delete (destructive, behind a separator, and confirmed).
+//! - Right-click a group folder → context menu: Rename Group…, New Session.
+//! - The "+" in the "Session" header → the same dialog as "New Session".
+//! - "New Session" / "Properties" → open a dialog (see [`super::session_dialog`]).
 //! - "Open" / double-click → open the connect dialog (see [`super::connect_dialog`]).
 
 use std::cell::Cell;
@@ -23,8 +25,12 @@ use gpui::{
 };
 use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use gpui_component::{
-    WindowExt, button::ButtonVariant, dialog::DialogButtonProps, input::InputState,
-    notification::NotificationType, tree::TreeState,
+    IconName, Sizable as _, WindowExt,
+    button::{Button, ButtonVariant, ButtonVariants as _},
+    dialog::DialogButtonProps,
+    input::InputState,
+    notification::NotificationType,
+    tree::TreeState,
 };
 
 use crate::session_state::{SshSessionId, SshSessionStore};
@@ -36,6 +42,53 @@ use super::tree_builder::build_tree_items;
 /// Wording of the delete confirmation for the saved session `label`.
 fn delete_session_confirmation(label: &str) -> String {
     format!("Delete the saved SSH session \"{label}\"? This cannot be undone.")
+}
+
+/// Ask before removing the saved session `id` from the store, then remove it.
+///
+/// Deleting a session rewrites `ssh_session.json` and there is no undo, so every
+/// surface that offers Delete — the rebindable action and the tree's context
+/// menu — goes through this one confirmation (CORR-34, `US-0119`). It matches
+/// the SFTP browser's delete: the same danger-styled confirm button, and the
+/// thing being deleted named in the question.
+pub(crate) fn confirm_delete_session(
+    store: Entity<SshSessionStore>,
+    id: SshSessionId,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(label) = store.read(cx).get(id).map(|s| s.label.clone()) else {
+        return;
+    };
+    let description = delete_session_confirmation(&label);
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        let store = store.clone();
+        alert
+            .confirm()
+            .title("Delete SSH Session")
+            .description(description.clone())
+            .button_props(
+                DialogButtonProps::default()
+                    .ok_text("Delete")
+                    .ok_variant(ButtonVariant::Danger)
+                    .cancel_text("Cancel")
+                    .show_cancel(true),
+            )
+            .on_ok(move |_, window, cx| {
+                store.update(cx, |s, cx| {
+                    s.remove(id, cx);
+                });
+                window.push_notification(
+                    oneterm_theme::notif_ext::notify(
+                        NotificationType::Success,
+                        "SSH session deleted.",
+                        cx,
+                    ),
+                    cx,
+                );
+                true
+            })
+    });
 }
 
 /// Id prefix for leaf TreeItems (sessions) — followed by the stable session id.
@@ -60,6 +113,19 @@ pub struct SessionPanel {
     pub(crate) search_debounce_task: Option<Task<()>>,
     /// Tracks the clicked index (any button) for highlighting — only one item at a time.
     pub(crate) right_clicked_ix: Rc<Cell<Option<usize>>>,
+    /// Whether the last right-click landed on a tree row, so the blank-area
+    /// context menu must stay empty for it.
+    ///
+    /// The list container and each tree row both carry a context menu, and both
+    /// hitboxes are hovered when the pointer is over a row: the container's menu
+    /// is built for every right-click inside the list, the row's only when a row
+    /// is hit. gpui dispatches the container's handler first, so the row cannot
+    /// stop it; instead the row sets this flag, and the container's builder —
+    /// which the kit defers to the next frame, after the whole dispatch — reads
+    /// and clears it. A menu with no rows renders nothing, so a right-click on a
+    /// row shows only the row's own menu. Exactly one builder run per
+    /// right-click and one set per row hit, so the two stay in step.
+    pub(crate) row_was_right_clicked: Rc<Cell<bool>>,
 }
 
 impl SessionPanel {
@@ -123,6 +189,7 @@ impl SessionPanel {
             search_state,
             search_debounce_task: None,
             right_clicked_ix: Rc::new(Cell::new(None)),
+            row_was_right_clicked: Rc::new(Cell::new(false)),
         }
     }
 
@@ -178,39 +245,7 @@ impl SessionPanel {
         let Some(id) = self.selected_session_id(cx) else {
             return;
         };
-        let Some(label) = self.store.read(cx).get(id).map(|s| s.label.clone()) else {
-            return;
-        };
-        let store = self.store.clone();
-        let description = delete_session_confirmation(&label);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let store = store.clone();
-            alert
-                .confirm()
-                .title("Delete SSH Session")
-                .description(description.clone())
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text("Delete")
-                        .ok_variant(ButtonVariant::Danger)
-                        .cancel_text("Cancel")
-                        .show_cancel(true),
-                )
-                .on_ok(move |_, window, cx| {
-                    store.update(cx, |s, cx| {
-                        s.remove(id, cx);
-                    });
-                    window.push_notification(
-                        oneterm_theme::notif_ext::notify(
-                            NotificationType::Success,
-                            "SSH session deleted.",
-                            cx,
-                        ),
-                        cx,
-                    );
-                    true
-                })
-        });
+        confirm_delete_session(self.store.clone(), id, window, cx);
     }
 
     /// Action handler: open the property dialog for the selected session.
@@ -255,5 +290,24 @@ impl Panel for SessionPanel {
 
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         Some(PanelControl::Both)
+    }
+
+    /// "+" at the trailing end of the "Session" title — a way to add a session
+    /// that is there whether or not the list is empty (`US-0119`/`F8`). It opens
+    /// the same full session dialog the tree's "New Session" opens.
+    fn title_suffix(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        Some(
+            Button::new("new-ssh-session")
+                .icon(IconName::Plus)
+                .xsmall()
+                .ghost()
+                .tab_stop(false)
+                .tooltip("New Session")
+                .on_click(|_, window, cx| open_session_dialog(window, cx, None)),
+        )
     }
 }
