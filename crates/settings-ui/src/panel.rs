@@ -1,16 +1,40 @@
 //! [`SettingsPanel`] — the General Settings view shown in its own window.
 //!
-//! Wraps the gpui-component [`Settings`] widget (a sidebar + page layout) with
-//! six pages: General (UI font), Key Bindings (configurable shortcuts grouped by
-//! origin), Terminal (shell/font/cursor/layout/scroll/bell/security), SSH
-//! (connection keepalive + the SFTP editor workflow), Appearance
-//! (theme mode + theme list), and About. The Terminal page reads/writes the global
-//! [`TerminalSettings`] and persists changes to `terminal.json`; the Appearance
-//! page drives the gpui-component [`Theme`] / [`ThemeRegistry`].
+//! Wraps the gpui-component [`Settings`] widget (a sidebar + page layout).
+//!
+//! Pages are short by design, not by taste. The kit scrolls a sidebar sub-item
+//! into view from the group heights it has measured, and it measures only what
+//! has been laid out, so a group below the fold of a freshly opened page cannot
+//! be scrolled to (`docs/gui-layout.md` §"Sidebar navigation", `US-0122`).
+//! Page *selection*, by contrast, is exact: it swaps an index and scrolls
+//! nothing. Splitting the two long pages into pages that each fit the window is
+//! therefore what makes the sidebar work, and it keeps everything the kit gives
+//! a page — sub-items, per-item search, and a page-level Reset All.
+//!
+//! The pages, in sidebar order: General; Key Bindings, Key Bindings: Terminal,
+//! Key Bindings: Sessions; Terminal, Terminal Display, Mouse & Clipboard,
+//! Terminal Logging, Completion; SSH; Network; About. Each owning module builds
+//! its own and `docs/gui-layout.md` §Settings window is the list's home. The
+//! Terminal pages read/write the global [`TerminalSettings`] and persist changes
+//! to `terminal.json`; General's theme group drives the gpui-component [`Theme`]
+//! / [`ThemeRegistry`].
 //!
 //! The view is hosted by [`super::window`] inside a [`gpui_component::Root`];
 //! it is not a dock panel and is deliberately not registered with the
 //! `PanelRegistry` (ARCH-39).
+//!
+//! **This window has no notification layer, on purpose.** `Root::render` draws
+//! none of its own, so a `push_notification` from a settings control goes into a
+//! layer nobody renders and is never seen. Rendering one here — exactly as
+//! `OneTermWorkspace::render` does — makes the toast appear but *under* the page:
+//! the kit's `SettingPage` paints its chips, switches and buttons into a scene
+//! layer, and `Scene::insert_primitive` orders every primitive by the enclosing
+//! layer before anything else (`reference/zed/crates/gpui/src/scene.rs:74-101`),
+//! so a card drawn later still loses. Two probes settled that it is not a
+//! paint-order contest a caller can win: `deferred` at `POPUP_PRIORITY + 1`, and
+//! again at 10_000, both left the rows printing through the card (`US-0123`
+//! Evidence, `F-R6`). A settings control that needs to say something says it
+//! **in the page**, beside the control — see the Key Bindings row's notice line.
 
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
@@ -23,7 +47,7 @@ use gpui_component::{
     v_flex,
 };
 
-use super::{about, appearance, general, key_bindings, ssh, terminal, updates};
+use super::{about, general, key_bindings, ssh, terminal, updates};
 
 const SETTINGS_GROUP_VARIANT: GroupBoxVariant = GroupBoxVariant::Outline;
 const SETTINGS_PANEL_ROLE: Role = Role::Pane;
@@ -83,14 +107,13 @@ impl SettingsPanel {
     /// Pages are rebuilt on every render (same pattern as the gpui-component
     /// `settings_story`) so the get-closures always read the latest state.
     fn pages(&self, cx: &App) -> Vec<SettingPage> {
-        vec![
-            general::page(),
-            key_bindings::page(),
-            terminal::page(),
-            ssh::page(cx),
-            appearance::page(cx),
-            about::page(cx),
-        ]
+        let mut pages = vec![general::page(cx)];
+        pages.extend(key_bindings::pages());
+        pages.extend(terminal::pages());
+        pages.push(ssh::page(cx));
+        pages.push(updates::network_page(cx));
+        pages.push(about::page(cx));
+        pages
     }
 }
 

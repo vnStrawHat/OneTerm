@@ -14,6 +14,36 @@
 //! free-text keystroke field (which would fire per-keystroke and round-trip
 //! badly with `SettingField`).
 //!
+//! App-level defaults do not use a bare `Ctrl` plus a letter, digit or Space:
+//! in a terminal those keystrokes carry control characters that belong to the
+//! foreground program (`DEC-0018`; `ctrl-w` and `ctrl-t` are its one recorded
+//! exception). Because `ui_config.json` stores only bindings that *differ* from
+//! the built-in default, moving a default moves every user who never rebound
+//! that action and leaves every user who did — so changing the table is the
+//! whole migration, and there is no migration code.
+//!
+//! The exception is a collision, and it is the one decision
+//! [`apply_key_bindings`] makes rather than registers. A user override may hold
+//! the keystroke that is now some *other* action's default; registering both
+//! would put two actions on one key. The rule: **the user's override wins, and
+//! the action whose default collided is left unbound and logged once at `warn`
+//! naming both action ids.** The displaced action is emptied in `effective`, so
+//! the Key Bindings page shows it as unbound and it is one click from rebound.
+//! The check runs on every apply, not only at startup, because **Reset** writes a
+//! default back into `effective` without passing through [`conflicting_action`],
+//! which only runs in the capture UI; Reset onto a taken key says so in a
+//! notification, because the row otherwise snaps back to unbound with no
+//! explanation.
+//!
+//! The rule covers exactly one shape: **a shipped default taken by a user
+//! override.** Two *overrides* on one keystroke are not resolved here and both
+//! are registered, leaving gpui to pick one. That is unreachable through the
+//! application — the capture UI rejects a keystroke another action already holds
+//! (CORR-55) — so it needs a hand-edited `ui_config.json` to produce, and it is
+//! recorded as not handled rather than quietly implied to be. A future source of
+//! bindings that can introduce either shape must route through
+//! `collisions_with_overrides`, or widen it first.
+//!
 //! Replacing a binding cleanly (freeing the old keystroke) requires clearing the
 //! keymap — gpui has no per-binding remove API. [`apply_key_bindings`] snapshots
 //! the gpui-component bindings (registered during `gpui_component::init`) once at
@@ -37,7 +67,7 @@ mod key_bindings_actions;
 mod key_bindings_ui;
 mod state;
 
-pub(crate) use key_bindings_ui::page;
+pub(crate) use key_bindings_ui::pages;
 pub(crate) use state::{
     KeyBindingsSnapshotGlobal, KeyBindingsState, apply_key_bindings, init_state,
 };

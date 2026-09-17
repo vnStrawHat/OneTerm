@@ -5,11 +5,15 @@
 //! module is the full General Settings (font, theme, key bindings, terminal
 //! options, about), split into one file per page:
 //!
-//! - [`general`] — UI font size.
+//! - [`general`] — theme, UI font size, default shell: the page the window
+//!   opens on, composed from the groups the other modules own.
 //! - [`key_bindings`] — configurable key bindings (grouped by origin).
-//! - [`terminal`] — shell, font, cursor, layout, scroll, bell, security.
+//! - [`terminal`] — font, cursor, layout, logging, scroll, mouse, bell,
+//!   security, completion.
 //! - [`ssh`] — SSH connection keepalive and the SFTP browser editor workflow.
-//! - [`appearance`] — theme mode + theme list.
+//! - [`updates`] — the Network page (updater proxy + TLS) and the About page's
+//!   update preferences, status and manual check.
+//! - [`appearance`] — the theme group General hosts.
 //! - [`about`] — version info + links.
 //!
 //! See the roadmap entry "General Settings UI" in `docs/agents/structure.md`.

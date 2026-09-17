@@ -41,7 +41,7 @@ pub(super) fn group() -> SettingGroup {
 
     SettingGroup::new()
         .title("Shell")
-        .description("Shell for new local terminals.")
+        .description("Used by every new local terminal.")
         .items(vec![
             SettingItem::new(
                 "Shell",
@@ -60,8 +60,7 @@ pub(super) fn group() -> SettingGroup {
                 .default_value(shell_label(
                     oneterm_core::config::LocalShellConfig::default().kind,
                 )),
-            )
-            .description("Choose shell kind."),
+            ),
             SettingItem::new(
                 "Custom Program",
                 SettingField::input(
@@ -80,6 +79,6 @@ pub(super) fn group() -> SettingGroup {
                 )
                 .default_value(SharedString::default()),
             )
-            .description("Custom shell path."),
+            .description("Path to the shell executable. Custom only."),
         ])
 }

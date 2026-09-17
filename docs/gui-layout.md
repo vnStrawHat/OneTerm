@@ -45,7 +45,42 @@ Layout construction uses `DockLayout::{tabs,v_split}` and `DockArea::{set_center
 
 Every OneTerm-owned focus target exposes an ID and accessibility role. The Settings root and feature-panel content roots are named `Pane` nodes, the Key Bindings capture target is a `TextInput`, and repository targets are `Link` elements. GPUI Base focuses the host-supplied `DockAreaRenderer`, `TabGroupRenderer`, and `TilesRenderer` frames directly, so `OneTermDockSkin` also assigns pane roles at those seams; this keeps the published dependency unmodified while preventing node-less focus targets. Docked panels return a separate navigation focus proxy to `TabGroup` and forward it to their independently tracked content focus after that frame; a tab-group frame and panel content must never track the same handle because both accessibility nodes would claim focus in one frame.
 
-The upstream sidebar numbers only titled groups, while page scrolling indexes every group. OneTerm therefore keeps untitled groups after all titled groups on a page; the About-page ordering regression protects that alignment without adding a heading to its identity block.
+The pages, in sidebar order:
+
+| Page | Groups |
+|---|---|
+| General | Theme (mode + colour theme), Interface (UI font size), Shell |
+| Key Bindings | App Menu, Edit Menu |
+| Key Bindings: Terminal | Terminal Context Menu, Input Channel |
+| Key Bindings: Sessions | Session Tabs Context Menu, SFTP Context Menu |
+| Terminal | Font, Cursor |
+| Terminal Display | Layout, Scroll, Bell |
+| Mouse & Clipboard | Mouse, Security |
+| Terminal Logging | Logging |
+| Completion | Completion |
+| SSH | Connection, SFTP Editor, SFTP Edit Limit |
+| Network | GitHub Connection |
+| About | Application, Links, Updates |
+
+`General` is the page the window opens on and carries what a new user reaches Settings for first — the theme, the UI font size, and the shell new local terminals start. There is no separate Appearance page: two controls did not earn one, and the theme was the thing hardest to find (`US-0122`). `Network` holds the updater's proxy and TLS-verification settings (`docs/auto-update.md`); `About` holds the application identity, the repository link and the update preferences together with the **Check Now** action that the About dialog also offers.
+
+**Pages are short on purpose.** Terminal's nine groups and Key Bindings' six were one page each until `US-0122`, and neither could be navigated by its own sidebar: the kit scrolls a sub-item into view using the group heights it has *measured*, and it measures only what has been laid out, so anything below the fold of a freshly opened page is invisible to the calculation (§"Sidebar navigation" below). Page **selection** has no such problem — it swaps an index and scrolls nothing — so splitting a long page into pages that each fit the window is what makes the sidebar work, and it costs nothing the kit gives a page: sub-items still appear on any page with more than one group (`settings.rs:209`), search is per `SettingItem` and page-independent (`settings.rs:112-140`), and `Reset All` is per page (`page.rs:111-119`). The budget is the default 708 px window, which leaves about 610 px of page body; three groups is the most any page carries today. **Adding a group to a full page moves the fold and breaks navigation for everything below it — add a page instead.** `terminal/mod.rs`'s `TERMINAL_PAGES` and `key_bindings_ui.rs`'s `KEY_BINDING_PAGES` are the two tables that hold the split, and each is asserted against its own group source in tests.
+
+Every setting is named at most twice: once by its group (a title, plus a description only where the description says something the titles do not) and once by its item (a label, plus a description that says what the value *does*). A description never restates a title. This is the rule `US-0122` applied across every page after `F16` found `Interface / UI font size. → UI Font Size → Interface font size in px.` on the landing page.
+
+The theme list on **General** is built by `appearance::theme_rows`, not handed to the kit in registry order. It is sectioned `Light themes` / `Dark themes`, the section holding the selected theme comes first, and the selected theme leads that section, so the checked row is the first selectable one. That ordering is how the current theme is visible the moment the list opens: `gpui_component`'s popup always opens at its top and exposes no way to scroll it to the checked row (see `US-0121` Gaps for the file and line). The picker is a `SettingField::element` rather than the kit's `scrollable_dropdown`, because the dropdown field accepts only `(value, label)` pairs and a section heading would have to be a selectable row that does nothing; building the menu in OneTerm lets the headings be `PopupMenuItem::label`, which the kit renders disabled and never treats as clickable, and steps over in `select_up`/`select_down` once a row is selected. The first Down-arrow of all still highlights the heading, because the kit sets index 0 without checking (`popup_menu.rs:906-911`); Enter there does nothing. Ordering the list has one visible consequence: choosing a theme in the other mode moves that whole section to the top for the next open.
+
+A key-binding row prints its keystroke once. The `Default: …` line under the label appears only while the row differs from its shipped default — the same test `overrides_from_effective` applies when deciding what reaches `ui_config.json` (`key_bindings/state.rs`'s `is_at_default`), so the line and the persisted override can never disagree about what "changed" means. On a row at its default, **Reset** is a no-op and the row says nothing about defaults.
+
+### Sidebar navigation, and the two things upstream owns
+
+The kit indexes a page's groups twice, and the two indexes are not the same one.
+
+1. **The sidebar numbers only titled groups** (`reference/gpui-kit/crates/component/src/setting/settings.rs:209-216`), while the page hands that number to a `list` that indexes **every** group matching the search query (`.../setting/page.rs:131-137`). They agree only while no untitled group precedes a titled one. OneTerm therefore keeps untitled groups after all titled groups on a page; the About-page ordering regression protects that alignment without adding a heading to its identity block. **No test guards the rule in general**, and none can from this side: `SettingPage::groups` (`.../setting/page.rs:29`) and `SettingGroup::title` (`.../setting/group.rs:19`) are both `pub(super)`, so a built page cannot be read back to see whether an untitled group precedes a titled one. It is a convention a reviewer has to hold, and today every OneTerm group on every page is titled.
+
+2. **The scroll itself under-shoots on a long page, and OneTerm works around it by not shipping long pages.** A sidebar sub-item click sets `deferred_scroll_group_ix` (`settings.rs:222-230`); the page consumes it exactly once and calls `ListState::scroll_to_reveal_item` (`page.rs:152-158`). That function's forward branch derives its target from the summed heights in `state.items` (`reference/zed/crates/gpui/src/elements/list.rs:664-694`), and a gpui `list` item that has not been laid out is `ListItem::Unmeasured` and contributes nothing to that sum (`list.rs:245-297`). On a page taller than its viewport every group below the fold therefore weighs zero, the target collapses towards the top, and the jump lands short — the further down the group, the shorter. Scrolling *up* is exact, because that is the other branch. The `ListState` is keyed element state created inside the kit's own element-id stack and `SettingsState` is `pub(super)`, so OneTerm can neither repeat the scroll nor replace it, and `docs/PROJECT.md` forbids patching the dependency. The fix from this side is page composition: a page whose groups all fall inside the measured window is measured in full, and then the jump is exact. That is why the page list above is twelve pages and not six, and why the two split tables carry a comment saying so (`US-0122`; its Handoff holds the upstream report text, unfiled).
+
+The sidebar's chevron is upstream too. The caret is its own button and **does** collapse a group (`reference/gpui-kit/crates/component/src/sidebar/menu.rs:312-333`); it is the row that never closes, because `Settings` passes `click_to_open(true)` (`settings.rs:193`), which forces open rather than toggling. OneTerm cannot change that argument and instead keeps the row count down.
 
 ## Panel registration and presentation
 

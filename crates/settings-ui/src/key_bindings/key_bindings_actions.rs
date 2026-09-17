@@ -4,6 +4,17 @@
 //! built-in default keystroke, optional gpui key context, and a constructor that
 //! builds a [`KeyBinding`] from a keystroke string. The array order is the
 //! display order in the Key Bindings settings page.
+//!
+//! A default never takes a bare `Ctrl` plus a letter, digit or Space that
+//! carries a terminal control character: in a terminal that keystroke belongs to
+//! the foreground program. Every row here has `context: None`, so the rule
+//! reaches every group and not only "App Menu". Four defaults are accepted
+//! exceptions — `ctrl-w` (Close Panel), `ctrl-t` (New Terminal Tab), `ctrl-f`
+//! (Find) and `ctrl-,` (Open Settings) — and
+//! `the_only_bare_ctrl_defaults_are_the_ones_dec_0018_accepted` asserts that set
+//! exactly. A fifth needs
+//! `docs/decisions/DEC-0018-app-shortcuts-leave-single-ctrl-keys-to-the-terminal.md`
+//! amended, not a comment here.
 
 use gpui::{Action, KeyBinding, Keystroke};
 
@@ -77,7 +88,8 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         id: "new_ssh_session",
         label: "New SSH Session",
         group: "App Menu",
-        default: Some("ctrl-s"),
+        // `ctrl-s` until `DEC-0018`: `^S` is XOFF and belongs to the terminal.
+        default: Some("ctrl-shift-n"),
         context: None,
         make: |ks, ctx| make_binding(ks, NewSession, ctx),
         name_fn: <NewSession as Action>::name_for_type,
@@ -86,7 +98,10 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         id: "toggle_gutter",
         label: "Toggle Gutter",
         group: "App Menu",
-        default: Some("ctrl-g"),
+        // `ctrl-g` until `DEC-0018`: `^G` is BEL and the readline/Emacs abort.
+        // Ships unbound rather than moved — a view toggle with no other entry
+        // point buys nothing with a default keystroke.
+        default: None,
         context: None,
         make: |ks, ctx| make_binding(ks, ToggleGutter, ctx),
         name_fn: <ToggleGutter as Action>::name_for_type,
@@ -95,7 +110,9 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         id: "about",
         label: "About OneTerm",
         group: "App Menu",
-        default: Some("ctrl-space"),
+        // `ctrl-space` until `DEC-0018`: `^@` is set-mark, and the IME toggle
+        // on several input methods.
+        default: Some("f1"),
         context: None,
         make: |ks, ctx| make_binding(ks, About, ctx),
         name_fn: <About as Action>::name_for_type,
@@ -104,7 +121,8 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         id: "quit",
         label: "Quit",
         group: "App Menu",
-        default: Some("ctrl-q"),
+        // `ctrl-q` until `DEC-0018`: `^Q` is XON and belongs to the terminal.
+        default: Some("ctrl-shift-q"),
         context: None,
         make: |ks, ctx| make_binding(ks, Quit, ctx),
         name_fn: <Quit as Action>::name_for_type,
@@ -399,7 +417,90 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::BINDABLE_ACTIONS;
+
+    #[test]
+    fn the_app_defaults_are_the_ones_dec_0018_records() {
+        let default_for = |id: &str| {
+            BINDABLE_ACTIONS
+                .iter()
+                .find(|action| action.id == id)
+                .unwrap_or_else(|| panic!("{id} must be registered"))
+                .default
+        };
+        assert_eq!(default_for("new_ssh_session"), Some("ctrl-shift-n"));
+        assert_eq!(default_for("quit"), Some("ctrl-shift-q"));
+        assert_eq!(default_for("about"), Some("f1"));
+        assert_eq!(default_for("toggle_gutter"), None);
+        // Kept by DEC-0018's explicit exception, not by oversight.
+        assert_eq!(default_for("close_panel"), Some("ctrl-w"));
+        assert_eq!(default_for("new_terminal_tab"), Some("ctrl-t"));
+        // Not in DEC-0018's scope, and no fifth default moved.
+        assert_eq!(default_for("toggle_zoom"), Some("shift-escape"));
+        assert_eq!(default_for("open_settings"), Some("ctrl-,"));
+    }
+
+    /// The bare-`Ctrl` defaults `DEC-0018` accepted as exceptions, with the
+    /// keystroke each one keeps.
+    ///
+    /// Every `BINDABLE_ACTIONS` row has `context: None`, so "App Menu" is a
+    /// display heading and not a scope: every default in the registry is global
+    /// and every one of them is in the rule's reach. The list is therefore the
+    /// whole exception set, not the App Menu's share of it — `find` is an Edit
+    /// Menu row and is in it.
+    const ACCEPTED_SINGLE_CTRL_DEFAULTS: [(&str, &str); 4] = [
+        ("close_panel", "ctrl-w"),
+        ("new_terminal_tab", "ctrl-t"),
+        ("find", "ctrl-f"),
+        ("open_settings", "ctrl-,"),
+    ];
+
+    #[test]
+    fn the_only_bare_ctrl_defaults_are_the_ones_dec_0018_accepted() {
+        let mut found: Vec<(&str, &str)> = BINDABLE_ACTIONS
+            .iter()
+            .filter_map(|action| Some((action.id, action.default?)))
+            .filter(|(_, default)| default.strip_prefix("ctrl-").is_some_and(is_one_key))
+            .collect();
+        found.sort_unstable();
+
+        let mut accepted = ACCEPTED_SINGLE_CTRL_DEFAULTS;
+        accepted.sort_unstable();
+
+        // Not "no row breaks the rule" but "these rows and no others": a fifth
+        // bare-Ctrl default added later fails here, and so does removing one of
+        // the four without amending `DEC-0018`.
+        assert_eq!(
+            found.as_slice(),
+            accepted.as_slice(),
+            "the set of bare-Ctrl defaults changed; amend DEC-0018 rather than this test"
+        );
+    }
+
+    /// Whether what follows `ctrl-` is one key the terminal reads as a control
+    /// character: a letter, a digit, Space, or a punctuation key that produces
+    /// one (`ctrl-,` does not, but it is in the accepted list anyway, so the
+    /// predicate stays simple and the list does the deciding).
+    fn is_one_key(rest: &str) -> bool {
+        rest == "space" || rest.chars().count() == 1
+    }
+
+    #[test]
+    fn no_two_shipped_defaults_share_a_keystroke_in_one_context() {
+        let mut seen: HashMap<(Option<&str>, gpui::Keystroke), &str> = HashMap::new();
+        for action in BINDABLE_ACTIONS {
+            let Some(default) = action.default else {
+                continue;
+            };
+            let stroke = gpui::Keystroke::parse(default)
+                .unwrap_or_else(|_| panic!("{} defaults to unparseable {default}", action.id));
+            if let Some(other) = seen.insert((action.context, stroke), action.id) {
+                panic!("{} and {} both default to {default}", other, action.id);
+            }
+        }
+    }
 
     #[test]
     fn duplicate_session_is_bindable_without_a_default_keystroke() {

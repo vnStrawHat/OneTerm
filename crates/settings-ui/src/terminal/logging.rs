@@ -22,70 +22,67 @@ const WRITE_MODES: &[(&str, LogWriteMode)] = &[
 
 /// Build the terminal output logging settings group.
 pub(super) fn group() -> SettingGroup {
-    SettingGroup::new()
-        .title("Logging")
-        .description("Write printable terminal output to timestamped log files.")
-        .items(vec![
-            SettingItem::new(
-                "Automatic: Local Shell",
-                SettingField::switch(
-                    |cx: &App| TerminalSettings::global(cx).read(cx).logging.local,
-                    |value, cx| set(cx, move |settings| settings.logging.local = value),
-                )
-                .default_value(false),
+    SettingGroup::new().items(vec![
+        SettingItem::new(
+            "Automatic: Local Shell",
+            SettingField::switch(
+                |cx: &App| TerminalSettings::global(cx).read(cx).logging.local,
+                |value, cx| set(cx, move |settings| settings.logging.local = value),
             )
-            .description("Start logging every new local shell."),
-            SettingItem::new(
-                "Automatic: SSH",
-                SettingField::switch(
-                    |cx: &App| TerminalSettings::global(cx).read(cx).logging.ssh,
-                    |value, cx| set(cx, move |settings| settings.logging.ssh = value),
-                )
-                .default_value(false),
+            .default_value(false),
+        )
+        .description("Start logging every new local shell."),
+        SettingItem::new(
+            "Automatic: SSH",
+            SettingField::switch(
+                |cx: &App| TerminalSettings::global(cx).read(cx).logging.ssh,
+                |value, cx| set(cx, move |settings| settings.logging.ssh = value),
             )
-            .description("Start logging new SSH terminals unless a saved session overrides it."),
-            SettingItem::new("Log Folder", log_folder_field())
-                .description("Default: <user_home>/.OneTerm/logs."),
-            SettingItem::new(
-                "Existing File",
-                SettingField::dropdown(
+            .default_value(false),
+        )
+        .description("Start logging new SSH terminals unless a saved session overrides it."),
+        SettingItem::new("Log Folder", log_folder_field())
+            .description("Default: <user_home>/.OneTerm/logs."),
+        SettingItem::new(
+            "Existing File",
+            SettingField::dropdown(
+                WRITE_MODES
+                    .iter()
+                    .map(|(label, _)| ((*label).into(), (*label).into()))
+                    .collect(),
+                |cx: &App| {
+                    let mode = TerminalSettings::global(cx).read(cx).logging.write_mode;
                     WRITE_MODES
                         .iter()
-                        .map(|(label, _)| ((*label).into(), (*label).into()))
-                        .collect(),
-                    |cx: &App| {
-                        let mode = TerminalSettings::global(cx).read(cx).logging.write_mode;
-                        WRITE_MODES
-                            .iter()
-                            .find(|(_, candidate)| *candidate == mode)
-                            .map(|(label, _)| SharedString::from(*label))
-                            .unwrap_or_else(|| "Append".into())
-                    },
-                    |value, cx| {
-                        let mode = WRITE_MODES
-                            .iter()
-                            .find(|(label, _)| *label == value.as_ref())
-                            .map(|(_, mode)| *mode)
-                            .unwrap_or_default();
-                        set(cx, move |settings| settings.logging.write_mode = mode);
-                    },
-                )
-                .default_value("Append"),
+                        .find(|(_, candidate)| *candidate == mode)
+                        .map(|(label, _)| SharedString::from(*label))
+                        .unwrap_or_else(|| "Append".into())
+                },
+                |value, cx| {
+                    let mode = WRITE_MODES
+                        .iter()
+                        .find(|(label, _)| *label == value.as_ref())
+                        .map(|(_, mode)| *mode)
+                        .unwrap_or_default();
+                    set(cx, move |settings| settings.logging.write_mode = mode);
+                },
             )
-            .description("Overwrite truncates once when logging starts; Append preserves content."),
-            SettingItem::new(
-                "File Name Format",
-                SettingField::input(|_| LOG_FILE_NAME_FORMAT.into(), |_, _| {}),
-            )
-            .description("Fixed for this release. %n = process or SSH endpoint.")
-            .disabled(true),
-            SettingItem::new(
-                "Content Format",
-                SettingField::input(|_| LOG_CONTENT_FORMAT.into(), |_, _| {}),
-            )
-            .description("Fixed for this release. %msg is one printable output line.")
-            .disabled(true),
-        ])
+            .default_value("Append"),
+        )
+        .description("Overwrite truncates once when logging starts; Append preserves content."),
+        SettingItem::new(
+            "File Name Format",
+            SettingField::input(|_| LOG_FILE_NAME_FORMAT.into(), |_, _| {}),
+        )
+        .description("Fixed for this release. %n = process or SSH endpoint.")
+        .disabled(true),
+        SettingItem::new(
+            "Content Format",
+            SettingField::input(|_| LOG_CONTENT_FORMAT.into(), |_, _| {}),
+        )
+        .description("Fixed for this release. %msg is one printable output line.")
+        .disabled(true),
+    ])
 }
 
 struct LogFolderInputState {

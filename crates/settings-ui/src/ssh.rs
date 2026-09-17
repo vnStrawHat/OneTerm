@@ -194,33 +194,31 @@ fn sftp_editor_group(cx: &App) -> SettingGroup {
 
 /// "SFTP Edit Limit" group — the size gate for the Edit action.
 fn sftp_edit_limit_group() -> SettingGroup {
-    SettingGroup::new()
-        .description("Limits for opening remote files for editing.")
-        .items(vec![
-            SettingItem::new(
-                "Max Edit File Size (MB)",
-                SettingField::number_input(
-                    NumberFieldOptions {
-                        min: 0.0,
-                        max: 4096.0,
-                        step: 1.0,
-                    },
-                    |cx: &App| {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .sftp
-                            .edit_max_file_size as f64
-                            / BYTES_PER_MB
-                    },
-                    |val: f64, cx: &mut App| {
-                        let bytes = (val.max(0.0) * BYTES_PER_MB).round() as u64;
-                        set_sftp(cx, move |s| s.edit_max_file_size = bytes);
-                    },
-                )
-                .default_value(1.0),
+    SettingGroup::new().items(vec![
+        SettingItem::new(
+            "Max Edit File Size (MB)",
+            SettingField::number_input(
+                NumberFieldOptions {
+                    min: 0.0,
+                    max: 4096.0,
+                    step: 1.0,
+                },
+                |cx: &App| {
+                    TerminalSettings::global(cx)
+                        .read(cx)
+                        .sftp
+                        .edit_max_file_size as f64
+                        / BYTES_PER_MB
+                },
+                |val: f64, cx: &mut App| {
+                    let bytes = (val.max(0.0) * BYTES_PER_MB).round() as u64;
+                    set_sftp(cx, move |s| s.edit_max_file_size = bytes);
+                },
             )
-            .description("Files larger than this prompt before opening. 0 = no limit."),
-        ])
+            .default_value(1.0),
+        )
+        .description("Files larger than this prompt before opening. 0 = no limit."),
+    ])
 }
 
 /// Update the live editor config + persist.

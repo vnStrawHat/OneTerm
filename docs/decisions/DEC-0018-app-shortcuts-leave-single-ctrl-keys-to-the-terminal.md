@@ -7,6 +7,12 @@ Date: 2026-09-17
 Accepted 2026-09-17 by the owner, with the explicit ruling that `ctrl-w` (Close Panel) and
 `ctrl-t` (New Terminal Tab) stay as they are. `US-0123` (`IN-0042`) implements it.
 
+Where it landed: the four defaults in
+`crates/settings-ui/src/key_bindings/key_bindings_actions.rs`, the rule itself as
+`key_bindings_actions::tests::the_only_bare_ctrl_defaults_are_the_ones_dec_0018_accepted`,
+and the collision rule as `key_bindings/state.rs`'s `collisions_with_overrides`
+called from `resolve_default_collisions` at the head of `apply_key_bindings`.
+
 ## Context
 
 OneTerm is a terminal. A keystroke the user presses with a remote program in the foreground
@@ -109,9 +115,22 @@ shipped defaults hold the same keystroke in the same key context.
 
 ### What future work inherits
 
-Any new app-level action added to `BINDABLE_ACTIONS` obeys the rule when it declares a
-default. Adding a default that takes a single-Ctrl control character needs this record
-amended, not a comment in the table.
+Any new action added to `BINDABLE_ACTIONS` obeys the rule when it declares a default.
+Adding a default that takes a single-Ctrl control character needs this record amended, not
+a comment in the table.
+
+The rule reaches the whole registry, not the App Menu group: every row in
+`BINDABLE_ACTIONS` has `context: None`, so its binding is global and every default is in
+the rule's scope. The **complete** set of bare-`Ctrl` defaults this record accepts is
+therefore four: `ctrl-w` (Close Panel), `ctrl-t` (New Terminal Tab), `ctrl-,` (Open
+Settings) and `ctrl-f` (Find). **`find` stays on `ctrl-f` by the same exception `ctrl-w`
+and `ctrl-t` are kept by** — it is the near-universal cross-application meaning of that
+chord, it collides with a readline motion (`forward-char`, and page-forward in `less`)
+rather than with flow control or abort, and a user who wants `^F` in a shell can unbind
+Find from the Key Bindings page. `US-0123` did not move it, because moving it would have
+been a fifth default change this record did not authorise.
+`the_only_bare_ctrl_defaults_are_the_ones_dec_0018_accepted` asserts that set exactly, so a
+fifth cannot appear without amending this record.
 
 ## Alternatives
 
@@ -153,9 +172,20 @@ amended, not a comment in the table.
 - [ ] Tradeoff: Toggle Gutter ships with no keystroke at all, so a user who used `Ctrl-G` for
   it must bind it again from the Key Bindings page. The alternative — `ctrl-shift-g` — was
   not taken because it spends a chord on a toggle nothing else in the application surfaces.
-- [ ] Follow-up: `ctrl-w` and `ctrl-t` remain on readline keys by explicit exception. If a
-  user reports losing `^W` in a shell, that is this decision's soft spot surfacing, and it is
-  an amendment here plus a packet — not a new argument.
+- [ ] Follow-up: `ctrl-w`, `ctrl-t` and `ctrl-f` remain on readline keys by explicit
+  exception. If a user reports losing `^W`, `^T` or `^F` in a shell, that is this decision's
+  soft spot surfacing, and it is an amendment here plus a packet — not a new argument.
+- [ ] Tradeoff, confirmed after acceptance rather than before it: `f1` is taken from the
+  foreground program too. Every `BINDABLE_ACTIONS` row has `context: None`, and gpui
+  dispatches a matched binding before any key-down listener
+  (`reference/zed/crates/gpui/src/window.rs:4901-4923`; the `skip_bindings` escape at
+  `:4886-4899` needs a `key_char`, which `F1` has none), so while OneTerm is focused `F1` no
+  longer reaches the terminal view's key map (`crates/terminal-view/src/input/keys.rs:350`).
+  A user loses F1 help in `mc`, `nano`, `htop`, `vim` and `less`. This is the same class of
+  cost the record set out to remove from `^S`, `^Q`, `^G` and `^@`, on a key used by fewer
+  programs; it is recorded here because it was established by an independent verification of
+  `US-0123` **after** the owner accepted `f1`, and it is an amendment here plus a packet if
+  the owner now wants About moved again.
 - [ ] Follow-up: `apply_key_bindings` gains the collision rule, which is the first time it
   makes a decision rather than registering what it is given. Any future work that adds a
   second source of bindings must route through the same rule or this guarantee stops holding.

@@ -9,9 +9,9 @@ Created: 2026-09-17
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -71,21 +71,21 @@ Addresses `F31` (medium), quoted from `research/ux-walkthrough-2026-09-16.md`:
 
 ## Acceptance
 
-- [ ] The four defaults in `key_bindings_actions.rs` are exactly what `DEC-0018` records, and
+- [x] The four defaults in `key_bindings_actions.rs` are exactly what `DEC-0018` records, and
       no fifth default changed.
-- [ ] A profile with **no** `key_bindings` entry for a moved action resolves to the new
+- [x] A profile with **no** `key_bindings` entry for a moved action resolves to the new
       keystroke after upgrade, with no migration code run and no file rewritten.
-- [ ] A profile with an entry that differs from the old default keeps that entry untouched.
-- [ ] A profile whose surviving override holds a keystroke that is now another action's
+- [x] A profile with an entry that differs from the old default keeps that entry untouched.
+- [x] A profile whose surviving override holds a keystroke that is now another action's
       default: the override wins, the displaced action is unbound, and exactly one `warn` line
       names both action ids. The Key Bindings page shows the displaced action as unbound.
-- [ ] No two shipped defaults hold the same keystroke in the same key context. Asserted over
+- [x] No two shipped defaults hold the same keystroke in the same key context. Asserted over
       the whole table, not just the four changed rows.
-- [ ] Resetting a moved action from the Key Bindings page restores the **new** default.
-- [ ] The release notes for the version carrying this packet list the four moved defaults.
-- [ ] `DEC-0018` is Accepted and the owner has accepted the new defaults, both recorded here
+- [x] Resetting a moved action from the Key Bindings page restores the **new** default.
+- [ ] The release notes for the version carrying this packet list the four moved defaults. *(NOT MET: `release.yml` renders commit subjects only — see Gaps.)*
+- [x] `DEC-0018` is Accepted and the owner has accepted the new defaults, both recorded here
       before merge.
-- [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
+- [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
 
@@ -149,6 +149,66 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 - `research/before/27-settings-keybindings.png` and `38-keybindings-edit-menu.png` show the
   table as shipped; they are the before pictures.
 
+### The shipped table, before and after
+
+`crates/settings-ui/src/key_bindings/key_bindings_actions.rs`, group `App Menu`. Only the four
+rows `DEC-0018` names change; every other default in `BINDABLE_ACTIONS` is untouched, and the
+table-wide test asserts that no two defaults share a keystroke in one key context.
+
+| Action | id | Old default | New default | Why it moved |
+|---|---|---|---|---|
+| New SSH Session | `new_ssh_session` | `ctrl-s` | `ctrl-shift-n` | `^S` is XOFF — stops terminal output |
+| Quit | `quit` | `ctrl-q` | `ctrl-shift-q` | `^Q` is XON — resumes terminal output |
+| About OneTerm | `about` | `ctrl-space` | `f1` | `^@`/NUL is set-mark, and the IME toggle on several input methods |
+| Toggle Gutter | `toggle_gutter` | `ctrl-g` | *(unbound)* | `^G` is BEL and the readline/Emacs abort; a view toggle earns no default |
+
+Unchanged by explicit exception (`DEC-0018`'s recorded soft spot): `close_panel` = `ctrl-w`,
+`new_terminal_tab` = `ctrl-t`. Unchanged because they were never in scope: `toggle_zoom` =
+`shift-escape`, `open_settings` = `ctrl-,`, and every `Edit Menu`, `Terminal Context Menu`,
+`Input Channel`, `Session Tabs Context Menu` and `SFTP Context Menu` row.
+
+`f1` was checked against the gpui-component snapshot before being shipped as a default, as
+this packet's Risks require: no binding, action or keystroke string `f1` exists anywhere under
+`reference/gpui-kit/crates/`, so `apply_key_bindings`'s name-based snapshot filter has nothing
+to miss.
+
+### The migration, and the one case that needs code
+
+The load-bearing fact, quoted as the packet asks — `crates/settings/src/ui_config.rs`:
+
+> Per-action key-binding overrides: action id → keystroke string… Missing entries fall back to
+> the built-in default.
+
+`overrides_from_effective` (`state.rs`) writes only entries that differ from the built-in
+default, and `init_state` resolves `override.or(default)`. So a user still on an old default
+has no entry and the table edit moves them; a user who rebound has an entry and keeps it. No
+migration code, no file rewritten — as `DEC-0018` and the intake's high-level design both say.
+
+The collision is the exception, and it is implemented in `apply_key_bindings`, which is where
+`DEC-0018` puts it. The rule as code: an action still sitting on its shipped default loses that
+keystroke to any *other* action in the same key context whose keystroke is a user override
+parsing to the same key. The displaced action is emptied, so it is unbound both in the keymap
+and on the Key Bindings page — one source of truth rather than a keymap and a page that
+disagree. `apply_key_bindings` runs at startup and after every rebind and reset, so a collision
+reintroduced by **Reset** (which writes a default back without going through the capture UI's
+`conflicting_action` check) is caught too. The `warn` fires only when the resolution actually
+changes something, so it is one line per collision, not one per apply.
+
+The rule is the pure function `collisions_with_overrides(&effective)`, which is where this
+packet's confidence comes from: the three `DEC-0018` cases plus the table-wide assertion are
+unit tests over `(BINDABLE_ACTIONS, overrides)` and need no window.
+
+### Where the release note comes from
+
+`.github/workflows/release.yml` generates the notes from Conventional Commit **subjects** only
+(the body is read solely to detect a `BREAKING CHANGE:` trailer, which promotes the same
+subject line into a "Breaking Changes" section). There is no changelog file for the
+application. The four moved defaults are therefore carried by this packet's commit: a `!`
+subject plus a `BREAKING CHANGE:` trailer listing old → new, so the release names the change in
+its Breaking Changes section and the table itself is one `git show` away. Recorded here because
+"the release notes list the four moved defaults" cannot be satisfied more literally with the
+current generator.
+
 ## Plan
 
 - [ ] Confirm `DEC-0018` is Accepted and the owner has accepted the defaults. **Do not start
@@ -190,11 +250,11 @@ This packet implements it and does not restate its rationale.
    cannot be done, say so in Evidence and mark `F31` as verified only at the table level.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -217,10 +277,187 @@ This packet implements it and does not restate its rationale.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+> Reworked after independent verification (`evidence/settings-ui-wave1-verify.md`), which
+> returned **PASS on code, FAIL on the record**. The table, the migration and the collision rule
+> were confirmed correct and reproduced; the record around them still described a world in
+> which `DEC-0018` was unaccepted. **`DEC-0018` is Accepted — 2026-09-17, by the owner, with
+> the explicit ruling that `ctrl-w` and `ctrl-t` stay as they are.** Both merge gates in the
+> Acceptance above are therefore closed.
+
+### Second rework, after the re-verification of `dab9cac4`
+
+The re-verification returned **PASS with findings** for this packet: `DEC-0018` carries the
+owner's Accepted line with no contradiction, the rule test runs over the whole registry and pins
+the exact exception set, and Reset on a displaced row says so. One finding was a defect in the
+new work.
+
+**`F-R6` (major) — the message was drawn under the page. Fixed, but not by fixing the
+z-order.** The verifier was right about the symptom and right that the first rework's own
+evidence frame showed it and presented it as working: the toast appeared, and the page's chips,
+`Edit`/`Reset` buttons and switches printed straight through the card, on any `SettingPage`.
+
+The obvious repair was tried twice and **does not work**:
+
+| Probe | Frame | Result |
+| --- | --- | --- |
+| `deferred(layer).with_priority(POPUP_PRIORITY + 1)` — the same priority the kit's own shell gives its toasts (`gpui-kit/crates/shell/src/root.rs:58`, `:756`) | `evidence/US-0123-fr6-probe-a-deferred-popup-priority.png` | No change. |
+| The same, at priority `10_000` | `evidence/US-0123-fr6-probe-b-deferred-priority-10000.png` | No change, pixel for pixel. |
+
+So it is not a paint-order contest a caller can win, which is also why the verifier's own probe
+(adding `.relative()`) changed nothing. Deferred draws are painted last and in priority order
+(`reference/zed/crates/gpui/src/window.rs:3058-3102`), but painting last is not the same as
+being on top: `Scene::insert_primitive` gives every primitive the `order` of its enclosing
+**layer** and sorts by that (`reference/zed/crates/gpui/src/scene.rs:74-101`), so page content
+inside a pushed layer outranks a card drawn afterwards outside one. Nothing `SettingsPanel` can
+put in its own subtree beats that.
+
+The fix is therefore to stop trying to float a message over the page and to put it **in** the
+page, beside the control that was pressed:
+
+- `SettingsPanel::render` no longer renders a notification layer, and `panel.rs`'s module doc
+  says why, with both probes, so the next agent does not add one back and re-inherit the bug.
+  The `gpui-base` dependency added for `POPUP_PRIORITY` is gone with it.
+- `KeyBindingsState` gains `notice: Option<(String, String)>` — a message pinned under one row
+  — and the Key Bindings row renders it in the theme's warning colour under the `Default:`
+  line. It is cleared by the next Edit, Reset or page Reset All.
+
+Walked: `evidence/US-0123-40e-reset-on-a-displaced-row-says-so.png` — Reset on the displaced
+**New SSH Session** row leaves it unbound and the row now reads
+*"Still unbound: Quit holds this key. Rebind either one to free it."*, fully legible, with
+nothing printed through it. It is also better placed than the toast was: it is beside the button
+that produced it, and it survives until the user does something else rather than timing out.
+
+This is a deviation from the instruction to fix the z-order, taken because the z-order does not
+move; both probes are kept as evidence rather than summarised away.
+
+**`F-R5` (minor) — the accepted exception set was widened from two to four.** Left as it stands,
+on the coordinator's instruction: they have put it to the owner. The record is transparent about
+it (`DEC-0018` §"What future work inherits" names all four and argues `find`'s case in the
+record's own voice) and the alternative — moving `find`, a fifth default change — was correctly
+refused as out of scope. `ctrl-,` is in the list only because the test's `is_one_key` predicate
+deliberately does not discriminate punctuation; `ctrl-f` is the real widening. If the owner
+declines it, the fix is to move `find` under an amended `DEC-0018`, not to narrow the test back
+to the App Menu group, which is what hid it in the first place.
+
+
+### Commands
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p oneterm-settings-ui` | `test result: ok. 52 passed; 0 failed` |
+| `cargo clippy -p oneterm-settings-ui --all-targets -- -D warnings` | clean |
+| `cargo test --workspace` | 2109 passed, 12 ignored |
+| `pwsh scripts/ci-local.ps1` | **`ci-local: all checks passed.`** |
+
+Focused tests:
+
+- `the_app_defaults_are_the_ones_dec_0018_records` — the four moved rows, the two exceptions,
+  and the two out-of-scope App Menu rows. No fifth default moved.
+- `the_only_bare_ctrl_defaults_are_the_ones_dec_0018_accepted` — **rewritten.** It used to skip
+  every row whose `group != "App Menu"`, which hid a live instance: `find` defaults to `ctrl-f`
+  and every `BINDABLE_ACTIONS` row has `context: None`, so "App Menu" is a display heading and
+  not a scope (verifier MAJOR 2). It now runs over the whole registry and asserts the exact
+  accepted set — `close_panel`/`ctrl-w`, `new_terminal_tab`/`ctrl-t`, `find`/`ctrl-f`,
+  `open_settings`/`ctrl-,` — as an equality, so a fifth bare-`Ctrl` default fails the build and
+  so does dropping one of the four without amending `DEC-0018`.
+- `no_two_shipped_defaults_share_a_keystroke_in_one_context` — over parsed keystrokes, so
+  modifier order cannot hide a clash.
+- `key_bindings::state::tests` — the three `DEC-0018` migration cases as a pure function over
+  `(BINDABLE_ACTIONS, overrides)`, plus modifier-order and already-unbound cases. The verifier
+  mutated `collisions_with_overrides` to swap winner and loser and these caught it.
+
+### Acceptance, walked
+
+1016x708, `gui.ps1`, own pid only, on the reworked build. Seeded `ui_config.json` profiles for
+the migration cases, one launch each.
+
+| Acceptance | Frame | Result |
+| --- | --- | --- |
+| The four defaults are exactly what `DEC-0018` records, no fifth moved | `evidence/US-0123-27-settings-keybindings.png` | **MET.** |
+| ...and they reach the running application | `evidence/US-0123-25-app-menu.png` | **MET.** The menu advertises **About F1** and **Quit Ctrl+Shift+Q**; `research/before/25-app-menu.png` shows `Ctrl+Space` and `Ctrl+Q`. |
+| (a) No entry → new keystroke, nothing rewritten | `evidence/US-0123-27-settings-keybindings.png` | **MET.** After the walk `ui_config.json` still had no `key_bindings` key. |
+| (b) A differing entry is untouched | `evidence/US-0123-40b-differing-override-untouched.png` | **MET.** |
+| (c) A colliding override wins; the displaced action is unbound | `evidence/US-0123-40c-collision-override-wins.png` | **MET.** Quit keeps `Ctrl+Shift+N`; New SSH Session shows `—` with "Default: ctrl-shift-n". |
+| ...and exactly one `warn` names both action ids | `app-stderr.log` | **MET.** One line per resolution; the second line in the reset run below is a second resolution, not a repeat of the first. |
+| No two shipped defaults share a keystroke in one context | unit test | **MET.** |
+| Resetting a moved action restores the **new** default | `evidence/US-0123-40d-reset-restores-the-new-default.png` | **MET.** |
+| The release notes list the four moved defaults | — | **NOT MET.** See Gaps. |
+| `DEC-0018` Accepted and the owner has accepted the defaults | `docs/decisions/DEC-0018-...md` §Status | **MET.** Accepted 2026-09-17 by the owner. |
+
+**Reset on a displaced row now says what happened** (verifier MINOR 4). It used to write the
+default back, get re-displaced by the collision rule on the following apply, and snap to `—`
+with no message — a button that looked broken. `evidence/US-0123-40e-reset-on-a-displaced-row-says-so.png`
+is that click on the reworked build: *"Key already taken — New SSH Session is left unbound: its
+default is your own binding for Quit. Rebind either one to free the key."*
+
+Getting that notification to appear needed one more fix, found by walking rather than by
+reading: the Settings window is its own `Root`, and `Root::render` draws no notification layer
+— the hosting view must ask for one, as `OneTermWorkspace::render` does
+(`crates/workspace/src/layout/workspace/mod.rs:540`). `SettingsPanel::render` never did, so
+**every** `push_notification` from a settings control was pushed into a layer nobody rendered.
+It now renders the layer.
+
+### Docs reconciled
+
+- `DEC-0018` — the paragraph the branch added under the owner's Accepted line, which said the
+  packet was "waiting on that acceptance", is **deleted**; the "Where it landed" paragraph
+  stays and now names the renamed rule test. §"What future work inherits" states that the rule
+  reaches the whole registry and names the complete accepted exception set, **including one
+  sentence that `find` stays on `ctrl-f` by the same exception `ctrl-w` and `ctrl-t` are kept
+  by**, and why `US-0123` did not move it. Consequences gain the confirmed `f1` cost.
+- `crates/settings-ui/src/key_bindings/mod.rs` — the collision rule, and **narrowed**: it used
+  to claim "the keymap and the page can never disagree" and that any future source of bindings
+  routed through the same function keeps the guarantee. It covers one shape only — a shipped
+  default taken by a user override — so it now says so, and says that two *overrides* on one
+  keystroke are **not** resolved and need a hand-edited `ui_config.json` to produce, because the
+  capture UI rejects them (CORR-55).
+- `crates/settings-ui/src/key_bindings/key_bindings_actions.rs` header — the rule restated at
+  registry scope with the four exceptions named.
+- `crates/settings/src/ui_config.rs:44-46` — the load-bearing sentence, quoted above. **No change.**
+- `docs/gui-layout.md` — its §Panel registration paragraph mentions `Ctrl-T`, which this packet
+  does not move. **No change**, confirmed.
+
+### Gaps
+
+- **"`Ctrl-S` now reaches the shell" is unverified, deliberately**, and so is the cost on the
+  other side. The walk posts `WM_*` messages, which set no modifier state, so no `Ctrl` chord
+  and no `F1` was delivered. What is proven is the table (test + the app-menu frame + the Key
+  Bindings page) and the migration rule (test + seeded launches). A human at a real keyboard is
+  still required; `DEC-0018`'s first Consequence remains unverified.
+- **`f1` is taken from the foreground program, and this is now established rather than
+  suspected.** The verifier traced it: every row has `context: None`, and gpui dispatches a
+  matched binding before any key-down listener (`reference/zed/crates/gpui/src/window.rs:4901-4923`;
+  the `skip_bindings` escape at `:4886-4899` needs a `key_char`, which `F1` has none), so while
+  OneTerm is focused `F1` cannot reach `crates/terminal-view/src/input/keys.rs:350`. A user
+  loses F1 help in `mc`, `nano`, `htop`, `vim` and `less`. The owner accepted `f1` before this
+  was proved, so it is written into `DEC-0018`'s Consequences for them to see; changing it is
+  an amendment plus a packet, not a reopening of this one.
+- **The release-notes clause is NOT MET** (verifier MINOR 5 — the first pass graded it one
+  notch generous). `.github/workflows/release.yml` builds each note item from the commit
+  **subject** and reads the body only to detect the `BREAKING CHANGE:` trailer, which promotes
+  that same subject into a Breaking Changes section. The commit is correct, but the rendered
+  notes will read "**key-bindings:** app defaults leave the single-Ctrl keys to the terminal"
+  and name no keystroke. Satisfying the clause needs the generator to emit breaking-change
+  bodies — a small, separate change to `release.yml` — or an application changelog, which the
+  repository does not have.
+- **Override-vs-override collisions are not handled** (verifier MINOR 3). Two overrides on one
+  keystroke both register and gpui picks one. Unreachable through the application, because the
+  capture UI rejects a keystroke another action holds; reachable by hand-editing
+  `ui_config.json`. The module doc now records it as not handled instead of implying otherwise.
+  Widening `collisions_with_overrides` would need a rule for which override loses, which
+  `DEC-0018` does not specify.
+- **The collision resolution becomes a persisted unbind.** Emptying the displaced action means
+  the next save writes `"new_ssh_session": ""`. That matches what the user is shown and is
+  stable across restarts; removing the colliding override later does not bring the default back
+  by itself, and the user resets that row — which now also tells them when the reset cannot
+  take effect.
+
 
 ## Handoff
 
-Use only across actors or sessions: current state, next owner/action, and blockers.
+Complete. `DEC-0018` is Accepted (owner, 2026-09-17) and both merge gates are closed.
 
-Blocked until: `DEC-0018` is Accepted and the owner has accepted the four new defaults.
+One thing for the owner rather than the next agent: `DEC-0018`'s Consequences now record that
+`f1` is taken from the foreground program while OneTerm is focused, traced through gpui's
+dispatch order. That was established after the owner accepted `f1`. Moving About off `F1` is an
+amendment to `DEC-0018` plus a packet, not a reopening of this one.
