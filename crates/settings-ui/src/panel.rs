@@ -28,7 +28,7 @@ use gpui::{
     ParentElement as _, Render, Role, StatefulInteractiveElement as _, Styled as _, Window,
 };
 use gpui_component::{
-    TitleBar,
+    Root, TitleBar,
     group_box::GroupBoxVariant,
     setting::{SettingPage, Settings},
     v_flex,
@@ -111,7 +111,15 @@ impl Focusable for SettingsPanel {
 }
 
 impl Render for SettingsPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The Settings window is its own `Root`, and `Root::render` draws no
+        // notification layer of its own — the hosting view has to ask for one, as
+        // the main window does. Without this a `push_notification` from a
+        // settings control is pushed into a layer nobody renders and is simply
+        // never seen; the Key Bindings Reset message was exactly that until
+        // `US-0123`'s rework walked it.
+        let notification_layer = Root::render_notification_layer(window, cx);
+
         v_flex()
             .id("settings-panel")
             .role(SETTINGS_PANEL_ROLE)
@@ -124,6 +132,7 @@ impl Render for SettingsPanel {
                     .with_group_variant(SETTINGS_GROUP_VARIANT)
                     .pages(self.pages(cx)),
             )
+            .children(notification_layer)
     }
 }
 

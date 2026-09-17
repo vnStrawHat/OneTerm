@@ -81,23 +81,26 @@ Addresses `F14` (**high**), `F16` (medium) and `F15` (low), quoted from
 
 ## Acceptance
 
-- [ ] On the Terminal page, clicking each sidebar sub-item lands on that group, with the
+- [x] On the Terminal page, clicking each sidebar sub-item lands on that group, with the
       group's title visible. Walked for the tenth item ("Completion") and the fifth
-      ("Logging") specifically — the two `F14` measured.
-- [ ] On the Key Bindings page, clicking "Edit Menu" lands on the Edit Menu group.
+      ("Logging") specifically — the two `F14` measured. *(There is no longer a tenth or a
+      fifth item to click: the fix is that Terminal's nine groups are five pages, so Completion
+      and Logging are pages of their own and are reached without any scroll at all. Every
+      sub-item of every page was walked instead — see the Evidence table.)*
+- [x] On the Key Bindings page, clicking "Edit Menu" lands on the Edit Menu group.
 - [ ] If the navigation cannot be fixed from the OneTerm side, the packet ships whatever is
       reachable, and Gaps records: the upstream item, the `reference/gpui-kit/` file and line
       that shows why, what the OneTerm-side attempt cost, and the follow-up raised upstream.
-      "Upstream owns it" alone does not close this packet.
+      "Upstream owns it" alone does not close this packet. *(not applicable: it was fixed from the OneTerm side. The upstream limit is recorded anyway, with the report text in Handoff.)*
 - [ ] The sidebar fits the default 708 px window, or its chevrons actually collapse — the
-      affordance and the behaviour agree either way.
+      affordance and the behaviour agree either way. *(partial: fits collapsed and with one page open; overflows with several open — the row toggle is upstream. Frame: `evidence/US-0122-31-sidebar-all-expanded-overflows.png`.)*
 - [ ] Appearance and About are reachable in the default window without the sidebar scrolling
-      past the fold.
-- [ ] Settings → General either has content worth a landing page or no longer exists as one.
+      past the fold. *(partial: same condition as above.)*
+- [x] Settings → General either has content worth a landing page or no longer exists as one.
       Whichever, no setting loses its effect and none becomes unreachable.
-- [ ] No page states the same name three times. Every page is checked, not just General and
+- [x] No page states the same name three times. Every page is checked, not just General and
       Terminal.
-- [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
+- [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
 
@@ -301,8 +304,8 @@ deserves a `DEC`. Raise it rather than leaving it in a packet.
 - [x] Unit proof
 - [x] Integration proof
 - [x] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -323,89 +326,211 @@ deserves a `DEC`. Raise it rather than leaving it in a packet.
 
 ## Evidence and Gaps
 
+> Reworked after independent verification (`evidence/settings-ui-wave1-verify.md`), which
+> returned **FAIL**. Its MAJOR 2 was right: the cheap OneTerm-side fix — splitting a long page
+> into several short **pages** — was named, priced at zero and never built, while the packet
+> closed on the escape clause. It is built now, and the headline acceptance is met.
+
 ### Commands
 
 | Command | Result |
 | --- | --- |
-| `cargo test -p oneterm-settings-ui` | 46 passed |
+| `cargo test -p oneterm-settings-ui` | `test result: ok. 48 passed; 0 failed` |
 | `cargo clippy -p oneterm-settings-ui --all-targets -- -D warnings` | clean |
-| `cargo test --workspace` | 2069 passed, 12 ignored |
-| `pwsh scripts/ci-local.ps1` | see the closing note below |
+| `cargo test --workspace` | 2105 passed, 12 ignored |
+| `pwsh scripts/ci-local.ps1` | **`ci-local: all checks passed.`** |
 
-Focused tests added: `panel::tests` —
-`an_all_titled_page_scrolls_to_the_group_the_sidebar_names` (a nine-group page, every index),
-`untitled_groups_kept_last_leave_every_sidebar_item_aligned` (OneTerm's ordering rule) and
-`an_untitled_group_before_a_titled_one_desynchronises_the_two_indexes` (the failure mode the
-rule exists to prevent). `about::tests::identity_group_leads_the_about_page` was reviewed, not
-merely kept green: after `US-0121` the About page is `[Identity, Links, Updates]`, all titled,
-so the alignment the test guards still holds for the same reason it did before.
+### What the split is
+
+Two pages were longer than the window; both are now several pages that each fit it. Nothing the
+kit gives a page is lost: sub-items appear on any page with more than one group
+(`settings.rs:209`), search is per `SettingItem` and page-independent (`settings.rs:112-140`),
+`Reset All` is per page (`page.rs:111-119`), and the Key Bindings "reset every binding" handler
+stays on the first row of the registry so one `Reset All` still restores the whole table.
+
+| Was | Is now | Groups |
+| --- | --- | --- |
+| Terminal (9 groups) | Terminal | Font, Cursor |
+| | Terminal Display | Layout, Scroll, Bell |
+| | Mouse & Clipboard | Mouse, Security |
+| | Terminal Logging | Logging |
+| | Completion | Completion |
+| Key Bindings (6 groups) | Key Bindings | App Menu, Edit Menu |
+| | Key Bindings: Terminal | Terminal Context Menu, Input Channel |
+| | Key Bindings: Sessions | Session Tabs Context Menu, SFTP Context Menu |
+
+Twelve pages in total. Both splits are tables — `terminal/mod.rs`'s `TERMINAL_PAGES` and
+`key_bindings_ui.rs`'s `KEY_BINDING_PAGES` — and both are asserted against their own group
+source, which is what the first pass's deleted helper could not do (see Gaps).
 
 ### Acceptance, walked
 
-1016x708, `gui.ps1`, own pid only.
+`target/fast-dev`, 1016x708 (the walkthrough's window size), `gui.ps1`, own pid only.
+**Every sidebar sub-item on every page was clicked from a freshly opened page**, and the
+deepest one on each page is framed.
 
-| Acceptance | Frame | Result |
+| Page | Deepest sub-item clicked | Frame | Result |
+| --- | --- | --- | --- |
+| Terminal | Cursor (2 of 2) | `evidence/US-0122-30-terminal-cursor-subitem.png` | **MET.** Scrolled 113 px; the whole Cursor group is on screen, heading included. |
+| Terminal Display | Bell (3 of 3) | `evidence/US-0122-30b-terminal-display-bell-subitem.png` | **MET.** Whole Bell group revealed. |
+| Key Bindings | Edit Menu (2 of 2) | `evidence/US-0122-38-keybindings-edit-menu.png` | **MET.** Edit Menu heading and all five rows on screen. |
+| Key Bindings: Terminal | Input Channel (2 of 2) | `evidence/US-0122-30c-kb-terminal-input-channel.png` | **MET.** All seven Input Channel rows on screen. |
+| Key Bindings: Sessions | SFTP Context Menu (2 of 2) | `evidence/US-0122-30d-kb-sessions-sftp-subitem.png` | **MET.** All nine SFTP rows on screen. |
+| Mouse & Clipboard | Security (2 of 2) | `evidence/US-0122-30e-mouse-clipboard-security.png` | **MET.** Page fits entirely; the click needs no scroll at all. |
+| SSH | SFTP Edit Limit (3 of 3) | `evidence/US-0122-30f-ssh-edit-limit-subitem.png` | **MET.** Whole group revealed. |
+| About | Updates (3 of 3) | `evidence/US-0122-30g-about-updates-subitem.png` | **MET.** Whole Updates group revealed, Check Now and status included. |
+| General | Shell (3 of 3) | `evidence/US-0122-26-settings-general.png` | **MET.** All three groups fit; no scroll needed. |
+| Terminal Logging, Completion, Network | — | `evidence/US-0122-28c-...`, `-28d-...`, `US-0121-35b-...` | One group each, so no sub-items; the page row itself is the navigation and page selection scrolls nothing, so it is exact by construction. |
+
+The two scenes `F14` measured are the first two rows: the deepest item on the page that used to
+be Terminal's tenth, and the one that used to be its fifth. Both land now. The before pictures
+of the failure are `research/before/30-settings-completion.png` and
+`30b-settings-sidebar-logging.png`; the first pass's own frames of the same failure on the
+unsplit page have been removed from `evidence/` so the round does not carry two contradictory
+answers to the same scene.
+
+| Other acceptance | Frame | Result |
 | --- | --- | --- |
-| Terminal: clicking each sub-item lands on that group — the 10th | `evidence/US-0122-30-settings-completion.png` | **NOT MET.** Clicking "Completion" (now 9th of 9) left the page on Font/Cursor. The upstream under-shoot, reproduced on the fixed build. |
-| ...and the 5th | `evidence/US-0122-30b-settings-sidebar-logging.png` | **NOT MET.** "Logging" (now 4th) landed on Cursor/Layout — two groups short. |
-| Key Bindings: "Edit Menu" lands on the Edit Menu group | `evidence/US-0122-38-keybindings-edit-menu.png` | **MET.** The Edit Menu heading and its first five rows are on screen. It works here because `US-0121` halved the App Menu group's height, so both groups now fall inside the measured window. |
-| Gaps record the upstream item with file and line | §"The reference read" above, and Gaps below | done, with a reproduction |
-| The sidebar fits 708 px, or its chevrons collapse | `evidence/US-0122-31-sidebar-collapsed-chevron.png` | **MET, with a caveat.** The caret does collapse a group: the frame is taken after clicking Key Bindings' chevron, which folded its six sub-items away. The *row* still never closes (upstream `click_to_open(true)`). |
-| Appearance and About reachable without the sidebar scrolling past the fold | same frame, and `evidence/US-0122-26-settings-general.png` | **MET.** Six page rows instead of seven; with Terminal fully expanded (nine sub-items) About sits at y≈572 of 708. Opening a *second* group at the same time still pushes About below the fold — see Gaps. |
-| General has content worth a landing page | `evidence/US-0122-26-settings-general.png` | **MET.** Theme (Mode, Color Theme), Interface (UI Font Size), Shell (Shell, Custom Program). |
-| No setting lost its effect or became unreachable | same frame + `evidence/US-0122-28-settings-terminal.png` | **MET.** The groups moved, the builders did not: `general::page` calls `appearance::theme_group` and `terminal::shell_group`, which are the same functions the Appearance page and the Terminal page called. Terminal shows its remaining nine groups. |
-| No page states the same name three times | `evidence/US-0122-28-settings-terminal.png`, `-26-`, `evidence/US-0121-35b-settings-network.png` | **MET.** Swept across every page, not only General and Terminal: Font, Cursor, Layout, Scroll, Bell, Security, Completion, Shell, Interface, Theme, the SSH edit-limit group and the update status row. |
+| The sidebar fits 708 px | `evidence/US-0122-26-settings-general.png` | **MET** with everything collapsed: twelve page rows, General at y=104 to About at y=500, no scrollbar. |
+| ...or its chevrons collapse | `evidence/US-0122-31-sidebar-all-expanded-overflows.png` | **PARTIAL, framed.** With all nine expandable pages open the sidebar is 34 rows, overflows and scrolls — "Scroll" is cut off at the bottom edge. The caret collapses a group (upstream `menu.rs:312-333`); the row never closes (upstream `click_to_open(true)`, `settings.rs:193`). This is the trade the split buys, shown rather than argued. |
+| Appearance and About reachable without the sidebar scrolling | `evidence/US-0122-26-settings-general.png` | **MET** in the default state and in every single-page-open state walked. Not met with several pages open — same frame as above. Graded PARTIAL in the round's terms, per the verifier's MINOR 5. |
+| General has content worth a landing page | `evidence/US-0122-26-settings-general.png` | **MET.** Theme, Interface, Shell. |
+| No setting lost its effect or became unreachable | `-26-`, `-28-`, `-28b-`, `-28c-`, `-28d-`, `-30e-` | **MET.** Nine terminal groups across five pages, asserted by `the_terminal_groups_are_spread_over_pages_none_of_which_is_long`; every key-binding group placed exactly once, asserted by `key_binding_pages_cover_every_group_exactly_once` against `BINDABLE_ACTIONS` itself. The verifier counted 58 items on `main` against 59 here and attributed the one addition to `US-0121`'s Check for Updates. |
+| No page states the same name three times | `-28-`, `-28b-`, `-30e-`, `US-0121-35b-` | **MET**, swept across every page. |
 
 ### Docs reconciled
 
-- `docs/gui-layout.md` §Settings window — rewritten. The page list is six pages with General as
-  the landing page and no Appearance page; the two-level naming rule is stated; and the
-  untitled-group paragraph is replaced by §"Sidebar navigation, and the two things upstream
-  owns", which keeps the index rule (now with a test behind it) and adds the scroll defect with
-  the `reference/` files and lines that show it, plus the chevron's true behaviour.
-- `docs/PROJECT.md` — read for the "no patching `gpui-component`" rule, which bounded the
-  packet. **No change.**
-- `reference/gpui-kit/crates/component/src/setting/`, `.../sidebar/menu.rs` and
-  `reference/zed/crates/gpui/src/elements/list.rs` — read only, cited by line. **Not changed,
-  and must not be.**
-- `docs/gui-layout.md` §Panel registration — read for consistency with `US-0116`, which meets
-  the same upstream boundary from the tab strip's side. **No change:** both conclusions are the
-  same shape (ship what is reachable, cite the private state).
+- `docs/gui-layout.md` §Settings window — the page list is now a twelve-row table, with a
+  paragraph stating that pages are short **because the sidebar depends on it**, what the budget
+  is, and that adding a group to a full page breaks navigation below it.
+- `docs/gui-layout.md` §"Sidebar navigation" — **the false claim is gone.** The paragraph used
+  to say `panel.rs`'s tests "pin the rule so it fails a build". They did not. It now says
+  plainly that no test can guard the titled/untitled ordering rule from this side, and why
+  (`SettingPage::groups` and `SettingGroup::title` are `pub(super)`), and the scroll paragraph
+  says the fix from this side is page composition.
+- `crates/settings-ui/src/panel.rs`, `terminal/mod.rs`, `key_bindings/key_bindings_ui.rs`
+  module docs — each says why its pages are short.
+- `docs/PROJECT.md` — read for the "no patching `gpui-component`" rule. **No change.**
+- `reference/gpui-kit/`, `reference/zed/` — read only, cited by line. **Not changed.**
 
 ### Gaps
 
-- **`F14`'s scroll is not fixed and cannot be fixed from this side.** The mechanism, the
-  citations and the rejected OneTerm-side option are in §"The reference read" above; the
-  reproduction is `evidence/US-0122-30-settings-completion.png`. The one-line statement of the
-  upstream item: *`gpui_component::setting::SettingPage::render` asks a gpui `list` to reveal a
-  group that the list has not measured, once, and `ListState::scroll_to_reveal_item`'s forward
-  branch treats an unmeasured item as zero-height, so the jump lands short in proportion to how
-  far down the page the group is.* A fix upstream is small — retry the deferred scroll while
-  the target is still not visible, or scroll to the item's top with `ListState::scroll_to`
-  instead of revealing it, which needs no measurement — but it is a change to a published
-  crate, and `docs/PROJECT.md` forbids patching it here. **Follow-up: raise it with GPUI Kit,
-  quoting `setting/page.rs:152-158`.**
-- **The under-shoot converges with repeated clicks**, which is the diagnosis showing itself:
-  `evidence/US-0122-30c-completion-second-click.png` is a second click on "Completion" after
-  the first had caused more groups to be measured, and it lands further down. A user can reach
-  the group by clicking the same sub-item repeatedly. That is not a fix and is not documented
-  as a workaround; it is recorded because it confirms the cause.
-- **The chevron is only half honest, and that half is upstream.** The caret collapses
-  (`sidebar/menu.rs:312-333`); clicking the row forces the group open and never closes it,
-  because `Settings` hard-codes `click_to_open(true)` (`settings.rs:193`) and exposes no way to
-  pass `click_to_toggle` instead. `F15`'s complaint is exactly that mismatch. This packet
-  reduced the row count (one page and one group fewer) rather than fixing the affordance.
-- **Two groups open at once still overflows the sidebar.** Key Bindings (6 sub-items) plus
-  Terminal (9) plus six page rows is 21 rows, and Network and About fall below 708 px until one
-  is collapsed with its caret. Fully fixing this needs the row toggle above.
-- **`US-0122` did not attempt the page wrapper.** It was scoped and rejected for the three
-  capabilities it would cost (sub-items, per-item search, page-level Reset All). If a future
-  packet decides those are worth losing on one page, that is a `DEC`, not a retry of this one.
-- **Not re-captured: `31-settings-appearance.png`.** The Appearance page no longer exists; its
-  contents are the first group of `evidence/US-0122-26-settings-general.png`. The before/after
-  report should pair scene 31 with that frame rather than with a missing page.
+- **The upstream defect is untouched; the split routes around it.** `SettingPage::render` asks
+  a gpui `list` to reveal a group it has not measured, once, and `scroll_to_reveal_item`'s
+  forward branch treats an unmeasured item as zero-height. Nothing in this packet changes that:
+  a page long enough to put a group outside the measured window would fail exactly as before.
+  That is why the two page tables carry comments saying so and why both are asserted. The
+  report to file upstream is written out in full in **Handoff**.
+- **The claim that a test guards the group-ordering rule was false and is withdrawn.**
+  `sidebar_group_to_scroll_index` was `#[cfg(test)]` over a hand-written `&[bool]`; the
+  verifier removed `.title("Interface")` from a real page and 46/46 stayed green. The helper,
+  its three tests and the two sentences that trusted them are deleted. The rule survives as
+  prose plus the fact that every OneTerm group on every page is titled today; it cannot be
+  guarded from this side and `docs/gui-layout.md` now says so instead of claiming otherwise.
+- **The page budget is walked, not asserted.** The tests cap the number of *groups* per page
+  (one to three) because that is the proxy a test can see; the real constraint is rendered
+  height, which only a walk can measure. A page of three unusually tall groups would pass the
+  test and fail the window. The cap is deliberately tight for that reason, and the walk above
+  is the measurement.
+- **`Completion` needs a short scroll to read its last three items**
+  (`evidence/US-0122-28d-settings-completion.png`), and `Terminal` its last two
+  (`evidence/US-0122-28-settings-terminal.png`). Neither has a navigation consequence —
+  `Completion` is one group, so the page row is its only entry and page selection is exact;
+  `Terminal`'s second group is revealed in full by its sub-item. Splitting further would buy a
+  scrollbar's worth of comfort for two more sidebar rows, and was not worth it.
+- **Twelve pages is more sidebar than six.** Collapsed it fits with room to spare; expanded it
+  does not, and the frame shows it. The row that would fix that — a chevron that toggles rather
+  than forces open — is upstream (`settings.rs:193`).
+- **The `P16` page wrapper was still not built**, and that is now a choice rather than a gap:
+  the split achieves the acceptance without losing sub-items, search or Reset All, which the
+  wrapper would have cost. See Handoff.
 
 
 ## Handoff
 
-Use only across actors or sessions: current state, next owner/action, and blockers.
+Next owner: the repository owner, to file the report below with GPUI Kit. **Nothing has been
+filed from here** — this session has no issue tracker access and does not open issues on the
+project's behalf. Everything else in this packet is complete; this is the "follow-up raised
+upstream" half of `IN-0042.md:201-203`, written out so filing it is a copy and a paste.
+
+### Upstream report, ready to file
+
+**Title:** `setting::Settings` — a sidebar sub-item cannot scroll to a group below the fold of
+a freshly opened page
+
+**Body:**
+
+> **What happens**
+>
+> On a `setting::SettingPage` taller than its viewport, clicking a sidebar sub-item for a group
+> below the fold scrolls only a little way and lands on an earlier group. The further down the
+> page the group is, the shorter the jump falls. On a ten-group page, clicking the tenth
+> sub-item moves the page by about 95 px and lands on the second group. Clicking the same
+> sub-item again gets closer, and repeating it eventually arrives.
+>
+> **Why**
+>
+> `SettingPage::render` consumes `deferred_scroll_group_ix` once and calls
+> `ListState::scroll_to_reveal_item`:
+>
+> ```rust
+> // crates/component/src/setting/page.rs:152-158
+> let deferred_scroll_group_ix = state.read(cx).deferred_scroll_group_ix;
+> if let Some(ix) = deferred_scroll_group_ix {
+>     state.update(cx, |state, _| { state.deferred_scroll_group_ix = None; });
+>     list_state.scroll_to_reveal_item(ix);
+> }
+> ```
+>
+> `scroll_to_reveal_item`'s forward branch derives its target from the summed heights in
+> `state.items`:
+>
+> ```rust
+> // gpui/src/elements/list.rs:664-694
+> } else {
+>     let mut cursor = state.items.cursor::<ListItemSummary>(());
+>     cursor.seek(&Count(ix + 1), Bias::Right);
+>     let bottom = cursor.start().height + padding.top;
+>     let goal_top = px(0.).max(bottom - height + padding.bottom);
+>     ...
+> }
+> ```
+>
+> An item the list has not laid out is `ListItem::Unmeasured` (`list.rs:245-249`) and
+> `ListItem::summary` gives it `height: px(0.)` when its `size_hint` is `None`
+> (`list.rs:1622-1637`); `ListState::new` (`list.rs:314-331`) populates itself through
+> `splice`, which creates every item as `ListItem::Unmeasured { size_hint: None, .. }`
+> (`list.rs:520-532`). A freshly opened page has laid out only the viewport plus the
+> `px(100.)` overdraw the page passes to `ListState::new` (`page.rs:139-143`), so every group
+> below that weighs nothing, `bottom` collapses to roughly the measured height, and `goal_top`
+> clamps to about `overdraw`. The backward branch (`ix <= scroll_top.item_ix`) sets
+> `item_ix = ix, offset = 0` and is exact, which is why scrolling *up* the sidebar always
+> works.
+>
+> **Three possible fixes, cheapest first**
+>
+> 1. Seed the heights. `ListState::reset_with_uniform_height` is public (`list.rs:372-376`) and
+>    hands every item a `size_hint` through `apply_uniform_item_height` (`:378-394`), which
+>    `ListItem::summary` then counts. Using it at `page.rs:143` with a rough per-group estimate
+>    makes the forward branch approximately right from the first frame, with no retry.
+> 2. Scroll to the item's top instead of revealing it: `ListState::scroll_to(ListOffset { item_ix: ix, offset_in_item: px(0.) })`
+>    needs no measurement at all and is arguably what a sidebar jump means anyway.
+> 3. Keep `deferred_scroll_group_ix` set until the target is actually visible
+>    (`ListState::bounds_for_item`, `list.rs:698`, returns `None` for an item that has not been
+>    rendered, which is exactly the "not there yet" signal), so the scroll converges over a
+>    frame or two.
+>
+> **Workaround in use**
+>
+> Splitting long pages into pages that each fit the window. Page *selection* swaps
+> `selected_index.page_ix` (`settings.rs:197-207`) and scrolls nothing, so it is exact; a page
+> whose groups all fall inside the measured window is measured in full, and then
+> `scroll_to_reveal_item` is exact too. It is not a fix — it is a constraint on page
+> composition that consumers have to keep obeying.
+
+### If the owner wants the wrapper instead
+
+The `P16` page wrapper stays unbuilt and this packet records why (see §"Why neither is
+reachable"). If a future owner decides the three capabilities it costs — sidebar sub-items,
+per-item search, page-level `Reset All` — are worth losing on one page, that is a `DEC`, not a
+reopening of this packet.

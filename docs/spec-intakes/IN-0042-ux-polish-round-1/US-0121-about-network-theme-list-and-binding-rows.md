@@ -84,22 +84,22 @@ proposed by `P11` and is recorded in Gaps.
 
 ## Acceptance
 
-- [ ] The Settings About page offers a manual update check that performs the same check the
+- [x] The Settings About page offers a manual update check that performs the same check the
       About dialog performs, and its result is visible on the page.
-- [ ] Proxy URL and Verify Certificates are no longer under About. They are under a heading a
+- [x] Proxy URL and Verify Certificates are no longer under About. They are under a heading a
       user would look for when thinking "network", and both still read and write the same
       configuration values they do today.
-- [ ] Changing the proxy or the certificate setting on its new page still affects the update
+- [x] Changing the proxy or the certificate setting on its new page still affects the update
       check — the move must not orphan the settings from the code that reads them.
-- [ ] Opening the theme dropdown shows the currently selected theme, with its tick visible,
+- [x] Opening the theme dropdown shows the currently selected theme, with its tick visible,
       without scrolling.
-- [ ] Light and dark themes are visually separated in the list.
-- [ ] Selecting a theme still works, still persists, and still agrees with the separate Mode
+- [x] Light and dark themes are visually separated in the list.
+- [x] Selecting a theme still works, still persists, and still agrees with the separate Mode
       setting — or, if the two can still contradict each other, that is recorded in Gaps as a
       finding this packet leaves standing.
-- [ ] A key-binding row whose binding equals its default shows the binding once. A row that
+- [x] A key-binding row whose binding equals its default shows the binding once. A row that
       differs still shows what the default was, so Reset is meaningful.
-- [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
+- [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
 
@@ -232,8 +232,8 @@ line in `docs/gui-layout.md`, not a rule future work inherits.
 - [x] Unit proof
 - [x] Integration proof
 - [x] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Risks
@@ -257,87 +257,113 @@ line in `docs/gui-layout.md`, not a rule future work inherits.
 
 ## Evidence and Gaps
 
+> Reworked after independent verification (`evidence/settings-ui-wave1-verify.md`), which
+> returned **PASS with findings**. No acceptance clause failed; two of this packet's own Gaps
+> were wrong and one reachable improvement was written off as unreachable. Both are fixed
+> below, and the frames are re-captured on the reworked build.
+
 ### Commands
 
 | Command | Result |
 | --- | --- |
-| `cargo test -p oneterm-settings-ui` | 46 passed (with `US-0122`/`US-0123` in the same crate) |
+| `cargo test -p oneterm-settings-ui` | `test result: ok. 48 passed; 0 failed` |
 | `cargo clippy -p oneterm-settings-ui --all-targets -- -D warnings` | clean |
-| `cargo test --workspace` | 2069 passed, 12 ignored |
-| `pwsh scripts/ci-local.ps1` | see the closing note below |
+| `cargo test --workspace` | 2105 passed, 12 ignored |
+| `pwsh scripts/ci-local.ps1` | **`ci-local: all checks passed.`** |
 
-Focused tests added by this packet:
+Focused tests:
 
-- `appearance::tests` — the list's ordering and sectioning, the index it opens at for a dark
-  and a light selection, the fallback when the selected theme is not registered, that a header
-  row can never collide with a theme name, and that an empty section contributes no header.
-- `key_bindings::key_bindings_ui::tests` — the row's `Default:` predicate, including
-  `the_default_line_agrees_with_what_is_persisted_as_an_override`, which asserts the line
-  appears exactly when `is_at_default` says the action would be written to `ui_config.json`.
-  That is the "must agree with `overrides_from_effective`" clause in the Verification Plan,
-  as an assertion rather than a claim.
+- `appearance::tests` — the picker's ordering and sectioning, the index it opens at for a dark
+  and a light selection, the fallback when the selected theme is not registered, that a
+  heading is a different row variant from a theme and so can never reach `apply_theme_named`,
+  and that an empty section contributes no heading.
+- `key_bindings::key_bindings_ui::tests::the_default_line_agrees_with_what_is_persisted_as_an_override`
+  — rewritten. It used to compare the row against `is_at_default` while
+  `overrides_from_effective` also calls `is_at_default`, so both sides moved together and the
+  test could not fail (verifier MINOR 5). It now holds **both** the row and the persistence
+  layer to a written-out truth table. Checked by mutation: making `is_at_default` treat an
+  unbound action as "at default" turns `48 passed` into `45 passed; 3 failed`, and this test
+  is one of the three. Reverted.
 - `about::tests::identity_group_leads_the_about_page` — the existing About-page ordering guard,
-  read before the page was edited and still green afterwards. It still means what it says:
-  after removing `Network` the page is `[Identity, Links, Updates]`, every group titled, so
-  the sidebar's titled-group numbering and the page's every-group indexing still line up.
+  still green and still meaning what it says.
 
 ### Acceptance, walked
 
-Captured on `target/fast-dev` at 1016x708 (the walkthrough's window size), driven by
-`gui.ps1` (PrintWindow + posted `WM_*`, own pid only).
+1016x708, `gui.ps1`, own pid only, on the reworked build.
 
 | Acceptance | Frame | Result |
 | --- | --- | --- |
-| About offers a manual check that performs the About dialog's check | `evidence/US-0121-36-settings-about-updates.png` | **Check Now** sits in the Updates group, under "Check for Updates / Ask GitHub Releases now, whatever the interval says." |
-| ...and its result is visible on the page | `evidence/US-0121-36b-settings-about-check-result.png` | after the click, Update Status reads "OneTerm 0.6.0 is up to date." — a live GitHub round trip |
-| Proxy / Verify Certificates are no longer under About | `evidence/US-0121-35-settings-about.png` | About is Application, Links, Updates |
-| ...and are under a heading a user would look for | `evidence/US-0121-35b-settings-network.png` | Settings > **Network** > GitHub Connection |
-| ...and still drive the update check | `evidence/US-0121-36b-...` | the check ran with `verify_certificates` on and an empty proxy, both read from the same `UpdateConfig` entity the moved group writes; the round trip succeeding is the proof the move did not orphan them |
-| The theme dropdown shows the current theme, tick visible, without scrolling | `evidence/US-0121-32-theme-dropdown.png` | opens on "Dark themes" then "✓ Zed One Dark" — the checked row is the first selectable one |
-| Light and dark are visually separated | same frame | "Dark themes" header; "Light themes" heads the other block |
-| A row at its default shows its binding once | `evidence/US-0121-27-settings-keybindings.png` | every App Menu row is a single line |
-| A row that differs still shows its default | `evidence/US-0121-39b-keybinding-differs.png` | New Terminal Tab rebound to `F5` keeps "Default: ctrl-t"; Reset restores it |
-| The capture row is unchanged | `evidence/US-0121-39-keybinding-capture.png` | "Press keys…  (Esc to cancel)" |
+| About offers a manual check that performs the About dialog's check | `evidence/US-0121-36-settings-about-updates.png` | **MET.** Both call `updates::check_now` (`about.rs:103`, `updates/groups.rs:253`), which the verifier confirmed by reading. |
+| ...and its result is visible on the page | `evidence/US-0121-36b-settings-about-check-result.png` | **MET.** "OneTerm 0.6.0 is up to date." after a live GitHub round trip. |
+| Proxy / Verify Certificates are no longer under About | `evidence/US-0121-35-settings-about.png` | **MET.** Application, Links, Updates. |
+| ...and are under a heading a user would look for | `evidence/US-0121-35b-settings-network.png` | **MET.** Network ▸ GitHub Connection. |
+| ...and still drive the update check | `evidence/US-0121-36b-...` | **MET.** The verifier confirmed `proxy_item`/`certificate_item` are byte-identical and still write `UpdateConfig` → `update_config.json`; the successful round trip is the behavioural half. |
+| The theme dropdown shows the current theme, tick visible, without scrolling | `evidence/US-0121-32-theme-dropdown.png` | **MET.** "Dark themes" heading, then `✓ Zed One Dark` as the first selectable row. |
+| Light and dark are visually separated | same frame | **MET**, and better than before: the headings now render muted and disabled rather than looking like themes (see below). |
+| A row at its default shows its binding once | `evidence/US-0121-27-settings-keybindings.png` | **MET.** |
+| A row that differs still shows its default | `evidence/US-0121-39b-keybinding-differs.png` | **MET.** New Terminal Tab on `F5` keeps "Default: ctrl-t". |
+| The capture row | `evidence/US-0121-39-keybinding-capture.png` | Unchanged, as scoped. |
+
+### What the rework changed
+
+- **The section headings are no longer dead clickable rows** (verifier MINOR 3 and MINOR 4).
+  The picker is now a `SettingField::element` that builds its own `PopupMenu`, so the headings
+  are `PopupMenuItem::label` — which the kit renders `disabled(true).cursor_default()`
+  (`popup_menu.rs:1221-1228`) and excludes from `is_clickable` (`:229-241`), and therefore from
+  clicking and from `select_up`/`select_down`. The Gap that said this was "supported by
+  `PopupMenu` but not exposed by `DropdownField`" was wrong to stop there: `SettingField::element`
+  is public and this crate already uses it five times for exactly this reason
+  (`terminal/font.rs`, `about.rs`, `terminal/logging.rs`, `updates/groups.rs` ×3).
+- **The "Mode and Color Theme can still contradict each other" Gap is withdrawn** (verifier
+  MAJOR 1). They cannot. `Theme::apply_config` ends with `self.mode = config.mode`
+  (`reference/gpui-kit/crates/component/src/theme/schema.rs:1060`, `:1104`), and `Theme::change`
+  sets the mode and then re-applies that mode's stored config
+  (`.../theme/mod.rs:237-255`); both dropdowns read the one `Theme` global. The real
+  consequence — switching Mode swaps the colour theme to the last one used in that mode — is
+  now the Mode row's own description, visible in `evidence/US-0122-26-settings-general.png`.
 
 ### Docs reconciled
 
-- `docs/auto-update.md` — the manual check's second entry point (Settings > About > **Check
-  Now**), a table saying which Settings page owns which update setting, and the reason the two
-  network fields have their own page. The smoke-test list names the new entry point.
-- `docs/gui-layout.md` §Settings window — the page list including `Network`, how the theme list
-  is ordered and why, and the key-binding row's single-print rule with the predicate it shares
-  with `overrides_from_effective`.
+- `docs/auto-update.md` — the manual check's second entry point, which Settings page owns which
+  update setting, and why the two network fields have their own page. Unchanged by the rework.
+- `docs/gui-layout.md` §Settings window — the theme-list paragraph now names `theme_rows`,
+  explains why the picker is an element field, and records the reordering consequence.
 - `docs/ssh-authentication.md`, `docs/ssh-client-connect.md` — read, **no change**: neither
-  names a proxy or a certificate setting, so the fields this packet moved are the update
-  client's alone and there is no second "network" concept they could have joined.
-- `docs/PROJECT.md` — read for invariants, **no change**.
-- The About-page group-ordering rule still holds and its guard test needed no edit.
+  names a proxy or a certificate setting.
+- `docs/agents/persistence.md` — the verifier checked it independently: no schema owner, field
+  or version changed, so its Schema owners table still describes `update_config.json`
+  correctly. **No change.**
+- `docs/PROJECT.md` — read for invariants. **No change.**
 
 ### Gaps
 
-- **The kit cannot open a dropdown scrolled to its checked row, and this packet works around
-  it rather than fixing it.** `PopupMenu::selected_index` starts `None`
-  (`reference/gpui-kit/crates/component/src/menu/popup_menu.rs:332`,
-  `:339` for `scroll_handle`), the only code that scrolls is the private
-  `set_selected_index` (`:879-886`), and it is reached only from keyboard navigation
-  (`select_up`/`select_down`). `DropdownField` (`.../setting/fields/dropdown.rs:64-84`) hands
-  the menu nothing but `(value, label)` pairs and `scrollable`. So OneTerm cannot pre-scroll
-  the popup and instead orders the list so no scrolling is needed. A kit that gained
-  "open on the checked item" would let the list return to plain alphabetical order.
-- **Section headers are selectable rows that do nothing.** They are ordinary `PopupMenuItem`s,
-  because that is all the dropdown field accepts; clicking one dismisses the menu and changes
-  nothing (its sentinel value is not a theme name). A disabled or element row — which
-  `PopupMenu` supports but `DropdownField` does not expose — would read better.
-- **Mode and Color Theme can still contradict each other.** Sectioning makes the disagreement
-  visible; it does not remove it. Choosing a light theme while Mode says Dark is still
-  possible, and `F18`'s second half stands as a design question this packet did not answer.
+- **The kit still cannot open a dropdown scrolled to its checked row.** `PopupMenu::selected_index`
+  is private and starts `None` (`popup_menu.rs:292`, `:332`); the only code that scrolls is the
+  private `set_selected_index` (`:879-886`), reached only from keyboard navigation. So the
+  ordering is the mechanism, not a stopgap for a scroll that could be requested.
+- **The first Down-arrow still highlights the heading.** `select_down` with no selection sets
+  index 0 unconditionally (`popup_menu.rs:906-910`) without asking whether row 0 is clickable.
+  `Confirm` there is now inert (`confirm` matches only `Item`/`ElementItem`, `:833-861`) instead
+  of dismissing the menu with no change, and a second Down reaches the first theme — so the
+  dead *click* and the dead *Enter* are gone, but the first keypress is still absorbed. That
+  last step needs the upstream `select_down` to skip non-clickable rows.
+- **The list reorders between opens** (verifier MINOR 6). `theme_rows` is recomputed from the
+  current theme on every render, so picking a theme in the other mode moves that whole section
+  to the top next time. It is the deliberate trade that puts the tick on screen; it is now
+  recorded in `docs/gui-layout.md` rather than left as a surprise.
+- **Network is a one-group page** (verifier MINOR 7), which is the shape `F16` filed against
+  General, while `US-0122` folded Appearance away saying two controls did not earn a page. The
+  two are decided on different grounds — ownership for Network (the settings are the updater's,
+  not the SSH client's; `docs/auto-update.md`), findability for Appearance — and after
+  `US-0122`'s split the round ships several one-group pages by design. Recorded so the
+  before/after report does not read it as an inconsistency left unnoticed.
 - **`F32`'s third symptom is untouched**, as scoped: entering capture still replaces the whole
-  row rather than just the chip (`evidence/US-0121-39-keybinding-capture.png`). Not proposed by
-  `P11`; recorded here so the before/after report can mark it "not fixed, not attempted".
-- **The 35b and check-result frames are new scene numbers**, not re-captures: the walkthrough
-  had no Network page and never ran a manual check from Settings.
+  row. Not proposed by `P11`.
 
 
 ## Handoff
 
-Use only across actors or sessions: current state, next owner/action, and blockers.
+Complete. Reworked once after independent verification; no open action for another actor.
+The one upstream item this packet leans on (a popup cannot be opened scrolled to its checked
+row) is not filed and does not need to be: the ordering makes it moot, and `US-0122`'s Handoff
+carries the kit report that is worth filing.
