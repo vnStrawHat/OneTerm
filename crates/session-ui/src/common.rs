@@ -526,10 +526,7 @@ pub(crate) fn connect_ssh_session(
                         on_failed(message.clone(), cx);
                     }
                     window.refresh();
-                    window.push_notification(
-                        notify(NotificationType::Error, message, cx),
-                        cx,
-                    );
+                    window.push_notification(notify(NotificationType::Error, message, cx), cx);
                 }
             });
         })

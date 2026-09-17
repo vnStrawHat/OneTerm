@@ -192,21 +192,31 @@ fn color_row(state: &gpui::Entity<ColorPickerState>, cx: &App) -> impl IntoEleme
         .gap_2()
         .items_center()
         .flex_wrap()
-        .children(swatch_colors(cx).into_iter().enumerate().map(|(ix, color)| {
-            let is_selected = selected.is_some_and(|value| value.to_hex() == color.to_hex());
-            let state = state.clone();
-            div()
-                .id(("session-color", ix))
-                .w_5()
-                .h_5()
-                .rounded_sm()
-                .bg(color)
-                .border_2()
-                .border_color(if is_selected { border } else { gpui::transparent_black() })
-                .on_click(move |_, window, cx| {
-                    state.update(cx, |state, cx| state.set_value(color, window, cx));
-                })
-        }))
+        .children(
+            swatch_colors(cx)
+                .into_iter()
+                .enumerate()
+                .map(|(ix, color)| {
+                    let is_selected =
+                        selected.is_some_and(|value| value.to_hex() == color.to_hex());
+                    let state = state.clone();
+                    div()
+                        .id(("session-color", ix))
+                        .w_5()
+                        .h_5()
+                        .rounded_sm()
+                        .bg(color)
+                        .border_2()
+                        .border_color(if is_selected {
+                            border
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .on_click(move |_, window, cx| {
+                            state.update(cx, |state, cx| state.set_value(color, window, cx));
+                        })
+                }),
+        )
         .child(ColorPicker::new(state).small())
         .child(div().text_xs().text_color(muted).child("Custom\u{2026}"))
 }
@@ -457,7 +467,7 @@ pub(crate) fn open_session_dialog(
                     cx,
                 ))
                 .child(labelled_field(
-                    "Colour",
+                    "Color",
                     FieldRequirement::Optional,
                     color_row(&color_state, cx),
                     cx,

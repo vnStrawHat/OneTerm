@@ -273,10 +273,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
             }
             // A retry starts clean; the failure of this attempt replaces it.
             inline_error.clear();
-            let jump_hops = match hops
-                .forms(window, cx)
-                .and_then(|forms| forms.take_hops(cx))
-            {
+            let jump_hops = match hops.forms(window, cx).and_then(|forms| forms.take_hops(cx)) {
                 Ok(jump_hops) => jump_hops,
                 Err(message) => {
                     window.push_notification(notify(NotificationType::Warning, message, cx), cx);

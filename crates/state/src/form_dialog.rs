@@ -313,7 +313,10 @@ mod tests {
         let mut previous = px(0.);
         for height in [px(0.), px(400.), px(600.), px(900.), px(1600.)] {
             let cap = form_body_max_height(height);
-            assert!(cap >= previous, "{height:?} gave {cap:?} after {previous:?}");
+            assert!(
+                cap >= previous,
+                "{height:?} gave {cap:?} after {previous:?}"
+            );
             previous = cap;
         }
     }

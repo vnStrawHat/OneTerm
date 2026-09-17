@@ -117,13 +117,11 @@ impl SshAuthForm {
                 RadioGroup::horizontal("ssh-auth-method")
                     // `control_label` instead of `Radio::from(&str)`, whose
                     // `.label(…)` clips the `y` of "Private Key" (BUG-0069).
-                    .children(
-                        ["Password", "Private Key", "SSH Agent"].map(|label| {
-                            Radio::new(label)
-                                .accessibility_label(label)
-                                .child(control_label(label))
-                        }),
-                    )
+                    .children(["Password", "Private Key", "SSH Agent"].map(|label| {
+                        Radio::new(label)
+                            .accessibility_label(label)
+                            .child(control_label(label))
+                    }))
                     .selected_index(Some(selected_index))
                     .on_click(move |selected: &usize, window, cx| {
                         let private_key_selected = *selected == 1;

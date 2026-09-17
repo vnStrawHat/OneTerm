@@ -269,7 +269,7 @@ the collapsed case no longer scrolls at all in a 1000 px window.
 
 Eight swatches — `US-0110`'s `#56B6C2` default first so a new session's colour is one of them,
 then theme colours, no hard-coded values — a "Custom…" square that opens the full picker, and a
-visible **Colour** label. The swatches write through the very same `ColorPickerState` the
+visible **Color** label (the spelling the rest of the UI uses: "Color Theme", "Cursor Color"). The swatches write through the very same `ColorPickerState` the
 picker writes, and `submit` still stores `color_state.read(cx).value().map(|h| h.to_hex())`.
 **There is no new value format and no second code path**, which is why this packet adds no
 colour test: `US-0110`'s resolver tests already cover the only value that is produced. The

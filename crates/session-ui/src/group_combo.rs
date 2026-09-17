@@ -168,108 +168,115 @@ pub(crate) fn group_combobox(
         })
         .child(
             Combobox::new(state)
-        .placeholder("Select or type group...")
-        .search_placeholder("Search or type group name...")
-        .w_full()
-        .render_trigger({
-            let group_value = group_value.clone();
-            let is_open = is_open.clone();
-            move |ctx, _, cx| {
-                is_open.set(ctx.is_open());
-                let val = group_value.borrow().clone();
-                let placeholder = ctx.placeholder().cloned().unwrap_or_default();
+                .placeholder("Select or type group...")
+                .search_placeholder("Search or type group name...")
+                .w_full()
+                .render_trigger({
+                    let group_value = group_value.clone();
+                    let is_open = is_open.clone();
+                    move |ctx, _, cx| {
+                        is_open.set(ctx.is_open());
+                        let val = group_value.borrow().clone();
+                        let placeholder = ctx.placeholder().cloned().unwrap_or_default();
 
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap_1()
-                    .child(
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .truncate()
+                                    .when(val.is_empty(), |this| {
+                                        this.text_color(cx.theme().muted_foreground)
+                                            .child(placeholder)
+                                    })
+                                    .when(!val.is_empty(), |this| {
+                                        this.child(SharedString::from(val))
+                                    }),
+                            )
+                            .when(!ctx.is_open(), |this| {
+                                // Clear (×) button — only shown when the dropdown is closed and a value exists.
+                                this.when(!group_value.borrow().is_empty(), |this| {
+                                    let gv = group_value.clone();
+                                    this.child(
+                                        div()
+                                            .id("clear-group")
+                                            .on_mouse_down(
+                                                gpui::MouseButton::Left,
+                                                move |_, _, cx| {
+                                                    cx.stop_propagation();
+                                                    *gv.borrow_mut() = String::new();
+                                                },
+                                            )
+                                            .child(
+                                                Icon::new(IconName::CircleX)
+                                                    .xsmall()
+                                                    .text_color(muted_fg),
+                                            ),
+                                    )
+                                })
+                            })
+                            .child(
+                                Icon::new(IconName::ChevronDown)
+                                    .xsmall()
+                                    .text_color(cx.theme().muted_foreground),
+                            )
+                            .into_any_element()
+                    }
+                })
+                .footer({
+                    let group_value = group_value.clone();
+                    let query_cell = query_cell.clone();
+                    move |_, cx| {
+                        let query = query_cell.borrow().trim().to_string();
+                        let label = if query.is_empty() {
+                            "Type to create new group".to_string()
+                        } else {
+                            format!("Create \"{}\"", query)
+                        };
+                        let enabled = !query.is_empty();
+
+                        Button::new("create-group")
+                            .ghost()
+                            .label(label)
+                            .icon(Icon::new(IconName::Plus))
+                            .text_color(cx.theme().foreground)
+                            .w_full()
+                            .justify_start()
+                            .when(!enabled, |this| this.disabled(true))
+                            .when(enabled, |this| {
+                                let gv = group_value.clone();
+                                let q = query.clone();
+                                this.on_click(move |_, window, cx| {
+                                    *gv.borrow_mut() = q.clone();
+                                    // Close the dropdown: it used to stay open still
+                                    // offering to create the group it had just created.
+                                    window.dispatch_action(Box::new(Cancel), cx);
+                                })
+                            })
+                            .into_any_element()
+                    }
+                })
+                // The kit's default empty state is a bare inbox icon (`F22`).
+                .empty({
+                    let query_cell = query_cell.clone();
+                    move |_, cx| {
+                        let query = query_cell.borrow().trim().to_string();
                         div()
                             .w_full()
-                            .overflow_hidden()
-                            .truncate()
-                            .when(val.is_empty(), |this| {
-                                this.text_color(cx.theme().muted_foreground)
-                                    .child(placeholder)
+                            .py_4()
+                            .px_3()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(if query.is_empty() {
+                                "No groups yet. Type a name to create one.".to_string()
+                            } else {
+                                format!("No group matches \"{query}\". Press Enter to create it.")
                             })
-                            .when(!val.is_empty(), |this| this.child(SharedString::from(val))),
-                    )
-                    .when(!ctx.is_open(), |this| {
-                        // Clear (×) button — only shown when the dropdown is closed and a value exists.
-                        this.when(!group_value.borrow().is_empty(), |this| {
-                            let gv = group_value.clone();
-                            this.child(
-                                div()
-                                    .id("clear-group")
-                                    .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
-                                        cx.stop_propagation();
-                                        *gv.borrow_mut() = String::new();
-                                    })
-                                    .child(
-                                        Icon::new(IconName::CircleX).xsmall().text_color(muted_fg),
-                                    ),
-                            )
-                        })
-                    })
-                    .child(
-                        Icon::new(IconName::ChevronDown)
-                            .xsmall()
-                            .text_color(cx.theme().muted_foreground),
-                    )
-                    .into_any_element()
-            }
-        })
-        .footer({
-            let group_value = group_value.clone();
-            let query_cell = query_cell.clone();
-            move |_, cx| {
-                let query = query_cell.borrow().trim().to_string();
-                let label = if query.is_empty() {
-                    "Type to create new group".to_string()
-                } else {
-                    format!("Create \"{}\"", query)
-                };
-                let enabled = !query.is_empty();
-
-                Button::new("create-group")
-                    .ghost()
-                    .label(label)
-                    .icon(Icon::new(IconName::Plus))
-                    .text_color(cx.theme().foreground)
-                    .w_full()
-                    .justify_start()
-                    .when(!enabled, |this| this.disabled(true))
-                    .when(enabled, |this| {
-                        let gv = group_value.clone();
-                        let q = query.clone();
-                        this.on_click(move |_, window, cx| {
-                            *gv.borrow_mut() = q.clone();
-                            // Close the dropdown: it used to stay open still
-                            // offering to create the group it had just created.
-                            window.dispatch_action(Box::new(Cancel), cx);
-                        })
-                    })
-                    .into_any_element()
-            }
-        })
-        // The kit's default empty state is a bare inbox icon (`F22`).
-        .empty({
-            let query_cell = query_cell.clone();
-            move |_, cx| {
-                let query = query_cell.borrow().trim().to_string();
-                div()
-                    .w_full()
-                    .py_4()
-                    .px_3()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(if query.is_empty() {
-                        "No groups yet. Type a name to create one.".to_string()
-                    } else {
-                        format!("No group matches \"{query}\". Press Enter to create it.")
-                    })
-            }
-        }),
+                    }
+                }),
         )
 }
 
@@ -282,7 +289,10 @@ mod tests {
     #[test]
     fn enter_creates_only_a_typed_name_the_list_cannot_offer() {
         assert_eq!(group_commit("Lab", 0), GroupCommit::Create("Lab".into()));
-        assert_eq!(group_commit("  Lab  ", 0), GroupCommit::Create("Lab".into()));
+        assert_eq!(
+            group_commit("  Lab  ", 0),
+            GroupCommit::Create("Lab".into())
+        );
         // A row is on screen: Enter belongs to the list, which selects it.
         assert_eq!(group_commit("Lab", 1), GroupCommit::Ignore);
         // Nothing typed: Enter has nothing to create.

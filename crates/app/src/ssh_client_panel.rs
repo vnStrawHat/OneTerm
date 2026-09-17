@@ -192,7 +192,11 @@ impl SshClientPanel {
     }
 
     /// The Session header with its "New Session" button (`US-0119`).
-    fn render_session_header(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_session_header(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let suffix = self.session.update(cx, |session, cx| {
             session
                 .title_suffix(window, cx)
