@@ -10,8 +10,8 @@ Created: 2026-09-18
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -68,21 +68,21 @@ once for the whole batch with Replace all / Skip.
 
 ## Acceptance
 
-- [ ] Uploading a file whose name already exists in the remote directory opens a
+- [x] Uploading a file whose name already exists in the remote directory opens a
       confirmation dialog naming the file, and requests **nothing** from the
       backend until it is answered.
-- [ ] Cancel/Skip leaves the colliding file untouched on the server — no transfer
+- [x] Cancel/Skip leaves the colliding file untouched on the server — no transfer
       request, no queue item for it.
-- [ ] Replace starts the upload, exactly as before the packet.
-- [ ] A batch in which several files collide asks **once**, offering **Replace all**
+- [x] Replace starts the upload, exactly as before the packet.
+- [x] A batch in which several files collide asks **once**, offering **Replace all**
       and **Skip**; Skip still uploads the files of the batch that collide with
       nothing.
-- [ ] A batch in which nothing collides is unchanged: no dialog, upload starts
+- [x] A batch in which nothing collides is unchanged: no dialog, upload starts
       immediately.
-- [ ] The dialog is the same shape as the download direction's: danger-styled
+- [x] The dialog is the same shape as the download direction's: danger-styled
       Replace, neutral (outline) keep button, the name(s) in the description —
       because both directions now render it from one helper.
-- [ ] A remote directory that cannot be listed does not block the upload; it only
+- [x] A remote directory that cannot be listed does not block the upload; it only
       means the collision cannot be known (logged at `warn`).
 
 ## Documentation
@@ -119,9 +119,10 @@ contract is symmetric and the doc must say so.
 
 ### Reconciliation
 
-Docs to change (confirmed after implementation):
+Docs changed:
 
-- `docs/sftp-browser-design.md` — §4.6 Upload row and §4.15 dual-pane paragraph.
+- `docs/sftp-browser-design.md` — §4.6 Upload and Download rows, the §4.15
+  dual-pane paragraph, and a new §4.16 that owns the shared confirmation.
 - `docs/spec-intakes/IN-0042-ux-polish-round-1/IN-0042.md` — `US-0128` added to
   Candidate Work Packets.
 - `docs/spec-intakes/IN-0042-ux-polish-round-1/evidence/before-after-report.md` —
@@ -149,17 +150,17 @@ to list that directory, and it answers for a whole batch at once.
 
 ## Plan
 
-- [ ] Extract the download dialog into `confirm_replace(...)` in `transfer.rs`,
+- [x] Extract the download dialog into `confirm_replace(...)` in `transfer.rs`,
       parameterized by title, description and the two button labels, with a
       single `answer(bool, &mut Window, &mut App)` callback that fires once.
-- [ ] Add the two pure decision functions and their unit tests.
-- [ ] Give `do_upload_paths` a `&mut Window`, list the remote cwd, and gate the
+- [x] Add the two pure decision functions and their unit tests.
+- [x] Give `do_upload_paths` a `&mut Window`, list the remote cwd, and gate the
       batch on the answer; update the four call sites.
-- [ ] Point `download_entry_to_local` at the shared helper.
-- [ ] Panel tests for: no collision → no dialog; one collision → dialog, nothing
+- [x] Point `download_entry_to_local` at the shared helper.
+- [x] Panel tests for: no collision → no dialog; one collision → dialog, nothing
       requested; Cancel → nothing requested; Replace → upload requested; multi
       collision → one dialog, Skip uploads only the non-colliding file.
-- [ ] Reconcile the docs and capture the GUI frames.
+- [x] Reconcile the docs and capture the GUI frames.
 
 ## Decisions
 
@@ -177,18 +178,25 @@ applied to the other direction; the shape of the dialog is already settled there
   Skip dialog for a multi-file collision.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-To be filled after implementation; see `evidence/US-0128-verification.md`.
+`cargo test -p oneterm-sftp-ui` — 67 passed, 0 failed (8 of them new: four on the
+decision itself, four on the panel wiring). `pwsh scripts/ci-local.ps1` —
+`ci-local: all checks passed.` The GUI walk against a loopback `sftp-dev-server`
+is written up with its seven frames in `evidence/US-0128-verification.md`: the
+dialog on an existing remote file, the remote listing unchanged after Cancel
+(same 3 B / `09:38`), the overwrite after Replace (384 B / `09:48`), the batch's
+single Replace all / Skip question, Skip uploading only the file that collided
+with nothing, and the download direction still showing the same dialog.
 
-Known gaps, decided up front:
+Gaps:
 
 - **The editor's save path is deliberately untouched** (see Scope). It guards the
   foreign-change case with its own mtime conflict dialog and does not use

@@ -260,8 +260,18 @@ Consequence above) and `US-0123` carries the code as acceptance rework.
 `US-0124`: "Uploading onto an existing remote file still overwrites it without asking, exactly as
 the drag-and-drop and menu uploads did before this packet; only the download direction confirms."
 The new `Upload` button makes the existing action visible without changing it. The packet puts a
-change to the transfer mechanism out of scope and says it is worth its own packet, which was not
-opened.
+change to the transfer mechanism out of scope and says it is worth its own packet, ~~which was not
+opened.~~
+
+**Closed 2026-09-18 by `US-0128`**
+(`docs/spec-intakes/IN-0042-ux-polish-round-1/US-0128-upload-asks-before-overwriting.md`), which
+opened that packet and closed the asymmetry rather than the symptom: the confirmation
+`download_entry_to_local` already showed was lifted into one shared `confirm_replace` helper in
+`crates/sftp-ui/src/transfer.rs` and extended to the other direction. `do_upload_paths` -- the one
+funnel every GUI upload path goes through (Upload button, menu actions, external drop, Local-pane
+row drop) -- now lists the remote cwd first and starts nothing until the question is answered.
+One collision asks `Replace` / `Cancel`, several ask once with `Replace all` / `Skip`, and Skip
+still uploads the files of the batch that collide with nothing.
 
 ### 4.6 Remaining gaps by packet
 
