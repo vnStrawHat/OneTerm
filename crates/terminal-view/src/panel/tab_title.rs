@@ -76,9 +76,31 @@ fn resolve_tab_label(live: Option<&str>, fallback: &str) -> String {
     }
 }
 
-/// The static tab label of a local-shell tab: the program's file stem when the
-/// settings name one, otherwise the shell kind's display name (`US-0114`). A
-/// live OSC 0/2 title still wins over this — see [`resolve_tab_label`].
+/// The display name of a shell program path: its last component after either
+/// separator — `/` **or** `\`, whatever the host OS thinks — with one trailing
+/// `.exe` removed case-insensitively and nothing else. `None` when that leaves
+/// nothing to name a tab after (a trailing separator, an empty program).
+///
+/// [`std::path::Path::file_stem`] cannot do this and used to: on Linux `\` is
+/// not a separator, so `C:\Program Files\Git\bin\bash.exe` kept its
+/// directories and the label read as the whole path, and it strips *any* last
+/// extension, so `python3.11` would come out `python3`.
+fn program_display_name(program: &str) -> Option<&str> {
+    let last = program
+        .rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .unwrap_or(program);
+    // `saturating_sub` + `get` also rejects a non-char-boundary cut.
+    let name = match last.get(last.len().saturating_sub(4)..) {
+        Some(ext) if ext.eq_ignore_ascii_case(".exe") => &last[..last.len() - 4],
+        _ => last,
+    };
+    (!name.is_empty()).then_some(name)
+}
+
+/// The static tab label of a local-shell tab: the program's display name when
+/// the settings name one, otherwise the shell kind's display name (`US-0114`).
+/// A live OSC 0/2 title still wins over this — see [`resolve_tab_label`].
 ///
 /// An explicit `program` wins for **every** kind, not only `Custom`, because
 /// `resolve_shell` honours it for every kind: `kind: cmd` with
@@ -87,8 +109,11 @@ fn resolve_tab_label(live: Option<&str>, fallback: &str) -> String {
 /// (`F-114.2`). The "+" menu clears `program` for an explicit kind, so only the
 /// default-shell path can reach this.
 pub(super) fn shell_tab_title(kind: ShellKind, program: Option<&Path>) -> String {
-    if let Some(stem) = program.and_then(|p| p.file_stem()).and_then(|s| s.to_str()) {
-        return stem.to_string();
+    if let Some(name) = program
+        .and_then(|p| p.to_str())
+        .and_then(program_display_name)
+    {
+        return name.to_string();
     }
     if kind == ShellKind::Custom {
         // A custom shell with no program has nothing to be named after.
@@ -554,8 +579,8 @@ mod tests {
     use oneterm_core::ShellKind;
 
     use super::{
-        CloseScope, resolve_tab_label, shell_tab_title, tab_title_label, tabs_to_close,
-        trim_path_title,
+        CloseScope, program_display_name, resolve_tab_label, shell_tab_title, tab_title_label,
+        tabs_to_close, trim_path_title,
     };
 
     #[test]
@@ -619,6 +644,36 @@ mod tests {
             "duplicate shell labels: {labels:?}"
         );
         assert!(!labels.iter().any(|l| l == "Terminal"));
+    }
+
+    #[test]
+    fn a_program_name_is_read_the_same_way_on_every_os() {
+        // The two tests below use Windows-style paths, and `Path::file_stem`
+        // kept their directories on Linux (CI, "Full workspace quality gate").
+        // This table is the OS-independent proof: both separator styles, and
+        // only a trailing `.exe` comes off.
+        let cases = [
+            ("bash", Some("bash")),
+            ("cmd", Some("cmd")),
+            ("nu", Some("nu")),
+            ("pwsh.exe", Some("pwsh")),
+            ("PWSH.EXE", Some("PWSH")),
+            ("C:\\Program Files\\Git\\bin\\bash.exe", Some("bash")),
+            ("C:\\tools\\nu", Some("nu")),
+            ("/usr/local/bin/fish", Some("fish")),
+            ("/opt/shells/pwsh.exe", Some("pwsh")),
+            // Only `.exe`: a version suffix is part of the name.
+            ("/usr/bin/python3.11", Some("python3.11")),
+            // Nothing left to name the tab after.
+            ("C:\\tools\\", None),
+            ("/usr/bin/", None),
+            (".exe", None),
+            ("", None),
+        ];
+
+        for (program, expected) in cases {
+            assert_eq!(program_display_name(program), expected, "{program:?}");
+        }
     }
 
     #[test]

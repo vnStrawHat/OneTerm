@@ -601,3 +601,135 @@ Two qualifications, so the record is complete rather than flattering:
   source is unambiguous.
 - `#N` covering row 0 is inferred from the grid geometry (18 px pitch, `padding.top = 0`), not from
   a capture in which row 0 has text at the right edge. Such a capture would be the direct proof.
+
+## Acceptance rework 2026-09-18 (Linux label) — verification
+
+Verifier: a second independent agent, on `4526f22f` ("fix(terminal-view): name a shell tab from its
+program path on every OS", one commit on top of main `1df9ca2b`). Reviewed: `git diff main...HEAD`
+in full (3 files, +117/-9) — `crates/terminal-view/src/panel/tab_title.rs`, `docs/gui-layout.md`,
+`US-0114-tabs-named-after-their-shell-and-menu-names-its-dialog.md`.
+
+**Verdict: PASS.** The fix is at the root, the new function is pure and OS-independent, and the two
+tests that CI failed on ubuntu pass on Linux by construction. Five nits below, none blocking.
+
+### The function, and why it is OS-independent
+
+`program_display_name(&str) -> Option<&str>` (`tab_title.rs:88-98`) does three things and no more:
+`rsplit(|c| c == '/' || c == '\\').next()` for the last component, one case-insensitive `.exe`
+stripped off the tail via `last.get(last.len().saturating_sub(4)..)`, and `None` for an empty
+result. Every operation is on `str`, so nothing in it consults the host platform. `shell_tab_title`
+(`:111-123`) now reads `program.and_then(|p| p.to_str()).and_then(program_display_name)`, and
+`Path::to_str` is the one remaining platform type in the path — it hands back the stored bytes
+verbatim and interprets no separator, on either OS. On `None` the function falls through to exactly
+the pre-existing "no program" arms: `DEFAULT_TAB_TITLE` ("Terminal") for `ShellKind::Custom`,
+`kind.display_name()` otherwise. So a degenerate program is treated as no program, which is the
+right fallback and needed no new branch.
+
+Single consumer: `terminal_panel.rs:187` (`shell.kind`, `shell.program`) and `:199` (kind only).
+No other call site derives a label from a program path (a grep for `file_stem` across `crates/`
+leaves only `completion/build.rs` and `vt/src/parser/parser_tests.rs`, both unrelated).
+
+### The two previously failing tests, traced by hand on a host where `\` is an ordinary character
+
+- `custom_shell_is_named_after_its_program` — `Path::new("C:\\Program Files\\Git\\bin\\bash.exe")`
+  gives that same string back from `to_str`, then `rsplit` on `/` **or** `\` (a plain `char`
+  predicate, not a platform separator table) yields `"bash.exe"` first, whose last four bytes are
+  `.exe`, so the label is `"bash"`. Asserted `"bash"`. The `/usr/bin/fish` case yields `"fish"` the
+  same way, and `None` still gives `"Terminal"`. Passes on Linux.
+- `an_explicit_program_wins_over_the_kinds_name` — `"C:\\tools\\nu.exe"` has last component
+  `"nu.exe"`, so the label is `"nu"`. Asserted `"nu"`. `"/usr/bin/fish"` gives `"fish"`; `(Cmd,
+  None)` gives the kind's `"Command Prompt"`. Passes on Linux.
+
+Under the old `Path::file_stem`, a Windows-style path on Linux has exactly one component, so the
+"stem" was the whole string minus a final `.exe` — `"C:\Program Files\Git\bin\bash"` and
+`"C:\tools\nu"`, which is exactly what the CI log shows. The diagnosis in the packet is correct.
+
+### Edge cases (run, not reasoned: the function was copied verbatim into a standalone `rustc` probe)
+
+| program | result |
+| --- | --- |
+| `C:\tools\nu.EXE` | `Some("nu")` — the strip is `eq_ignore_ascii_case` |
+| `nu.exe.exe` | `Some("nu.exe")` — one `.exe` only, as documented |
+| `./bash` | `Some("bash")` |
+| `\` (and `/`) | `None`, so the kind's display name names the tab |
+| `\\server\share\pwsh.exe` | `Some("pwsh")` — a UNC path needs no special case |
+| a three-character CJK component, with a directory prefix | returned whole |
+| the same component plus `.exe` | the `.exe` comes off (the cut at `len-4` is on a boundary here) |
+| a two-character CJK component (6 bytes, `len-4 = 2`, **not** a char boundary) | returned whole, no panic |
+| an emoji component, with and without `.exe` | handled both ways |
+| `C:\foo\bar.exe\` | `None` — a trailing separator wins, as intended |
+
+**`.get(len-4..)` cannot panic on a non-char boundary: confirmed.** `str::get` returns `None`
+rather than panicking when the index splits a code point (unlike the `&last[..]` sugar), so the
+match arm falls to `_ => last` and the whole component is kept. The 6-byte two-character CJK case
+above exercises that path for real. The only indexing sugar left, `&last[..last.len() - 4]`, runs
+only inside the arm that has already proved bytes `len-4..` are the ASCII `.exe`, so `len-4` is a
+boundary there by construction.
+
+### Dropping "strip every extension": acceptable
+
+`file_stem` removed whatever followed the last dot; the new rule removes only `.exe`. For a tab
+label that is the better rule, not merely a tolerable regression: `/usr/bin/python3.11` used to
+read `python3` — a label naming a different interpreter than the one running — and a Unix shell
+with a dotted name (`bash.static`, `zsh-5.9`) lost a meaningful suffix. What is given up is that
+`foo.bat` and `foo.cmd` now keep their extension. That is the correct trade: `.exe` is noise on
+every Windows program, while `.bat` / `.cmd` / `.ps1` distinguish one wrapper script from another
+and are worth showing in a 100-220 px tab. No acceptance criterion in `US-0114` names an extension
+other than `.exe`.
+
+### Docs and packet
+
+- `docs/gui-layout.md:104` — the old clause said "a custom shell is named after its program's file
+  stem", which was wrong twice over (the program wins for *every* kind since the earlier rework,
+  and "file stem" is the mechanism that just broke). The replacement states the rule and its
+  OS-independence in one clause and moves nothing else in that paragraph. Accurate.
+- The packet's "Acceptance rework 2026-09-18" section is dated, cites the CI job and both failing
+  assertions, names the cause at `tab_title.rs:89-90`, gives the table, and — usefully — records
+  that `trim_path_title` was checked for the same assumption and does not have it. Re-verified:
+  `trim_path_title` (`:126-141`) splits with its own `|c| c == '\\' || c == '/'` and detects a
+  drive letter by bytes, never touching `Path`, and `trim_path_title_helper_directly` (`:799-805`)
+  asserts both styles. The claim is true. The `Reopened (acceptance rework)` status box is ticked.
+
+### Checks re-run here
+
+- `cargo test -p oneterm-terminal-view --lib` — **352 passed**, 0 failed, 3 ignored. The diff adds
+  exactly one `#[test]`, so the packet's "351 before" is consistent.
+- **Mutation.** Narrowing the split to `|c| c == '/'` — the Linux behaviour of `file_stem` in
+  miniature — fails three tests, not one: the new table test
+  (`a_program_name_is_read_the_same_way_on_every_os`, at the `C:\Program Files\Git\bin\bash.exe`
+  row) and both tests CI failed, with the identical strings `"C:\\Program Files\\Git\\bin\\bash"`
+  and `"C:\\tools\\nu"`. So the table test has teeth, and the mutation reproduces the reported CI
+  failure exactly. Restored; `git status` clean before commit.
+- `python scripts/check-english.py` — passed, 962 files. `python scripts/check-doc-paths.py` —
+  passed, 202 paths in 11 documents.
+- `cargo clippy -p oneterm-terminal-view --all-targets -- -D warnings` — clean.
+
+### Nits
+
+- **`N-1` — a dead fallback.** `rsplit(...).next()` on a `str` always yields at least one item
+  (the empty string for an empty input), so the `.unwrap_or(program)` at `tab_title.rs:92` can
+  never run. Harmless, but it implies a `None` case that does not exist.
+- **`N-2` — `..exe` labels a tab `"."`.** Only a hand-edited settings file produces such a
+  program, and a one-character tab is not a defect worth a branch; recorded so the next reader
+  does not think it was missed.
+- **`N-3` — `.exe` is stripped here but kept by `trim_path_title`.** A tab named from its
+  `program` reads `cmd`, while a tab named from a live OSC 0/2 title that happens to be a path
+  reads `cmd.exe` (`trim_path_title_helper_directly:800` asserts exactly that). Pre-existing, out
+  of this rework's scope, and arguably right — an OSC title is the shell's own words — but the two
+  surfaces do disagree about the same program.
+- **`N-4` — the doc comment's "whatever the host OS thinks" reads as the opposite of what it
+  means.** The point is that the host OS does *not* get a say; the sentence can be read as
+  deferring to it. "on every OS, whatever that OS's own separator is" would not wobble.
+- **`N-5` — the label is not length-guarded.** `program_display_name` returns the component
+  whole, so a 200-character program name becomes a 200-character label. The tab's 100-220 px
+  ellipsis handles it visually, so this is only a note that no truncation happens in this layer.
+
+### Gaps in this verification
+
+- `pwsh scripts/ci-local.ps1` was **not** re-run (no full gate, on instruction), so the packet's
+  "all checks passed" line is taken from the implementer. Only the five checks listed above were
+  executed here, all on Windows.
+- Nothing was executed on Linux. The Linux claims rest on the hand trace, on the function being
+  `str`-only, and on the mutation run reproducing the CI strings on this host — strong, but not the
+  same as a green ubuntu job. The CI run on the pushed branch is the direct proof.
+- No GUI walk: no frame in `evidence/` shows a tab labelled from a `program` on either OS.

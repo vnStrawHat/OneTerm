@@ -13,7 +13,7 @@ Created: 2026-09-17
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -317,6 +317,59 @@ standing:
   nushell in a tab reading "Command Prompt" — the same untruth `F1` is about. `shell_tab_title`
   now prefers the program's file stem for **every** kind and falls back to the kind's name only
   when no program is set. New test: `an_explicit_program_wins_over_the_kinds_name`.
+
+### Acceptance rework 2026-09-18
+
+The owner's push turned the CI job **"Full workspace quality gate" (ubuntu)** red, with two
+of this packet's own tests failing on Linux only (the Windows job was green):
+
+```
+panel::tab_title::tests::an_explicit_program_wins_over_the_kinds_name
+  left: "C:\\tools\\nu"   right: "nu"     (tab_title.rs:645)
+panel::tab_title::tests::custom_shell_is_named_after_its_program
+  left: "C:\\Program Files\\Git\\bin\\bash"   right: "bash"   (tab_title.rs:626)
+```
+
+**Cause.** `shell_tab_title` derived the label with `std::path::Path::file_stem`
+(`tab_title.rs:89-90`). `Path` is host-OS-flavoured: on Linux `\` is not a separator, so a
+Windows-style program path has exactly one component and the "file stem" is the whole path,
+directories and all. The two tests use Windows-style paths — the paths a Windows user's
+settings actually hold — so they passed on the Windows runner and failed on ubuntu. The tests
+were right; the function was wrong on one of the two OSes the app ships on.
+
+**Fix (at the root, not in the tests).** A new pure `program_display_name(&str) -> Option<&str>`
+takes the last component after either `/` **or** `\`, whatever the host OS thinks, then strips
+one trailing `.exe` case-insensitively and only that (`file_stem` stripped *any* last extension,
+so `/usr/bin/python3.11` came out `python3`). An empty result — a trailing separator, an empty
+program, a bare `.exe` — is `None` and falls back to the kind's display name, i.e. the behaviour
+`shell_tab_title` already had for "no program". Its own table test
+(`a_program_name_is_read_the_same_way_on_every_os`) covers both separator styles in one table,
+so it runs identically on every OS:
+
+| program | label |
+|---|---|
+| `bash`, `cmd`, `nu` | `bash`, `cmd`, `nu` |
+| `pwsh.exe`, `PWSH.EXE` | `pwsh`, `PWSH` |
+| `C:\Program Files\Git\bin\bash.exe` | `bash` |
+| `C:\tools\nu` | `nu` |
+| `/usr/local/bin/fish`, `/opt/shells/pwsh.exe` | `fish`, `pwsh` |
+| `/usr/bin/python3.11` | `python3.11` (only `.exe` comes off) |
+| `C:\tools\`, `/usr/bin/`, `.exe`, an empty program | fall back to the kind's name |
+
+The two failing tests are unchanged and now pass on Linux by construction.
+
+**`trim_path_title` checked for the same assumption: it does not have it.** It splits on
+`|c| c == '\\' || c == '/'` by hand and recognises a drive letter by bytes, never touching
+`Path`, so it already reads both styles on every OS (`trim_path_title_helper_directly` asserts
+both). No change.
+
+**Docs.** `docs/gui-layout.md`'s tab-label sentence described the mechanism as "its program's
+file stem", so it now says what the code does: the last path component with a trailing `.exe`
+removed and nothing else, with both separators recognised on every OS. Nothing else in the
+packet's contract moved.
+
+**Checks.** `cargo test -p oneterm-terminal-view --lib` — 352 passed, 0 failed (351 before, plus
+the new table test). `pwsh scripts/ci-local.ps1` — "ci-local: all checks passed".
 
 ### Gaps
 
