@@ -257,8 +257,291 @@ secondary text" is a restatement of what "primary" means, not a new position.
 
 ## Evidence and Gaps
 
-Pending the rework's re-proof.
+All numbers below are the **reworked** check (the one on this branch). Where the first
+revision of this packet reported something different, the difference is named.
+
+### What the extended check finds on `main`, before any theme was edited
+
+| | before (`main`) | after | first revision |
+|---|---|---|---|
+| foreground/surface pairings | 1365 | 1365 | 1248 |
+| token/variant rows | 351 | 351 | 273 |
+| primary/secondary comparisons | 585 | 585 | 507 |
+| rows below 4.5:1 | **6** | 0 | 0 |
+| inverted comparisons | **42** (in 12 rows) | 0 | 37, reported as "10" |
+
+The three additions the rework makes are +117 pairings (39 variants x 3: `foreground` on
+`tab_bar.background`, plus the two new tokens), +78 rows and +78 comparisons. They are what
+turns 0 rows below the floor into 6, and 10 reported rows into 12.
+
+The six below the floor:
+
+```
+ayu.json:         Ayu Light (light):        accent.foreground    on accent.background    4.13:1
+everforest.json:  Everforest Light (light): accent.foreground    on accent.background    4.21:1
+everforest.json:  Everforest Light (light): secondary.foreground on secondary.background 4.43:1
+everforest.json:  Everforest Dark (dark):   secondary.foreground on secondary.background 3.62:1
+solarized.json:   Solarized Light (light):  foreground           on tab_bar.background   4.39:1
+tokyonight.json:  Tokyo Moon (dark):        secondary.foreground on secondary.background 4.26:1
+```
+
+The twelve inverted rows, worst surface first, with how many of that pair's shared surfaces
+are inverted:
+
+```
+Ayu Light         foreground            background            6.10 <= 6.80  (11 surfaces)
+Ayu Light         popover.foreground    popover.background    4.88 <= 5.91  (1)
+Ayu Light         sidebar.foreground    sidebar.background    5.76 <= 6.43  (1)
+Ayu Light         tab.active.foreground tab.active.background 5.62 <= 6.80  (1)
+Ayu Light         accent.foreground     accent.background     4.13 <= 5.00  (1)
+Everforest Light  foreground            background            5.18 <= 5.55  (11 surfaces)
+Everforest Light  popover.foreground    popover.background    5.18 <= 5.55  (1)
+Everforest Light  sidebar.foreground    sidebar.background    5.03 <= 5.39  (1)
+Everforest Light  tab.active.foreground tab.active.background 5.18 <= 5.55  (1)
+Everforest Light  accent.foreground     accent.background     4.21 <= 4.51  (1)
+Solarized Light   foreground            background            4.99 <= 5.71  (11 surfaces)
+Solarized Light   sidebar.foreground    sidebar.background    4.77 <= 5.45  (1)
+```
+
+11 + 1 + 1 + 1 + 1 = 15 comparisons per variant; 42 of the 585 were inverted. The first
+revision printed the *row* count (10) on a line that named comparisons (507) -- two different
+units side by side. `inversions()` now returns the per-row count and every caller reports both.
+
+**Alduin was not flagged.** The report listed it as "close" at 5.65; that is `foreground` on
+the title and status strips against `muted.foreground`'s 5.05 there -- correct order, 0.6 of
+headroom. **Ayu Light was flagged**, inverted on all five of its pairs; the report listed it as
+"close" rather than failing. Both stand from the first revision.
+
+**Solarized Light's `foreground` really was below the floor**, at 4.39:1 on
+`tab_bar.background` -- the surface the first revision excluded. See Context; the correction is
+carried into `evidence/before-after-report.md` §4.2.
+
+### Changed values -- twelve keys, six distinct colours, five variants, four files
+
+Every move is lightness-only: the light variants darken their text, the two dark variants
+lighten it. Max hue drift **0.29 deg**, max saturation drift **0.28 pp**, both the 8-bit
+rounding of a pure lightness step. **No secondary token was touched.**
+
+| variant | key(s) | before | after | HSL before -> after |
+|---|---|---|---|---|
+| Solarized Light | `foreground` | `#586E75` | `#4B5E64` | h194.5 s14.1% l40.2% -> h194.4 s14.3% l34.3% |
+| Everforest Light | `foreground`, `popover.foreground`, `tab.active.foreground`, `accent.foreground`, `secondary.foreground` | `#5F6D75` | `#546067` | h201.8 s10.4% l41.6% -> h202.1 s10.2% l36.7% |
+| Ayu Light | `foreground` | `#5c6166` | `#4E5256` | h210.0 s5.2% l38.0% -> h210.0 s4.9% l32.2% |
+| Ayu Light | `popover.foreground`, `tab.active.foreground`, `accent.foreground` | `#5C6773` | `#4B545E` | h211.3 s11.1% l40.6% -> h211.6 s11.2% l33.1% |
+| Everforest Dark | `secondary.foreground` | `#849087` | `#A9B1AB` | h135.0 s5.1% l54.1% -> h135.0 s4.9% l67.8% |
+| Tokyo Moon | `secondary.foreground` | `#8c94b5` | `#9BA2BF` | h228.3 s21.7% l62.9% -> h228.3 s22.0% l67.8% |
+
+Where a variant spelled one colour in several keys, all of them move together, so no theme
+gains a near-duplicate: Everforest Light's five keys were all `#5F6D75`, and Ayu Light's three
+were all `#5C6773`. Ayu Light's `#5C6773` group is one 8-bit step darker than the first
+revision's `#4C555F`, which is what its `accent.foreground` needed to keep half a ratio point
+over `muted.foreground` on a hovered menu row.
+
+Everforest Light's `accent.foreground` and `secondary.foreground` were the two values the first
+revision left at `#5F6D75` and filed as "unmodelled"; they are now part of the same group.
+
+#### Per-surface ratios, before -> after
+
+`muted.foreground` is unchanged throughout and is shown wherever the hierarchy rule applies.
+Only the tokens that moved are listed; every other token in every other variant is untouched.
+
+**Solarized Light**
+
+| token | surface | before | after | `muted.foreground` |
+|---|---|---|---|---|
+| `foreground` | `background` | 4.99 | **6.31** | 5.71 |
+| `foreground` | `popover.background` | 4.99 | **6.31** | 5.71 |
+| `foreground` | `title_bar.background` | 4.57 | **5.78** | 5.22 |
+| `foreground` | `status_bar.background` | 4.57 | **5.78** | 5.22 |
+| `foreground` | `tab_bar.background` | 4.39 | **5.56** | 5.02 |
+| `foreground` | `list.background` | 4.99 | **6.31** | 5.71 |
+| `foreground` | `list.even.background` | 4.63 | **5.85** | 5.29 |
+| `foreground` | `list.hover.background` | 4.53 | **5.73** | 5.18 |
+| `foreground` | `table.background` | 4.99 | **6.31** | 5.71 |
+| `foreground` | `table.even.background` | 4.63 | **5.85** | 5.29 |
+| `foreground` | `table.hover.background` | 4.53 | **5.73** | 5.18 |
+| `foreground` | `table.head.background` | 4.99 | **6.31** | -- |
+| `sidebar.foreground` | `sidebar.background` | 4.77 | **6.03** | 5.45 |
+
+**Everforest Light**
+
+| token | surface | before | after | `muted.foreground` |
+|---|---|---|---|---|
+| `foreground` | `background` | 5.18 | **6.28** | 5.55 |
+| `foreground` | `popover.background` | 5.18 | **6.28** | 5.55 |
+| `foreground` | `title_bar.background` | 4.89 | **5.92** | 5.24 |
+| `foreground` | `status_bar.background` | 4.89 | **5.92** | 5.24 |
+| `foreground` | `tab_bar.background` | 4.71 | **5.71** | 5.05 |
+| `foreground` | `list.background` | 5.18 | **6.28** | 5.55 |
+| `foreground` | `list.even.background` | 4.71 | **5.71** | 5.05 |
+| `foreground` | `list.hover.background` | 4.59 | **5.55** | 4.91 |
+| `foreground` | `table.background` | 5.18 | **6.28** | 5.55 |
+| `foreground` | `table.even.background` | 4.71 | **5.71** | 5.05 |
+| `foreground` | `table.hover.background` | 4.59 | **5.55** | 4.91 |
+| `foreground` | `table.head.background` | 4.71 | **5.71** | -- |
+| `sidebar.foreground` | `sidebar.background` | 5.03 | **6.09** | 5.39 |
+| `popover.foreground` | `popover.background` | 5.18 | **6.28** | 5.55 |
+| `tab.active.foreground` | `tab.active.background` | 5.18 | **6.28** | 5.55 |
+| `accent.foreground` | `accent.background` | 4.21 | **5.10** | 4.51 |
+| `secondary.foreground` | `secondary.background` | 4.43 | **5.37** | -- |
+
+**Ayu Light**
+
+| token | surface | before | after | `muted.foreground` |
+|---|---|---|---|---|
+| `foreground` | `background` | 6.10 | **7.68** | 6.80 |
+| `foreground` | `popover.background` | 5.30 | **6.67** | 5.91 |
+| `foreground` | `title_bar.background` | 5.30 | **6.67** | 5.91 |
+| `foreground` | `status_bar.background` | 5.30 | **6.67** | 5.91 |
+| `foreground` | `tab_bar.background` | 5.69 | **7.17** | 6.35 |
+| `foreground` | `list.background` | 6.10 | **7.68** | 6.80 |
+| `foreground` | `list.even.background` | 5.01 | **6.31** | 5.59 |
+| `foreground` | `list.hover.background` | 5.09 | **6.41** | 5.68 |
+| `foreground` | `table.background` | 6.10 | **7.68** | 6.80 |
+| `foreground` | `table.even.background` | 5.01 | **6.31** | 5.59 |
+| `foreground` | `table.hover.background` | 5.09 | **6.41** | 5.68 |
+| `foreground` | `table.head.background` | 5.85 | **7.37** | -- |
+| `sidebar.foreground` | `sidebar.background` | 5.76 | **7.26** | 6.43 |
+| `popover.foreground` | `popover.background` | 4.88 | **6.52** | 5.91 |
+| `tab.active.foreground` | `tab.active.background` | 5.62 | **7.50** | 6.80 |
+| `accent.foreground` | `accent.background` | 4.13 | **5.51** | 5.00 |
+
+**Everforest Dark**
+
+| token | surface | before | after | `muted.foreground` |
+|---|---|---|---|---|
+| `secondary.foreground` | `secondary.background` | 3.62 | **5.48** | -- |
+
+**Tokyo Moon**
+
+| token | surface | before | after | `muted.foreground` |
+|---|---|---|---|---|
+| `secondary.foreground` | `secondary.background` | 4.26 | **5.05** | -- |
+
+Nothing that already cleared both rules moved: the other 34 variants are untouched, and the
+row count is 351 before and after, so no token was dropped from the check to make it pass.
+
+### Commands
+
+```
+python scripts/check-theme-contrast.py --self-test
+    check-theme-contrast: self-test passed
+
+python scripts/check-theme-contrast.py
+    check-theme-contrast: 1365 foreground/surface pairings across 351 token/variant rows,
+    all >= 4.5:1; primary text out-reads muted.foreground on all 585 shared-surface comparisons
+    (exit 0)
+
+python scripts/check-theme-contrast.py --report | tail -3
+    351 measurements, 0 below 4.5:1
+    585 primary/muted.foreground comparisons, 0 inverted across 0 token/variant row(s)
+
+# Negative 1 (hierarchy AND floor) -- Solarized Light's old foreground #586E75 put back.
+# With `tab_bar.background` measured, this now trips both rules, which is the whole point
+# of the rework: the first revision's model let it trip only the hierarchy rule.
+python scripts/check-theme-contrast.py            # exit 1
+    solarized.json: Solarized Light (light): foreground on tab_bar.background is 4.39:1
+    solarized.json: Solarized Light (light): on background foreground is 4.99:1 but
+      muted.foreground is 5.71:1 -- secondary text out-reads primary (11 of its surface(s))
+    solarized.json: Solarized Light (light): on sidebar.background sidebar.foreground is
+      4.77:1 but muted.foreground is 5.45:1 -- secondary text out-reads primary (1 of its
+      surface(s))
+    check-theme-contrast: 1 token(s) below the 4.5:1 floor
+    check-theme-contrast: 12 comparison(s) in 2 token/variant row(s) where muted.foreground
+      reads at least as strongly as the primary token beside it
+
+# Negative 2 (floor) -- Zed One Dark foreground dimmed to #4a4a4a. Full transcript this
+# time: the first revision's quoted block omitted the hierarchy line the same run prints.
+python scripts/check-theme-contrast.py            # exit 1
+    zed-one-dark.json: Zed One Dark (dark): foreground on list.hover.background is 1.47:1
+    zed-one-dark.json: Zed One Dark (dark): on popover.background foreground is 1.80:1 but
+      muted.foreground is 6.14:1 -- secondary text out-reads primary (11 of its surface(s))
+    check-theme-contrast: 1 token(s) below the 4.5:1 floor
+    check-theme-contrast: 11 comparison(s) in 1 token/variant row(s) where muted.foreground
+      reads at least as strongly as the primary token beside it
+
+cargo test -p oneterm-theme                       # exit 0, every edited JSON still loads
+pwsh scripts/ci-local.ps1                         # CARGO_BUILD_JOBS=4
+    ci-local: all checks passed.
+```
+
+Both negatives were reverted immediately; the working tree holds only the intended values.
+
+### GUI walk
+
+Two builds of `cargo build -p oneterm-app --profile fast-dev` from this worktree: the after
+state, and a before state with only `crates/theme/themes/` reverted to the pre-fix commit.
+Each run launched one process, found its own window by `EnumWindows` +
+`GetWindowThreadProcessId` filtered on its own pid, sized it to 1400x900, captured it with
+`PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)` -- the desktop is locked, as it was for the
+whole round -- and closed that pid. No window was addressed by name or title and no process
+was closed by image name. The theme was selected by writing `theme_name` into the walk's own
+`target/ui_config.json` before launch; the rest of the state is the round's `cfgbak/`, so the
+session tree holds the same `DevServer` and `PAM` entries. Both after frames were re-taken on
+the reworked palette.
+
+Ratios are recomputed from the PNG pixels: the script locates every pixel equal to the token
+colour inside the named region and reads the fill beside the glyphs, so both the colour and
+**the surface** are measured rather than assumed -- which is exactly what the first revision
+got wrong when it reported the dock header against the window body.
+
+| frame | text run | glyph px | surface px | surface is | ratio |
+|---|---|---|---|---|---|
+| `US-0127-before-solarized-light.png` | `DevServer` session name (primary) | `#586e75` | `#fdf6e3` | `background` | 4.99:1 |
+| `US-0127-before-solarized-light.png` | `root@192.168.13.128:22` (secondary) | `#576464` | `#fdf6e3` | `background` | **5.71:1 -- louder** |
+| `US-0127-before-solarized-light.png` | `Session` dock header (primary) | `#586e75` | `#eee8d5` | `tab_bar.background` | **4.39:1 -- below the floor** |
+| `US-0127-solarized-light.png` | `DevServer` session name (primary) | `#4b5e64` | `#fdf6e3` | `background` | **6.31:1** |
+| `US-0127-solarized-light.png` | `root@192.168.13.128:22` (secondary) | `#576464` | `#fdf6e3` | `background` | 5.71:1 |
+| `US-0127-solarized-light.png` | `Session` dock header (primary) | `#4b5e64` | `#eee8d5` | `tab_bar.background` | **5.56:1** |
+| `US-0127-before-everforest-light.png` | `DevServer` session name (primary) | `#5f6d75` | `#fefcee` | `background` | 5.18:1 |
+| `US-0127-before-everforest-light.png` | `root@192.168.13.128:22` (secondary) | `#62676a` | `#fefcee` | `background` | **5.55:1 -- louder** |
+| `US-0127-before-everforest-light.png` | `Session` dock header (primary) | `#5f6d75` | `#f4f1e2` | `tab_bar.background` | 4.71:1 |
+| `US-0127-everforest-light.png` | `DevServer` session name (primary) | `#546067` | `#fefcee` | `background` | **6.28:1** |
+| `US-0127-everforest-light.png` | `root@192.168.13.128:22` (secondary) | `#62676a` | `#fefcee` | `background` | 5.55:1 |
+| `US-0127-everforest-light.png` | `Session` dock header (primary) | `#546067` | `#f4f1e2` | `tab_bar.background` | **5.71:1** |
+
+`#eee8d5` and `#f4f1e2` are those themes' `tab_bar.background` values, read from the JSON, so
+the dock header is `foreground` on the tab strip and nothing else. Every figure matches the
+per-surface tables above to 0.01.
+
+The Everforest after frame also shows the two newly raised button tokens: `#5f6d75` (the old
+`accent.foreground` / `secondary.foreground`) occurs 980 times in the before frame and **0**
+times in the after frame, where `#546067` occurs 973 times.
+
+### Gaps
+
+- **`muted.background` carries no primary-text row.** The key-binding chip's text is the
+  secondary token; the check records that in a comment rather than a measurement. Every other
+  surface `muted.foreground` is drawn on now has a primary token measured against it too.
+- **`button.*` tokens are only reached through their fallbacks.** `button.secondary.background`
+  and `button.secondary.foreground` fall back to the `secondary.*` pair this packet measures,
+  and 38 of the 39 variants take that fallback -- but the one variant that sets them
+  (`macos-classic.json`) has its button colours unmeasured, as do `button.primary.*`,
+  `button.danger.*` and the rest. A theme that overrides them can still ship an illegible
+  button.
+- **`secondary.foreground` has no OneTerm call site of its own.** Its draw sites are the kit's
+  `Secondary` button and tag; the surface is listed because the values are the theme's, not
+  because a OneTerm component was found painting that exact pair. If the kit stops using it,
+  the row becomes decoration.
+- **`sidebar.foreground`'s group headings are drawn at 70 % opacity** (kit
+  `sidebar/group.rs:69`); the check measures the token at full opacity, so a heading's real
+  ratio is lower than the row reports. Modelling per-call-site opacity would need a fourth
+  mechanism beside `PARENTS`, `FALLBACKS` and gradient stops.
+- **The floor rule has no end-to-end fixture.** The self-test's below-floor case asserts on
+  `measure` directly while the hierarchy cases go through `inversions()`; nothing exercises
+  `rows()` -> `failures` on a fixture, so a wiring mistake between the two would only be caught
+  by a real theme going bad. Raised by the independent verification as TRIVIAL 9 and left
+  standing.
+- **No hover, selection, menu or multi-tab state was driven in the walk** -- posted messages
+  cannot deliver a real hover -- so the `list.hover`, `table.hover`, `popover`, `accent`,
+  `secondary` and `tab.active` rows are computed, not photographed. The frames do photograph
+  the `background` and `tab_bar.background` rows.
+- **Windows only**, as the whole round was.
+- **`evidence/US-0127-verify.md` describes the first revision**, not this one. It is kept as
+  written; its MAJOR 1, MAJOR 2, MEDIUM 3, MINOR 4, MINOR 5, MINOR 6 and MINOR 7 are all acted
+  on here, TRIVIAL 7 is folded into the negative-test transcript above, and TRIVIAL 9 is the
+  gap immediately above. No second independent verification of the rework has been run.
 
 ## Handoff
 
-In rework.
+None. The work is complete on `fix/primary-text-contrast-floor`; nothing is left in flight.
