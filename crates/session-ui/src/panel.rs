@@ -8,8 +8,9 @@
 //!   then by label within the group).
 //! - Double-click a session item → open the SSH connect dialog.
 //! - Right-click the blank area below the list → "New Session" context menu.
-//! - Right-click a session item → context menu: Open, Properties, New Session,
-//!   Delete (destructive, behind a separator, and confirmed).
+//! - Right-click a session item → context menu: Open, Properties, Duplicate
+//!   Saved Session, Move to Group ▸, New Session, Delete (destructive, behind a
+//!   separator, and confirmed).
 //! - Right-click a group folder → context menu: Rename Group…, New Session.
 //! - The "+" in the "Session" header → the same dialog as "New Session".
 //! - "New Session" / "Properties" → open a dialog (see [`super::session_dialog`]).
@@ -210,7 +211,7 @@ impl SessionPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        open_session_dialog(window, cx, None);
+        open_session_dialog(window, cx, None, false);
     }
 
     /// Resolve the id of the currently selected session in the tree.
@@ -257,7 +258,7 @@ impl SessionPanel {
     ) {
         if let Some(id) = self.selected_session_id(cx) {
             if let Some(s) = self.store.read(cx).get(id).cloned() {
-                open_session_dialog(window, cx, Some((id, s)));
+                open_session_dialog(window, cx, Some((id, s)), false);
             }
         }
     }
@@ -307,7 +308,7 @@ impl Panel for SessionPanel {
                 .ghost()
                 .tab_stop(false)
                 .tooltip("New Session")
-                .on_click(|_, window, cx| open_session_dialog(window, cx, None)),
+                .on_click(|_, window, cx| open_session_dialog(window, cx, None, false)),
         )
     }
 }

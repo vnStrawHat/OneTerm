@@ -245,7 +245,11 @@ one says what it copies. For the same reason the submenu reads **Move to Group**
 
 ### Commands
 
-- `cargo test -p oneterm-session-ui` — 88 passed, 0 failed.
+- `cargo test -p oneterm-session-ui` — 76 passed, 0 failed (72 before this packet, plus
+  `copy_label_numbers_only_the_candidates_already_in_use`,
+  `duplicate_copies_every_field_next_to_its_source`, `set_group_moves_exactly_one_session`;
+  `tree_render::tests` gained `duplicate_and_move_to_group_join_the_session_block` and its two
+  existing tests were widened to the new row table).
 - `pwsh scripts/ci-local.ps1` — "ci-local: all checks passed".
 
 ### Evidence frames
@@ -254,19 +258,25 @@ Walked against a seeded `target/ssh_session.json` (two ungrouped sessions, an `i
 two), in the worktree's own `target/` config directory, driving only the walk's own pid.
 
 - `evidence/US-0129-01-session-context-menu.png` — Open / Properties / Duplicate Saved Session /
-  Move to Group / — / New Session / — / Delete.
-- `evidence/US-0129-02-move-to-group-submenu.png` — the submenu: `No group`, `infra`,
-  separator, `New group…`.
-- `evidence/US-0129-03-duplicate-and-properties.png` — `DevServer (copy)` in the tree with the
-  Edit SSH Session dialog open on it.
-- `evidence/US-0129-04-moved-into-group.png` — `Staging` now inside the `infra` folder.
+  Move to Group ▸ / — / New Session / — / Delete, Delete still in the danger colour.
+- `evidence/US-0129-02-move-to-group-submenu.png` — the submenu open beside its row: `No group`
+  **checked** (the right-clicked `DevServer` has none), `infra`, a separator, `New group…`.
+- `evidence/US-0129-04-moved-into-group.png` — after clicking `infra` in that submenu,
+  `DevServer` is inside the `infra` folder and gone from the root, and `target/ssh_session.json`
+  shows `"group": "infra"` on id 1 with `schema_version` still 2 and no new field.
+- `evidence/US-0129-03-duplicate-and-properties.png` — `Duplicate Saved Session` on `Staging`:
+  `Staging (copy)` in the tree directly under `Staging`, with **Edit SSH Session** open on the
+  copy carrying host `10.0.0.12`, port `2222`, username `deploy` and the source's colour. No
+  connect dialog, no tab.
+- `evidence/US-0129-05-new-group-focuses-the-field.png` — `Move to Group ▸ New group…` on
+  `Staging`: the dialog opens with the focus ring on the **Group** combobox and on nothing
+  else.
 
 ### Gaps
 
 - **The deferred focus into the Group field is proved by a frame, not by an assertion.** Focus
-  is not queryable from a unit test here, and the walk's posted messages cannot show a caret
-  the way a real cursor would; the frame shows the dialog open with the combobox in its focused
-  state.
+  is not queryable from a unit test here; the frame shows the dialog open with the focus ring
+  on the combobox and on nothing else, which is as far as a `PrintWindow` capture goes.
 - **No frame of the `(copy 2)` step.** The rule is unit-tested including that step; the walk
   duplicated once, because a second duplicate proves nothing the test does not.
 - **The copy's position in `ssh_session.json` is proved by the unit test, not by the walk.**

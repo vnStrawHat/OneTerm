@@ -51,7 +51,7 @@ pub fn saved_ssh_sessions(cx: &App) -> oneterm_state::commands::SavedSshSessionS
 /// the same reason `saved_ssh_sessions` does: the reverse crate edge is a cycle
 /// (`US-0114`).
 pub fn open_new_saved_session_dialog(window: &mut Window, cx: &mut App) {
-    session_dialog::open_session_dialog(window, cx, None);
+    session_dialog::open_session_dialog(window, cx, None, false);
 }
 
 /// `WorkspaceCommands::open_saved_ssh_session` — open the connect dialog for a

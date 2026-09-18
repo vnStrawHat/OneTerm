@@ -98,7 +98,7 @@ recorded.
 | F21 | Unlabelled colour square opening a 130-swatch palette | `US-0120` | fixed | A labelled eight-swatch row with `Custom...` for the full picker, whose own featured row is now the same eight. The swatches are not tab stops; the picker beside them is the keyboard route (`US-0120` Gaps). | [before](../research/before/54-session-color-picker.png) / [after](after/54-session-color-picker.png) |
 | F22 | Enter does not create a typed group; the no-match area is a bare icon | `US-0118` | fixed | Enter creates the group and closes the dropdown; the no-match area reads "No groups yet. Type a name to create one." Enter with a match already highlighted is deliberately unchanged (`US-0118` Gaps). | [before](../research/before/56-group-typed.png) / [after](after/56-group-typed.png) |
 | F23 | Group disclosure uses the diagonal maximise arrow | `US-0119` | fixed | A chevron. | [before](../research/before/57-session-tree-with-group.png) / [after](after/57-session-tree-with-group.png) |
-| F24 | Global New Session in the top slot; Delete unseparated and unstyled; "Property" | `US-0119` | partly fixed | Open / Properties / separator / New Session / separator / Delete, with Delete in the danger colour and a confirmation. **Duplicate and Move to Group are still absent**, declined in `US-0119` Gaps as new capabilities needing their own packets. | [before](../research/before/10-session-context-menu.png) / [after](after/10-session-context-menu.png) |
+| F24 | Global New Session in the top slot; Delete unseparated and unstyled; "Property" | `US-0119`, `US-0129` | partly fixed at the round's close; closed by `US-0129` | Open / Properties / separator / New Session / separator / Delete, with Delete in the danger colour and a confirmation. Duplicate and Move to Group, absent when this row was written and declined in `US-0119` Gaps as new capabilities, are **delivered by `US-0129`** (owner request of 2026-09-18): the menu now reads Open / Properties / Duplicate Saved Session / Move to Group ▸ / separator / New Session / separator / Delete. | [before](../research/before/10-session-context-menu.png) / [after](after/10-session-context-menu.png) |
 | F25 | Empty-Space placeholder never mentions New Terminal Here; no shell picker | `US-0115` | partly fixed | The placeholder leads with "Right-click -> New Terminal Here". The **shell picker is deliberately not added**: a decision recorded in `US-0115` keeps the empty Space's menu spawning the default shell. | [before](../research/before/07-split-right-empty-space.png) / [after](after/07-split-right-empty-space.png) |
 | F26 | The active Space is marked by a single 1-pixel line | `US-0117` | fixed | A 2 px accent ring on the active Space and a small `#N` chip on each inactive one. The chip's tooltip reads the raw session title rather than the tab label (`US-0117` Gaps, deliberate: routing it through the tab label would re-open a double-lease class of bug). | [before](../research/before/09-split-two-terminals.png) / [after](after/09-split-two-terminals.png) |
 | F27 | Status bar collapses to the clock in an empty Space | -- | observation, not packeted | Unchanged, as `IN-0042` set out: the walkthrough recorded it with no proposal, and `docs/gui-layout.md` documents the behaviour as intended. | [before](../research/before/07-split-right-empty-space.png) / [after](after/07-split-right-empty-space.png) |
@@ -117,7 +117,9 @@ recorded decision rather than an omission.
 All six findings the walkthrough marked **high** -- `F1`, `F2`, `F6`, `F7`, `F9`, `F14` -- were
 taken: five are fixed and `F14` is partly fixed, with the upstream mechanism named. The eight
 partial rows are `F11`, `F13`, `F14`, `F15`, `F24`, `F25`, `F32`, `F34`; the two observations are
-`F27` and `F33`.
+`F27` and `F33`. (That tally is the round as it closed and is left as the record of the walk;
+`F24` was closed afterwards by `US-0129`, which delivered the Duplicate and Move to Group rows
+`US-0119` had declined.)
 
 ---
 
@@ -278,13 +280,14 @@ opened.
 | `BUG-0068` | Records no gaps of its own. |
 | `BUG-0069` | Two `sftp-ui` sites (`render.rs:276`, `edit.rs:588`) still clip; `CONTROL_LABEL_LINE_HEIGHT = 1.5` is pinned by no test; glyph paint is not queryable, so the proof is a pixel-row measurement. |
 | `US-0118` | A match on screen with no row highlighted still ignores Enter (deliberate); a host-key failure on a retried connect has no dialog left, only the toast; the duplicate-with-jump-chain path was closed by reading the call graph, not by walking it. |
-| `US-0119` | Duplicate and Move to Group are absent; header crowding at a narrow dock width was not captured; the `row_was_right_clicked` flag remains a `bool` rather than a counter. |
+| `US-0119` | Duplicate and Move to Group were absent -- **closed by `US-0129`**, which adds both rows; header crowding at a narrow dock width was not captured; the `row_was_right_clicked` flag remains a `bool` rather than a counter. |
 | `US-0120` | The four SFTP `FormDialog` dialogs were not captured; the port-forward list was not walked with the wheel; the colour swatches are not tab stops; the 260 px chrome cap is a constant, not a measurement. |
 | `US-0121` | The kit cannot open a dropdown scrolled to its checked row, so ordering is the mechanism; the first Down-arrow still highlights the heading; the list reorders between opens; Network is a one-group page; `F32`'s capture-replaces-the-row symptom is untouched. |
 | `US-0122` | The upstream scroll defect is untouched and the split routes around it; twelve pages is more sidebar than six and it overflows when several are expanded; the page budget is walked, not asserted; the `P16` page wrapper was not built, and that is now a choice. |
 | `US-0123` | The release-notes clause is the round's one explicitly **NOT MET** acceptance line -- `.github/workflows/release.yml` builds notes from commit subjects, so the rendered notes name no keystroke; override-vs-override collisions are not handled; a collision resolution becomes a persisted unbind; `F1`'s cost (4.4). |
 | `US-0124` | Upload overwrites without asking (4.5); menu items are never greyed out; the "one list" invariant is structural, not tested; the `...` menu's height is estimated; the column-resize drag could not be driven from the implementer's session and has no after-frame; everything ran against the loopback server. |
 | `US-0125` | The header's appearance is proven by screenshots, not assertions; the populated frame was produced by hand-emitting the sequence, not by a real agent; a link out of the application was declined. |
+| `US-0129` | The deferred focus into the Group field is proven by a frame, not an assertion; the `(copy 2)` step and the copy's position in `ssh_session.json` are unit-tested but not walked; the submenu creates no group of its own, handing that to the dialog. |
 
 ### 4.7 Method limits this walk inherits
 
