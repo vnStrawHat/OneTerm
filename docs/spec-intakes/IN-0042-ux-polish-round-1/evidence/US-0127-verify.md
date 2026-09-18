@@ -382,3 +382,215 @@ pwsh scripts/ci-local.ps1
   the compositing itself was not compared against a rendered pixel for every surface; only the
   six frame regions above were checked against real pixels.
 - Windows only.
+
+---
+
+# Re-verification of `045b8f34` — 2026-09-18
+
+Same verifier, same method: own WCAG function, own fallback/parent resolution, frames
+re-measured from the PNG pixels with PIL. Target `fix/primary-text-contrast-floor` @
+`045b8f34`, three commits on `30eddd5b` (the FAIL above). Scope: the nine findings and the
+numbers the rework claims — not a fresh audit of what the first pass already confirmed.
+
+## Verdict
+
+**PASS.** Every finding is fixed, correctly and at the root rather than at the symptom. The
+rework did not stop at adding the one surface the FAIL named: measuring `accent.background`
+and `secondary.background` too turned up **five more values below the floor** that neither
+`US-0111`, `US-0127`'s first revision nor my own first pass had counted, in two themes the
+round had never touched. Every number the packet quotes re-derives exactly, the frames were
+re-taken and now photograph the pair the argument turns on, and the gate passes.
+
+## Per-finding status
+
+| # | Finding (from the FAIL above) | Status |
+|---|---|---|
+| 1 | MAJOR — `foreground` on `tab_bar.background` drawn and unmeasured | **Fixed** |
+| 2 | MAJOR — the report of record states a false correction | **Fixed** |
+| 3 | MEDIUM — button/menu foregrounds below the floor, filed as unmodelled | **Fixed, and wider than I reported** |
+| 4 | MINOR — "comparisons inverted" mixes units | **Fixed** |
+| 5 | MINOR — five `FALLBACKS` citations off by one | **Fixed** |
+| 6 | MINOR — `title_bar.rs:73`, `tab_title.rs:245` off by a few lines | **Fixed** |
+| 7 | MINOR — both `ci-local` comments describe a secondary-only check | **Fixed** |
+| 8 | TRIVIAL — negative test 2's transcript trimmed | **Fixed** |
+| 9 | TRIVIAL — the floor rule has no end-to-end fixture | **Open, disclosed** |
+
+### 1 — `tab_bar.background` — fixed
+
+`scripts/check-theme-contrast.py:104` adds `"tab_bar.background"` to `SURFACES["foreground"]`,
+and `:62-71` carries the citation asked for: kit `dock/tab_panel.rs:356-425`, the
+`when_some(title_style, …)` at `:380-382`, and `Panel::title_style` defaulting to `None` at
+`dock/panel.rs:87-89`. All three re-read and exact — `:380` is the `when_some`, `:381` the
+`bg`/`text_color` pair, `:382` its close; `render_title`'s body ends at `:425`; `panel.rs:88`
+is the bare `None`. The "deliberately absent" note (`:91-97`) no longer lists the strip, and
+the entry it keeps for `accent.background` now says "measured under that token" rather than
+implying the surface is unchecked. The comment also states the thing that caused the error —
+that one surface can carry two tokens, the strip carrying both a dock header's `foreground`
+and an inactive tab's `tab.foreground`.
+
+### 2 — the records — fixed
+
+- `evidence/before-after-report.md:236-246`: the two ratios are now "**confirmed real**",
+  attributed to `foreground` on `tab_bar.background`, with the kit citations, the measured
+  `#586e75` on `#eee8d5` = 4.39:1 and `#5f6d75` on `#f4f1e2` = 4.71:1, their 5.56 / 5.71
+  after, and an explicit note that an earlier revision claimed the opposite and that the
+  independent verification caught it. The section heading is again accurate.
+- The Ayu-Light-is-a-third-variant and Alduin-is-not-inverted facts survive as *extensions*
+  (`:248-258`) rather than as corrections, which is the right classification: both re-derived
+  here and both hold.
+- `docs/gui-layout.md:169-175` names the tab strip among `foreground`'s surfaces with the
+  header explanation; `:188-193` replaces "a number about nothing" with the correct rule and
+  adds the line that matters most for the next reader: "Declaring a surface out of scope is
+  the one move this table cannot make safely — an omission reads exactly like a pair that was
+  never drawn."
+- The GUI table (`US-0127-…md:488-502`) gains a **surface** column and the corrected pair:
+  `Session` dock header 4.39 → 5.56 (Solarized) and 4.71 → 5.71 (Everforest), with the
+  `DevServer` / `root@…` rows still labelled `background`. The on-background pair is intact
+  and correctly labelled; the two claims are no longer conflated.
+- `AGENTS.md:71` lists all six primary tokens.
+
+### 3 — button and menu foregrounds — fixed, and the fix found more than I did
+
+`accent.foreground` on `accent.background` and `secondary.foreground` on
+`secondary.background` are now `SURFACES` rows (`:127-144`), with draw sites: kit
+`menu/menu_item.rs:115-120` for the accent pair (verified, exactly those six lines), and for
+the secondary pair the fallback chain `button.secondary.background → secondary.background`
+(kit `theme/schema.rs:828`) and `button.secondary.foreground → secondary.foreground`
+(`:830-832`), plus a secondary `Tag` (`tag.rs:30` fill, `tag.rs:78` text) — all four re-read
+and exact. `FALLBACKS` gains `accent.foreground → foreground` (`schema.rs:904`) and
+`secondary.foreground → foreground` (`schema.rs:819`), both verified. `accent.foreground` is
+in `HIERARCHY` (`:220`) because the shortcut hint on the same row is `muted.foreground`;
+`secondary.foreground` is not, and the comment gives the correct reason — `muted.foreground`
+has no `secondary.background` surface, so the pair would never fire.
+
+The honest result is that my MEDIUM 3 understated it as much as the packet had. Measured over
+`main`, the two new rows are below the floor in **five** places, not the three I found:
+
+| variant | token | before | after |
+|---|---|---|---|
+| Ayu Light | `accent.foreground` | 4.13 | 5.51 |
+| Everforest Light | `accent.foreground` | 4.21 | 5.10 |
+| Everforest Light | `secondary.foreground` | 4.43 | 5.37 |
+| **Everforest Dark** | `secondary.foreground` | **3.62** | 5.48 |
+| **Tokyo Moon** | `secondary.foreground` | 4.26 | 5.05 |
+
+Everforest Dark at 3.62:1 is the worst value in the whole round and neither `US-0111` nor my
+first pass measured it. All five are fixed.
+
+### 4-8 — the minors — fixed
+
+- **4.** `inversions()` now returns a per-pair `count` of inverted surfaces (`:400-422`), and
+  both the report footer (`:534-537`) and the stderr summary (`:555-560`) print comparisons
+  *and* rows in the right units. `--report` prints `585 primary/muted.foreground comparisons,
+  0 inverted across 0 token/variant row(s)`. The self-test gained an assertion that the counts
+  sum to every shared surface of every pair (`:481-483`).
+- **5.** All five citations corrected — `title_bar.background` 1011, `table.hover.background`
+  1009, `tab_bar.background` 998, `tab.background` 995, `tab.active.background` 996. Re-read
+  against `schema.rs`: all five now right, and the previously-correct ones (970, 984, 997,
+  1000, 1006, 1013) untouched.
+- **6.** `title_bar.rs:77` is `.child(self.app_menu_bar.clone())` and `tab_title.rs:244` is
+  `tab_title_label()`. Both correct now.
+- **7.** `scripts/ci-local.ps1:145-151` and `scripts/ci-local.sh:112-118` both name
+  `US-0111` + `US-0127`, all six primary tokens and both rules.
+- **8.** The negative-2 block (`US-0127-…md:452-460`) now quotes the full transcript including
+  the hierarchy line, and says why it changed.
+
+### 9 — the floor fixture — still open, and disclosed
+
+The self-test's below-floor case still asserts on `measure` directly rather than through
+`rows()` → `failures`. The packet records it verbatim as a standing gap. Reasonable call:
+closing it means a fixture path through `rows()`, which reads the themes directory. Left
+as-is.
+
+## Numbers re-derived independently
+
+Own WCAG function; "before" read out of `main` (`b64b70bc`) with `git show`, so nothing was
+hand-transcribed.
+
+| | packet | independent |
+|---|---|---|
+| variants | 39 | 39 |
+| pairings | 1365 | 1365 (39 × 35) |
+| rows | 351 | 351 (39 × 9) |
+| comparisons | 585 | 585 (39 × 15) |
+| before: rows below 4.5:1 | 6 | 6 — the five above plus Solarized Light `foreground` on `tab_bar.background` 4.39 |
+| before: inverted | 42 comparisons / 12 rows | 42 / 12 |
+| after: below / inverted | 0 / 0 | 0 / 0 |
+
+The twelve before-state inversion rows match one for one, including the three
+`foreground`-on-`background` rows that each carry 11 inverted surfaces (the tab strip is the
+eleventh now) and the two new `accent.foreground` rows (Ayu Light 4.13 vs 5.00, Everforest
+Light 4.21 vs 4.51).
+
+**Twelve keys, six colours, five variants, four files** — confirmed against
+`git diff b64b70bc 045b8f34 -- crates/theme/themes/`: exactly twelve changed lines, no more.
+HSL recomputed for all six moves: **max hue drift 0.29°, max saturation drift 0.28 pp**,
+lightness −7.45 to −4.90 pp in the four light variants and +13.73 / +4.90 pp in Everforest
+Dark and Tokyo Moon. Lightness-only holds, in both directions.
+
+## Frames
+
+The two after frames were re-taken; the before frames are byte-identical, correctly — nothing
+about the before state changed.
+
+| frame | region | glyph | surface | ratio |
+|---|---|---|---|---|
+| `US-0127-before-solarized-light.png` | `Session` dock header | `#586e75` | `#eee8d5` | **4.39:1** |
+| `US-0127-solarized-light.png` | same | `#4b5e64` | `#eee8d5` | **5.56:1** |
+| `US-0127-before-everforest-light.png` | same | `#5f6d75` | `#f4f1e2` | **4.71:1** |
+| `US-0127-everforest-light.png` | same | `#546067` | `#f4f1e2` | **5.71:1** |
+
+Measured by taking the two modal colours of the header region and running my own contrast
+function over them — the claimed figures to the digit. `#5f6d75` is **absent from the
+Everforest after frame** (0 pixels, against 160 in the first revision's frame): the
+`accent.foreground` / `secondary.foreground` group moved with the rest, so the old value
+survives nowhere in the window. Solarized's after frame still holds 308 pixels of `#586e75`,
+which is `list.active.background` — a 154 × 2 fill, not text, and unchanged from the first
+revision.
+
+## Commands
+
+```
+git reset --hard 045b8f34
+python scripts/check-theme-contrast.py
+    check-theme-contrast: 1365 foreground/surface pairings across 351 token/variant rows,
+    all >= 4.5:1; primary text out-reads muted.foreground on all 585 shared-surface
+    comparisons                                              exit 0
+python scripts/check-theme-contrast.py --self-test           exit 0
+python scripts/check-theme-contrast.py --report | tail -3
+    351 measurements, 0 below 4.5:1
+    585 primary/muted.foreground comparisons, 0 inverted across 0 token/variant row(s)
+
+# Negative 1 -- Solarized Light's old #586E75 put back; now trips BOTH rules
+python scripts/check-theme-contrast.py                       exit 1
+    solarized.json: Solarized Light (light): foreground on tab_bar.background is 4.39:1
+    ... on background foreground is 4.99:1 but muted.foreground is 5.71:1 (11 of its surface(s))
+    ... on sidebar.background sidebar.foreground is 4.77:1 but muted.foreground is 5.45:1 (1 ...)
+    check-theme-contrast: 1 token(s) below the 4.5:1 floor
+    check-theme-contrast: 12 comparison(s) in 2 token/variant row(s) ...
+    -- matches the packet's quoted block exactly; reverted, tree clean
+
+<scratch>/indep2.py    own re-derivation, after and before (before via `git show b64b70bc:`)
+<scratch>/hsl2.py      HSL drift of all six moves + the after ratios of the five new failures
+<scratch>/frames2.py   token histograms and header-region ratios for all four frames
+
+cargo test -p oneterm-theme                                  exit 0, 2 passed
+pwsh scripts/ci-local.ps1                                    exit 0
+    ci-local: all checks passed.
+```
+
+## Gaps in this re-verification
+
+- Scoped to the nine findings and the rework's own numbers. The parts the first pass confirmed
+  (the maths, the alpha/gradient handling, the twelve original draw-site citations) were not
+  re-audited; only what the rework touched.
+- Still no GUI walk here: the header attribution rests on the committed frames plus the kit
+  source. The rework's frames strengthen it — the pair is now photographed, in two themes,
+  before and after — but a hovered menu row, a `Secondary` button and a tag are still computed
+  rather than captured, so the two new `SURFACES` rows are unphotographed.
+- `secondary.foreground` has no OneTerm call site, only the kit's fallback chain and `Tag`. The
+  packet says so plainly. The chain was confirmed here, but no OneTerm screen that paints a
+  `Secondary` button was found, so that row is a contract about the theme rather than an
+  observed pair.
+- The kit reference is read from the main checkout; line numbers move if the pin moves.
+- Windows only.
