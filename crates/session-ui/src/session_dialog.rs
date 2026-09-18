@@ -18,8 +18,9 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Role,
-    SharedString, StatefulInteractiveElement as _, Styled, Window, div, px,
+    App, AppContext, Focusable as _, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, Role, SharedString, StatefulInteractiveElement as _, Styled, Window, div,
+    px,
 };
 use gpui_component::{
     ActiveTheme, Colorize as _, Icon, IconName, IndexPath, Sizable as _, WindowExt as _,
@@ -38,7 +39,7 @@ use oneterm_state::form_dialog::{FieldRequirement, FormDialog, control_label, la
 use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
-use super::common::parse_port;
+use super::common::{defer_initial_focus_once, parse_port};
 use super::forward_rows::PortForwardRows;
 use super::group_combo::{GroupComboDelegate, MatchCount, SharedCell, group_combobox};
 use super::jump_hops::JumpHostPicker;
@@ -112,8 +113,10 @@ fn non_empty(text: String) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// The distinct, trimmed, sorted group names in use — the combobox choices.
-fn existing_group_names(sessions: &[SshSessionEntry]) -> Vec<SharedString> {
+/// The distinct, trimmed, sorted group names in use — the combobox choices, and
+/// the rows of the tree menu's "Move to Group" submenu (`US-0129`), so the two
+/// surfaces cannot offer different groups.
+pub(crate) fn existing_group_names(sessions: &[SshSessionEntry]) -> Vec<SharedString> {
     let mut groups: Vec<String> = sessions
         .iter()
         .filter_map(|entry| entry.session.group.as_ref().map(|g| g.trim().to_string()))
@@ -303,10 +306,16 @@ fn logging_radio(
 
 /// Open the dialog to create (when `edit` = `None`) or edit (when `edit` =
 /// `Some((id, session))`) an SSH session.
+///
+/// `focus_group` puts the initial focus in the Group combobox instead of
+/// leaving it where the dialog puts it. Only the tree menu's
+/// "Move to Group ▸ New group…" asks for that (`US-0129`): it is a request to
+/// type a group name, so the caret belongs in the field that takes one.
 pub(crate) fn open_session_dialog(
     window: &mut Window,
     cx: &mut App,
     edit: Option<(SshSessionId, SshSession)>,
+    focus_group: bool,
 ) {
     let is_edit = edit.is_some();
     let edit_id = edit.as_ref().map(|(id, _)| *id);
@@ -539,6 +548,9 @@ pub(crate) fn open_session_dialog(
         }
     };
 
+    // Kept outside the content closure, which takes the combobox by value.
+    let group_focus_state = group_combo_state.clone();
+
     FormDialog::new(
         title,
         move |content, _window, cx| {
@@ -640,6 +652,15 @@ pub(crate) fn open_session_dialog(
     // Wide enough for one port-forward row per line. The body scrolls when it
     // outgrows the window; `FormDialog` owns that now (`US-0120`).
     .width(px(560.))
+    // Focus has to wait until the dialog exists, which is what `on_render` is
+    // for — the same deferred-once helper the connect dialogs use.
+    .on_render({
+        let pending = Rc::new(Cell::new(focus_group));
+        move |window, cx| {
+            let focus = group_focus_state.read(cx).focus_handle(cx);
+            defer_initial_focus_once(&pending, focus, window, cx);
+        }
+    })
     .open(window, cx);
 }
 

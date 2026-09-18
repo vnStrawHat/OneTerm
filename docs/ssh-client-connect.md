@@ -64,7 +64,9 @@ a dialog for the user to enter them.
 
 A session is *created* from the `+` in the right dock's "Session" header, from the context menu
 on the blank area below the list, or from the tree's own "New Session" row — all three open the
-same full session dialog (§6.5).
+same full session dialog (§6.5). Since `US-0129` there is a fourth: **Duplicate Saved Session**
+on a session's own context menu, which writes the copy first and opens that same dialog on it,
+so the user renames a session that already exists instead of filling an empty form.
 
 Since `IN-0033` the same saved sessions are also listed in the centre tab bar's `+` (New
 Terminal) dropdown, and picking one there enters this flow at exactly the same point with the
@@ -950,7 +952,7 @@ The sections above describe how the panel was built. What it offers today:
 | Right-click the blank area below the list | One row, "New Session" — the same dialog. |
 | The empty-list hint | Unchanged: "No SSH session yet. Right-click → New Session." |
 | Double-click a session, or its "Open" row | `open_connect_dialog` for that session. |
-| Right-click a session | `Open`, `Properties`, separator, `New Session`, separator, `Delete`. |
+| Right-click a session | `Open`, `Properties`, `Duplicate Saved Session`, `Move to Group ▸`, separator, `New Session`, separator, `Delete`. |
 | Right-click a group | `Rename Group…`, separator, `New Session`. |
 
 Three rules hold across them:
@@ -965,6 +967,39 @@ Three rules hold across them:
   it takes from the SFTP browser is the **confirmation**: the thing being deleted named in the
   question and a danger confirm button. SFTP's menu *row* is not red; this one is, which is a
   deliberate step further and leaves the two menus differing on that point.
+
+**Duplicate Saved Session and Move to Group (`US-0129`).** Both act on the right-clicked
+session and both are ordinary store writes — `ssh_session.json` stays at `schema_version: 2`
+and gains no field.
+
+- **Duplicate Saved Session** copies the source's `SshSession` whole (`session.clone()`, so a
+  field added later cannot be forgotten), replaces only the label, gives it the next id from
+  `next_session_id` — never the source's, never a reused one — and inserts it immediately after
+  its source in store order. The label is `"<label> (copy)"`, or `"(copy 2)"`, `"(copy 3)"`, …
+  when an earlier candidate is already a label in the store; the rule appends to whatever label
+  it is handed, so duplicating a copy gives `prod (copy) (copy)`. It then opens the Properties
+  dialog on the copy so it can be renamed, and **connects nothing**. The copy is **saved before
+  that dialog opens**, and the dialog's Cancel keeps it: Cancel discards the edits, not the
+  duplicate — which is what makes the row "Duplicate" rather than "New from…". Undoing a
+  duplicate means deleting the copy. The row is not called
+  "Duplicate" because a terminal tab's context menu already has a row by that name
+  (`US-0116`) which reopens a *running* connection through `oneterm_core::SshDuplicateConfig`;
+  the two share no code and no data.
+  Note that the tree sorts alphabetically inside a group, so "immediately after its source" is
+  a statement about `ssh_session.json` and the `+` menu, which follow store order — not about
+  where the copy appears in the right dock.
+- **Move to Group ▸** is a submenu listing `No group`, then the groups already in use
+  (`session_dialog::existing_group_names`, the same list the dialog's Group combobox offers),
+  with the session's current group checked, then `New group…`. Choosing one rewrites that one
+  session's `group` — trimmed, blank meaning ungrouped, the convention `rename_group` and the
+  tree builder already share — and the tree re-sorts. The submenu offers only names that
+  already exist, so it cannot create `Infra` beside `infra`; `New group…` hands that job to the
+  dialog, opened on the session with the initial focus in the Group field (§6.6).
+  The submenu is built when the parent menu is built, so it reads the store at right-click
+  time. It is attached with `PopupMenuItem::submenu` over a `PopupMenu::build` rather than
+  `PopupMenu::submenu`, because `Tree::context_menu` hands its builder a `Context<TreeState>`
+  and not a `Context<PopupMenu>`; the kit supports that path and wires the parent link on the
+  parent menu's next render.
 
 The list container and each tree row both carry a context menu. Both hitboxes are hovered over
 a row and gpui runs the container's handler first, so the container's builder checks a flag the
@@ -1001,6 +1036,13 @@ the **Advanced** disclosure, **Group**, **Logging**.
   writes through the same `ColorPickerState` the picker writes and Save still stores
   `state.value().to_hex()`, so both produce exactly the value `session_color_hex` already
   accepted and the tree and the `+` menu cannot disagree.
+- **Initial focus** is normally left where the dialog puts it. One caller asks for it: the
+  tree menu's "Move to Group ▸ New group…" opens this dialog with `focus_group = true`, which
+  puts the caret in the Group combobox through `FormDialog::on_render` and
+  `common::defer_initial_focus_once` — the same deferred-once helper the connect and
+  quick-connect dialogs use, because focus can only be moved once the dialog exists. That row
+  is a request to type a group name, so the caret belongs in the field that takes one
+  (`US-0129`).
 - **The body scrolls** when it outgrows the window. That belongs to `FormDialog`
   (`crates/state/src/form_dialog.rs`), not to this dialog: the footer sits outside the capped
   box, so Cancel and Save are reachable at any window height, and a form that fits keeps its
