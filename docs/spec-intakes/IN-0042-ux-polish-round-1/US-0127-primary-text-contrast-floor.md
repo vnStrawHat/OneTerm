@@ -13,9 +13,14 @@ Created: 2026-09-18
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
+
+Reopened 2026-09-18 after the independent verification
+(`evidence/US-0127-verify.md`) returned **FAIL**: `foreground` on `tab_bar.background` is a
+pair the application draws and the first revision excluded it, which turned a true §4.2
+finding into a false closure. Reworked and re-proved below.
 
 ## Classification
 
@@ -74,8 +79,9 @@ the discipline this packet has to follow when it adds the primary tokens.
     they still clear the floor; lowering one would be a cheaper way to satisfy the hierarchy
     rule and the wrong one — the complaint is that primary text is too quiet, not that
     secondary text is too loud. **No secondary token was touched.**
-  - Every non-text token: backgrounds, borders, the ANSI palette, `accent.foreground` and
-    `secondary.foreground` (text on a button fill, a surface pair this check does not model).
+  - Every non-text token: backgrounds, borders, the ANSI palette. (`accent.foreground` and
+    `secondary.foreground` *were* out of scope in the first revision and are now in it — the
+    verification showed they were not merely unmeasured but already failing.)
   - Any change to how a component picks a colour. No call site moves; this packet changes
     what the tokens *are*.
   - User-supplied themes, as `US-0111` scoped it. The floor binds what OneTerm ships.
@@ -96,6 +102,16 @@ the discipline this packet has to follow when it adds the primary tokens.
 - [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed.".
 - [x] A GUI frame of the main window in Solarized Light and in Everforest Light, with
       pixel-measured before/after ratios of one primary and one secondary text run on each.
+
+Added by the acceptance rework:
+
+- [x] `foreground` on `tab_bar.background` is measured, with the `render_title` citation, and
+      the record says the two §4.2 ratios were real.
+- [x] `accent.foreground` on `accent.background` and `secondary.foreground` on
+      `secondary.background` are measured, with a draw site each, and every value the check
+      flags there is raised by lightness only.
+- [x] The inverted count is reported in comparisons as well as rows -- the two are different
+      units and the first revision printed one beside the other.
 
 ## Documentation
 
@@ -141,13 +157,17 @@ Docs changed:
   the primary tokens and both rules, and keeps the `SURFACES`-is-the-contract paragraph.
 - `AGENTS.md` §3.4 — the theme bullet names both rules and the primary tokens; §4's gate list
   comment now reads "text >= 4.5:1 in every built-in theme, primary above secondary".
-- `evidence/before-after-report.md` §4.2 — closure line, plus a correction of the two ratios
-  the section quoted (see Evidence: they were measured on a surface the themes do not paint
-  primary text on).
+- `evidence/before-after-report.md` §4.2 — closure line, confirming the two ratios the section
+  quoted as real measurements of `foreground` on `tab_bar.background` and adding the two
+  extensions (a third inverted variant, and five button/menu values below the floor).
 - `docs/spec-intakes/IN-0042-ux-polish-round-1/IN-0042.md` — `US-0127` added to the packet
   list.
 - `evidence/US-0127-solarized-light.png`, `evidence/US-0127-everforest-light.png` and their
   two `US-0127-before-*` counterparts — the GUI proof.
+- `scripts/ci-local.ps1` / `scripts/ci-local.sh` — the comment beside the step still described
+  a secondary-text-only check; it now names both rules and every checked token.
+- `evidence/US-0127-verify.md` — the independent verification that reopened this packet, kept
+  as written. It is a dated record of the first revision, not of this one.
 
 No-change reasons confirmed still valid: `US-0111` and `evidence/US-0111-verify.md` (accepted,
 dated records of work that was correct for its scope), `docs/PROJECT.md`, and the kit schema.
@@ -167,14 +187,28 @@ dated records of work that was correct for its scope), `docs/PROJECT.md`, and th
   `foreground` for the variants that leave it unset. It changed the answer: **Ayu Light's
   `popover.foreground` is a fourth failure** the naive model would have missed, and Ayu Light
   itself is a third failing variant the report did not list.
-- **The tab strip is not a primary-text surface.** An inactive tab label is
-  `tab.foreground`, which `US-0111` already measures on `tab_bar.background`; the active one
-  is `tab.active.foreground` on `tab.active.background`. §4.2's headline numbers (Solarized
-  Light 4.39, Everforest Light 4.71) are `foreground` scored against the strip, where those
-  themes draw `tab.foreground` (`#52646b`, `#5b6971`) instead. Attributed correctly, **no
-  variant's primary text was actually below 4.5:1** — Solarized Light bottomed out at 4.53:1
-  on a hovered row. The defect §4.2 describes is real and is entirely the *hierarchy*: the
-  floor rule alone would never have caught it, which is why rule 2 exists.
+- **The tab strip carries two text tokens, not one, and §4.2's numbers are real.** An
+  inactive tab label is `tab.foreground`, which `US-0111` already measures on
+  `tab_bar.background` — but the **dock panel headers** ("Session", "SFTP Browser") are drawn
+  on the same strip in the plain `foreground`: the kit's `render_title` sets a text colour
+  only `when_some(title_style, …)` (kit `dock/tab_panel.rs:356-425`, the `when_some` at
+  `:380-382`) and `Panel::title_style` defaults to `None` (kit `dock/panel.rs:87-89`), which
+  neither `SessionPanel` nor `SftpPanel` overrides. So §4.2's headline ratios (Solarized Light
+  4.39, Everforest Light 4.71) are `foreground` on `tab_bar.background`, a pair the
+  application really paints, and **Solarized Light's primary text was below the floor**.
+  A first revision of this packet excluded that surface on the reasoning that the strip draws
+  only `tab.foreground`, and wrote the opposite into the report; the independent verification
+  (`evidence/US-0127-verify.md`) caught it from these frames. One surface can carry more than
+  one token, and declaring a pair out of scope is the one move the `SURFACES` table cannot
+  make safely: an omission is indistinguishable from a pair that is never drawn.
+- **Buttons and menu rows have their own text pair, and three variants were below the floor
+  there.** `accent.foreground` on `accent.background` is the label of a hovered or selected
+  menu row (kit `menu/menu_item.rs:115-120` — a site the script already cited for the *other*
+  side of the swap), and `secondary.foreground` on `secondary.background` is a `Secondary`
+  button or tag (kit `theme/schema.rs:828`/`:830-832`, `tag.rs:30`/`:78`). Both fall back to
+  `foreground` (kit `theme/schema.rs:904`, `:819`). A first revision filed these as
+  "unmodelled"; measured, five values across four variants were already below 4.5:1, two of
+  them also inverted against `muted.foreground` on a hovered menu row.
 - Ladder: no new file, no new dependency, no new machinery. The primary tokens are four more
   `SURFACES` rows; the hierarchy rule is a tuple of `(primary, secondary)` pairs and one
   function that walks the intersection of their surface lists. `FALLBACKS`, `PARENTS`,
@@ -223,213 +257,8 @@ secondary text" is a restatement of what "primary" means, not a new position.
 
 ## Evidence and Gaps
 
-### What the extended check found before any theme was edited
-
-| | before | after |
-|---|---|---|
-| foreground/surface pairings | 1248 (546 of them new: the four primary tokens) | 1248 |
-| token/variant rows | 273 (156 new) | 273 |
-| rows below 4.5:1 | **0** | 0 |
-| primary/secondary comparisons | 507 (all new) | 507 |
-| comparisons inverted | **10**, across 3 variants | 0 |
-
-The ten, as the check printed them (`ayu.json` x4, `everforest.json` x4, `solarized.json` x2):
-
-```
-ayu.json: Ayu Light (light): on background foreground is 6.10:1 but muted.foreground is 6.80:1
-ayu.json: Ayu Light (light): on popover.background popover.foreground is 4.88:1 but muted.foreground is 5.91:1
-ayu.json: Ayu Light (light): on sidebar.background sidebar.foreground is 5.76:1 but muted.foreground is 6.43:1
-ayu.json: Ayu Light (light): on tab.active.background tab.active.foreground is 5.62:1 but muted.foreground is 6.80:1
-everforest.json: Everforest Light (light): on background foreground is 5.18:1 but muted.foreground is 5.55:1
-everforest.json: Everforest Light (light): on popover.background popover.foreground is 5.18:1 but muted.foreground is 5.55:1
-everforest.json: Everforest Light (light): on sidebar.background sidebar.foreground is 5.03:1 but muted.foreground is 5.39:1
-everforest.json: Everforest Light (light): on tab.active.background tab.active.foreground is 5.18:1 but muted.foreground is 5.55:1
-solarized.json: Solarized Light (light): on background foreground is 4.99:1 but muted.foreground is 5.71:1
-solarized.json: Solarized Light (light): on sidebar.background sidebar.foreground is 4.77:1 but muted.foreground is 5.45:1
-```
-
-`sidebar.foreground` is unset in all three, so it follows `foreground`; Solarized Light's
-`popover.foreground` and `tab.active.foreground` are `#073642`, far above the floor, and were
-not touched. **Alduin was not flagged** — the report listed it as "close" at 5.65, but that is
-`foreground` on the title and status strips against `muted.foreground`'s 5.05 there: correct
-order, 0.6 of headroom. **Ayu Light was flagged**, at 5.01 on an alternating row and inverted
-on all four of its surfaces; the report had listed it as "close" rather than failing.
-
-### Changed values — six keys, four distinct colours
-
-Every move is lightness-only. Max hue drift **0.3°**, max saturation drift **0.3 pp**, both the
-8-bit rounding of a pure lightness step. **No secondary token was touched.**
-
-| theme | token(s) | before | after | HSL before → after |
-|---|---|---|---|---|
-| Solarized Light | `foreground` | `#586E75` | `#4B5E64` | h194.5 s14.1% l40.2% → h194.4 s14.3% l34.3% |
-| Everforest Light | `foreground`, `popover.foreground`, `tab.active.foreground` | `#5F6D75` | `#546067` | h201.8 s10.4% l41.6% → h202.1 s10.2% l36.7% |
-| Ayu Light | `foreground` | `#5c6166` | `#4E5256` | h210.0 s5.2% l38.0% → h210.0 s4.9% l32.2% |
-| Ayu Light | `popover.foreground`, `tab.active.foreground` | `#5C6773` | `#4C555F` | h211.3 s11.1% l40.6% → h211.6 s11.1% l33.5% |
-
-Everforest Light spelled the same colour in three keys, so all three move together; its
-`accent.foreground` and `secondary.foreground` keep the old `#5F6D75` and are left alone — they
-are text on a button fill, a pair this check does not model.
-
-#### Per-surface ratios, before → after (`muted.foreground` unchanged, shown for the rule)
-
-**Solarized Light** — `foreground`, and `sidebar.background` through the `sidebar.foreground`
-fallback:
-
-| surface | before | after | `muted.foreground` |
-|---|---|---|---|
-| `background` | 4.99 | **6.31** | 5.71 |
-| `popover.background` | 4.99 | **6.31** | 5.71 |
-| `title_bar.background` | 4.57 | **5.78** | 5.22 |
-| `status_bar.background` | 4.57 | **5.78** | 5.22 |
-| `list.background` | 4.99 | **6.31** | 5.71 |
-| `list.even.background` | 4.63 | **5.85** | 5.29 |
-| `list.hover.background` | 4.53 | **5.73** | 5.18 |
-| `table.background` | 4.99 | **6.31** | 5.71 |
-| `table.even.background` | 4.63 | **5.85** | 5.29 |
-| `table.hover.background` | 4.53 | **5.73** | 5.18 |
-| `table.head.background` | 4.99 | **6.31** | — |
-| `sidebar.background` | 4.77 | **6.03** | 5.45 |
-
-**Everforest Light** — `foreground`, plus `popover.foreground` and `tab.active.foreground`,
-which carried the same value:
-
-| surface | before | after | `muted.foreground` |
-|---|---|---|---|
-| `background` | 5.18 | **6.28** | 5.55 |
-| `popover.background` | 5.18 | **6.28** | 5.55 |
-| `title_bar.background` | 4.89 | **5.92** | 5.24 |
-| `status_bar.background` | 4.89 | **5.92** | 5.24 |
-| `list.background` | 5.18 | **6.28** | 5.55 |
-| `list.even.background` | 4.71 | **5.71** | 5.05 |
-| `list.hover.background` | 4.59 | **5.55** | 4.91 |
-| `table.background` | 5.18 | **6.28** | 5.55 |
-| `table.even.background` | 4.71 | **5.71** | 5.05 |
-| `table.hover.background` | 4.59 | **5.55** | 4.91 |
-| `table.head.background` | 4.71 | **5.71** | — |
-| `sidebar.background` | 5.03 | **6.09** | 5.39 |
-| `tab.active.background` | 5.18 | **6.28** | 5.55 |
-
-**Ayu Light** — `foreground`:
-
-| surface | before | after | `muted.foreground` |
-|---|---|---|---|
-| `background` | 6.10 | **7.68** | 6.80 |
-| `popover.background` | 5.30 | **6.67** | 5.91 |
-| `title_bar.background` | 5.30 | **6.67** | 5.91 |
-| `status_bar.background` | 5.30 | **6.67** | 5.91 |
-| `list.background` | 6.10 | **7.68** | 6.80 |
-| `list.even.background` | 5.01 | **6.31** | 5.59 |
-| `list.hover.background` | 5.09 | **6.41** | 5.68 |
-| `table.background` | 6.10 | **7.68** | 6.80 |
-| `table.even.background` | 5.01 | **6.31** | 5.59 |
-| `table.hover.background` | 5.09 | **6.41** | 5.68 |
-| `table.head.background` | 5.85 | **7.37** | — |
-| `sidebar.background` | 5.76 | **7.26** | 6.43 |
-
-**Ayu Light** — `popover.foreground` / `tab.active.foreground`, which override `foreground` and
-so are measured on their own:
-
-| surface | before | after | `muted.foreground` |
-|---|---|---|---|
-| `popover.background` | 4.88 | **6.42** | 5.91 |
-| `tab.active.background` | 5.62 | **7.38** | 6.80 |
-
-Nothing that already cleared both rules moved: the other 36 variants are untouched, and the row
-count is 273 before and after, so no token was dropped from the check to make it pass.
-
-### Commands
-
-```
-python scripts/check-theme-contrast.py --self-test
-    check-theme-contrast: self-test passed
-
-python scripts/check-theme-contrast.py
-    check-theme-contrast: 1248 foreground/surface pairings across 273 token/variant rows,
-    all >= 4.5:1; primary text out-reads muted.foreground on all 507 shared-surface comparisons
-    (exit 0)
-
-python scripts/check-theme-contrast.py --report | tail -4
-    273 measurements, 0 below 4.5:1
-    507 primary/muted.foreground comparisons, 0 inverted
-
-# Negative 1 (hierarchy) -- Solarized Light's old foreground #586E75 put back
-python scripts/check-theme-contrast.py            # exit 1
-    solarized.json: Solarized Light (light): on background foreground is 4.99:1 but
-      muted.foreground is 5.71:1 -- secondary text out-reads primary
-    solarized.json: Solarized Light (light): on sidebar.background sidebar.foreground is
-      4.77:1 but muted.foreground is 5.45:1 -- secondary text out-reads primary
-    check-theme-contrast: 2 case(s) where muted.foreground reads at least as strongly as the
-      primary token beside it
-
-# Negative 2 (floor) -- Zed One Dark foreground dimmed to #4a4a4a
-python scripts/check-theme-contrast.py            # exit 1
-    zed-one-dark.json: Zed One Dark (dark): foreground on list.hover.background is 1.47:1
-    check-theme-contrast: 1 token(s) below the 4.5:1 floor
-
-cargo test -p oneterm-theme                       # exit 0, every edited JSON still loads
-pwsh scripts/ci-local.ps1
-    ci-local: all checks passed.
-```
-
-Both negatives were reverted immediately; the working tree holds only the intended values.
-
-### GUI walk
-
-Two builds of `cargo build -p oneterm-app --profile fast-dev` from this worktree: the after
-state at `f7232072`, and a before state with only `crates/theme/themes/` reverted to the
-pre-fix commit. Each run launched one process, found its own window by `EnumWindows` +
-`GetWindowThreadProcessId` filtered on its own pid, sized it to 1400x900, captured it with
-`PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)` — the desktop is locked, as it was for the whole
-round — and closed that pid. No window was addressed by name or title and no process was closed
-by image name. The theme was selected by writing `theme_name` into the walk's own
-`target/ui_config.json` before launch; the rest of the state is the round's `cfgbak/`, so the
-session tree holds the same `DevServer` and `PAM` entries.
-
-Ratios below are recomputed from the PNG pixels: the script locates every pixel equal to the
-token colour inside the named region and reads the panel colour beside the glyphs, so the
-numbers are measured, not assumed.
-
-| frame | text run | surface px | glyph px | ratio |
-|---|---|---|---|---|
-| `US-0127-before-solarized-light.png` | `DevServer` session name (primary) | `#fdf6e3` | `#586e75` | 4.99:1 |
-| `US-0127-before-solarized-light.png` | `root@192.168.13.128:22` (secondary) | `#fdf6e3` | `#576464` | **5.71:1 — louder** |
-| `US-0127-solarized-light.png` | `DevServer` session name (primary) | `#fdf6e3` | `#4b5e64` | **6.31:1** |
-| `US-0127-solarized-light.png` | `root@192.168.13.128:22` (secondary) | `#fdf6e3` | `#576464` | 5.71:1 |
-| `US-0127-before-everforest-light.png` | `DevServer` session name (primary) | `#fefcee` | `#5f6d75` | 5.18:1 |
-| `US-0127-before-everforest-light.png` | `root@192.168.13.128:22` (secondary) | `#fefcee` | `#62676a` | **5.55:1 — louder** |
-| `US-0127-everforest-light.png` | `DevServer` session name (primary) | `#fefcee` | `#546067` | **6.28:1** |
-| `US-0127-everforest-light.png` | `root@192.168.13.128:22` (secondary) | `#fefcee` | `#62676a` | 5.55:1 |
-
-The `Session` panel title in the same frames measures with the primary token throughout
-(4.99 → 6.31 and 5.18 → 6.28), which is the second primary run asked for. The inversion is
-visible in the before frames and gone in the after ones.
-
-### Gaps
-
-- **`accent.background` and `muted.background` carry no primary-text row.** Reading the kit
-  says primary text is never drawn on them — a hovered or selected menu row swaps to
-  `accent.foreground` (`menu/menu_item.rs:115-120`), and the key-binding chip's text is the
-  secondary token — and the check records that in a comment rather than a measurement. If a
-  component starts drawing a primary token on either, nothing fails until someone adds the
-  surface.
-- **`accent.foreground` / `secondary.foreground` / the `button.*` foregrounds are unmodelled.**
-  Text on a button or badge fill has its own foreground/background pair that neither `US-0111`
-  nor this packet measures; Everforest Light's `accent.foreground` still carries the old
-  `#5F6D75`. Worth its own packet if button labels are ever reported as hard to read.
-- **`sidebar.foreground`'s group headings are drawn at 70 % opacity** (kit
-  `sidebar/group.rs:69`); the check measures the token at full opacity, so a heading's real
-  ratio is lower than the row reports. Modelling per-call-site opacity would need a fourth
-  mechanism beside `PARENTS`, `FALLBACKS` and gradient stops.
-- **No hover or selection state was driven in the walk**, so the `list.hover` / `table.hover`
-  rows above are computed, not photographed — posted messages cannot deliver a real hover
-  (report §4.7). The same limit applies to the popover and active-tab rows: the frames show
-  neither a menu nor a second tab.
-- **Windows only**, as the whole round was.
-- **The floor rule caught nothing here.** Every failure was the hierarchy rule. That is the
-  honest result, and it means §4.2's "below the floor" framing was a surface-attribution
-  artefact, which the report now records.
+Pending the rework's re-proof.
 
 ## Handoff
 
-None. The work is complete on `fix/primary-text-contrast-floor`; nothing is left in flight.
+In rework.
