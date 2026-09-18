@@ -386,11 +386,13 @@ that no `name` width is stored), `toggling_visibility_never_hides_name`,
 - **`US-0113` landed while this packet was in flight**, and `main` was merged in before the walk,
   so the frames are against the real dock width. The flexible-Name rule makes the defaults
   independent of that width anyway, which is why no column default names a dock size.
-- **Uploading onto an existing remote file still overwrites it without asking**, exactly as the
+- ~~**Uploading onto an existing remote file still overwrites it without asking**, exactly as the
   drag-and-drop and menu uploads did before this packet; only the download direction confirms
   (IN-0025). The button makes the existing action visible, it does not change it. Worth its own
   packet; not opened here because it is a change to the transfer mechanism, which this packet
-  puts out of scope.
+  puts out of scope.~~ **Closed 2026-09-18 by `US-0128`**
+  (`US-0128-upload-asks-before-overwriting.md`), which gave the packet this gap asked for:
+  every upload path now confirms through the same helper the download direction uses.
 - **Menu items are never greyed out.** A row menu drops what does not apply to that row (Edit on
   a directory), but an action that needs a selection is still offered with none and reports
   "Select a file or folder to …" when used, rather than being disabled. That is the behaviour the

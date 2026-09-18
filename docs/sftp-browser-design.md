@@ -1044,8 +1044,8 @@ not — it has none of its own).
 | **Select** | Single-click entry | Set `selected` index |
 | **Rename** | Click `✏` / F2 / context menu | Dialog to enter new name → `sftp.rename(from, to)` |
 | **Delete** | Click `🗑` / Delete key | Confirm dialog → `sftp.remove(path)` |
-| **Upload** | Click `⬆` / drag-drop file | File picker → `sftp.upload(local, remote)` → add to transfer queue |
-| **Download** | Click `⬇` / context menu | File picker → `sftp.download(remote, local)` → add to transfer queue |
+| **Upload** | Click `⬆` / drag-drop file | File picker → list the remote cwd → confirm before replacing what is already there (§4.16) → `sftp.upload(local, remote)` → add to transfer queue |
+| **Download** | Click `⬇` / context menu | File picker (or the Local pane's directory, §4.15) → confirm before replacing an existing local file (§4.16) → `sftp.download(remote, local)` → add to transfer queue |
 | **New Folder** | Click `📁` | Dialog to enter name → `sftp.mkdir(path)` |
 | **Properties** | Click `📋` / context menu | `sftp.stat(path)` → detail dialog |
 | **Open** | Double-click file | Download to temp → open local app → (edit → re-upload?) |
@@ -1328,9 +1328,69 @@ disabled while it has none (US-0124 / F30). Transfers between the panes reuse
 `do_upload_paths` (local selection → remote cwd via button, menu, double-click,
 or dragging a row onto the remote list) and
 `download_to` (remote selection → the Local pane's directory, without a save
-dialog, confirming before an existing file is replaced; also the drop target of
-a remote row). `docks.json` `sftp_table_state` carries `expanded` and
-`local_dir`. Design and guards: `docs/spec-intakes/IN-0025-sftp-dual-pane/`.
+dialog; also the drop target of a remote row). Neither direction replaces an
+existing file without asking — see §4.16. `docks.json` `sftp_table_state` carries
+`expanded` and `local_dir`. Design and guards:
+`docs/spec-intakes/IN-0025-sftp-dual-pane/`.
+
+### 4.16. Overwrite confirmation — one decision, both directions (US-0128)
+
+A transfer never writes over a file that is already at its destination without
+the user saying so, and both directions ask the same way. `confirm_replace` in
+`crates/sftp-ui/src/transfer.rs` renders that one dialog: the target named in the
+description, the destructive answer styled `danger`, the keep-what-is-there
+answer neutral, and a callback that fires exactly once — so nothing is
+transferred until the question is answered.
+
+| Direction | What is probed | When it asks |
+|---|---|---|
+| **Download** | `PathBuf::exists()` on the background executor, in `download_entry_to_local` | The Local pane already holds a file of that name. Answers: `Replace` / `Cancel`. |
+| **Upload** | one `read_dir` of the remote cwd, in `do_upload_paths` | The remote directory already holds a name from the batch, **compared case-insensitively**. One collision: `Replace` / `Cancel` (a folder: `Merge` / `Cancel`). Several: one question for the batch, `Replace all` / `Skip`. |
+
+`do_upload_paths` is the single funnel every GUI upload path reaches the backend
+through — the Upload button and its menu/double-click in the Local pane, the
+`SftpUploadFiles` / `SftpUploadFolder` actions and their context-menu entries,
+and both drop targets (external paths, a Local pane row) — so the guard lives
+there once rather than at each entry point.
+
+The batch answers once. `Skip` drops only the colliding files and still uploads
+the rest, which is also why the neutral button reads `Cancel` when skipping would
+leave nothing to upload and `Skip` when it would not — the label is decided from
+what `keep_after_answer` would actually leave, so a name that appears twice in one
+batch does not make the button lie. Repeats are one collision, not two: the same
+upload name is one remote entry.
+
+**Case.** The upload side matches case-insensitively (`collisions` in
+`transfer.rs`). A client cannot know the server's case-folding rule, and on a
+Windows or default-macOS host uploading `case.txt` truncates an existing
+`Case.txt`; a byte-exact comparison saw no collision and asked nothing, which is
+precisely the data-loss path this guard exists to close. An exact match wins over
+a case-only one, and when the two spellings differ the question names the remote
+entry and says the upload "may be the same file on this server", so a user on a
+case-sensitive server can tell the situations apart. The cost is one extra dialog
+where `Keep.txt` and `keep.txt` genuinely coexist.
+
+**Folders.** An existing remote folder is merged into, not emptied first: the
+files inside that collide are overwritten and the rest survive. The dialog says
+that rather than promising a replacement — title `Replace Remote Folder`, and the
+destructive button reads `Merge`.
+
+**What the guard is not.** It is advisory, not atomic: the listing is a snapshot
+taken before the question, so a file created between the answer and the write is
+still overwritten (`finalize_remote_file` renames the staged `.part` over
+whatever is there; it does refuse to replace a remote directory or symlink).
+Closing that would need `SSH_FXF_EXCL` on the staged-file finalize, which the
+backend does not expose. A remote directory that cannot be listed is a
+best-effort miss: the collision is unknown, the upload runs as it did before, and
+the failure is logged at `warn` — failing closed would make it impossible to
+upload into a directory the user may write but not read.
+
+The editor's save path (§4.14) is deliberately not routed through this dialog. It
+writes the user's own edits back to the file they opened, and it already asks a
+different and more precise question — `warn_conflict_then_upload` compares the
+remote mtime against the baseline taken at open and warns only when the file
+moved under the editor.
+
 ---
 
 
