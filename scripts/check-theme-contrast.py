@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""Check that secondary text in the built-in themes clears the WCAG AA contrast floor.
+"""Check that text in the built-in themes clears the WCAG AA contrast floor, in order.
 
 Secondary text (`muted.foreground`, `tab.foreground`, `table.head.foreground`) carries the
 most data-bearing values on a row -- host addresses, SFTP dates, key-binding chips,
-placeholders -- so it has to be readable, not decorative. This script computes the WCAG
-relative-luminance contrast ratio of each secondary foreground token against every surface
-`SURFACES` says it is drawn on, for every variant of every theme in `crates/theme/themes/`,
-and fails when one drops below 4.5:1.
+placeholders -- so it has to be readable, not decorative. Primary text (`foreground`) is
+every label, name and value beside them. This script computes the WCAG relative-luminance
+contrast ratio of each of those tokens against every surface `SURFACES` says it is drawn on,
+for every variant of every theme in `crates/theme/themes/`, and applies two rules:
+
+* **Floor** -- no token drops below 4.5:1 on any of its surfaces.
+* **Hierarchy** -- on every surface both are drawn on, `foreground` reads *more* strongly
+  than `muted.foreground` (`HIERARCHY`). Raising only the secondary token clears the floor
+  and inverts the page: secondary text louder than the primary text beside it is not a
+  readable page, it is a differently broken one (`US-0127`).
 
 `SURFACES` is the whole contract: a foreground paired with a surface the application never
 paints under it proves nothing, and a surface left out of the list is simply not checked.
@@ -37,10 +43,79 @@ THEMES_DIR = REPO_ROOT / "crates" / "theme" / "themes"
 # WCAG 2.1 AA for body text.
 FLOOR = 4.5
 
-# The surfaces each secondary foreground token is composited over in OneTerm, with the line
+# The surfaces each checked foreground token is composited over in OneTerm, with the line
 # that draws the pair. A token that sits on more than one surface must clear the floor on all
 # of them, so the reported ratio is the worst of the set.
 SURFACES: dict[str, tuple[str, ...]] = {
+    # `foreground` -- primary text. Most of it carries no colour of its own: the kit sets the
+    # window's default text colour once (`reference/gpui-kit/crates/component/src/root.rs:593`)
+    # and every label that does not override it inherits that. The distinct surfaces:
+    #   background            the window body under that default, the tab-rename dialog's
+    #                         field label (`crates/terminal-view/src/panel/tab_title.rs:543`)
+    #                         on a dialog whose panel is the body colour (kit
+    #                         `dialog/dialog.rs:574`), and the drag preview of a tab
+    #                         (`crates/terminal-view/src/space/render.rs:46`)
+    #   popover.background    a menu row's label (kit `menu/menu_item.rs:105`) and the
+    #                         completion overlay's own rows, both popover-backed
+    #   title_bar.background  the app menu bar's top-level names: `menu/app_menu_bar.rs` sets
+    #                         no text colour, so they inherit the root's `foreground`
+    #                         (`crates/workspace/src/layout/title_bar.rs:73`)
+    #   status_bar.background a status segment in the `Foreground` tone
+    #                         (`crates/workspace/src/widgets/status_text.rs:42,343`)
+    #   list.background       the session tree's session and group labels
+    #                         (`crates/session-ui/src/tree_render.rs:170`, kit
+    #                         `list/list_item.rs:192`)
+    #   list.even.background  its alternating row
+    #   list.hover.background the hovered *and selected* tree row: `list_item.rs:192` keeps
+    #                         `foreground` while only the fill changes, and OneTerm overrides
+    #                         the selection style to equal hover
+    #                         (`crates/theme/src/theme.rs:69-77`)
+    #   table.background      the SFTP file-name cell
+    #                         (`crates/sftp-ui/src/table_delegate.rs:54`)
+    #   table.even.background its alternating row
+    #   table.hover.background the hovered and selected SFTP row
+    #   table.head.background the local pane's column headers, which unlike the remote
+    #                         table's use the primary colour
+    #                         (`crates/sftp-ui/src/local_pane.rs:276`)
+    #
+    # Deliberately absent, because primary text is not what is drawn there:
+    #   accent.background     a hovered or selected menu row swaps to `accent.foreground`
+    #                         (kit `menu/menu_item.rs:115-120`)
+    #   muted.background      the key-binding chip's text is the secondary token
+    #   sidebar.background / tab.active.background / tab_bar.background
+    #                         each has its own primary token below (or, for the tab strip,
+    #                         the secondary `tab.foreground`), so measuring `foreground`
+    #                         there as well would score a colour the kit does not paint on
+    #                         that surface in the themes that set the more specific token.
+    "foreground": (
+        "background",
+        "popover.background",
+        "title_bar.background",
+        "status_bar.background",
+        "list.background",
+        "list.even.background",
+        "list.hover.background",
+        "table.background",
+        "table.even.background",
+        "table.hover.background",
+        "table.head.background",
+    ),
+    # `popover.foreground` -- primary text on a popover that the kit routes through the more
+    # specific token: a popup menu's title and empty label (kit `menu/popup_menu.rs:1441`),
+    # a tooltip's body (kit `tooltip.rs:115`) and the command palette (kit
+    # `command/state.rs:828`). It falls back to `foreground` (kit `theme/schema.rs:970`), so
+    # this row measures the primary colour in the variants that leave it unset and the
+    # override in the 20 that set it.
+    "popover.foreground": ("popover.background",),
+    # `sidebar.foreground` -- the Settings sidebar's page rows, the only colour drawn on that
+    # surface as primary text (kit `sidebar/mod.rs:414`; group headings use the same value at
+    # 70 % opacity, `sidebar/group.rs:69`). Falls back to `foreground` (kit
+    # `theme/schema.rs:984`), which is what 36 of the 39 variants take.
+    "sidebar.foreground": ("sidebar.background",),
+    # `tab.active.foreground` -- the active tab's label, the strip's primary text (kit
+    # `tab/tab.rs:175`, labelled by `crates/terminal-view/src/panel/tab_title.rs:245`).
+    # Falls back to `foreground` (kit `theme/schema.rs:997`).
+    "tab.active.foreground": ("tab.active.background",),
     # `muted.foreground` -- 21 call sites across the feature crates. The distinct surfaces:
     #   background            the window body and the empty-Space placeholder
     #                         (`crates/terminal-view/src/space/render.rs:233`), and the
@@ -105,6 +180,18 @@ SURFACES: dict[str, tuple[str, ...]] = {
     "table.head.foreground": ("table.head.background",),
 }
 
+# The hierarchy rule, as (primary, secondary) pairs. On every surface both tokens are drawn
+# on -- the intersection of their `SURFACES` entries -- the primary token's ratio must be
+# strictly greater than the secondary's. Equal is a failure too: text that reads exactly as
+# loud as the label beside it has no hierarchy left. `tab.foreground` is not a primary token
+# (an inactive tab label is secondary by design) and so is not compared here.
+HIERARCHY: tuple[tuple[str, str], ...] = (
+    ("foreground", "muted.foreground"),
+    ("popover.foreground", "muted.foreground"),
+    ("sidebar.foreground", "muted.foreground"),
+    ("tab.active.foreground", "muted.foreground"),
+)
+
 # The surface each surface is painted on, so a translucent one is composited over what is
 # actually behind it rather than over the window body. Anything absent sits on `background`.
 PARENTS: dict[str, str] = {
@@ -146,6 +233,9 @@ FALLBACKS: dict[str, str | tuple] = {
     "tab.background": "background",                                      # schema.rs:994
     "tab.active.background": "background",                               # schema.rs:995
     "tab.foreground": "foreground",                                      # schema.rs:1000
+    "tab.active.foreground": "foreground",                               # schema.rs:997
+    "popover.foreground": "foreground",                                  # schema.rs:970
+    "sidebar.foreground": "foreground",                                  # schema.rs:984
     "table.head.foreground": "muted.foreground",                         # schema.rs:1006
     "muted.foreground": ("blend", "muted.background", "foreground", 0.7),  # schema.rs:777-779
 }
@@ -252,19 +342,53 @@ def variants() -> list[tuple[str, str, str, dict[str, str]]]:
     return out
 
 
+def shared_surfaces(primary: str, secondary: str) -> tuple[str, ...]:
+    """The surfaces both tokens are drawn on -- where the hierarchy rule can be applied."""
+    return tuple(bg for bg in SURFACES[primary] if bg in SURFACES[secondary])
+
+
 def pairings() -> int:
     """How many foreground/surface pairs one pass actually measures."""
     return len(variants()) * sum(len(surfaces) for surfaces in SURFACES.values())
 
 
+def comparisons() -> int:
+    """How many primary/secondary surface comparisons one pass makes."""
+    return len(variants()) * sum(len(shared_surfaces(*pair)) for pair in HIERARCHY)
+
+
 def rows() -> list[tuple[str, str, str, str, str, float]]:
-    """(file, variant, mode, fg token, worst surface, worst ratio) for every secondary token."""
+    """(file, variant, mode, fg token, worst surface, worst ratio) for every checked token."""
     out = []
     for file_name, name, mode, colors in variants():
         for fg_token, surfaces in SURFACES.items():
             measured = [(bg, measure(colors, fg_token, bg)) for bg in surfaces]
             bg, ratio = min(measured, key=lambda item: item[1])
             out.append((file_name, name, mode, fg_token, bg, ratio))
+    return out
+
+
+def inversions(
+    only: list[tuple[str, str, str, dict[str, str]]] | None = None,
+) -> list[tuple[str, str, str, str, str, float, float]]:
+    """(file, variant, mode, primary, surface, primary ratio, secondary ratio) failures.
+
+    One row per variant and pair, for the surface with the smallest margin: a primary token
+    that is too quiet is too quiet on every surface it is drawn on, and ten near-identical
+    rows say it ten times.
+    """
+    out = []
+    for file_name, name, mode, colors in variants() if only is None else only:
+        for primary, secondary in HIERARCHY:
+            worst = min(
+                (
+                    (bg, measure(colors, primary, bg), measure(colors, secondary, bg))
+                    for bg in shared_surfaces(primary, secondary)
+                ),
+                key=lambda item: item[1] - item[2],
+            )
+            if worst[1] <= worst[2]:
+                out.append((file_name, name, mode, primary, *worst))
     return out
 
 
@@ -307,6 +431,33 @@ def self_test(quiet: bool = False) -> int:
     assert abs(surface(colors, "sidebar.background")[0][0] - 0.15) < 0.01, "border at 15%"
     assert abs(surface(colors, "list.hover.background")[0][0] - 0.6) < 0.01, "accent at 60%"
     assert abs(stops(colors, "muted.foreground")[0][0] - 0.7) < 0.01, "foreground at 70%"
+    # The floor rule catches primary text that is too quiet. `#8a8a8a` on white is 3.05:1.
+    faint = {"background": "#ffffff", "foreground": "#8a8a8a", "muted.foreground": "#767676",
+             "border": "#000000", "muted.background": "#ffffff", "accent.background": "#767676"}
+    assert measure(faint, "foreground", "background") < FLOOR, "primary below the floor"
+    # The hierarchy rule catches the `US-0127` shape: both tokens clear 4.5:1, but the
+    # secondary one reads more strongly, which is the inversion `US-0111` left behind.
+    for pair in HIERARCHY:
+        assert shared_surfaces(*pair), f"{pair} share no surface, so the rule never fires"
+    inverted = {"background": "#ffffff", "foreground": "#767676", "muted.foreground": "#595959",
+                "border": "#000000", "muted.background": "#ffffff",
+                "accent.background": "#595959"}
+    assert measure(inverted, "foreground", "background") >= FLOOR, "primary clears the floor"
+    assert measure(inverted, "muted.foreground", "background") >= FLOOR, "so does secondary"
+    found = inversions([("fixture.json", "Fixture", "light", inverted)])
+    # Every primary token falls back to `foreground` here, so all four pairs report.
+    assert len(found) == len(HIERARCHY) and all(row[5] < row[6] for row in found), found
+    # ...and passes once the primary is the darker of the two.
+    upright = dict(inverted, foreground="#404040")
+    assert not inversions([("fixture.json", "Fixture", "light", upright)])
+    # Equal is not "above": a tie has no hierarchy left either.
+    tied = dict(inverted, foreground=inverted["muted.foreground"])
+    assert inversions([("fixture.json", "Fixture", "light", tied)]), "a tie is a failure"
+    # A theme that overrides one primary token is judged on the override, not on `foreground`:
+    # the popover row alone fails when only `popover.foreground` is lowered.
+    only_popover = dict(upright, **{"popover.foreground": "#767676"})
+    found = inversions([("fixture.json", "Fixture", "light", only_popover)])
+    assert [row[3] for row in found] == ["popover.foreground"], found
     # A token with no value and no kit fallback is reported, not a traceback.
     try:
         stops({"background": "#000000"}, "muted.foreground")
@@ -331,6 +482,8 @@ def main() -> int:
     self_test(quiet=True)
     measured = rows()
     failures = [row for row in measured if row[5] < FLOOR]
+    inverted = inversions()
+    secondary = HIERARCHY[0][1]
 
     if args.report:
         width = max(len(row[1]) for row in measured)
@@ -338,20 +491,39 @@ def main() -> int:
             mark = "FAIL" if ratio < FLOOR else "ok  "
             print(f"{mark} {name:<{width}} {mode:<5} {fg_token:<22} on {bg_token:<24} {ratio:5.2f}:1")
         print(f"\n{len(measured)} measurements, {len(failures)} below {FLOOR}:1")
+        for file_name, name, mode, fg_token, bg_token, hi, lo in inverted:
+            print(
+                f"INVERTED {name:<{width}} {mode:<5} {fg_token:<22} on {bg_token:<24} "
+                f"{hi:5.2f}:1 <= {lo:5.2f}:1"
+            )
+        print(f"{comparisons()} primary/{secondary} comparisons, {len(inverted)} inverted")
 
-    if failures:
+    if failures or inverted:
         if not args.report:
             for file_name, name, mode, fg_token, bg_token, ratio in failures:
                 print(f"{file_name}: {name} ({mode}): {fg_token} on {bg_token} is {ratio:.2f}:1")
-        print(
-            f"check-theme-contrast: {len(failures)} secondary token(s) below the {FLOOR}:1 floor",
-            file=sys.stderr,
-        )
+            for file_name, name, mode, fg_token, bg_token, hi, lo in inverted:
+                print(
+                    f"{file_name}: {name} ({mode}): on {bg_token} {fg_token} is {hi:.2f}:1 but "
+                    f"{secondary} is {lo:.2f}:1 -- secondary text out-reads primary"
+                )
+        if failures:
+            print(
+                f"check-theme-contrast: {len(failures)} token(s) below the {FLOOR}:1 floor",
+                file=sys.stderr,
+            )
+        if inverted:
+            print(
+                f"check-theme-contrast: {len(inverted)} case(s) where {secondary} reads at "
+                "least as strongly as the primary token beside it",
+                file=sys.stderr,
+            )
         return 1
 
     print(
         f"check-theme-contrast: {pairings()} foreground/surface pairings across "
-        f"{len(measured)} token/variant rows, all >= {FLOOR}:1"
+        f"{len(measured)} token/variant rows, all >= {FLOOR}:1; primary text out-reads "
+        f"{secondary} on all {comparisons()} shared-surface comparisons"
     )
     return 0
 
