@@ -11,7 +11,7 @@ use gpui_component::{
     tree::tree,
 };
 
-use crate::session_state::{SshSession, SshSessionId, SshSessionStore};
+use crate::session_state::{SshSession, SshSessionId, SshSessionStore, normalized_group};
 use oneterm_actions::{DeleteSession, NewSession, OpenSession, SessionProperty};
 
 use super::connect_dialog::open_connect_dialog;
@@ -90,13 +90,34 @@ fn move_to_group_submenu(
     cx: &mut gpui::App,
 ) -> gpui::Entity<PopupMenu> {
     let store = SshSessionStore::global(cx);
+    // Trimmed, because the rows are: `existing_group_names` trims and a
+    // hand-edited `"group": " infra "` would otherwise check nothing at all and
+    // misreport where the session lives. This is also the value the click
+    // writes, so the check and the write agree.
     let current = store
         .read(cx)
         .get(session_id)
-        .and_then(|session| session.group.clone());
+        .and_then(|session| normalized_group(session.group.as_deref()));
     let groups = existing_group_names(store.read(cx).sessions());
 
-    PopupMenu::build(window, cx, move |menu, _window, _cx| {
+    PopupMenu::build(window, cx, move |menu, window, _cx| {
+        // The kit applies its height cap only when `scrollable` is set, and
+        // `item()` never sets it — only its `with_menu_items` builder does. The
+        // group count is user data with no ceiling, so without this the rows
+        // past the window bottom (`New group…` among them, it is last) would be
+        // unreachable by mouse *and* by keyboard. Same estimate and same cap as
+        // the "+" menu and the SFTP overflow menu, for the same reason.
+        //
+        // ponytail: rows are counted, not measured — the popup has no laid-out
+        // bounds while it is being built — so a menu within a row of the cap can
+        // guess wrong by one row.
+        const ROW_HEIGHT: f32 = 28.;
+        const SEPARATOR_HEIGHT: f32 = 9.;
+        // "No group", a row per group, and "New group…", behind one separator.
+        let estimated = px((groups.len() + 2) as f32 * ROW_HEIGHT + SEPARATOR_HEIGHT);
+        let cap = (window.window_bounds().get_bounds().size.height * 0.5).min(px(450.));
+        let menu = menu.scrollable(estimated > cap);
+
         let mut menu = menu.item(
             PopupMenuItem::new(NO_GROUP_ROW_LABEL)
                 .checked(current.is_none())

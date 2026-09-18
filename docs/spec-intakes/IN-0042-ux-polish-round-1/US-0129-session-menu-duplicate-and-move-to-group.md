@@ -242,6 +242,28 @@ one says what it copies. For the same reason the submenu reads **Move to Group**
 - **"New group…"** opens the Properties dialog for that session with the caret in the Group
   combobox. `open_session_dialog` gained a `focus_group: bool`; every other caller passes
   `false`, so nothing else changed its behaviour.
+- **Duplicate saves the copy before the dialog opens, and that dialog's Cancel keeps it.**
+  Cancel discards the edits, not the duplicate — which is what makes the row "Duplicate"
+  rather than "New from…"; undoing one means deleting the copy. Recorded here and in §6.5
+  after the verification found it undocumented (F3).
+
+### After the independent verification (`evidence/US-0129-verify.md`, PASS with findings)
+
+- **F1 — the submenu now scrolls.** `PopupMenu::item()` never turns scrolling on (only the
+  kit's `with_menu_items` builder does), and an unscrollable menu has no height cap at all, so
+  a user with enough groups would have lost the rows past the window bottom — `New group…`
+  among them, since it is last. `move_to_group_submenu` now calls `.scrollable(...)` with the
+  same row estimate and the same cap (half the window, at most 450px) the centre `+` menu and
+  the SFTP overflow menu already use. Frame `US-0129-06`.
+- **F2 — the checked row is computed from the normalized group.** `set_group_in`'s trim rule
+  is now the shared `session_state::normalized_group`, and the submenu checks through it, so a
+  hand-edited `"group": " infra "` checks `infra` instead of checking nothing. Test:
+  `a_padded_stored_group_normalizes_to_the_row_it_should_check`.
+- **F3, F4** — documentation, above and in the frame list.
+- **The `(copy) (copy)` rule stays.** The verifier recommended against stripping a trailing
+  ` (copy N)`: a label is free text, so `prod (copy)` may be a name the user chose, and
+  turning a copy of it into `prod (copy 2)` would state the wrong provenance silently. The
+  Properties dialog opens with the Label field at the top, which is where that is fixed.
 
 ### Commands
 
@@ -262,8 +284,16 @@ two), in the worktree's own `target/` config directory, driving only the walk's 
 - `evidence/US-0129-02-move-to-group-submenu.png` — the submenu open beside its row: `No group`
   **checked** (the right-clicked `DevServer` has none), `infra`, a separator, `New group…`.
 - `evidence/US-0129-04-moved-into-group.png` — after clicking `infra` in that submenu,
-  `DevServer` is inside the `infra` folder and gone from the root, and `target/ssh_session.json`
-  shows `"group": "infra"` on id 1 with `schema_version` still 2 and no new field.
+  `DevServer` is inside the `infra` folder and gone from the root. The frame shows the tree
+  only; that the write landed as `"group": "infra"` on id 1, with `schema_version` still 2 and
+  no new field, was read from `target/ssh_session.json` during the walk and is not visible in
+  the capture (verification F4).
+- `evidence/US-0129-06-thirty-group-submenu.png` — the same submenu against a store seeded with
+  30 groups (verification F1). It stops at the cap — about 445px, ending well inside the 918px
+  window at `group-17` — instead of the ~900px of rows it holds. That cap is the proof the fix
+  is live: the kit applies `max_height` only `when(self.scrollable, …)`, so before this change
+  the popup had **no** height limit at all and the rows past the window bottom, `New group…`
+  among them, were unreachable. The scroll gesture itself is not in the frame; see Gaps.
 - `evidence/US-0129-03-duplicate-and-properties.png` — `Duplicate Saved Session` on `Staging`:
   `Staging (copy)` in the tree directly under `Staging`, with **Edit SSH Session** open on the
   copy carrying host `10.0.0.12`, port `2222`, username `deploy` and the source's colour. No
@@ -282,6 +312,12 @@ two), in the worktree's own `target/` config directory, driving only the walk's 
 - **The copy's position in `ssh_session.json` is proved by the unit test, not by the walk.**
   The tree sorts alphabetically, so the right dock cannot show store order; the `+` menu
   follows store order and would, but it was not captured.
+- **The 30-group submenu's scroll gesture was not driven**, only its height cap captured.
+  Neither a posted `WM_MOUSEWHEEL` (its `lParam` is in screen coordinates, so a posted client
+  point lands outside the popup) nor the arrow keys (they went to the parent menu and closed
+  the submenu) moved it — the method limits `IN-0042` §4.7 already records for this walk. The
+  cap in frame `US-0129-06` is what the fix changes, and the kit source
+  (`popup_menu.rs:1452-1456`) is what ties the cap to `scrollable`.
 - **Move to Group offers no way to create a group in the submenu itself** — `New group…` hands
   off to the dialog. A free-text field inside a popup submenu is a second group-creation
   surface to keep in step with the dialog's, which `US-0118` had just finished making

@@ -553,14 +553,24 @@ fn duplicate_in(
     true
 }
 
-/// Move the session `id` into `group` (trimmed; `None` or blank → ungrouped,
-/// the same convention [`rename_group_in`] and the tree builder use). Returns
-/// whether anything changed.
-fn set_group_in(entries: &mut [SshSessionEntry], id: SshSessionId, group: Option<&str>) -> bool {
-    let group = group
+/// A group name as the store keeps it: trimmed, and `None` when blank — the
+/// convention [`rename_group_in`] and the tree builder already share.
+///
+/// The "Move to Group" submenu checks its rows through this too, so the row it
+/// marks as current is decided by the same rule the click then writes: a
+/// hand-edited `"group": " infra "` checks `infra` rather than nothing
+/// (`US-0129` verification, F2).
+pub(crate) fn normalized_group(group: Option<&str>) -> Option<String> {
+    group
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .map(str::to_string);
+        .map(str::to_string)
+}
+
+/// Move the session `id` into `group` (see [`normalized_group`]). Returns
+/// whether anything changed.
+fn set_group_in(entries: &mut [SshSessionEntry], id: SshSessionId, group: Option<&str>) -> bool {
+    let group = normalized_group(group);
     match entries.iter_mut().find(|entry| entry.id == id) {
         Some(entry) if entry.session.group != group => {
             entry.session.group = group;
@@ -1431,6 +1441,34 @@ mod persistence_tests {
         assert_eq!(entries[1].session.group, None);
 
         assert!(!set_group_in(&mut entries, SshSessionId(99), Some("infra")));
+    }
+
+    /// `US-0129` verification F2: the submenu's checked row and the write it
+    /// performs go through one rule, so a hand-edited `" infra "` checks the
+    /// `infra` row instead of checking nothing at all.
+    #[test]
+    fn a_padded_stored_group_normalizes_to_the_row_it_should_check() {
+        assert_eq!(normalized_group(Some(" infra ")).as_deref(), Some("infra"));
+        assert_eq!(normalized_group(Some("infra")).as_deref(), Some("infra"));
+        assert_eq!(normalized_group(Some("   ")), None);
+        assert_eq!(normalized_group(Some("")), None);
+        assert_eq!(normalized_group(None), None);
+
+        // ...and it is the same rule the click writes, so the checked row and
+        // the stored value cannot disagree.
+        let mut padded = session("web");
+        padded.group = Some(" infra ".into());
+        let mut entries = document(vec![(1, padded)], 2).entries;
+        assert_eq!(
+            normalized_group(entries[0].session.group.as_deref()).as_deref(),
+            Some("infra"),
+            "`infra` is the row the submenu checks, not `No group` and not nothing"
+        );
+        // Clicking that row is still a write, because the stored text differs
+        // from what it means: one click repairs the hand-edited padding.
+        assert!(set_group_in(&mut entries, SshSessionId(1), Some("infra")));
+        assert_eq!(entries[0].session.group.as_deref(), Some("infra"));
+        assert!(!set_group_in(&mut entries, SshSessionId(1), Some("infra")));
     }
 
     #[test]

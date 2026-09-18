@@ -978,7 +978,10 @@ and gains no field.
   its source in store order. The label is `"<label> (copy)"`, or `"(copy 2)"`, `"(copy 3)"`, …
   when an earlier candidate is already a label in the store; the rule appends to whatever label
   it is handed, so duplicating a copy gives `prod (copy) (copy)`. It then opens the Properties
-  dialog on the copy so it can be renamed, and **connects nothing**. The row is not called
+  dialog on the copy so it can be renamed, and **connects nothing**. The copy is **saved before
+  that dialog opens**, and the dialog's Cancel keeps it: Cancel discards the edits, not the
+  duplicate — which is what makes the row "Duplicate" rather than "New from…". Undoing a
+  duplicate means deleting the copy. The row is not called
   "Duplicate" because a terminal tab's context menu already has a row by that name
   (`US-0116`) which reopens a *running* connection through `oneterm_core::SshDuplicateConfig`;
   the two share no code and no data.
