@@ -761,7 +761,7 @@ impl LocalPane {
             return;
         };
         _ = self.panel.update(cx, |panel, cx| {
-            panel.do_upload_paths(vec![entry.path], cx);
+            panel.do_upload_paths(vec![entry.path], window, cx);
         });
     }
 

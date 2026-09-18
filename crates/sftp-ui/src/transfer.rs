@@ -9,8 +9,12 @@
 //! Both directions share [`run_transfer`], which maps `TransferEvent`s and the
 //! final result onto the queue item's status. A cancelled or failed item never
 //! stays `InProgress`, and one failure never aborts the remaining files of a batch.
+//!
+//! They also share one overwrite decision: neither direction replaces a file that
+//! is already there without asking ([`confirm_replace`], US-0128).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{App, AsyncApp, AsyncWindowContext, Context, Entity, ParentElement as _, Window};
@@ -34,6 +38,145 @@ fn notify_dialog_failure(what: &str, error: &dyn std::fmt::Display, cx: &mut Asy
     _ = cx.update(|window, cx| {
         window.push_notification(notify(NotificationType::Error, message, cx), cx);
     });
+}
+
+/// Ask before an existing target is replaced — the one overwrite decision both
+/// transfer directions make (US-0128).
+///
+/// Download calls it before it writes over a local file, upload before it writes
+/// over a remote one, so both show the same dialog: the target named in the
+/// description, the destructive answer styled `danger`, the keep-what-is-there
+/// answer neutral. `answer` runs exactly once — with `true` only when the user
+/// chose to replace — so nothing is transferred until the question is answered.
+pub(crate) fn confirm_replace(
+    title: &'static str,
+    description: String,
+    replace_label: &'static str,
+    keep_label: &'static str,
+    answer: impl Fn(bool, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    // The dialog builder is a `Fn` and both buttons plus the dismiss path can
+    // reach `answer`; the flag keeps the decision to the first one that does.
+    let answered = std::cell::Cell::new(false);
+    let answer = Rc::new(move |replace: bool, window: &mut Window, cx: &mut App| {
+        if !answered.replace(true) {
+            answer(replace, window, cx);
+        }
+    });
+    window.open_alert_dialog(cx, move |alert, _window, _cx| {
+        let keep = answer.clone();
+        let replace = answer.clone();
+        alert
+            .confirm()
+            .title(title)
+            .description(description.clone())
+            .footer(
+                DialogFooter::new()
+                    .child(Button::new("keep").label(keep_label).outline().on_click(
+                        move |_, window, cx| {
+                            window.close_dialog(cx);
+                            keep(false, window, cx);
+                        },
+                    ))
+                    .child(
+                        Button::new("replace")
+                            .label(replace_label)
+                            .danger()
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                replace(true, window, cx);
+                            }),
+                    ),
+            )
+            .button_props(
+                DialogButtonProps::default()
+                    .on_cancel(|_, _, _| true)
+                    .on_ok(|_, _, _| false),
+            )
+    });
+}
+
+/// The name an uploaded path takes in the remote directory.
+fn upload_name(local: &Path) -> String {
+    local
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "uploaded".to_string())
+}
+
+/// The names of `local_paths` that an upload would write over, in batch order.
+///
+/// `existing` is what the remote directory holds right now. An empty result
+/// means the batch can start without asking.
+fn colliding_names(local_paths: &[PathBuf], existing: &[String]) -> Vec<String> {
+    local_paths
+        .iter()
+        .map(|path| upload_name(path))
+        .filter(|name| existing.contains(name))
+        .collect()
+}
+
+/// What is left of the batch once the user has answered: `replace` keeps all of
+/// it, otherwise the colliding files are dropped and the rest still goes up.
+fn keep_after_answer(
+    local_paths: Vec<PathBuf>,
+    colliding: &[String],
+    replace: bool,
+) -> Vec<PathBuf> {
+    if replace {
+        return local_paths;
+    }
+    local_paths
+        .into_iter()
+        .filter(|path| !colliding.contains(&upload_name(path)))
+        .collect()
+}
+
+/// Word the overwrite question for `colliding` out of a batch of `batch_len`:
+/// title, description, the destructive label and the neutral one.
+///
+/// The neutral answer is "Cancel" when skipping leaves nothing to upload and
+/// "Skip" when the rest of the batch still goes up, so the button never claims
+/// to stop more than it stops.
+fn collision_prompt(
+    colliding: &[String],
+    batch_len: usize,
+) -> (&'static str, String, &'static str, &'static str) {
+    let keep_label = if colliding.len() < batch_len {
+        "Skip"
+    } else {
+        "Cancel"
+    };
+    if let [name] = colliding {
+        return (
+            "Replace Remote File",
+            format!("\"{name}\" already exists in the remote folder. Replace it?"),
+            "Replace",
+            keep_label,
+        );
+    }
+    // Long batches name the first few files rather than filling the dialog.
+    const SHOWN: usize = 5;
+    let mut listed = colliding
+        .iter()
+        .take(SHOWN)
+        .map(|name| format!("\"{name}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if colliding.len() > SHOWN {
+        listed.push_str(&format!(", and {} more", colliding.len() - SHOWN));
+    }
+    (
+        "Replace Remote Files",
+        format!(
+            "{} files already exist in the remote folder: {listed}. Replace them?",
+            colliding.len()
+        ),
+        "Replace all",
+        keep_label,
+    )
 }
 
 /// Register a queue item for a transfer that is about to start.
@@ -138,11 +281,18 @@ pub(crate) async fn run_transfer(
 impl SftpPanel {
     /// Upload a list of local paths → remote cwd.
     ///
-    /// Core logic — used by both the file picker (`do_upload`) and drag & drop
-    /// (`on_drop` in render). Uploads each path sequentially, adds a TransferItem,
-    /// drives the transfer, and refreshes when done. A cancelled or failed file
-    /// does not stop the remaining files of the batch.
-    pub(crate) fn do_upload_paths(&mut self, local_paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+    /// Core logic — every GUI upload path reaches the backend through here: the
+    /// file picker (`do_upload`), the Local pane's Upload button, and both drop
+    /// targets (`on_drop` in render). So this is also where the overwrite
+    /// question is asked (US-0128): the remote cwd is listed first, and a batch
+    /// that would write over something already there starts nothing until the
+    /// user answers [`confirm_replace`].
+    pub(crate) fn do_upload_paths(
+        &mut self,
+        local_paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if local_paths.is_empty() {
             return;
         }
@@ -162,43 +312,102 @@ impl SftpPanel {
             local_paths.len()
         );
 
-        let backend_key = sftp.session_id();
-
-        cx.spawn(async move |_panel, cx| {
-            for local_path in local_paths {
-                let filename = local_path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "uploaded".to_string());
-                let remote_path = cwd.join(&filename);
-
-                log::info!(
-                    "SftpPanel: upload \"{}\" → \"{remote_path}\"",
-                    local_path.display()
-                );
-
-                let Some(transfer_id) =
-                    begin_transfer(&panel, TransferDirection::Upload, &filename, cx)
-                else {
-                    return;
-                };
-
-                // Sequential: each file finishes before the next one starts.
-                let handle = sftp.upload(transfer_id as u64, local_path, remote_path);
-                run_transfer(&panel, backend_key, transfer_id, handle, cx).await;
+        cx.spawn_in(window, async move |_panel, cx| {
+            // What is in the remote directory right now decides which of the
+            // batch would be overwritten. A directory we cannot list is a
+            // best-effort miss, not a reason to refuse the upload: it only means
+            // the collision cannot be known, so the batch runs as it always did.
+            let existing: Vec<String> = match sftp.read_dir(cwd.clone()).await {
+                Ok(entries) => entries.into_iter().map(|entry| entry.name).collect(),
+                Err(error) => {
+                    log::warn!(
+                        "SftpPanel::do_upload_paths: could not list \"{cwd}\" to check for \
+                         overwrites: {error}"
+                    );
+                    Vec::new()
+                }
+            };
+            let colliding = colliding_names(&local_paths, &existing);
+            if colliding.is_empty() {
+                Self::upload_batch(&panel, sftp, cwd, local_paths, cx).await;
+                return;
             }
 
-            // Refresh after all files have been uploaded (only if this backend
-            // is still the active one — otherwise the user will refresh on switch).
-            cx.update(|cx| {
-                panel.update(cx, |this, cx| {
-                    if this.active_key() == Some(backend_key) {
-                        this.refresh(cx);
-                    }
-                })
+            log::info!(
+                "SftpPanel::do_upload_paths: {} of {} path(s) already exist in \"{cwd}\" — asking",
+                colliding.len(),
+                local_paths.len()
+            );
+            let (title, description, replace_label, keep_label) =
+                collision_prompt(&colliding, local_paths.len());
+            _ = cx.update(|window, cx| {
+                confirm_replace(
+                    title,
+                    description,
+                    replace_label,
+                    keep_label,
+                    move |replace, window, cx| {
+                        let keep = keep_after_answer(local_paths.clone(), &colliding, replace);
+                        if keep.is_empty() {
+                            log::info!("SftpPanel::do_upload_paths: nothing left to upload");
+                            return;
+                        }
+                        let panel = panel.clone();
+                        let sftp = sftp.clone();
+                        let cwd = cwd.clone();
+                        window
+                            .spawn(cx, async move |cx| {
+                                Self::upload_batch(&panel, sftp, cwd, keep, cx).await;
+                            })
+                            .detach();
+                    },
+                    window,
+                    cx,
+                );
             });
         })
         .detach();
+    }
+
+    /// Upload each path of an already-confirmed batch into `cwd`, sequentially,
+    /// then refresh the listing. A cancelled or failed file does not stop the
+    /// remaining files of the batch.
+    async fn upload_batch(
+        panel: &Entity<SftpPanel>,
+        sftp: Arc<dyn SftpBackend>,
+        cwd: RemotePath,
+        local_paths: Vec<PathBuf>,
+        cx: &mut AsyncApp,
+    ) {
+        let backend_key = sftp.session_id();
+        for local_path in local_paths {
+            let filename = upload_name(&local_path);
+            let remote_path = cwd.join(&filename);
+
+            log::info!(
+                "SftpPanel: upload \"{}\" → \"{remote_path}\"",
+                local_path.display()
+            );
+
+            let Some(transfer_id) = begin_transfer(panel, TransferDirection::Upload, &filename, cx)
+            else {
+                return;
+            };
+
+            // Sequential: each file finishes before the next one starts.
+            let handle = sftp.upload(transfer_id as u64, local_path, remote_path);
+            run_transfer(panel, backend_key, transfer_id, handle, cx).await;
+        }
+
+        // Refresh after all files have been uploaded (only if this backend
+        // is still the active one — otherwise the user will refresh on switch).
+        cx.update(|cx| {
+            panel.update(cx, |this, cx| {
+                if this.active_key() == Some(backend_key) {
+                    this.refresh(cx);
+                }
+            })
+        });
     }
 
     /// Upload a local file or folder → remote.
@@ -262,9 +471,9 @@ impl SftpPanel {
             log::info!("SftpPanel: upload — {} path(s) selected", paths.len());
 
             // The panel may be gone before the picker closes; nothing to upload then.
-            _ = cx.update(|_, cx| {
+            _ = cx.update(|window, cx| {
                 panel.update(cx, |this, cx| {
-                    this.do_upload_paths(paths, cx);
+                    this.do_upload_paths(paths, window, cx);
                 });
             });
         })
@@ -459,34 +668,20 @@ impl SftpPanel {
                 "\"{}\" already exists in the local folder. Replace it?",
                 entry.name
             );
-            let start = std::rc::Rc::new(start);
             _ = cx.update(|window, cx| {
-                window.open_alert_dialog(cx, move |alert, _window, _cx| {
-                    let start = start.clone();
-                    alert
-                        .confirm()
-                        .title("Replace Local File")
-                        .description(description.clone())
-                        .footer(
-                            DialogFooter::new()
-                                .child(Button::new("cancel").label("Cancel").outline().on_click(
-                                    |_, window, cx| {
-                                        window.close_dialog(cx);
-                                    },
-                                ))
-                                .child(Button::new("replace").label("Replace").danger().on_click(
-                                    move |_, window, cx| {
-                                        window.close_dialog(cx);
-                                        start(window, cx);
-                                    },
-                                )),
-                        )
-                        .button_props(
-                            DialogButtonProps::default()
-                                .on_cancel(|_, _, _| true)
-                                .on_ok(|_, _, _| false),
-                        )
-                });
+                confirm_replace(
+                    "Replace Local File",
+                    description,
+                    "Replace",
+                    "Cancel",
+                    move |replace, window, cx| {
+                        if replace {
+                            start(window, cx);
+                        }
+                    },
+                    window,
+                    cx,
+                );
             });
         })
         .detach();
@@ -833,8 +1028,12 @@ mod tests {
         let first = backend.arm_transfer();
         let second = backend.arm_transfer();
 
-        harness.panel.update(cx, |panel, cx| {
-            panel.do_upload_paths(vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")], cx);
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_upload_paths(
+                vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")],
+                window,
+                cx,
+            );
         });
         cx.run_until_parked();
 
@@ -876,6 +1075,204 @@ mod tests {
         assert_eq!(error.as_deref(), Some("disk full"));
     }
 
+    // ── US-0128: the overwrite decision ──────────────────────
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    fn owned(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    /// US-0128: only the batch entries whose remote name is already in the
+    /// directory collide, and they are reported in batch order.
+    #[test]
+    fn collisions_are_the_batch_names_the_remote_directory_already_holds() {
+        let batch = paths(&["a/notes.md", "b/new.txt", "c/report.pdf"]);
+        let existing = owned(&["report.pdf", "notes.md", "unrelated.bin"]);
+
+        assert_eq!(
+            super::colliding_names(&batch, &existing),
+            vec!["notes.md".to_string(), "report.pdf".to_string()]
+        );
+        assert!(super::colliding_names(&batch, &[]).is_empty());
+        assert!(super::colliding_names(&[], &existing).is_empty());
+    }
+
+    /// A path with no file name still gets the fallback name the upload uses,
+    /// so it is matched against the directory like any other entry.
+    #[test]
+    fn a_nameless_path_collides_under_its_fallback_name() {
+        assert_eq!(
+            super::colliding_names(&paths(&[".."]), &owned(&["uploaded"])),
+            vec!["uploaded".to_string()]
+        );
+    }
+
+    /// US-0128: Replace uploads the whole batch; Skip drops exactly the
+    /// colliding files and still uploads the rest, in the original order.
+    #[test]
+    fn the_answer_decides_what_is_left_of_the_batch() {
+        let batch = paths(&["a/notes.md", "b/new.txt", "c/report.pdf"]);
+        let colliding = owned(&["notes.md", "report.pdf"]);
+
+        assert_eq!(
+            super::keep_after_answer(batch.clone(), &colliding, true),
+            batch
+        );
+        assert_eq!(
+            super::keep_after_answer(batch.clone(), &colliding, false),
+            paths(&["b/new.txt"])
+        );
+        // A batch that collides everywhere uploads nothing when skipped.
+        assert!(
+            super::keep_after_answer(batch, &owned(&["notes.md", "new.txt", "report.pdf"]), false)
+                .is_empty()
+        );
+    }
+
+    /// US-0128: one collision asks "Replace", several ask "Replace all"; the
+    /// neutral button only says "Cancel" when skipping leaves nothing to upload.
+    #[test]
+    fn the_prompt_names_the_files_and_labels_the_answers() {
+        let (title, description, replace, keep) = super::collision_prompt(&owned(&["notes.md"]), 1);
+        assert_eq!(title, "Replace Remote File");
+        assert_eq!(
+            description,
+            "\"notes.md\" already exists in the remote folder. Replace it?"
+        );
+        assert_eq!((replace, keep), ("Replace", "Cancel"));
+
+        // One collision, but the rest of the batch still goes up → "Skip".
+        let (_, _, replace, keep) = super::collision_prompt(&owned(&["notes.md"]), 3);
+        assert_eq!((replace, keep), ("Replace", "Skip"));
+
+        let (title, description, replace, keep) =
+            super::collision_prompt(&owned(&["a.txt", "b.txt"]), 2);
+        assert_eq!(title, "Replace Remote Files");
+        assert_eq!(
+            description,
+            "2 files already exist in the remote folder: \"a.txt\", \"b.txt\". Replace them?"
+        );
+        assert_eq!((replace, keep), ("Replace all", "Cancel"));
+
+        // A long list names the first five and counts the rest.
+        let many = owned(&["1", "2", "3", "4", "5", "6", "7"]);
+        let (_, description, _, _) = super::collision_prompt(&many, 7);
+        assert!(
+            description.ends_with("\"1\", \"2\", \"3\", \"4\", \"5\", and 2 more. Replace them?"),
+            "{description}"
+        );
+    }
+
+    /// US-0128: a batch that overwrites nothing is unchanged — no dialog, the
+    /// upload starts straight away.
+    #[gpui::test]
+    fn upload_without_a_collision_asks_nothing(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        let _transfer = backend.arm_transfer();
+        backend
+            .arm_read_dir()
+            .try_send(Ok(vec![dir_entry(
+                &RemotePath::new("/home/u"),
+                "other.txt",
+                false,
+            )]))
+            .unwrap();
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_upload_paths(vec![PathBuf::from("a.txt")], window, cx);
+        });
+        cx.run_until_parked();
+
+        assert!(!harness.has_dialog(cx));
+        let requests = backend.transfer_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].remote.as_str(), "/home/u/a.txt");
+    }
+
+    /// US-0128 (the data-loss path of the UX round's report §4.5): an upload
+    /// onto an existing remote file opens the confirmation and asks the backend
+    /// for nothing until it is answered.
+    #[gpui::test]
+    fn upload_onto_an_existing_remote_file_asks_first(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        backend
+            .arm_read_dir()
+            .try_send(Ok(vec![dir_entry(
+                &RemotePath::new("/home/u"),
+                "a.txt",
+                false,
+            )]))
+            .unwrap();
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_upload_paths(vec![PathBuf::from("a.txt")], window, cx);
+        });
+        cx.run_until_parked();
+
+        assert!(harness.has_dialog(cx));
+        assert!(backend.transfer_requests().is_empty());
+        assert!(harness.statuses(cx).is_empty());
+    }
+
+    /// US-0128: several colliding files of one batch ask once, not once per file.
+    #[gpui::test]
+    fn a_batch_with_several_collisions_asks_once(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        let cwd = RemotePath::new("/home/u");
+        backend
+            .arm_read_dir()
+            .try_send(Ok(vec![
+                dir_entry(&cwd, "a.txt", false),
+                dir_entry(&cwd, "b.txt", false),
+            ]))
+            .unwrap();
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_upload_paths(
+                vec![
+                    PathBuf::from("a.txt"),
+                    PathBuf::from("b.txt"),
+                    PathBuf::from("c.txt"),
+                ],
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        assert!(harness.has_dialog(cx));
+        assert!(backend.transfer_requests().is_empty());
+        // One listing, one question — not one per file.
+        assert_eq!(backend.read_dir_requests(), vec![cwd]);
+    }
+
+    /// US-0128: a remote directory that cannot be listed must not block the
+    /// upload — the collision is simply unknown.
+    #[gpui::test]
+    fn an_unlistable_remote_directory_does_not_block_the_upload(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        let _transfer = backend.arm_transfer();
+        backend
+            .arm_read_dir()
+            .try_send(Err(AppError::msg("permission denied")))
+            .unwrap();
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_upload_paths(vec![PathBuf::from("a.txt")], window, cx);
+        });
+        cx.run_until_parked();
+
+        assert!(!harness.has_dialog(cx));
+        assert_eq!(backend.transfer_requests().len(), 1);
+    }
+
     /// ARCH-05: a `Cancelled` result without a preceding `Cancelled` event still
     /// settles the item as cancelled — never left `InProgress`.
     #[gpui::test]
@@ -884,8 +1281,8 @@ mod tests {
         let backend = harness.attach_backend(cx);
         let transfer = backend.arm_transfer();
 
-        harness.panel.update(cx, |panel, cx| {
-            panel.do_upload_paths(vec![PathBuf::from("a.txt")], cx);
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_upload_paths(vec![PathBuf::from("a.txt")], window, cx);
         });
         cx.run_until_parked();
 

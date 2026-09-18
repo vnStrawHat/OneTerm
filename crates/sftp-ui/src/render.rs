@@ -434,9 +434,9 @@ impl SftpPanel {
             )
             // Drag & drop external files (or a Local pane row) → upload to remote cwd.
             .can_drop(|drag, _window, _cx| drag.is::<ExternalPaths>() || drag.is::<LocalRowDrag>())
-            .on_drop(cx.listener(|this, drag: &LocalRowDrag, _, cx| {
+            .on_drop(cx.listener(|this, drag: &LocalRowDrag, window, cx| {
                 log::info!("SftpPanel: local row \"{}\" dropped — upload", drag.name);
-                this.do_upload_paths(vec![drag.path.clone()], cx);
+                this.do_upload_paths(vec![drag.path.clone()], window, cx);
             }))
             .on_drop(
                 cx.listener(move |this, external_paths: &ExternalPaths, window, cx| {
@@ -446,7 +446,7 @@ impl SftpPanel {
                         paths.len()
                     );
                     if this.sftp().is_some() {
-                        this.do_upload_paths(paths, cx);
+                        this.do_upload_paths(paths, window, cx);
                     } else {
                         log::warn!("SftpPanel: on_drop — no SFTP connection, ignoring");
                         window.push_notification(
