@@ -152,25 +152,40 @@ The bar neither wraps nor scrolls, so something has to give when the window is n
 
 Inside that region `build_status_bar` divides the room between the two: it **measures** every label through the window's text system, gives the branch what it asks for while the path keeps at least 80 px, and takes it out of the branch below that (down to 40 px of branch). The path then elides from the **left**, at a path separator, behind a leading ellipsis (`…\scratchpad\ux\home`), keeping the directory the user is in; the branch elides from the **right**, keeping the head that identifies it (`worktree-agent-a18…`). Only a single component longer than the whole budget is cut inside itself. A shortened indicator shows its full value in a tooltip, and click-to-copy still copies the sampled path, not the shortened one.
 
-## Secondary text contrast floor
+## Text contrast floor and hierarchy
 
+Text in the built-in themes obeys two rules, both enforced by
+`scripts/check-theme-contrast.py` in the quality gate, so a new theme in
+`crates/theme/themes/` cannot ship breaking either.
+
+**The floor.** Every checked token clears **4.5:1** (WCAG AA for body text) on every surface
+the script's `SURFACES` table lists for it, in every variant of every built-in theme.
 Secondary text — host addresses, search placeholders, empty-state copy, key-binding chips,
-`Default:` hints, SFTP dates, column headers, inactive tab labels — is drawn in one of three
-theme tokens: `muted.foreground`, `tab.foreground` and `table.head.foreground`. In every
-variant of every built-in theme each of those clears **4.5:1** (WCAG AA for body text) on
-every surface the `SURFACES` table in `scripts/check-theme-contrast.py` lists for it — for
-`muted.foreground` that is the window body, popovers and a hovered menu row, the key-binding
-chip's own fill, the sidebar, the title and status bars, list and table rows in their plain,
-alternating and hovered/selected states, and both an inactive and the active tab. The quality
-gate runs the check, so a new theme in `crates/theme/themes/` cannot ship below the floor.
+`Default:` hints, SFTP dates, column headers, inactive tab labels — is `muted.foreground`,
+`tab.foreground` and `table.head.foreground`; for `muted.foreground` the surfaces are the
+window body, popovers and a hovered menu row, the key-binding chip's own fill, the sidebar,
+the title and status bars, list and table rows in their plain, alternating and
+hovered/selected states, and both an inactive and the active tab. Primary text — every label,
+name and value beside them — is `foreground` plus the three tokens the kit routes specific
+surfaces through, each falling back to `foreground` when a theme omits it:
+`popover.foreground`, `sidebar.foreground` and `tab.active.foreground`.
 
-That table is the contract, and it is only as complete as its last review: a surface missing
-from it is not measured, so a component that starts drawing one of these tokens on a new
-background adds the surface there (each entry cites the line that draws the pair) instead of
-assuming an existing entry covers it. The floor is also a minimum, not a target — raised
-values land near 5:1 so that secondary text still reads as secondary, while a few themes
-carry untouched tokens far above the floor (`Molokai Light`'s `tab.foreground` inherits the
-primary `foreground` at 19:1).
+**The hierarchy.** On every surface where a primary token and `muted.foreground` are both
+drawn, the primary token's ratio is **strictly greater** than the secondary's. Clearing the
+floor is not enough on its own: raising only `muted.foreground` satisfies it and still leaves
+a page where the host address shouts louder than the session name (`US-0111` did exactly
+that, and `US-0127` is the correction). A tie fails too — text as loud as the label beside it
+has no hierarchy left.
+
+That `SURFACES` table is the contract, and it is only as complete as its last review: a
+surface missing from it is not measured, so a component that starts drawing one of these
+tokens on a new background adds the surface there (each entry cites the line that draws the
+pair) instead of assuming an existing entry covers it. Pair each foreground with the token
+the kit actually paints on that surface — `foreground` scored against the tab strip, where
+`tab.foreground` is drawn, is a number about nothing. The floor is a minimum, not a target:
+secondary values land near 5:1 so that secondary text still reads as secondary, primary ones
+sit about half a ratio point or more above them, and a few themes carry untouched tokens far
+above both (`Molokai Light`'s `foreground` is 19:1).
 
 ## Source map
 

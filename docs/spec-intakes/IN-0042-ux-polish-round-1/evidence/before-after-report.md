@@ -228,6 +228,19 @@ Their secondary text now has more contrast than their primary. The independent v
 confirmed these are the only two inversions among the 39 variants. `US-0111` records the work as
 the same script with `foreground` added to the token list.
 
+**Closed 2026-09-18 by `US-0127`**
+(`docs/spec-intakes/IN-0042-ux-polish-round-1/US-0127-primary-text-contrast-floor.md`), which
+added the primary-text tokens and a second rule -- a primary token must out-read
+`muted.foreground` on every surface both are drawn on -- and moved the flagged values in
+lightness only. Two corrections to the numbers above, both from attributing each token to the
+surface the kit actually paints it on: the headline ratios are `foreground` scored against the
+**tab strip**, where these themes draw `tab.foreground` instead, so **no variant's primary text
+was in fact below 4.5:1** (Solarized Light bottomed out at 4.53:1 on a hovered row); and there
+were **three** inverted variants, not two -- **Ayu Light** was inverted on all four of its
+surfaces, including `popover.foreground` at 4.88:1 against `muted.foreground`'s 5.91:1. The
+defect the section describes is real and is entirely the hierarchy: the 4.5:1 floor alone would
+never have caught it.
+
 ### 4.3 The pre-existing flaky test
 
 `oneterm-terminal::handle::tests::a_pump_yields_to_the_demand_within_a_bounded_number_of_chunks`
