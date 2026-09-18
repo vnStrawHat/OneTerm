@@ -1,19 +1,23 @@
 //! Tree widget rendering — item renderer + context menu for SessionPanel.
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{Hsla, IntoElement, MouseButton, ParentElement as _, SharedString, Styled, div, px};
+use gpui::{
+    Hsla, IntoElement, MouseButton, ParentElement as _, SharedString, Styled, Window, div, px,
+};
 use gpui_component::{
-    ActiveTheme as _, Colorize as _, Icon, IconName, Sizable as _, h_flex, list::ListItem,
-    menu::PopupMenuItem, tree::tree,
+    ActiveTheme as _, Colorize as _, Icon, IconName, Sizable as _, h_flex,
+    list::ListItem,
+    menu::{PopupMenu, PopupMenuItem},
+    tree::tree,
 };
 
-use crate::session_state::{SshSession, SshSessionStore};
+use crate::session_state::{SshSession, SshSessionId, SshSessionStore, normalized_group};
 use oneterm_actions::{DeleteSession, NewSession, OpenSession, SessionProperty};
 
 use super::connect_dialog::open_connect_dialog;
 use super::panel::{SessionPanel, confirm_delete_session};
 use super::rename_group::open_rename_group_dialog;
-use super::session_dialog::open_session_dialog;
+use super::session_dialog::{existing_group_names, open_session_dialog};
 use super::tree_builder::{parse_group_id, parse_session_id, session_color_hex, session_subtitle};
 
 /// One row of the context menu for a session leaf, in the order they appear.
@@ -27,6 +31,10 @@ pub(crate) enum SessionMenuRow {
     Open,
     /// Edit the right-clicked session.
     Properties,
+    /// Copy the right-clicked **saved** session and open the copy's properties.
+    Duplicate,
+    /// Submenu: move the right-clicked session into another group.
+    MoveToGroup,
     /// Create a session — global, so it does not sit in the first slot.
     NewSession,
     /// Delete the right-clicked session, after a confirmation.
@@ -36,18 +44,113 @@ pub(crate) enum SessionMenuRow {
 
 /// The session leaf's context menu, top to bottom.
 ///
-/// The two actions that act on the right-clicked session come first; the global
+/// The four actions that act on the right-clicked session come first; the global
 /// "New Session" no longer occupies the most-misclicked slot (`F24`); and Delete
 /// is last, behind its own separator and styled destructive, which is the shape
 /// the SFTP browser's delete already uses.
-pub(crate) const SESSION_MENU_ROWS: [SessionMenuRow; 6] = [
+pub(crate) const SESSION_MENU_ROWS: [SessionMenuRow; 8] = [
     SessionMenuRow::Open,
     SessionMenuRow::Properties,
+    SessionMenuRow::Duplicate,
+    SessionMenuRow::MoveToGroup,
     SessionMenuRow::Separator,
     SessionMenuRow::NewSession,
     SessionMenuRow::Separator,
     SessionMenuRow::Delete,
 ];
+
+/// The Duplicate row's label.
+///
+/// Not just "Duplicate": a terminal tab's own context menu already has a row by
+/// that name (`US-0116`) and it does something else — it reopens the *running*
+/// connection in a second tab through `oneterm_core::SshDuplicateConfig`. This
+/// one writes a second row into `ssh_session.json` and connects nothing, so it
+/// says what it copies (`US-0129`).
+const DUPLICATE_ROW_LABEL: &str = "Duplicate Saved Session";
+
+/// The "Move to Group" submenu's ungrouped row.
+const NO_GROUP_ROW_LABEL: &str = "No group";
+
+/// The "Move to Group" submenu's route to the Group field of the dialog.
+const NEW_GROUP_ROW_LABEL: &str = "New group\u{2026}";
+
+/// Build the "Move to Group" submenu for `session_id`: the groups already in the
+/// store (the same list the session dialog's combobox offers), "No group", and
+/// "New group…", with the session's current group checked.
+///
+/// It is built while the parent menu is built, so it reads the store at
+/// right-click time and cannot list a stale group. It is attached with
+/// [`PopupMenuItem::submenu`] rather than `PopupMenu::submenu` because the
+/// tree's context-menu builder holds a `Context<TreeState>`, not a
+/// `Context<PopupMenu>`; the kit supports exactly that and wires the parent link
+/// on the parent's next render.
+fn move_to_group_submenu(
+    session_id: SshSessionId,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) -> gpui::Entity<PopupMenu> {
+    let store = SshSessionStore::global(cx);
+    // Trimmed, because the rows are: `existing_group_names` trims and a
+    // hand-edited `"group": " infra "` would otherwise check nothing at all and
+    // misreport where the session lives. This is also the value the click
+    // writes, so the check and the write agree.
+    let current = store
+        .read(cx)
+        .get(session_id)
+        .and_then(|session| normalized_group(session.group.as_deref()));
+    let groups = existing_group_names(store.read(cx).sessions());
+
+    PopupMenu::build(window, cx, move |menu, window, _cx| {
+        // The kit applies its height cap only when `scrollable` is set, and
+        // `item()` never sets it — only its `with_menu_items` builder does. The
+        // group count is user data with no ceiling, so without this the rows
+        // past the window bottom (`New group…` among them, it is last) would be
+        // unreachable by mouse *and* by keyboard. Same estimate and same cap as
+        // the "+" menu and the SFTP overflow menu, for the same reason.
+        //
+        // ponytail: rows are counted, not measured — the popup has no laid-out
+        // bounds while it is being built — so a menu within a row of the cap can
+        // guess wrong by one row.
+        const ROW_HEIGHT: f32 = 28.;
+        const SEPARATOR_HEIGHT: f32 = 9.;
+        // "No group", a row per group, and "New group…", behind one separator.
+        let estimated = px((groups.len() + 2) as f32 * ROW_HEIGHT + SEPARATOR_HEIGHT);
+        let cap = (window.window_bounds().get_bounds().size.height * 0.5).min(px(450.));
+        let menu = menu.scrollable(estimated > cap);
+
+        let mut menu = menu.item(
+            PopupMenuItem::new(NO_GROUP_ROW_LABEL)
+                .checked(current.is_none())
+                .on_click(move |_, _, cx| {
+                    SshSessionStore::global(cx)
+                        .update(cx, |store, cx| store.set_group(session_id, None, cx));
+                }),
+        );
+        for group in groups {
+            let checked = current.as_deref() == Some(group.as_ref());
+            let target = group.clone();
+            menu = menu.item(PopupMenuItem::new(group).checked(checked).on_click(
+                move |_, _, cx| {
+                    SshSessionStore::global(cx).update(cx, |store, cx| {
+                        store.set_group(session_id, Some(target.as_ref()), cx)
+                    });
+                },
+            ));
+        }
+        menu.separator()
+            .item(
+                PopupMenuItem::new(NEW_GROUP_ROW_LABEL).on_click(move |_, window, cx| {
+                    if let Some(session) = SshSessionStore::global(cx)
+                        .read(cx)
+                        .get(session_id)
+                        .cloned()
+                    {
+                        open_session_dialog(window, cx, Some((session_id, session)), true);
+                    }
+                }),
+            )
+    })
+}
 
 impl SessionPanel {
     /// Render the tree widget — item renderer + context menu.
@@ -56,7 +159,8 @@ impl SessionPanel {
     /// 1. Item renderer — renders a folder (group) or leaf (session) with
     ///    icon, label, subtitle, and mouse handlers.
     /// 2. Context menu — right-click on an item → the appropriate menu
-    ///    (Open / Properties / New Session / Delete).
+    ///    (Open / Properties / Duplicate Saved Session / Move to Group ▸ /
+    ///    New Session / Delete).
     pub(crate) fn render_tree_widget(&self) -> impl IntoElement {
         let store = self.store.clone();
         let right_clicked_ix = self.right_clicked_ix.clone();
@@ -227,7 +331,7 @@ impl SessionPanel {
         .context_menu({
             let focus = focus.clone();
             let right_clicked_ix = right_clicked_ix.clone();
-            move |ix, entry, menu, _window, _cx| {
+            move |ix, entry, menu, window, cx| {
                 // Clear the old highlight, highlight only the right-clicked item.
                 right_clicked_ix.set(Some(ix));
                 if entry.is_folder() {
@@ -278,10 +382,43 @@ impl SessionPanel {
                                             .get(session_id)
                                             .cloned()
                                         {
-                                            open_session_dialog(window, cx, Some((session_id, s)));
+                                            open_session_dialog(
+                                                window,
+                                                cx,
+                                                Some((session_id, s)),
+                                                false,
+                                            );
                                         }
                                     }),
                             ),
+                            // A **saved** session's copy, not the live tab's
+                            // Duplicate — see `DUPLICATE_ROW_LABEL`. It opens
+                            // the copy's properties so the user can rename it;
+                            // nothing connects.
+                            SessionMenuRow::Duplicate => {
+                                menu.item(PopupMenuItem::new(DUPLICATE_ROW_LABEL).on_click(
+                                    move |_, window, cx| {
+                                        let store = SshSessionStore::global(cx);
+                                        let Some(copy_id) =
+                                            store.update(cx, |s, cx| s.duplicate(session_id, cx))
+                                        else {
+                                            return;
+                                        };
+                                        if let Some(copy) = store.read(cx).get(copy_id).cloned() {
+                                            open_session_dialog(
+                                                window,
+                                                cx,
+                                                Some((copy_id, copy)),
+                                                false,
+                                            );
+                                        }
+                                    },
+                                ))
+                            }
+                            SessionMenuRow::MoveToGroup => menu.item(PopupMenuItem::submenu(
+                                "Move to Group",
+                                move_to_group_submenu(session_id, window, cx),
+                            )),
                             // `PopupMenuItem` has no destructive variant, so the
                             // row draws its own label in the theme's danger
                             // colour; the confirmation behind it is the SFTP
@@ -323,10 +460,36 @@ mod tests {
             vec![
                 SessionMenuRow::Open,
                 SessionMenuRow::Properties,
+                SessionMenuRow::Duplicate,
+                SessionMenuRow::MoveToGroup,
                 SessionMenuRow::NewSession,
                 SessionMenuRow::Delete,
             ]
         );
+    }
+
+    /// `US-0129`: the two new rows act on the right-clicked session, so they
+    /// join the block above the first separator rather than sitting beside the
+    /// global "New Session" or below the Delete separator.
+    #[test]
+    fn duplicate_and_move_to_group_join_the_session_block() {
+        let first_separator = SESSION_MENU_ROWS
+            .iter()
+            .position(|row| *row == SessionMenuRow::Separator)
+            .expect("the menu has a separator");
+        assert_eq!(
+            &SESSION_MENU_ROWS[..first_separator],
+            &[
+                SessionMenuRow::Open,
+                SessionMenuRow::Properties,
+                SessionMenuRow::Duplicate,
+                SessionMenuRow::MoveToGroup,
+            ]
+        );
+        // The row says what it copies, so it cannot be read as the terminal
+        // tab's "Duplicate" (`US-0116`), which reopens a live connection.
+        assert_ne!(DUPLICATE_ROW_LABEL, "Duplicate");
+        assert!(DUPLICATE_ROW_LABEL.contains("Saved Session"));
     }
 
     /// Delete is separated from the rows above it, and it is the only

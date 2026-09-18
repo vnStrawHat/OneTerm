@@ -345,6 +345,44 @@ impl SshSessionStore {
         }
     }
 
+    /// Duplicate the saved session `id`: a copy of every field under a fresh id,
+    /// placed right after its source in storage order (`US-0129`). Returns the
+    /// new id, or `None` when `id` no longer exists.
+    ///
+    /// This copies a **saved** session. The live tab's "Duplicate" is a
+    /// different thing entirely ([`oneterm_core::SshDuplicateConfig`]): it
+    /// reopens a running connection. Nothing here connects.
+    pub fn duplicate(
+        &mut self,
+        id: SshSessionId,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<SshSessionId> {
+        let new_id = SshSessionId(self.next_id);
+        if !duplicate_in(&mut self.entries, id, new_id) {
+            log::warn!("SshSessionStore::duplicate: session {id} no longer exists");
+            return None;
+        }
+        self.next_id = self.next_id.saturating_add(1);
+        cx.notify();
+        self.save(cx);
+        Some(new_id)
+    }
+
+    /// Move the saved session `id` into `group` (`None`, or a blank name, means
+    /// ungrouped) + save the file + notify observers. No-op when `id` no longer
+    /// exists or the group would not change.
+    pub fn set_group(
+        &mut self,
+        id: SshSessionId,
+        group: Option<&str>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if set_group_in(&mut self.entries, id, group) {
+            cx.notify();
+            self.save(cx);
+        }
+    }
+
     /// Rename a group — update all sessions with `group == old_name` to `new_name`
     /// + save the file + notify observers.
     /// If `new_name` is empty (or whitespace only) → set group = None (ungroup).
@@ -467,6 +505,79 @@ fn rename_group_in(entries: &mut [SshSessionEntry], old_name: &str, new_name: &s
         }
     }
     changed
+}
+
+/// The label a duplicate of `label` gets: `"<label> (copy)"`, or
+/// `"<label> (copy 2)"`, `"(copy 3)"`, … when an earlier candidate is already a
+/// label in `entries` (`US-0129`).
+///
+/// The rule appends to whatever label it is handed, so duplicating a copy gives
+/// `prod (copy) (copy)` rather than `prod (copy 2)`: one rule instead of two,
+/// and the user is about to rename it in the dialog the duplicate opens.
+/// Comparison is exact — two sessions may legitimately share a label (the "+"
+/// menu says so), and only the candidate this function invents must be unused.
+fn copy_label(label: &str, entries: &[SshSessionEntry]) -> String {
+    let taken = |candidate: &str| entries.iter().any(|entry| entry.session.label == candidate);
+    let mut candidate = format!("{label} (copy)");
+    let mut suffix = 2u32;
+    while taken(&candidate) {
+        candidate = format!("{label} (copy {suffix})");
+        suffix += 1;
+    }
+    candidate
+}
+
+/// Insert a copy of the session `id` — every field, relabelled by
+/// [`copy_label`] — right after it, under `new_id`. Returns whether it happened.
+///
+/// The session is cloned whole rather than rebuilt field by field: `SshSession`
+/// has gained three fields since schema v2 and a hand-written list would have
+/// silently stopped copying each of them.
+fn duplicate_in(
+    entries: &mut Vec<SshSessionEntry>,
+    id: SshSessionId,
+    new_id: SshSessionId,
+) -> bool {
+    let Some(index) = entries.iter().position(|entry| entry.id == id) else {
+        return false;
+    };
+    let mut session = entries[index].session.clone();
+    session.label = copy_label(&session.label, entries);
+    entries.insert(
+        index + 1,
+        SshSessionEntry {
+            id: new_id,
+            session,
+        },
+    );
+    true
+}
+
+/// A group name as the store keeps it: trimmed, and `None` when blank — the
+/// convention [`rename_group_in`] and the tree builder already share.
+///
+/// The "Move to Group" submenu checks its rows through this too, so the row it
+/// marks as current is decided by the same rule the click then writes: a
+/// hand-edited `"group": " infra "` checks `infra` rather than nothing
+/// (`US-0129` verification, F2).
+pub(crate) fn normalized_group(group: Option<&str>) -> Option<String> {
+    group
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+/// Move the session `id` into `group` (see [`normalized_group`]). Returns
+/// whether anything changed.
+fn set_group_in(entries: &mut [SshSessionEntry], id: SshSessionId, group: Option<&str>) -> bool {
+    let group = normalized_group(group);
+    match entries.iter_mut().find(|entry| entry.id == id) {
+        Some(entry) if entry.session.group != group => {
+            entry.session.group = group;
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Parse and migrate one `ssh_session.json` document.
@@ -1214,6 +1325,150 @@ mod persistence_tests {
         assert!(rename_group_in(&mut entries, "platform", "   "));
         assert_eq!(entries[0].session.group, None);
         assert!(!rename_group_in(&mut entries, "missing", "x"));
+    }
+
+    /// `US-0129`: " (copy)", then " (copy 2)", " (copy 3)" — and the rule
+    /// appends to whatever label it is handed.
+    #[test]
+    fn copy_label_numbers_only_the_candidates_already_in_use() {
+        let entries = |labels: &[&str]| -> Vec<SshSessionEntry> {
+            labels
+                .iter()
+                .enumerate()
+                .map(|(index, label)| SshSessionEntry {
+                    id: SshSessionId(index as u64 + 1),
+                    session: session(label),
+                })
+                .collect()
+        };
+        assert_eq!(copy_label("prod", &entries(&["prod"])), "prod (copy)");
+        assert_eq!(
+            copy_label("prod", &entries(&["prod", "prod (copy)"])),
+            "prod (copy 2)"
+        );
+        assert_eq!(
+            copy_label("prod", &entries(&["prod", "prod (copy)", "prod (copy 2)"])),
+            "prod (copy 3)"
+        );
+        // A gap is filled rather than skipped past.
+        assert_eq!(
+            copy_label("prod", &entries(&["prod (copy)", "prod (copy 3)"])),
+            "prod (copy 2)"
+        );
+        // Duplicating a copy appends again; the user renames it in the dialog.
+        assert_eq!(
+            copy_label("prod (copy)", &entries(&["prod (copy)"])),
+            "prod (copy) (copy)"
+        );
+        // Another session's label is no obstacle, and an empty store is fine.
+        assert_eq!(copy_label("prod", &entries(&["staging"])), "prod (copy)");
+        assert_eq!(copy_label("prod", &[]), "prod (copy)");
+    }
+
+    /// The copy carries every field of its source, sits directly after it, and
+    /// takes the id it was given — not the source's, and not a reused one.
+    #[test]
+    fn duplicate_copies_every_field_next_to_its_source() {
+        let mut source = session("prod");
+        source.port = 2222;
+        source.username = Some("deploy".into());
+        source.auth_method = SshAuthPreference::PrivateKey;
+        source.key_path = Some(PathBuf::from("/keys/prod"));
+        source.color = Some("#E06C75".into());
+        source.group = Some("infra".into());
+        source.logging = SshLoggingOverride::On;
+        source.jump_host = Some(SshSessionId(9));
+        source.port_forwards = vec![PortForward::Dynamic {
+            bind: oneterm_core::loopback(),
+            bind_port: 1080,
+        }];
+        source.agent_forwarding = true;
+
+        let mut entries = document(vec![(3, source.clone()), (4, session("staging"))], 5).entries;
+        assert!(duplicate_in(&mut entries, SshSessionId(3), SshSessionId(5)));
+
+        let ids: Vec<_> = entries.iter().map(|entry| entry.id).collect();
+        assert_eq!(
+            ids,
+            vec![SshSessionId(3), SshSessionId(5), SshSessionId(4)],
+            "the copy sits directly after its source, not at the end"
+        );
+        let copy = entries[1].session.clone();
+        assert_eq!(copy.label, "prod (copy)");
+        // Field for field, the clone equals the source once the label matches —
+        // so a field added to SshSession later cannot be forgotten here.
+        assert_eq!(
+            SshSession {
+                label: source.label.clone(),
+                ..copy
+            },
+            source
+        );
+
+        // An id that is gone changes nothing.
+        let before = entries.clone();
+        assert!(!duplicate_in(
+            &mut entries,
+            SshSessionId(99),
+            SshSessionId(6)
+        ));
+        assert_eq!(entries, before);
+    }
+
+    /// `US-0129`: Move to Group rewrites one session's group; blank ungroups;
+    /// an unchanged value and an unknown id are both no-ops.
+    #[test]
+    fn set_group_moves_exactly_one_session() {
+        let mut infra = session("web");
+        infra.group = Some("infra".into());
+        let mut entries = document(vec![(1, infra), (2, session("solo"))], 3).entries;
+
+        assert!(set_group_in(
+            &mut entries,
+            SshSessionId(2),
+            Some("  infra  ")
+        ));
+        assert_eq!(entries[1].session.group.as_deref(), Some("infra"));
+        assert_eq!(entries[0].session.group.as_deref(), Some("infra"));
+
+        // Same value again: nothing to write.
+        assert!(!set_group_in(&mut entries, SshSessionId(2), Some("infra")));
+
+        // "No group": None, and a blank name means the same.
+        assert!(set_group_in(&mut entries, SshSessionId(1), None));
+        assert_eq!(entries[0].session.group, None);
+        assert!(set_group_in(&mut entries, SshSessionId(2), Some("   ")));
+        assert_eq!(entries[1].session.group, None);
+
+        assert!(!set_group_in(&mut entries, SshSessionId(99), Some("infra")));
+    }
+
+    /// `US-0129` verification F2: the submenu's checked row and the write it
+    /// performs go through one rule, so a hand-edited `" infra "` checks the
+    /// `infra` row instead of checking nothing at all.
+    #[test]
+    fn a_padded_stored_group_normalizes_to_the_row_it_should_check() {
+        assert_eq!(normalized_group(Some(" infra ")).as_deref(), Some("infra"));
+        assert_eq!(normalized_group(Some("infra")).as_deref(), Some("infra"));
+        assert_eq!(normalized_group(Some("   ")), None);
+        assert_eq!(normalized_group(Some("")), None);
+        assert_eq!(normalized_group(None), None);
+
+        // ...and it is the same rule the click writes, so the checked row and
+        // the stored value cannot disagree.
+        let mut padded = session("web");
+        padded.group = Some(" infra ".into());
+        let mut entries = document(vec![(1, padded)], 2).entries;
+        assert_eq!(
+            normalized_group(entries[0].session.group.as_deref()).as_deref(),
+            Some("infra"),
+            "`infra` is the row the submenu checks, not `No group` and not nothing"
+        );
+        // Clicking that row is still a write, because the stored text differs
+        // from what it means: one click repairs the hand-edited padding.
+        assert!(set_group_in(&mut entries, SshSessionId(1), Some("infra")));
+        assert_eq!(entries[0].session.group.as_deref(), Some("infra"));
+        assert!(!set_group_in(&mut entries, SshSessionId(1), Some("infra")));
     }
 
     #[test]

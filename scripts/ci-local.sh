@@ -109,9 +109,13 @@ step python scripts/check-doc-paths.py
 step python -m unittest scripts/test_check_english.py
 step python scripts/check-english.py
 step python scripts/completion-catalog.py validate
-# `US-0111`: secondary text (`muted.foreground`, `tab.foreground`,
-# `table.head.foreground`) must clear WCAG AA on every surface it is drawn on,
-# in every variant of every built-in theme.
+# `US-0111` + `US-0127`: every checked text token -- secondary
+# (`muted.foreground`, `tab.foreground`, `table.head.foreground`) and primary
+# (`foreground`, `popover.foreground`, `sidebar.foreground`,
+# `tab.active.foreground`, `accent.foreground`, `secondary.foreground`) -- must
+# clear WCAG AA on every surface it is drawn on, in every variant of every
+# built-in theme, and each primary token must out-read `muted.foreground` on
+# every surface both are drawn on.
 step python scripts/check-theme-contrast.py
 step python scripts/third-party-notices.py --check
 
