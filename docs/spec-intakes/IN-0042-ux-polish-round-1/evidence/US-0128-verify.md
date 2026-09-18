@@ -277,3 +277,111 @@ own port 2288. `target/fast-dev` was deleted after the walk.
 - The worktree could not check out `feat/sftp-upload-confirm-overwrite` (it is
   checked out elsewhere), so the review ran on `verify/US-0128`, created at the same
   commit `1e1dbf0a`. `main` was not moved.
+
+---
+
+# Re-verification of `3b6e7b0f` — 2026-09-18
+
+Under test: `feat/sftp-upload-confirm-overwrite` @ `3b6e7b0f` (merge of `main`
+@ `ac421f84` plus one rework commit on top of the verification commit `2fb47571`).
+Host: Windows 11, `fast-dev` profile, loopback `sftp-dev-server` on
+`127.0.0.1:2289` (a fresh port and a fresh fixture), own pid, own scratch `$HOME`.
+
+## Verdict
+
+**PASS.** Every finding the first pass raised is either fixed in code with a test
+that fails without it, or recorded with its reasoning in the packet's Gaps and in
+`docs/sftp-browser-design.md` §4.16. The data-loss path that made the first verdict
+"PASS with findings" is closed: the fixture that destroyed `Case.txt` now stops at
+a dialog naming both spellings, and Cancel leaves the file byte-identical.
+
+Two numbers in the rework's own write-up are slightly off, both in the safe
+direction; they are recorded under "Corrections" below and change nothing about
+the behaviour.
+
+## Per-finding status
+
+| # | Finding | Status | Evidence |
+|---|---|---|---|
+| **F1** | case-insensitive collision | **Fixed** | `collisions(&[PathBuf], &[FileEntry]) -> Vec<Collision>` (`crates/sftp-ui/src/transfer.rs:113-182`) matches exactly first, then case-insensitively, so an exact match wins; `Collision` carries `upload`, `existing` and `existing_is_dir`. The prompt names **both** spellings. Live: frames `r2`/`r3`. Mutation **M2** (back to byte-exact) now fails **4** tests, `a_remote_name_differing_only_in_case_is_a_collision` among them. |
+| **F2** | TOCTOU / advisory, not atomic | **Recorded, no code change — correct call** | Packet Gaps ("The guard is advisory, not atomic") and design §4.16 "What the guard is not", both naming `finalize_remote_file` and `SSH_FXF_EXCL` as the real fix and why it is out of scope. |
+| **F3** | duplicate names counted twice | **Fixed** | `collisions` skips an upload name it has already seen (`transfer.rs:124-127`) and `collision_prompt` de-duplicates the listed remote names. Test `a_name_repeated_in_one_batch_collides_once`. Live: frame `r5`. |
+| **F4** | wrong comment about the dismiss path | **Fixed** | `transfer.rs:60-65` now says dismissal does not reach `answer` at all — Escape dispatches Cancel, Enter's Confirm returns `false` — and why both are the right default. Matches what the first pass traced in gpui-kit. |
+| **F5** | no test answered the dialog | **Fixed** | `SftpPanel::start_answered_upload` (`transfer.rs:480-510`) is extracted as the two buttons' only caller, and `Harness::answer_collision` drives it. Mutation **M1** (Skip keeps everything) now fails **5** tests, **3 of them panel tests**, where before it failed one pure test. |
+| **F6** | silent fail-open on an unlistable cwd | **Recorded, no code change — correct call** | Packet Gaps spells out the error-policy reading, why failing closed is wrong, and leaves the "could not check — upload anyway?" question to the owner as a UX call. Design §4.16 carries the short form. |
+| **F7** | folder announced as a "File" | **Fixed** | `existing_is_dir` drives a separate branch: title `Replace Remote Folder`, a description that says the upload "merges into it and overwrites the files inside that collide", and a destructive button reading **Merge**. Test `the_prompt_explains_a_case_match_and_a_folder_merge`. Live: frame `r4`, and `Merge` really merged. |
+| **F8** | "requests nothing from the backend" overstated | **Fixed** | The Acceptance row now reads "**writes nothing** until it is answered" and names the one `read_dir` and its extra round trip explicitly. |
+
+## Commands
+
+| Command | Result |
+|---|---|
+| `git reset --hard 3b6e7b0f` in the worktree | clean tree, `HEAD` at the rework commit |
+| `cargo test -p oneterm-sftp-ui` | `test result: ok. 75 passed; 0 failed` — as expected |
+| Mutation **M2** — `collisions` finds only `entry.name == upload` | **4 failed**, 71 passed: `a_remote_name_differing_only_in_case_is_a_collision`, `the_prompt_explains_a_case_match_and_a_folder_merge`, `a_case_only_collision_is_answered_like_any_other`, `upload_onto_a_case_only_match_asks_first`. Restored. |
+| Mutation **M1** — `keep_after_answer` returns the whole batch | **5 failed**, 70 passed: `a_name_repeated_in_one_batch_collides_once`, `the_answer_decides_what_is_left_of_the_batch`, **`answering_skip_uploads_only_the_files_that_collide_with_nothing`**, **`answering_cancel_transfers_nothing`**, **`a_case_only_collision_is_answered_like_any_other`**. Restored. |
+| `pwsh scripts/ci-local.ps1` (`CARGO_BUILD_JOBS=6`, after deleting `target/fast-dev`) | `ci-local: all checks passed.` |
+
+## GUI re-walk
+
+Fresh fixture on port 2289 — remote `Case.txt` 20 B (`REMOTE-CASE-ORIGINAL`),
+`keep.txt` 3 B, `readme.md` 14 B, `adir/onlyremote.txt` 7 B; local `case.txt` 90 B,
+`adir/inner.txt` 24 B, and (added mid-walk) `keep.txt`, `dup/keep.txt`, `fresh.txt`.
+
+| Frame | What it shows |
+|---|---|
+| `US-0128-verify-r1-before.png` | The starting state: remote `Case.txt` 20 B, local `case.txt` 90 B — the fixture that silently destroyed the remote file before the rework. |
+| `US-0128-verify-r2-case-asks.png` | **F1 fixed.** The upload now stops: **Replace Remote File** — `"Case.txt" already exists in the remote folder. You are uploading "case.txt", which may be the same file on this server. Replace it?` — outline **Cancel**, danger **Replace**. Both spellings named. The server's disk is untouched while the dialog is up. |
+| `US-0128-verify-r3-case-cancel-kept.png` | **Cancel** keeps it: `Case.txt` still 20 B at `11:06:00`, content still `REMOTE-CASE-ORIGINAL`, nothing in the transfer queue. |
+| `US-0128-verify-r4-folder-merge.png` | **F7 fixed.** The local folder onto the existing remote `adir`: **Replace Remote Folder** — `"adir" already exists in the remote folder. The upload merges into it and overwrites the files inside that collide. Continue?` — **Cancel** / danger **Merge**. Answering `Merge` added `inner.txt` (24 B) and left `onlyremote.txt` at 7 B / `11:06:00`. |
+| `US-0128-verify-r5-duplicate-once.png` | **F3 fixed.** A batch of `home\keep.txt` + `home\dup\keep.txt` + `home\fresh.txt` now asks the **singular** question — `"keep.txt" already exists in the remote folder. Replace it?` — one collision, named once, with **Skip** because `fresh.txt` would still go up. Before the rework the same batch read `"keep.txt", "keep.txt", ...`. |
+| `US-0128-verify-r6-skip.png` | **Skip** uploaded only `fresh.txt` (60 B at `11:11:46`); remote `keep.txt` untouched at 3 B / `11:06:00`. |
+
+Server disk after the re-walk:
+
+```text
+Case.txt              20  11:06:00   (F1: asked, then Cancel -- content intact)
+adir\inner.txt        24  11:10:47   (Merge)
+adir\onlyremote.txt    7  11:06:00   (survived the Merge)
+fresh.txt             60  11:11:46   (Skip still uploaded the non-colliding file)
+keep.txt               3  11:06:00   (Skip)
+readme.md             14  11:06:00
+```
+
+## Corrections to the rework's own write-up
+
+Neither affects behaviour; both understate the coverage.
+
+1. The commit message, the packet's Evidence section and
+   `evidence/US-0128-verification.md` all say the `keep_after_answer` mutation
+   "fails four" tests. It fails **five** — the extra one is
+   `a_name_repeated_in_one_batch_collides_once`, which also exercises
+   `keep_after_answer` through its `Cancel`-label assertion. The "3 of them panel
+   tests" half is exact.
+2. The packet's Evidence still says the GUI walk "is written up with its seven
+   frames"; `evidence/US-0128-verification.md` now carries nine (the two
+   case-collision frames were appended below the original seven).
+
+## New observations at `3b6e7b0f` (none blocking)
+
+- **NIT — "1 files already exist".** If one batch contains both `case.txt` and
+  `Case.txt` (only reachable from two local folders) against a remote `Case.txt`,
+  both are distinct upload names, so `colliding.len() == 2` takes the plural
+  branch while the de-duplicated `names` list holds one entry — the description
+  reads `1 files already exist in the remote folder: "Case.txt".` Grammar only;
+  the decision and the labels are right.
+- `collisions` is `O(batch x listing)` with a `to_lowercase()` allocation per
+  probe. Nothing at picker-sized batches; worth remembering only if a batch ever
+  becomes thousands of files.
+- `to_lowercase()` is Unicode-aware rather than `eq_ignore_ascii_case`, which is
+  the right choice for a check that is deliberately looser than the server's.
+
+## Gaps in this re-verification
+
+- External (Explorer) OLE drag & drop still cannot be driven by posted messages;
+  it reaches the same `do_upload_paths` one line from the internal drop, which was
+  driven in the first pass and is unchanged by the rework.
+- Windows only, again. The loopback server folds case like its host, so the
+  `r2`/`r3` frames prove the **guard**, not the server-side folding on a
+  case-sensitive host — the packet records this too.
+- `harness.db` untouched; no push. `target/fast-dev` deleted after the walk.
