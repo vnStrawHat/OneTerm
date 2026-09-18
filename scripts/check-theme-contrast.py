@@ -59,7 +59,17 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #                         completion overlay's own rows, both popover-backed
     #   title_bar.background  the app menu bar's top-level names: `menu/app_menu_bar.rs` sets
     #                         no text colour, so they inherit the root's `foreground`
-    #                         (`crates/workspace/src/layout/title_bar.rs:73`)
+    #                         (`crates/workspace/src/layout/title_bar.rs:77`)
+    #   tab_bar.background    the dock panel headers, "Session" and "SFTP Browser": the kit's
+    #                         `render_title` colours the header only
+    #                         `when_some(title_style, ...)` (kit
+    #                         `dock/tab_panel.rs:356-425`, the `when_some` at `:380-382`) and
+    #                         `Panel::title_style` defaults to `None` (kit
+    #                         `dock/panel.rs:87-89`), which neither `SessionPanel` nor
+    #                         `SftpPanel` overrides -- so the header inherits the root's
+    #                         `foreground` on the strip's own fill. An *inactive tab* label on
+    #                         the same strip is `tab.foreground`, measured under that token;
+    #                         both are drawn there, so both are listed.
     #   status_bar.background a status segment in the `Foreground` tone
     #                         (`crates/workspace/src/widgets/status_text.rs:42,343`)
     #   list.background       the session tree's session and group labels
@@ -80,11 +90,10 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #
     # Deliberately absent, because primary text is not what is drawn there:
     #   accent.background     a hovered or selected menu row swaps to `accent.foreground`
-    #                         (kit `menu/menu_item.rs:115-120`)
+    #                         (kit `menu/menu_item.rs:115-120`), measured under that token
     #   muted.background      the key-binding chip's text is the secondary token
-    #   sidebar.background / tab.active.background / tab_bar.background
-    #                         each has its own primary token below (or, for the tab strip,
-    #                         the secondary `tab.foreground`), so measuring `foreground`
+    #   sidebar.background / tab.active.background
+    #                         each has its own primary token below, so measuring `foreground`
     #                         there as well would score a colour the kit does not paint on
     #                         that surface in the themes that set the more specific token.
     "foreground": (
@@ -92,6 +101,7 @@ SURFACES: dict[str, tuple[str, ...]] = {
         "popover.background",
         "title_bar.background",
         "status_bar.background",
+        "tab_bar.background",
         "list.background",
         "list.even.background",
         "list.hover.background",
@@ -113,9 +123,26 @@ SURFACES: dict[str, tuple[str, ...]] = {
     # `theme/schema.rs:984`), which is what 36 of the 39 variants take.
     "sidebar.foreground": ("sidebar.background",),
     # `tab.active.foreground` -- the active tab's label, the strip's primary text (kit
-    # `tab/tab.rs:175`, labelled by `crates/terminal-view/src/panel/tab_title.rs:245`).
+    # `tab/tab.rs:175`, labelled by `crates/terminal-view/src/panel/tab_title.rs:244`).
     # Falls back to `foreground` (kit `theme/schema.rs:997`).
     "tab.active.foreground": ("tab.active.background",),
+    # `accent.foreground` -- the label of a hovered or selected menu row, which swaps both
+    # fill and text (kit `menu/menu_item.rs:115-120`): every OneTerm popup menu -- the tab
+    # strip's `+` menu, the terminal and session context menus, the app menu's dropdowns.
+    # Falls back to `foreground` (kit `theme/schema.rs:904`). `muted.foreground` is drawn on
+    # the same row (the shortcut hint), so this pair is in `HIERARCHY` too.
+    "accent.foreground": ("accent.background",),
+    # `secondary.foreground` -- text on a secondary fill: a `Secondary` button, whose own
+    # tokens fall back to this pair (`button.secondary.background` -> `secondary.background`,
+    # kit `theme/schema.rs:828`; `button.secondary.foreground` -> `secondary.foreground`,
+    # `:830-832`; only 1 of the 39 variants overrides either), and a secondary `Tag` (kit
+    # `tag.rs:30` fill, `tag.rs:78` text). `secondary.foreground` falls back to `foreground`
+    # (kit `theme/schema.rs:819`). OneTerm reaches this pair through the kit's components
+    # rather than a call site of its own, which is why it has no OneTerm citation; it is
+    # listed because the colours are the theme's and a theme author has to keep them legible.
+    # `muted.foreground` is not drawn on `secondary.background`, so there is no hierarchy
+    # comparison here.
+    "secondary.foreground": ("secondary.background",),
     # `muted.foreground` -- 21 call sites across the feature crates. The distinct surfaces:
     #   background            the window body and the empty-Space placeholder
     #                         (`crates/terminal-view/src/space/render.rs:233`), and the
@@ -190,6 +217,7 @@ HIERARCHY: tuple[tuple[str, str], ...] = (
     ("popover.foreground", "muted.foreground"),
     ("sidebar.foreground", "muted.foreground"),
     ("tab.active.foreground", "muted.foreground"),
+    ("accent.foreground", "muted.foreground"),
 )
 
 # The surface each surface is painted on, so a translucent one is composited over what is
@@ -219,7 +247,7 @@ PARENTS: dict[str, str] = {
 FALLBACKS: dict[str, str | tuple] = {
     "popover.background": "background",                                  # schema.rs:969
     "sidebar.background": ("blend", "background", "border", 0.15),       # schema.rs:977-980
-    "title_bar.background": "background",                                # schema.rs:1010
+    "title_bar.background": "background",                                # schema.rs:1011
     "status_bar.background": "title_bar.background",                     # schema.rs:1013
     "list.background": "background",                                     # schema.rs:957
     "list.even.background": "list.background",                           # schema.rs:966
@@ -227,15 +255,17 @@ FALLBACKS: dict[str, str | tuple] = {
     "list.head.background": "list.background",                           # schema.rs:967
     "table.background": "list.background",                               # schema.rs:1001
     "table.even.background": "list.even.background",                     # schema.rs:1004
-    "table.hover.background": "list.hover.background",                   # schema.rs:1008
+    "table.hover.background": "list.hover.background",                   # schema.rs:1009
     "table.head.background": "list.head.background",                     # schema.rs:1005
-    "tab_bar.background": "background",                                  # schema.rs:997
-    "tab.background": "background",                                      # schema.rs:994
-    "tab.active.background": "background",                               # schema.rs:995
+    "tab_bar.background": "background",                                  # schema.rs:998
+    "tab.background": "background",                                      # schema.rs:995
+    "tab.active.background": "background",                               # schema.rs:996
     "tab.foreground": "foreground",                                      # schema.rs:1000
     "tab.active.foreground": "foreground",                               # schema.rs:997
     "popover.foreground": "foreground",                                  # schema.rs:970
     "sidebar.foreground": "foreground",                                  # schema.rs:984
+    "accent.foreground": "foreground",                                   # schema.rs:904
+    "secondary.foreground": "foreground",                                # schema.rs:819
     "table.head.foreground": "muted.foreground",                         # schema.rs:1006
     "muted.foreground": ("blend", "muted.background", "foreground", 0.7),  # schema.rs:777-779
 }
@@ -370,25 +400,26 @@ def rows() -> list[tuple[str, str, str, str, str, float]]:
 
 def inversions(
     only: list[tuple[str, str, str, dict[str, str]]] | None = None,
-) -> list[tuple[str, str, str, str, str, float, float]]:
-    """(file, variant, mode, primary, surface, primary ratio, secondary ratio) failures.
+) -> list[tuple[str, str, str, str, str, float, float, int]]:
+    """(file, variant, mode, primary, surface, primary ratio, secondary ratio, count).
 
     One row per variant and pair, for the surface with the smallest margin: a primary token
-    that is too quiet is too quiet on every surface it is drawn on, and ten near-identical
-    rows say it ten times.
+    that is too quiet is usually too quiet on every surface it is drawn on, and ten
+    near-identical rows say it ten times. `count` is how many of that pair's shared surfaces
+    are actually inverted, so a caller can report comparisons as well as rows -- the two are
+    different units and 10 rows was 37 comparisons when this rule was written.
     """
     out = []
     for file_name, name, mode, colors in variants() if only is None else only:
         for primary, secondary in HIERARCHY:
-            worst = min(
-                (
-                    (bg, measure(colors, primary, bg), measure(colors, secondary, bg))
-                    for bg in shared_surfaces(primary, secondary)
-                ),
-                key=lambda item: item[1] - item[2],
-            )
+            measured = [
+                (bg, measure(colors, primary, bg), measure(colors, secondary, bg))
+                for bg in shared_surfaces(primary, secondary)
+            ]
+            worst = min(measured, key=lambda item: item[1] - item[2])
             if worst[1] <= worst[2]:
-                out.append((file_name, name, mode, primary, *worst))
+                count = sum(1 for _, hi, lo in measured if hi <= lo)
+                out.append((file_name, name, mode, primary, *worst, count))
     return out
 
 
@@ -441,12 +472,16 @@ def self_test(quiet: bool = False) -> int:
         assert shared_surfaces(*pair), f"{pair} share no surface, so the rule never fires"
     inverted = {"background": "#ffffff", "foreground": "#767676", "muted.foreground": "#595959",
                 "border": "#000000", "muted.background": "#ffffff",
-                "accent.background": "#595959"}
+                "accent.background": "#ffffff", "secondary.background": "#ffffff"}
     assert measure(inverted, "foreground", "background") >= FLOOR, "primary clears the floor"
     assert measure(inverted, "muted.foreground", "background") >= FLOOR, "so does secondary"
     found = inversions([("fixture.json", "Fixture", "light", inverted)])
-    # Every primary token falls back to `foreground` here, so all four pairs report.
+    # Every primary token falls back to `foreground` here, so every pair reports, and each
+    # row names how many of that pair's shared surfaces are inverted.
     assert len(found) == len(HIERARCHY) and all(row[5] < row[6] for row in found), found
+    assert sum(row[7] for row in found) == sum(
+        len(shared_surfaces(*pair)) for pair in HIERARCHY
+    ), "every shared surface of every pair is inverted in this fixture"
     # ...and passes once the primary is the darker of the two.
     upright = dict(inverted, foreground="#404040")
     assert not inversions([("fixture.json", "Fixture", "light", upright)])
@@ -483,6 +518,7 @@ def main() -> int:
     measured = rows()
     failures = [row for row in measured if row[5] < FLOOR]
     inverted = inversions()
+    inverted_comparisons = sum(row[7] for row in inverted)
     secondary = HIERARCHY[0][1]
 
     if args.report:
@@ -491,21 +527,25 @@ def main() -> int:
             mark = "FAIL" if ratio < FLOOR else "ok  "
             print(f"{mark} {name:<{width}} {mode:<5} {fg_token:<22} on {bg_token:<24} {ratio:5.2f}:1")
         print(f"\n{len(measured)} measurements, {len(failures)} below {FLOOR}:1")
-        for file_name, name, mode, fg_token, bg_token, hi, lo in inverted:
+        for file_name, name, mode, fg_token, bg_token, hi, lo, count in inverted:
             print(
-                f"INVERTED {name:<{width}} {mode:<5} {fg_token:<22} on {bg_token:<24} "
-                f"{hi:5.2f}:1 <= {lo:5.2f}:1"
+                f"INVERTED {name:<{width}} {mode:<5} {fg_token:<22} worst on "
+                f"{bg_token:<24} {hi:5.2f}:1 <= {lo:5.2f}:1 ({count} surface(s))"
             )
-        print(f"{comparisons()} primary/{secondary} comparisons, {len(inverted)} inverted")
+        print(
+            f"{comparisons()} primary/{secondary} comparisons, {inverted_comparisons} "
+            f"inverted across {len(inverted)} token/variant row(s)"
+        )
 
     if failures or inverted:
         if not args.report:
             for file_name, name, mode, fg_token, bg_token, ratio in failures:
                 print(f"{file_name}: {name} ({mode}): {fg_token} on {bg_token} is {ratio:.2f}:1")
-            for file_name, name, mode, fg_token, bg_token, hi, lo in inverted:
+            for file_name, name, mode, fg_token, bg_token, hi, lo, count in inverted:
                 print(
                     f"{file_name}: {name} ({mode}): on {bg_token} {fg_token} is {hi:.2f}:1 but "
-                    f"{secondary} is {lo:.2f}:1 -- secondary text out-reads primary"
+                    f"{secondary} is {lo:.2f}:1 -- secondary text out-reads primary "
+                    f"({count} of its surface(s))"
                 )
         if failures:
             print(
@@ -514,8 +554,9 @@ def main() -> int:
             )
         if inverted:
             print(
-                f"check-theme-contrast: {len(inverted)} case(s) where {secondary} reads at "
-                "least as strongly as the primary token beside it",
+                f"check-theme-contrast: {inverted_comparisons} comparison(s) in "
+                f"{len(inverted)} token/variant row(s) where {secondary} reads at least "
+                "as strongly as the primary token beside it",
                 file=sys.stderr,
             )
         return 1

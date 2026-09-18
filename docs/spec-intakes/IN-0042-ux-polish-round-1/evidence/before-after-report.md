@@ -232,14 +232,29 @@ the same script with `foreground` added to the token list.
 (`docs/spec-intakes/IN-0042-ux-polish-round-1/US-0127-primary-text-contrast-floor.md`), which
 added the primary-text tokens and a second rule -- a primary token must out-read
 `muted.foreground` on every surface both are drawn on -- and moved the flagged values in
-lightness only. Two corrections to the numbers above, both from attributing each token to the
-surface the kit actually paints it on: the headline ratios are `foreground` scored against the
-**tab strip**, where these themes draw `tab.foreground` instead, so **no variant's primary text
-was in fact below 4.5:1** (Solarized Light bottomed out at 4.53:1 on a hovered row); and there
-were **three** inverted variants, not two -- **Ayu Light** was inverted on all four of its
-surfaces, including `popover.foreground` at 4.88:1 against `muted.foreground`'s 5.91:1. The
-defect the section describes is real and is entirely the hierarchy: the 4.5:1 floor alone would
-never have caught it.
+lightness only.
+
+The two ratios quoted above are **confirmed real**. They are `foreground` on
+`tab_bar.background`, and OneTerm draws primary text there: the dock panel headers "Session"
+and "SFTP Browser" inherit the root `foreground` because the kit colours a header only when a
+panel supplies a `title_style` and neither `SessionPanel` nor `SftpPanel` does (kit
+`dock/tab_panel.rs:380-382`, `dock/panel.rs:87-89`). Measured on the packet's own frames, the
+"Session" header is `#586e75` on `#eee8d5` = **4.39:1** and `#5f6d75` on `#f4f1e2` = **4.71:1**,
+now **5.56:1** and **5.71:1**. So Solarized Light's primary text really was below the floor, and
+the section's heading is accurate as written. (An earlier revision of `US-0127` claimed the
+opposite, on the incorrect ground that the strip carries only `tab.foreground`; the independent
+verification caught it, and both the check and the records were corrected.)
+
+Two extensions to the finding rather than corrections of it:
+
+- There were **three** inverted variants, not two. **Ayu Light** was inverted on all of its
+  primary surfaces, including `popover.foreground` at 4.88:1 against `muted.foreground`'s
+  5.91:1. **Alduin**, listed as close at 5.65, was not inverted: that is `foreground` on the
+  title and status strips against `muted.foreground`'s 5.05 there, with 0.6 of headroom.
+- Five more values were below the floor once the button and menu surfaces were measured too:
+  `accent.foreground` in Ayu Light (4.13) and Everforest Light (4.21), and
+  `secondary.foreground` in Everforest Light (4.43), Everforest Dark (3.62) and Tokyo Moon
+  (4.26). All five are fixed in the same lightness-only way.
 
 ### 4.3 The pre-existing flaky test
 

@@ -166,9 +166,14 @@ Secondary text — host addresses, search placeholders, empty-state copy, key-bi
 window body, popovers and a hovered menu row, the key-binding chip's own fill, the sidebar,
 the title and status bars, list and table rows in their plain, alternating and
 hovered/selected states, and both an inactive and the active tab. Primary text — every label,
-name and value beside them — is `foreground` plus the three tokens the kit routes specific
-surfaces through, each falling back to `foreground` when a theme omits it:
-`popover.foreground`, `sidebar.foreground` and `tab.active.foreground`.
+name and value beside them — is `foreground` plus the tokens the kit routes specific surfaces
+through, each falling back to `foreground` when a theme omits it: `popover.foreground`,
+`sidebar.foreground`, `tab.active.foreground`, `accent.foreground` (the label of a hovered or
+selected menu row) and `secondary.foreground` (text on a secondary fill — a `Secondary` button
+or tag). `foreground` itself is measured on the window body, popovers, the title and status
+bars, the **tab strip** (the dock panel headers "Session" and "SFTP Browser" inherit it: the
+kit colours a header only when a panel supplies a `title_style`, and none does) and list and
+table rows in their plain, alternating, hovered/selected and header states.
 
 **The hierarchy.** On every surface where a primary token and `muted.foreground` are both
 drawn, the primary token's ratio is **strictly greater** than the secondary's. Clearing the
@@ -180,9 +185,12 @@ has no hierarchy left.
 That `SURFACES` table is the contract, and it is only as complete as its last review: a
 surface missing from it is not measured, so a component that starts drawing one of these
 tokens on a new background adds the surface there (each entry cites the line that draws the
-pair) instead of assuming an existing entry covers it. Pair each foreground with the token
-the kit actually paints on that surface — `foreground` scored against the tab strip, where
-`tab.foreground` is drawn, is a number about nothing. The floor is a minimum, not a target:
+pair) instead of assuming an existing entry covers it. Pair each foreground with the token the
+kit actually paints on that surface, and remember that one surface can carry more than one:
+the tab strip shows an inactive tab's `tab.foreground` *and* a dock header's `foreground`, so
+both are listed against it. Declaring a surface out of scope is the one move this table cannot
+make safely — an omission reads exactly like a pair that was never drawn. The floor is a
+minimum, not a target:
 secondary values land near 5:1 so that secondary text still reads as secondary, primary ones
 sit about half a ratio point or more above them, and a few themes carry untouched tokens far
 above both (`Molokai Light`'s `foreground` is 19:1).
