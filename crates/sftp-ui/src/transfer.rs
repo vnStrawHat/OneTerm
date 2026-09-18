@@ -57,8 +57,12 @@ pub(crate) fn confirm_replace(
     window: &mut Window,
     cx: &mut App,
 ) {
-    // The dialog builder is a `Fn` and both buttons plus the dismiss path can
-    // reach `answer`; the flag keeps the decision to the first one that does.
+    // The dialog builder is a `Fn`, so each button's handler is cloned into every
+    // frame; the flag keeps the decision to the first click that lands. Dismissal
+    // does not reach `answer` at all: Escape dispatches Cancel, which closes the
+    // dialog through `on_cancel` below, and Enter's Confirm returns `false` so the
+    // dialog stays open. Both leave the target untouched, which is the right
+    // default for a destructive question.
     let answered = std::cell::Cell::new(false);
     let answer = Rc::new(move |replace: bool, window: &mut Window, cx: &mut App| {
         if !answered.replace(true) {
@@ -106,23 +110,76 @@ fn upload_name(local: &Path) -> String {
         .unwrap_or_else(|| "uploaded".to_string())
 }
 
-/// The names of `local_paths` that an upload would write over, in batch order.
+/// One file of a batch that would land on something already in the remote
+/// directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Collision {
+    /// The name the local file uploads as.
+    upload: String,
+    /// The remote entry it would land on — the same name, or one differing only
+    /// in case (see [`collisions`]).
+    existing: String,
+    /// That remote entry is a directory, so the upload merges into it rather
+    /// than replacing it wholesale.
+    existing_is_dir: bool,
+}
+
+impl Collision {
+    /// The remote entry and the upload name are not spelled the same, so the
+    /// two are only the same file if the server folds case.
+    fn differs_in_case(&self) -> bool {
+        self.upload != self.existing
+    }
+}
+
+/// The files of `local_paths` that an upload would write over, in batch order,
+/// one entry per upload name.
 ///
 /// `existing` is what the remote directory holds right now. An empty result
 /// means the batch can start without asking.
-fn colliding_names(local_paths: &[PathBuf], existing: &[String]) -> Vec<String> {
-    local_paths
-        .iter()
-        .map(|path| upload_name(path))
-        .filter(|name| existing.contains(name))
-        .collect()
+///
+/// The match is **case-insensitive**. A client cannot know the server's
+/// case-folding rule, and on a Windows or default-macOS host uploading
+/// `case.txt` truncates an existing `Case.txt`; a byte-exact comparison saw no
+/// collision and asked nothing, which is the data-loss path this guard exists to
+/// close. Matching loosely can only ask more often — on a case-sensitive server
+/// where `Keep.txt` and `keep.txt` genuinely coexist — and the prompt says which
+/// entry it means so the user can tell the two situations apart.
+fn collisions(local_paths: &[PathBuf], existing: &[FileEntry]) -> Vec<Collision> {
+    let mut found: Vec<Collision> = Vec::new();
+    for path in local_paths {
+        let upload = upload_name(path);
+        // The same name twice in one batch is one collision, not two: it is a
+        // single remote entry that would be overwritten.
+        if found.iter().any(|seen| seen.upload == upload) {
+            continue;
+        }
+        // An exact match wins over a case-only one, so a directory holding both
+        // spellings names the entry the upload actually lands on.
+        let entry = existing
+            .iter()
+            .find(|entry| entry.name == upload)
+            .or_else(|| {
+                existing
+                    .iter()
+                    .find(|entry| entry.name.to_lowercase() == upload.to_lowercase())
+            });
+        if let Some(entry) = entry {
+            found.push(Collision {
+                upload,
+                existing: entry.name.clone(),
+                existing_is_dir: entry.is_dir,
+            });
+        }
+    }
+    found
 }
 
 /// What is left of the batch once the user has answered: `replace` keeps all of
 /// it, otherwise the colliding files are dropped and the rest still goes up.
 fn keep_after_answer(
     local_paths: Vec<PathBuf>,
-    colliding: &[String],
+    colliding: &[Collision],
     replace: bool,
 ) -> Vec<PathBuf> {
     if replace {
@@ -130,49 +187,101 @@ fn keep_after_answer(
     }
     local_paths
         .into_iter()
-        .filter(|path| !colliding.contains(&upload_name(path)))
+        .filter(|path| {
+            let name = upload_name(path);
+            !colliding.iter().any(|collision| collision.upload == name)
+        })
         .collect()
 }
 
-/// Word the overwrite question for `colliding` out of a batch of `batch_len`:
-/// title, description, the destructive label and the neutral one.
+/// A sentence for the collisions whose remote entry is spelled differently, or
+/// an empty string when every name matched exactly.
+fn case_note(colliding: &[Collision]) -> String {
+    if colliding.iter().any(Collision::differs_in_case) {
+        " Names that differ only in case may be the same file on this server.".to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Word the overwrite question: title, description, the destructive label and
+/// the neutral one. `others_remain` is whether anything would still be uploaded
+/// after skipping.
 ///
 /// The neutral answer is "Cancel" when skipping leaves nothing to upload and
 /// "Skip" when the rest of the batch still goes up, so the button never claims
 /// to stop more than it stops.
 fn collision_prompt(
-    colliding: &[String],
-    batch_len: usize,
+    colliding: &[Collision],
+    others_remain: bool,
 ) -> (&'static str, String, &'static str, &'static str) {
-    let keep_label = if colliding.len() < batch_len {
-        "Skip"
-    } else {
-        "Cancel"
-    };
-    if let [name] = colliding {
+    let keep_label = if others_remain { "Skip" } else { "Cancel" };
+    if let [only] = colliding {
+        let existing = &only.existing;
+        // A folder is merged into, not replaced: saying "Replace" would promise
+        // that what is already inside is removed first, and it is not.
+        if only.existing_is_dir {
+            let spelling = if only.differs_in_case() {
+                format!(
+                    " You are uploading \"{}\", which may be the same folder on this server.",
+                    only.upload
+                )
+            } else {
+                String::new()
+            };
+            return (
+                "Replace Remote Folder",
+                format!(
+                    "\"{existing}\" already exists in the remote folder. The upload merges into \
+                     it and overwrites the files inside that collide.{spelling} Continue?"
+                ),
+                "Merge",
+                keep_label,
+            );
+        }
+        let spelling = if only.differs_in_case() {
+            format!(
+                " You are uploading \"{}\", which may be the same file on this server.",
+                only.upload
+            )
+        } else {
+            String::new()
+        };
         return (
             "Replace Remote File",
-            format!("\"{name}\" already exists in the remote folder. Replace it?"),
+            format!("\"{existing}\" already exists in the remote folder.{spelling} Replace it?"),
             "Replace",
             keep_label,
         );
     }
-    // Long batches name the first few files rather than filling the dialog.
+    // Long batches name the first few entries rather than filling the dialog.
     const SHOWN: usize = 5;
-    let mut listed = colliding
+    let mut names: Vec<&str> = Vec::new();
+    for collision in colliding {
+        if !names.contains(&collision.existing.as_str()) {
+            names.push(&collision.existing);
+        }
+    }
+    let mut listed = names
         .iter()
         .take(SHOWN)
         .map(|name| format!("\"{name}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    if colliding.len() > SHOWN {
-        listed.push_str(&format!(", and {} more", colliding.len() - SHOWN));
+    if names.len() > SHOWN {
+        listed.push_str(&format!(", and {} more", names.len() - SHOWN));
     }
+    let folders = if colliding.iter().any(|c| c.existing_is_dir) {
+        " An existing folder is merged into, not emptied first."
+    } else {
+        ""
+    };
     (
         "Replace Remote Files",
         format!(
-            "{} files already exist in the remote folder: {listed}. Replace them?",
-            colliding.len()
+            "{} files already exist in the remote folder: {listed}. Replace them?{}{folders}",
+            names.len(),
+            case_note(colliding),
         ),
         "Replace all",
         keep_label,
@@ -317,8 +426,8 @@ impl SftpPanel {
             // batch would be overwritten. A directory we cannot list is a
             // best-effort miss, not a reason to refuse the upload: it only means
             // the collision cannot be known, so the batch runs as it always did.
-            let existing: Vec<String> = match sftp.read_dir(cwd.clone()).await {
-                Ok(entries) => entries.into_iter().map(|entry| entry.name).collect(),
+            let existing: Vec<FileEntry> = match sftp.read_dir(cwd.clone()).await {
+                Ok(entries) => entries,
                 Err(error) => {
                     log::warn!(
                         "SftpPanel::do_upload_paths: could not list \"{cwd}\" to check for \
@@ -327,7 +436,7 @@ impl SftpPanel {
                     Vec::new()
                 }
             };
-            let colliding = colliding_names(&local_paths, &existing);
+            let colliding = collisions(&local_paths, &existing);
             if colliding.is_empty() {
                 Self::upload_batch(&panel, sftp, cwd, local_paths, cx).await;
                 return;
@@ -338,8 +447,10 @@ impl SftpPanel {
                 colliding.len(),
                 local_paths.len()
             );
+            let others_remain =
+                !keep_after_answer(local_paths.clone(), &colliding, false).is_empty();
             let (title, description, replace_label, keep_label) =
-                collision_prompt(&colliding, local_paths.len());
+                collision_prompt(&colliding, others_remain);
             _ = cx.update(|window, cx| {
                 confirm_replace(
                     title,
@@ -347,19 +458,16 @@ impl SftpPanel {
                     replace_label,
                     keep_label,
                     move |replace, window, cx| {
-                        let keep = keep_after_answer(local_paths.clone(), &colliding, replace);
-                        if keep.is_empty() {
-                            log::info!("SftpPanel::do_upload_paths: nothing left to upload");
-                            return;
-                        }
-                        let panel = panel.clone();
-                        let sftp = sftp.clone();
-                        let cwd = cwd.clone();
-                        window
-                            .spawn(cx, async move |cx| {
-                                Self::upload_batch(&panel, sftp, cwd, keep, cx).await;
-                            })
-                            .detach();
+                        Self::start_answered_upload(
+                            &panel,
+                            sftp.clone(),
+                            cwd.clone(),
+                            local_paths.clone(),
+                            &colliding,
+                            replace,
+                            window,
+                            cx,
+                        );
                     },
                     window,
                     cx,
@@ -367,6 +475,36 @@ impl SftpPanel {
             });
         })
         .detach();
+    }
+
+    /// Start what the user's answer leaves of the batch: the whole of it on
+    /// Replace, only the files that collide with nothing on Skip or Cancel.
+    ///
+    /// The collision dialog's two buttons are this function's only callers in
+    /// the app; the panel tests call it directly, because a gpui test cannot
+    /// click a dialog button.
+    #[allow(clippy::too_many_arguments)]
+    fn start_answered_upload(
+        panel: &Entity<SftpPanel>,
+        sftp: Arc<dyn SftpBackend>,
+        cwd: RemotePath,
+        local_paths: Vec<PathBuf>,
+        colliding: &[Collision],
+        replace: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let keep = keep_after_answer(local_paths, colliding, replace);
+        if keep.is_empty() {
+            log::info!("SftpPanel: upload answered \"keep\" — nothing left to upload");
+            return;
+        }
+        let panel = panel.clone();
+        window
+            .spawn(cx, async move |cx| {
+                Self::upload_batch(&panel, sftp, cwd, keep, cx).await;
+            })
+            .detach();
     }
 
     /// Upload each path of an already-confirmed batch into `cwd`, sequentially,
@@ -1081,8 +1219,21 @@ mod tests {
         names.iter().map(PathBuf::from).collect()
     }
 
-    fn owned(names: &[&str]) -> Vec<String> {
-        names.iter().map(|n| n.to_string()).collect()
+    /// A remote listing of plain files with these names.
+    fn remote(names: &[&str]) -> Vec<oneterm_core::FileEntry> {
+        names
+            .iter()
+            .map(|name| dir_entry(&RemotePath::new("/home/u"), name, false))
+            .collect()
+    }
+
+    /// The collisions of `batch` against a remote directory of plain files,
+    /// reduced to the (upload, existing) name pairs.
+    fn collision_pairs(batch: &[PathBuf], existing: &[&str]) -> Vec<(String, String)> {
+        super::collisions(batch, &remote(existing))
+            .into_iter()
+            .map(|c| (c.upload, c.existing))
+            .collect()
     }
 
     /// US-0128: only the batch entries whose remote name is already in the
@@ -1090,14 +1241,68 @@ mod tests {
     #[test]
     fn collisions_are_the_batch_names_the_remote_directory_already_holds() {
         let batch = paths(&["a/notes.md", "b/new.txt", "c/report.pdf"]);
-        let existing = owned(&["report.pdf", "notes.md", "unrelated.bin"]);
 
         assert_eq!(
-            super::colliding_names(&batch, &existing),
-            vec!["notes.md".to_string(), "report.pdf".to_string()]
+            collision_pairs(&batch, &["report.pdf", "notes.md", "unrelated.bin"]),
+            vec![
+                ("notes.md".to_string(), "notes.md".to_string()),
+                ("report.pdf".to_string(), "report.pdf".to_string()),
+            ]
         );
-        assert!(super::colliding_names(&batch, &[]).is_empty());
-        assert!(super::colliding_names(&[], &existing).is_empty());
+        assert!(collision_pairs(&batch, &[]).is_empty());
+        assert!(collision_pairs(&[], &["report.pdf"]).is_empty());
+    }
+
+    /// US-0128 (verification F1): the client cannot know the server's
+    /// case-folding rule, so a remote entry that differs only in case is a
+    /// collision too — otherwise a Windows or macOS server truncates it with no
+    /// question asked. This fails under a byte-exact `contains(name)`.
+    #[test]
+    fn a_remote_name_differing_only_in_case_is_a_collision() {
+        assert_eq!(
+            collision_pairs(&paths(&["case.txt"]), &["Case.txt"]),
+            vec![("case.txt".to_string(), "Case.txt".to_string())]
+        );
+        assert_eq!(
+            collision_pairs(&paths(&["READ.ME"]), &["read.me"]),
+            vec![("READ.ME".to_string(), "read.me".to_string())]
+        );
+        // An exact match wins, so a directory holding both spellings names the
+        // entry the upload actually lands on.
+        assert_eq!(
+            collision_pairs(&paths(&["case.txt"]), &["Case.txt", "case.txt"]),
+            vec![("case.txt".to_string(), "case.txt".to_string())]
+        );
+        // And a name that differs by more than case still does not collide.
+        assert!(collision_pairs(&paths(&["case.txt"]), &["cases.txt"]).is_empty());
+    }
+
+    /// US-0128 (verification F3): the same name twice in one batch is one
+    /// remote entry, so it is reported — and counted — once.
+    #[test]
+    fn a_name_repeated_in_one_batch_collides_once() {
+        let batch = paths(&["a/x.txt", "b/x.txt", "c/y.txt"]);
+        assert_eq!(
+            collision_pairs(&batch, &["x.txt"]),
+            vec![("x.txt".to_string(), "x.txt".to_string())]
+        );
+
+        // ...and the question counts and lists it once, not twice.
+        let colliding = super::collisions(&batch, &remote(&["x.txt"]));
+        let (_, description, _, _) = super::collision_prompt(&colliding, true);
+        assert_eq!(
+            description,
+            "\"x.txt\" already exists in the remote folder. Replace it?"
+        );
+
+        // Both copies are dropped on Skip, so a batch that is nothing but the
+        // repeated name leaves nothing to upload and the button says so.
+        let both = paths(&["a/x.txt", "b/x.txt"]);
+        let colliding = super::collisions(&both, &remote(&["x.txt"]));
+        let remaining = super::keep_after_answer(both, &colliding, false);
+        assert!(remaining.is_empty());
+        let (_, _, _, keep) = super::collision_prompt(&colliding, !remaining.is_empty());
+        assert_eq!(keep, "Cancel");
     }
 
     /// A path with no file name still gets the fallback name the upload uses,
@@ -1105,8 +1310,8 @@ mod tests {
     #[test]
     fn a_nameless_path_collides_under_its_fallback_name() {
         assert_eq!(
-            super::colliding_names(&paths(&[".."]), &owned(&["uploaded"])),
-            vec!["uploaded".to_string()]
+            collision_pairs(&paths(&[".."]), &["uploaded"]),
+            vec![("uploaded".to_string(), "uploaded".to_string())]
         );
     }
 
@@ -1115,7 +1320,7 @@ mod tests {
     #[test]
     fn the_answer_decides_what_is_left_of_the_batch() {
         let batch = paths(&["a/notes.md", "b/new.txt", "c/report.pdf"]);
-        let colliding = owned(&["notes.md", "report.pdf"]);
+        let colliding = super::collisions(&batch, &remote(&["notes.md", "report.pdf"]));
 
         assert_eq!(
             super::keep_after_answer(batch.clone(), &colliding, true),
@@ -1126,17 +1331,16 @@ mod tests {
             paths(&["b/new.txt"])
         );
         // A batch that collides everywhere uploads nothing when skipped.
-        assert!(
-            super::keep_after_answer(batch, &owned(&["notes.md", "new.txt", "report.pdf"]), false)
-                .is_empty()
-        );
+        let all = super::collisions(&batch, &remote(&["notes.md", "new.txt", "report.pdf"]));
+        assert!(super::keep_after_answer(batch, &all, false).is_empty());
     }
 
     /// US-0128: one collision asks "Replace", several ask "Replace all"; the
     /// neutral button only says "Cancel" when skipping leaves nothing to upload.
     #[test]
     fn the_prompt_names_the_files_and_labels_the_answers() {
-        let (title, description, replace, keep) = super::collision_prompt(&owned(&["notes.md"]), 1);
+        let one = super::collisions(&paths(&["notes.md"]), &remote(&["notes.md"]));
+        let (title, description, replace, keep) = super::collision_prompt(&one, false);
         assert_eq!(title, "Replace Remote File");
         assert_eq!(
             description,
@@ -1145,11 +1349,11 @@ mod tests {
         assert_eq!((replace, keep), ("Replace", "Cancel"));
 
         // One collision, but the rest of the batch still goes up → "Skip".
-        let (_, _, replace, keep) = super::collision_prompt(&owned(&["notes.md"]), 3);
+        let (_, _, replace, keep) = super::collision_prompt(&one, true);
         assert_eq!((replace, keep), ("Replace", "Skip"));
 
-        let (title, description, replace, keep) =
-            super::collision_prompt(&owned(&["a.txt", "b.txt"]), 2);
+        let two = super::collisions(&paths(&["a.txt", "b.txt"]), &remote(&["a.txt", "b.txt"]));
+        let (title, description, replace, keep) = super::collision_prompt(&two, false);
         assert_eq!(title, "Replace Remote Files");
         assert_eq!(
             description,
@@ -1158,10 +1362,57 @@ mod tests {
         assert_eq!((replace, keep), ("Replace all", "Cancel"));
 
         // A long list names the first five and counts the rest.
-        let many = owned(&["1", "2", "3", "4", "5", "6", "7"]);
-        let (_, description, _, _) = super::collision_prompt(&many, 7);
+        let names = ["1", "2", "3", "4", "5", "6", "7"];
+        let many = super::collisions(&paths(&names), &remote(&names));
+        let (_, description, _, _) = super::collision_prompt(&many, false);
         assert!(
             description.ends_with("\"1\", \"2\", \"3\", \"4\", \"5\", and 2 more. Replace them?"),
+            "{description}"
+        );
+    }
+
+    /// US-0128 (verification F1/F7): the question says which remote entry it
+    /// means when the spelling differs, and a folder is announced as one — with
+    /// the merge it really performs, not a replacement.
+    #[test]
+    fn the_prompt_explains_a_case_match_and_a_folder_merge() {
+        let cased = super::collisions(&paths(&["case.txt"]), &remote(&["Case.txt"]));
+        let (title, description, replace, _) = super::collision_prompt(&cased, false);
+        assert_eq!(title, "Replace Remote File");
+        assert_eq!(
+            description,
+            "\"Case.txt\" already exists in the remote folder. You are uploading \"case.txt\", \
+             which may be the same file on this server. Replace it?"
+        );
+        assert_eq!(replace, "Replace");
+
+        let folder = super::collisions(
+            &paths(&["adir"]),
+            &[dir_entry(&RemotePath::new("/home/u"), "adir", true)],
+        );
+        let (title, description, replace, keep) = super::collision_prompt(&folder, false);
+        assert_eq!(title, "Replace Remote Folder");
+        assert_eq!(
+            description,
+            "\"adir\" already exists in the remote folder. The upload merges into it and \
+             overwrites the files inside that collide. Continue?"
+        );
+        assert_eq!((replace, keep), ("Merge", "Cancel"));
+
+        // In a batch the case and folder caveats are appended once.
+        let mixed = super::collisions(
+            &paths(&["case.txt", "adir"]),
+            &[
+                dir_entry(&RemotePath::new("/home/u"), "Case.txt", false),
+                dir_entry(&RemotePath::new("/home/u"), "adir", true),
+            ],
+        );
+        let (_, description, _, _) = super::collision_prompt(&mixed, false);
+        assert!(
+            description.ends_with(
+                "Names that differ only in case may be the same file on this server. An \
+                 existing folder is merged into, not emptied first."
+            ),
             "{description}"
         );
     }
@@ -1250,6 +1501,138 @@ mod tests {
         assert!(backend.transfer_requests().is_empty());
         // One listing, one question — not one per file.
         assert_eq!(backend.read_dir_requests(), vec![cwd]);
+    }
+
+    impl Harness {
+        /// Answer a collision question the way the dialog's buttons do, and let
+        /// the resulting batch reach the backend. `replace` is the danger
+        /// button; `false` is Skip / Cancel.
+        ///
+        /// A gpui test cannot click a dialog button, so this drives the same
+        /// `start_answered_upload` the two buttons call — everything from the
+        /// answer down, including `keep_after_answer`.
+        fn answer_collision(
+            &self,
+            batch: &[&str],
+            existing: &[&str],
+            replace: bool,
+            cx: &mut VisualTestContext,
+        ) {
+            let batch = paths(batch);
+            let colliding = super::collisions(&batch, &remote(existing));
+            assert!(!colliding.is_empty(), "the test batch must collide");
+            self.panel.update_in(cx, |panel, window, cx| {
+                let sftp = panel.sftp().cloned().expect("backend attached");
+                let cwd = panel.browser().cwd().clone();
+                let panel = cx.entity();
+                SftpPanel::start_answered_upload(
+                    &panel, sftp, cwd, batch, &colliding, replace, window, cx,
+                );
+            });
+            cx.run_until_parked();
+        }
+    }
+
+    /// US-0128 (verification F5): answering **Replace** uploads every file of
+    /// the batch, the colliding ones included.
+    #[gpui::test]
+    fn answering_replace_uploads_the_whole_batch(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        let first = backend.arm_transfer();
+        let _second = backend.arm_transfer();
+
+        harness.answer_collision(&["a.txt", "new.txt"], &["a.txt"], true, cx);
+
+        // Sequential, so the colliding file goes first and on its own.
+        let requests = backend.transfer_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].remote.as_str(), "/home/u/a.txt");
+        assert_eq!(harness.statuses(cx), vec![TransferStatus::InProgress]);
+
+        // Settling it lets the rest of the batch follow — Replace kept both.
+        drop(first.events);
+        first.result.try_send(Ok(())).unwrap();
+        cx.run_until_parked();
+
+        let requests = backend.transfer_requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].remote.as_str(), "/home/u/new.txt");
+        assert_eq!(
+            harness.statuses(cx),
+            vec![TransferStatus::Completed, TransferStatus::InProgress]
+        );
+    }
+
+    /// US-0128 (verification F5): answering **Skip** uploads only the files that
+    /// collide with nothing — the colliding one is never requested.
+    #[gpui::test]
+    fn answering_skip_uploads_only_the_files_that_collide_with_nothing(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        let _transfer = backend.arm_transfer();
+
+        harness.answer_collision(&["a.txt", "new.txt"], &["a.txt"], false, cx);
+
+        let requests = backend.transfer_requests();
+        assert_eq!(requests.len(), 1, "only the non-colliding file goes up");
+        assert_eq!(requests[0].remote.as_str(), "/home/u/new.txt");
+        assert_eq!(harness.statuses(cx), vec![TransferStatus::InProgress]);
+    }
+
+    /// US-0128 (verification F5): answering **Cancel** — the same answer with
+    /// nothing else in the batch — transfers nothing at all.
+    #[gpui::test]
+    fn answering_cancel_transfers_nothing(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+
+        harness.answer_collision(&["a.txt"], &["a.txt"], false, cx);
+
+        assert!(backend.transfer_requests().is_empty());
+        assert!(harness.statuses(cx).is_empty());
+    }
+
+    /// US-0128 (verification F1/F5): a case-only match is answered like any
+    /// other — Skip leaves the remote entry alone, Replace uploads onto it.
+    #[gpui::test]
+    fn a_case_only_collision_is_answered_like_any_other(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+
+        harness.answer_collision(&["case.txt"], &["Case.txt"], false, cx);
+        assert!(backend.transfer_requests().is_empty());
+
+        let _transfer = backend.arm_transfer();
+        harness.answer_collision(&["case.txt"], &["Case.txt"], true, cx);
+        let requests = backend.transfer_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].remote.as_str(), "/home/u/case.txt");
+    }
+
+    /// US-0128 (verification F1): an upload whose only match differs in case
+    /// still stops at the dialog instead of truncating the remote file.
+    #[gpui::test]
+    fn upload_onto_a_case_only_match_asks_first(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        backend
+            .arm_read_dir()
+            .try_send(Ok(vec![dir_entry(
+                &RemotePath::new("/home/u"),
+                "Case.txt",
+                false,
+            )]))
+            .unwrap();
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_upload_paths(vec![PathBuf::from("case.txt")], window, cx);
+        });
+        cx.run_until_parked();
+
+        assert!(harness.has_dialog(cx));
+        assert!(backend.transfer_requests().is_empty());
+        assert!(harness.statuses(cx).is_empty());
     }
 
     /// US-0128: a remote directory that cannot be listed must not block the

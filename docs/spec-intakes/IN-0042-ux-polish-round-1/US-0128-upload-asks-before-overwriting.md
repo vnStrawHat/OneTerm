@@ -13,7 +13,7 @@ Created: 2026-09-18
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -26,7 +26,10 @@ Created: 2026-09-18
   the user never agreed to lose. The change adds a guard rather than removing one,
   but it sits directly on that path, so the failure mode to watch is a guard that
   is *skipped* (a new upload entry point that bypasses `do_upload_paths`) or one
-  that lets the transfer start before the answer arrives.
+  that lets the transfer start before the answer arrives. The verification found a
+  third: a guard that *misses* — the collision check must be at least as loose as
+  the server's own name matching, or it waves through exactly the overwrite it
+  exists to catch.
 - Spec Intake, when required: `IN-0042` (UX polish round 1)
 
 ## Outcome
@@ -69,8 +72,10 @@ once for the whole batch with Replace all / Skip.
 ## Acceptance
 
 - [x] Uploading a file whose name already exists in the remote directory opens a
-      confirmation dialog naming the file, and requests **nothing** from the
-      backend until it is answered.
+      confirmation dialog naming the remote entry, and **writes nothing** until it
+      is answered. (One `read_dir` of the cwd runs first — that is how the
+      collision is known — so every upload now costs one extra round trip even
+      when nothing collides; no `upload` is requested before the answer.)
 - [x] Cancel/Skip leaves the colliding file untouched on the server — no transfer
       request, no queue item for it.
 - [x] Replace starts the upload, exactly as before the packet.
@@ -84,6 +89,16 @@ once for the whole batch with Replace all / Skip.
       because both directions now render it from one helper.
 - [x] A remote directory that cannot be listed does not block the upload; it only
       means the collision cannot be known (logged at `warn`).
+- [x] **A remote entry that differs from the upload only in case is a collision
+      too**, because the client cannot know the server's case-folding rule; the
+      question names the remote entry and says the two may be the same file on
+      this server. (Acceptance rework, verification `F1`.)
+- [x] The same name twice in one batch is one collision: listed once, counted
+      once, and the neutral button still reads `Cancel` when skipping both copies
+      would leave nothing to upload. (Acceptance rework, verification `F3`.)
+- [x] An existing remote **folder** is announced as a folder and the dialog says
+      the upload merges into it rather than replacing it. (Acceptance rework,
+      verification `F7`.)
 
 ## Documentation
 
@@ -187,8 +202,20 @@ applied to the other direction; the shape of the dialog is already settled there
 
 ## Evidence and Gaps
 
-`cargo test -p oneterm-sftp-ui` — 67 passed, 0 failed (8 of them new: four on the
-decision itself, four on the panel wiring). `pwsh scripts/ci-local.ps1` —
+**Acceptance rework, 2026-09-18**, after an independent verification returned
+PASS with findings (`evidence/US-0128-verify.md`, 14 frames). `F1` (a
+case-insensitive server still overwrote silently), `F3` (a repeated name counted
+twice), `F4` (a comment that described a dismiss path which does not exist), `F5`
+(no test answered the dialog), `F7` (a folder announced as a file) and `F8` (an
+acceptance row that overstated "requests nothing") are fixed above; `F2` and `F6`
+are recorded in Gaps with their reasoning and no code change.
+
+`cargo test -p oneterm-sftp-ui` — 75 passed, 0 failed. Both mutations the
+verifier used are now caught: replacing the case-insensitive match with the old
+byte-exact `contains` fails four tests (including the pure
+`a_remote_name_differing_only_in_case_is_a_collision`), and making `Skip` keep the
+whole batch fails four — three of them panel tests, where before only the pure one
+caught it. `pwsh scripts/ci-local.ps1` —
 `ci-local: all checks passed.` The GUI walk against a loopback `sftp-dev-server`
 is written up with its seven frames in `evidence/US-0128-verification.md`: the
 dialog on an existing remote file, the remote listing unchanged after Cancel
@@ -202,19 +229,46 @@ Gaps:
   foreign-change case with its own mtime conflict dialog and does not use
   `confirm_replace`, so the "one dialog style" rule holds for the two transfer
   directions but not for that third, differently-worded question.
-- **An unlistable remote directory fails open.** If `read_dir` of the remote cwd
-  errors, the upload proceeds without a prompt (logged at `warn`), exactly as it
-  behaved before this packet. Failing closed would make an upload impossible into a
-  write-only directory, which the server itself would accept.
-- **Directories are confirmed like files.** A folder upload onto an existing remote
-  name asks the same question, and Replace means "merge, overwriting what
-  collides inside" rather than "delete then write" — the same meaning the download
-  direction's confirmation has. No per-file prompting inside a recursive upload.
+- **The guard is advisory, not atomic (verification `F2`, recorded, not fixed).**
+  The listing is a snapshot taken *before* the question, and the window is not
+  milliseconds — it is however long the dialog is on screen. A file created on the
+  server in that window is overwritten with no prompt, because
+  `finalize_remote_file` (`crates/ssh/src/sftp_task/transfer/staging.rs`) renames
+  the staged `.part` over whatever is there. It does refuse to replace a remote
+  *directory* or *symlink*, which bounds the damage. Closing the race properly
+  needs `SSH_FXF_EXCL` on that finalize, which `SftpBackend` does not expose —
+  a backend change, out of this packet's scope. For a single-user GUI against a
+  host the user controls the trade is acceptable; what was wrong was leaving it
+  unsaid.
+- **An unlistable remote directory fails open, silently (verification `F6`,
+  recorded, not fixed).** If `read_dir` of the remote cwd errors, the upload
+  proceeds with no prompt and no notification — only a `warn` log. Measured
+  against `docs/agents/error-policy.md` this sits on the "best effort, log and
+  continue" row rather than the "user action, stop and notify" one. Failing closed
+  would make it impossible to upload into a directory the user may write but not
+  read, which the server itself would accept, and it is not a regression — before
+  this packet nothing asked at all. The honest middle is a third question ("the
+  folder could not be listed, so existing files cannot be checked — upload
+  anyway?"), which changes what the user is asked and is a UX call for the owner;
+  left for a follow-up rather than decided here.
+- **Per-file prompting inside a recursive folder upload does not exist.** The
+  folder is one question; the files inside that collide are overwritten without
+  further prompts (the dialog now says so).
 - **Windows-only run.** The frames come from a Windows host against a loopback
-  dev server; no Linux/macOS pass (Platform proof unchecked).
-- Two names that are equal after the batch is picked (the same file name from two
-  different local folders, only reachable by drag & drop) are counted as one
-  collision entry in the dialog text.
+  dev server; no Linux/macOS pass (Platform proof unchecked). `F1` is precisely a
+  platform-dependent behaviour: the loopback server folds case like its host, so
+  the case-collision frame proves the *guard*, not the server-side folding on a
+  case-sensitive host.
+- **Two batch entries with the same name that collide with nothing remotely** are
+  still uploaded one after the other, the second overwriting the first, with no
+  prompt. Only reachable by dropping files of the same name from two different
+  local folders. The collision check compares the batch against the *server*, not
+  against itself.
+- **The panel tests answer the decision, not the pixels.** A gpui test cannot
+  click a dialog button, so the three answer tests drive
+  `SftpPanel::start_answered_upload` — the function the two buttons call — with
+  the same arguments. Everything from the answer down is covered; the button-to-
+  handler wiring itself rests on the frames.
 
 ## Handoff
 

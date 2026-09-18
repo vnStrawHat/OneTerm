@@ -1345,7 +1345,7 @@ transferred until the question is answered.
 | Direction | What is probed | When it asks |
 |---|---|---|
 | **Download** | `PathBuf::exists()` on the background executor, in `download_entry_to_local` | The Local pane already holds a file of that name. Answers: `Replace` / `Cancel`. |
-| **Upload** | one `read_dir` of the remote cwd, in `do_upload_paths` | The remote directory already holds a name from the batch. One collision: `Replace` / `Cancel`. Several: one question for the batch, `Replace all` / `Skip`. |
+| **Upload** | one `read_dir` of the remote cwd, in `do_upload_paths` | The remote directory already holds a name from the batch, **compared case-insensitively**. One collision: `Replace` / `Cancel` (a folder: `Merge` / `Cancel`). Several: one question for the batch, `Replace all` / `Skip`. |
 
 `do_upload_paths` is the single funnel every GUI upload path reaches the backend
 through — the Upload button and its menu/double-click in the Local pane, the
@@ -1355,9 +1355,35 @@ there once rather than at each entry point.
 
 The batch answers once. `Skip` drops only the colliding files and still uploads
 the rest, which is also why the neutral button reads `Cancel` when skipping would
-leave nothing to upload and `Skip` when it would not. A remote directory that
-cannot be listed is a best-effort miss: the collision is unknown, the upload runs
-as it did before, and the failure is logged at `warn`.
+leave nothing to upload and `Skip` when it would not — the label is decided from
+what `keep_after_answer` would actually leave, so a name that appears twice in one
+batch does not make the button lie. Repeats are one collision, not two: the same
+upload name is one remote entry.
+
+**Case.** The upload side matches case-insensitively (`collisions` in
+`transfer.rs`). A client cannot know the server's case-folding rule, and on a
+Windows or default-macOS host uploading `case.txt` truncates an existing
+`Case.txt`; a byte-exact comparison saw no collision and asked nothing, which is
+precisely the data-loss path this guard exists to close. An exact match wins over
+a case-only one, and when the two spellings differ the question names the remote
+entry and says the upload "may be the same file on this server", so a user on a
+case-sensitive server can tell the situations apart. The cost is one extra dialog
+where `Keep.txt` and `keep.txt` genuinely coexist.
+
+**Folders.** An existing remote folder is merged into, not emptied first: the
+files inside that collide are overwritten and the rest survive. The dialog says
+that rather than promising a replacement — title `Replace Remote Folder`, and the
+destructive button reads `Merge`.
+
+**What the guard is not.** It is advisory, not atomic: the listing is a snapshot
+taken before the question, so a file created between the answer and the write is
+still overwritten (`finalize_remote_file` renames the staged `.part` over
+whatever is there; it does refuse to replace a remote directory or symlink).
+Closing that would need `SSH_FXF_EXCL` on the staged-file finalize, which the
+backend does not expose. A remote directory that cannot be listed is a
+best-effort miss: the collision is unknown, the upload runs as it did before, and
+the failure is logged at `warn` — failing closed would make it impossible to
+upload into a directory the user may write but not read.
 
 The editor's save path (§4.14) is deliberately not routed through this dialog. It
 writes the user's own edits back to the file they opened, and it already asks a

@@ -8,7 +8,7 @@ Host: Windows 11, `fast-dev` profile, loopback `sftp-dev-server` on `127.0.0.1:2
 
 | Command | Result |
 | --- | --- |
-| `cargo test -p oneterm-sftp-ui` | `test result: ok. 67 passed; 0 failed` |
+| `cargo test -p oneterm-sftp-ui` | `test result: ok. 75 passed; 0 failed` (67 before the acceptance rework) |
 | `cargo clippy -p oneterm-sftp-ui --all-targets -- -D warnings` | clean |
 | `pwsh scripts/ci-local.ps1` | see the last line recorded below |
 
@@ -51,6 +51,25 @@ Fixture — remote root served by `sftp-dev-server`, local folder handed to the 
 | `US-0128-06-skip-uploaded-only-the-new-file.png` | **Skip**: only `fresh.txt` went up (110 B at `09:50`); `other.txt` is untouched at 9 B `09:38` and `keep.txt` still carries the 09:48 replace. The queue holds two rows for the walk's two accepted transfers — the skipped files never entered it. |
 | `US-0128-07-download-direction-same-dialog.png` | Regression: downloading remote `keep.txt` onto the local copy still asks, in the same shape — **Replace Local File**, neutral **Cancel**, danger **Replace**. Both directions render it from `confirm_replace`. |
 
+## Acceptance rework, 2026-09-18 — verification `F1`
+
+An independent verification (`US-0128-verify.md`) reproduced the data-loss path
+still open on a case-folding server: with remote `Case.txt` (20 B) in place,
+uploading local `case.txt` (90 B) asked **nothing** and destroyed the original.
+Re-taken on the same loopback server after the fix:
+
+| Frame | What it shows |
+| --- | --- |
+| `US-0128-08-case-only-collision-asks.png` | The fixture the verifier used — remote `Case.txt` 20 B, local `case.txt` 90 B — now stops at the dialog: **Replace Remote File**, `"Case.txt" already exists in the remote folder. You are uploading "case.txt", which may be the same file on this server. Replace it?`, neutral **Cancel**, danger **Replace**. The question names the remote entry *and* the upload, so a user on a case-sensitive server where the two genuinely coexist can tell the situations apart. |
+| `US-0128-09-case-only-collision-cancel-kept-it.png` | **Cancel**, then the remote list re-read from the server: `Case.txt` is still there at 20 B / `10:47`, and its bytes on the server's disk are still `REMOTE-CASE-ORIGINAL`. Nothing entered the transfer queue. |
+
+Both mutations the verifier ran are now caught:
+
+| Mutation | Before the rework | After |
+| --- | --- | --- |
+| `collisions` compares byte-exactly (drop the case-insensitive fallback) | **not caught** — 67 passed | **caught** — 4 tests fail, including the pure `a_remote_name_differing_only_in_case_is_a_collision` |
+| `keep_after_answer` returns the whole batch on Skip | caught by 1 pure test only | **caught by 4** — 3 of them panel tests (`answering_skip_…`, `answering_cancel_…`, `a_case_only_collision_…`) |
+
 Remote directory after the walk (on the server's disk):
 
 ```text
@@ -65,6 +84,13 @@ readme.md     16 9/18/2026 9:38:57 AM
 - The batch frame is driven through the OS file picker, which is the only upload
   path that can hand several files to one batch; drag & drop of several external
   files takes the same `do_upload_paths` call and is not separately framed.
+- The reworked **folder** wording (`Replace Remote Folder` / `Merge`) is covered by
+  `the_prompt_explains_a_case_match_and_a_folder_merge`, not by a re-taken frame;
+  the verifier's frame 10 shows the old wording on the same path.
+- The case frame proves the **guard**, not the server-side folding: the loopback
+  server folds case like its Windows host. On a case-sensitive server the same
+  upload would now ask where it previously did not need to — the cost the design
+  accepts.
 - Windows only. The guard is platform-independent (no `cfg`), but no Linux/macOS
   run was made.
 - `Skip` on a batch where **every** file collides reads `Cancel`, because nothing
