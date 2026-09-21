@@ -313,9 +313,14 @@ Changes:
    runs break on token boundaries automatically. `url_mask` is replaced by
    `cell_class` (with `Class::Url` one variant), generalizing the existing overlay.
 
-3. **`RowLayoutCache` key gains `line_text_hash`** so unchanged lines skip both lex and
-   layout. The scanner writes into a reused `Vec<u8>` scratch (like the existing
-   `box_probe`).
+3. **The row-plan cache keys the scan by the logical line, not by the visual row.** A
+   class depends on the whole logical line, so a per-row text hash is not a sufficient
+   key: changing one row of a wrapped line changes the classes of its continuation rows
+   without changing their own text. The class pass therefore runs inside the same
+   wrap-run-closed rescan the URL masks use — the dirty rows closed under the frame's
+   `WRAPLINE` flags — and a row is replanned when *either* its mask or its classes
+   differ from the previous frame's (`BUG-0071`). The scanner writes into a reused
+   `Vec<u8>` scratch.
 
 4. **`TerminalTheme` gains `class_styles: ClassStyles`**, populated in
    `build_terminal_theme()` from the theme JSON's `terminal.semantic` block.
@@ -327,12 +332,23 @@ Changes:
    with `prompt_line_bg`), inserted before per-cell backgrounds — orthogonal to per-cell
    fg, emitted as one rect.
 
+The unit of a scan is the **logical line**, not the visual row. A soft wrap does not end
+a line: the scanner's state — inside a quoted string, after the prompt sign, mid-token —
+belongs to the whole line, so the wrap-connected run of rows is joined into one string,
+scanned once, and the resulting classes are sliced back per visual row and column. A row
+whose `WRAPLINE` flag is clear ends the line, so a hard newline is never joined. Scanning
+each visual row on its own was the defect behind `BUG-0071`: a prompt whose cwd wrapped
+was not recognised as a prompt at all, a string opened on one row ended at the row edge,
+and moving the wrap point by resizing the window changed the colours of text that had not
+changed.
+
 ```
 snapshot → viewport rows
-   for each visible row:
-     role = row_roles[row] OR prompt_regex(line)         // §4.2
-     cell_class = scan_line(line, rules, profile, role)   // single pass
-     cache by line_text_hash
+   for each logical line (wrap run of visible rows):
+     role = row_roles[first row] OR prompt_regex(joined)  // §4.2
+     classes = scan_line(joined, rules, profile, role)    // single pass
+     slice classes back per (row, col)
+   rescan scope = dirty rows closed under wrap runs; replan on a class or mask delta
    layout_row(cells, theme, cell_class, …)
      per cell: (fg,bg) = cell_colors(cell, theme)
                merged  = merge(cell, fg, bg, cell_class[col], theme.class_styles)
@@ -603,11 +619,20 @@ char index stay in lockstep. This is the single source of truth for char<->colum
 **Question.** Re-lexing on every scroll could be expensive; a 100k-line jump into
 un-lexed scrollback needs throttling. Do we need a separate semantic cache?
 
-**Decision.** **No separate cache.** The semantic scan rides the *existing* per-line
-dirty decision in `RowLayoutCache` (`layout/cache.rs`), which already hashes each line
-with `line_hash` and only re-lays-out dirty/damaged lines. The scanner runs only for
-lines that are already going to be re-laid-out, and only within the visible viewport.
-Cold scroll into un-lexed scrollback is allowed to be one frame behind (progressive).
+**Decision.** **No separate cache.** The semantic scan rides the *existing* per-row dirty
+decision in the plan cache, which already tracks row identity and only replans rows that
+changed. The scanner runs only for rows that are already going to be replanned, and only
+within the visible viewport. Cold scroll into un-lexed scrollback is allowed to be one
+frame behind (progressive).
+
+**Amended by `BUG-0071`.** "Rows that changed" is not "rows whose own text changed": a
+class depends on the whole logical line, so the scan scope is the dirty rows **closed
+under wrap runs**, and the classes of the rows in that scope are compared with the
+previous frame's to decide which plans to rebuild. This is the same scope and the same
+delta the URL masks already use (`US-0092`), so it adds no new invalidation surface — one
+`Vec<u8>` per display row beside the existing `Vec<bool>` mask. It stays viewport-only and
+it lowers the number of scanner invocations per frame, because one run of rows is now one
+scan instead of one scan each.
 
 **Rationale.**
 - `RowLayoutCache` already maintains `prev_hash` per display line and a damage set
@@ -621,11 +646,10 @@ Cold scroll into un-lexed scrollback is allowed to be one frame behind (progress
   highlighted. Scrollback highlights lazily as it scrolls into view.
 
 **Implementation.**
-- Inside the existing `if is_dirty { ... }` block in `cache.rs`, *before* calling
-  `layout_row`, run `scan_line` -> `char_class`, flatten to `cell_class` (Q4), apply
-  `url_mask` -> `Class::Url` (Q3), then pass `cell_class` into `layout_row`. The scan
-  result is not cached separately — it is consumed immediately and the line's
-  `prev_hash` already gates re-computation.
+- Before the plans are rebuilt, run the class pass over the rescan scope: join each wrap
+  run, `scan_line` -> `char_class`, flatten to `cell_class` (Q4) per row and column, and
+  keep it per display row beside the URL mask. Then rebuild the rows whose mask or
+  classes changed, applying `url_mask` -> `Class::Url` (Q3) on top.
 - For a cold 100k-line scroll: only the ~50 visible rows are scanned this frame; rows
   scrolled into view next frame are scanned then. Worst case a row is unhighlighted for
   one frame as it enters the viewport — imperceptible. No background task, no

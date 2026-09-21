@@ -324,10 +324,6 @@ pub(crate) struct FrameRow<'a> {
 }
 
 impl<'a> FrameRow<'a> {
-    pub(crate) fn index(&self) -> usize {
-        self.index
-    }
-
     pub(crate) fn len(&self) -> usize {
         self.row.cells.len()
     }
@@ -374,19 +370,23 @@ impl<'a> FrameRow<'a> {
         self.row.wrapped
     }
 
-    /// The row's display text for the semantic scanner: one entry per
+    /// Append the row's display text for the semantic scanner: one entry per
     /// non-spacer cell (`\0` and tab read as a space, zero-width chars are
-    /// skipped because classes are per column), with the column of every char
-    /// and whether it is a wide char so classes can be flattened back.
-    pub(crate) fn text_into(
+    /// skipped because classes are per column), with the display row and column
+    /// of every char and whether it is a wide char so classes can be flattened
+    /// back.
+    ///
+    /// It appends rather than clears because a logical line is scanned as one
+    /// string: the wrap-connected rows are joined here, and the row index each
+    /// char came from is what slices the resulting classes back per visual row
+    /// (`BUG-0071`).
+    pub(crate) fn append_text_into(
         &self,
         text: &mut String,
+        char_rows: &mut Vec<u16>,
         char_cols: &mut Vec<u16>,
         char_wide: &mut Vec<bool>,
     ) {
-        text.clear();
-        char_cols.clear();
-        char_wide.clear();
         for (col, cell) in self.cells().enumerate() {
             if cell.is_spacer() {
                 continue;
@@ -395,6 +395,7 @@ impl<'a> FrameRow<'a> {
                 '\0' | '\t' => ' ',
                 c => c,
             });
+            char_rows.push(self.index as u16);
             char_cols.push(col as u16);
             char_wide.push(cell.flags.contains(CellFlags::WIDE_CHAR));
         }
@@ -930,7 +931,6 @@ mod tests {
         assert_eq!(row.cell(1).fg, Color::Ansi(1));
         assert!(row.cell(1).flags.contains(CellFlags::BOLD));
         assert_eq!(row.len(), 4);
-        assert_eq!(row.index(), 0);
     }
 
     #[test]
@@ -982,10 +982,12 @@ mod tests {
             .build();
         let row = frame.row(0);
         let mut text = String::new();
+        let mut rows = Vec::new();
         let mut cols = Vec::new();
         let mut wide = Vec::new();
-        row.text_into(&mut text, &mut cols, &mut wide);
+        row.append_text_into(&mut text, &mut rows, &mut cols, &mut wide);
         assert_eq!(text, "a日b  ");
+        assert_eq!(rows, vec![0, 0, 0, 0, 0]);
         assert_eq!(cols, vec![0, 1, 3, 4, 5]);
         assert_eq!(wide, vec![false, true, false, false, false]);
         assert_eq!(row.cell(3).zerowidth, &['\u{301}']);

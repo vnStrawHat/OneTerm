@@ -18,7 +18,7 @@ use oneterm_terminal::SnapshotUpdate;
 use super::diagnostics::FrameStats;
 use super::frame::{Frame, GridSize, RowKey};
 use super::glyphs::GlyphCache;
-use super::row_plan::{PlanContext, RowPlan, Scratch, build_row_plan};
+use super::row_plan::{PlanContext, RowPlan, Scratch, build_row_plan, class_rows_into};
 use super::shapes::CellSizeDevicePx;
 use crate::url::{fill_wraps, url_masks_rows_into};
 
@@ -54,6 +54,12 @@ pub(crate) struct PlanCache {
     /// Scratch for the rows this frame rescans; swapped row by row into
     /// `mask_prev` so both keep their inner allocations.
     mask_cur: Vec<Vec<bool>>,
+    /// The semantic classes as of the last update, and this frame's scratch —
+    /// the same pair as the URL masks, because a class depends on the whole
+    /// logical line and therefore on the neighbouring rows of a wrap run
+    /// (`BUG-0071`). Empty per row while semantic highlighting is off.
+    class_prev: Vec<Vec<u8>>,
+    class_cur: Vec<Vec<u8>>,
     /// This frame's per-row `WRAPLINE` flags.
     wraps: Vec<bool>,
     /// The previous frame's, aligned with `mask_prev` (so `shift` rotates it
@@ -87,6 +93,8 @@ impl PlanCache {
             grid: None,
             mask_prev: Vec::new(),
             mask_cur: Vec::new(),
+            class_prev: Vec::new(),
+            class_cur: Vec::new(),
             wraps: Vec::new(),
             wraps_prev: Vec::new(),
             scan: Vec::new(),
@@ -156,12 +164,16 @@ impl PlanCache {
         stats.rows_candidate = self.dirty.iter().filter(|&&d| d).count() as u32;
 
         // Phase 2: a changed row may start or end a wrapped URL, which changes
-        // the class of untouched continuation rows (deviation 10). That hazard
-        // is bounded, and the bound is the scope of the rescan: a URL can only
-        // reach a row it is wrap-connected to, so the answer is the dirty rows
-        // closed under the wrap runs `self.wraps` already tracks — never the
-        // whole viewport (`US-0092`). Rows outside those runs keep the masks
-        // they had, which is why `mask_prev` stays authoritative for all rows.
+        // the class of untouched continuation rows (deviation 10). The semantic
+        // classes have the same dependency and a stronger one: a logical line is
+        // scanned as a whole, so every row of a wrap run depends on every other
+        // (`BUG-0071`). That hazard is bounded, and the bound is the scope of
+        // the rescan: neither a URL nor a scanner state can reach a row it is
+        // not wrap-connected to, so the answer is the dirty rows closed under
+        // the wrap runs `self.wraps` already tracks — never the whole viewport
+        // (`US-0092`). Rows outside those runs keep the masks and classes they
+        // had, which is why `mask_prev` and `class_prev` stay authoritative for
+        // all rows.
         //
         // One dependency is **not** a row's content: where the viewport's top
         // edge cuts a wrap run. Display row 0's mask is extended into it from
@@ -180,6 +192,8 @@ impl PlanCache {
             self.wraps_prev.resize(rows, false);
             self.mask_prev.resize_with(rows, Vec::new);
             self.mask_cur.resize_with(rows, Vec::new);
+            self.class_prev.resize_with(rows, Vec::new);
+            self.class_cur.resize_with(rows, Vec::new);
             self.mark_scan_runs(rows, scrolled_seam);
             stats.url_scans += 1;
 
@@ -195,11 +209,25 @@ impl PlanCache {
                 }
                 stats.url_rows_scanned += (r - start) as u32;
                 url_masks_rows_into(frame, &mut self.mask_cur, &self.wraps, start..r);
+                match ctx.semantic {
+                    Some(overlay) => class_rows_into(
+                        frame,
+                        overlay,
+                        &mut self.class_cur,
+                        &self.wraps,
+                        start..r,
+                        scratch,
+                    ),
+                    None => self.class_cur[start..r].iter_mut().for_each(Vec::clear),
+                }
                 for row in start..r {
-                    if self.mask_cur[row] != self.mask_prev[row] {
+                    if self.mask_cur[row] != self.mask_prev[row]
+                        || self.class_cur[row] != self.class_prev[row]
+                    {
                         self.dirty[row] = true;
                     }
                     std::mem::swap(&mut self.mask_prev[row], &mut self.mask_cur[row]);
+                    std::mem::swap(&mut self.class_prev[row], &mut self.class_cur[row]);
                 }
             }
             self.wraps_prev.copy_from_slice(&self.wraps);
@@ -213,6 +241,7 @@ impl PlanCache {
             build_row_plan(
                 frame.row(r),
                 ctx,
+                &self.class_prev[r],
                 &self.mask_prev[r],
                 scratch,
                 glyphs,
@@ -294,14 +323,21 @@ impl PlanCache {
             self.rows.rotate_right(distance);
             self.keys.rotate_right(distance);
         }
-        // The masks and the wrap flags they were computed from travel with
-        // their rows too, so the delta check and the wrap-run walk stay
-        // meaningful and only the scrolled-in rows are rescanned.
+        // The masks, the classes and the wrap flags they were computed from
+        // travel with their rows too, so the delta check and the wrap-run walk
+        // stay meaningful and only the scrolled-in rows are rescanned.
         if self.mask_prev.len() == len {
             if scrolled > 0 {
                 self.mask_prev.rotate_left(distance);
             } else {
                 self.mask_prev.rotate_right(distance);
+            }
+        }
+        if self.class_prev.len() == len {
+            if scrolled > 0 {
+                self.class_prev.rotate_left(distance);
+            } else {
+                self.class_prev.rotate_right(distance);
             }
         }
         if self.wraps_prev.len() == len {
@@ -319,6 +355,7 @@ mod tests {
     use super::*;
     use oneterm_terminal::test_support::FixtureCell;
 
+    use crate::highlight::SemanticOverlay;
     use crate::render::frame::CellFlags;
     use crate::render::frame::test_support::{FrameBuilder, resnapshot, rewrite_row};
     use crate::render::glyphs::FontSet;
@@ -357,6 +394,7 @@ mod tests {
         cache: PlanCache,
         scratch: Scratch,
         glyphs: GlyphCache,
+        semantic: Option<SemanticOverlay>,
     }
 
     impl Harness {
@@ -367,6 +405,18 @@ mod tests {
                 cache: PlanCache::new(),
                 scratch: Scratch::new(),
                 glyphs: GlyphCache::new(),
+                semantic: None,
+            }
+        }
+
+        /// The same harness with semantic highlighting on (`BUG-0071`).
+        fn semantic() -> Self {
+            Self {
+                semantic: Some(SemanticOverlay::new(
+                    oneterm_highlight::ShellProfile::Unix,
+                    true,
+                )),
+                ..Self::new()
             }
         }
 
@@ -394,6 +444,7 @@ mod tests {
                 cache,
                 scratch,
                 glyphs,
+                semantic,
             } = self;
             cx.update(|window, _| {
                 let ctx = PlanContext {
@@ -403,7 +454,7 @@ mod tests {
                     font_weight: 400.0,
                     cell_width: px(cell_width),
                     device,
-                    semantic: None,
+                    semantic: semantic.as_ref(),
                     reverse_video: false,
                     window,
                 };
@@ -1138,5 +1189,36 @@ mod tests {
         h.update(cx, &wrapped, style_key(13.0));
         assert!(h.cache.url_mask(1)[0]);
         assert_eq!(h.cache.row(1).map(|p| p.decorations.len()), Some(1));
+    }
+
+    /// `BUG-0071`: a class depends on the whole logical line, so rewriting row
+    /// 0 of a wrapped line must replan row 1 — which is untouched, and whose
+    /// `(RowId, SeqNo)` therefore did not change.
+    #[gpui::test]
+    fn class_delta_replans_the_continuation_row(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut key = style_key(13.0);
+        key.semantic_enabled = true;
+        let mut h = Harness::semantic();
+        let (mut frame, mut fixture) = FrameBuilder::new(3, 10)
+            .text(0, 0, "echo \"aaa")
+            .flags(0, 9, CellFlags::WRAPLINE)
+            .text(1, 0, "bbb\" tail")
+            .build_with_fixture();
+        h.update(cx, &frame, key);
+        let inside_string = h.cache.row(1).map(|p| p.colors.clone());
+
+        // Row 0 stops opening the quote; row 1 is not touched at all.
+        rewrite_row(&mut frame, &mut fixture, 0, "echo  aaa");
+        let stats = h.update(cx, &frame, key);
+        assert_ne!(
+            h.cache.row(1).map(|p| p.colors.clone()),
+            inside_string,
+            "row 1 kept the classes of a string that no longer opens"
+        );
+        assert!(
+            stats.url_rows_scanned <= 2,
+            "the rescan must stay the wrap run, not the viewport: {stats:?}"
+        );
     }
 }

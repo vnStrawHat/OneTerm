@@ -56,10 +56,15 @@ impl SemanticOverlay {
         self.profile = profile;
     }
 
-    /// Scan one line of display text into a caller-owned buffer of `Class`
-    /// bytes (one per char, cleared and refilled), so a per-row scan reuses one
-    /// allocation across frames. When disabled the buffer is all `Default`.
-    pub fn scan_into(&self, line: &str, display_row: usize, out: &mut Vec<u8>) {
+    /// Scan one **logical** line of display text into a caller-owned buffer of
+    /// `Class` bytes (one per char, cleared and refilled), so a per-frame scan
+    /// reuses one allocation. When disabled the buffer is all `Default`.
+    ///
+    /// `line` is the whole logical line — a wrap-connected run of display rows
+    /// joined into one string — and `first_row` is the display row it starts
+    /// on, which is the row whose role applies (`BUG-0071`). The caller slices
+    /// the result back per visual row.
+    pub fn scan_into(&self, line: &str, first_row: usize, out: &mut Vec<u8>) {
         out.clear();
         if !self.enabled {
             out.resize(line.chars().count(), Class::Default as u8);
@@ -67,7 +72,7 @@ impl SemanticOverlay {
         }
         let rules = RuleSet::global();
         let role = if !self.row_roles.role.is_empty() {
-            self.row_roles.role_at(display_row)
+            self.row_roles.role_at(first_row)
         } else {
             RowRole::Output
         };

@@ -3,12 +3,14 @@
 //! cleared and refilled, never replaced, so a rebuild allocates nothing once
 //! the row has been planned once at this width.
 
+use std::ops::Range;
+
 use gpui::{Hsla, Pixels, ShapedLine, Window};
 use oneterm_highlight::{Class, ClassStyle, Decoration};
 use oneterm_terminal::is_decorative_character;
 
 use super::diagnostics::FrameStats;
-use super::frame::{Cell, CellFlags, Color, FrameRow};
+use super::frame::{Cell, CellFlags, Color, Frame, FrameRow};
 use super::glyphs::{FontKey, FontSet, GlyphCache};
 use super::shapes::{CellSizeDevicePx, DeviceRect, is_shape_char, shape_quads};
 use crate::highlight::{SemanticOverlay, to_gpui_hsla};
@@ -109,7 +111,11 @@ impl RowPlan {
 /// Reusable per-row working buffers (HLD "Cross-frame State").
 #[derive(Default)]
 pub(crate) struct Scratch {
+    /// The joined text of one logical line — the wrap-connected run of display
+    /// rows — which the semantic scanner reads as a single line (`BUG-0071`).
     pub line_text: String,
+    /// The display row every char of `line_text` came from.
+    pub char_rows: Vec<u16>,
     pub char_cols: Vec<u16>,
     pub char_wide: Vec<bool>,
     pub class_chars: Vec<u8>,
@@ -127,6 +133,7 @@ impl Scratch {
     pub(crate) fn new() -> Self {
         Self {
             line_text: String::with_capacity(256),
+            char_rows: Vec::with_capacity(256),
             char_cols: Vec::with_capacity(256),
             char_wide: Vec::with_capacity(256),
             class_chars: Vec::with_capacity(256),
@@ -449,32 +456,107 @@ impl RowBuilder<'_, '_> {
     }
 }
 
-/// Fill `scratch.class` with one class byte per column of `row`.
-fn classify(row: &FrameRow<'_>, ctx: &PlanContext<'_>, url_mask: &[bool], scratch: &mut Scratch) {
-    let cols = row.len();
-    scratch.class.clear();
-    scratch.class.resize(cols, Class::Default as u8);
-    if let Some(overlay) = ctx.semantic {
-        row.text_into(
+/// Semantic classes for the display rows in `range`, scanned one **logical**
+/// line at a time and written into `classes[range]`.
+///
+/// A logical line is a wrap-connected run of display rows: `wraps[r]` means row
+/// `r + 1` continues row `r`. The scanner's state — inside a quoted string,
+/// after the prompt sign, mid-token — belongs to that whole line, so the run is
+/// joined into one string, scanned once, and the resulting classes are sliced
+/// back per visual row (`BUG-0071`). Scanning each row on its own restarted the
+/// state at every wrap: a prompt whose cwd wrapped lost its prompt sign, a
+/// string opened on one row ended at the row edge, and a resize that moved the
+/// wrap point changed the colours of text that had not changed.
+///
+/// The run's **first** row supplies the role, because that is where the logical
+/// line starts. `wraps` holds the frame's per-row `WRAPLINE` flags
+/// ([`fill_wraps`](crate::url::fill_wraps)), and the inner buffers of the rows
+/// in `range` are reused so a per-frame recomputation allocates nothing.
+///
+/// **`range` must be closed under wrap runs**, exactly as for the URL masks:
+/// every class in the range then depends only on rows inside it, which is what
+/// lets the caller rescan the changed runs rather than the viewport (§10 of
+/// `docs/terminal-semantic-highlighting.md`).
+pub(crate) fn class_rows_into(
+    frame: &Frame,
+    overlay: &SemanticOverlay,
+    classes: &mut [Vec<u8>],
+    wraps: &[bool],
+    range: Range<usize>,
+    scratch: &mut Scratch,
+) {
+    debug_assert!(range.end <= classes.len() && range.end <= wraps.len());
+    for r in range.clone() {
+        let out = &mut classes[r];
+        out.clear();
+        out.resize(frame.row(r).len(), Class::Default as u8);
+    }
+
+    let mut start = range.start;
+    while start < range.end {
+        let mut end = start;
+        while end + 1 < range.end && wraps[end] {
+            end += 1;
+        }
+        scan_logical_line(frame, overlay, classes, start..=end, scratch);
+        start = end + 1;
+    }
+}
+
+/// Scan one logical line (`rows`, a wrap run) and scatter its classes back to
+/// the columns of the rows it came from.
+fn scan_logical_line(
+    frame: &Frame,
+    overlay: &SemanticOverlay,
+    classes: &mut [Vec<u8>],
+    rows: std::ops::RangeInclusive<usize>,
+    scratch: &mut Scratch,
+) {
+    let first = *rows.start();
+    scratch.line_text.clear();
+    scratch.char_rows.clear();
+    scratch.char_cols.clear();
+    scratch.char_wide.clear();
+    for r in rows {
+        frame.row(r).append_text_into(
             &mut scratch.line_text,
+            &mut scratch.char_rows,
             &mut scratch.char_cols,
             &mut scratch.char_wide,
         );
-        // Blank rows carry nothing to classify; skip the scanner entirely.
-        if !scratch.line_text.trim().is_empty() {
-            overlay.scan_into(&scratch.line_text, row.index(), &mut scratch.class_chars);
-            for (i, &class) in scratch.class_chars.iter().enumerate() {
-                let Some(&col) = scratch.char_cols.get(i) else {
-                    break;
-                };
-                let col = usize::from(col);
-                scratch.class[col] = class;
-                if scratch.char_wide.get(i).copied().unwrap_or(false) && col + 1 < cols {
-                    scratch.class[col + 1] = class;
-                }
+    }
+    // A blank line carries nothing to classify; skip the scanner entirely.
+    if scratch.line_text.trim().is_empty() {
+        return;
+    }
+    overlay.scan_into(&scratch.line_text, first, &mut scratch.class_chars);
+    for (i, &class) in scratch.class_chars.iter().enumerate() {
+        let (Some(&row), Some(&col)) = (scratch.char_rows.get(i), scratch.char_cols.get(i)) else {
+            break;
+        };
+        let out = &mut classes[usize::from(row)];
+        let col = usize::from(col);
+        let Some(slot) = out.get_mut(col) else {
+            continue;
+        };
+        *slot = class;
+        // A wide char owns its spacer column too, so a run stays unbroken.
+        if scratch.char_wide.get(i).copied().unwrap_or(false) {
+            if let Some(spacer) = out.get_mut(col + 1) {
+                *spacer = class;
             }
         }
     }
+}
+
+/// Fill `scratch.class` with one class byte per column of `row`: the semantic
+/// classes computed for its logical line, with URL columns on top.
+fn classify(row: &FrameRow<'_>, classes: &[u8], url_mask: &[bool], scratch: &mut Scratch) {
+    let cols = row.len();
+    scratch.class.clear();
+    scratch.class.resize(cols, Class::Default as u8);
+    let shared = cols.min(classes.len());
+    scratch.class[..shared].copy_from_slice(&classes[..shared]);
     for (col, &masked) in url_mask.iter().enumerate().take(cols) {
         if masked {
             scratch.class[col] = Class::Url as u8;
@@ -482,11 +564,15 @@ fn classify(row: &FrameRow<'_>, ctx: &PlanContext<'_>, url_mask: &[bool], scratc
     }
 }
 
-/// Rebuild `plan` for `row`. `url_mask` may be shorter than the row (or empty)
-/// when no URL was detected.
+/// Rebuild `plan` for `row`. `classes` holds the row's semantic classes as
+/// [`class_rows_into`] computed them for its logical line, and `url_mask` the
+/// row's URL columns; either may be shorter than the row (or empty) when
+/// semantic highlighting is off or no URL was detected.
+#[allow(clippy::too_many_arguments)] // the frame-constant half is already in `ctx`
 pub(crate) fn build_row_plan(
     row: FrameRow<'_>,
     ctx: &PlanContext<'_>,
+    classes: &[u8],
     url_mask: &[bool],
     scratch: &mut Scratch,
     glyphs: &mut GlyphCache,
@@ -494,7 +580,7 @@ pub(crate) fn build_row_plan(
     plan: &mut RowPlan,
 ) {
     plan.clear();
-    classify(&row, ctx, url_mask, scratch);
+    classify(&row, classes, url_mask, scratch);
     scratch.run_text.clear();
     scratch.open_prev.clear();
     let theme = ctx.theme;
@@ -546,9 +632,9 @@ mod tests {
     use oneterm_highlight::ShellProfile;
 
     use super::*;
-    use crate::render::frame::Frame;
     use crate::render::frame::test_support::FrameBuilder;
     use crate::theme::build_terminal_theme;
+    use crate::url::fill_wraps;
 
     fn font() -> Font {
         Font {
@@ -589,6 +675,27 @@ mod tests {
             self
         }
 
+        /// The whole frame's semantic classes, logical line by logical line —
+        /// what the plan cache computes before it rebuilds a row.
+        fn classes(&self, frame: &Frame) -> Vec<Vec<u8>> {
+            let rows = usize::from(frame.size().rows);
+            let mut classes = vec![Vec::new(); rows];
+            let Some(overlay) = self.semantic.as_ref() else {
+                return classes;
+            };
+            let mut wraps = Vec::new();
+            fill_wraps(frame, &mut wraps);
+            class_rows_into(
+                frame,
+                overlay,
+                &mut classes,
+                &wraps,
+                0..rows,
+                &mut Scratch::new(),
+            );
+            classes
+        }
+
         fn plan(
             &self,
             cx: &mut TestAppContext,
@@ -616,6 +723,7 @@ mod tests {
                 build_row_plan(
                     frame.row(row),
                     &ctx,
+                    &self.classes(frame)[row],
                     mask,
                     &mut scratch,
                     &mut glyphs,
@@ -1114,5 +1222,138 @@ mod tests {
                 "coverage not multiplied into the color: {quad:?}"
             );
         }
+    }
+
+    // ── BUG-0071: a logical line is classified as one line ──────────────────
+
+    /// A quoted string, a keyword and a URL that straddle the wrap boundaries
+    /// of a 20-column grid. Laid out so the string crosses row 1 -> 2, the
+    /// keyword crosses row 2 -> 3 and the URL crosses row 3 -> 4.
+    const WRAPPED_LINE: &str =
+        "user@host:~$ echo \"hello error world\" WARNING https://x.test/a /etc/hosts";
+
+    /// Build `text` into a `cols`-wide grid, wrapping every full row.
+    fn wrapped_frame(text: &str, cols: usize) -> Frame {
+        let chars: Vec<char> = text.chars().collect();
+        let rows = chars.len().div_ceil(cols);
+        let mut builder = FrameBuilder::new(rows, cols);
+        for (r, chunk) in chars.chunks(cols).enumerate() {
+            builder = builder.text(r, 0, &chunk.iter().collect::<String>());
+            if chunk.len() == cols && r + 1 < rows {
+                builder = builder.flags(r, cols - 1, CellFlags::WRAPLINE);
+            }
+        }
+        builder.build()
+    }
+
+    /// Every row's classes, in display order, as one flat vector.
+    fn flat_classes(fx: &Fixture, frame: &Frame) -> Vec<u8> {
+        fx.classes(frame).concat()
+    }
+
+    /// The headline of `BUG-0071`: the same text classifies identically whether
+    /// it fits one row or wraps over four, because the scan runs over the
+    /// logical line, not the visual row.
+    #[test]
+    fn wrapped_line_classifies_like_the_same_text_unwrapped() {
+        let fx = Fixture::new(true);
+        let narrow = wrapped_frame(WRAPPED_LINE, 20);
+        let wide = wrapped_frame(WRAPPED_LINE, 80);
+        assert_eq!(usize::from(narrow.size().rows), 4, "the text must wrap");
+        assert_eq!(usize::from(wide.size().rows), 1, "the text must fit");
+        assert_eq!(flat_classes(&fx, &narrow), flat_classes(&fx, &wide));
+    }
+
+    /// The prompt sign and the command word keep their classes wherever the
+    /// wrap drops them — the case the owner reported as a long cwd. Before the
+    /// fix a prompt whose sign fell on a later row was not recognised as a
+    /// prompt at all, so nothing after it was a command.
+    #[test]
+    fn a_prompt_that_wraps_keeps_its_sign_and_command() {
+        let fx = Fixture::new(true);
+        // The same prompt, pushed onto a second row by a long cwd.
+        let long = "user@host:/srv/customer/acme/backend/services/gateway$ echo hello";
+        let classes = flat_classes(&fx, &wrapped_frame(long, 20));
+        let sign = long.find('$').expect("the prompt sign");
+        assert_eq!(
+            classes[sign],
+            Class::PromptSign as u8,
+            "the sign is on row {}",
+            sign / 20
+        );
+        let echo = long.find("echo").expect("the command");
+        assert!(
+            classes[echo..echo + 4]
+                .iter()
+                .all(|&c| c == Class::Command as u8),
+            "the command after a wrapped prompt: {:?}",
+            &classes[echo..echo + 4]
+        );
+    }
+
+    /// A quoted string opened on one row still ends on the row its closing
+    /// quote is on, as one unbroken run.
+    #[test]
+    fn a_string_that_straddles_a_wrap_is_one_run() {
+        let fx = Fixture::new(true);
+        let line = "value = \"abcdefghijklmno pqr\" end";
+        let classes = flat_classes(&fx, &wrapped_frame(line, 20));
+        let open = line.find('"').expect("the opening quote");
+        let close = line.rfind('"').expect("the closing quote");
+        assert!(
+            open < 20 && close >= 20,
+            "the string must straddle the wrap"
+        );
+        assert!(
+            classes[open..=close]
+                .iter()
+                .all(|&c| c == Class::String as u8),
+            "the string is split at the wrap: {:?}",
+            &classes[open..=close]
+        );
+    }
+
+    /// A row without the wrap flag ends the logical line: the next row is
+    /// scanned on its own, exactly as a hard newline should behave.
+    #[test]
+    fn a_hard_newline_is_not_joined() {
+        let fx = Fixture::new(true);
+        let chars: Vec<char> = WRAPPED_LINE.chars().collect();
+        let rows: Vec<String> = chars.chunks(20).map(|c| c.iter().collect()).collect();
+        let mut hard = FrameBuilder::new(rows.len(), 20);
+        for (r, text) in rows.iter().enumerate() {
+            hard = hard.text(r, 0, text);
+        }
+        let hard = hard.build();
+        let joined = wrapped_frame(WRAPPED_LINE, 20);
+        assert_ne!(
+            flat_classes(&fx, &hard),
+            flat_classes(&fx, &joined),
+            "rows without the wrap flag must not be joined"
+        );
+        // Each row of the unwrapped grid classifies as its own single line.
+        for (r, text) in rows.iter().enumerate() {
+            let alone = FrameBuilder::new(1, 20).text(0, 0, text).build();
+            assert_eq!(
+                fx.classes(&hard)[r],
+                fx.classes(&alone)[0],
+                "row {r} must be scanned alone"
+            );
+        }
+    }
+
+    /// Editing one row of a wrapped line re-classifies the whole line: the
+    /// classes of row 1 depend on text that lives on row 0.
+    #[test]
+    fn editing_one_row_reclassifies_the_whole_logical_line() {
+        let fx = Fixture::new(true);
+        let opened = wrapped_frame("echo \"aaaaaaaaaaaaaaabbbbbbbbbbbbbbb\" x", 20);
+        // Same rows, but row 0 no longer opens the quote.
+        let closed = wrapped_frame("echo  aaaaaaaaaaaaaaabbbbbbbbbbbbbbb\" x", 20);
+        assert_ne!(
+            fx.classes(&opened)[1],
+            fx.classes(&closed)[1],
+            "row 1 must follow the quote opened on row 0"
+        );
     }
 }
