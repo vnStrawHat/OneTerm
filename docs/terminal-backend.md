@@ -578,9 +578,13 @@ full), answers colour queries with the same guard, then calls
 one lock hold is bounded in bytes. At each chunk boundary it asks
 `render_demand_raised()` and, when a frame is waiting, answers that batch's colour
 queries, drops the guard and finishes the batch there (§ 5.1) instead of holding
-it until the pipe runs dry. The poller waits **without a timeout**: every
-`ShellNotifier::send` and the child watcher call `poller.notify()`, so an idle
-tab does not wake up. Being generic over the PTY, the loop is unit-tested with a
+it until the pipe runs dry. The poller waits **without a timeout**, so an idle
+tab does not wake up: every `ShellNotifier::send` calls `poller.notify()`, and the
+child watcher posts a **keyed completion packet** on `PTY_CHILD_EVENT_TOKEN`.
+That difference is load-bearing and not an implementation detail — a `notify()`
+wake arrives as a keyless interrupt, which the loop `continue`s past before it
+ever compares the token, so the exit has to come in on the key or it is not read
+at all (§6.3, BUG-0072). Being generic over the PTY, the loop is unit-tested with a
 loopback-socket PTY (`event_loop_tests.rs`) — no shell is spawned to cover
 output parsing, input FIFO, resize, colour replies, child exit, shutdown, and the
 hand-over itself (`a_flooding_loop_hands_the_engine_to_a_waiting_frame` floods the
@@ -619,6 +623,23 @@ reproduces the full table on demand.
 - **Ctrl-C**: byte `0x03` → shell handles it. OK.
 - **Child exit**: `oneterm_vt::pty` watches the child handle (race-free) and reports
   `ChildEvent::Exited` on `PTY_CHILD_EVENT_TOKEN` → `SessionEvent::Exited(code)`.
+  "Race-free" rests on two orderings inside `ChildExitWatcher`, and the loop above is why
+  they are load-bearing: it waits without a timeout and reads the child event **only** when
+  the poll names that token, so a wake that is never posted is an exit that is never reported.
+  (1) The wait callback queues the exit *before* it posts the completion packet, so a poll the
+  packet wakes always finds the event. (2) `RegisterWaitForSingleObject` fires immediately for
+  a child that exited before the embedder registered — between `PseudoConsole::spawn` and
+  `register` the owner thread still opens the session log file — so whichever of the callback
+  and `register` runs **second** posts the wake: the callback records the exit under the same
+  lock that holds the poll interest, and a registration that finds it already recorded posts
+  the packet itself (BUG-0072). The wake is owed **once per registration**: on Windows
+  `register` *is* `reregister` (`crates/vt/src/pty/windows.rs`), so an embedder's loop that
+  re-registers each pass to toggle write interest would otherwise spin at 100 % CPU after the
+  child exited. Re-registering an interest that has already been woken posts nothing;
+  `deregister` clears that mark, so a poller registered after one is woken again — the
+  transport cannot know whether the event was ever read, and a missed wake costs more than a
+  spare one. A registration after the event was read therefore yields an eventless wake, so
+  every consumer must tolerate a wake whose `next_child_event()` is `None`.
 - **Close**: `ClosePseudoConsole` only *asks* the host to end the session, and a client
   that had not finished starting when the console went away never processes that request —
   measured, such a `cmd.exe` was still alive 15 s later (and its console host with it),
