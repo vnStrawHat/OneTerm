@@ -103,9 +103,43 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 - Windows ConPTY is bundled; Unix local PTY compiles but is untested
 - Windows is the primary platform; Linux/macOS compile but are untested
 
+### 🛡️ Run as administrator (Windows)
+
+The "+" (New Terminal) menu has a `Run as administrator ›` submenu listing the three
+Windows shells. Picking one asks for consent and then opens a **second OneTerm window** that
+runs elevated — Windows will not let an elevated shell attach to a pseudo-console this
+process owns, so it cannot be a tab in the window you are already in. The window you were
+working in keeps its tabs, its connections and its transfers, unelevated; declining the
+prompt does nothing at all.
+
+The elevated window is deliberately a smaller application, and it says what it is:
+
+- **It is marked**, from the process token and never from how it was started:
+  `OneTerm (Administrator)` in the taskbar and in the title bar, and the title bar's border
+  in the theme's warning colour. A window elevated any other way — right-click ▸
+  Run as administrator, a policy — is marked and restricted in exactly the same way.
+- **It has**: local Windows shells, your theme, font and key bindings, and everything the
+  terminal itself does.
+- **It does not have**: SSH, SFTP, saved sessions, Quick Connect, the Agent panel, the right
+  dock or its mode toggles, updates (those are done from the normal window), or its own
+  "Run as administrator" entries.
+- **It writes no settings.** `docks.json`, `ui_config.json`, `terminal.json`,
+  `ssh_session.json` and `update_config.json` are read and never written, so an elevated
+  session cannot change what your ordinary window opens with. Its crash reports go to
+  `crashes/elevated/` and it shows no crash dialog.
+- **Drag-and-drop from Explorer does not work into any elevated window.** Windows forbids a
+  drop from a medium-integrity Explorer onto a high-integrity window. It is inherent to
+  elevation and cannot be fixed; under the list above there is no SFTP panel there to drop
+  onto anyway.
+- **What it runs is not taken from your settings.** The shell is resolved to a fixed path
+  under `%SystemRoot%` or `%ProgramFiles%`, never through `PATH`, `%COMSPEC%` or
+  `terminal.json`, and a custom shell cannot be elevated — see
+  [`docs/terminal-backend.md`](docs/terminal-backend.md) §6.1.1.
+
 ### 🔄 Auto-update
 
 - Checks GitHub Releases of this repository (release notes, asset selection per platform)
+- Never runs from an elevated window (see above)
 - SHA-256-verified download, staged install with rollback, restart from the About page
 - Configurable in Settings (auto-check, proxy, certificate verification) — see
   [`docs/auto-update.md`](docs/auto-update.md)
@@ -113,7 +147,8 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 ### 🧯 Crash reporting
 
 - Rust panics and native crashes are captured into `crashes/*.crash.txt` under the config
-  directory (user paths redacted) and offered for review on the next start — see
+  directory (user paths redacted) and offered for review on the next start; an elevated
+  window stores its own under `crashes/elevated/` and shows no dialog — see
   [`docs/crash-reporting.md`](docs/crash-reporting.md)
 
 ### 🪟 Platform support

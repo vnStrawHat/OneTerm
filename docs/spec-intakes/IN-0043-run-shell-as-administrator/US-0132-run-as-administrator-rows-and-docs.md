@@ -9,9 +9,9 @@ Created: 2026-09-21
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -191,6 +191,23 @@ Before completion, list the four documents as changed, confirm the user-facing n
 and confirm `docs/gui-layout.md`'s top-to-bottom menu description matches the built menu
 clause by clause in both modes.
 
+**Done.** Four documents changed, plus the user-facing note:
+
+| Document | What changed |
+| --- | --- |
+| `docs/gui-layout.md` | the top-to-bottom "+" menu description names the `Run as administrator ›` row in its place; the owner-fixed-order sentence now says *why* a submenu at the top is what keeps that order, what picking one does, and that the row and the whole SSH block are absent in an elevated window; the dock-composition section gains the elevated window's reduced dock and its three markers |
+| `docs/terminal-backend.md` | new section 6.1.1, "Elevated windows resolve their shell from a trusted table" — the three paths, why not `%COMSPEC%` / `PATH` / `terminal.json`, why the resolution runs in the elevated process, the stated cost of a pwsh outside `%ProgramFiles%`, and the two exit codes; section 6.2 gains the "why an elevated shell needs a second process" note (`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` vs `ShellExecuteEx`) |
+| `docs/auto-update.md` | "Installation behavior" opens with M2: an elevated window never checks, downloads or installs, and *why* — the helper under an administrator token can leave files the ordinary instance cannot replace |
+| `docs/crash-reporting.md` | "Capture boundary" gains `crashes/elevated/` and the reason (an ACL the medium-integrity instance cannot delete would wedge pruning); "Recovery lifecycle" gains the suppressed dialog, with promotion and retention still running there |
+| `README.md` (the user-facing note) | a "Run as administrator (Windows)" section: what the elevated window is, that it is marked from the token, what it has, what it does not have, that it writes no settings, and that Explorer drag-and-drop does not work into any elevated window. The Auto-update and Crash-reporting bullets cross-reference it |
+
+`docs/gui-layout.md`'s description was checked clause by clause against the built menu in
+the unelevated mode (`evidence/US-0132-plus-menu-run-as-admin.png`): three shells, the
+`Run as administrator ›` row, the "SSH Sessions" labelled separator, the sessions (here the
+disabled "No saved sessions" hint), the plain separator, "Quick Connect...", "New Saved
+Session...". The elevated mode's clause — three shells and nothing else — is covered by the
+`menu_rows` unit test and by the owner's checklist step 4 in `US-0131`.
+
 ## Context
 
 - **The menu is built on every open**, in `TerminalPanel::title_suffix`
@@ -285,23 +302,74 @@ Platform / release:
 - [ ] Linux and macOS build and test green with the menu unchanged there.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record commands, results and gaps. Known in advance:
+### The presentation shape, settled here
 
-- The consent prompt cannot be automated: E1-E10 are manual with screenshots, and the
-  project's posted-message GUI walks cannot reach the secure desktop.
-- Over-the-shoulder elevation needs a second account; if none is available, say so.
-- Group Policy "Automatically deny elevation requests" is not exercised on the development
-  machine; the error path it takes is the generic "any other failure" notification and is
-  verified by fault injection rather than by policy.
+**One `Run as administrator ›` submenu row**, placed directly after the three Windows shell
+rows and before the "SSH Sessions" separator, listing the same three shells with the same
+`ShellKind::display_name` wording. Owner ruling, 2026-09-21, recorded in `IN-0043.md`'s Open
+Decisions. A submenu rather than three top-level rows because three rows double the menu's
+shell block for a case that is not the everyday one, and because one row keeps the
+owner-fixed order below the shells untouched by construction rather than by care. It is a
+separate hit target from the ordinary shell rows, with no modifier and no overlap.
+
+`crates/terminal-view/src/panel/terminal_panel.rs`: the submenu is `#[cfg(windows)]`, it is
+built through `PopupMenu::submenu`, each row calls the `launch_elevated_shell` fn pointer
+with its `ShellKind`, and an elevated window returns from the menu builder before reaching
+it. `FIXED_ROWS` is gone; `menu_rows(elevated, session_rows)` counts what each mode emits,
+with `ELEVATED_SUBMENU_ROWS` at 1 on Windows and 0 elsewhere, and `menu_scrolls` keeps the
+estimate's existing `ponytail:` caveat.
+
+### Commands
+
+- `pwsh scripts/ci-local.ps1` — final line **`ci-local: all checks passed.`** That run
+  includes `cargo clippy --workspace --all-targets -- -D warnings` (twice, once with
+  `terminal-diagnostics`), `cargo test --workspace`, `python scripts/check-doc-paths.py`
+  ("Doc path check passed for 203 current paths in 11 documents"),
+  `python scripts/check-english.py` ("passed for 979 files") and
+  `python scripts/check-theme-contrast.py`, which passes **untouched** — the proof the
+  elevated marker was done as a border and not as text on a new surface.
+- `python scripts/verify-dependency-graph.py` — passed for 20 workspace packages;
+  `crates/core` still has no `windows-sys`, and the menu still reaches the effect through
+  `WorkspaceCommands` rather than a crate edge (R1/R5).
+
+### E2E actually performed here
+
+- **The menu.** `evidence/US-0132-plus-menu-run-as-admin.png` — the "+" menu of an ordinary
+  (non-elevated) window with the submenu open: `Command Prompt`, `PowerShell`,
+  `PowerShell 7`, `Run as administrator ›` opening onto the same three names, then the
+  "SSH Sessions" separator, "No saved sessions", the plain separator, "Quick Connect...",
+  "New Saved Session...". The rows below the shell block are in their existing order, and no
+  scrollbar appears at this length.
+- Driven with the project's posted-message walk against a `fast-dev` build launched by this
+  session and addressed only by its own pid. **No submenu row was clicked**: clicking one
+  raises a UAC prompt, which this session must not do.
+
+### Gaps
+
+- **E1's second half and E2-E9 are not run.** The consent prompt is drawn by the AppInfo
+  service on the secure desktop, where posted messages cannot reach, and this session is
+  forbidden to raise one. Everything past the click — the prompt, the elevated window, its
+  markers, `whoami /groups`, its reduced menu and dock, the five hashes, the About text, the
+  crash store, the declined path — is the owner's manual checklist, written out step by step
+  in `US-0131`'s Evidence. **Nothing in this packet's acceptance that depends on an elevated
+  window may be read as proven.**
+- The elevated mode's menu (three shells, nothing else) is proven by unit test only; no
+  elevated window was looked at.
+- Over-the-shoulder elevation needs a second account; none is available here.
+- Group Policy "Automatically deny elevation requests" is **not** exercised. Its path is the
+  generic "any other `ShellExecuteExW` failure" branch, which is also unexercised at run
+  time: reaching it needs a real failure.
+- No shield glyph was added. `crates/theme/assets/icons/` has no shield SVG and the row
+  reads correctly without one — the text is the marker, a glyph would be decoration.
 
 ## Handoff
 

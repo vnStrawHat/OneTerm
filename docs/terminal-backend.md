@@ -440,6 +440,34 @@ Resolving `ShellKind` → executable + args + env (Windows-first):
 > The Terminal page of the Settings window (`crates/settings-ui/src/terminal/`) lets the user pick `kind`, type a custom
 > `program`, add `args`, set `cwd`, toggle `utf8`, and configure local/SSH output logging. Persisted in `terminal.json` via `oneterm_settings::TerminalConfig`; see [`terminal-logging.md`](terminal-logging.md).
 
+#### 6.1.1 Elevated windows resolve their shell from a trusted table
+
+An **elevated** OneTerm process does not use the table above. `resolve_shell` asks
+`oneterm_core::config::elevation` first, and that module resolves the kind to an absolute
+path it trusts, ignoring `LocalShellConfig::program` and `LocalShellConfig::args`:
+
+| Kind | Resolved to |
+|---|---|
+| `Cmd` | `%SystemRoot%\System32\cmd.exe` — **not** `%COMSPEC%`, which is a plain environment variable any parent process can set |
+| `PowerShell` | `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` |
+| `Pwsh` | the highest numeric `<N>` for which `%ProgramFiles%\PowerShell\<N>\pwsh.exe` exists |
+| `Bash` / `Zsh` / `Sh` / `Custom` | refused — an elevated window runs only the three Windows shells |
+
+`PATH` is not consulted and neither is `terminal.json`. The rule behind it (`DEC-0019`
+rule 4, mitigation M3) is that **nothing the unelevated process writes may direct what the
+elevated process executes**, and `terminal.json` is a file the unelevated process can write
+that names an executable. The three directories above are writable only by
+`TrustedInstaller` and the Administrators group, so after resolution the path is checked
+for existence and nothing else. The resolution happens **inside** the elevated process:
+resolving first and passing the path as an argument would make the unelevated process the
+thing that names the executable, which is the same hole with extra steps. The cost is
+stated rather than hidden: a pwsh installed outside `%ProgramFiles%\PowerShell` cannot be
+elevated from the menu — the consent prompt is answered and the process then exits with
+code 3 and one message naming the path it looked for. The one accepted argument is
+`--elevated-shell cmd|powershell|pwsh`; every other command line is one message box and
+exit code 2, with no window. See
+[`spec-intakes/IN-0043-run-shell-as-administrator/low-level-design/elevated-instance.md`](spec-intakes/IN-0043-run-shell-as-administrator/low-level-design/elevated-instance.md).
+
 ### 6.1.1 Windows local cwd reporting
 
 OneTerm's generated prompt integration emits OSC 7 whenever it controls the Windows shell prompt:
@@ -451,6 +479,20 @@ OneTerm's generated prompt integration emits OSC 7 whenever it controls the Wind
 The engine parses OSC 7 itself and reports the host and the path unresolved; the router sanitises the path into `SessionEvent::Cwd` and updates `TerminalSession::cwd()`.
 
 ### 6.2. Spawn via `oneterm_vt::pty`
+
+> **Why an elevated shell needs a second process.** The shell is attached to its
+> pseudo-console through exactly one channel:
+> `UpdateProcThreadAttribute(.., PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, ..)` on the
+> `STARTUPINFOEXW` handed to `CreateProcessW`. `CreateProcessW` creates the child with a
+> copy of the caller's token and has no flag meaning "elevate", and a process cannot raise
+> its own token; the supported route is `ShellExecuteEx` with the `runas` verb, which takes
+> no attribute list, no `STARTUPINFOEX` and no environment block. So an elevated child can
+> join neither this process's pseudo-console nor the environment that carries OneTerm's
+> whole shell integration (`PROMPT`, `PROMPT_COMMAND`, `PS1`, `TERM`). OneTerm therefore
+> relaunches **itself** elevated and lets the new process create its own pseudo-console:
+> `resolve_shell` and `CreatePseudoConsole` both run under the elevated token, so OSC 7 cwd
+> reporting and OSC 133 prompt marks survive intact. That is the whole reason the elevated
+> shell opens in a second window (`DEC-0019`; `docs/gui-layout.md` §Panel registration).
 
 > Original design sketch (the forked engine's `EventLoop` + an `ArcSwap` cache). The shipped code
 > described below the sketch differs: a custom `ShellEventLoop`, no `last_content`
