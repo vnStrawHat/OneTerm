@@ -5349,6 +5349,7 @@ name = "oneterm-app"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "chrono",
  "crash-handler",
  "embed-resource",

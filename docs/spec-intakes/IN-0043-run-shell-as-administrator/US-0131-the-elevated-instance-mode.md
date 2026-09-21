@@ -405,6 +405,18 @@ necessarily the repository root. Start the normal window from the repository roo
 `<repo>\target\*.json`. A release build resolves from `%USERPROFILE%` and the files are
 under `~\.OneTerm\`.
 
+0. **The click must not crash the window it was made from.** Start the **normal** window
+   from a console (`cargo run -p oneterm-app --profile fast-dev`) so its log is visible, open
+   the "+" menu, and click `Run as administrator › Command Prompt`. While the consent prompt
+   is up and after it is answered **either way**, the log must contain **no**
+   `RefCell already borrowed` line and the window must still be alive and responsive. This
+   is the first thing to check because it is what failed: the launch used to run
+   `ShellExecuteExW` on the gpui thread, whose message pump re-entered the window procedure
+   while the click still held the `App` borrow, and the process aborted at
+   `async_context.rs:65` the moment a queued task ran (`US-0130`, second rework). Decline the
+   prompt for this step; steps 3 onward consent.
+   `evidence/US-0131-E0-no-reentrancy.png` — the console, showing the click and a clean log.
+
 1. **Precondition — put `docks.json` in the state every real user is in.** This is the step
    the old checklist lacked, and without it step 5 proves nothing: `reset_default_layout`
    only runs on a *first ever* launch, so a machine with no `docks.json` would pass a broken

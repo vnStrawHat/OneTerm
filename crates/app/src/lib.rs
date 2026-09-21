@@ -84,6 +84,9 @@ pub fn run() {
     // parse comes before the ballast because a malformed command line must
     // produce a message and an exit, not a 64 MiB allocation first.
     read_process_identity();
+    // For one debug assertion: the `runas` launch must never run on this thread
+    // (`IN-0043`, `crate::elevation::ElevationRequest::execute`).
+    crate::elevation::remember_ui_thread();
     oom::init_ballast();
     let crash_capture_paths = match crash_report::prepare_capture_paths() {
         Ok(paths) => {

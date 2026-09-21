@@ -13,7 +13,7 @@ Created: 2026-09-21
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -385,6 +385,116 @@ option D was rejected for, reached by the back door.
 restoring `env: cfg.env.clone()` fails it with *"no configured environment entry may survive:
 PATH and PSModulePath decide what runs"*.
 
+### Acceptance rework, 2026-09-21 (second) — the click crashed the app
+
+The owner ran the branch and clicked `Run as administrator › PowerShell`. OneTerm logged
+ten `ERROR RefCell already borrowed` lines inside a second and then aborted with
+`0xc0000409` at
+`gpui-pre-0.3.3/src/app/async_context.rs:65:27: RefCell already borrowed`, **at the moment
+the UAC prompt appeared**. Reopened rather than filed as a new BUG: the packet was never
+accepted.
+
+**The backtrace, which names the whole mechanism** (frames as reported):
+
+```text
+48-61  App::update                      <- the mouse-up dispatch: the App RefCell is
+                                           borrowed for the whole click
+  42   terminal_panel.rs:779            <- the menu row's on_click
+  41   elevation::launch_elevated_shell (elevation.rs:133)
+  40   elevation::launch               (elevation.rs:214)
+  39   ShellExecuteExW
+  38   CFileOperationRecorder_CreateInstance
+  37   SetAppStartingCursor
+  36   RealShellExecuteW
+  35   SHChangeNotifyRegister
+  34   IsWindowUnicode
+  33   CallWindowProcW                  <- the shell pumps the calling thread's messages
+  32   gpui_windows::platform::window_procedure
+  26   handle_msg
+  25   handle_gpui_events
+  24   run_foreground_task              <- gpui runs a queued foreground task, re-entrantly
+  17   gpui::app::context::spawn
+  16   oneterm_terminal_view::terminal_view::view::new  (view.rs:249)
+  15   WeakEntity::update
+  14   AsyncApp::update_entity          (async_context.rs:65)  -> borrow_mut() -> PANIC
+```
+
+**Cause.** `ShellExecuteExW` is modal while the AppInfo consent request is outstanding, and
+it pumps the calling thread's message queue to stay responsive — frames 39→33 are the shell
+doing exactly that. The call was made synchronously from the menu's `on_click`, which gpui
+invokes from inside `App::update` with the `App` `RefCell` **already mutably borrowed**
+(frames 48–61). So the pump re-entered OneTerm's own window procedure (frame 32), gpui
+dispatched a queued foreground task (frame 24), and that task's `AsyncApp::update_entity`
+asked for a second mutable borrow (frame 14) and aborted the process. The ten `ERROR` lines
+before it are the same re-entrancy hitting gpui's non-fatal borrow diagnostics once per
+pumped message.
+
+Nothing about elevation is special here. Any blocking Win32 call that pumps messages, made
+from a gpui callback, does this. What made it certain rather than occasional is that the
+consent prompt takes hundreds of milliseconds, so there is always a queued task to hit — in
+the owner's trace, a terminal view's own start-up closure.
+
+**The fix, at the root.** `ShellExecuteExW` now runs on a thread of its own and never
+touches gpui:
+
+- `ElevationRequest` owns everything the call needs (`current_exe`, the
+  `--elevated-shell <token>` string, `current_dir`). Built on the UI thread — it only reads
+  process state and formats a string, neither of which pumps — so a failure is still
+  reported without a round trip, and the construction of what crosses the trust boundary
+  stays next to the security argument for it.
+- `ElevationRequest::execute` runs on `std::thread::Builder::new().name("oneterm-elevate")`,
+  initialises **its own** COM apartment (`CoInitializeEx`, `COINIT_APARTMENTTHREADED` —
+  `ShellExecuteEx` delegates to COM shell extensions) and uninitialises it before returning.
+  `fMask` gains `SEE_MASK_NOASYNC` beside `SEE_MASK_FLAG_NO_UI`: that thread has no message
+  loop and exits as soon as the call returns, so the operation must complete before it does.
+  `runas`, `lpDirectory` and the absence of `SEE_MASK_NOCLOSEPROCESS` are unchanged — the
+  security shape of the call did not move, only the thread it runs on.
+- The outcome comes back over an `async_channel` and is consumed by a plain foreground
+  `window.spawn(cx, ..)`; the notification is pushed from inside that task's `cx.update`.
+  **The menu handler returns immediately after spawning**, so the `App` borrow from the
+  click is released long before the consent prompt appears.
+- `LaunchOutcome` gained `Failed(String)` so "what happened" is one value, and the two pure
+  halves — `outcome_of(started, last_error)` and `notification_for(&outcome)` — are
+  testable without launching anything.
+
+**Re-entrancy audit of the rest of the path.** `commands(cx)` at the call site reads a
+global and returns; `notify` / `push_notification` build and enqueue; `ElevationRequest::build`
+does `current_exe`, `current_dir` and a `format!`. None pumps messages. `fatal_message`'s
+`MessageBoxW` **is** modal and pumping, and is fine: it runs in `read_process_identity()`,
+the first statement of `run()`, before gpui exists at all — there is no `App` to borrow. The
+trusted-path resolution's `read_dir` / `is_file` block but do not pump. `ShellExecuteExW` was
+the only message-pumping call reachable from a gpui callback.
+
+**The guard against a refactor undoing this.** `run()` records the gpui thread's id
+(`remember_ui_thread()`), and `execute()` opens with
+`debug_assert_ne!(current().id(), UI_THREAD)`. A future change that "simplifies" the launch
+back onto the calling thread trips it in every dev build, on the first click, with the
+reason in the message. That is the cheap structural check the rework asked for; the
+alternative — asserting "no `App` borrow is held" — is not expressible, because **every**
+gpui callback holds one. The borrow was never the bug; a pumping call underneath it was.
+
+**Verification.**
+
+- `cargo test -p oneterm-app -p oneterm-core` — green. New:
+  `elevation::tests::a_declined_prompt_says_nothing_and_a_failure_says_why` (the outcome
+  mapping: `ERROR_CANCELLED` → silent, anything else → one notification naming the code) and
+  `elevation::tests::error_cancelled_matches_windows` (the cross-platform constant against
+  `windows_sys`' own).
+- **Threading probe, with a benign verb.** A temporary test drove the same mechanism — worker
+  thread, `CoInitializeEx`, `SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI`, `async_channel` hop —
+  with verb **`open`** on `cmd.exe /c exit`, never `runas`, so no consent prompt was raised:
+
+  ```text
+  PROBE: ui=ThreadId(2) worker=ThreadId(3) outcome=Started
+  test elevation::tests::probe_worker_thread_and_channel_hop ... ok
+  ```
+
+  The FFI ran on a different thread from the caller and the outcome came back through the
+  channel. Probe removed afterwards.
+- **Not verified here:** that the real `runas` path no longer crashes. That needs a consent
+  prompt, which this session must not raise. `US-0131`'s checklist **step 0** is the
+  closing evidence.
+
 ### Gaps
 
 - **The elevated side is unverified in this environment.** The consent prompt is drawn by the
@@ -396,8 +506,11 @@ PATH and PSModulePath decide what runs"*.
 - `cfg(unix)` behaviour is compile-and-unit-tested only; no Linux or macOS desktop run is
   available in this environment.
 - `launch_elevated_shell`'s own error map (`ERROR_CANCELLED` vs everything else) is
-  **unexercised at run time**: reaching it needs a real `ShellExecuteExW` failure. It is read
-  against the design, not proven.
+  **unexercised at run time**: reaching it needs a real `ShellExecuteExW` failure. The
+  mapping is now unit-tested as pure data, but no real failure has been observed.
+- **The crash fix is unproven against `runas`.** The mechanism is verified (probe above,
+  benign verb) and the cause is confirmed by the owner's backtrace, but nobody has clicked
+  the row since the fix — that raises a consent prompt. Checklist step 0 is what proves it.
 
 ## Handoff
 

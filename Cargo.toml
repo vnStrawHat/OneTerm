@@ -137,6 +137,9 @@ windows-sys = { version = "0.59", features = [
     # struct behind this feature. Nothing in OneTerm reads the registry
     # (`IN-0043` resolves pwsh by scanning `%ProgramFiles%` for that reason).
     "Win32_System_Registry",
+    # `CoInitializeEx` on the elevation helper thread: `ShellExecuteEx` delegates
+    # to COM shell extensions, so that thread needs its own apartment.
+    "Win32_System_Com",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
