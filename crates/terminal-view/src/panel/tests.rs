@@ -26,10 +26,19 @@ use crate::terminal_view::TerminalView;
 fn the_menu_row_count_matches_the_rows_each_mode_emits() {
     use crate::panel::terminal_panel::menu_rows;
 
-    // 3 shells + the "SSH Sessions" heading + n sessions + the closing
-    // separator + "Quick Connect..." + "New Saved Session...".
-    assert_eq!(menu_rows(false, 0), 7);
-    assert_eq!(menu_rows(false, 5), 12);
+    // 3 shells + (on Windows) the "Run as administrator" submenu row + the
+    // "SSH Sessions" heading + n sessions + the closing separator +
+    // "Quick Connect..." + "New Saved Session...".
+    #[cfg(windows)]
+    {
+        assert_eq!(menu_rows(false, 0), 8);
+        assert_eq!(menu_rows(false, 5), 13);
+    }
+    #[cfg(not(windows))]
+    {
+        assert_eq!(menu_rows(false, 0), 7);
+        assert_eq!(menu_rows(false, 5), 12);
+    }
     // M1: an elevated window emits the three shells and nothing else.
     assert_eq!(menu_rows(true, 0), 3);
     assert_eq!(

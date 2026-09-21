@@ -118,8 +118,15 @@ pub(super) fn menu_rows(elevated: bool, session_rows: usize) -> usize {
     if elevated {
         return SHELL_ROWS;
     }
-    SHELL_ROWS + 1 + session_rows + 1 + 2
+    SHELL_ROWS + ELEVATED_SUBMENU_ROWS + 1 + session_rows + 1 + 2
 }
+
+/// The `Run as administrator >` row, which exists on Windows only and never in
+/// an elevated window (`US-0132`).
+#[cfg(windows)]
+const ELEVATED_SUBMENU_ROWS: usize = 1;
+#[cfg(not(windows))]
+const ELEVATED_SUBMENU_ROWS: usize = 0;
 
 /// Whether the popup needs the kit's scrolling container for `rows`.
 ///
@@ -747,10 +754,38 @@ impl Panel for TerminalPanel {
                     menu = menu.menu(kind.display_name(), Box::new(AddPanelWithShell(kind)));
                 }
                 // M1 (`DEC-0019`): an elevated window runs local shells and
-                // nothing else — no SSH Sessions heading, no saved sessions, no
-                // Quick Connect, no New Saved Session. The menu ends here.
+                // nothing else — no "Run as administrator" row either, since a
+                // `runas` from an elevated process would only produce a second
+                // identical window — no SSH Sessions heading, no saved sessions,
+                // no Quick Connect, no New Saved Session. The menu ends here.
                 if oneterm_core::elevation::is_elevated() {
                     return menu.scrollable(menu_scrolls(menu_rows(true, 0), window));
+                }
+                // One submenu row rather than three top-level rows, so the
+                // owner-fixed order below the shell block is not disturbed and
+                // "open a shell" never shares a hit target with "open an
+                // elevated shell" (`US-0132`).
+                #[cfg(windows)]
+                {
+                    menu = menu.submenu(
+                        "Run as administrator",
+                        window,
+                        cx,
+                        |mut submenu, _window, _cx| {
+                            for kind in SHELLS {
+                                submenu =
+                                    submenu.item(PopupMenuItem::new(kind.display_name()).on_click(
+                                        move |_, window, cx| {
+                                            (oneterm_state::commands::commands(cx)
+                                                .launch_elevated_shell)(
+                                                kind, window, cx
+                                            );
+                                        },
+                                    ));
+                            }
+                            submenu
+                        },
+                    );
                 }
                 // The sessions saved in `ssh_session.json`, so a saved host
                 // opens from the same place a local shell does. This closure
