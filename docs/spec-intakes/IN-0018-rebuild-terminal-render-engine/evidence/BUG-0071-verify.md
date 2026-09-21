@@ -488,3 +488,180 @@ three mutations listed above.
   eight scroll steps in §(b).
 - The GUI walk is driven by posted `WM_CHAR` messages, so keystrokes can race the shell the
   same way the original packet's walk did.
+
+---
+
+# Re-verification of `48521ff5` (2026-09-21)
+
+Subject: the rework commit `e4b1d017` "fix(highlight): detect Windows prompts with spaces,
+and map bytes to chars", on top of this trace's `ea7d4c0a`, then `main` @ `08736a19` merged
+as `48521ff5`. Same reviewer, same adversarial brief, aimed at the ten findings above and at
+the new regexes.
+
+## Verdict: **PASS**
+
+All ten findings are addressed, and addressed at the root rather than papered over: the two
+prompt regexes were rewritten around a shared path body instead of patched, the byte→char
+map is per byte, the insensitive test became a three-profile table that really does fail
+under the mutation, the untested rotation has a scroll walk that really does fail without
+it, and the two overstated Acceptance items were qualified rather than quietly re-worded.
+Both mutations reproduce the failure counts the rework claims. `80 + 363` tests pass and the
+gate is green.
+
+The new prompt patterns are correct on every case the brief names. They do buy their new
+true positives with a new class of **false** positives, which is a real trade and is not
+recorded anywhere — that is `N1` and `N2` below. Both are cosmetic (a line is coloured as a
+prompt that is not one), both are bounded, and neither is a reason to hold the rework.
+
+## Per-finding status
+
+| # | Status | Proof |
+| --- | --- | --- |
+| **F1** PowerShell prompt never detected | **Fixed** | `PROMPT_PWSH` is now `^(?:PS(?: {WIN_PATH_BODY})?>[ ]?)\|(?:^>+[ ]?)` (`crates/highlight/src/profile.rs:121-124`). `PS C:\Users\John Doe\ws> echo hi` → sign on the `>`, `echo` `Command`, `-Force` `Option`; `PS>` → sign at 2. In the product: `evidence/BUG-0071-after-07-powershell-wrapped-prompt.png`, zoomed 4x, paints the `>` after `rework` the same red `PromptSign` the cmd tab uses — the thing my `-verify-after-05-powershell-prompt.png` showed missing. |
+| **F2** cwd with a space never a prompt | **Fixed** | `WIN_PATH_BODY` = `[^<>\|"*?\r\n]*[^\s<>\|"*?]` (`profile.rs:106`), cmd = drive **or UNC root** + body + `>` (`profile.rs:112-118`). `C:\Users\John Doe\ws>dir` → the whole path is one `Path` run and `dir` is `Command`; `\\server\share\a b>dir` → sign at 18. In the product: `-after-05-cmd-cwd-with-spaces.png` — `…\home John Doe rework` is blue across three rows, `>` red, `cd` and `/d` coloured. |
+| **F3** `byte_to_char_map` was the identity | **Fixed** | One entry per byte (`scanner/mod.rs:107-114`). `日本語 error here` paints `error`; `🚀🚀🚀 ERROR 2026-09-21 10:00:00` lands the keyword at char 4 and the 19-char stamp at char 10; `路 2026-09-21 10:00:00` ends `DateTime` **on the last char**, which is the sentinel path; `🚀 /etc/hosts` paints the path and not the emoji. Both consumers (`output.rs:219-220`, `structural.rs:28-29`) use `char_end` as an exclusive char index guarded against `chars.len()`, so the new `last()` sentinel is the right value and the old `len()-1` would now be wrong. |
+| **F4** the prompt test did not detect the defect | **Fixed** | The test is a table over `Unix`, `Cmd` and `PowerShell` with `assert!(sign >= 20)` so no visual row is a prompt alone. Mutating `class_rows_into` back to one row per scan gives **exactly 8 failures**, as claimed, and `a_prompt_that_wraps_keeps_its_sign_and_command` is among them — failing on the `Cmd` fixture (`"C:\Users\John Doe\…\gateway>echo hello": the sign is on row 2`). |
+| **F5** "never the viewport" | **Fixed** | §10 rewritten; `a_line_longer_than_the_viewport_scans_the_viewport` asserts `class_rows_scanned == rows_total` on a 6-row grid holding one run; `class_delta_replans_the_continuation_row` moved to a 12-row grid and asserts `class_rows_scanned == 2`, `class_scans == 1`, `rows_planned == 2`. `oneterm-highlight` is in `[profile.fast-dev.package]` (`Cargo.toml:228`) with the 4.14 ms number as its reason. |
+| **F6** "a quoted string stays `String`" | **Fixed (as a qualification)** | Acceptance item 2 split into "one classification across the boundary, whatever it is" plus an **output-line** clause, with the consequence spelled out; §4.1 gained a paragraph saying command arguments are deliberately unclassified and that this fix therefore reduces colour on a wrapped command line. The design was not changed, which is the right call. |
+| **F7** the `class_prev` rotation was untested | **Fixed** | `scrolling_keeps_the_classes_with_their_rows` + `PlanCache::classes(r)`. Disabling the rotation in `shift` fails it (`row 1 classes drifted scrolled forward 2`) and nothing else — so it is the only guard, and it works. |
+| **F8** citation drift | **Fixed** | The packet now cites 463 with the 452/457 context. |
+| **F9** §10 cost table | **Fixed** | Rewritten per logical line, with the scope, the bound, the worst case and the `FrameStats` split. |
+| **F10** class scans counted as URL scans | **Fixed** | `FrameStats::class_scans` / `class_rows_scanned` (`render/diagnostics.rs:30-35`), incremented in `class_rows_into`, and logged as their own clause. |
+
+## Attacking the new regexes
+
+The truth table below is a single test run against `48521ff5` (`ShellProfile` in brackets,
+value = the char index that carries `Class::PromptSign`, `None` = scanned as output):
+
+| Line | Profile | Result | |
+| --- | --- | --- | --- |
+| `C:\work>dir > out.txt` | Cmd | **7** — the *first* `>` | the redirection stays out, as designed |
+| `C:\log size > 3` | Cmd | `None` | output |
+| `PS is > 3` | PowerShell | `None` | output |
+| `D:\x is where > goes` | Cmd | `None` | output |
+| `PS>` / `PS> dir` | PowerShell | **2** | bare prompt |
+| `>>` / `>> ` | PowerShell | **1** | continuation (see `N4`) |
+| `\\server\share\a b>dir` | Cmd | **18** | UNC with a space |
+| `C:\trailing \>` | Cmd | **13** | body ends on `\` |
+| `C:\trailing >` | Cmd | `None` | body would end on a space (see `N3`) |
+| `C:\>` | Cmd | **3** | drive root |
+| `C:>` | Cmd | `None` | cmd shows `C:\>`, so this shape does not occur |
+| `user@host:~$ ls > out` | Unix | **11** | unchanged |
+| `[user@host ~]# make` | Unix | **13** | unchanged |
+| `100% done`, `$HOME=/root`, `#include <stdio.h>` | Unix | `None` | CORR-48 still holds |
+
+**The prompt region is exactly the path.** For `PS C:\Users\John Doe\ws> echo hi`: chars
+0-2 (`PS` and its space) stay `Default`, chars 3..sign are all `Path`, the sign is
+`PromptSign`, and the char after it is not `Path`. For `C:\Users\John Doe\ws>dir` the whole
+head is one `Path` run. `windows_prompt_path` (`scanner/prompt.rs:53-63`) only fires when the
+region really starts at a drive root, a UNC root, or either after `PS `, so `PS>` and bare
+`>` still fall through to the generic probe.
+
+**The sign index is in char space, not bytes** — worth checking, because `prompt_sign`
+derives it from a **byte** match end (`prompt.rs:35-47`) and `scan_prompt_line` uses it to
+index a per-char array. `C:\Café\Ünïcødé ws>dir` and `PS C:\Café\Ünïcødé ws> dir` both come
+out right: the class vector is `line.chars().count()` long, the sign lands on the `>`, the
+path run is whole (from char 3 for the PowerShell form), and `dir` is `Command`. The
+`chars().count() - 1 - back` arithmetic holds.
+
+**Cost.** `regex` is a finite automaton — it does not backtrack, so catastrophic
+backtracking is impossible whatever the pattern, and `WIN_PATH_BODY` has no nested quantifier
+in any case. Measured end-to-end `scan_line` on this tree, debug build, mean of 20:
+
+| Line | Profile | Per scan |
+| --- | --- | --- |
+| 10 004-char cmd prompt (`C:\` + 2 500 × `a b\` + `>`) | Cmd | **0.86 ms** |
+| 10 007-char `C:\… > 3` (never a prompt) | Cmd | **1.67 ms** |
+| the same | PowerShell | **1.44 ms** |
+| 10 000 × `x` | Unix | **1.28 ms** |
+
+A 10 000-char prompt is *cheaper* than a 10 000-char output line, because matching the
+prompt skips the keyword and structural passes entirely. Nothing here is a new cost.
+
+## New findings
+
+### N1 (medium) — a bare `>` at the start of an output line is now a prompt on **every** profile
+
+`UNIVERSAL_PROMPT` is now `format!("{}|{}", cmd_prompt_pattern(), UNIX_PROMPT_PATTERN)`
+(`scanner/prompt.rs:22-25`), and `cmd_prompt_pattern()` carries its own second alternative
+`(?:^>[ ]?)`. The previous universal fallback was
+`^(?:[A-Za-z]:[^\s>]*>[ ]?)|{UNIX_PROMPT_PATTERN}` — it had **no** bare-`>` branch. So a
+shape that was output on `3c0e9976` is a prompt now, on profiles that never asked for it:
+
+```
+"> quoted text from a mail reply"   [Unix] -> PromptSign at 0, "quoted" becomes Command
+"> 3 files changed"                 [Unix] -> PromptSign at 0
+```
+
+Mail quotes, markdown blockquotes, `git log` bodies and diff context all start with `> ` and
+all arrive on an SSH tab, which is `ShellProfile::Unix` (`terminal_view/render.rs:211`). It
+is not all loss — bash's `PS2` *is* `> `, so a continuation line is now coloured correctly —
+which is exactly why this deserves to be a decision rather than a side effect of sharing one
+pattern string. If it is wanted, say so in §4.1; if not, keep the bare-`>` branch out of the
+shared pattern and leave it to the Windows and `Dumb` profiles.
+
+### N2 (medium) — the wider path body admits a new class of Windows false positives
+
+Any line starting with a drive letter or `\\` whose first `>` is not preceded by whitespace
+is now a prompt, and `windows_prompt_path` then fills **everything before that `>`** with
+`Path`. Measured:
+
+```
+r"C:\src -> C:\dst"                                     [Cmd] -> PromptSign at 8
+r"c:\proj\x.cpp(5): error C2059: syntax error: '>'"     [Cmd] -> PromptSign at 46
+```
+
+The first is what `mklink`, `dir /AL` and most symlink listings print; the second is an MSVC
+diagnostic, and it loses its `error` colouring entirely because the whole line becomes a
+prompt path. This is the deliberate side of the trade the rework documents for
+`C:\log size > 3` — the body may hold spaces, so only a space *immediately* before the `>`
+rejects a line — and it is bounded (drive/UNC-anchored lines only) and cosmetic. It is not
+recorded anywhere, and it should be, next to the trade it comes from. A cheap tightening, if
+wanted: require the body to contain a path separator, or reject a body whose last two chars
+are ` -`.
+
+### N3 (minor) — a cwd that ends in a space is still not a prompt
+
+`C:\trailing >` is output (measured). A trailing space in a directory name is legal on
+Windows, and the rework exists precisely because spaces in the cwd were being rejected, so
+the one remaining space that still rejects the line is worth one sentence in §4.1 beside the
+`C:\log size > 3` rationale it exists for.
+
+### N4 (trivial) — the first `>` of a `>>` continuation is not the sign
+
+`prompt_sign` takes the **last** prompt glyph inside the match, which is what lets a path
+hold a `%` or a `#`. For the PowerShell continuation `>>` that puts the sign on char 1 and
+leaves char 0 to the generic path probe, which leaves it `Default`. Half a continuation
+prompt is coloured. Cosmetic.
+
+## Commands
+
+```
+git reset --hard 48521ff5
+$env:CARGO_BUILD_JOBS=6
+cargo test -p oneterm-highlight -p oneterm-terminal-view
+#   oneterm-highlight:     80 passed; 0 failed
+#   oneterm-terminal-view: 363 passed; 0 failed; 3 ignored
+pwsh scripts/ci-local.ps1
+#   exit 0, final line: "ci-local: all checks passed."
+```
+
+Temporary, reverted: six `rv_*` tests in
+`crates/highlight/src/scanner/scanner_tests.rs` (the truth table, the prompt-region check,
+the false-positive probe, the 10 000-char cost probe, the byte/char edge cases and the
+non-ASCII cwd check) and the two mutations (`class_rows_into` per visual row → 8 failures;
+`shift` without the `class_prev` rotation → `scrolling_keeps_the_classes_with_their_rows`).
+The tree was clean of all of them before the gate ran, and the non-ASCII check was run
+after it on an otherwise clean tree.
+
+## Gaps in this re-verification
+
+- **No new GUI walk.** The three rework frames were measured (4x nearest-neighbour crops of
+  the prompt-sign region of `-after-05` and `-after-07`), not re-captured; no `before` pair
+  was built for them, and `-after-06` was read at full size only.
+- **No `release` timing**, same as before; the numbers above are a debug build, which is now
+  pessimistic for `fast-dev` too since `oneterm-highlight` gained `opt-level = 3`.
+- **`N1` and `N2` are reported, not adjudicated.** Whether a bare `>` line and a
+  drive-anchored line with a `>` in it *should* be prompts is an owner call; I measured what
+  happens, not what ought to.
+- **Unix (`cfg(unix)`) behaviour is unverifiable on this host.**
