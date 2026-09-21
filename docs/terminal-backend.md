@@ -619,6 +619,17 @@ reproduces the full table on demand.
 - **Ctrl-C**: byte `0x03` → shell handles it. OK.
 - **Child exit**: `oneterm_vt::pty` watches the child handle (race-free) and reports
   `ChildEvent::Exited` on `PTY_CHILD_EVENT_TOKEN` → `SessionEvent::Exited(code)`.
+  "Race-free" rests on two orderings inside `ChildExitWatcher`, and the loop above is why
+  they are load-bearing: it waits without a timeout and reads the child event **only** when
+  the poll names that token, so a wake that is never posted is an exit that is never reported.
+  (1) The wait callback queues the exit *before* it posts the completion packet, so a poll the
+  packet wakes always finds the event. (2) `RegisterWaitForSingleObject` fires immediately for
+  a child that exited before the embedder registered — between `PseudoConsole::spawn` and
+  `register` the owner thread still opens the session log file — so whichever of the callback
+  and `register` runs **second** posts the wake: the callback records the exit under the same
+  lock that holds the poll interest, and a registration that finds it already recorded posts
+  the packet itself (BUG-0072). Registering twice around an exit posts a second, eventless
+  wake; every consumer must tolerate a wake whose `next_child_event()` is `None`.
 - **Close**: `ClosePseudoConsole` only *asks* the host to end the session, and a client
   that had not finished starting when the console went away never processes that request —
   measured, such a `cmd.exe` was still alive 15 s later (and its console host with it),

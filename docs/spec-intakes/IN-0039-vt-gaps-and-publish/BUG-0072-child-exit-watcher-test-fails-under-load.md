@@ -242,7 +242,8 @@ it constrains this one file, not future work elsewhere, so it does not earn a `D
 `crates/vt/src/pty/windows/child.rs`, production:
 
 - `ChildExitSender::interest: Mutex<Option<Interest>>` becomes `notify: Mutex<Notify>`, where
-  `Notify` holds the optional `Interest` and an `exited` flag;
+  `Notify` holds the optional `Interest` and an `exited` flag, and owns the one-line `post`
+  both sides call;
 - the callback sets `exited` and posts under that lock, after the `send` as before;
 - `register` posts under the same lock when `exited` is already set;
 - `deregister` clears the interest only — the flag is the record that the exit happened, and
@@ -255,28 +256,33 @@ is what lets the loop re-poll rather than block forever if a wake is genuinely l
 
 ### Runs
 
-Load: `cargo build --workspace --all-targets` running in a loop in this worktree throughout,
-plus the test binary's own 562 sibling tests in the workspace runs.
+Load: `cargo build --workspace --all-targets`, then `cargo clean`, looping in this worktree
+throughout — into a scratch `CARGO_TARGET_DIR`, so the loop never touched the artefacts the
+tests under measurement were running from. Six build jobs on the same machine, which is a
+heavier load than the `ci-local` run that reported the bug.
 
 ```
 30x  cargo test -p oneterm-vt --lib pty::windows::child::tests::instant_exit_is_not_missed
      passed=30 failed=0
  3x  cargo test --workspace
-     passed=3 failed=0
+     passed=3  failed=0
  5x  cargo test -p oneterm-vt --lib pty::windows::child::   (the five watcher tests)
-     passed=5 failed=0
+     passed=5  failed=0
 ```
-
-Before the fix, the same 30-run command under the same load: recorded below in "What fails
-when the product breaks".
 
 ### What fails when the product breaks — measured
 
+Both mutations keep `Notify` (the test reads its `exited` flag), so they break one half of the
+fix each rather than reverting the type:
+
 | Mutation | Result |
 |---|---|
-| The whole fix reverted (`git stash` of the production hunk) | `an_exit_before_registration_still_wakes_the_poller` **FAIL 3/3**, "the exit must wake the poller on the child token" |
-| `register` keeps the post, the callback stops setting `exited` | **FAIL 3/3**, same assertion |
-| The callback posts **before** it sends (notify-before-enqueue) | Not deterministically detectable; see Gaps. |
+| `register` stops posting when the exit is already recorded | `an_exit_before_registration_still_wakes_the_poller` **FAIL 3/3**, "registering after the exit must still wake the poller", each run spending the full 5 s on the poll |
+| The callback stops recording the exit (`notify.exited = true` deleted) | **FAIL 3/3** on the 5 s deadline, "the wait callback never ran for an already-exited child" |
+| The callback posts **before** it sends (notify-before-enqueue) | Not deterministically detectable; not run. See Gaps. |
+
+The unfixed product itself is covered by the probe in Context: `woken=false` with the event
+already in the channel, reproducible on every run once the callback is given a head start.
 
 ### Gaps
 

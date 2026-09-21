@@ -12,6 +12,19 @@
 //! status and posts a completion packet, so the caller learns about the exit
 //! through the same `poll.wait` it uses for output.
 //!
+//! Two orderings make that race-free, and both are load-bearing — a consumer
+//! polls without a timeout and reads the child event only when the poll names
+//! the child token, so a wake that is never posted is an exit that is never
+//! reported:
+//!
+//! 1. **The exit is queued before the wake is posted.** A poll woken by the
+//!    packet always finds the event waiting for it.
+//! 2. **Whichever of the callback and [`ChildExitWatcher::register`] runs second
+//!    posts the wake.** The callback fires on a thread-pool thread while the
+//!    embedder is still building its session, so it can reach a watcher no
+//!    poller is registered on yet; `register` then finds the exit already
+//!    recorded and posts the packet itself.
+//!
 //! The shape — a wait callback feeding an `mpsc` channel plus an IOCP completion
 //! packet, with the poll interest behind a mutex — follows Alacritty's
 //! `alacritty_terminal/src/tty/windows/child.rs`
@@ -57,12 +70,44 @@ struct Interest {
     event: Event,
 }
 
+// The lost wake this lock closes is `BUG-0072`.
+/// Where to post the wake, and whether there is one owed.
+///
+/// One lock over both, so that whichever of the exit callback and
+/// [`ChildExitWatcher::register`] runs second is the one that posts: neither
+/// can observe the other half-done, and the ordinary path still posts exactly
+/// once.
+#[derive(Default)]
+struct Notify {
+    interest: Option<Interest>,
+    /// Set by the callback once the exit is in the channel.
+    exited: bool,
+}
+
+impl Notify {
+    /// Wake the registered poller, if there is one. Best effort: a dead poller
+    /// means the caller is already gone.
+    fn post(&self) {
+        if let Some(interest) = self.interest.as_ref() {
+            let _ = interest.poller.post(CompletionPacket::new(interest.event));
+        }
+    }
+}
+
 /// The callback's view of the watcher. Reached through a raw pointer, so it
 /// lives in an `Arc` whose last owner is the watcher itself.
 struct ChildExitSender {
     events: mpsc::Sender<ChildEvent>,
-    interest: Mutex<Option<Interest>>,
+    notify: Mutex<Notify>,
     process: AtomicPtr<c_void>,
+}
+
+impl ChildExitSender {
+    fn notify(&self) -> std::sync::MutexGuard<'_, Notify> {
+        self.notify
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// Runs on a thread-pool wait thread once the child's handle signals.
@@ -85,16 +130,13 @@ extern "system" fn child_exited(context: *mut c_void, timed_out: BOOLEAN) {
     let status = (read != FALSE).then(|| ExitStatus::from_raw(code));
 
     // A closed receiver means the session was torn down first; nothing to report.
+    // Queued *before* the wake is posted: a poll the packet wakes always finds
+    // the event already there.
     let _ = sender.events.send(ChildEvent::Exited(status));
 
-    let interest = sender
-        .interest
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(interest) = interest.as_ref() {
-        // Best effort: a dead poller means the caller is already gone.
-        let _ = interest.poller.post(CompletionPacket::new(interest.event));
-    }
+    let mut notify = sender.notify();
+    notify.exited = true;
+    notify.post();
 }
 
 pub(super) struct ChildExitWatcher {
@@ -114,7 +156,7 @@ impl ChildExitWatcher {
         let raw = process.as_raw_handle();
         let sender = Arc::new(ChildExitSender {
             events: tx,
-            interest: Mutex::new(None),
+            notify: Mutex::new(Notify::default()),
             process: AtomicPtr::new(raw),
         });
 
@@ -156,23 +198,25 @@ impl ChildExitWatcher {
         self.events.try_recv().ok()
     }
 
+    /// Record where to post the child's exit — and post it at once when the
+    /// child has already exited, because the callback that fired before this
+    /// call had nowhere to post to.
     pub(super) fn register(&self, poller: &Arc<Poller>, event: Event) {
-        *self
-            .sender
-            .interest
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Interest {
+        let mut notify = self.sender.notify();
+        notify.interest = Some(Interest {
             poller: poller.clone(),
             event,
         });
+        if notify.exited {
+            notify.post();
+        }
     }
 
+    /// Stop waking a poller that no longer cares. The recorded exit stays: a
+    /// watcher registered again afterwards is owed the wake as much as a
+    /// watcher registered for the first time.
     pub(super) fn deregister(&self) {
-        *self
-            .sender
-            .interest
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        self.sender.notify().interest = None;
     }
 
     // `DEC-0016`, and the client that provoked it is `BUG-0055`.
@@ -245,6 +289,13 @@ mod tests {
         (ChildExitWatcher::new(handle).expect("watch the child"), pid)
     }
 
+    /// Poll until the child token wakes us, and require the exit to be there on
+    /// that same wake — the "queued before posted" half of the contract.
+    ///
+    /// An iteration that sees no token is not a failure even if the event is
+    /// already in the channel: the callback queues it a few instructions before
+    /// it posts, and a poll that expires inside that gap is a timeout, not a
+    /// lost wake. The packet is on its way, so the next poll returns at once.
     fn wait_for_exit(watcher: &ChildExitWatcher, poller: &Arc<Poller>) -> ChildEvent {
         let mut events = polling::Events::new();
         for _ in 0..50 {
@@ -252,15 +303,13 @@ mod tests {
             poller
                 .wait(&mut events, Some(Duration::from_millis(200)))
                 .expect("poll");
-            if let Some(event) = watcher.next_event() {
-                assert!(
-                    events.iter().any(|e| e.key == PTY_CHILD_EVENT_TOKEN),
-                    "the exit must arrive on the child token"
-                );
-                return event;
+            if events.iter().any(|e| e.key == PTY_CHILD_EVENT_TOKEN) {
+                return watcher
+                    .next_event()
+                    .expect("a wake on the child token must carry the exit");
             }
         }
-        panic!("the child exit was never reported");
+        panic!("the child exit was never reported on the child token");
     }
 
     #[test]
@@ -299,6 +348,51 @@ mod tests {
         assert_eq!(
             wait_for_exit(&watcher, &poller),
             ChildEvent::Exited(Some(ExitStatus::from_raw(0)))
+        );
+    }
+
+    // The lost wake, and the load-dependent failure that exposed it, are
+    // `BUG-0072`.
+    /// The callback fires on a thread-pool thread and can reach the watcher
+    /// before the embedder has registered a poller on it — in the real session
+    /// the two are separated by a channel send and by opening the session log
+    /// file. The wake is owed all the same, so `register` posts it.
+    ///
+    /// Deterministic, not timed: the exit is observed through the watcher's own
+    /// state before `register` is called at all, so the callback is provably
+    /// first.
+    #[test]
+    fn an_exit_before_registration_still_wakes_the_poller() {
+        let poller = Arc::new(Poller::new().unwrap());
+        let mut child = Command::new("cmd.exe")
+            .args(["/c", "exit 5"])
+            .spawn()
+            .unwrap();
+        child.wait().expect("reap the child first");
+        let (watcher, _) = watcher_for(child);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !watcher.sender.notify().exited {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the wait callback never ran for an already-exited child"
+            );
+            std::thread::yield_now();
+        }
+
+        watcher.register(&poller, Event::readable(PTY_CHILD_EVENT_TOKEN));
+
+        let mut events = polling::Events::new();
+        poller
+            .wait(&mut events, Some(Duration::from_secs(5)))
+            .expect("poll");
+        assert!(
+            events.iter().any(|e| e.key == PTY_CHILD_EVENT_TOKEN),
+            "registering after the exit must still wake the poller"
+        );
+        assert_eq!(
+            watcher.next_event(),
+            Some(ChildEvent::Exited(Some(ExitStatus::from_raw(5))))
         );
     }
 
