@@ -10,6 +10,11 @@ use super::{
 };
 
 pub(crate) fn download_and_install_update(window: &mut Window, cx: &mut App) {
+    // Before the confirm dialog: an elevated window offers no install path at
+    // all, so it must not ask about one either (M2).
+    if super::elevated_never_updates() {
+        return;
+    }
     let state = UpdateUiState::global(cx);
     if state.read(cx).is_busy() {
         return;

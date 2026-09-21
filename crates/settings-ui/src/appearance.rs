@@ -38,7 +38,7 @@ use gpui_component::{
     setting::{RenderOptions, SettingField, SettingGroup, SettingItem},
 };
 
-use oneterm_theme::theme::apply_list_style_override;
+use oneterm_theme::theme::{apply_list_style_override, apply_warning_legibility};
 
 const DEFAULT_THEME_MODE: &str = "dark";
 const DEFAULT_THEME_NAME: &str = "Zed One Dark";
@@ -84,6 +84,7 @@ fn mode_item() -> SettingItem {
                 };
                 Theme::change(mode, None, cx);
                 apply_list_style_override(cx);
+                apply_warning_legibility(cx);
                 cx.refresh_windows();
             },
         )
@@ -160,6 +161,7 @@ fn apply_theme_named(name: &SharedString, cx: &mut App) {
     };
     Theme::global_mut(cx).apply_config(&theme_config);
     apply_list_style_override(cx);
+    apply_warning_legibility(cx);
     cx.refresh_windows();
 }
 

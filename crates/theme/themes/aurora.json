@@ -130,7 +130,7 @@
         "title_bar.border": "#E2E8F0",
         "status_bar.background": "linear-gradient(180deg, #F8FAFC, #F1F5F9)",
         "status_bar.border": "#E2E8F0",
-        "warning.background": "linear-gradient(180deg, #EAB308, #CA8A04)",
+        "warning.background": "#8c6b05",
         "warning.active.background": "linear-gradient(180deg, #CA8A04, #A16207)",
         "warning.hover.background": "linear-gradient(180deg, #FACC15, #EAB308)",
         "warning.foreground": "#422006",

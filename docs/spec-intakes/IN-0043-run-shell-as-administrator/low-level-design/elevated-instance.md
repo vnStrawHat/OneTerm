@@ -30,7 +30,7 @@ security boundary.
 | oneterm.exe (the user's window)  |              | oneterm.exe --elevated-shell pwsh|
 |                                  |              |                                  |
 | "+" menu row                     |              | run():                           |
-|   -> WorkspaceCommands           |              |  1 set_elevated(token query)     |
+|   -> WorkspaceCommands           |              |  1 set_elevation(token query)    |
 |      .launch_elevated_shell(kind)|              |  2 parse argv -> ElevatedShell   |
 |         (crates/state)           |              |  3 set_initial_shell(kind)       |
 |   -> crate::elevation (app)      |              |  4 crash paths (crashes/elevated)|
@@ -40,7 +40,7 @@ security boundary.
 |   lpFile  = current_exe()        | ----------->  |     -> CreatePseudoConsole HERE  |
 |   lpParams= "--elevated-shell .."|   + UAC on   |                                  |
 |   lpDir   = current_dir()        |  secure      | title: "OneTerm (Administrator)" |
-|   fMask   = SEE_MASK_FLAG_NO_UI  |  desktop     | title-bar border: warning token  |
+|   fMask   = SEE_MASK_NOASYNC     |  desktop     | (title text is the whole marker) |
 | }                                |              | right dock: absent               |
 +----------------------------------+              +----------------------------------+
 ```
@@ -64,7 +64,7 @@ The HLD left the owning crate open. Split by what each half needs:
 
 | Piece | Crate | Why |
 | --- | --- | --- |
-| `ElevatedShell` enum, argument parser, trusted-path resolution, the `is_elevated()` / `initial_shell()` process globals | `crates/core`, new `src/config/elevation.rs` | pure data and `std` only; `core` is the one crate `settings`, `workspace`, `terminal-view`, `state` and `app` can all name (`crates/state/src/panel_names.rs:9-12`), and it already owns `ShellKind` and `config_dir()` (`crates/core/src/config/shell.rs:17-32`, `:109-124`) |
+| `ElevatedShell` enum, argument parser, trusted-path resolution, the `Elevation` enum, the `is_restricted()` / `initial_shell()` process globals | `crates/core`, new `src/config/elevation.rs` | pure data and `std` only; `core` is the one crate `settings`, `workspace`, `terminal-view`, `state` and `app` can all name (`crates/state/src/panel_names.rs:9-12`), and it already owns `ShellKind` and `config_dir()` (`crates/core/src/config/shell.rs:17-32`, `:109-124`) |
 | The token query, the `ShellExecuteExW` call, the fatal `MessageBoxW` | `crates/app`, new `src/elevation.rs`, `#[cfg(windows)]` | `crates/app` already owns every process-level concern — the allocator (`crates/app/src/lib.rs:28-29`), the crash handlers (`:34-72`), the console Ctrl handler (`:78-93`) — and is the composition root that installs `WorkspaceCommands` (`crates/app/src/init.rs:62-80`). It is also the only crate that already depends on `windows-sys` outside the VT engine (`crates/app/Cargo.toml:67`). |
 
 This keeps `crates/core` free of a `windows-sys` dependency it does not have today, and
@@ -73,7 +73,7 @@ the process global that everyone else reads:
 
 ```rust
 // crates/app/src/lib.rs, first statement of run()
-oneterm_core::elevation::set_elevated(crate::elevation::process_is_elevated());
+oneterm_core::elevation::set_elevation(crate::elevation::process_elevation());
 ```
 
 `crates/terminal-view` never performs the effect; it calls a new `WorkspaceCommands` fn
@@ -91,8 +91,8 @@ process is elevated (M7):
 
 | Step | Call | Notes |
 | --- | --- | --- |
-| 1 | `oneterm_core::elevation::set_elevated(process_is_elevated())` | the token query, section 5. The only source of the marker and of every gate. |
-| 2 | `oneterm_core::elevation::parse(std::env::args_os())` | section 4. `Err` -> `fatal_message(...)` + `std::process::exit(2)`. `Ok(Some(kind))` -> `set_initial_shell(kind)`. |
+| 1 | `oneterm_core::elevation::set_elevation(process_elevation())` | the token query, section 5. The only source of the marker and of every gate. Three-valued: a failed query is `Unknown`, which is **restricted** and claims no elevation. |
+| 2 | `oneterm_core::elevation::parse(std::env::args_os())` | section 4. `Err` -> `fatal_message(...)` + `std::process::exit(2)`. `Ok(Some(shell))` -> when elevated, `trusted_program_for(shell)` or exit 3; then `set_initial_shell(shell)`. Steps 1 and 2 are one function, `read_process_identity()`, the first statement of `run()`. |
 | 3 | `oom::init_ballast()` | unchanged (`lib.rs:33`) |
 | 4 | `crash_report::prepare_capture_paths()` | unchanged call site (`lib.rs:34`); `crashes_dir()` now resolves to `<config>/crashes/elevated` when step 1 said elevated |
 | 5 | logging, native crash handler, Ctrl handler | unchanged (`lib.rs:47-93`) |
@@ -184,14 +184,17 @@ Exit codes, for the manual E2E and for anyone scripting the binary:
 | --- | --- |
 | 0 | normal exit |
 | 2 | the command line was not understood; one message box, no window |
-| 3 | the command line was understood but the requested shell has no trusted path on this machine (section 5); one message box, no window |
+| 3 | the command line was understood but the requested shell has no trusted path on this machine (section 5); one message box, no window. **Elevated processes only** — a process that is not elevated is unrestricted, resolves the shell the ordinary way and opens a window, because the token decides everything else and no consent prompt was paid for (`US-0130`, as built) |
 
 The message box is `MessageBoxW` and not `eprintln!`, because a release build is linked
 with `windows_subsystem = "windows"` (`crates/app/src/bin/oneterm.rs:7-10`) and has no
 console to print to. It runs before `gpui_platform::application()` (`lib.rs:95`), so there
 is no OneTerm window and no theme yet; a native message box is the only surface that
 exists. This adds `Win32_UI_WindowsAndMessaging` to the workspace `windows-sys` feature
-list (`Cargo.toml:125-135`) alongside `Win32_UI_Shell`.
+list (`Cargo.toml:125-135`) alongside `Win32_UI_Shell` — and, as built,
+`Win32_System_Registry`: windows-sys 0.59 gates the whole `SHELLEXECUTEINFOW` struct
+behind it because the struct carries an `HKEY` field. The feature buys the struct
+definition, nothing more; OneTerm still reads no registry key (section 5).
 
 Non-Windows builds are unaffected: `parse` compiles everywhere (it is pure `std`) and the
 non-Windows arm of `run()` never calls it, so `oneterm` on Linux and macOS still ignores
@@ -227,14 +230,15 @@ to install: an MSI run with `INSTALLFOLDER=D:\tools\pwsh` records a path under a
 a standard user may be able to write, which is the exact hole M3 exists to close — so
 honouring the registry would need a second check that the target is under a protected
 directory, at which point the directory scan alone is the same answer with less code.
-Second, the scan needs no `Win32_System_Registry` feature and no FFI, and it picks up a
+Second, the scan needs no registry FFI and it picks up a
 side-by-side PowerShell 8 for free. The cost is real and stated: **a pwsh installed outside
 `%ProgramFiles%\PowerShell` cannot be elevated from the menu** — the row is offered, the
 UAC prompt is answered, and the elevated process exits with code 3 and one message naming
 the path it looked for. **Open for the owner:** if a custom-location pwsh must be
 elevatable, the registry lookup comes back *plus* a check that `InstallLocation` resolves
-under a protected directory — and `Win32_System_Registry` joins the feature list. Until
-then this is the recorded behaviour, not an oversight.
+under a protected directory, plus `RegGetValueW` from the `Win32_System_Registry` feature
+the `SHELLEXECUTEINFOW` struct already pulls in (section 4). Until then this is the
+recorded behaviour, not an oversight.
 
 Resolution lives in `crates/core` and is parameterized the way `resolve_unix_shell`
 (`crates/core/src/config/shell.rs:203-222`) already is, so it can be unit-tested on the
@@ -264,6 +268,36 @@ are read in the *elevated* process, whose environment block was built by the App
 service from the elevated token's profile. `SHELLEXECUTEINFOW` carries no environment block
 at all (`research/windows-elevation-and-conpty.md` section 2.1) — the very limitation that
 forced option A is what makes these variables unreachable from the launching process.
+
+**Every field, not two.** `trusted_shell_config` builds the elevated
+`LocalShellConfig` field by field and deliberately **not** with `..cfg.clone()`
+(`IN-0043` MAJ-1, as built). `program` and `args` are not the only fields of
+`terminal.json`'s shell block that direct what executes:
+
+| Field | Why it cannot cross |
+| --- | --- |
+| `program`, `args` | names the executable and its command line |
+| `env` | the ConPTY environment block writes custom entries **ahead** of the inherited ones, so a `PATH` or `PSModulePath` here decides what the elevated shell runs on the first unqualified command — the first `net`, `sc`, `reg` or `icacls` the user types |
+| `cwd` | `cmd.exe` searches the working directory before `PATH`: the same escalation with one fewer field |
+| `utf8` | presentation only (the console codepage); the one field that crosses |
+
+Struct-update syntax would carry the next field added to `LocalShellConfig` across the
+boundary silently; listing every field means the next one fails the build until somebody
+decides which side it is on.
+
+`ResolvedShell` carries `cwd` for the same reason: `LocalSession::spawn` used to read
+`cfg.cwd` from the **original** config, so the guard at the top of `resolve_shell` was
+bypassed by construction. Everything a spawn needs now comes out of `resolve_shell`, which
+is what makes that one guard complete.
+
+**The behaviour change this costs, stated rather than discovered.** `cwd: None` is
+unconditional in an elevated window, so **Duplicate tab** and **New Terminal Here** open at
+the home directory instead of inheriting the tab's live OSC 7 working directory
+(`crates/terminal-view/src/panel/duplicate.rs` sets it; the guard discards it). That is the
+correct security answer — the cwd of a live shell is not a value this process may take
+instructions from once it is elevated, and `cmd.exe` searches the working directory before
+`PATH` — and it is a real difference a user will notice between an ordinary window and an
+administrator one. `docs/terminal-backend.md` §6.1.1 says so for users.
 
 Once resolved, the shell is spawned through the ordinary path:
 `PanelSpec::Shell`-equivalent -> `LocalSession::spawn`
@@ -305,6 +339,15 @@ Field by field, and why each value:
   Windows command-line quoting is not a hazard on this path and there is no quoting code
   to get wrong.
 - **`lpDirectory = std::env::current_dir()`** (falling back to `current_exe()`'s parent).
+  **It is inside the trust boundary, not outside it** (`IN-0043` MIN-1, as built): any
+  same-user process may call `ShellExecuteExW(runas, oneterm.exe, "--elevated-shell cmd")`
+  with any `lpDirectory` of its own, and in a **debug or `fast-dev`** build `config_dir()`
+  is the relative `target/`, so that directory chooses the elevated instance's whole
+  configuration root. Release builds resolve `config_dir()` from `USERPROFILE` and are
+  unaffected, which is the only reason this is acceptable: it is a **developer-build-only**
+  exposure, and it is a severity multiplier for anything else that reads configuration
+  rather than a hole on its own. A release build must never gain a cwd-relative
+  `config_dir()`.
   Load-bearing: `runas` does not inherit the caller's working directory, and in **debug**
   builds `config_dir()` is the relative path `target/`
   (`crates/core/src/config/shell.rs:109-124`), so an unset `lpDirectory` silently puts the
@@ -336,7 +379,7 @@ comment carries the rule so the next person to add coalescing reads it.
 
 ### 7. The elevated-mode switch and every seam it gates
 
-**One switch, and it is the token.** `oneterm_core::elevation::is_elevated()` returns the
+**One switch, and it is the token.** `oneterm_core::elevation::is_restricted()` reads the
 value set in step 1 of section 3. The command-line argument selects *which shell opens* and
 nothing else; it never contributes to the marker or to any gate. Stated as one sentence,
 because it is the rule that makes M5 true:
@@ -347,7 +390,9 @@ Two corollaries fall out and are both intended:
 
 - A OneTerm the user elevated by some other route (right-click -> Run as administrator, a
   policy auto-elevation) is marked and restricted exactly like one launched from the menu.
-  That is fail-safe: there is no elevated-but-unrestricted state to reach.
+  That is fail-safe: there is no elevated-but-unrestricted state to reach — **including
+  when the token query fails**, which is why `Elevation` has three values and not two, and
+  why `is_restricted()` is the only predicate the gates read (`IN-0043` MIN-3).
 - A **non**-elevated process given `--elevated-shell cmd` opens Command Prompt, unmarked
   and unrestricted, and logs one `warn`. It cannot claim an elevation it does not have, so
   there is nothing to be fooled by, and it does not dead-end a window over a token race.
@@ -356,33 +401,53 @@ The token query:
 
 ```rust
 // crates/app/src/elevation.rs   #[cfg(windows)]
-pub fn process_is_elevated() -> bool {
+pub(crate) fn process_elevation() -> Elevation {
     let mut token = std::ptr::null_mut();
-    if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == FALSE { return false; }
+    if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == FALSE {
+        return Elevation::Unknown;              // restricted, and claims nothing
+    }
     let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
     let mut returned = 0u32;
     let ok = GetTokenInformation(token, TokenElevation, (&mut elevation as *mut _).cast(),
                                  size_of::<TOKEN_ELEVATION>() as u32, &mut returned);
     CloseHandle(token);
-    ok != FALSE && elevation.TokenIsElevated != 0
+    if ok == FALSE { return Elevation::Unknown; }
+    if elevation.TokenIsElevated != 0 { Elevation::Elevated } else { Elevation::NotElevated }
 }
 ```
 
-`#[cfg(not(windows))]` it is a `const fn` returning `false`, so every gate below compiles
-away to the current behaviour on Linux and macOS and no surface is `#[cfg]`-duplicated.
+`#[cfg(not(windows))]` it is a `const fn` returning `Elevation::NotElevated`, so every gate
+below compiles away to the current behaviour on Linux and macOS and no surface is
+`#[cfg]`-duplicated.
+
+**Why three values and not a `bool`.** A failed query has two honest answers and they are
+different ones. On the restrictions, fail **closed**: a process that *is* elevated and
+cannot prove it would otherwise run SSH, SFTP, the updater and `terminal.json`'s program
+under an administrator token with none of M1-M7 applied, and the corollary below — *there is
+no elevated-but-unrestricted state to reach* — would be false in exactly that branch. On the
+marker, fail **honest**: `DEC-0019` rule 2 forbids a window claiming an elevation the token
+did not confirm, so `Unknown` reads `OneTerm (elevation unknown)` rather than
+`(Administrator)`. `is_restricted()` is the only predicate the gates read; there is
+deliberately no `is_elevated()` beside it, because two predicates differing only in this
+case is an invitation to guard a security seam with the weaker one.
 
 Seams, one row per gate, with the line each one sits on today:
 
 | M | Seam | File:line today | Elevated behaviour |
 | --- | --- | --- | --- |
 | M5 | OS window title | `crates/app/src/window.rs:66` — `window.set_window_title("OneTerm")` | `"OneTerm (Administrator)"`, so the taskbar, Alt-Tab and every screenshot carry it |
-| M5 | in-app title bar text | `crates/workspace/src/layout/workspace/mod.rs:262` — `AppTitleBar::new("OneTerm", window, cx)` | `"OneTerm (Administrator)"` |
-| M5 | title-bar border | `crates/workspace/src/layout/title_bar.rs:63` — `.border_color(cx.theme().border)` | `cx.theme().warning`. A **border**, not a background: a border introduces no new text surface, so `scripts/check-theme-contrast.py`'s `SURFACES` table is untouched. If a later change tints `title_bar.background` instead, that surface must be added to `SURFACES` (and to `PARENTS`) in the same commit. |
-| M1 | the "+" menu shell list | `crates/terminal-view/src/panel/terminal_panel.rs:697-704` | the three Windows kinds only, and **no "Run as administrator" rows** — `is_elevated()` suppresses them, so an elevated window cannot spawn a second identical one |
+| M5 | in-app title bar text | `crates/workspace/src/layout/workspace/mod.rs` — `AppTitleBar::new("OneTerm", window, cx)` | **Two spans** (owner ruling 2026-09-21): the app menu bar keeps the plain `OneTerm`, and `AppTitleBar::render` draws the suffix beside it — ` (Administrator)` or ` (elevation unknown)` — in `cx.theme().warning`, bold. A sibling element rather than part of the menu name, because the kit renders a menu name as one string and `docs/PROJECT.md` forbids patching it. `window_title_parts` is a **view** of `window_title`, not a second copy, and a test concatenates the spans and asserts the result is the OS title, so the plain and the coloured forms cannot drift. |
+| M5 | `warning` on `title_bar.background` | `scripts/check-theme-contrast.py` `SURFACES` | A new text-on-surface pairing, so it is checked: every theme in `crates/theme/themes/` now sets `warning` explicitly — the 27 dark variants keep exactly the kit's `#facc15`, the 12 light ones take a darker shade of the kit's own yellow ramp (lightness only, same hue). The kit's default amber reads on a dark title bar and fails on all 12 light ones, which is why the token could not simply be left to the kit. |
+| M5 | ~~title-bar border~~ | `crates/workspace/src/layout/title_bar.rs` | **Removed** (owner ruling 2026-09-21, `DEC-0019` M5 as amended): the marker is the **title text only**. The border briefly carried `cx.theme().warning`; it was chosen as a border precisely so it added no text surface, so removing it leaves `scripts/check-theme-contrast.py` untouched in both directions. If a later change ever tints `title_bar.background`, that surface must be added to `SURFACES` (and to `PARENTS`) in the same commit — the note outlives the border it was written for. |
+| M1 | the "+" menu shell list | `crates/terminal-view/src/panel/terminal_panel.rs:697-704` | the three Windows kinds only, and **no "Run as administrator" rows** — `is_restricted()` suppresses them, so an elevated window cannot spawn a second identical one |
 | M1 | the "+" menu SSH block | `terminal_panel.rs:705-742` — "SSH Sessions" separator, saved rows, "Quick Connect...", "New Saved Session..." | absent in full. `FIXED_ROWS` (`:763`) is computed for the rows actually emitted, so the scroll estimate stays honest in both modes |
-| M1 | right dock content | `crates/workspace/src/layout/workspace/mod.rs:204-214` (persisted mode applied) and `layout.rs:38-41`, `:65-76` (`build_named_panel(panel_names::SSH_CLIENT, ...)`) | no right dock at all: `SSH_CLIENT` is not built and `set_dock(DockPlacement::Right, ...)` is not called. `sync_right_dock_mode` (`mod.rs:317-319`) and `apply_right_dock_width` (`mod.rs:403`) both early-return on `!has_dock(Right)`, so nothing else needs a guard |
+| M1 | right dock content | `crates/workspace/src/layout/workspace/mod.rs` (`startup_dock_document`), `layout.rs` (`right_dock`) | **`docks.json` is not read at all** (as built, `IN-0043` MAJ-2). Gating the two layout *builders* was necessary and not sufficient: `load_layout` restores the side docks **by name**, so a saved `ssh_client` or `agent` dock is built before either builder runs, and declining to call `set_dock(Right, ..)` does not remove a dock that is already there — it leaves it. An elevated window therefore starts from the fixed default layout, every time, and `right_dock`'s `None` arm now calls `remove_dock` rather than merely skipping `set_dock`. `sync_right_dock_mode` and `apply_right_dock_width` early-return on `!has_dock(Right)` as before |
 | M1 | right-dock mode toggles | `crates/workspace/src/layout/workspace/mod.rs:263` — `.child(|_, cx| title_bar::mode_toggle_group(cx))` | the child is not attached. The three segments ("SSH Client" / "Agent" / "None", `title_bar.rs:110-152`) are absent rather than disabled: there is nothing to switch to |
 | M1 | Agent panel | registered at `crates/app/src/init.rs:42-44` | `oneterm_agent_ui::init(cx)` still runs — the `AppServices` bundle's install order invariant (`init.rs:57-61`) depends on every feature `init` having run — but the panel has no route into the layout because the right dock does not exist and the toggle is gone |
+| M1 | **actions**, not only rows | `crates/actions/src/elevated_policy.rs` (new), consulted by `workspace/.../actions.rs`, `session-ui/src/lib.rs`, `session-ui/src/quick_connect_dialog.rs` and `settings-ui/.../key_bindings/state.rs` | Removing a *row* is not removing an *action*: `new_ssh_session` ships bound to `ctrl-shift-n` with a global context, so Quick Connect opened in an elevated window with no row involved (`IN-0043` MAJ-3). One exhaustive table classifies every `BINDABLE_ACTIONS` id; an unclassified id is **denied**, and `every_bindable_action_is_classified_for_an_elevated_window` fails until somebody classifies it. `apply_key_bindings` does not bind a denied action at all, which closes every keystroke route including a user's own override |
+| M4 | terminal logging | `crates/settings/src/terminal_config/logging.rs` — `LoggingConfig::runtime_config` | **off regardless of config** (`IN-0043` MAJ-4). `logging.local` plus `logging.directory` is a file created at a config-chosen path under an administrator token, and `LogWriteMode::Overwrite` makes it a create-or-**truncate** primitive. One gate in the function both the local and the SSH caller resolve through |
+| M4 | quarantine renames | `crates/core/src/persistence.rs` — `quarantine_file` | **no rename** (`IN-0043` MIN-2). The M4 guards sit on the write entry points; a quarantine is a rename of the user's file and is not one of them. An elevated window that meets a corrupt document starts on the defaults, says so once, and leaves the file for the ordinary window to quarantine. One guard covers `ui_config.json`, `terminal.json` and `docks.json` |
+| M2/M4 | the Network settings page | `crates/settings-ui/src/panel.rs` — `pages` | **hidden** (`IN-0043` MIN-4). It configures how the updater reaches GitHub, and M2 removed the updater; a page whose edits are silently discarded is worse than one that is not there. The settings window also carries one line saying this is an administrator window and its changes are not saved |
 | M2 | startup update check | `crates/app/src/window.rs:58` — `start_auto_check(window, cx)` | not called |
 | M2 | manual check | `crates/settings-ui/src/updates/actions.rs:85` — `check_now` | early return |
 | M2 | download and install | `crates/settings-ui/src/updates/install.rs:12` — `download_and_install_update` | early return, before the confirm dialog |
@@ -414,7 +479,7 @@ costs one `join` and removes the whole class.
 | Unrecognized command line | `MessageBoxW` naming the flag and the three accepted values, exit code 2, no window | `run()`, step 2 |
 | Requested shell has no trusted path | `MessageBoxW` naming the path that was looked for, exit code 3, no window. An elevated window with no shell in it is worse than none | `run()`, before the gpui app starts |
 | The elevated process cannot read the configuration (different profile, over-the-shoulder elevation) | it starts with defaults and says so **once**, as one info notification after the window opens: *"Settings could not be read for this account; this window is using the defaults."* The marker is still correct, because it comes from the token, not from the configuration | `crates/app/src/window.rs` after `open_window` |
-| The token query itself fails | treated as **not elevated**, logged at `error`. `OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY)` on one's own process is always granted, so this is a theoretical branch; the honest direction is the one where no window claims an elevation it could not prove | section 7 |
+| The token query itself fails | **fail closed on the restrictions, honest on the marker** (`Elevation::Unknown`, as built). M1-M7 all apply, and the title reads `OneTerm (elevation unknown)` with the warning border. The first draft of this table said "treated as not elevated", which was fail-**open** on a security switch: a process that *is* elevated and fails the query would have run SSH, SFTP, the updater and `terminal.json`'s program under an administrator token, unmarked, and the corollary in section 7 — *there is no elevated-but-unrestricted state to reach* — would have been false in exactly that branch. Claiming "(Administrator)" instead is not the answer either: `DEC-0019` rule 2 forbids a marker asserting an elevation the token never confirmed. `OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY)` on one's own process is always granted, so the branch stays theoretical; the direction it fails in is not. | section 7 |
 | The elevated window fails to open | an ordinary OneTerm start-up failure (CORR-63): logged, no window. The launching window has already returned; the user sees a consent prompt followed by nothing. Same as any failed launch | `crates/app/src/window.rs` |
 
 ## Interfaces
@@ -450,15 +515,42 @@ pub fn trusted_program(
     versions: impl Fn(&std::path::Path) -> Vec<std::ffi::OsString>,
     exists: impl Fn(&std::path::Path) -> bool,
 ) -> Result<std::path::PathBuf, std::path::PathBuf>;
+/// The same, against this machine (`%SystemRoot%`, `%ProgramFiles%`, read_dir, is_file).
+pub fn trusted_program_for(shell: ElevatedShell) -> Result<std::path::PathBuf, std::path::PathBuf>;
+
+/// M3 as one function: the config an elevated process may spawn for `cfg.kind` --
+/// the trusted program, the kind's own args, and nothing from `terminal.json`.
+/// `resolve` is `trusted_program_for` in production and injected in tests, so the
+/// rule is unit-tested without the process global and without a Windows host.
+/// `resolve_shell` calls this behind `if is_restricted()`; that one guard covers
+/// every local spawn, because every one of them resolves through it.
+pub fn trusted_shell_config(
+    cfg: &LocalShellConfig,
+    resolve: impl Fn(ElevatedShell) -> Result<std::path::PathBuf, std::path::PathBuf>,
+) -> Result<LocalShellConfig, AppError>;
+
+/// What the process token said. Three-valued: see section 7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Elevation { #[default] NotElevated, Elevated, Unknown }
+impl Elevation { pub fn is_restricted(self) -> bool; }   // true for Elevated AND Unknown
+
+/// The window title, for the OS title bar and the in-app one -- one function for
+/// both, so the two markers cannot disagree. Takes the value rather than reading
+/// the global, so the rule is testable without mutating process state.
+pub fn window_title(elevation: Elevation) -> &'static str;
 
 /// Process globals, set exactly once in run() before any UI exists.
-pub fn set_elevated(value: bool);
-pub fn is_elevated() -> bool;              // false until set, and on non-Windows
-pub fn set_initial_shell(kind: crate::ShellKind);
-pub fn initial_shell() -> Option<crate::ShellKind>;
+pub fn set_elevation(value: Elevation);
+pub fn elevation() -> Elevation;           // NotElevated until set, and on non-Windows
+pub fn is_restricted() -> bool;            // the ONE predicate every gate reads
+/// Takes an `ElevatedShell`, not a `ShellKind`, as built: the global then cannot
+/// hold `Custom` even by mistake, which is the same argument the enum itself makes.
+pub fn set_initial_shell(shell: ElevatedShell);
+pub fn initial_shell() -> Option<crate::ShellKind>;   // what the panel needs
 
-// ── crates/app/src/elevation.rs (new, #[cfg(windows)]) ──────────────────
-pub(crate) fn process_is_elevated() -> bool;
+// ── crates/app/src/elevation.rs (new; the Win32 bodies are #[cfg(windows)],
+//    the module is not, because the fn pointer field exists on every platform) ──
+pub(crate) fn process_elevation() -> Elevation; // a const fn returning NotElevated off Windows
 pub(crate) fn fatal_message(text: &str);   // MessageBoxW; used before the gpui app starts
 pub(crate) fn launch_elevated_shell(kind: oneterm_core::ShellKind, window: &mut Window, cx: &mut App);
 
@@ -514,9 +606,29 @@ a compile-time-checked change with no runtime surface.
       resolve it from `USERPROFILE` and are unaffected. Developer-build-only, accepted.
 - [ ] **A future single-instance guard.** Forbidden to forward an `--elevated-shell`
       argument. `DEC-0019` rule 3 / M6, repeated in the parser's doc comment.
-- [ ] **Token query failure.** Treated as not elevated, logged at `error`.
+- [ ] **Token query failure.** `Elevation::Unknown`, which is **restricted** — every gate of
+      M1-M4 and M7 applies — while the marker reads `OneTerm (elevation unknown)` rather than
+      claiming an elevation the token never confirmed (`DEC-0019` rule 2). Fail closed on the
+      restrictions, fail honest on the marker; an earlier draft of this line said "treated as
+      not elevated", which was fail-**open** and would have left a genuinely elevated process
+      running SSH, SFTP, the updater and `terminal.json`'s program unmarked. The variant
+      carries a `&'static str` naming which call failed, because the query runs before
+      `env_logger` exists; `run()` logs it once the logger is up (`IN-0043` MIN-3, NEW-9).
 - [ ] **A second elevation request while an elevated window is open.** Served: a second
       consent prompt, a second elevated window. No coalescing, by M6.
+- [ ] **A second *click* while the first consent prompt is still up.** Ignored. The launch
+      became asynchronous when it moved off the gpui thread, and with it went the accidental
+      debounce the modal call gave for free; one flag, held for the lifetime of the
+      outstanding request, restores it (`IN-0043` NEW-8). This is about clicks, not about
+      requests: M6 is untouched, and two *separate* elevation requests still get two prompts.
+- [ ] **Quitting OneTerm while the consent prompt is up.** The helper thread is detached, so
+      the process exits with that thread inside `ShellExecuteExW`: its `CoUninitialize` never
+      runs, and if the user then approves the prompt an elevated OneTerm starts with no
+      launcher left to tell. Harmless, and worth writing down rather than discovering
+      (`IN-0043` NEW-10). Nothing the elevated process needs came from the launcher: the
+      verb, the executable and the one-token parameter were all fixed before the thread
+      started, and the COM apartment dies with the process. The window that opens is a
+      normal elevated OneTerm; only the `log::info!` saying it started is lost.
 
 ## Verification
 
@@ -566,7 +678,8 @@ that first produces one:
       Click one; screenshot the UAC prompt naming `oneterm.exe`.
 - [ ] **E2 — the marked window.** Screenshot of the elevated window showing all three
       markers at once: the OS title bar / taskbar reading `OneTerm (Administrator)`, the
-      in-app title bar reading the same, and the title-bar border in the warning colour.
+      in-app title bar reading the same. The title text is the whole marker: the warning-
+      coloured border was removed on the owner's ruling (`DEC-0019` M5 as amended).
 - [ ] **E3 — really elevated.** `whoami /groups` in the elevated tab, screenshot showing
       `Mandatory Label\High Mandatory Level`. This is the proof that the feature did what
       it claims; the marker alone is not.

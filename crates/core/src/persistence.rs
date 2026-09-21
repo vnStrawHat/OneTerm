@@ -140,6 +140,22 @@ fn replace_file(temporary: &Path, target: &Path) -> io::Result<()> {
 /// process) is never overwritten by this one; an unexpected collision is
 /// skipped by advancing the sequence instead of replacing the older file.
 pub fn quarantine_file(path: &Path) -> io::Result<Option<PathBuf>> {
+    // M4 (`DEC-0019`, `IN-0043`): read-only means read-only. A quarantine is a
+    // **rename** of the user's file, and the M4 guards sit on the write entry
+    // points, which this is not one of. An elevated window that met a corrupt
+    // document would otherwise modify the config directory — under
+    // over-the-shoulder elevation, another account's — which is the exact trace
+    // M4 says is never left. It still starts on the defaults and still says so
+    // once; it just leaves the file where it found it, for the ordinary window
+    // to quarantine. One guard here covers every caller
+    // (`ui_config.rs`, `terminal_config/document.rs`, `dock_persistence`).
+    if crate::config::elevation::is_restricted() {
+        log::info!(
+            "elevated window: not quarantining {}; using the defaults and leaving the file untouched",
+            path.display()
+        );
+        return Ok(None);
+    }
     let _lock = InterProcessLock::acquire(path)?;
     if !path.exists() {
         return Ok(None);

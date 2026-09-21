@@ -11,6 +11,21 @@ mod notify;
 mod state;
 
 pub(crate) use actions::{check_now, skip_offered_version, start_auto_check};
-pub(crate) use groups::{group, network_page};
+
+/// M2 (`DEC-0019`): the elevated instance never checks, downloads or installs
+/// an update, and says so once in the About surface.
+///
+/// An elevated updater can write `C:\Program Files` and leave files whose owner
+/// or ACL the ordinary instance cannot replace, which would silently change the
+/// install for the normal window too. Removing the path is cheaper and safer
+/// than warning about it.
+pub(crate) fn elevated_never_updates() -> bool {
+    let elevated = oneterm_core::elevation::is_restricted();
+    if elevated {
+        log::info!("Updates are checked and installed from the normal OneTerm window.");
+    }
+    elevated
+}
+pub(crate) use groups::{ELEVATED_UPDATES_TEXT, group, network_page};
 pub(crate) use install::download_and_install_update;
 pub(crate) use state::UpdateUiState;

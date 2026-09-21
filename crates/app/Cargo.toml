@@ -55,6 +55,9 @@ gpui-component.workspace = true
 gpui-kit-assets.workspace = true
 
 anyhow.workspace = true
+# Worker -> foreground hop for the elevation launch (IN-0043): the `runas` call
+# pumps messages, so it must not run on the gpui thread.
+async-channel.workspace = true
 serde_json.workspace = true
 env_logger.workspace = true
 log.workspace = true

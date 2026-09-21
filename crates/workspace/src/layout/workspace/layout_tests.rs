@@ -19,7 +19,7 @@ use super::actions::{DockModeAction, reopen_or_rebuild};
 use super::test_panels::{NamedPanel, register_test_panels};
 use super::{
     DEFAULT_RIGHT_DOCK_WIDTH, MAIN_DOCK_VERSION, OneTermWorkspace, clamp_right_dock_width, layout,
-    persistence, restore_zoom_in_dock, right_dock_mode_for,
+    persistence, restore_zoom_in_dock, right_dock_mode_for, startup_dock_document,
 };
 
 /// Removes the per-test directory when the test ends — on failure too.
@@ -682,5 +682,94 @@ fn load_layout_drops_a_split_centre_and_still_restores_zoom_after_the_reset(
     assert!(
         zoomed_after,
         "the saved zoom name must resolve against the reset centre"
+    );
+}
+
+// ── The elevated window's layout (`IN-0043` M1) ──────────────────────────
+//
+// `restricted_elevation` flips a **process-global** switch, so these two tests
+// must not run beside anything that reads it. They are the only tests in this
+// file that touch it, they restore it on every exit path including a panic, and
+// the packet records the `--exact` invocation that runs each one alone.
+
+/// Sets the process elevation for the life of the value and puts it back after,
+/// so a failing assertion cannot leave the switch on for the next test.
+struct RestrictedElevation;
+
+impl RestrictedElevation {
+    fn new() -> Self {
+        oneterm_core::elevation::set_elevation(oneterm_core::elevation::Elevation::Elevated);
+        Self
+    }
+}
+
+impl Drop for RestrictedElevation {
+    fn drop(&mut self) {
+        oneterm_core::elevation::set_elevation(oneterm_core::elevation::Elevation::NotElevated);
+    }
+}
+
+/// `MAJ-2`, the primary fix: an elevated window does not **read** `docks.json`.
+///
+/// Not "reads it and ignores the side docks" — `load_layout` builds them by
+/// name, so anything that reaches it has already lost. The injected reader
+/// panics if it is called.
+#[test]
+#[ignore = "flips the process-global elevation switch; run with --test-threads=1"]
+fn an_elevated_window_never_reads_the_saved_layout() {
+    let _restricted = RestrictedElevation::new();
+    let document = startup_dock_document(true, || {
+        panic!("an elevated window must not read docks.json at all")
+    });
+    assert!(
+        document.is_none(),
+        "an elevated window starts from the fixed default layout"
+    );
+
+    // ...and an ordinary window still reads it, which is the regression clause.
+    let read = startup_dock_document(false, || {
+        Some(oneterm_state::dock_persistence::DockDocument::default())
+    });
+    assert!(
+        read.is_some(),
+        "an ordinary window must still load its layout"
+    );
+}
+
+/// `MAJ-2`, the second lock: the elevated start-up path yields a dock state with
+/// **no right dock**, even when one is already there.
+///
+/// This is the test `US-0131`'s verification plan named and the branch did not
+/// have. The pre-existing dock stands in for what `load_layout` used to leave
+/// behind, so the assertion holds whichever way a dock arrives.
+#[test]
+#[ignore = "flips the process-global elevation switch; run with --test-threads=1"]
+fn the_elevated_startup_path_yields_a_dock_state_with_no_right_dock() {
+    let mut app = gpui::TestAppContext::single();
+    let (dock_area, cx) = dock_area(&mut app);
+    set_right_dock(&dock_area, panel_names::SSH_CLIENT, px(333.), true, cx);
+    assert_eq!(
+        right_dock(&dock_area, cx),
+        (333., true, panel_names::SSH_CLIENT.to_string()),
+        "fixture: the dock a restore would have left"
+    );
+
+    let _restricted = RestrictedElevation::new();
+    let state = cx
+        .update(|window, cx| layout::apply_center_reset(dock_area.downgrade(), window, cx))
+        .expect("dock area alive");
+
+    assert!(
+        !dock_area.read_with(cx, |dock_area, _| dock_area.has_dock(DockPlacement::Right)),
+        "an elevated window must have no right dock"
+    );
+    assert!(
+        state.right_dock.is_none(),
+        "and the dumped dock state must not carry one either"
+    );
+    let dumped = serde_json::to_string(&state).expect("dock state serializes");
+    assert!(
+        !dumped.contains(panel_names::SSH_CLIENT) && !dumped.contains(panel_names::SFTP),
+        "the elevated dock state must not name the SSH Client or SFTP panels: {dumped}"
     );
 }

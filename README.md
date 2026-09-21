@@ -103,9 +103,61 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 - Windows ConPTY is bundled; Unix local PTY compiles but is untested
 - Windows is the primary platform; Linux/macOS compile but are untested
 
+### 🛡️ Run as administrator (Windows)
+
+The "+" (New Terminal) menu has a `Run as administrator ›` submenu listing the three
+Windows shells. Picking one asks for consent and then opens a **second OneTerm window** that
+runs elevated — Windows will not let an elevated shell attach to a pseudo-console this
+process owns, so it cannot be a tab in the window you are already in. The window you were
+working in keeps its tabs, its connections and its transfers, unelevated; declining the
+prompt does nothing at all.
+
+The elevated window is deliberately a smaller application, and it says what it is:
+
+- **It is marked**, from the process token and never from how it was started:
+  `OneTerm (Administrator)` in the taskbar and in the title bar. The **words** are the
+  marker — a theme can change any colour, so the text is what has to carry it — and in
+  OneTerm's own title bar the `(Administrator)` part is highlighted beside the name so it
+  catches the eye. A window elevated any other way — right-click ▸ Run as administrator, a
+  policy — is marked and restricted in exactly the same way.
+- **No console window comes with it.** A debug build of OneTerm keeps a console so
+  developers can read the log; an elevated one gives that console up at start-up, because a
+  window started through `runas` gets a console of its own that nobody asked for. A release
+  build never had one.
+- **It has**: local Windows shells, your theme, font and key bindings, and everything the
+  terminal itself does.
+- **It does not have**: SSH, SFTP, saved sessions, Quick Connect, the Agent panel, the right
+  dock or its mode toggles, updates (those are done from the normal window), or its own
+  "Run as administrator" entries.
+- **It writes no settings.** `ui_config.json`, `terminal.json`, `ssh_session.json` and
+  `update_config.json` are read and never written, so an elevated session cannot change
+  what your ordinary window opens with — not even by leaving a corrupt file quarantined.
+  Its crash reports go to `crashes/elevated/` and it shows no crash dialog.
+- **Your saved layout never carries over.** `docks.json` is not read at all there, so an
+  administrator window always opens on the default layout: one terminal tab, no right dock.
+  That is deliberate and it is what keeps the SSH and SFTP panels out — restoring a saved
+  layout would rebuild them by name, before anything had a chance to decline.
+- **Duplicate tab and New Terminal Here open at your home directory**, not at the tab's
+  current directory. An elevated window does not take a working directory from anything
+  outside itself, because `cmd.exe` searches it before `PATH`.
+- **Drag-and-drop from Explorer does not work into any elevated window.** Windows forbids a
+  drop from a medium-integrity Explorer onto a high-integrity window. It is inherent to
+  elevation and cannot be fixed; under the list above there is no SFTP panel there to drop
+  onto anyway.
+- **What it runs is not taken from your settings.** The shell is resolved to a fixed path
+  under `%SystemRoot%` or `%ProgramFiles%`, never through `PATH`, `%COMSPEC%` or
+  `terminal.json`. None of that file's shell settings reach it — not the program, not the
+  arguments, not the environment, not the working directory — and a custom shell cannot be
+  elevated at all. Terminal logging is off there too. See
+  [`docs/terminal-backend.md`](docs/terminal-backend.md) §6.1.1.
+- **Its keyboard shortcuts are smaller too.** The SSH and SFTP actions are not bound in an
+  elevated window, so `Ctrl+Shift+N` opens nothing there: a missing menu row is not the same
+  as a missing action, and both have to go.
+
 ### 🔄 Auto-update
 
 - Checks GitHub Releases of this repository (release notes, asset selection per platform)
+- Never runs from an elevated window (see above)
 - SHA-256-verified download, staged install with rollback, restart from the About page
 - Configurable in Settings (auto-check, proxy, certificate verification) — see
   [`docs/auto-update.md`](docs/auto-update.md)
@@ -113,7 +165,8 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 ### 🧯 Crash reporting
 
 - Rust panics and native crashes are captured into `crashes/*.crash.txt` under the config
-  directory (user paths redacted) and offered for review on the next start — see
+  directory (user paths redacted) and offered for review on the next start; an elevated
+  window stores its own under `crashes/elevated/` and shows no dialog — see
   [`docs/crash-reporting.md`](docs/crash-reporting.md)
 
 ### 🪟 Platform support

@@ -309,6 +309,18 @@ unchanged, and report a typed user-facing error.
 Installation must be atomic from the user's perspective: either the next launch uses
 the new version or the old version remains available.
 
+**An elevated OneTerm window never checks, downloads or installs an update** (`IN-0043`,
+`DEC-0019` M2). Not "asks first", not "warns": the startup check is not started, the manual
+check and the install action return immediately, and the Updates surface — the About
+settings group and the About dialog alike — is one line saying updates are checked and
+installed from the normal OneTerm window, with no status, no preferences and no button. The
+reason is the helper described below: under an administrator token it can write
+`C:\Program Files` and leave files whose owner or ACL the ordinary, medium-integrity
+instance cannot replace, which would silently change the install for the normal window too
+and leave its next update unable to complete. Updating from the normal window is the
+supported path; where that window needs elevation to write its own install directory, the
+`runas` step belongs to the helper, not to a whole elevated GUI.
+
 Windows:
 
 - The running executable cannot be overwritten in place.

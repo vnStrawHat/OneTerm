@@ -39,6 +39,15 @@ impl<T> PersistQueue<T> {
         true
     }
 
+    /// Whether a snapshot is waiting to be written.
+    ///
+    /// For tests that need to assert a write was **not** queued — the M4 guards
+    /// of `IN-0043` return before `enqueue`, and "nothing reached the queue" is
+    /// a deterministic assertion where "no file appeared" is a racy one.
+    pub fn has_pending(queue: &Arc<Mutex<Self>>) -> bool {
+        lock(queue).pending.is_some()
+    }
+
     /// Write pending snapshots until the queue is empty; a snapshot queued
     /// while one is being written is picked up by the same worker.
     pub fn drain(queue: &Arc<Mutex<Self>>, mut save: impl FnMut(&T)) {

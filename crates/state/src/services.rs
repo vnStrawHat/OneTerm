@@ -137,6 +137,7 @@ mod tests {
             Vec::new()
         }
         fn open_saved_session(_: u64, _: &mut gpui::Window, _: &mut gpui::App) {}
+        fn elevated(_: oneterm_core::ShellKind, _: &mut gpui::Window, _: &mut gpui::App) {}
         fn dock(
             _: &gpui::Entity<gpui_component::dock::DockArea>,
             _: &mut gpui::Window,
@@ -154,6 +155,7 @@ mod tests {
             open_about: window,
             find_in_active_terminal: dock,
             setup_key_bindings: app,
+            launch_elevated_shell: elevated,
         }
     }
 

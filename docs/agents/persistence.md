@@ -89,3 +89,36 @@ use a temporary directory and cover: successful migration, idempotent current
 schema loading, invalid-file quarantine, backup preservation, and concurrent
 updates for shared documents. Tests must never write to the developer's real
 configuration directory.
+
+## Elevation: a process that reads and never writes
+
+An **elevated** OneTerm process (`IN-0043`, `DEC-0019` M4) persists nothing. Before adding a
+write, a document, or a recovery step, check it against this rule — it is a property of the
+process, not of any one document, so a new writer inherits it only if it is put in the right
+place.
+
+| Document | Elevated |
+|---|---|
+| `ui_config.json`, `terminal.json` | read; every write refused by `write_refusal(elevated)`, the one function both shared write entry points ask |
+| `docks.json` | **not read either.** `load_layout` restores side docks *by name*, so reading it would build the SSH Client or Agent panel in a window that must not have one. Writes refused in `save_state_to` |
+| `ssh_session.json`, `update_config.json` | read; writes refused in each document's own shared write function |
+| terminal logs | never opened. An arbitrary path from `terminal.json` plus `write_mode: overwrite` is a create-or-truncate primitive under an administrator token |
+| crash reports | own store, `crashes/elevated/` |
+
+Three rules that are easy to miss, and were all missed once:
+
+1. **A first-run default write is a write.** `UiConfig::load_from` and
+   `TerminalConfig::load_from` create the file when it is absent — *during the load*, so a
+   flag set after loading does not stop it. Under over-the-shoulder elevation that directory
+   belongs to another account.
+2. **A quarantine is a write.** `quarantine_file` renames the user's document, and the guards
+   on the write entry points do not cover it. One guard lives inside `quarantine_file` itself
+   so every caller is covered at once; an elevated process meeting a corrupt document starts
+   on the defaults and leaves the file for the ordinary one.
+3. **Put the guard in the shared function, never at the call sites.** Every guard above sits
+   at the deepest point its document's writes pass through, so a caller added later is
+   covered by construction. The one place that was gated at a *builder* instead of at the
+   *restore* is the one that shipped a hole.
+
+The switch is `oneterm_core::elevation::is_restricted()` — true for an elevated token **and**
+for a token query that failed. There is deliberately no `is_elevated()` beside it.
