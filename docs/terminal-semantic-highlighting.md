@@ -128,6 +128,14 @@ stored separately — see §7). After the sign + one space, switch to `CommandMo
 **CommandMode**: first non-space token → `Command`; subsequent `--x`/`-x`/`/x` tokens →
 `Option`; `;`/`|`/`&&`/`||` reset to expect a new `Command`. End at EOL.
 
+**Arguments stay `Default` in CommandMode** — no `String`, no `Path`, no `Number`. This
+is deliberate: what the user is typing is not output to be parsed, and the shell's own
+input colouring (PSReadLine, `zsh-syntax-highlighting`) is kept by §9's merge policy. It
+has a visible consequence worth stating, because `BUG-0071` made it reachable for the
+first time on a **wrapped** prompt: once such a line is correctly recognised as a prompt,
+its quoted arguments and path arguments lose the colours the output-mode matchers used to
+give them by mistake. Coloured strings and paths happen on **output** lines.
+
 **OutputMode** (no prompt): run the flat matcher set in **priority order**, first match
 wins per span (non-overlapping):
 
@@ -313,9 +321,14 @@ Changes:
    runs break on token boundaries automatically. `url_mask` is replaced by
    `cell_class` (with `Class::Url` one variant), generalizing the existing overlay.
 
-3. **`RowLayoutCache` key gains `line_text_hash`** so unchanged lines skip both lex and
-   layout. The scanner writes into a reused `Vec<u8>` scratch (like the existing
-   `box_probe`).
+3. **The row-plan cache keys the scan by the logical line, not by the visual row.** A
+   class depends on the whole logical line, so a per-row text hash is not a sufficient
+   key: changing one row of a wrapped line changes the classes of its continuation rows
+   without changing their own text. The class pass therefore runs inside the same
+   wrap-run-closed rescan the URL masks use — the dirty rows closed under the frame's
+   `WRAPLINE` flags — and a row is replanned when *either* its mask or its classes
+   differ from the previous frame's (`BUG-0071`). The scanner writes into a reused
+   `Vec<u8>` scratch.
 
 4. **`TerminalTheme` gains `class_styles: ClassStyles`**, populated in
    `build_terminal_theme()` from the theme JSON's `terminal.semantic` block.
@@ -327,12 +340,23 @@ Changes:
    with `prompt_line_bg`), inserted before per-cell backgrounds — orthogonal to per-cell
    fg, emitted as one rect.
 
+The unit of a scan is the **logical line**, not the visual row. A soft wrap does not end
+a line: the scanner's state — inside a quoted string, after the prompt sign, mid-token —
+belongs to the whole line, so the wrap-connected run of rows is joined into one string,
+scanned once, and the resulting classes are sliced back per visual row and column. A row
+whose `WRAPLINE` flag is clear ends the line, so a hard newline is never joined. Scanning
+each visual row on its own was the defect behind `BUG-0071`: a prompt whose cwd wrapped
+was not recognised as a prompt at all, a string opened on one row ended at the row edge,
+and moving the wrap point by resizing the window changed the colours of text that had not
+changed.
+
 ```
 snapshot → viewport rows
-   for each visible row:
-     role = row_roles[row] OR prompt_regex(line)         // §4.2
-     cell_class = scan_line(line, rules, profile, role)   // single pass
-     cache by line_text_hash
+   for each logical line (wrap run of visible rows):
+     role = row_roles[first row] OR prompt_regex(joined)  // §4.2
+     classes = scan_line(joined, rules, profile, role)    // single pass
+     slice classes back per (row, col)
+   rescan scope = dirty rows closed under wrap runs; replan on a class or mask delta
    layout_row(cells, theme, cell_class, …)
      per cell: (fg,bg) = cell_colors(cell, theme)
                merged  = merge(cell, fg, bg, cell_class[col], theme.class_styles)
@@ -369,18 +393,37 @@ colorization — overriding only the *default* foreground, never explicit SGR co
 
 ## 10. Performance budget
 
+The unit of a scan is the **logical line**, so a line is up to `cols × rows` characters,
+not `cols` (`BUG-0071`). The table is per logical line:
+
 | Cost | Source | Estimate |
 |---|---|---|
-| Keyword pass | one `aho_corasick` find_iter over ≤200 chars | < 1 µs/line (SIMD) |
-| Structural regexes | ~3 `regex` is_match over short strings | ~1-2 µs/line |
-| Hand-written probes | char-class scans | < 0.5 µs/line |
+| Keyword pass | one `aho_corasick` find_iter over the logical line (≤ cols × rows chars) | < 1 µs per 200 chars (SIMD) |
+| Structural regexes | ~3 `regex` is_match over the logical line | ~1-2 µs per 200 chars |
+| Hand-written probes | char-class scans | < 0.5 µs per 200 chars |
 | Per-cell theme lookup | `styles.style(class).fg` × cells | branchless, negligible |
-| Cache hit | hash compare | skip lex+layout entirely |
+| Cache hit | the row's `(RowId, SeqNo)` plus the class/mask delta | skip lex+layout entirely |
 
-Only **visible viewport** lines are lexed (≤~50/frame). With the hash cache, steady
-output re-lexes only the newly-appended lines + the active input line. Target: zero
-perceptual cost at 120 fps scroll. No C dependency, no backtracking (ReDoS-safe),
-no per-line JSON interpretation, no string-scope hashing.
+Only **visible viewport** rows are lexed. The scope of one frame's rescan is the dirty
+rows **closed under wrap runs**: a scanner state cannot reach a row it is not
+wrap-connected to, so for ordinary content (a wrapped prompt is 2-4 rows) the rescan is
+a handful of rows and the number of scanner calls *falls*, because one run is one call
+instead of one per row. The bound is the wrap run, and it is tight — but a logical line
+longer than the viewport makes that run **the whole viewport**, so "never the viewport"
+is not the guarantee and this document does not claim it.
+
+Worst case, measured: a single logical line filling a 40×200 viewport (8 000 chars) is
+one scan of 8 000 chars, and one keystroke on it re-scans all of it. At `opt-level = 0`
+that measured **4.14 ms** — which is why `oneterm-highlight` is in
+`[profile.fast-dev.package]` alongside the other hot-path crates. `release` optimizes it.
+For the shapes users actually meet this is far below a frame.
+
+No C dependency, no backtracking (ReDoS-safe), no per-line JSON interpretation, no
+string-scope hashing.
+
+`FrameStats` counts the class pass separately from the URL pass (`class_scans`,
+`class_rows_scanned`): the two share a row scope but the class pass does nothing while
+semantic highlighting is off.
 
 ---
 
@@ -598,16 +641,41 @@ The line string fed to the scanner is built by the *same* cell iteration (skip s
 emit one `char` per non-spacer cell, append zerowidth), so `char_idx` and the scanner's
 char index stay in lockstep. This is the single source of truth for char<->column mapping.
 
+**Corrected by `BUG-0071` F3.** That lockstep only holds if the *scanner* really emits
+char indices. It did not: the keyword automaton and the structural regexes match on
+**bytes**, and the scanner's byte→char map pushed one entry per char instead of one per
+byte, so it was the identity and every byte-matched class was written at the byte offset.
+On any line with a non-ASCII char, the classes after it were shifted right by that char's
+extra UTF-8 bytes — `日本語 error here` painted `here` as `Error`. The view's flatten was
+always correct; the map it was handed was not. The map is now one entry per byte, and a
+wrapped run containing CJK is a regression case (`a_wrapped_run_with_cjk_keeps_its_classes_on_the_right_chars`).
+
+One consequence of the cell iteration is worth stating: a `LEADING_WIDE_CHAR_SPACER` —
+the blank the engine leaves in the last column when a wide char will not fit — is a
+spacer, so no class is written to it and it stays `Default`. For a class that only sets a
+foreground the cell is blank and this is invisible; for one carrying a background it
+would leave a one-cell hole at the wrap boundary. It matters when §8 item 6
+(`prompt_line_bg`) is implemented, not before.
+
 ### Q5. Re-lex cost & cold scroll — ride the existing cache, viewport-only
 
 **Question.** Re-lexing on every scroll could be expensive; a 100k-line jump into
 un-lexed scrollback needs throttling. Do we need a separate semantic cache?
 
-**Decision.** **No separate cache.** The semantic scan rides the *existing* per-line
-dirty decision in `RowLayoutCache` (`layout/cache.rs`), which already hashes each line
-with `line_hash` and only re-lays-out dirty/damaged lines. The scanner runs only for
-lines that are already going to be re-laid-out, and only within the visible viewport.
-Cold scroll into un-lexed scrollback is allowed to be one frame behind (progressive).
+**Decision.** **No separate cache.** The semantic scan rides the *existing* per-row dirty
+decision in the plan cache, which already tracks row identity and only replans rows that
+changed. The scanner runs only for rows that are already going to be replanned, and only
+within the visible viewport. Cold scroll into un-lexed scrollback is allowed to be one
+frame behind (progressive).
+
+**Amended by `BUG-0071`.** "Rows that changed" is not "rows whose own text changed": a
+class depends on the whole logical line, so the scan scope is the dirty rows **closed
+under wrap runs**, and the classes of the rows in that scope are compared with the
+previous frame's to decide which plans to rebuild. This is the same scope and the same
+delta the URL masks already use (`US-0092`), so it adds no new invalidation surface — one
+`Vec<u8>` per display row beside the existing `Vec<bool>` mask. It stays viewport-only and
+it lowers the number of scanner invocations per frame, because one run of rows is now one
+scan instead of one scan each.
 
 **Rationale.**
 - `RowLayoutCache` already maintains `prev_hash` per display line and a damage set
@@ -621,11 +689,10 @@ Cold scroll into un-lexed scrollback is allowed to be one frame behind (progress
   highlighted. Scrollback highlights lazily as it scrolls into view.
 
 **Implementation.**
-- Inside the existing `if is_dirty { ... }` block in `cache.rs`, *before* calling
-  `layout_row`, run `scan_line` -> `char_class`, flatten to `cell_class` (Q4), apply
-  `url_mask` -> `Class::Url` (Q3), then pass `cell_class` into `layout_row`. The scan
-  result is not cached separately — it is consumed immediately and the line's
-  `prev_hash` already gates re-computation.
+- Before the plans are rebuilt, run the class pass over the rescan scope: join each wrap
+  run, `scan_line` -> `char_class`, flatten to `cell_class` (Q4) per row and column, and
+  keep it per display row beside the URL mask. Then rebuild the rows whose mask or
+  classes changed, applying `url_mask` -> `Class::Url` (Q3) on top.
 - For a cold 100k-line scroll: only the ~50 visible rows are scanned this frame; rows
   scrolled into view next frame are scanned then. Worst case a row is unhighlighted for
   one frame as it enters the viewport — imperceptible. No background task, no

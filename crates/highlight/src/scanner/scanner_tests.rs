@@ -558,3 +558,140 @@ fn cross_shell_prompt_unix_inside_cmd() {
     let echo_pos = line.find("echo").unwrap();
     assert_eq!(c[echo_pos], Class::Command);
 }
+
+// ── BUG-0071 rework: Windows prompts with spaces, and byte/char alignment ────
+
+/// The class of the char that starts `needle` in `line`.
+fn class_at(line: &str, profile: ShellProfile, needle: &str) -> Class {
+    let c = scan_with_profile(line, RowRole::Output, profile);
+    let byte = line.find(needle).expect("needle is in the line");
+    c[line[..byte].chars().count()]
+}
+
+/// F2: a cwd with a space is still a prompt — sign, path and command.
+#[test]
+fn cmd_prompt_with_spaces_in_the_cwd_is_a_prompt() {
+    let line = r"C:\Users\John Doe\oneterm workspace>echo hi";
+    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let gt = line.find('>').unwrap();
+    assert_eq!(c[gt], Class::PromptSign);
+    assert_eq!(c[0], Class::Path, "the drive letter is part of the path");
+    assert_eq!(c[gt - 1], Class::Path, "the last path char before '>'");
+    assert_eq!(class_at(line, ShellProfile::Cmd, "echo"), Class::Command);
+}
+
+/// F1: a PowerShell prompt is a prompt. It never was before.
+#[test]
+fn powershell_prompt_is_a_prompt() {
+    let line = r"PS C:\Users\John Doe\ws> echo hi -Force";
+    let c = scan_with_profile(line, RowRole::Output, ShellProfile::PowerShell);
+    let gt = line.find('>').unwrap();
+    assert_eq!(c[gt], Class::PromptSign, "{c:?}");
+    assert_eq!(c[gt - 1], Class::Path, "{c:?}");
+    assert_eq!(
+        class_at(line, ShellProfile::PowerShell, "echo"),
+        Class::Command
+    );
+    assert_eq!(
+        class_at(line, ShellProfile::PowerShell, "-Force"),
+        Class::Option
+    );
+}
+
+/// A UNC prompt, both Windows profiles.
+#[test]
+fn unc_prompt_is_a_prompt() {
+    for (line, profile) in [
+        (r"\\server\share\My Files>dir", ShellProfile::Cmd),
+        (r"PS \\server\share\My Files> dir", ShellProfile::PowerShell),
+    ] {
+        let c = scan_with_profile(line, RowRole::Output, profile);
+        let gt = line.find('>').unwrap();
+        assert_eq!(c[gt], Class::PromptSign, "{line:?}");
+        assert_eq!(class_at(line, profile, "dir"), Class::Command, "{line:?}");
+    }
+}
+
+/// The prompt ends at its own sign: a redirection later on the line is not it.
+#[test]
+fn a_redirection_is_not_the_prompt_sign() {
+    let line = r"C:\work>dir > out.txt";
+    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let first = line.find('>').unwrap();
+    let last = line.rfind('>').unwrap();
+    assert_eq!(c[first], Class::PromptSign);
+    assert_ne!(c[last], Class::PromptSign, "the redirection is not a sign");
+}
+
+/// Output that merely contains `>` must not become a prompt.
+#[test]
+fn windows_output_is_not_a_prompt() {
+    for (line, profile) in [
+        (r"C:\log size > 3", ShellProfile::Cmd),
+        ("PS is > 3", ShellProfile::PowerShell),
+        ("see C:\\x> not a prompt", ShellProfile::Cmd),
+    ] {
+        let c = scan_with_profile(line, RowRole::Output, profile);
+        assert!(
+            !c.contains(&Class::PromptSign),
+            "{line:?} must not be a prompt: {c:?}"
+        );
+    }
+}
+
+/// N1: a bare `>` starts `cmd`'s continuation prompt, but on a Unix or SSH tab
+/// it starts a mail quote, a markdown blockquote or diff context. Only the
+/// Windows profiles carry that branch.
+#[test]
+fn a_bare_angle_bracket_is_a_prompt_only_on_the_windows_profiles() {
+    for line in ["> quoted text from a mail reply", "> 3 files changed"] {
+        let unix = scan_with_profile(line, RowRole::Output, ShellProfile::Unix);
+        assert!(
+            !unix.contains(&Class::PromptSign),
+            "{line:?} is output on a Unix tab: {unix:?}"
+        );
+        for profile in [ShellProfile::Cmd, ShellProfile::PowerShell] {
+            let c = scan_with_profile(line, RowRole::Output, profile);
+            assert_eq!(
+                c[0],
+                Class::PromptSign,
+                "{line:?} is a continuation prompt on {profile:?}: {c:?}"
+            );
+        }
+    }
+    // The PowerShell `>>` continuation still matches.
+    let c = scan_with_profile(">> Get-Date", RowRole::Output, ShellProfile::PowerShell);
+    assert!(c.contains(&Class::PromptSign), "{c:?}");
+}
+
+/// F3: the byte->char map. A multi-byte char before a keyword used to shift
+/// every later class right by the extra UTF-8 bytes.
+#[test]
+fn multibyte_text_does_not_shift_keyword_classes() {
+    let line = "日本語 error here";
+    let c = scan(line, RowRole::Output);
+    let error = line.chars().position(|ch| ch == 'e').unwrap();
+    for i in error..error + 5 {
+        assert_eq!(c[i], Class::Error, "char {i} of {line:?}: {c:?}");
+    }
+    for (i, class) in c.iter().enumerate().take(error) {
+        assert_ne!(*class, Class::Error, "char {i} of {line:?}");
+    }
+    // `here` is not a keyword and must stay unclassified.
+    let here = line.chars().count() - 4;
+    assert_eq!(c[here], Class::Default, "{c:?}");
+}
+
+/// The same, for a structural regex (the datetime matcher) after an emoji.
+#[test]
+fn a_structural_match_after_an_emoji_lands_on_the_right_chars() {
+    let line = "🚀 2026-09-21 10:00:00 done";
+    let c = scan(line, RowRole::Output);
+    let stamp = line.chars().position(|ch| ch == '2').unwrap();
+    assert_eq!(stamp, 2, "the emoji is one char and three extra bytes");
+    for i in stamp..stamp + 19 {
+        assert_eq!(c[i], Class::DateTime, "char {i} of {line:?}: {c:?}");
+    }
+    assert_eq!(c[0], Class::Default, "the emoji is not part of the stamp");
+    assert_eq!(c[line.chars().count() - 1], Class::Default, "{c:?}");
+}

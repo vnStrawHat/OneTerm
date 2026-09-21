@@ -18,7 +18,7 @@ use oneterm_terminal::SnapshotUpdate;
 use super::diagnostics::FrameStats;
 use super::frame::{Frame, GridSize, RowKey};
 use super::glyphs::GlyphCache;
-use super::row_plan::{PlanContext, RowPlan, Scratch, build_row_plan};
+use super::row_plan::{PlanContext, RowPlan, Scratch, build_row_plan, class_rows_into};
 use super::shapes::CellSizeDevicePx;
 use crate::url::{fill_wraps, url_masks_rows_into};
 
@@ -54,6 +54,12 @@ pub(crate) struct PlanCache {
     /// Scratch for the rows this frame rescans; swapped row by row into
     /// `mask_prev` so both keep their inner allocations.
     mask_cur: Vec<Vec<bool>>,
+    /// The semantic classes as of the last update, and this frame's scratch —
+    /// the same pair as the URL masks, because a class depends on the whole
+    /// logical line and therefore on the neighbouring rows of a wrap run
+    /// (`BUG-0071`). Empty per row while semantic highlighting is off.
+    class_prev: Vec<Vec<u8>>,
+    class_cur: Vec<Vec<u8>>,
     /// This frame's per-row `WRAPLINE` flags.
     wraps: Vec<bool>,
     /// The previous frame's, aligned with `mask_prev` (so `shift` rotates it
@@ -87,6 +93,8 @@ impl PlanCache {
             grid: None,
             mask_prev: Vec::new(),
             mask_cur: Vec::new(),
+            class_prev: Vec::new(),
+            class_cur: Vec::new(),
             wraps: Vec::new(),
             wraps_prev: Vec::new(),
             scan: Vec::new(),
@@ -108,6 +116,13 @@ impl PlanCache {
     #[cfg(test)]
     pub(crate) fn url_mask(&self, r: usize) -> &[bool] {
         self.mask_prev.get(r).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// The semantic classes of display row `r` as of the last update (empty
+    /// while semantic highlighting is off).
+    #[cfg(test)]
+    pub(crate) fn classes(&self, r: usize) -> &[u8] {
+        self.class_prev.get(r).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// Bring the plans up to date with `frame`.
@@ -156,12 +171,16 @@ impl PlanCache {
         stats.rows_candidate = self.dirty.iter().filter(|&&d| d).count() as u32;
 
         // Phase 2: a changed row may start or end a wrapped URL, which changes
-        // the class of untouched continuation rows (deviation 10). That hazard
-        // is bounded, and the bound is the scope of the rescan: a URL can only
-        // reach a row it is wrap-connected to, so the answer is the dirty rows
-        // closed under the wrap runs `self.wraps` already tracks — never the
-        // whole viewport (`US-0092`). Rows outside those runs keep the masks
-        // they had, which is why `mask_prev` stays authoritative for all rows.
+        // the class of untouched continuation rows (deviation 10). The semantic
+        // classes have the same dependency and a stronger one: a logical line is
+        // scanned as a whole, so every row of a wrap run depends on every other
+        // (`BUG-0071`). That hazard is bounded, and the bound is the scope of
+        // the rescan: neither a URL nor a scanner state can reach a row it is
+        // not wrap-connected to, so the answer is the dirty rows closed under
+        // the wrap runs `self.wraps` already tracks — never the whole viewport
+        // (`US-0092`). Rows outside those runs keep the masks and classes they
+        // had, which is why `mask_prev` and `class_prev` stay authoritative for
+        // all rows.
         //
         // One dependency is **not** a row's content: where the viewport's top
         // edge cuts a wrap run. Display row 0's mask is extended into it from
@@ -180,6 +199,8 @@ impl PlanCache {
             self.wraps_prev.resize(rows, false);
             self.mask_prev.resize_with(rows, Vec::new);
             self.mask_cur.resize_with(rows, Vec::new);
+            self.class_prev.resize_with(rows, Vec::new);
+            self.class_cur.resize_with(rows, Vec::new);
             self.mark_scan_runs(rows, scrolled_seam);
             stats.url_scans += 1;
 
@@ -195,11 +216,26 @@ impl PlanCache {
                 }
                 stats.url_rows_scanned += (r - start) as u32;
                 url_masks_rows_into(frame, &mut self.mask_cur, &self.wraps, start..r);
+                match ctx.semantic {
+                    Some(overlay) => class_rows_into(
+                        frame,
+                        overlay,
+                        &mut self.class_cur,
+                        &self.wraps,
+                        start..r,
+                        scratch,
+                        stats,
+                    ),
+                    None => self.class_cur[start..r].iter_mut().for_each(Vec::clear),
+                }
                 for row in start..r {
-                    if self.mask_cur[row] != self.mask_prev[row] {
+                    if self.mask_cur[row] != self.mask_prev[row]
+                        || self.class_cur[row] != self.class_prev[row]
+                    {
                         self.dirty[row] = true;
                     }
                     std::mem::swap(&mut self.mask_prev[row], &mut self.mask_cur[row]);
+                    std::mem::swap(&mut self.class_prev[row], &mut self.class_cur[row]);
                 }
             }
             self.wraps_prev.copy_from_slice(&self.wraps);
@@ -213,6 +249,7 @@ impl PlanCache {
             build_row_plan(
                 frame.row(r),
                 ctx,
+                &self.class_prev[r],
                 &self.mask_prev[r],
                 scratch,
                 glyphs,
@@ -294,14 +331,21 @@ impl PlanCache {
             self.rows.rotate_right(distance);
             self.keys.rotate_right(distance);
         }
-        // The masks and the wrap flags they were computed from travel with
-        // their rows too, so the delta check and the wrap-run walk stay
-        // meaningful and only the scrolled-in rows are rescanned.
+        // The masks, the classes and the wrap flags they were computed from
+        // travel with their rows too, so the delta check and the wrap-run walk
+        // stay meaningful and only the scrolled-in rows are rescanned.
         if self.mask_prev.len() == len {
             if scrolled > 0 {
                 self.mask_prev.rotate_left(distance);
             } else {
                 self.mask_prev.rotate_right(distance);
+            }
+        }
+        if self.class_prev.len() == len {
+            if scrolled > 0 {
+                self.class_prev.rotate_left(distance);
+            } else {
+                self.class_prev.rotate_right(distance);
             }
         }
         if self.wraps_prev.len() == len {
@@ -319,6 +363,7 @@ mod tests {
     use super::*;
     use oneterm_terminal::test_support::FixtureCell;
 
+    use crate::highlight::SemanticOverlay;
     use crate::render::frame::CellFlags;
     use crate::render::frame::test_support::{FrameBuilder, resnapshot, rewrite_row};
     use crate::render::glyphs::FontSet;
@@ -357,6 +402,7 @@ mod tests {
         cache: PlanCache,
         scratch: Scratch,
         glyphs: GlyphCache,
+        semantic: Option<SemanticOverlay>,
     }
 
     impl Harness {
@@ -367,6 +413,18 @@ mod tests {
                 cache: PlanCache::new(),
                 scratch: Scratch::new(),
                 glyphs: GlyphCache::new(),
+                semantic: None,
+            }
+        }
+
+        /// The same harness with semantic highlighting on (`BUG-0071`).
+        fn semantic() -> Self {
+            Self {
+                semantic: Some(SemanticOverlay::new(
+                    oneterm_highlight::ShellProfile::Unix,
+                    true,
+                )),
+                ..Self::new()
             }
         }
 
@@ -394,6 +452,7 @@ mod tests {
                 cache,
                 scratch,
                 glyphs,
+                semantic,
             } = self;
             cx.update(|window, _| {
                 let ctx = PlanContext {
@@ -403,7 +462,7 @@ mod tests {
                     font_weight: 400.0,
                     cell_width: px(cell_width),
                     device,
-                    semantic: None,
+                    semantic: semantic.as_ref(),
                     reverse_video: false,
                     window,
                 };
@@ -1138,5 +1197,135 @@ mod tests {
         h.update(cx, &wrapped, style_key(13.0));
         assert!(h.cache.url_mask(1)[0]);
         assert_eq!(h.cache.row(1).map(|p| p.decorations.len()), Some(1));
+    }
+
+    fn semantic_key() -> StyleKey {
+        let mut key = style_key(13.0);
+        key.semantic_enabled = true;
+        key
+    }
+
+    /// `BUG-0071`: a class depends on the whole logical line, so rewriting the
+    /// head row of a wrapped line must replan its continuation row — which is
+    /// untouched, and whose `(RowId, SeqNo)` therefore did not change.
+    ///
+    /// The wrapped line is rows 4-5 of a 12-row viewport so the scan bound is
+    /// actually tested: `2`, not `12` (`BUG-0071` F5 — the guarantee is the
+    /// wrap run, which for a longer line can equal the viewport).
+    #[gpui::test]
+    fn class_delta_replans_the_continuation_row(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let key = semantic_key();
+        let mut h = Harness::semantic();
+        let (mut frame, mut fixture) = FrameBuilder::new(12, 10)
+            .text(4, 0, "echo \"aaa")
+            .flags(4, 9, CellFlags::WRAPLINE)
+            .text(5, 0, "bbb\" tail")
+            .build_with_fixture();
+        h.update(cx, &frame, key);
+        let inside_string = h.cache.classes(5).to_vec();
+
+        // Row 4 stops opening the quote; row 5 is not touched at all.
+        rewrite_row(&mut frame, &mut fixture, 4, "echo  aaa");
+        let stats = h.update(cx, &frame, key);
+        assert_ne!(
+            h.cache.classes(5),
+            inside_string,
+            "row 5 kept the classes of a string that no longer opens"
+        );
+        assert_eq!(stats.rows_planned, 2, "{stats:?}");
+        assert_eq!(
+            stats.class_rows_scanned, 2,
+            "exactly the wrap run, not the 12-row viewport: {stats:?}"
+        );
+        assert_eq!(stats.class_scans, 1, "one scan for one logical line");
+    }
+
+    /// A logical line longer than the viewport: the bound is still the wrap
+    /// run, and the wrap run is then the whole viewport (`BUG-0071` F5). The
+    /// honest guarantee, asserted rather than claimed away.
+    #[gpui::test]
+    fn a_line_longer_than_the_viewport_scans_the_viewport(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let key = semantic_key();
+        let mut h = Harness::semantic();
+        let (mut frame, mut fixture) = FrameBuilder::new(6, 10).build_with_fixture();
+        // No newline anywhere: the whole viewport is the tail of one wrap run.
+        fixture.feed(format!("echo \"{}\"", "x".repeat(300)).as_bytes());
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, key);
+
+        // One keystroke on the last row of that run.
+        fixture.feed(b"z");
+        resnapshot(&mut frame, &mut fixture);
+        let stats = h.update(cx, &frame, key);
+        assert_eq!(stats.rows_candidate, 1, "one row changed: {stats:?}");
+        assert_eq!(stats.class_scans, 1, "still one scan: {stats:?}");
+        assert_eq!(
+            stats.class_rows_scanned, stats.rows_total,
+            "the run is the viewport, and the bound says so: {stats:?}"
+        );
+    }
+
+    /// Scrolling moves plans with their rows, and `shift` must move the classes
+    /// with them too. Without the `class_prev` rotation a row keeps the colours
+    /// of whatever row used to sit at its index (`BUG-0071` F7).
+    #[gpui::test]
+    fn scrolling_keeps_the_classes_with_their_rows(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let key = semantic_key();
+        let mut h = Harness::semantic();
+        let (mut frame, mut fixture) = FrameBuilder::new(5, 24).build_with_fixture();
+        fixture.feed(
+            b"user@host:~$ echo \"a wrapped string that runs past the row\"\r\nplain\r\nmore\r\nlast\r\ntail\r\ntail2",
+        );
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, key);
+        assert_classes_match_a_full_rescan(&mut h, &frame, key, cx, "before scrolling");
+
+        for back in 1..=3 {
+            fixture.scroll_back(1);
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, key);
+            assert_classes_match_a_full_rescan(
+                &mut h,
+                &frame,
+                key,
+                cx,
+                &format!("scrolled back {back}"),
+            );
+        }
+        for fwd in 1..=3 {
+            fixture.scroll_forward(1);
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, key);
+            assert_classes_match_a_full_rescan(
+                &mut h,
+                &frame,
+                key,
+                cx,
+                &format!("scrolled forward {fwd}"),
+            );
+        }
+    }
+
+    /// The incremental classes of every row must equal a from-scratch scan of
+    /// the same frame by a cache that has never seen anything else.
+    fn assert_classes_match_a_full_rescan(
+        h: &mut Harness,
+        frame: &Frame,
+        key: StyleKey,
+        cx: &mut VisualTestContext,
+        when: &str,
+    ) {
+        let mut fresh = Harness::semantic();
+        fresh.update(cx, frame, key);
+        for r in 0..usize::from(frame.size().rows) {
+            assert_eq!(
+                h.cache.classes(r),
+                fresh.cache.classes(r),
+                "row {r} classes drifted {when}"
+            );
+        }
     }
 }
