@@ -345,6 +345,46 @@ as this packet's Documentation Action says: nothing here is user-reachable until
 rows exist. `DEC-0019` is unchanged; `low-level-design/elevated-instance.md` was corrected
 for the four deviations above in the implementation commit.
 
+### Acceptance rework, 2026-09-21 — MAJ-1
+
+Independent verification (`evidence/IN-0043-verify.md`) found this packet's own security
+deliverable incomplete and marked it **FAIL**. Reworked rather than opened as a new BUG:
+the behaviour was never accepted.
+
+**What was wrong.** M3 dropped `program` and `args` and kept everything else, because the
+trusted config was built with `..cfg.clone()`. Two fields of `terminal.json`'s shell block
+still directed what the elevated process executed:
+
+- `shell.env` — the ConPTY environment block writes custom entries **ahead** of the
+  inherited ones, so `"env": { "PATH": "C:\\Users\\me\\bin" }` handed the elevated
+  `cmd.exe` an attacker-chosen `PATH`; the first `net`, `sc`, `reg` or `icacls` the user
+  typed would have run an attacker binary with a high-integrity token. For PowerShell the
+  same field reaches `PSModulePath`.
+- `shell.cwd` — and not even through the trusted config: `LocalSession::spawn` read
+  `cfg.cwd` from the **original** config, so clearing it in `trusted_shell_config` would not
+  have helped. `cmd.exe` searches the working directory before `PATH`.
+
+A same-user process with no privilege writes one JSON file and waits for the user to open an
+administrator shell. The user sees a correct UAC prompt for OneTerm, consents to OneTerm, and
+gets an elevated shell whose command resolution someone else owns. That is the failure mode
+option D was rejected for, reached by the back door.
+
+**What changed.**
+
+- `trusted_shell_config` builds the config **field by field**, deliberately not with
+  struct-update syntax: `env` empty, `cwd` `None`, `args` empty, `program` trusted, and only
+  `utf8` (the console codepage) crosses. The next field added to `LocalShellConfig` now
+  fails the build until somebody decides which side of the boundary it is on.
+- `ResolvedShell` gained `cwd`, and `LocalSession::spawn` takes it from there. Everything a
+  spawn needs now comes out of `resolve_shell` — which is what makes the single guard at the
+  top of that function complete, instead of a guard a sibling field walks around.
+- `is_elevated()` became `is_restricted()` everywhere (see `US-0131`, MIN-3).
+
+**Test:** `config::elevation::tests::an_elevated_config_keeps_no_field_of_the_configured_one`
+(`oneterm-core`). It asserts *emptiness*, not equality, on every field. Mutation-checked:
+restoring `env: cfg.env.clone()` fails it with *"no configured environment entry may survive:
+PATH and PSModulePath decide what runs"*.
+
 ### Gaps
 
 - **The elevated side is unverified in this environment.** The consent prompt is drawn by the

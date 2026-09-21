@@ -12,9 +12,10 @@
 //! path itself, without `PATH`, without `COMSPEC` and without user
 //! configuration.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::error::AppError;
 
@@ -252,10 +253,29 @@ pub fn trusted_shell_config(
         shell: cfg.kind.display_name().to_string(),
         reason: format!("not installed at {}", looked_for.display()),
     })?;
+    // Built field by field, deliberately **not** with `..cfg.clone()`: struct
+    // update syntax would silently carry any field added to `LocalShellConfig`
+    // later across the trust boundary, which is how `env` and `cwd` crossed it
+    // the first time. Listing every field means the next one added fails the
+    // build until somebody decides which side of the boundary it belongs on.
     Ok(LocalShellConfig {
+        kind: cfg.kind,
         program: Some(program),
+        // The kind's own args only; `resolve_shell` appends `cfg.args` and finds
+        // nothing to append.
         args: Vec::new(),
-        ..cfg.clone()
+        // `shell.env` reaches the child's environment block **ahead** of the
+        // inherited one, so a `PATH` or `PSModulePath` written into
+        // `terminal.json` would decide what the elevated shell executes on the
+        // first unqualified command. The elevated process therefore takes the
+        // base environment and no custom entry at all.
+        env: HashMap::new(),
+        // `cmd.exe` searches the current directory before `PATH`, so a working
+        // directory is the same escalation with one fewer field. The system
+        // default (the user's home) is used instead.
+        cwd: None,
+        // Presentation only: the UTF-8 codepage of the console the user gets.
+        utf8: cfg.utf8,
     })
 }
 
@@ -266,35 +286,82 @@ pub fn trusted_shell_config(
 // because the panel registry builds panels **by name** and has nowhere to carry
 // a payload, and because the elevation flag gates seams in five crates.
 
-static ELEVATED: AtomicBool = AtomicBool::new(false);
+/// What the process token said about this process.
+///
+/// Three values and not a `bool`, because the query can in principle fail and
+/// the two honest answers to that are not the same one. `DEC-0019` rule 2
+/// forbids a window claiming an elevation the token did not confirm, so an
+/// unknown process does **not** say "Administrator"; M1-M7 exist to contain an
+/// administrator token, so an unknown process **is** restricted. Fail closed on
+/// the restrictions, fail honest on the marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Elevation {
+    /// The token says this process is not elevated. Every gate is a no-op.
+    #[default]
+    NotElevated,
+    /// The token says this process is elevated.
+    Elevated,
+    /// The query failed. Theoretical — `OpenProcessToken` on one's own process
+    /// with `TOKEN_QUERY` cannot be denied — but fail-open on a security switch
+    /// is the wrong default even for a branch nobody expects to reach.
+    Unknown,
+}
+
+impl Elevation {
+    /// Whether the elevated instance's restrictions (M1-M4, M7) apply.
+    ///
+    /// True for [`Elevation::Unknown`]: a process that cannot prove it is
+    /// ordinary is treated as though it were not.
+    pub fn is_restricted(self) -> bool {
+        !matches!(self, Self::NotElevated)
+    }
+}
+
+/// `0`/`1`/`2` = the [`Elevation`] discriminant.
+static ELEVATION: AtomicU8 = AtomicU8::new(0);
 /// `0` = no shell requested; otherwise the [`ElevatedShell`] discriminant + 1.
 static INITIAL_SHELL: AtomicU8 = AtomicU8::new(0);
 
 /// The window title, for the OS title bar and the in-app one.
 ///
 /// One function for both so the two markers cannot disagree (`DEC-0019` M5).
-/// `elevated` is [`is_elevated`] at every call site: the caller passes it rather
-/// than the function reading the global, so the rule is testable without
-/// mutating process state under the other tests.
-pub fn window_title(elevated: bool) -> &'static str {
-    if elevated {
-        "OneTerm (Administrator)"
-    } else {
-        "OneTerm"
+/// The caller passes [`elevation`] rather than the function reading the global,
+/// so the rule is testable without mutating process state under other tests.
+pub fn window_title(elevation: Elevation) -> &'static str {
+    match elevation {
+        Elevation::NotElevated => "OneTerm",
+        Elevation::Elevated => "OneTerm (Administrator)",
+        // Restricted, and it says what it actually knows. Claiming
+        // "(Administrator)" here would be a marker asserting something the token
+        // never confirmed, which `DEC-0019` rule 2 forbids.
+        Elevation::Unknown => "OneTerm (elevation unknown)",
     }
 }
 
 /// Record what the process token said. Called once, from `run()`.
-pub fn set_elevated(value: bool) {
-    ELEVATED.store(value, Ordering::Relaxed);
+pub fn set_elevation(value: Elevation) {
+    ELEVATION.store(value as u8, Ordering::Relaxed);
 }
 
-/// Whether this process runs with an elevated token.
+/// What the process token said. [`Elevation::NotElevated`] until set, and always
+/// that off Windows.
 ///
-/// **The token decides everything else; the argument only selects the shell.**
-/// False until set, and always false off Windows.
-pub fn is_elevated() -> bool {
-    ELEVATED.load(Ordering::Relaxed)
+/// **The token decides everything; the argument only selects the shell.**
+pub fn elevation() -> Elevation {
+    match ELEVATION.load(Ordering::Relaxed) {
+        1 => Elevation::Elevated,
+        2 => Elevation::Unknown,
+        _ => Elevation::NotElevated,
+    }
+}
+
+/// Whether this process runs under the elevated instance's restrictions.
+///
+/// The one predicate every gate reads. There is deliberately no `is_elevated()`
+/// beside it: two predicates that differ only in the `Unknown` case is an
+/// invitation to guard a security seam with the wrong one.
+pub fn is_restricted() -> bool {
+    elevation().is_restricted()
 }
 
 /// Record the shell the command line asked for. Called once, from `run()`.
@@ -417,14 +484,33 @@ mod tests {
             parse_args(&[ELEVATED_SHELL_FLAG, "cmd"]),
             Ok(Some(ElevatedShell::Cmd))
         );
-        assert!(!is_elevated());
-        assert_eq!(window_title(is_elevated()), "OneTerm");
+        assert_eq!(elevation(), Elevation::NotElevated);
+        assert!(!is_restricted());
+        assert_eq!(window_title(elevation()), "OneTerm");
     }
 
     #[test]
     fn only_an_elevated_window_is_marked() {
-        assert_eq!(window_title(true), "OneTerm (Administrator)");
-        assert_eq!(window_title(false), "OneTerm");
+        assert_eq!(window_title(Elevation::Elevated), "OneTerm (Administrator)");
+        assert_eq!(window_title(Elevation::NotElevated), "OneTerm");
+    }
+
+    /// `MIN-3`: a token query that fails must fail **closed** on the
+    /// restrictions and **honest** on the marker. `DEC-0019` rule 2 forbids a
+    /// window claiming an elevation the token did not confirm, and M1-M7 exist
+    /// to contain an administrator token, so the two answers differ.
+    #[test]
+    fn an_unknown_token_is_restricted_but_claims_no_elevation() {
+        assert!(
+            Elevation::Unknown.is_restricted(),
+            "a process that cannot prove it is ordinary must be treated as though it were not"
+        );
+        assert_eq!(
+            window_title(Elevation::Unknown),
+            "OneTerm (elevation unknown)"
+        );
+        assert!(Elevation::Elevated.is_restricted());
+        assert!(!Elevation::NotElevated.is_restricted());
     }
 
     #[test]
@@ -545,23 +631,52 @@ mod tests {
         );
     }
 
+    /// `MAJ-1`. Not "program and args are replaced" but **no field of
+    /// `terminal.json`'s shell block survives**. `env` reaches the child's
+    /// environment block ahead of the inherited one, so a `PATH` there decides
+    /// what the elevated shell runs on the first unqualified command; `cmd.exe`
+    /// searches the working directory before `PATH`, so `cwd` is the same
+    /// escalation with one fewer field.
     #[test]
-    fn an_elevated_config_takes_the_trusted_program_and_drops_the_configured_one() {
+    fn an_elevated_config_keeps_no_field_of_the_configured_one() {
         let cfg = LocalShellConfig {
             kind: ShellKind::Cmd,
             program: Some(PathBuf::from(r"C:\Users\someone\evil.exe")),
             args: vec!["/c".into(), "whoami".into()],
-            ..LocalShellConfig::default()
+            env: HashMap::from([
+                ("PATH".to_string(), r"C:\Users\someone\bin".to_string()),
+                (
+                    "PSModulePath".to_string(),
+                    r"C:\Users\someone\modules".to_string(),
+                ),
+            ]),
+            cwd: Some(PathBuf::from(r"C:\Users\someone\stage")),
+            utf8: true,
         };
         let trusted =
             trusted_shell_config(&cfg, |_| Ok(PathBuf::from(r"X:\Windows\System32\cmd.exe")))
                 .expect("cmd is elevatable");
+
         assert_eq!(
             trusted.program,
-            Some(PathBuf::from(r"X:\Windows\System32\cmd.exe"))
+            Some(PathBuf::from(r"X:\Windows\System32\cmd.exe")),
+            "the program must be the trusted path, never the configured one"
         );
-        assert!(trusted.args.is_empty());
+        assert!(
+            trusted.args.is_empty(),
+            "no configured argument may survive"
+        );
+        assert!(
+            trusted.env.is_empty(),
+            "no configured environment entry may survive: PATH and PSModulePath decide what runs"
+        );
+        assert_eq!(
+            trusted.cwd, None,
+            "no configured working directory may survive: cmd.exe searches it before PATH"
+        );
+        // The one field that is presentation and may cross: the console codepage.
         assert_eq!(trusted.utf8, cfg.utf8);
+        assert_eq!(trusted.kind, cfg.kind);
     }
 
     #[test]

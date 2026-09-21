@@ -50,7 +50,10 @@ impl LocalSession {
                 program_argument(&resolved.program),
                 resolved.args,
             )),
-            working_directory: cfg.cwd.clone().or_else(home_dir),
+            // From `resolved`, never from `cfg`: `resolve_shell` is where the
+            // elevation guard lives, and a spawner that read one more field off
+            // the original config would walk straight around it (`IN-0043`).
+            working_directory: resolved.cwd.or_else(home_dir),
             env: resolved.env,
             // The engine measures cluster widths with `wcswidth`, so the console
             // host is asked for the same rule.
