@@ -353,6 +353,19 @@ estimate's existing `ponytail:` caveat.
   session and addressed only by its own pid. **No submenu row was clicked**: clicking one
   raises a UAC prompt, which this session must not do.
 
+### Acceptance rework, 2026-09-21
+
+Verified **PASS** on its own contents (`evidence/IN-0043-verify.md`): the rows, their
+placement, the wording source and the four documents are all correct. One inherited defect:
+`docs/gui-layout.md`'s right-dock sentence stated *"`ssh_client_panel` is never built,
+`set_dock(Right, ..)` is never called"* as fact, and MAJ-2 made it false. The sentence is now
+true of the code, because the code changed to match it — an elevated window does not read
+`docks.json` at all — and the document says so with the restore named, so the next reader
+does not re-derive the same wrong conclusion from the builders alone.
+
+`docs/terminal-backend.md` §6.1.1 also gains the rest of M3: `env` and `cwd` are dropped
+along with `program` and `args`, and terminal logging is off in an elevated window.
+
 ### Gaps
 
 - **E1's second half and E2-E9 are not run.** The consent prompt is drawn by the AppInfo

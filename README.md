@@ -133,8 +133,13 @@ The elevated window is deliberately a smaller application, and it says what it i
   onto anyway.
 - **What it runs is not taken from your settings.** The shell is resolved to a fixed path
   under `%SystemRoot%` or `%ProgramFiles%`, never through `PATH`, `%COMSPEC%` or
-  `terminal.json`, and a custom shell cannot be elevated — see
+  `terminal.json`. None of that file's shell settings reach it — not the program, not the
+  arguments, not the environment, not the working directory — and a custom shell cannot be
+  elevated at all. Terminal logging is off there too. See
   [`docs/terminal-backend.md`](docs/terminal-backend.md) §6.1.1.
+- **Its keyboard shortcuts are smaller too.** The SSH and SFTP actions are not bound in an
+  elevated window, so `Ctrl+Shift+N` opens nothing there: a missing menu row is not the same
+  as a missing action, and both have to go.
 
 ### 🔄 Auto-update
 

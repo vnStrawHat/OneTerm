@@ -758,7 +758,7 @@ impl Panel for TerminalPanel {
                 // `runas` from an elevated process would only produce a second
                 // identical window — no SSH Sessions heading, no saved sessions,
                 // no Quick Connect, no New Saved Session. The menu ends here.
-                if oneterm_core::elevation::is_elevated() {
+                if oneterm_core::elevation::is_restricted() {
                     return menu.scrollable(menu_scrolls(menu_rows(true, 0), window));
                 }
                 // One submenu row rather than three top-level rows, so the

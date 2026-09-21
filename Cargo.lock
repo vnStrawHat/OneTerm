@@ -5327,6 +5327,7 @@ version = "0.6.0"
 dependencies = [
  "gpui-component",
  "gpui-pre",
+ "log",
  "oneterm-core",
  "serde",
 ]
