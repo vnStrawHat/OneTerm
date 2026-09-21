@@ -233,6 +233,19 @@ fn shell_not_found(shell: &str) -> AppError {
 ///
 /// Returns an error if `Custom` has no `program`, or the default shell cannot be found.
 pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> {
+    // M3 (`DEC-0019` rule 4, `IN-0043`): an elevated process never lets
+    // `terminal.json` name the program it executes or add arguments to it. One
+    // guard here covers every local spawn in that process, because every one of
+    // them resolves through this function.
+    let trusted;
+    let cfg = if super::elevation::is_elevated() {
+        trusted =
+            super::elevation::trusted_shell_config(cfg, super::elevation::trusted_program_for)?;
+        &trusted
+    } else {
+        cfg
+    };
+
     let mut env = base_env();
     // User env overrides (override the base).
     for (k, v) in &cfg.env {

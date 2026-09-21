@@ -92,7 +92,7 @@ process is elevated (M7):
 | Step | Call | Notes |
 | --- | --- | --- |
 | 1 | `oneterm_core::elevation::set_elevated(process_is_elevated())` | the token query, section 5. The only source of the marker and of every gate. |
-| 2 | `oneterm_core::elevation::parse(std::env::args_os())` | section 4. `Err` -> `fatal_message(...)` + `std::process::exit(2)`. `Ok(Some(kind))` -> `set_initial_shell(kind)`. |
+| 2 | `oneterm_core::elevation::parse(std::env::args_os())` | section 4. `Err` -> `fatal_message(...)` + `std::process::exit(2)`. `Ok(Some(shell))` -> when elevated, `trusted_program_for(shell)` or exit 3; then `set_initial_shell(shell)`. Steps 1 and 2 are one function, `read_process_identity()`, the first statement of `run()`. |
 | 3 | `oom::init_ballast()` | unchanged (`lib.rs:33`) |
 | 4 | `crash_report::prepare_capture_paths()` | unchanged call site (`lib.rs:34`); `crashes_dir()` now resolves to `<config>/crashes/elevated` when step 1 said elevated |
 | 5 | logging, native crash handler, Ctrl handler | unchanged (`lib.rs:47-93`) |
@@ -184,14 +184,17 @@ Exit codes, for the manual E2E and for anyone scripting the binary:
 | --- | --- |
 | 0 | normal exit |
 | 2 | the command line was not understood; one message box, no window |
-| 3 | the command line was understood but the requested shell has no trusted path on this machine (section 5); one message box, no window |
+| 3 | the command line was understood but the requested shell has no trusted path on this machine (section 5); one message box, no window. **Elevated processes only** — a process that is not elevated is unrestricted, resolves the shell the ordinary way and opens a window, because the token decides everything else and no consent prompt was paid for (`US-0130`, as built) |
 
 The message box is `MessageBoxW` and not `eprintln!`, because a release build is linked
 with `windows_subsystem = "windows"` (`crates/app/src/bin/oneterm.rs:7-10`) and has no
 console to print to. It runs before `gpui_platform::application()` (`lib.rs:95`), so there
 is no OneTerm window and no theme yet; a native message box is the only surface that
 exists. This adds `Win32_UI_WindowsAndMessaging` to the workspace `windows-sys` feature
-list (`Cargo.toml:125-135`) alongside `Win32_UI_Shell`.
+list (`Cargo.toml:125-135`) alongside `Win32_UI_Shell` — and, as built,
+`Win32_System_Registry`: windows-sys 0.59 gates the whole `SHELLEXECUTEINFOW` struct
+behind it because the struct carries an `HKEY` field. The feature buys the struct
+definition, nothing more; OneTerm still reads no registry key (section 5).
 
 Non-Windows builds are unaffected: `parse` compiles everywhere (it is pure `std`) and the
 non-Windows arm of `run()` never calls it, so `oneterm` on Linux and macOS still ignores
@@ -227,14 +230,15 @@ to install: an MSI run with `INSTALLFOLDER=D:\tools\pwsh` records a path under a
 a standard user may be able to write, which is the exact hole M3 exists to close — so
 honouring the registry would need a second check that the target is under a protected
 directory, at which point the directory scan alone is the same answer with less code.
-Second, the scan needs no `Win32_System_Registry` feature and no FFI, and it picks up a
+Second, the scan needs no registry FFI and it picks up a
 side-by-side PowerShell 8 for free. The cost is real and stated: **a pwsh installed outside
 `%ProgramFiles%\PowerShell` cannot be elevated from the menu** — the row is offered, the
 UAC prompt is answered, and the elevated process exits with code 3 and one message naming
 the path it looked for. **Open for the owner:** if a custom-location pwsh must be
 elevatable, the registry lookup comes back *plus* a check that `InstallLocation` resolves
-under a protected directory — and `Win32_System_Registry` joins the feature list. Until
-then this is the recorded behaviour, not an oversight.
+under a protected directory, plus `RegGetValueW` from the `Win32_System_Registry` feature
+the `SHELLEXECUTEINFOW` struct already pulls in (section 4). Until then this is the
+recorded behaviour, not an oversight.
 
 Resolution lives in `crates/core` and is parameterized the way `resolve_unix_shell`
 (`crates/core/src/config/shell.rs:203-222`) already is, so it can be unit-tested on the
@@ -450,15 +454,31 @@ pub fn trusted_program(
     versions: impl Fn(&std::path::Path) -> Vec<std::ffi::OsString>,
     exists: impl Fn(&std::path::Path) -> bool,
 ) -> Result<std::path::PathBuf, std::path::PathBuf>;
+/// The same, against this machine (`%SystemRoot%`, `%ProgramFiles%`, read_dir, is_file).
+pub fn trusted_program_for(shell: ElevatedShell) -> Result<std::path::PathBuf, std::path::PathBuf>;
+
+/// M3 as one function: the config an elevated process may spawn for `cfg.kind` --
+/// the trusted program, the kind's own args, and nothing from `terminal.json`.
+/// `resolve` is `trusted_program_for` in production and injected in tests, so the
+/// rule is unit-tested without the process global and without a Windows host.
+/// `resolve_shell` calls this behind `if is_elevated()`; that one guard covers
+/// every local spawn, because every one of them resolves through it.
+pub fn trusted_shell_config(
+    cfg: &LocalShellConfig,
+    resolve: impl Fn(ElevatedShell) -> Result<std::path::PathBuf, std::path::PathBuf>,
+) -> Result<LocalShellConfig, AppError>;
 
 /// Process globals, set exactly once in run() before any UI exists.
 pub fn set_elevated(value: bool);
 pub fn is_elevated() -> bool;              // false until set, and on non-Windows
-pub fn set_initial_shell(kind: crate::ShellKind);
-pub fn initial_shell() -> Option<crate::ShellKind>;
+/// Takes an `ElevatedShell`, not a `ShellKind`, as built: the global then cannot
+/// hold `Custom` even by mistake, which is the same argument the enum itself makes.
+pub fn set_initial_shell(shell: ElevatedShell);
+pub fn initial_shell() -> Option<crate::ShellKind>;   // what the panel needs
 
-// ── crates/app/src/elevation.rs (new, #[cfg(windows)]) ──────────────────
-pub(crate) fn process_is_elevated() -> bool;
+// ── crates/app/src/elevation.rs (new; the Win32 bodies are #[cfg(windows)],
+//    the module is not, because the fn pointer field exists on every platform) ──
+pub(crate) fn process_is_elevated() -> bool;   // a const fn returning false off Windows
 pub(crate) fn fatal_message(text: &str);   // MessageBoxW; used before the gpui app starts
 pub(crate) fn launch_elevated_shell(kind: oneterm_core::ShellKind, window: &mut Window, cx: &mut App);
 

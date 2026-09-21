@@ -455,6 +455,7 @@ fn duplicate_test_commands() -> WorkspaceCommands {
         Vec::new()
     }
     fn open_saved_session(_: u64, _: &mut gpui::Window, _: &mut gpui::App) {}
+    fn elevated(_: oneterm_core::ShellKind, _: &mut gpui::Window, _: &mut gpui::App) {}
 
     WorkspaceCommands {
         new_terminal_with_shell: terminal,
@@ -467,6 +468,7 @@ fn duplicate_test_commands() -> WorkspaceCommands {
         open_about: window,
         find_in_active_terminal: dock,
         setup_key_bindings: app,
+        launch_elevated_shell: elevated,
     }
 }
 

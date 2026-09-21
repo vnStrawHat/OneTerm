@@ -180,14 +180,23 @@ impl TerminalPanel {
         let deps = TerminalDeps::from_globals(cx);
         let (view, tab_title, workspace_id) = match spec {
             PanelSpec::DefaultShell { workspace } => {
+                // `--elevated-shell <kind>` *replaces* the configured default
+                // shell rather than adding a tab beside it, so `DEC-0016`'s
+                // "exactly one initial shell" still holds (`IN-0043`). The
+                // global is `None` for every ordinary start.
+                let requested = oneterm_core::elevation::initial_shell();
                 // Name the tab after the shell settings actually spawn, so ten
                 // local tabs are ten distinguishable tabs (`US-0114`).
-                let title = {
-                    let shell = &deps.settings.read(cx).shell;
-                    shell_tab_title(shell.kind, shell.program.as_deref())
+                let title = match requested {
+                    // `spawn_local_view` clears `program` for an explicit kind.
+                    Some(kind) => shell_tab_title(kind, None),
+                    None => {
+                        let shell = &deps.settings.read(cx).shell;
+                        shell_tab_title(shell.kind, shell.program.as_deref())
+                    }
                 };
                 (
-                    Self::spawn_local_view(&deps, None, window, cx),
+                    Self::spawn_local_view(&deps, requested, window, cx),
                     title,
                     workspace.or(primary),
                 )

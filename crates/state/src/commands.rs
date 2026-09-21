@@ -67,6 +67,16 @@ pub struct WorkspaceCommands {
     pub find_in_active_terminal: fn(&Entity<DockArea>, &mut Window, &mut App),
     /// Snapshot + apply key bindings (the settings feature owns the logic).
     pub setup_key_bindings: fn(&mut App),
+    /// Launch a **new** elevated OneTerm on this shell (Windows only; a logged
+    /// no-op elsewhere).
+    ///
+    /// The kind is passed as a value, never a path: nothing the unelevated
+    /// process writes may direct what the elevated process executes (`DEC-0019`
+    /// rule 4). An elevation request is always served by the process that
+    /// received it and must never be forwarded to another instance (`DEC-0019`
+    /// rule 3 / M6) — OneTerm has no instance coalescing today, so the rule is
+    /// free now and stops being free the moment someone adds it.
+    pub launch_elevated_shell: fn(ShellKind, &mut Window, &mut App),
 }
 
 /// Get the workspace commands from the application service bundle.
