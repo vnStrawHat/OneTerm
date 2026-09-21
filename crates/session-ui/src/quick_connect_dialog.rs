@@ -158,6 +158,12 @@ fn save_session_option(
 /// Open a dialog that collects SSH connection and authentication details.
 /// Optionally save the non-secret session metadata to the SSH session store.
 pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
+    // The dialog itself, not only its callers: this is the function the
+    // `ctrl-shift-n` route reached (`IN-0043` MAJ-3).
+    if !oneterm_actions::action_allowed_when_elevated("new_ssh_session") {
+        log::info!("elevated window: refusing to open Quick Connect");
+        return;
+    }
     open_quick_connect_dialog_internal(QuickConnectMode::New, window, cx);
 }
 

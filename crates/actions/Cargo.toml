@@ -14,5 +14,6 @@ workspace = true
 [dependencies]
 oneterm-core.workspace = true
 gpui.workspace = true
+log.workspace = true
 gpui-component.workspace = true
 serde.workspace = true

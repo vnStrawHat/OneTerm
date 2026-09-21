@@ -7,25 +7,32 @@
 //! globals — is `oneterm_core::elevation`, which is pure `std` and carries the
 //! unit tests.
 //!
-//! Off Windows nothing here has a meaning: `process_is_elevated` is a `const fn`
-//! returning `false`, so every gate compiles away to today's behaviour, and the
-//! launch logs and returns.
+//! Off Windows nothing here has a meaning: [`process_elevation`] is a `const fn`
+//! returning [`Elevation::NotElevated`], so every gate compiles away to today's
+//! behaviour, and the launch logs and returns.
 
 use gpui::{App, Window};
+use oneterm_core::elevation::Elevation;
 
-/// Whether this process runs with an elevated token.
+/// What this process's token says about it.
 ///
 /// The **only** source of the elevation marker and of every mode gate
 /// (`DEC-0019` M5): a window elevated by any route — the "+" menu, a right-click
 /// "Run as administrator", a policy auto-elevation — says so, and no window can
 /// be made to claim an elevation it does not have.
+///
+/// A failed query is [`Elevation::Unknown`], not "not elevated": the
+/// restrictions then apply (fail closed — a process that *is* elevated and fails
+/// the query would otherwise run SSH, SFTP, the updater and `terminal.json`'s
+/// program under an administrator token, unmarked) while the marker still
+/// refuses to claim an elevation the token did not confirm (`DEC-0019` rule 2).
 #[cfg(not(windows))]
-pub(crate) const fn process_is_elevated() -> bool {
-    false
+pub(crate) const fn process_elevation() -> Elevation {
+    Elevation::NotElevated
 }
 
 #[cfg(windows)]
-pub(crate) fn process_is_elevated() -> bool {
+pub(crate) fn process_elevation() -> Elevation {
     use windows_sys::Win32::Foundation::{CloseHandle, FALSE, HANDLE};
     use windows_sys::Win32::Security::{
         GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
@@ -38,10 +45,11 @@ pub(crate) fn process_is_elevated() -> bool {
     unsafe {
         let mut token: HANDLE = std::ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == FALSE {
-            // Theoretical: querying one's own token cannot be denied. The honest
-            // direction is the one where no window claims what it cannot prove.
-            log::error!("failed to open the process token; treating this process as not elevated");
-            return false;
+            // Theoretical: querying one's own token cannot be denied.
+            log::error!(
+                "failed to open the process token; this window is restricted and claims no elevation"
+            );
+            return Elevation::Unknown;
         }
         let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
         let mut returned = 0u32;
@@ -54,10 +62,16 @@ pub(crate) fn process_is_elevated() -> bool {
         );
         CloseHandle(token);
         if queried == FALSE {
-            log::error!("failed to read TokenElevation; treating this process as not elevated");
-            return false;
+            log::error!(
+                "failed to read TokenElevation; this window is restricted and claims no elevation"
+            );
+            return Elevation::Unknown;
         }
-        elevation.TokenIsElevated != 0
+        if elevation.TokenIsElevated != 0 {
+            Elevation::Elevated
+        } else {
+            Elevation::NotElevated
+        }
     }
 }
 

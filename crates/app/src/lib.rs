@@ -48,8 +48,8 @@ const EXIT_SHELL_NOT_INSTALLED: i32 = 3;
 fn read_process_identity() {
     use oneterm_core::elevation;
 
-    let elevated = crate::elevation::process_is_elevated();
-    elevation::set_elevated(elevated);
+    let elevated = crate::elevation::process_elevation();
+    elevation::set_elevation(elevated);
 
     let requested = match elevation::parse(std::env::args_os()) {
         Ok(requested) => requested,
@@ -61,7 +61,7 @@ fn read_process_identity() {
     let Some(shell) = requested else {
         return;
     };
-    if elevated {
+    if elevated.is_restricted() {
         // Resolved here, in the elevated process, and never by the launching
         // one: a pre-flight check the elevated side then trusts is the hole with
         // extra steps (`DEC-0019` rule 4).
@@ -109,7 +109,7 @@ pub fn run() {
     log::info!("OneTerm starting up");
     // The command line was read before the logger existed; report it now.
     if let Some(kind) = oneterm_core::elevation::initial_shell() {
-        if oneterm_core::elevation::is_elevated() {
+        if oneterm_core::elevation::is_restricted() {
             log::info!(
                 "Elevated window: opening {} as its one shell",
                 kind.display_name()

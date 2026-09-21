@@ -108,6 +108,13 @@ pub(crate) fn apply_key_bindings(cx: &mut App) {
     cx.bind_keys(snapshot);
     let mut bindings = Vec::new();
     for a in BINDABLE_ACTIONS {
+        // M1 (`DEC-0019`, `IN-0043` MAJ-3): an elevated window does not bind the
+        // SSH / SFTP / session actions at all. One place, and it closes every
+        // keystroke route at once — including a user's own override, which the
+        // handler guards alone would not have seen coming.
+        if !oneterm_actions::action_allowed_when_elevated(a.id) {
+            continue;
+        }
         if let Some(ks) = effective.get(a.id) {
             if let Some(b) = (a.make)(ks, a.context) {
                 bindings.push(b);

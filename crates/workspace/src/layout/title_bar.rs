@@ -65,7 +65,7 @@ impl Render for AppTitleBar {
             // so it is recognisable at a glance (`DEC-0019` M5). A border rather
             // than a background: it introduces no new text surface, so the
             // contrast gate's `SURFACES` table is untouched.
-            .border_color(if oneterm_core::elevation::is_elevated() {
+            .border_color(if oneterm_core::elevation::is_restricted() {
                 cx.theme().warning
             } else {
                 cx.theme().border

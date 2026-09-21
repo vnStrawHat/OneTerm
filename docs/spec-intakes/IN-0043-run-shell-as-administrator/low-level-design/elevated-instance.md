@@ -269,6 +269,27 @@ service from the elevated token's profile. `SHELLEXECUTEINFOW` carries no enviro
 at all (`research/windows-elevation-and-conpty.md` section 2.1) — the very limitation that
 forced option A is what makes these variables unreachable from the launching process.
 
+**Every field, not two.** `trusted_shell_config` builds the elevated
+`LocalShellConfig` field by field and deliberately **not** with `..cfg.clone()`
+(`IN-0043` MAJ-1, as built). `program` and `args` are not the only fields of
+`terminal.json`'s shell block that direct what executes:
+
+| Field | Why it cannot cross |
+| --- | --- |
+| `program`, `args` | names the executable and its command line |
+| `env` | the ConPTY environment block writes custom entries **ahead** of the inherited ones, so a `PATH` or `PSModulePath` here decides what the elevated shell runs on the first unqualified command — the first `net`, `sc`, `reg` or `icacls` the user types |
+| `cwd` | `cmd.exe` searches the working directory before `PATH`: the same escalation with one fewer field |
+| `utf8` | presentation only (the console codepage); the one field that crosses |
+
+Struct-update syntax would carry the next field added to `LocalShellConfig` across the
+boundary silently; listing every field means the next one fails the build until somebody
+decides which side it is on.
+
+`ResolvedShell` carries `cwd` for the same reason: `LocalSession::spawn` used to read
+`cfg.cwd` from the **original** config, so the guard at the top of `resolve_shell` was
+bypassed by construction. Everything a spawn needs now comes out of `resolve_shell`, which
+is what makes that one guard complete.
+
 Once resolved, the shell is spawned through the ordinary path:
 `PanelSpec::Shell`-equivalent -> `LocalSession::spawn`
 (`crates/local-shell/src/session.rs:37-120`) -> `CreatePseudoConsole` +
@@ -309,6 +330,15 @@ Field by field, and why each value:
   Windows command-line quoting is not a hazard on this path and there is no quoting code
   to get wrong.
 - **`lpDirectory = std::env::current_dir()`** (falling back to `current_exe()`'s parent).
+  **It is inside the trust boundary, not outside it** (`IN-0043` MIN-1, as built): any
+  same-user process may call `ShellExecuteExW(runas, oneterm.exe, "--elevated-shell cmd")`
+  with any `lpDirectory` of its own, and in a **debug or `fast-dev`** build `config_dir()`
+  is the relative `target/`, so that directory chooses the elevated instance's whole
+  configuration root. Release builds resolve `config_dir()` from `USERPROFILE` and are
+  unaffected, which is the only reason this is acceptable: it is a **developer-build-only**
+  exposure, and it is a severity multiplier for anything else that reads configuration
+  rather than a hole on its own. A release build must never gain a cwd-relative
+  `config_dir()`.
   Load-bearing: `runas` does not inherit the caller's working directory, and in **debug**
   builds `config_dir()` is the relative path `target/`
   (`crates/core/src/config/shell.rs:109-124`), so an unset `lpDirectory` silently puts the
@@ -351,7 +381,9 @@ Two corollaries fall out and are both intended:
 
 - A OneTerm the user elevated by some other route (right-click -> Run as administrator, a
   policy auto-elevation) is marked and restricted exactly like one launched from the menu.
-  That is fail-safe: there is no elevated-but-unrestricted state to reach.
+  That is fail-safe: there is no elevated-but-unrestricted state to reach — **including
+  when the token query fails**, which is why `Elevation` has three values and not two, and
+  why `is_restricted()` is the only predicate the gates read (`IN-0043` MIN-3).
 - A **non**-elevated process given `--elevated-shell cmd` opens Command Prompt, unmarked
   and unrestricted, and logs one `warn`. It cannot claim an elevation it does not have, so
   there is nothing to be fooled by, and it does not dead-end a window over a token race.
@@ -384,9 +416,13 @@ Seams, one row per gate, with the line each one sits on today:
 | M5 | title-bar border | `crates/workspace/src/layout/title_bar.rs:63` — `.border_color(cx.theme().border)` | `cx.theme().warning`. A **border**, not a background: a border introduces no new text surface, so `scripts/check-theme-contrast.py`'s `SURFACES` table is untouched. If a later change tints `title_bar.background` instead, that surface must be added to `SURFACES` (and to `PARENTS`) in the same commit. |
 | M1 | the "+" menu shell list | `crates/terminal-view/src/panel/terminal_panel.rs:697-704` | the three Windows kinds only, and **no "Run as administrator" rows** — `is_elevated()` suppresses them, so an elevated window cannot spawn a second identical one |
 | M1 | the "+" menu SSH block | `terminal_panel.rs:705-742` — "SSH Sessions" separator, saved rows, "Quick Connect...", "New Saved Session..." | absent in full. `FIXED_ROWS` (`:763`) is computed for the rows actually emitted, so the scroll estimate stays honest in both modes |
-| M1 | right dock content | `crates/workspace/src/layout/workspace/mod.rs:204-214` (persisted mode applied) and `layout.rs:38-41`, `:65-76` (`build_named_panel(panel_names::SSH_CLIENT, ...)`) | no right dock at all: `SSH_CLIENT` is not built and `set_dock(DockPlacement::Right, ...)` is not called. `sync_right_dock_mode` (`mod.rs:317-319`) and `apply_right_dock_width` (`mod.rs:403`) both early-return on `!has_dock(Right)`, so nothing else needs a guard |
+| M1 | right dock content | `crates/workspace/src/layout/workspace/mod.rs` (`startup_dock_document`), `layout.rs` (`right_dock`) | **`docks.json` is not read at all** (as built, `IN-0043` MAJ-2). Gating the two layout *builders* was necessary and not sufficient: `load_layout` restores the side docks **by name**, so a saved `ssh_client` or `agent` dock is built before either builder runs, and declining to call `set_dock(Right, ..)` does not remove a dock that is already there — it leaves it. An elevated window therefore starts from the fixed default layout, every time, and `right_dock`'s `None` arm now calls `remove_dock` rather than merely skipping `set_dock`. `sync_right_dock_mode` and `apply_right_dock_width` early-return on `!has_dock(Right)` as before |
 | M1 | right-dock mode toggles | `crates/workspace/src/layout/workspace/mod.rs:263` — `.child(|_, cx| title_bar::mode_toggle_group(cx))` | the child is not attached. The three segments ("SSH Client" / "Agent" / "None", `title_bar.rs:110-152`) are absent rather than disabled: there is nothing to switch to |
 | M1 | Agent panel | registered at `crates/app/src/init.rs:42-44` | `oneterm_agent_ui::init(cx)` still runs — the `AppServices` bundle's install order invariant (`init.rs:57-61`) depends on every feature `init` having run — but the panel has no route into the layout because the right dock does not exist and the toggle is gone |
+| M1 | **actions**, not only rows | `crates/actions/src/elevated_policy.rs` (new), consulted by `workspace/.../actions.rs`, `session-ui/src/lib.rs`, `session-ui/src/quick_connect_dialog.rs` and `settings-ui/.../key_bindings/state.rs` | Removing a *row* is not removing an *action*: `new_ssh_session` ships bound to `ctrl-shift-n` with a global context, so Quick Connect opened in an elevated window with no row involved (`IN-0043` MAJ-3). One exhaustive table classifies every `BINDABLE_ACTIONS` id; an unclassified id is **denied**, and `every_bindable_action_is_classified_for_an_elevated_window` fails until somebody classifies it. `apply_key_bindings` does not bind a denied action at all, which closes every keystroke route including a user's own override |
+| M4 | terminal logging | `crates/settings/src/terminal_config/logging.rs` — `LoggingConfig::runtime_config` | **off regardless of config** (`IN-0043` MAJ-4). `logging.local` plus `logging.directory` is a file created at a config-chosen path under an administrator token, and `LogWriteMode::Overwrite` makes it a create-or-**truncate** primitive. One gate in the function both the local and the SSH caller resolve through |
+| M4 | quarantine renames | `crates/core/src/persistence.rs` — `quarantine_file` | **no rename** (`IN-0043` MIN-2). The M4 guards sit on the write entry points; a quarantine is a rename of the user's file and is not one of them. An elevated window that meets a corrupt document starts on the defaults, says so once, and leaves the file for the ordinary window to quarantine. One guard covers `ui_config.json`, `terminal.json` and `docks.json` |
+| M2/M4 | the Network settings page | `crates/settings-ui/src/panel.rs` — `pages` | **hidden** (`IN-0043` MIN-4). It configures how the updater reaches GitHub, and M2 removed the updater; a page whose edits are silently discarded is worse than one that is not there. The settings window also carries one line saying this is an administrator window and its changes are not saved |
 | M2 | startup update check | `crates/app/src/window.rs:58` — `start_auto_check(window, cx)` | not called |
 | M2 | manual check | `crates/settings-ui/src/updates/actions.rs:85` — `check_now` | early return |
 | M2 | download and install | `crates/settings-ui/src/updates/install.rs:12` — `download_and_install_update` | early return, before the confirm dialog |
@@ -418,7 +454,7 @@ costs one `join` and removes the whole class.
 | Unrecognized command line | `MessageBoxW` naming the flag and the three accepted values, exit code 2, no window | `run()`, step 2 |
 | Requested shell has no trusted path | `MessageBoxW` naming the path that was looked for, exit code 3, no window. An elevated window with no shell in it is worse than none | `run()`, before the gpui app starts |
 | The elevated process cannot read the configuration (different profile, over-the-shoulder elevation) | it starts with defaults and says so **once**, as one info notification after the window opens: *"Settings could not be read for this account; this window is using the defaults."* The marker is still correct, because it comes from the token, not from the configuration | `crates/app/src/window.rs` after `open_window` |
-| The token query itself fails | treated as **not elevated**, logged at `error`. `OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY)` on one's own process is always granted, so this is a theoretical branch; the honest direction is the one where no window claims an elevation it could not prove | section 7 |
+| The token query itself fails | **fail closed on the restrictions, honest on the marker** (`Elevation::Unknown`, as built). M1-M7 all apply, and the title reads `OneTerm (elevation unknown)` with the warning border. The first draft of this table said "treated as not elevated", which was fail-**open** on a security switch: a process that *is* elevated and fails the query would have run SSH, SFTP, the updater and `terminal.json`'s program under an administrator token, unmarked, and the corollary in section 7 — *there is no elevated-but-unrestricted state to reach* — would have been false in exactly that branch. Claiming "(Administrator)" instead is not the answer either: `DEC-0019` rule 2 forbids a marker asserting an elevation the token never confirmed. `OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY)` on one's own process is always granted, so the branch stays theoretical; the direction it fails in is not. | section 7 |
 | The elevated window fails to open | an ordinary OneTerm start-up failure (CORR-63): logged, no window. The launching window has already returned; the user sees a consent prompt followed by nothing. Same as any failed launch | `crates/app/src/window.rs` |
 
 ## Interfaces

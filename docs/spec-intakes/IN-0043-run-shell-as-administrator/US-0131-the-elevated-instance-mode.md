@@ -389,46 +389,193 @@ This session cannot run any of it: the consent prompt is drawn by the AppInfo se
 secure desktop, and this session is forbidden to raise one. Build with
 `cargo build -p oneterm-app --profile fast-dev`; the binary is `target/fast-dev/oneterm.exe`.
 
-1. **E7 setup.** `Get-FileHash target\ui_config.json, target\terminal.json, target\docks.json,
-   target\ssh_session.json, target\update_config.json > before.txt` (release build: the same
-   five under `~\.OneTerm\`). Keep `before.txt`.
-2. **E2 — the marked window.** Right-click `oneterm.exe` → *Run as administrator*, consent.
+Rewritten after the independent verification (`evidence/IN-0043-verify.md` §6), which found
+the first version's step 9 not falsifiable and steps 2-4 unable to catch three of the four
+majors. Two of the steps below are one keystroke each and both **failed** on the branch the
+verifier read.
+
+**Which directory to hash.** A `fast-dev` build resolves `config_dir()` to the *relative*
+`target/`, so the five documents live under the **launcher's working directory**, not
+necessarily the repository root. Start the normal window from the repository root and hash
+`<repo>\target\*.json`. A release build resolves from `%USERPROFILE%` and the files are
+under `~\.OneTerm\`.
+
+1. **Precondition — put `docks.json` in the state every real user is in.** This is the step
+   the old checklist lacked, and without it step 5 proves nothing: `reset_default_layout`
+   only runs on a *first ever* launch, so a machine with no `docks.json` would pass a broken
+   build. Open the **normal** window, make sure the right dock is open on **SSH Client**, add
+   a saved SSH session if there is none, then close the window so the layout is written.
+   Confirm `docks.json` now contains `ssh_client_panel`.
+2. **E7 setup — record the before state, not only hashes.**
+   `Get-ChildItem target\*.json | Get-FileHash | Export-Csv before.csv`, and separately
+   `Get-ChildItem target -Force | Select-Object Name > before-names.txt`. The second file is
+   the point: a quarantine **renames** a document, which a hash of the same path reports as
+   "file not found" rather than as a difference, and the old wording would have missed it.
+3. **E2 — the marked window.** Right-click `oneterm.exe` → *Run as administrator*, consent.
    Screenshot showing all three markers at once: the taskbar / OS title reading
    `OneTerm (Administrator)`, the in-app title bar reading the same, and the title-bar border
-   in the warning colour. Save as `evidence/US-0131-E2-marked-window.png`.
-3. **E3 — really elevated.** In the elevated tab run `whoami /groups` and screenshot the line
+   in the warning colour. `evidence/US-0131-E2-marked-window.png`.
+4. **E3 — really elevated.** `whoami /groups` in the elevated tab; screenshot the line
    `Mandatory Label\High Mandatory Level`. `evidence/US-0131-E3-whoami-groups.png`. The
    marker alone is not proof; this is.
-4. **E4 — the smaller application.** Screenshot the elevated window's "+" menu: exactly three
-   rows (Command Prompt, PowerShell, PowerShell 7), **no** `Run as administrator >` row, no
-   "SSH Sessions" separator, no saved sessions, no "Quick Connect...", no "New Saved
-   Session...". Second screenshot of its title bar: no SSH Client / Agent / None segments,
-   and no right dock in the window at all.
+5. **The two one-keystroke checks the old checklist could not catch.** Both failed before
+   this rework.
+   - **MAJ-1.** In the elevated tab run `echo %PATH%` (or `$env:PATH` in PowerShell) and
+     `where.exe cmd`. `PATH` must be the machine's, with **no** entry from `terminal.json`'s
+     `shell.env`, and `cmd` must resolve under `%SystemRoot%\System32`. Also `cd` with no
+     argument: the working directory must be the profile's home, not a `shell.cwd` from
+     `terminal.json`. To make the check mean something, set
+     `"shell": { "env": { "PATH": "C:\\Users\\<you>\\bin" }, "cwd": "C:\\Users\\<you>\\stage" }`
+     in `terminal.json` **before** step 3 and confirm neither appears.
+     `evidence/US-0131-E11-path-and-cwd.png`.
+   - **MAJ-3.** Press `Ctrl+Shift+N` in the elevated window. **Nothing must open** — no Quick
+     Connect dialog, no session dialog. `evidence/US-0131-E12-ctrl-shift-n.png`.
+6. **E4 — the smaller application, and the one that needed step 1.** Screenshot the elevated
+   window's "+" menu: exactly three rows (Command Prompt, PowerShell, PowerShell 7), **no**
+   `Run as administrator ›` row, no "SSH Sessions" separator, no saved sessions, no
+   "Quick Connect...", no "New Saved Session...". Second screenshot of the whole window:
+   **no right dock at all** — no Session tree, no SFTP Browser, no Agent panel — and no
+   SSH Client / Agent / None segments in the title bar.
    `evidence/US-0131-E4-elevated-plus-menu.png`, `evidence/US-0131-E4-no-right-dock.png`.
-5. **No-argument case.** That window was started with **no** argument, which is the proof
+7. **No-argument case.** That window was started with **no** argument, which is the proof
    there is no elevated-but-unrestricted state: it is marked and restricted anyway.
-6. **E8 — the updater is absent.** OneTerm ▸ About in the elevated window: screenshot showing
-   the single line *"Updates are checked and installed from the normal OneTerm window."*, no
-   status, no preferences, and **no "Check for Updates" button in the dialog footer**. Same
-   on Settings ▸ About. `evidence/US-0131-E8-about-updates.png`.
-7. **Theme check.** Switch the elevated window between one light and one dark built-in theme
-   and confirm the title-bar border reads as a marker in both.
-8. **E9 — the crash store.** In an elevated debug build, trigger a panic. Confirm the report
-   lands in `<config>\crashes\elevated\`, that **no** crash dialog appears in the elevated
-   window, and that the normal window's dialog on its next launch does not show it.
-9. **E7 — five hashes.** Close the elevated window (this is the step that matters: the
-   exit-time layout write is the write most likely to be missed). Re-hash the same five files
-   and diff against `before.txt`. **All five must be byte-identical.** Also confirm no new
-   file appeared in the config directory.
-10. **E5 — the normal window is untouched.** In the same session, the unelevated window still
-    has its tabs, a live SSH connection still responding, and its own unmarked title bar.
-11. **E6 — declined.** From the unelevated window, "+" ▸ *Run as administrator* ▸ any shell,
+8. **MAJ-4 — no log file.** Set `"logging": { "local": true, "directory": "<a temp dir>",
+   "write_mode": "overwrite" }` in `terminal.json` before step 3. After opening the elevated
+   window, that directory must contain **no new file**.
+   `evidence/US-0131-E13-no-terminal-log.png`.
+9. **E8 — the updater is absent.** OneTerm ▸ About in the elevated window: one line,
+   *"Updates are checked and installed from the normal OneTerm window."*, no status, no
+   preferences, and **no "Check for Updates" button in the dialog footer**. Open Settings:
+   the **Network** page must be absent from the sidebar, and the window must carry the line
+   saying changes here are not saved.
+   `evidence/US-0131-E8-about-updates.png`, `evidence/US-0131-E8-settings-readonly.png`.
+10. **Theme check.** Switch the elevated window between one light and one dark built-in theme
+    and confirm the title-bar border reads as a marker in both.
+11. **E9 — the crash store.** In an elevated debug build, trigger a panic. The report must
+    land in `<config>\crashes\elevated\`, **no** crash dialog may appear in the elevated
+    window, and the normal window's dialog on its next launch must not show it.
+12. **E7 — the after state.** Close the elevated window; this is the step that matters,
+    because the exit-time layout write is the one most likely to be missed. Then:
+    - `Get-ChildItem target\*.json | Get-FileHash` and diff against `before.csv`: for each of
+      `ui_config.json`, `terminal.json`, `docks.json`, `ssh_session.json` and
+      `update_config.json`, the file must **still exist, at the same path, with the same
+      hash**.
+    - `Get-ChildItem target -Force | Select-Object Name` and diff against
+      `before-names.txt`: the **only** new path may be `crashes\elevated\`. That directory
+      *is* M7 working — `prepare_capture_paths` creates it on every elevated start — so the
+      old wording "no new file appeared" would have failed every single run. No `*.bak`, no
+      `.invalid-*` quarantine sibling, and no new `*.json` may appear.
+13. **E5 — the normal window is untouched.** In the same session, the unelevated window still
+    has its tabs, a live SSH connection still responding, its right dock, and its own
+    unmarked title bar.
+14. **E6 — declined.** From the unelevated window, "+" ▸ *Run as administrator* ▸ any shell,
     then **decline** the prompt. Nothing at all: no window, no notification, no change to the
-    launching window's tabs, connections or transfers; one `info` log line.
+    launching window's tabs, connections or transfers; one `info` log line. A screenshot
+    cannot prove "nothing", so also run `Get-Process oneterm` and confirm **no new process**
+    exists — a window that opened and closed quickly must not pass as "nothing".
     `evidence/US-0131-E6-declined.png`.
-12. **Over-the-shoulder, only if a second administrator account exists.** Elevate with that
-    account's credentials and confirm the window starts on the defaults, says so once as an
-    info notification, and leaves **no** file behind in that account's `~\.OneTerm`.
+15. **Over-the-shoulder, only if a second administrator account exists.** Elevate with that
+    account's credentials and confirm the window starts on the defaults and leaves **no** file
+    behind in that account's `~\.OneTerm`. The "says so once" notification fires only when
+    `ui_config.json` is **absent** there — if that account has ever run OneTerm, its correct
+    behaviour is to stay silent, which is a pass and not a failure.
+
+### Acceptance rework, 2026-09-21 — MAJ-2, MAJ-3, MAJ-4 and four minors
+
+Independent verification (`evidence/IN-0043-verify.md`) marked this packet **FAIL** on three
+majors, each a breach of M1 or M4 on a **default** path. Reworked rather than opened as new
+BUGs: none of it had been accepted.
+
+**MAJ-2 — an elevated window did get a right dock.** The M1 gate was on the two layout
+*builders*. It was not on the *restore*: `load_layout` rebuilds the side docks **by name**,
+so `ssh_client` (Session tree + SFTP browser) or `agent` was constructed before either
+builder ran — and declining to call `set_dock(Right, ..)` does not remove a dock that is
+already there, it leaves it. `reset_default_layout`, the path the design reasoned about, only
+runs on a *first ever* launch, so for every user who had run OneTerm once the default path
+was the broken one. SSH connections, SFTP transfers and `known_hosts` writes were all
+available under an administrator token.
+*Fix:* an elevated window **does not read `docks.json` at all** — `startup_dock_document`
+returns `None` and the fixed default layout is built every time. Second lock: `right_dock`'s
+`None` arm now calls `remove_dock` instead of skipping `set_dock`.
+*Tests:* `layout_tests::an_elevated_window_never_reads_the_saved_layout` (the injected reader
+**panics** if it is called, so the assertion is "not read", not "read and ignored") and
+`layout_tests::the_elevated_startup_path_yields_a_dock_state_with_no_right_dock` — the test
+this packet's own verification plan named and the branch did not have. Mutation-checked:
+reverting `remove_dock` fails the second with *"an elevated window must have no right dock"*.
+
+**MAJ-3 — `ctrl-shift-n` opened Quick Connect in an elevated window.** Removing a *row* is
+not removing an *action*. `new_ssh_session` ships bound globally, and neither
+`on_action_new_session` nor `open_quick_connect_dialog` had a guard. The same reasoning that
+put the `switch_right_dock_mode` guard in the shared function was not applied one function
+further down the file.
+*Fix:* one exhaustive table, `oneterm_actions::elevated_policy`, classifying **every**
+`BINDABLE_ACTIONS` id; an unclassified id is **denied**. Consulted by
+`on_action_new_session`, by `session-ui`'s three public entry points (the
+`WorkspaceCommands` seam), by `open_quick_connect_dialog` itself, and — the one that closes
+every keystroke route at once, including a user's own override — by `apply_key_bindings`,
+which does not bind a denied action at all.
+*Test:* `key_bindings_actions::tests::every_bindable_action_is_classified_for_an_elevated_window`
+(`oneterm-settings-ui`). A new action added and forgotten fails it, which is the point.
+
+**MAJ-4 — terminal logging was an arbitrary elevated file write.** `logging.local` plus
+`logging.directory` from `terminal.json`, ungated, created a file at a config-chosen path
+under an administrator token; `LogWriteMode::Overwrite` made it create-or-**truncate**.
+*Fix:* `LoggingConfig::runtime_config` — the one function both the local and the SSH caller
+resolve through — forces `enabled = false` when restricted.
+*Test:* `terminal_config::logging::tests::an_elevated_window_never_opens_a_terminal_log_file`
+(`oneterm-settings`).
+
+**MIN-3 — the token query failed open.** A process that *was* elevated and failed the query
+got `is_elevated() == false`, so **none** of M1/M2/M4/M7 applied: SSH, SFTP, the updater and
+`terminal.json`'s program, all under an administrator token, unmarked. The corollary "there
+is no elevated-but-unrestricted state to reach" was false in exactly that branch.
+*Fix:* `Elevation` is now three-valued. `Unknown` is **restricted** (fail closed) and its
+marker reads `OneTerm (elevation unknown)` with the warning border — claiming
+"(Administrator)" would assert an elevation the token never confirmed, which `DEC-0019`
+rule 2 forbids. `is_elevated()` is gone; there is one predicate, `is_restricted()`, because
+two that differ only in the `Unknown` case invite guarding a security seam with the wrong one.
+*Test:* `config::elevation::tests::an_unknown_token_is_restricted_but_claims_no_elevation`.
+
+**MIN-2 — a corrupt document was quarantined (renamed) by the elevated process.** The M4
+guards sat on the write entry points; a quarantine is a rename and is not one of them.
+*Fix:* one guard in `oneterm_core::persistence::quarantine_file`, covering
+`ui_config.json`, `terminal.json` and `docks.json` at once. The elevated window starts on the
+defaults, says so once, and leaves the file for the ordinary window.
+
+**MIN-4 — settings accepted edits and discarded them, and the Network page survived M2.**
+*Fix:* the Network page is not built when restricted, and the settings window carries one
+line: *"This is an administrator window: settings changed here apply until it closes and are
+not saved."*
+*Test:* `panel::tests::the_elevated_settings_note_says_the_edits_are_not_saved`.
+
+**MIN-5 — the "untestable" claim is retracted.** The previous Gaps section said the
+`docks.json`, `ssh_session.json` and `update_config.json` guards could not be tested because
+flipping the process global would race the other tests in the binary. The verifier showed the
+technique that works, and all three now have real elevated-branch tests. Each flips the
+global, restores it on every exit path including a panic, and is marked
+`#[ignore = "flips the process-global elevation switch; run alone with --exact"]` — the
+convention this repository already uses for tests that cannot share a process
+(`session_orphan_tests::orphan_liveness_table`). Five such tests exist; each was run alone:
+
+```text
+cargo test -p oneterm-workspace   -- --exact --ignored layout::workspace::layout_tests::an_elevated_window_never_reads_the_saved_layout
+cargo test -p oneterm-workspace   -- --exact --ignored layout::workspace::layout_tests::the_elevated_startup_path_yields_a_dock_state_with_no_right_dock
+cargo test -p oneterm-workspace   -- --exact --ignored layout::workspace::persistence::tests::an_elevated_window_writes_no_dock_layout
+cargo test -p oneterm-session-ui  -- --exact --ignored session_state::tests::an_elevated_window_writes_no_saved_sessions
+cargo test -p oneterm-settings-ui -- --exact --ignored updates::config::tests::an_elevated_window_queues_no_update_config_write
+```
+
+All five: `test result: ok. 1 passed`. The `docks.json` guard moved from `save_state_logged`
+into `save_state_to`, which is both deeper (every dock write passes through it) and takes an
+explicit path, so the test is not aimed at the developer's real configuration directory.
+`update_config.json` asserts that **nothing reached the persist queue**, which is
+deterministic where "no file appeared" would be racy.
+
+**MIN-1 — `lpDirectory`.** Documented, not changed: it is *inside* the trust boundary, and
+only the release `config_dir()` (from `%USERPROFILE%`) makes that harmless. A debug or
+`fast-dev` build resolves `config_dir()` relative to the launcher's working directory, which
+any same-user process chooses when it calls `ShellExecuteExW` itself. Recorded in the detail
+design as a developer-build-only exposure and a severity multiplier, not a finding on its own.
 
 ### Gaps
 
@@ -440,10 +587,13 @@ secure desktop, and this session is forbidden to raise one. Build with
 - UIPI drag-and-drop into an elevated window is not exercised: under M1 there is no SFTP
   panel there to drop onto.
 - `cfg(unix)` gates are compile-and-unit-tested only.
-- The `docks.json`, `ssh_session.json` and `update_config.json` guards are one-line `if`s on
-  the process global rather than parameterized functions, so unlike `ui_config.json` and
-  `terminal.json` their elevated branch has **no unit test**. Flipping the global in a test
-  would race every other test in the same binary; item 9 above is what actually proves them.
+- ~~The `docks.json`, `ssh_session.json` and `update_config.json` guards have no unit test
+  because flipping the global would race the other tests in the binary.~~ **Retracted.** The
+  claim was stronger than the evidence for it: `--exact` plus a restore-on-drop guard plus
+  `#[ignore]` gives each of the three a real elevated-branch test, and all three now have
+  one (MIN-5 above). What remains true is narrower — those tests do not run inside
+  `cargo test --workspace` and must be invoked individually, which is why the five commands
+  are written out above rather than left to be rediscovered.
 
 ## Handoff
 

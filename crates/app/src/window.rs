@@ -55,7 +55,7 @@ pub(crate) fn open_window(
         window
             .update(cx, |root, window, cx| {
                 window.activate_window();
-                let elevated = oneterm_core::elevation::is_elevated();
+                let elevated = oneterm_core::elevation::is_restricted();
                 if !elevated {
                     // M2: an elevated updater can write `C:\Program Files` and
                     // leave files the ordinary instance cannot replace, which
@@ -75,7 +75,9 @@ pub(crate) fn open_window(
                 }
                 // M5: the marker is in the OS title, so the taskbar, Alt-Tab and
                 // every screenshot carry it.
-                window.set_window_title(oneterm_core::elevation::window_title(elevated));
+                window.set_window_title(oneterm_core::elevation::window_title(
+                    oneterm_core::elevation::elevation(),
+                ));
                 // Over-the-shoulder elevation puts this process in another
                 // account's profile, so it has none of the user's settings. Say
                 // so once; the marker is still correct, because it comes from

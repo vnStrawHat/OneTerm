@@ -447,17 +447,7 @@ impl SshSessionStore {
     /// Snapshots are coalesced through the single-flight queue so back-to-back
     /// mutations always leave the newest state on disk.
     fn save(&self, cx: &gpui::Context<Self>) {
-        // M4 (`DEC-0019`): an elevated window never writes `ssh_session.json`.
-        // Unreachable under M1 — it offers no surface that can edit a session —
-        // so this is belt and braces, and it costs one `if`.
-        if oneterm_core::elevation::is_elevated() {
-            log::debug!("elevated window: not writing {DOCUMENT_NAME}");
-            return;
-        }
-        if self.persist_blocked {
-            log::warn!(
-                "{DOCUMENT_NAME} could not be read at startup; refusing to overwrite it with the in-memory list"
-            );
+        if !self.may_persist() {
             return;
         }
         let queue = self.persist_queue.clone();
@@ -469,6 +459,29 @@ impl SshSessionStore {
                 drain_persist_queue(&queue, &config_dir().join(DOCUMENT_NAME));
             })
             .detach();
+    }
+
+    /// Whether this process may write `ssh_session.json` at all.
+    ///
+    /// Two reasons it may not. **M4** (`DEC-0019`): an elevated window never
+    /// writes it — unreachable under M1, which leaves it no surface that can
+    /// edit a session, so this is belt and braces. And the pre-existing one: the
+    /// file could not be read at startup and may still be the user's.
+    ///
+    /// A named predicate rather than two `if`s inside [`Self::save`], so the M4
+    /// half has a test that needs no gpui `Context` (`IN-0043` MIN-5).
+    fn may_persist(&self) -> bool {
+        if oneterm_core::elevation::is_restricted() {
+            log::debug!("elevated window: not writing {DOCUMENT_NAME}");
+            return false;
+        }
+        if self.persist_blocked {
+            log::warn!(
+                "{DOCUMENT_NAME} could not be read at startup; refusing to overwrite it with the in-memory list"
+            );
+            return false;
+        }
+        true
     }
 
     fn save_snapshot(document: &SessionDocument, path: &Path) {
@@ -719,6 +732,57 @@ impl SshSessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `M4`, `IN-0043` MIN-5 — `ssh_session.json`. The guard reads a
+    /// **process-global** switch, so this test must be the only one in the
+    /// process:
+    ///
+    /// ```text
+    /// cargo test -p oneterm-session-ui -- --exact \
+    ///   session_state::tests::an_elevated_window_writes_no_saved_sessions
+    /// ```
+    ///
+    /// The packet previously called this untestable. It is not.
+    #[test]
+    #[ignore = "flips the process-global elevation switch; run alone with --exact"]
+    fn an_elevated_window_writes_no_saved_sessions() {
+        struct RestrictedElevation;
+        impl Drop for RestrictedElevation {
+            fn drop(&mut self) {
+                oneterm_core::elevation::set_elevation(
+                    oneterm_core::elevation::Elevation::NotElevated,
+                );
+            }
+        }
+
+        let store = SshSessionStore::with_document(SessionDocument {
+            entries: Vec::new(),
+            next_id: 1,
+        });
+        assert!(
+            store.may_persist(),
+            "fixture: an ordinary window writes the session list"
+        );
+
+        oneterm_core::elevation::set_elevation(oneterm_core::elevation::Elevation::Elevated);
+        let _restricted = RestrictedElevation;
+        assert!(
+            !store.may_persist(),
+            "an elevated window must write no saved sessions"
+        );
+
+        // ...and the unreadable-file refusal still stands on its own reason.
+        drop(_restricted);
+        oneterm_core::elevation::set_elevation(oneterm_core::elevation::Elevation::NotElevated);
+        let blocked = SshSessionStore {
+            persist_blocked: true,
+            ..SshSessionStore::with_document(SessionDocument {
+                entries: Vec::new(),
+                next_id: 1,
+            })
+        };
+        assert!(!blocked.may_persist());
+    }
 
     #[test]
     fn ssh_logging_override_has_explicit_precedence() {

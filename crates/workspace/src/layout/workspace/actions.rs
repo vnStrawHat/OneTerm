@@ -124,6 +124,12 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // M1: the "+" menu's Quick Connect row is absent in an elevated window,
+        // but the *action* is bound to `ctrl-shift-n` globally, so the row being
+        // gone was never enough (`IN-0043` MAJ-3).
+        if !oneterm_actions::action_allowed_when_elevated("new_ssh_session") {
+            return;
+        }
         (commands(cx).open_quick_connect_dialog)(window, cx);
     }
 
@@ -193,7 +199,7 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if oneterm_core::elevation::is_elevated() {
+        if oneterm_core::elevation::is_restricted() {
             // M1: an elevated window has no right dock and no mode toggles. The
             // guard sits here rather than at the two call sites so a key binding
             // on `SetRightDockMode` cannot build one either.

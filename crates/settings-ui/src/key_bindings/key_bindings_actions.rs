@@ -426,6 +426,66 @@ mod tests {
 
     use super::BINDABLE_ACTIONS;
 
+    /// `MAJ-3`: every rebindable action must be classified for an elevated
+    /// window, and every SSH / SFTP / session one must be denied.
+    ///
+    /// The point of the test is the **first** assertion: a new action added to
+    /// `BINDABLE_ACTIONS` and forgotten in `oneterm_actions::elevated_policy`
+    /// fails here, so it cannot reach an administrator token by nobody having
+    /// thought about it. `new_ssh_session` — bound to `ctrl-shift-n`, global
+    /// context — is the one that did.
+    #[test]
+    fn every_bindable_action_is_classified_for_an_elevated_window() {
+        let unclassified: Vec<&str> = BINDABLE_ACTIONS
+            .iter()
+            .filter(|action| {
+                oneterm_actions::action_classified_for_elevated_window(action.id).is_none()
+            })
+            .map(|action| action.id)
+            .collect();
+        assert!(
+            unclassified.is_empty(),
+            "these actions are not classified for an elevated window (add them to \
+             oneterm_actions::elevated_policy, denied unless they are local-terminal only): \
+             {unclassified:?}"
+        );
+
+        // Every id the policy denies must actually exist here, so the table
+        // cannot rot into a list of names nothing dispatches.
+        for denied in oneterm_actions::denied_when_elevated() {
+            assert!(
+                BINDABLE_ACTIONS.iter().any(|action| action.id == *denied),
+                "{denied} is denied but is not a bindable action any more"
+            );
+        }
+
+        // And the surfaces M1 names by hand are on the denied side.
+        for id in [
+            "new_ssh_session",
+            "open_session",
+            "delete_session",
+            "session_property",
+            "sftp_open",
+            "sftp_upload_files",
+            "sftp_delete",
+        ] {
+            assert_eq!(
+                oneterm_actions::action_classified_for_elevated_window(id),
+                Some(false),
+                "{id} reaches SSH or SFTP and must not run in an elevated window"
+            );
+        }
+
+        // ...while the terminal keeps working, which is what the window is for.
+        for id in ["new_terminal_tab", "terminal_copy", "split_right", "find"] {
+            assert_eq!(
+                oneterm_actions::action_classified_for_elevated_window(id),
+                Some(true),
+                "{id} is a local-terminal action and must keep working"
+            );
+        }
+    }
+
     #[test]
     fn the_app_defaults_are_the_ones_dec_0018_records() {
         let default_for = |id: &str| {

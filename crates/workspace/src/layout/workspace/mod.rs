@@ -42,6 +42,31 @@ const RIGHT_DOCK_MAX_SHARE: f32 = 0.35;
 /// user did not close stays on screen, and the splitter is still theirs to drag.
 const MIN_RIGHT_DOCK_WIDTH: gpui::Pixels = gpui::px(240.);
 
+/// The persisted layout this process may start from, or `None` for the fixed
+/// default layout.
+///
+/// M1 (`DEC-0019`, `IN-0043` MAJ-2): an elevated window **does not read
+/// `docks.json` at all**. `load_layout` restores the side docks *by name*, so a
+/// saved `ssh_client` or `agent` dock would be built before any gate on the
+/// layout builders could decline to build one — and declining to call
+/// `set_dock` does not remove a dock that already exists. Gating the builders
+/// was necessary and not sufficient: the restore is the path every user who has
+/// run OneTerm once actually takes, so the "default" path in practice was the
+/// broken one.
+///
+/// `read` is a closure so the test can prove the stronger claim — that the
+/// document is not read, rather than merely not used.
+fn startup_dock_document(
+    restricted: bool,
+    read: impl FnOnce() -> Option<oneterm_state::dock_persistence::DockDocument>,
+) -> Option<oneterm_state::dock_persistence::DockDocument> {
+    if restricted {
+        log::info!("elevated window: not reading docks.json; using the default layout");
+        return None;
+    }
+    read()
+}
+
 /// The width the right dock may actually take in a window this wide.
 ///
 /// A ceiling, not a proportion: a requested width that already fits is returned
@@ -161,8 +186,10 @@ impl OneTermWorkspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // An elevated window is a deliberately smaller application: local shells
         // only, marked, and writing no configuration (`DEC-0019` M1/M4/M5). Read
-        // from the process token, never from a launch argument.
-        let elevated = oneterm_core::elevation::is_elevated();
+        // from the process token, never from a launch argument — and true as
+        // well when the token query itself failed, because a process that cannot
+        // prove it is ordinary is treated as though it were not.
+        let elevated = oneterm_core::elevation::is_restricted();
         let (dock_area, dock_skin) =
             dock_skin::dock_area(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx);
         dock_skin.set_panel_style(PanelStyle::TabBar, cx);
@@ -180,9 +207,21 @@ impl OneTermWorkspace {
         // rewrites docks.json without the zoom), and the same document feeds
         // the layout load. An unreadable file is left to the first save:
         // `dock_persistence` — the document owner — quarantines it there.
-        let document = persistence::read_dock_document().unwrap_or_else(|error| {
-            log::warn!("{error}; using the default layout");
-            None
+        //
+        // M1 (`DEC-0019`, `IN-0043` MAJ-2): an elevated window does not read it
+        // at all. `load_layout` restores the **side docks by name**, so a saved
+        // `ssh_client` or `agent` dock would be built here — before any gate on
+        // the layout builders can decline to build one — and then left in place,
+        // because declining to call `set_dock(Right, ..)` does not remove a dock
+        // that is already there. Gating the builders was necessary and not
+        // sufficient: the restore is the path every user who has run OneTerm
+        // once actually takes. An elevated window therefore gets the fixed
+        // default layout, every time, with no saved zoom and no saved width.
+        let document = startup_dock_document(elevated, || {
+            persistence::read_dock_document().unwrap_or_else(|error| {
+                log::warn!("{error}; using the default layout");
+                None
+            })
         });
         let saved_zoom = document
             .as_ref()
@@ -267,7 +306,11 @@ impl OneTermWorkspace {
         let title_bar = cx.new(|cx| {
             // M5: the same string the OS title bar carries, from one source, so
             // the two markers cannot disagree.
-            let bar = AppTitleBar::new(oneterm_core::elevation::window_title(elevated), window, cx);
+            let bar = AppTitleBar::new(
+                oneterm_core::elevation::window_title(oneterm_core::elevation::elevation()),
+                window,
+                cx,
+            );
             if elevated {
                 // M1: an elevated window has no right dock, so there is nothing
                 // to switch between — the three segments are absent rather than

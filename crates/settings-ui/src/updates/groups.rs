@@ -28,7 +28,7 @@ pub(crate) const ELEVATED_UPDATES_TEXT: &str =
 /// status, no button. Disabling the controls would say the same thing less
 /// clearly and still leave something to click.
 pub(crate) fn group(cx: &App) -> SettingGroup {
-    if oneterm_core::elevation::is_elevated() {
+    if oneterm_core::elevation::is_restricted() {
         return SettingGroup::new()
             .title("Updates")
             .item(SettingItem::render(|_options, _, cx| {

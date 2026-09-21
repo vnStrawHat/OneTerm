@@ -51,7 +51,24 @@ pub fn saved_ssh_sessions(cx: &App) -> oneterm_state::commands::SavedSshSessionS
 /// the same reason `saved_ssh_sessions` does: the reverse crate edge is a cycle
 /// (`US-0114`).
 pub fn open_new_saved_session_dialog(window: &mut Window, cx: &mut App) {
+    if elevated_window_offers_no_ssh("new_ssh_session") {
+        return;
+    }
     session_dialog::open_session_dialog(window, cx, None, false);
+}
+
+/// M1 (`DEC-0019`): an elevated window has no SSH surface at all.
+///
+/// The guard sits on this crate's **public entry points** — the ones
+/// `WorkspaceCommands` holds pointers to — rather than on each caller, so a menu
+/// row, a key binding and any future caller are all covered by the same `if`
+/// (`IN-0043` MAJ-3).
+fn elevated_window_offers_no_ssh(action_id: &str) -> bool {
+    let denied = !oneterm_actions::action_allowed_when_elevated(action_id);
+    if denied {
+        log::info!("elevated window: refusing to open an SSH surface ({action_id})");
+    }
+    denied
 }
 
 /// `WorkspaceCommands::open_saved_ssh_session` — open the connect dialog for a
@@ -61,6 +78,9 @@ pub fn open_new_saved_session_dialog(window: &mut Window, cx: &mut App) {
 /// since the caller read the list cannot be mistaken for another one; an id
 /// that is gone simply opens nothing.
 pub fn open_saved_ssh_session(id: u64, window: &mut Window, cx: &mut App) {
+    if elevated_window_offers_no_ssh("open_session") {
+        return;
+    }
     let id = SshSessionId::from_raw(id);
     if let Some(session) = SshSessionStore::global(cx).read(cx).get(id).cloned() {
         connect_dialog::open_connect_dialog(session, id, window, cx);

@@ -157,7 +157,7 @@ impl TerminalConfig {
                 // not even the first-run default, because under
                 // over-the-shoulder elevation this directory belongs to another
                 // account and must be left without a trace.
-                if oneterm_core::elevation::is_elevated() {
+                if oneterm_core::elevation::is_restricted() {
                     log::info!(
                         "elevated window: {DOCUMENT_NAME} is absent; using the defaults and writing nothing"
                     );

@@ -116,7 +116,7 @@ impl UiConfig {
                 // elevation this directory belongs to another account and must
                 // be left without a trace; the flag makes the window say once
                 // that it is running on the defaults.
-                if oneterm_core::elevation::is_elevated() {
+                if oneterm_core::elevation::is_restricted() {
                     log::info!(
                         "elevated window: {DOCUMENT_NAME} is absent; using the defaults and writing nothing"
                     );
@@ -183,7 +183,7 @@ impl UiConfig {
 
     /// Save the config to an explicit path for deterministic callers and tests.
     pub fn save_to(&self, path: &Path) -> Result<(), AppError> {
-        if let Some(refusal) = self.write_refusal(oneterm_core::elevation::is_elevated()) {
+        if let Some(refusal) = self.write_refusal(oneterm_core::elevation::is_restricted()) {
             return Err(refusal);
         }
         let mut value = serde_json::to_value(self)?;
@@ -254,7 +254,7 @@ impl UiConfig {
     /// Does nothing (with a warning) while [`Self::persist_blocked`] is set.
     pub fn persist(cx: &App) {
         let snapshot = Self::global(cx).read(cx).clone();
-        if let Some(refusal) = snapshot.write_refusal(oneterm_core::elevation::is_elevated()) {
+        if let Some(refusal) = snapshot.write_refusal(oneterm_core::elevation::is_restricted()) {
             log::warn!("{refusal}");
             return;
         }

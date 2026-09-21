@@ -153,7 +153,7 @@ impl TerminalSettings {
     /// Refused with [`AppError::ConfigLoad`] while [`Self::persist_blocked`] is
     /// set: the file on disk could not be read and may still be the user's.
     pub fn save(&self) -> Result<(), AppError> {
-        if let Some(refusal) = self.write_refusal(oneterm_core::elevation::is_elevated()) {
+        if let Some(refusal) = self.write_refusal(oneterm_core::elevation::is_restricted()) {
             return Err(refusal);
         }
         self.to_config().save()?;
@@ -184,7 +184,7 @@ impl TerminalSettings {
     /// Schedule persistence of the current global settings off the UI thread.
     pub fn persist_global(cx: &App) {
         let settings = Self::global(cx).read(cx);
-        if let Some(refusal) = settings.write_refusal(oneterm_core::elevation::is_elevated()) {
+        if let Some(refusal) = settings.write_refusal(oneterm_core::elevation::is_restricted()) {
             log::warn!("{refusal}");
             return;
         }
