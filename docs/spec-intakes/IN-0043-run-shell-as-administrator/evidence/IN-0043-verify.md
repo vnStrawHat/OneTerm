@@ -610,3 +610,305 @@ Also, three wording notes:
   unexercised, so the non-`ERROR_CANCELLED` notification branch is read, not run.
 - No attempt was made to audit `gpui-component`'s `DockArea::load` beyond its behaviour as
   documented in `load_layout`'s own comment and as observed by the probe.
+
+---
+
+# Re-verification of 24226d4c — 2026-09-21
+
+Target: `feat/elevated-shell` @ `24226d4c`, three commits on `ac6f2928` (the commit that
+carried the findings above). Scope: the four majors and the five minors only, plus the
+question of whether the new security tests are actually run. Same constraints: no UAC
+prompt, the elevated side remains the owner's manual acceptance.
+
+## Verdicts
+
+| Packet | Verdict |
+| --- | --- |
+| **US-0130** | **PASS** |
+| **US-0131** | **PASS** |
+| **US-0132** | **PASS** |
+| **Overall (IN-0043)** | **PASS — accept, subject to the owner's 15-step manual checklist.** All four majors are closed at the root rather than at the reported symptom, and three of the five minors were fixed beyond what was recommended. Six new **minor** items are recorded below; none blocks acceptance, and one of them (NEW-4) is a question the coordinator asked rather than a defect. |
+
+## Per-finding status
+
+| # | Status | Evidence |
+| --- | --- | --- |
+| **MAJ-1** env / cwd crossed the trust boundary | **FIXED** | `trusted_shell_config` builds `LocalShellConfig` field by field with no `..cfg.clone()` (`crates/core/src/config/elevation.rs:256-279`): `env: HashMap::new()`, `cwd: None`, only `kind` and `utf8` cross. `ResolvedShell` gained `cwd` (`shell.rs:144-154`) and `LocalSession::spawn` reads `resolved.cwd`, not `cfg.cwd` (`crates/local-shell/src/session.rs:53-56`). Independently re-probed — see below. Mutation-checked. |
+| **MAJ-2** the right dock was restored from `docks.json` | **FIXED, at the root** | `startup_dock_document` (`mod.rs:60-66`) returns `None` when restricted, so the document is never read; `right_dock`'s `None` arm now calls `remove_dock` (`layout.rs:50-60`, `:115-121`) instead of skipping `set_dock`. Two locks, and the outer one is the one that mattered. Independently re-probed. Mutation-checked. |
+| **MAJ-3** `ctrl-shift-n` opened Quick Connect | **FIXED, and generalised** | `oneterm_actions::elevated_policy`, an exhaustive table with unclassified = denied, consulted at four layers: `apply_key_bindings` (denied actions are **not bound at all**, `state.rs:111-117`), `on_action_new_session` (`actions.rs:127-132`), `session-ui`'s public entry points (`lib.rs:54-90`), and `open_quick_connect_dialog` itself (`quick_connect_dialog.rs:161-167`). Classification audited independently — see below. |
+| **MAJ-4** terminal logging was an elevated arbitrary file write | **FIXED** | `LoggingConfig::gated` forces `enabled = false` when restricted, inside `runtime_config`, the one function both `local_config` and `ssh_config` resolve through (`crates/settings/src/terminal_config/logging.rs:47-73`). The test drives it with `directory = C:\Windows\System32\drivers\etc` and `LogWriteMode::Overwrite`. |
+| **MIN-1** `lpDirectory` is inside the trust boundary | **RESOLVED as documented** | Not changed, which is right; the LLD now states it explicitly as a developer-build-only exposure and a severity multiplier, and adds the standing rule *"a release build must never gain a cwd-relative `config_dir()`"*. |
+| **MIN-2** quarantine renamed the user's file | **FIXED** | One guard in `oneterm_core::persistence::quarantine_file` (`crates/core/src/persistence.rs:143-158`) — the shared function, so `ui_config.json`, `terminal.json` and `docks.json` are covered at once rather than three times. |
+| **MIN-3** the token query failed open | **FIXED, beyond the recommendation** | `Elevation` is three-valued. `Unknown` **is restricted** and its marker reads `OneTerm (elevation unknown)` — the recommendation was only to record the risk; the rework split the two questions correctly, because fail-closed on the restrictions and fail-honest on the marker are not the same answer. `is_elevated()` was **removed** so no seam can be guarded with the weaker predicate: grep confirms zero Rust call sites of `is_elevated` / `set_elevated` remain, and all 17 gate sites read `is_restricted()`. |
+| **MIN-4** settings discarded edits silently; Network page survived M2 | **FIXED** | The Network page is not built when restricted (`crates/settings-ui/src/panel.rs:115-120`) and the settings window carries one warning-coloured line (`:125-133`, `:150-160`). |
+| **MIN-5** three guards called "untestable" | **FIXED, claim retracted** | Five `#[ignore]`d elevated-branch tests now exist, each restoring the global on every exit path including a panic. All five run and pass — see Commands. |
+
+## MAJ-1 re-probe — attacking `Unknown`, not `Elevated`
+
+Every test in the rework flips the switch to `Elevation::Elevated`. `Elevation::Unknown` is
+the new fail-closed branch and is covered only by a unit test of `is_restricted()` itself, so
+this probe drove the **whole spawn path** under `Unknown`. Added temporarily to
+`crates/core/src/config/shell.rs`, run with `--exact --ignored`, then removed.
+
+A `LocalShellConfig` poisoned in every field — `program` = `C:\Users\attacker\evil.exe`,
+`args` = `/c calc`, `env` = `PATH` plus `PSModulePath` plus `COMSPEC` all pointing at the
+attacker, `cwd` = `C:\Users\attacker\stage` — was resolved twice. Unrestricted first, and the
+probe asserts the poison **does** get through there, so a pass cannot come from an inert
+fixture. Then under `Elevation::Unknown`:
+
+```
+test config::shell::verify_probe::probe_no_terminal_json_field_survives_under_unknown_elevation ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 76 filtered out
+```
+
+The assertion is an **exact key-set** equality, not a list of absences: the elevated spawn's
+environment is precisely
+
+```
+["COLORTERM", "LANG", "PROMPT", "TERM", "TERM_PROGRAM", "WSLENV"]
+```
+
+— `base_env()` plus the `cmd` OSC 7 prompt, and nothing else. `program` ends in
+`\System32\cmd.exe`, no configured argument survives, and `cwd` is `None`.
+
+**Every spawn path is covered by that one guard**, confirmed by tracing rather than assumed:
+the five routes — startup default shell (`terminal_panel.rs:241`), `AddPanelWithShell` and
+the "+" menu row (`:247`), `new_terminal_here` (`spaces.rs:113`), split (which creates an
+*empty* Space and fills it through `new_terminal_here`), and duplicate tab
+(`duplicate.rs:124`) — all converge on `TerminalPanel::spawn_local_session`, then the single
+production `LocalSession::spawn` (`crates/app/src/session_factory.rs:24`), then
+`resolve_shell`. A grep for `cfg.` inside `LocalSession::spawn` now returns **nothing**: the
+spawner reads only `resolved`, which is what makes the one guard complete.
+
+## MAJ-2 re-probe — also under `Unknown`
+
+The same attack as the original probe, under `Elevation::Unknown`: a pre-built `ssh_client`
+right dock standing in for what `load_layout` used to leave behind, then the restore gate and
+the center reset.
+
+```
+test layout::workspace::layout_tests::probe_unknown_elevation_also_has_no_right_dock_and_reads_no_layout ... ok
+```
+
+The injected reader panics if called and was not called; `has_dock(Right)` is false
+afterwards; the dumped `DockAreaState` carries no right dock and its JSON names neither
+`ssh_client` nor `sftp`. The assertion that used to pass — *the dock is still there* — now
+fails, which is the point.
+
+## MAJ-3 — the classification, audited independently
+
+I extracted both policy tables and the full `BINDABLE_ACTIONS` id list and compared them as
+sets rather than trusting the exhaustiveness test:
+
+- **38 bindable ids, 13 denied, 25 allowed, 38 classified.** No id unclassified, no id in
+  both tables, no id in a table that is not bindable.
+- **Denied**, and I agree with every one: `new_ssh_session`, `open_session`,
+  `delete_session`, `session_property`, and all nine `sftp_*`.
+- **Allowed**, and I agree with every one: the four `split_*`, `new_terminal_tab`,
+  `close_panel`, `close_space`, `toggle_zoom`, `find`, the four `terminal_*`
+  (`clear`, `copy`, `paste`, `select_all`), the seven input-channel ids, `toggle_gutter`,
+  `open_settings`, `about`, `quit`, `duplicate_session`.
+- **`duplicate_session` is the only one worth arguing**, and allowing it is right: it reopens
+  the *active tab's* live session, every tab in an elevated window is a local shell, and the
+  local branch spawns through `resolve_shell` (`duplicate.rs:121-126`) and is therefore
+  covered by MAJ-1's guard.
+- **No Agent action is bindable at all**, so there is nothing to deny there; the Agent panel
+  is unreachable through the right dock, which no longer exists.
+
+**Rows as well as keys.** The "+" menu returns after the three shells when restricted
+(`terminal_panel.rs:761-763`), so Quick Connect and New Saved Session have no row; the
+session tree's and the SFTP browser's context menus live on panels that are not built. So for
+every denied action both the row and the key are gone, not just the key.
+
+**`apply_key_bindings` is the strongest of the four layers** and it is correct in a way worth
+recording: it first strips *every* rebindable action's default from the kit snapshot
+(`state.rs:104-109`) and then re-adds only the allowed ones, so a denied action ends with
+**no binding at all** — including a user's own `ui_config.json` override, which the handler
+guards alone would never have seen.
+
+## New findings — all minor, none blocking
+
+- **NEW-1 (doc, normative).** The LLD's **Interfaces** block still declares the removed API:
+  `pub fn set_elevated(value: bool)`, `pub fn is_elevated() -> bool` and
+  `pub(crate) fn process_is_elevated() -> bool`
+  (`low-level-design/elevated-instance.md:500-517`), with `bool` signatures that contradict
+  the three-valued `Elevation` the same document now describes in its error table. The
+  start-up sequence (`:33`, `:76`, `:94`), section 7's prose (`:373`, `:395`) and one seam row
+  (`:417`) name `is_elevated()` too. The behavioural prose was reconciled thoroughly; the
+  interface contract was not. Worth one pass before the intake closes.
+- **NEW-2 (doc, user-facing).** `README.md:126-128` says `docks.json` is among the files
+  "read and never written". It is no longer **read** in an elevated window, and the visible
+  consequence — an administrator window never restores your saved layout, every time, by
+  design — is the load-bearing half of the MAJ-2 fix and is not stated for users.
+- **NEW-3 (defence in depth).** `open_duplicate_ssh_dialog` is the one `session-ui` public
+  entry point the policy does not consult; the other three do. It is unreachable today (no
+  SSH tab can exist in an elevated window), but the policy table's own comment rejects
+  exactly that reasoning for the `sftp_*` ids — *"'unreachable' is a property of the current
+  layout and this is a property of the action"*. One `if`, for consistency with the rule the
+  table states about itself.
+- **NEW-4 (the coordinator's question).** The five security tests are `#[ignore]`d and neither
+  `ci-local` nor CI runs them. Assessed below.
+- **NEW-5 (behaviour, undocumented).** Because `trusted_shell_config` sets `cwd: None`,
+  Duplicate-tab and `new_terminal_here` in an elevated window no longer inherit the live
+  OSC 7 working directory (`duplicate.rs:121` sets it, the guard discards it). That is the
+  correct security answer and a real behaviour change a user will notice; it is documented
+  nowhere.
+- **NEW-6 (doc).** `docs/agents/persistence.md` — the document `AGENTS.md` tells every agent
+  to read *before changing persisted schemas or storage mechanics* — has **no** mention of
+  elevation, although this branch made a whole class of writes conditional, suppressed
+  quarantine, and stopped one document being read. One paragraph there would put the rule
+  where the next agent will look for it.
+
+## NEW-4 — should CI run the five ignored tests? Yes. Recommendation below
+
+**The problem is real.** The five tests are the only automated proof of the MAJ-2 restore
+gate and of three M4 guards. `cargo test --workspace` skips them, so today a regression in
+any of the five is caught by **nothing**. That is worse than before the rework in one narrow
+sense: previously the guards were untested and the packet said so; now they are tested and a
+reader will reasonably assume CI covers them.
+
+**A blanket `cargo test --workspace -- --ignored` is not the answer.** Measured here: the
+workspace has **17** ignored tests, and the set is heterogeneous by design — benchmarks,
+release-only measurements, visual-review-only tables, and
+`session_orphan_tests::orphan_liveness_table`, whose own reason says it *"spawns real cmd.exe
+processes and can take minutes"*. Running all of them in CI would be slow and noisy.
+
+**A dedicated test binary with a process-per-test harness (the second option asked about) is
+not worth it.** The five tests assert against `save_state_to`, `persist_update_config`,
+`startup_dock_document` and `apply_center_reset`, all of which are private or `pub(crate)`.
+Moving them to `tests/` means widening visibility purely to accommodate a test — which is
+precisely the *"removing a validation"* risk this packet's own risk list names — plus a custom
+`harness = false` re-exec shim to maintain. Reach for it only if the count grows past a
+handful.
+
+**Recommended, and measured here: three scoped invocations, not five.** The `#[ignore]`
+reason says *"run alone with `--exact`"*, which is stronger than the tests actually need.
+`--ignored` already selects only the ignored tests, and `--test-threads=1` makes them
+sequential in one process; each restores the global on `Drop` before the next starts. I ran
+it:
+
+```
+cargo test -p oneterm-workspace   --lib -- --ignored --test-threads=1
+  -> test result: ok. 3 passed; 0 failed; 36 filtered out
+cargo test -p oneterm-session-ui  --lib -- --ignored --test-threads=1
+  -> test result: ok. 1 passed; 0 failed; 77 filtered out
+cargo test -p oneterm-settings-ui --lib -- --ignored --test-threads=1
+  -> test result: ok. 1 passed; 0 failed; 54 filtered out
+elapsed: 15.4s wall for all three, of which the tests themselves are 0.01s
+```
+
+All five, in three lines, for fifteen seconds of a gate that already takes minutes. Three
+lines beat five because a *new* elevation test added to one of those crates is picked up
+automatically, where a hand-written list of five test names silently would not be. The three
+crates contain no other ignored tests today; if one later gains an unrelated ignored
+benchmark it would join the run, which fails in the "CI got slower" direction rather than the
+"a security check stopped running" direction — the right way round.
+
+**Add one census line to close the rot.** The scoping above still assumes somebody puts a new
+elevation test in one of those three crates. Make that assumption checkable:
+
+```
+cargo test --workspace -- --ignored --list   # 17 today
+```
+
+diffed against a checked-in list, so **any** new ignored test anywhere fails the gate until
+someone records it and decides whether it belongs in the elevation run. That is the same
+"exhaustive table, unclassified fails the build" pattern this rework just used for
+`elevated_policy`, applied to the ignore list — and it is one line plus one small text file.
+
+**Where to put it.** `scripts/ci-local.ps1` and `scripts/ci-local.sh`, immediately after
+`cargo test --workspace`; and in `.github/workflows/ci.yml` in the **Full workspace quality
+gate** job after its `cargo test --workspace` (line 122). No Windows job is needed: all five
+tests are platform-independent — they drive pure logic and gpui's `TestAppContext`, with no
+`cfg(windows)` in them — and that job already installs the GPUI Linux dependencies.
+
+**Also worth doing, since it is free:** relax the `#[ignore]` reason text from *"run alone
+with `--exact`"* to *"run with `--ignored --test-threads=1`"*, so the next maintainer reads
+the convention that matches what the gate does.
+
+## Commands
+
+All at `24226d4c`, `$env:CARGO_BUILD_JOBS=6`.
+
+```
+cargo test -p oneterm-core -p oneterm-app -p oneterm-actions -p oneterm-settings \
+           -p oneterm-settings-ui -p oneterm-session-ui -p oneterm-terminal-view \
+           -p oneterm-workspace -p oneterm-local-shell
+  -> exit 0. oneterm-core 76, oneterm-actions 20, oneterm-session-ui 77 (+1 ignored),
+     oneterm-settings-ui 54 (+1 ignored), oneterm-terminal-view 353 (+3 ignored),
+     oneterm-workspace 36 (+3 ignored), oneterm-settings 49, oneterm-app 33 (+2 ignored).
+     0 failed in every binary.
+```
+
+The five ignored security tests, each run alone with `--exact --ignored`:
+
+```
+oneterm-workspace   an_elevated_window_never_reads_the_saved_layout                  -> ok. 1 passed
+oneterm-workspace   the_elevated_startup_path_yields_a_dock_state_with_no_right_dock -> ok. 1 passed
+oneterm-workspace   an_elevated_window_writes_no_dock_layout                         -> ok. 1 passed
+oneterm-session-ui  an_elevated_window_writes_no_saved_sessions                      -> ok. 1 passed
+oneterm-settings-ui an_elevated_window_queues_no_update_config_write                 -> ok. 1 passed
+```
+
+Mutation testing — one per major fix, each caught by the named test, both restored
+(`git status` clean afterwards):
+
+| Mutation | Test that failed | Assertion |
+| --- | --- | --- |
+| `trusted_shell_config` keeps `env: cfg.env.clone()` | `config::elevation::tests::an_elevated_config_keeps_no_field_of_the_configured_one` | *"no configured environment entry may survive: PATH and PSModulePath decide what runs"* |
+| `right_dock`'s `None` arm skips `remove_dock` | `layout_tests::the_elevated_startup_path_yields_a_dock_state_with_no_right_dock` | *"an elevated window must have no right dock"* |
+
+```
+pwsh scripts/ci-local.ps1
+  -> exit 0, final line: ci-local: all checks passed.
+     English contributor-text check passed for 981 files.
+     check-theme-contrast: 1365 pairings, all >= 4.5:1 (untouched, as before).
+     THIRD-PARTY-NOTICES.md is up to date.
+```
+
+## The 15-step manual checklist — re-reviewed
+
+Every correction from section 6 above was taken, and two of them were taken further than
+suggested: step 1 now **creates** the `docks.json` precondition instead of merely asserting
+one, and step 2 records `before-names.txt` alongside the hashes so a quarantine **rename** is
+visible where a same-path hash comparison would have reported only "file not found". Step
+12's "only `crashes\elevated\` may be new" is now correct and falsifiable, where the old step
+9 would have failed every run. Steps 5 and 8 are new and directly exercise MAJ-1, MAJ-3 and
+MAJ-4 — all three would have failed on the previous branch, which is the property a checklist
+step should have.
+
+Three small additions, none blocking:
+
+1. **Nothing exercises the *allowed* side of the policy table.** The packet's own risk 4 is
+   *"a guard whose condition is wrong in the other direction"*, and `apply_key_bindings`
+   filtering is exactly where that could happen: a table typo would silently unbind `Ctrl+T`,
+   copy and paste, or the splits in the elevated window, and no manual step would notice. Add
+   one line to step 6: *"in the elevated window confirm `Ctrl+T` opens a tab,
+   `Ctrl+Shift+C` / `Ctrl+Shift+V` copy and paste, and a split works."*
+2. **Step 5's MAJ-1 check should name `PSModulePath`.** It checks `PATH` and `cwd`; the
+   PowerShell-specific vector is `PSModulePath`, which autoloads a module on the first
+   unresolved command. Put it in the `terminal.json` fixture alongside `PATH` and check it in
+   the elevated PowerShell tab.
+3. **Step 8 would be sharper against a file that already exists.** "The directory must
+   contain no new file" catches creation; pointing `logging.directory` at a directory holding
+   a file with known content, and re-hashing it afterwards, also catches the `Overwrite`
+   truncation, which is the destructive half of MAJ-4.
+
+And one note rather than a change: **`Elevation::Unknown` has no manual step and should not
+have one** — the token query cannot be made to fail by hand. It is covered by
+`an_unknown_token_is_restricted_but_claims_no_elevation` and, end to end, by the two probes
+above. Worth one sentence in the checklist's preamble so its absence reads as deliberate.
+
+## Gaps in this re-verification
+
+- **The elevated side is still unrun**, for the same reason. Everything about a
+  high-integrity process is reading, unit tests, and probes that set the process global in a
+  test binary.
+- **No GUI walk this round.** The non-elevated walk in section 5 was performed against
+  `0ac3f8dc`; nothing in this rework changes the unelevated rendering path, and `ci-local`
+  covers the build. `target/fast-dev` was not rebuilt.
+- **MAJ-4 is proven at the gate, not at the file system.** The test asserts
+  `enabled == false`; nobody watched a log file fail to appear, because that needs an
+  elevated window. Checklist step 8 is the closing evidence.
+- Over-the-shoulder elevation, Group Policy denial and a real `ShellExecuteExW` failure
+  remain unexercised, as before.
