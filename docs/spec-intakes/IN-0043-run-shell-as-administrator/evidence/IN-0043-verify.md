@@ -1243,3 +1243,214 @@ crates/workspace/src/layout/workspace/layout_tests.rs    -> Theme::warning for a
   the suffix element, which renders nothing at all when the window is not restricted.
 - Over-the-shoulder elevation, Group Policy denial and a real `ShellExecuteExW` failure
   remain unexercised, as in both earlier sections.
+
+---
+
+# Re-verification of bc993b76 — 2026-09-21
+
+Target: `feat/elevated-shell` @ `bc993b76`, one commit (`fix(theme): warning.background is the
+key the kit reads`) on the section above. Scope: **MAJ-5 and the four minors only** — NEW-7,
+NEW-8, NEW-9, NEW-10. Nothing else was re-examined; deltas 1-3 were passed in the section
+above and are unchanged by this commit. Same constraints: no UAC prompt, no elevated process,
+no `oneterm.exe` enumerated.
+
+## Verdict
+
+| Item | Verdict |
+| --- | --- |
+| **MAJ-5** the highlight was inert | **FIXED, at the root and with the right judgement.** All 39 variants now carry `colors["warning.background"]`; the rendered colour equals the file's value in every one of them; **0 of 117** foreground/surface pairings are below 4.5:1, measured from the renderer rather than from the JSON. 16 variants took a lightness-only move of their own hue, 23 had their existing colour written out verbatim. |
+| **NEW-7** the other `warning` surfaces | **FIXED.** `background` and `popover.background` joined `title_bar.background`, each with its draw site; 1482 pairings. |
+| **NEW-8** no debounce | **FIXED.** One `AtomicBool`, `swap`-acquired, released on every exit path this session could find, including thread-spawn failure. One residual path, benign — below. |
+| **NEW-9** the `Unknown` reason was unloggable | **FIXED, and better than suggested.** `Elevation::Unknown(&'static str)` carries *why*, and `run()` logs it once the logger exists. |
+| **NEW-10** quit while the prompt is up | **RESOLVED as documented**, in the LLD's edge-case list, with the reason it is harmless. |
+| **Overall** | **PASS — accept `bc993b76`.** The one finding that blocked the previous section is closed and independently re-measured. Two new minors, neither blocking: NEW-11 (a stale LLD line, three rows above one the same commit added) and NEW-12 (the kit's own `Default Light`, which the theme menu offers and the gate cannot see, still renders the marker at 1.81:1). |
+
+---
+
+## MAJ-5 — re-measured, not re-read
+
+**The key.** All 24 theme files, 39 variants: every one now has
+`"warning.background"` **inside its own `colors` object**, and not one retains a bare
+`colors["warning"]` — checked by parsing each file rather than by reading the diff. Four
+variants already had `colors["warning.background"]` before this commit (Aurora Light, Kibble,
+Zed One Dark, Zed One Light), which is why two of them show a deletion and no addition: the
+dead key was simply removed. That also corrects one sentence in the section above — the
+pre-fix rendered value was each theme's `base.yellow` for 35 of 39 variants, and those four
+were already rendering their own live `warning.background`. The conclusion is unchanged; the
+mechanism had two sources, not one.
+
+**The highlight block is untouched.** Every theme file was diffed against `main` by parsing
+both and comparing the `highlight` object: **no variant's highlight style differs**. And a
+line-level diff of `7be70bd7..bc993b76` across all 24 files contains nothing but
+`"warning"` / `"warning.background"` lines — no collateral edit anywhere. (The packet records
+two earlier attempts that did corrupt the syntax colours; neither survives here.)
+
+**The runtime probe, over three surfaces.** A probe added to `crates/theme/src/theme.rs`
+(removed afterwards; `git status` clean) drove the kit's real `Theme::apply_config` over every
+registered variant and read back `Theme::warning`, `title_bar`, `background` and `popover`:
+
+- **rendered == the file's value, in all 39** — not one mismatch, so the key is live;
+- all four colours came back fully opaque, so no compositing is hidden behind the numbers;
+- feeding the 39 × 3 = **117** pairings through a WCAG 2.1 ratio written for this review:
+  **0 below 4.5:1**. Worst eight: Fahrenheit 4.58 (title bar), Hybrid Light / Mellifluous
+  Light / Solarized Light 4.60, Flexoki Light / Gruvbox Light 4.61, Ayu Light 4.62 on both
+  popover and title bar. Thin margins by design — the packet's stated rule is the smallest
+  move that clears the floor — but above it on every surface.
+
+**Exactly 16 colour changes, and they are lightness-only.** Comparing each variant's new value
+against what the previous section measured it rendering: **23 verbatim, 16 changed**. Converted
+to HSL, the 16 moves are:
+
+- hue drift: 15 of 16 at **0.5° or less**, the sixteenth (Solarized Light) at 1.6°;
+- saturation drift: **0.7 percentage points or less**, all 16;
+- lightness: the whole of the change, from -32.9 pp (Everforest Light) to +12.2 pp
+  (Solarized Dark).
+
+So each theme kept its own hue, which is the judgement the packet argues for and which the
+rework's original instruction (one generic `#facc15` across 27 variants) would have destroyed
+— across the toasts, agent cards, terminal alerts and settings notes as well as the new marker.
+The 16 that moved are exactly the 16 the previous section measured below the floor.
+
+**The permanent test catches the original bug.** `warning_is_the_value_the_theme_file_names`
+(`crates/theme/src/theme.rs`) drives `apply_config` and compares `Theme::warning` against the
+literal the file names, for one light and one dark variant. Mutated by renaming
+`warning.background` back to `warning` in `ayu.json` — the exact mistake — and it failed:
+
+```
+Ayu Light: the file names #955d0b but the kit renders
+Hsla { h: 0.09920636, s: 0.85714287, l: 0.6156863, a: 1.0 }
+  -- the key in `colors` is not one `ThemeConfigColors` reads
+```
+
+That `Hsla` is `#f1ad49`, the `base.yellow` fallback: the test reports not just failure but the
+mechanism. **And the gate has a second, independent guard**: under the same mutation
+`check-theme-contrast.py` aborts with
+`ValueError: warning.background: the theme does not define it and the kit has no fallback`,
+because `warning.background` deliberately has no `FALLBACKS` entry. A misspelling now has to
+get past a value comparison *and* a missing-token error. (Cosmetic: the script reports that as
+an uncaught traceback rather than a formatted failure.)
+
+## NEW-7 — the other surfaces
+
+`SURFACES` now carries `"warning.background": ("title_bar.background", "background",
+"popover.background")`, and the comment above it names a draw site for each: the elevation
+suffix for the title bar; the settings read-only note, the key-bindings notice, the
+port-forwarding warning, the terminal warning line and `Alert::warning`, and the Agent card's
+Blocked/Stale colour for `background`; a `Warning` notification's body for the popover. Those
+are the sites the previous section listed, all of them. 39 × 3 = 117 new pairings, and
+**1404 + 78 = 1482** — the number the gate reports. The comment also records the trap itself
+(`ThemeConfigColors` renames, `HighlightThemeStyle` does not, no `deny_unknown_fields`), which
+is the half a future reader will need.
+
+## NEW-8 — the debounce, and its one residual path
+
+`LAUNCH_IN_FLIGHT: AtomicBool`, acquired with `swap(true, SeqCst)` rather than load-then-store,
+so two clicks dispatched in the same frame cannot both see `false`. Released on:
+
+1. **thread-spawn failure** — `store(false)` immediately before the `report(..)`, so a failed
+   launch does not wedge the menu row for the session (this is the path the instruction asked
+   about, and it is covered);
+2. **the outcome arriving** — `store(false)` is placed *after* the `await` and *before* the
+   `Ok(..)` match, so it runs for `Err` (helper thread died) as well as for
+   `Started` / `Declined` / `Failed`.
+
+The two early returns that precede the `swap` — an unelevatable `ShellKind`, and
+`ElevationRequest::build` failing — never acquire it, so they cannot leak it. I traced every
+`return` in the function.
+
+**The one path that does leak it**: if the foreground `window.spawn` task is dropped before
+`recv()` resolves — the window closed while the consent prompt is up — the `store(false)` never
+runs and the flag stays `true`. It is benign here: OneTerm opens exactly one window
+(`crates/app/src/window.rs:50`, the only `cx.open_window` in the workspace), so losing it means
+the process is going away. Worth one line in the LLD if a second window is ever added.
+
+The test, `a_second_click_is_ignored_while_a_prompt_is_outstanding`, is honest but thin:
+`should_start_launch(in_flight) = !in_flight`, so the test asserts `!`. What could actually
+break — `swap` versus load-then-store, and the release placement — has no test and was verified
+by reading. That is a reasonable trade for a path that needs two clicks and a UAC dialog to
+reach, and it is recorded here rather than left implied.
+
+## NEW-9 — the reason survives to the logger
+
+`Elevation::Unknown` became `Unknown(&'static str)` carrying which call failed
+(`OpenProcessToken(TOKEN_QUERY) failed` / `GetTokenInformation(TokenElevation) failed`), and
+`run()` emits one `log::error!` naming it immediately after `env_logger …init()`
+(`crates/app/src/lib.rs:120-125`), beside the existing "report the command line now" line. The
+`log::error!` calls that could never be emitted are gone from `process_elevation`, with a
+comment saying why. The payload is kept in a `OnceLock` beside the `AtomicU8` rather than
+squeezed into it, and `elevation()` falls back to `"reason not recorded"` if it is somehow
+unset. `an_unknown_elevation_carries_its_reason` covers the accessor, and the four existing
+`Unknown` tests were updated rather than deleted. Fail-closed is unchanged: `is_restricted()`
+is still `!matches!(self, NotElevated)`, so a payload cannot alter the security answer.
+
+## NEW-10 — documented
+
+The LLD's edge-case list gains the case, with the reason it is harmless: the verb, the
+executable and the one-token parameter were all fixed before the thread started, so an approval
+after the launcher dies produces a normal elevated OneTerm and loses only the `log::info!`.
+
+## New findings — both minor
+
+- **NEW-11 (doc, contradicts the code).** The same LLD edge-case list still reads
+  *"**Token query failure.** Treated as not elevated, logged at `error`."*
+  (`low-level-design/elevated-instance.md:609`) — three lines above the NEW-8 row this commit
+  added. `Elevation::Unknown` is **restricted**, not "treated as not elevated"; that is the
+  MIN-3 fix from two rounds ago, and this line is the pre-fix wording surviving in the one
+  document a future reader consults for the edge cases. The "logged at `error`" half is true
+  again as of NEW-9. One line to correct.
+- **NEW-12 (real, out of the gate's reach).** The theme menu lists **every** theme in the
+  registry (`crates/workspace/src/layout/app_menus.rs:128`, `sorted_themes()`), which includes
+  the kit's own `Default Light` and `Default Dark` registered by `gpui_component::init`. The
+  probe measured `Default Light`'s `warning` at `#eab308` on a `#f8f8f8` title bar —
+  **1.81:1**, and 1.92:1 on its `background`. The packet discloses this honestly and calls it
+  out of scope, which is right for the gate (`check-theme-contrast.py` globs
+  `crates/theme/themes/` only) but not for the user: a selectable theme renders the elevation
+  marker illegibly. `Default Dark` is fine at 11.71:1. Cheapest fix in the shape this crate
+  already uses: an override in `oneterm_theme::init`, beside `apply_list_style_override`.
+
+## Commands
+
+All at `bc993b76`, `$env:CARGO_BUILD_JOBS=6`.
+
+```
+cargo test -p oneterm-theme -p oneterm-app -p oneterm-workspace
+  -> exit 0. oneterm-app 25 (was 24: +the debounce test),
+     oneterm-theme 3 (was 2: +warning_is_the_value_the_theme_file_names),
+     oneterm-workspace 36 (+3 ignored). 0 failed in every binary.
+
+python scripts/check-theme-contrast.py
+  -> check-theme-contrast: 1482 foreground/surface pairings across 390 token/variant rows,
+     all >= 4.5:1; primary text out-reads muted.foreground on all 585 shared-surface
+     comparisons
+
+pwsh scripts/ci-local.ps1
+  -> exit 0, final line: ci-local: all checks passed.
+```
+
+Mutation, reverted immediately (`git status` clean):
+
+```
+crates/theme/themes/ayu.json: "warning.background" -> "warning" (the original bug)
+  -> theme::tests::warning_is_the_value_the_theme_file_names FAILED
+  -> scripts/check-theme-contrast.py ValueError: warning.background: the theme does not
+     define it and the kit has no fallback
+```
+
+Probe, added temporarily and removed (`git status` clean): `crates/theme/src/theme.rs`,
+`apply_config` over every registered variant, reading `Theme::{warning, title_bar, background,
+popover}`. `target/fast-dev` was not built, so there was nothing to delete.
+
+## Gaps
+
+- **The elevated side is still unrun**, for the same reason as every section above: the consent
+  prompt is drawn on the secure desktop. NEW-8's debounce in particular is proven by reading
+  and by a test of `!`; nobody has double-clicked the row with a prompt up.
+- **MAJ-5 is closed at the token, not at the pixel.** The probe reads the `Hsla` the renderer
+  uses and the ratios are computed from it; no screenshot of an elevated window on a light
+  theme exists, and taking one needs an elevated window.
+- **The margins are thin.** Six of the 16 corrected variants sit between 4.58 and 4.62 on their
+  worst surface. That is the packet's stated rule (smallest move that clears the floor), but it
+  means any future change to a `title_bar.background`, `background` or `popover.background` in
+  those themes will fail the gate — which is the gate working, and worth expecting.
+- Over-the-shoulder elevation, Group Policy denial and a real `ShellExecuteExW` failure remain
+  unexercised, as in every section above.
