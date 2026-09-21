@@ -111,6 +111,17 @@ impl UiConfig {
                 Self::default()
             })),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // M4 (`DEC-0019`): an elevated window writes no configuration —
+                // not even the first-run default. Under over-the-shoulder
+                // elevation this directory belongs to another account and must
+                // be left without a trace; the flag makes the window say once
+                // that it is running on the defaults.
+                if oneterm_core::elevation::is_elevated() {
+                    log::info!(
+                        "elevated window: {DOCUMENT_NAME} is absent; using the defaults and writing nothing"
+                    );
+                    return Ok(Self::defaults_with_persist_blocked());
+                }
                 let cfg = Self::default();
                 match serde_json::to_string_pretty(&cfg) {
                     Ok(json) => match atomic_write(path, json.as_bytes()) {
@@ -144,6 +155,26 @@ impl UiConfig {
         )
     }
 
+    /// Why this write is refused, or `None` when it may go ahead.
+    ///
+    /// Two reasons, and they are not the same one: the file could not be read
+    /// and may still be the user's (CORR-61), or this is an elevated window,
+    /// which reads configuration and writes none of it (`DEC-0019` M4). Both
+    /// shared write entry points ask here, so neither reason can be honoured in
+    /// one and missed in the other.
+    ///
+    /// `elevated` is a parameter rather than a read of the process global so the
+    /// rule can be tested without flipping process state under the other tests.
+    fn write_refusal(&self, elevated: bool) -> Option<AppError> {
+        if elevated {
+            return Some(AppError::config_load(
+                DOCUMENT_NAME,
+                "an elevated OneTerm window writes no configuration",
+            ));
+        }
+        self.persist_blocked.then(Self::persist_blocked_error)
+    }
+
     /// Save the config to `ui_config.json` (pretty-printed). Refused with
     /// [`AppError::ConfigLoad`] while [`Self::persist_blocked`] is set.
     pub fn save(&self) -> Result<(), AppError> {
@@ -152,8 +183,8 @@ impl UiConfig {
 
     /// Save the config to an explicit path for deterministic callers and tests.
     pub fn save_to(&self, path: &Path) -> Result<(), AppError> {
-        if self.persist_blocked {
-            return Err(Self::persist_blocked_error());
+        if let Some(refusal) = self.write_refusal(oneterm_core::elevation::is_elevated()) {
+            return Err(refusal);
         }
         let mut value = serde_json::to_value(self)?;
         set_schema_version(&mut value, CURRENT_SCHEMA_VERSION)?;
@@ -223,8 +254,8 @@ impl UiConfig {
     /// Does nothing (with a warning) while [`Self::persist_blocked`] is set.
     pub fn persist(cx: &App) {
         let snapshot = Self::global(cx).read(cx).clone();
-        if snapshot.persist_blocked {
-            log::warn!("{}", Self::persist_blocked_error());
+        if let Some(refusal) = snapshot.write_refusal(oneterm_core::elevation::is_elevated()) {
+            log::warn!("{refusal}");
             return;
         }
         cx.background_executor()
@@ -326,6 +357,25 @@ mod tests {
         let restored = UiConfig::load_from(&path).unwrap();
         assert_eq!(restored.theme_name, config.theme_name);
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// M4 (`DEC-0019`): an elevated window reads `ui_config.json` and writes
+    /// none of it back, whatever the file's own state was.
+    #[test]
+    fn an_elevated_window_refuses_to_write_a_perfectly_readable_config() {
+        let readable = UiConfig::default();
+        assert!(readable.write_refusal(false).is_none());
+        let refusal = readable
+            .write_refusal(true)
+            .expect("an elevated window must not write ui_config.json");
+        assert!(refusal.to_string().contains("elevated"));
+        // ...and the unreadable-file refusal still stands on its own reason.
+        let blocked = UiConfig::defaults_with_persist_blocked();
+        assert!(
+            blocked
+                .write_refusal(false)
+                .is_some_and(|error| error.to_string().contains("could not be read"))
+        );
     }
 
     #[test]

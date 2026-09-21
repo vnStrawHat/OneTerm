@@ -18,8 +18,25 @@ use super::{config::update_preference, state::UpdateUiState};
 const CHANNEL_STABLE: &str = "stable";
 const CHANNEL_PREVIEW: &str = "preview";
 
+/// The one line the Updates group shows in an elevated window (`DEC-0019` M2).
+pub(crate) const ELEVATED_UPDATES_TEXT: &str =
+    "Updates are checked and installed from the normal OneTerm window.";
+
 /// Build the About-page update group.
+///
+/// In an elevated window the group is that one sentence: no preferences, no
+/// status, no button. Disabling the controls would say the same thing less
+/// clearly and still leave something to click.
 pub(crate) fn group(cx: &App) -> SettingGroup {
+    if oneterm_core::elevation::is_elevated() {
+        return SettingGroup::new()
+            .title("Updates")
+            .item(SettingItem::render(|_options, _, cx| {
+                Label::new(ELEVATED_UPDATES_TEXT)
+                    .text_color(cx.theme().muted_foreground)
+                    .into_any_element()
+            }));
+    }
     let state = UpdateUiState::global(cx).read(cx).clone();
     let config = UpdateUiState::config(cx).read(cx).clone();
     let mut items = vec![

@@ -36,9 +36,8 @@ pub(crate) fn apply_center_reset(
     cx: &mut App,
 ) -> Option<DockAreaState> {
     let center_panel = super::build_named_panel(panel_names::TERMINAL, &dock_area, window, cx)?;
-    let right_panel = super::build_named_panel(panel_names::SSH_CLIENT, &dock_area, window, cx)?;
+    let right = right_dock(&dock_area, window, cx)?;
     let center = DockLayout::v_split().child(DockLayout::tabs().panel_view(center_panel, cx), None);
-    let right = DockLayout::tabs().panel_view(right_panel, cx);
 
     dock_area
         .update(cx, |view, cx| {
@@ -48,12 +47,36 @@ pub(crate) fn apply_center_reset(
                 window.viewport_size().width,
             );
             view.set_center(center, window, cx);
-            view.set_dock(DockPlacement::Right, right, window, cx);
-            view.set_dock_size(DockPlacement::Right, right_size, window, cx);
-            view.set_dock_collapsible(DockPlacement::Right, true, window, cx);
+            if let Some(right) = right {
+                view.set_dock(DockPlacement::Right, right, window, cx);
+                view.set_dock_size(DockPlacement::Right, right_size, window, cx);
+                view.set_dock_collapsible(DockPlacement::Right, true, window, cx);
+            }
             view.dump(cx)
         })
         .ok()
+}
+
+/// The right dock's content, or `None` when this window has no right dock.
+///
+/// M1 (`DEC-0019`): an elevated window runs local shells and nothing else, so
+/// the SSH Client panel is **not built** and `set_dock(Right, ..)` is never
+/// called — not built and hidden, but absent. `sync_right_dock_mode` and
+/// `apply_right_dock_width` both early-return on `!has_dock(Right)`, so no
+/// further guard is needed.
+///
+/// The outer `Option` is the caller's existing "the dock area is gone" signal;
+/// the inner one is the elevation gate.
+fn right_dock(
+    dock_area: &gpui::WeakEntity<DockArea>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Option<DockLayout>> {
+    if oneterm_core::elevation::is_elevated() {
+        return Some(None);
+    }
+    let panel = super::build_named_panel(panel_names::SSH_CLIENT, dock_area, window, cx)?;
+    Some(Some(DockLayout::tabs().panel_view(panel, cx)))
 }
 
 /// Build the default OneTerm layout: center = terminals, right dock = SSH client.
@@ -67,13 +90,10 @@ pub(crate) fn reset_default_layout(
     else {
         return;
     };
-    let Some(right_panel) =
-        super::build_named_panel(panel_names::SSH_CLIENT, &dock_area, window, cx)
-    else {
+    let Some(right) = right_dock(&dock_area, window, cx) else {
         return;
     };
     let center = DockLayout::v_split().child(DockLayout::tabs().panel_view(center_panel, cx), None);
-    let right = DockLayout::tabs().panel_view(right_panel, cx);
 
     let default_size =
         super::clamp_right_dock_width(DEFAULT_RIGHT_DOCK_WIDTH, window.viewport_size().width);
@@ -81,9 +101,11 @@ pub(crate) fn reset_default_layout(
         .update(cx, |view, cx| {
             view.set_version(Some(MAIN_DOCK_VERSION), cx);
             view.set_center(center, window, cx);
-            view.set_dock(DockPlacement::Right, right, window, cx);
-            view.set_dock_size(DockPlacement::Right, default_size, window, cx);
-            view.set_dock_collapsible(DockPlacement::Right, true, window, cx);
+            if let Some(right) = right {
+                view.set_dock(DockPlacement::Right, right, window, cx);
+                view.set_dock_size(DockPlacement::Right, default_size, window, cx);
+                view.set_dock_collapsible(DockPlacement::Right, true, window, cx);
+            }
             view.dump(cx)
         })
         .ok()

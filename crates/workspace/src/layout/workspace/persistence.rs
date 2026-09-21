@@ -163,7 +163,18 @@ fn persistence_compatible_state(state: &DockAreaState) -> DockAreaState {
 }
 
 /// Persist a background snapshot and retain an actionable diagnostic on failure.
+///
+/// Writes nothing from an elevated window (`DEC-0019` M4): the one writer of
+/// `docks.json` stays the unelevated instance, so an elevated session leaves the
+/// user's layout — and, under over-the-shoulder elevation, the administrator's
+/// profile — exactly as it found them. The guard is here rather than at the four
+/// call sites (`mod.rs`'s debounce and its two exit hooks, both layout resets)
+/// so a fifth writer added later is covered by construction.
 pub(crate) fn save_state_logged(state: &DockAreaState, zoomed_panel: Option<&str>, trigger: &str) {
+    if oneterm_core::elevation::is_elevated() {
+        log::debug!("elevated window: not writing the dock layout [trigger={trigger}]");
+        return;
+    }
     if let Err(error) = save_state(state, zoomed_panel, trigger) {
         log::error!("failed to persist dock state [trigger={trigger}]: {error:#}");
     }

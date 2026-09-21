@@ -159,6 +159,10 @@ impl OneTermWorkspace {
     /// Precondition: the composition root has initialised the shared globals
     /// (`AppState`, `UiConfig`, `AppServices`) before the window opens.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // An elevated window is a deliberately smaller application: local shells
+        // only, marked, and writing no configuration (`DEC-0019` M1/M4/M5). Read
+        // from the process token, never from a launch argument.
+        let elevated = oneterm_core::elevation::is_elevated();
         let (dock_area, dock_skin) =
             dock_skin::dock_area(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx);
         dock_skin.set_panel_style(PanelStyle::TabBar, cx);
@@ -205,7 +209,9 @@ impl OneTermWorkspace {
         // right dock to the SSH Client `ssh_client_panel`; if the user last chose
         // Agent Mode or None, apply that now (Agent swaps the panel, None hides
         // the dock). Preserves the dock width; for Agent it keeps the open state
-        // just loaded, for None it collapses the dock.
+        // just loaded, for None it collapses the dock. An elevated window has no
+        // right dock to apply a mode to, and `switch_right_dock_mode` refuses
+        // there anyway (M1).
         let saved_mode = oneterm_settings::UiConfig::global(cx)
             .read(cx)
             .right_dock_mode;
@@ -259,8 +265,17 @@ impl OneTermWorkspace {
             .detach();
 
         let title_bar = cx.new(|cx| {
-            AppTitleBar::new("OneTerm", window, cx)
-                .child(|_window, cx| crate::layout::title_bar::mode_toggle_group(cx))
+            // M5: the same string the OS title bar carries, from one source, so
+            // the two markers cannot disagree.
+            let bar = AppTitleBar::new(oneterm_core::elevation::window_title(elevated), window, cx);
+            if elevated {
+                // M1: an elevated window has no right dock, so there is nothing
+                // to switch between — the three segments are absent rather than
+                // disabled.
+                bar
+            } else {
+                bar.child(|_window, cx| crate::layout::title_bar::mode_toggle_group(cx))
+            }
         });
 
         let clock = datetime_clock(window, cx);

@@ -153,6 +153,16 @@ impl TerminalConfig {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 // A missing file is the only read failure that safely selects defaults.
                 let cfg = Self::default();
+                // M4 (`DEC-0019`): an elevated window writes no configuration —
+                // not even the first-run default, because under
+                // over-the-shoulder elevation this directory belongs to another
+                // account and must be left without a trace.
+                if oneterm_core::elevation::is_elevated() {
+                    log::info!(
+                        "elevated window: {DOCUMENT_NAME} is absent; using the defaults and writing nothing"
+                    );
+                    return Ok(cfg);
+                }
                 match cfg.serialize_document() {
                     Ok(json) => match atomic_write(path, json.as_bytes()) {
                         Ok(()) => log::info!("Created default terminal.json at {path:?}"),

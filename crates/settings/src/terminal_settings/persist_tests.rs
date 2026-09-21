@@ -208,3 +208,26 @@ fn weight_string_roundtrip() {
     // Unknown input falls back to the default weight.
     assert_eq!(weight_to_string(parse_weight("wat")), "normal");
 }
+
+/// M4 (`DEC-0019`): an elevated window reads `terminal.json` and writes none of
+/// it back. What it *runs* does not come from this document either (M3).
+#[test]
+fn an_elevated_window_refuses_to_write_a_perfectly_readable_config() {
+    let readable = TerminalSettings::default();
+    assert!(readable.write_refusal(false).is_none());
+    let refusal = readable
+        .write_refusal(true)
+        .expect("an elevated window must not write terminal.json");
+    assert!(refusal.to_string().contains("elevated"));
+
+    // ...and the unreadable-file refusal still stands on its own reason.
+    let blocked = TerminalSettings {
+        persist_blocked: true,
+        ..TerminalSettings::default()
+    };
+    assert!(
+        blocked
+            .write_refusal(false)
+            .is_some_and(|error| error.to_string().contains("could not be read"))
+    );
+}

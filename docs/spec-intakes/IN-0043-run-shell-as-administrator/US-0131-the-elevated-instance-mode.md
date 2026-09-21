@@ -9,8 +9,8 @@ Created: 2026-09-21
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
-- [ ] In progress
+- [ ] Planned
+- [x] In progress
 - [ ] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)

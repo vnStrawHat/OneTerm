@@ -35,6 +35,14 @@ impl AboutUpdateControls {
 
 impl Render for AboutUpdateControls {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if oneterm_core::elevation::is_elevated() {
+            // M2 (`DEC-0019`): the elevated window shows one line and no
+            // control, in the dialog as on the settings page.
+            return Label::new(updates::ELEVATED_UPDATES_TEXT)
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .into_any_element();
+        }
         let state = updates::UpdateUiState::global(cx).read(cx).clone();
         let status = state.status_text();
 
@@ -96,12 +104,15 @@ pub(crate) fn open_about_dialog(window: &mut Window, cx: &mut App) {
             .footer(
                 DialogFooter::new()
                     .gap_2()
-                    .child(
-                        Button::new("about-check-update")
-                            .ghost()
-                            .label("Check for Updates")
-                            .on_click(|_, window, cx| updates::check_now(window, cx)),
-                    )
+                    // No update control at all in an elevated window (M2).
+                    .when(!oneterm_core::elevation::is_elevated(), |footer| {
+                        footer.child(
+                            Button::new("about-check-update")
+                                .ghost()
+                                .label("Check for Updates")
+                                .on_click(|_, window, cx| updates::check_now(window, cx)),
+                        )
+                    })
                     .child(
                         Button::new("about-close")
                             .label("Close")

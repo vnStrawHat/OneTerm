@@ -106,6 +106,41 @@ fn saved_session_row(title: String, color_hex: String) -> PopupMenuItem {
     })
 }
 
+/// How many rows the "+" menu emits, so the scroll estimate below stays honest
+/// in both modes rather than being a literal that goes stale.
+///
+/// Unelevated: the three shells, the "SSH Sessions" heading, `session_rows`, the
+/// closing separator and the two closing rows ("Quick Connect...", "New Saved
+/// Session..."). Elevated: the three shells and nothing else — M1 (`DEC-0019`)
+/// leaves an elevated window with local shells only.
+pub(super) fn menu_rows(elevated: bool, session_rows: usize) -> usize {
+    const SHELL_ROWS: usize = 3;
+    if elevated {
+        return SHELL_ROWS;
+    }
+    SHELL_ROWS + 1 + session_rows + 1 + 2
+}
+
+/// Whether the popup needs the kit's scrolling container for `rows`.
+///
+/// A saved list can be longer than the window, and the kit applies its height
+/// cap (half the window, at most 450px) only when `scrollable` is set: without
+/// it a long list runs off the bottom, unreachable by mouse *and* by keyboard
+/// (`scroll_to_item` is a no-op outside a scrolling container). But a scrollable
+/// menu also carries a scrollbar, which this app's theme keeps permanently
+/// visible, so scrolling is turned on only when the rows really cannot fit: the
+/// everyday menu stays free of the bar and a long one stays reachable.
+///
+/// ponytail: the row height is the kit's own 26px item plus its 2px gap,
+/// estimated rather than measured, so a menu within a row of the cap can guess
+/// wrong by one row. Measuring would need the popup's laid-out bounds, which do
+/// not exist while it is being built.
+fn menu_scrolls(rows: usize, window: &Window) -> bool {
+    const ROW_HEIGHT: f32 = 28.;
+    let cap = (window.window_bounds().get_bounds().size.height * 0.5).min(px(450.));
+    px(rows as f32 * ROW_HEIGHT) > cap
+}
+
 /// Initial PTY size for a freshly spawned session; the element resizes it to
 /// the real grid on the first prepaint.
 pub(super) const INITIAL_PTY_SIZE: PtySize = PtySize::INITIAL;
@@ -711,6 +746,12 @@ impl Panel for TerminalPanel {
                 for kind in SHELLS {
                     menu = menu.menu(kind.display_name(), Box::new(AddPanelWithShell(kind)));
                 }
+                // M1 (`DEC-0019`): an elevated window runs local shells and
+                // nothing else — no SSH Sessions heading, no saved sessions, no
+                // Quick Connect, no New Saved Session. The menu ends here.
+                if oneterm_core::elevation::is_elevated() {
+                    return menu.scrollable(menu_scrolls(menu_rows(true, 0), window));
+                }
                 // The sessions saved in `ssh_session.json`, so a saved host
                 // opens from the same place a local shell does. This closure
                 // runs on every open, so the list is never stale.
@@ -750,28 +791,7 @@ impl Panel for TerminalPanel {
                             .on_click(move |_, window, cx| open_saved_dialog(window, cx)),
                     );
 
-                // A saved list can be longer than the window, and the kit
-                // applies its height cap (half the window, at most 450px) only
-                // when `scrollable` is set: without it a long list runs off the
-                // bottom, unreachable by mouse *and* by keyboard
-                // (`scroll_to_item` is a no-op outside a scrolling container).
-                // But a scrollable menu also carries a scrollbar, which this
-                // app's theme keeps permanently visible, so scrolling is turned
-                // on only when the rows really cannot fit: the everyday menu
-                // stays free of the bar and a long one stays reachable.
-                //
-                // ponytail: the row height is the kit's own 26px item plus its
-                // 2px gap, estimated rather than measured, so a menu within a
-                // row of the cap can guess wrong by one row. Measuring would
-                // need the popup's laid-out bounds, which do not exist while it
-                // is being built.
-                const ROW_HEIGHT: f32 = 28.;
-                // 3 shells + the "SSH Sessions" heading + the closing separator
-                // and the two closing rows ("Quick Connect...", "New Saved
-                // Session...").
-                const FIXED_ROWS: usize = 7;
-                let cap = (window.window_bounds().get_bounds().size.height * 0.5).min(px(450.));
-                menu.scrollable(px((FIXED_ROWS + session_rows) as f32 * ROW_HEIGHT) > cap)
+                menu.scrollable(menu_scrolls(menu_rows(false, session_rows), window))
             })
             .anchor(Anchor::TopRight);
         Some(btn)

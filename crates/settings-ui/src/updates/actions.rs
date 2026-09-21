@@ -4,12 +4,16 @@ use gpui::{App, Window};
 use oneterm_update::{UpdateCheckResult, UpdateManager};
 
 use super::{
+    elevated_never_updates,
     notify::notify_status,
     state::{UpdateUiState, UpdateUiStatus},
 };
 
 /// Start a release-build automatic check when preferences say it is due.
 pub(crate) fn start_auto_check(window: &mut Window, cx: &mut App) {
+    if elevated_never_updates() {
+        return;
+    }
     if cfg!(debug_assertions) && std::env::var_os("ONETERM_UPDATE_AUTO_CHECK_DEBUG").is_none() {
         log::info!("Automatic update check skipped in debug builds.");
         return;
@@ -83,6 +87,9 @@ pub(crate) fn start_auto_check(window: &mut Window, cx: &mut App) {
 }
 
 pub(crate) fn check_now(window: &mut Window, cx: &mut App) {
+    if elevated_never_updates() {
+        return;
+    }
     let state = UpdateUiState::global(cx);
     if state.read(cx).is_busy() {
         return;

@@ -12,6 +12,8 @@ use std::{
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 
 const CRASHES_DIR: &str = "crashes";
+/// Subdirectory of [`CRASHES_DIR`] an elevated instance owns (`DEC-0019` M7).
+const ELEVATED_DIR: &str = "elevated";
 const COMPLETED_SUFFIX: &str = ".crash.txt";
 const NATIVE_SUFFIX: &str = ".native.tmp";
 const MAX_REPORTS: usize = 20;
@@ -79,7 +81,31 @@ pub(crate) fn delete_pending_report(path: PathBuf) -> io::Result<()> {
 }
 
 fn crashes_dir() -> PathBuf {
-    oneterm_core::config_dir().join(CRASHES_DIR)
+    crashes_dir_in(
+        &oneterm_core::config_dir(),
+        oneterm_core::elevation::is_elevated(),
+    )
+}
+
+/// The crash store for a process at this integrity level (`DEC-0019` M7).
+///
+/// An elevated instance keeps its reports in a subdirectory of its own. Two
+/// processes at different integrity levels sharing one directory is the awkward
+/// case this document already worries about: a file written under an
+/// administrator token can carry an ACL the medium-integrity process cannot
+/// delete, which would wedge the newest-20 pruning permanently. One `join`
+/// removes the whole class.
+///
+/// One function, so the writer ([`prepare_capture_paths`]), the reader
+/// ([`load_pending_reports`]) and the path validator ([`delete_pending_report`])
+/// cannot drift apart.
+fn crashes_dir_in(config_dir: &Path, elevated: bool) -> PathBuf {
+    let crashes = config_dir.join(CRASHES_DIR);
+    if elevated {
+        crashes.join(ELEVATED_DIR)
+    } else {
+        crashes
+    }
 }
 
 fn unique_identity(directory: &Path) -> io::Result<String> {
@@ -421,6 +447,32 @@ mod tests {
 
     fn completed_path(directory: &Path, identity: &str) -> PathBuf {
         directory.join(format!("{identity}{COMPLETED_SUFFIX}"))
+    }
+
+    #[test]
+    fn an_elevated_process_keeps_its_reports_in_its_own_store() {
+        let config = PathBuf::from("config");
+        assert_eq!(crashes_dir_in(&config, false), config.join("crashes"));
+        assert_eq!(
+            crashes_dir_in(&config, true),
+            config.join("crashes").join("elevated")
+        );
+    }
+
+    /// The store moved; the guard that keeps a delete inside it did not get
+    /// looser to accommodate the move.
+    #[test]
+    fn deleting_a_report_outside_the_current_store_is_refused() {
+        let directory = temporary_directory("outside-store");
+        let outside = completed_path(&directory, "20260921T000000000Z-p1-0000000a");
+        fs::write(&outside, b"report").expect("fixture report should be written");
+
+        let error = delete_pending_report(outside.clone()).expect_err("must be refused");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            outside.exists(),
+            "a refused delete must not remove the file"
+        );
     }
 
     #[test]

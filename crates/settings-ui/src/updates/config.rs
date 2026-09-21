@@ -61,6 +61,13 @@ pub(super) fn apply_check_cache(cx: &mut App, cache: UpdateCheckCache) {
 }
 
 fn persist_update_config(cx: &App) {
+    if oneterm_core::elevation::is_elevated() {
+        // M4 (`DEC-0019`): `update_config.json` is never written from an
+        // elevated window. Unreachable under M2, which removes the surface that
+        // edits it, so this is belt and braces.
+        log::debug!("elevated window: not writing update_config.json");
+        return;
+    }
     let snapshot = entity(cx).read(cx).clone();
     let queue = cx.global::<UpdateConfigPersistQueueGlobal>().0.clone();
     if PersistQueue::enqueue(&queue, snapshot) {

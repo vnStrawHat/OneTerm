@@ -193,6 +193,12 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if oneterm_core::elevation::is_elevated() {
+            // M1: an elevated window has no right dock and no mode toggles. The
+            // guard sits here rather than at the two call sites so a key binding
+            // on `SetRightDockMode` cannot build one either.
+            return;
+        }
         let Some(panel_name) = panel_names::right_dock_panel_name(mode) else {
             // None mode — hide the right dock without rebuilding its panel, so
             // switching back to SSH Client / Agent restores the previous content.

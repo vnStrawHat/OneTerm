@@ -20,6 +20,25 @@ use crate::panel::{PanelSpec, TerminalPanel};
 use crate::space::{CloseOutcome, SplitDir};
 use crate::terminal_view::TerminalView;
 
+/// The scroll estimate must count the rows the menu really emits, in both modes
+/// — a literal would go stale the next time a row is added (`IN-0043`).
+#[test]
+fn the_menu_row_count_matches_the_rows_each_mode_emits() {
+    use crate::panel::terminal_panel::menu_rows;
+
+    // 3 shells + the "SSH Sessions" heading + n sessions + the closing
+    // separator + "Quick Connect..." + "New Saved Session...".
+    assert_eq!(menu_rows(false, 0), 7);
+    assert_eq!(menu_rows(false, 5), 12);
+    // M1: an elevated window emits the three shells and nothing else.
+    assert_eq!(menu_rows(true, 0), 3);
+    assert_eq!(
+        menu_rows(true, 5),
+        3,
+        "an elevated window lists no saved sessions to count"
+    );
+}
+
 /// A `PanelSpec` wrapping an existing session without duplication metadata.
 fn session_spec(session: Box<dyn TerminalSession>, title: &str) -> PanelSpec {
     PanelSpec::Session {

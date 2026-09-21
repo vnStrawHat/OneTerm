@@ -447,6 +447,13 @@ impl SshSessionStore {
     /// Snapshots are coalesced through the single-flight queue so back-to-back
     /// mutations always leave the newest state on disk.
     fn save(&self, cx: &gpui::Context<Self>) {
+        // M4 (`DEC-0019`): an elevated window never writes `ssh_session.json`.
+        // Unreachable under M1 — it offers no surface that can edit a session —
+        // so this is belt and braces, and it costs one `if`.
+        if oneterm_core::elevation::is_elevated() {
+            log::debug!("elevated window: not writing {DOCUMENT_NAME}");
+            return;
+        }
         if self.persist_blocked {
             log::warn!(
                 "{DOCUMENT_NAME} could not be read at startup; refusing to overwrite it with the in-memory list"

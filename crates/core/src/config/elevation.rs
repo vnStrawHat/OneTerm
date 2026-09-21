@@ -270,6 +270,20 @@ static ELEVATED: AtomicBool = AtomicBool::new(false);
 /// `0` = no shell requested; otherwise the [`ElevatedShell`] discriminant + 1.
 static INITIAL_SHELL: AtomicU8 = AtomicU8::new(0);
 
+/// The window title, for the OS title bar and the in-app one.
+///
+/// One function for both so the two markers cannot disagree (`DEC-0019` M5).
+/// `elevated` is [`is_elevated`] at every call site: the caller passes it rather
+/// than the function reading the global, so the rule is testable without
+/// mutating process state under the other tests.
+pub fn window_title(elevated: bool) -> &'static str {
+    if elevated {
+        "OneTerm (Administrator)"
+    } else {
+        "OneTerm"
+    }
+}
+
 /// Record what the process token said. Called once, from `run()`.
 pub fn set_elevated(value: bool) {
     ELEVATED.store(value, Ordering::Relaxed);
@@ -392,6 +406,25 @@ mod tests {
         for token in ["cmd", "powershell", "pwsh"] {
             assert!(message.contains(token), "message must name {token}");
         }
+    }
+
+    /// The rule M5 exists for: *the argument selects the shell, the token decides
+    /// everything else.* A command line can never make a window claim an
+    /// elevation the process does not have.
+    #[test]
+    fn the_argument_never_makes_the_process_elevated() {
+        assert_eq!(
+            parse_args(&[ELEVATED_SHELL_FLAG, "cmd"]),
+            Ok(Some(ElevatedShell::Cmd))
+        );
+        assert!(!is_elevated());
+        assert_eq!(window_title(is_elevated()), "OneTerm");
+    }
+
+    #[test]
+    fn only_an_elevated_window_is_marked() {
+        assert_eq!(window_title(true), "OneTerm (Administrator)");
+        assert_eq!(window_title(false), "OneTerm");
     }
 
     #[test]
