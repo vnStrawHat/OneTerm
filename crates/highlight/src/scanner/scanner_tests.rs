@@ -639,6 +639,31 @@ fn windows_output_is_not_a_prompt() {
     }
 }
 
+/// N1: a bare `>` starts `cmd`'s continuation prompt, but on a Unix or SSH tab
+/// it starts a mail quote, a markdown blockquote or diff context. Only the
+/// Windows profiles carry that branch.
+#[test]
+fn a_bare_angle_bracket_is_a_prompt_only_on_the_windows_profiles() {
+    for line in ["> quoted text from a mail reply", "> 3 files changed"] {
+        let unix = scan_with_profile(line, RowRole::Output, ShellProfile::Unix);
+        assert!(
+            !unix.contains(&Class::PromptSign),
+            "{line:?} is output on a Unix tab: {unix:?}"
+        );
+        for profile in [ShellProfile::Cmd, ShellProfile::PowerShell] {
+            let c = scan_with_profile(line, RowRole::Output, profile);
+            assert_eq!(
+                c[0],
+                Class::PromptSign,
+                "{line:?} is a continuation prompt on {profile:?}: {c:?}"
+            );
+        }
+    }
+    // The PowerShell `>>` continuation still matches.
+    let c = scan_with_profile(">> Get-Date", RowRole::Output, ShellProfile::PowerShell);
+    assert!(c.contains(&Class::PromptSign), "{c:?}");
+}
+
 /// F3: the byte->char map. A multi-byte char before a keyword used to shift
 /// every later class right by the extra UTF-8 bytes.
 #[test]

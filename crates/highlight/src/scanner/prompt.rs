@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::class::Class;
-use crate::profile::{ShellProfile, UNIX_PROMPT_PATTERN, cmd_prompt_pattern};
+use crate::profile::{ShellProfile, UNIX_PROMPT_PATTERN, win_path_prompt_pattern};
 
 use super::command::scan_command_mode;
 use super::structural;
@@ -19,9 +19,18 @@ use super::structural;
 /// and Windows (`C:\path>`, spaces in the path allowed) prompts. Used as a
 /// fallback when the profile's own prompt regex doesn't match (e.g. user runs
 /// `wsl` inside `cmd.exe` — prompt changes to Unix but the profile stays `Cmd`).
+///
+/// It takes the **drive/UNC-anchored** Windows half only. The bare `>` and `>>`
+/// continuation prompts stay in the `Cmd` and `PowerShell` patterns, because on
+/// a Unix or SSH tab a line starting with `> ` is a mail quote, a blockquote or
+/// diff context, not a prompt (`BUG-0071` N1).
 static UNIVERSAL_PROMPT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!("{}|{}", cmd_prompt_pattern(), UNIX_PROMPT_PATTERN))
-        .expect("universal prompt regex is valid")
+    Regex::new(&format!(
+        "{}|{}",
+        win_path_prompt_pattern(),
+        UNIX_PROMPT_PATTERN
+    ))
+    .expect("universal prompt regex is valid")
 });
 
 /// The char index of the prompt sign, when `line` is a prompt line (no OSC 133).

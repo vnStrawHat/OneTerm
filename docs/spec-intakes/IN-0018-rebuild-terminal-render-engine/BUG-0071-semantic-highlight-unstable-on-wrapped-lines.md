@@ -352,8 +352,42 @@ Rework frames, from a home directory named `home John Doe rework`:
   four-row `PS C:\…\home John Doe rework>` now carries a `PromptSign`, which the verifier's
   `BUG-0071-verify-after-05-powershell-prompt.png` shows it did not.
 
+### Re-verification (2026-09-21)
+
+A second pass over the rework — **PASS**, appended to `evidence/BUG-0071-verify.md`. Both
+mutations reproduce the claimed failure counts, and the new patterns are correct on every
+case the brief names. Four notes came out of it. `N1` was a real regression introduced by
+the rework and is fixed here; `N2`-`N4` are bounded, cosmetic, and recorded below.
+
+**`N1` (fixed).** Sharing one pattern string put the cmd pattern's bare `(?:^>[ ]?)` branch
+into `UNIVERSAL_PROMPT`, so `> quoted text` was a prompt on **every** profile — including
+the Unix profile every SSH tab uses, where a leading `> ` is a mail quote, a markdown
+blockquote, a `git log` body or diff context. The shared fragment is now
+`win_path_prompt_pattern()`, the drive/UNC-anchored half only; the bare `>` and `>>`
+continuation branches stay in `PROMPT_CMD` and `PROMPT_PWSH`, which is where a continuation
+prompt actually occurs. Guarded by
+`a_bare_angle_bracket_is_a_prompt_only_on_the_windows_profiles`.
+
 ### Gaps
 
+- **`N2` — a wider path body admits a new class of Windows false positives.** Any line
+  starting with a drive letter or `\\` whose first `>` is not preceded by whitespace is read
+  as a prompt, and the whole region before that `>` is filled with `Path`. Measured:
+  `C:\src -> C:\dst` (what `mklink` and `dir /AL` print) takes a `PromptSign` at char 8, and
+  the MSVC diagnostic `c:\proj\x.cpp(5): error C2059: syntax error: '>'` takes one at 46 and
+  loses its `error` colouring. This is the deliberate other side of the rule that makes
+  `C:\log size > 3` output — the body may hold spaces, so only a space *immediately* before
+  the `>` rejects a line. Bounded (drive/UNC-anchored lines only) and cosmetic. A cheap
+  tightening, if it ever matters: require the body to contain a path separator, or reject a
+  body ending in ` -`.
+- **`N3` — a cwd that ends in a space is still not a prompt.** `C:\trailing >` is output. A
+  trailing space is legal in a Windows directory name, and it is the one remaining space
+  that rejects a line, for the same reason `N2` exists. Recorded beside the rule in
+  `WIN_PATH_BODY`.
+- **`N4` — the first `>` of a `>>` continuation is not the sign.** `prompt_sign` takes the
+  **last** prompt glyph inside the match, which is what lets a path hold a `%` or `#`; for
+  PowerShell's `>>` that puts the sign on char 1 and leaves char 0 `Default`, so half the
+  continuation prompt is coloured. Cosmetic.
 - **No benchmark harness.** There is still no `cargo bench` for the render path. The one
   timing number in §10 (8 000-char logical line, 4.14 ms at `opt-level = 0`) comes from the
   verifier's ad-hoc probe on a debug build, not from a committed benchmark, and no `release`

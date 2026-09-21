@@ -21,7 +21,7 @@ pub(crate) enum PathSep {
 ///
 /// Selected from session settings (shell kind). Unknown → `Dumb` (most
 /// permissive prompt regex). See §6.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ShellProfile {
     /// bash/sh/zsh/fish — Linux/macOS/WSL local + SSH on Linux.
     #[default]
@@ -103,18 +103,33 @@ pub(crate) const UNIX_PROMPT_PATTERN: &str =
 /// `C:\log size > 3` is not read as a prompt. Because `>` is excluded, the match
 /// ends at the **first** `>`, which is the prompt sign: a redirection later on
 /// the line (`dir > out.txt`) stays outside the prompt region.
+///
+/// Two costs of that trade, both bounded and cosmetic (`BUG-0071` N2/N3): a
+/// drive-anchored line whose first `>` is not preceded by a space is read as a
+/// prompt (`C:\src -> C:\dst`), and a cwd that legally ends in a space
+/// (`C:\trailing >`) is not.
 const WIN_PATH_BODY: &str = r#"[^<>|"*?\r\n]*[^\s<>|"*?]"#;
 
 /// cmd.exe prompt: `C:\path>`, a UNC path `\\server\share>`, or a bare `>`. The
 /// trailing space is optional so the prompt is detected even when the user has
 /// typed right after `>` (the blank cell after `>` is replaced by the typed
 /// char, removing the trailing space).
-pub(crate) static PROMPT_CMD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(&cmd_prompt_pattern()).expect("cmd prompt regex is valid"));
+pub(crate) static PROMPT_CMD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!("{}|(?:^>[ ]?)", win_path_prompt_pattern()))
+        .expect("cmd prompt regex is valid")
+});
 
-/// The cmd pattern, shared with the scanner's universal fallback.
-pub(crate) fn cmd_prompt_pattern() -> String {
-    format!(r"^(?:(?:[A-Za-z]:|\\\\){WIN_PATH_BODY}>[ ]?)|(?:^>[ ]?)")
+/// The drive- or UNC-anchored half of the Windows prompt patterns, shared with
+/// the scanner's universal fallback.
+///
+/// It deliberately leaves out the bare `>` / `>>` continuation branch, which
+/// belongs to the Windows profiles alone. A line starting with `> ` is `cmd`'s
+/// continuation prompt, but it is also a mail quote, a markdown blockquote, a
+/// `git log` body and diff context — and those arrive on a Unix or SSH tab,
+/// where they are output. Sharing one pattern string briefly made every profile
+/// read them as prompts (`BUG-0071` N1).
+pub(crate) fn win_path_prompt_pattern() -> String {
+    format!(r"^(?:(?:[A-Za-z]:|\\\\){WIN_PATH_BODY}>[ ]?)")
 }
 
 /// PowerShell prompt: `PS C:\path>`, the bare `PS>`, or the `>>` continuation.
