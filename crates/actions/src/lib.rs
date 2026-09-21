@@ -1,5 +1,11 @@
 //! UI-level actions for OneTerm.
 
+pub mod elevated_policy;
+
+pub use elevated_policy::{
+    action_allowed_when_elevated, action_classified_for_elevated_window, denied_when_elevated,
+};
+
 use gpui::{SharedString, actions};
 use gpui_component::ThemeMode;
 use serde::Deserialize;

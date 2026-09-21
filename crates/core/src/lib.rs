@@ -17,6 +17,7 @@ pub mod sftp;
 pub mod ssh_config;
 pub mod terminal_logging;
 
+pub use config::elevation;
 pub use config::{LocalShellConfig, RightDockMode, ShellKind, config_dir, home_dir};
 pub use editor_launcher::{EditorChoice, launch_editor};
 pub use error::{AppError, ConnectPhase, SftpStatus};

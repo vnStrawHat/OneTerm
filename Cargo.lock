@@ -5327,6 +5327,7 @@ version = "0.6.1"
 dependencies = [
  "gpui-component",
  "gpui-pre",
+ "log",
  "oneterm-core",
  "serde",
 ]
@@ -5348,6 +5349,7 @@ name = "oneterm-app"
 version = "0.6.1"
 dependencies = [
  "anyhow",
+ "async-channel",
  "chrono",
  "crash-handler",
  "embed-resource",

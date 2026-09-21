@@ -107,6 +107,20 @@ pub(crate) fn save_state_to(
     zoomed_panel: Option<&str>,
     trigger: &str,
 ) -> Result<()> {
+    // M4 (`DEC-0019`): an elevated window writes no configuration, so the one
+    // writer of `docks.json` stays the unelevated instance and an elevated
+    // session leaves the user's layout — under over-the-shoulder elevation, the
+    // administrator's profile — exactly as it found them.
+    //
+    // The guard sits in this function rather than in `save_state_logged` for two
+    // reasons: it is the deepest point every dock write passes through, so a
+    // writer added later is covered by construction; and it takes an explicit
+    // path, so the rule has a test that is not aimed at the developer's real
+    // configuration directory (`IN-0043` MIN-5).
+    if oneterm_core::elevation::is_restricted() {
+        log::debug!("elevated window: not writing the dock layout [trigger={trigger}]");
+        return Ok(());
+    }
     let state = persistence_compatible_state(state);
     let state_value = serde_json::to_value(&state)?;
     let right_dock_open = state_value
@@ -176,6 +190,66 @@ mod tests {
     use gpui_component::dock::DockAreaState;
     use oneterm_core::SftpTableState;
     use oneterm_state::dock_persistence::DockDocument;
+
+    /// Sets the process elevation and restores it on every exit path, panics
+    /// included, so a failing assertion cannot leave the switch on.
+    struct RestrictedElevation;
+
+    impl RestrictedElevation {
+        fn new() -> Self {
+            oneterm_core::elevation::set_elevation(oneterm_core::elevation::Elevation::Elevated);
+            Self
+        }
+    }
+
+    impl Drop for RestrictedElevation {
+        fn drop(&mut self) {
+            oneterm_core::elevation::set_elevation(oneterm_core::elevation::Elevation::NotElevated);
+        }
+    }
+
+    /// `M4`, `IN-0043` MIN-5 — `docks.json`. The guard reads a **process-global**
+    /// switch, so this test must be the only one in the process:
+    ///
+    /// ```text
+    /// cargo test -p oneterm-workspace -- --exact \
+    ///   layout::workspace::persistence::tests::an_elevated_window_writes_no_dock_layout
+    /// ```
+    ///
+    /// The packet previously called this untestable. It is not.
+    #[test]
+    #[ignore = "flips the process-global elevation switch; run with --test-threads=1"]
+    fn an_elevated_window_writes_no_dock_layout() {
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-elevated-docks-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("docks.json");
+        let state = DockAreaState::default();
+
+        // Unelevated first, so the test can tell "refused" apart from "this
+        // fixture never wrote anything anyway".
+        super::save_state_to(&path, &state, None, "test").expect("the ordinary write succeeds");
+        assert!(
+            path.exists(),
+            "fixture: an ordinary window writes the layout"
+        );
+        std::fs::remove_file(&path).unwrap();
+
+        let _restricted = RestrictedElevation::new();
+        super::save_state_to(&path, &state, None, "test").expect("a refusal is not an error");
+        assert!(
+            !path.exists(),
+            "an elevated window must write no dock layout"
+        );
+        drop(_restricted);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 
     #[test]
     fn one_term_fields_roundtrip_with_dock_state() {

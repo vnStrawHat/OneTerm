@@ -14,6 +14,7 @@ use oneterm_workspace::OneTermWorkspace;
 mod assets;
 mod crash_report;
 mod crash_report_dialog;
+mod elevation;
 mod init;
 mod native_crash;
 mod oom;
@@ -28,8 +29,71 @@ use assets::CustomAssets;
 #[global_allocator]
 static GLOBAL_ALLOC: oom::OomResilientAlloc = oom::OomResilientAlloc;
 
+/// Exit code for a command line OneTerm did not understand.
+const EXIT_UNRECOGNIZED_COMMAND_LINE: i32 = 2;
+/// Exit code for a requested shell with no trusted path on this machine.
+const EXIT_SHELL_NOT_INSTALLED: i32 = 3;
+
+/// Record what this process is (the token) and what it was asked to open (the
+/// command line), before any window, logger or allocator ballast exists.
+///
+/// **The argument selects the shell; the token decides everything else**
+/// (`DEC-0019` M5). A process that is not elevated opens the requested shell as
+/// an ordinary window with no marker and no restrictions — it cannot claim an
+/// elevation it does not have — and says so once in the log.
+///
+/// Exits the process on a command line that is not understood (code 2) or names
+/// a shell this machine has no trusted path for (code 3, elevated only): an
+/// elevated window with no shell in it is worse than none.
+fn read_process_identity() {
+    use oneterm_core::elevation;
+
+    let elevated = crate::elevation::process_elevation();
+    elevation::set_elevation(elevated);
+
+    let requested = match elevation::parse(std::env::args_os()) {
+        Ok(requested) => requested,
+        Err(error) => {
+            crate::elevation::fatal_message(&error.to_string());
+            std::process::exit(EXIT_UNRECOGNIZED_COMMAND_LINE);
+        }
+    };
+    let Some(shell) = requested else {
+        return;
+    };
+    if elevated.is_restricted() {
+        // Resolved here, in the elevated process, and never by the launching
+        // one: a pre-flight check the elevated side then trusts is the hole with
+        // extra steps (`DEC-0019` rule 4).
+        if let Err(looked_for) = elevation::trusted_program_for(shell) {
+            crate::elevation::fatal_message(&format!(
+                "OneTerm cannot run {} as administrator: {} is not installed.",
+                shell.shell_kind().display_name(),
+                looked_for.display()
+            ));
+            std::process::exit(EXIT_SHELL_NOT_INSTALLED);
+        }
+    }
+    elevation::set_initial_shell(shell);
+}
+
 /// Launch OneTerm: initialize logging, the app, the UI, then open the main window.
 pub fn run() {
+    // What this process is, and what it was asked to open, before anything else
+    // (`IN-0043`). The token comes first because `crashes_dir()` needs it; the
+    // parse comes before the ballast because a malformed command line must
+    // produce a message and an exit, not a 64 MiB allocation first.
+    read_process_identity();
+    // For one debug assertion: the `runas` launch must never run on this thread
+    // (`IN-0043`, `crate::elevation::ElevationRequest::execute`).
+    crate::elevation::remember_ui_thread();
+    if oneterm_core::elevation::is_restricted() {
+        // Before the logger exists, so nothing is written to a console that is
+        // about to go away. A debug build is console-subsystem and `runas` hands
+        // it a console of its own, which would otherwise sit beside the elevated
+        // window for its whole life (`IN-0043`).
+        crate::elevation::release_own_console();
+    }
     oom::init_ballast();
     let crash_capture_paths = match crash_report::prepare_capture_paths() {
         Ok(paths) => {
@@ -53,6 +117,27 @@ pub fn run() {
     .format_timestamp_secs()
     .init();
     log::info!("OneTerm starting up");
+    // Both were decided before the logger existed; report them now.
+    if let Some(reason) = oneterm_core::elevation::elevation().unknown_reason() {
+        log::error!(
+            "the process token could not be read ({reason}); this window is restricted and claims no elevation"
+        );
+    }
+    // The command line was read before the logger existed; report it now.
+    if let Some(kind) = oneterm_core::elevation::initial_shell() {
+        if oneterm_core::elevation::is_restricted() {
+            log::info!(
+                "Elevated window: opening {} as its one shell",
+                kind.display_name()
+            );
+        } else {
+            log::warn!(
+                "{} was given to a process that is not elevated: opening {} with no elevation and no restrictions",
+                oneterm_core::elevation::ELEVATED_SHELL_FLAG,
+                kind.display_name()
+            );
+        }
+    }
     let pending_crash_reports = match crash_report::load_pending_reports() {
         Ok(reports) => reports,
         Err(error) => {

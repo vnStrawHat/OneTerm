@@ -2,6 +2,7 @@
 //!
 //! Pure logic, no GPUI dependency.
 
+pub mod elevation;
 mod env;
 pub mod shell;
 

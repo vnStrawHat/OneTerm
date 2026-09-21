@@ -9,7 +9,7 @@ OneTerm captures diagnostics for unrecoverable **Rust panics** and supported pla
 - A Rust panic hook records the OneTerm version, Unix timestamp, OS/architecture, thread name, panic payload/location, and a forced Rust backtrace. It then invokes the previously installed panic hook.
 - `crash-handler` 0.8.0 catches supported native exceptions/signals. Windows coverage includes structured exceptions and CRT invalid-parameter/purecall failures; Linux/Android coverage includes `SIGABRT`, `SIGBUS`, `SIGFPE`, `SIGILL`, `SIGSEGV`, and `SIGTRAP`; macOS coverage uses Mach exception ports plus `SIGABRT`.
 
-Completed reports live under the platform configuration directory's `crashes/` child. On Unix the directory is created `0700` and every report file `0600`, because panic payloads and backtraces may carry host names, remote paths, or command text beyond the redacted home prefix. Their sortable names have this form:
+Completed reports live under the platform configuration directory's `crashes/` child — or, when the process runs with an **elevated** token, under `crashes/elevated/` (`IN-0043`, `DEC-0019` M7). The split exists because two instances at different integrity levels sharing one directory is the awkward case the reconciliation rules below already work around: a report written under an administrator token can carry an owner or ACL the medium-integrity instance cannot delete, which would wedge the newest-20 pruning permanently. One subdirectory removes the whole class, and every reader, writer and path validator goes through the same `crashes_dir()`, so the guard that refuses a delete outside the managed store still applies in both modes. Promotion and retention run inside `crashes/elevated/` exactly as they do in `crashes/`, so it does not grow without bound; the two stores are simply never reconciled against each other. On Unix the directory is created `0700` and every report file `0600`, because panic payloads and backtraces may carry host names, remote paths, or command text beyond the redacted home prefix. Their sortable names have this form:
 
 ```text
 YYYYMMDDTHHMMSSmmmZ-p<PID>-<8 lowercase hex random>.crash.txt
@@ -46,6 +46,8 @@ There is no in-app crash trigger. Exercise the panic capture, restart, and recov
 Native callback behavior is verified through `crash-handler`'s platform simulation API in focused tests where the target supports it. The About trigger remains a Rust panic and does not intentionally execute invalid native memory access in normal application builds.
 
 ## Recovery lifecycle
+
+**An elevated window shows no recovery dialog at all** (`IN-0043`, `DEC-0019` M7): it still loads, promotes and prunes the reports in its own store, but it never opens the dialog below — an elevated window must not be a route to a browser and a prefilled GitHub issue. Its reports are reviewed from the normal window's store owner, or read from `crashes/elevated/` by hand.
 
 After the main window opens, OneTerm shows completed reports sequentially, newest first (`crates/app/src/crash_report_dialog.rs`, next to the crash store in the composition root):
 

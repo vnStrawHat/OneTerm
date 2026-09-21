@@ -39,9 +39,10 @@
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, Role, StatefulInteractiveElement as _, Styled as _, Window,
+    prelude::FluentBuilder as _,
 };
 use gpui_component::{
-    TitleBar,
+    ActiveTheme as _, TitleBar,
     group_box::GroupBoxVariant,
     setting::{SettingPage, Settings},
     v_flex,
@@ -111,10 +112,24 @@ impl SettingsPanel {
         pages.extend(key_bindings::pages());
         pages.extend(terminal::pages());
         pages.push(ssh::page(cx));
-        pages.push(updates::network_page(cx));
+        // M2 (`DEC-0019`, `IN-0043` MIN-4): the Network page configures how the
+        // updater reaches GitHub, and an elevated window has no updater. A page
+        // whose edits are silently discarded is worse than one that is not
+        // there.
+        if !oneterm_core::elevation::is_restricted() {
+            pages.push(updates::network_page(cx));
+        }
         pages.push(about::page(cx));
         pages
     }
+
+    /// The one line an elevated window shows above its settings (`M4`).
+    ///
+    /// Settings still open, and the pages still apply for the session — theme,
+    /// font, key bindings are all read. What an elevated window does not do is
+    /// write any of it back, and a page that accepts an edit and then loses it
+    /// without saying so is the dishonest half of M4 (`IN-0043` MIN-4).
+    const READ_ONLY_NOTE: &'static str = "This is an administrator window: settings changed here apply until it closes and are not saved.";
 }
 
 impl Focusable for SettingsPanel {
@@ -132,6 +147,17 @@ impl Render for SettingsPanel {
             .track_focus(&self.focus_handle)
             .size_full()
             .child(TitleBar::new().child("Settings"))
+            .when(oneterm_core::elevation::is_restricted(), |this| {
+                this.child(
+                    gpui::div()
+                        .w_full()
+                        .px_3()
+                        .py_2()
+                        .text_sm()
+                        .text_color(cx.theme().warning)
+                        .child(Self::READ_ONLY_NOTE),
+                )
+            })
             .child(
                 Settings::new("oneterm-settings")
                     .with_group_variant(SETTINGS_GROUP_VARIANT)
@@ -152,6 +178,15 @@ mod tests {
     #[test]
     fn settings_panel_focus_target_is_an_accessible_pane() {
         assert!(matches!(SETTINGS_PANEL_ROLE, Role::Pane));
+    }
+
+    /// `MIN-4`: the note says the two things a user needs — that this window is
+    /// the administrator one, and that what they change here is not kept.
+    #[test]
+    fn the_elevated_settings_note_says_the_edits_are_not_saved() {
+        let note = SettingsPanel::READ_ONLY_NOTE;
+        assert!(note.contains("administrator"));
+        assert!(note.contains("not saved"));
     }
 
     struct ResetProbeView;

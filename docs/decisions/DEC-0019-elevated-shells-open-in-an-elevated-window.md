@@ -113,11 +113,29 @@ line.
   administrator's profile.
 - **M5 — the elevation marker derives from the process token, never from the argument.**
   `GetTokenInformation(TokenElevation)` is the only source. The title reads
-  `OneTerm (Administrator)` in both the OS title bar and the in-app title bar, and the
-  title bar carries a distinct background or border from a theme token. Stated as one
+  `OneTerm (Administrator)` in both the OS title bar and the in-app title bar. Stated as one
   sentence: *the argument selects the shell, the token decides everything else.* A window
   elevated by any route says so; no window can be made to claim an elevation it does not
   have.
+
+  > **Amended 2026-09-21 by the owner, second time: title text only, suffix
+  > highlighted in the app title bar.** The suffix — `(Administrator)` or
+  > `(elevation unknown)` — is drawn beside the application name in the theme's `warning`,
+  > bold. The **OS** title bar stays plain text: a window title has no spans. The two are
+  > kept identical by construction, not by care: `window_title_parts` is a view of
+  > `window_title`, and a test concatenates the spans and asserts the result *is* the OS
+  > title. Because this is a new text-on-surface pairing, `warning` on
+  > `title_bar.background` joined `scripts/check-theme-contrast.py`'s `SURFACES`, and every
+  > theme now sets `warning` explicitly so the marker is legible rather than merely
+  > coloured — the kit's own amber reads on a dark title bar and fails on a light one.
+  >
+  > **Amended 2026-09-21 by the owner, first time: title text only, no colour.** The rule first asked
+  > for "a distinct background or border from a theme token" as well, and that border was
+  > built and then removed on the owner's ruling after seeing it. The marker is the title
+  > text. This is consistent with what the rule always said — *colour alone is not a marker:
+  > themes are user-editable* — so the text was carrying the weight either way; the colour
+  > is simply gone rather than demoted. A token query that fails reads
+  > `OneTerm (elevation unknown)`, which claims nothing the token did not confirm.
 - **M6 — no single-instance forwarding.** Every elevation request is served by the process
   that received it. OneTerm has no instance coalescing today, so this is free now and stops
   being free the moment someone adds it: forwarding an elevation request to an existing

@@ -9,11 +9,11 @@ Created: 2026-09-21
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -281,24 +281,305 @@ Platform:
       -- -D warnings` and the Linux/macOS compile of every `#[cfg(windows)]` seam.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record the commands, their results, and every gap. Known in advance
-and to be restated with the outcome:
+### What was built
 
-- The UAC prompt cannot be automated; E3, E6 and E10 are manual with screenshots.
-- Over-the-shoulder elevation (a standard user typing an administrator's credentials)
-  needs a second account and is not exercised on the development machine unless one is
-  available; if it is not, say so rather than implying it was tested.
-- `cfg(unix)` behaviour of the new module is compile-and-unit-tested only; no Linux or
-  macOS desktop run is available in this environment.
+| Piece | File |
+| --- | --- |
+| `ElevatedShell`, `CliError`, `ELEVATED_SHELL_FLAG`, `parse`, `trusted_program`, `trusted_program_for`, `trusted_shell_config`, `window_title`, the `is_elevated` / `initial_shell` globals | `crates/core/src/config/elevation.rs` (new, pure `std`, 24 unit tests) |
+| The M3 guard: one `if` at the top of `resolve_shell` that replaces the config with `trusted_shell_config`'s, so every local spawn in an elevated process takes its program from the trusted table and its args from the kind's own arm | `crates/core/src/config/shell.rs` |
+| `process_is_elevated` (`GetTokenInformation(TokenElevation)`), `fatal_message` (`MessageBoxW`), `launch_elevated_shell` (`ShellExecuteExW`, `runas`, explicit `lpDirectory`, `SEE_MASK_FLAG_NO_UI`, no `SEE_MASK_NOCLOSEPROCESS`) | `crates/app/src/elevation.rs` (new) |
+| `read_process_identity()` — the token, then the parse, as the first statement of `run()`; the "not elevated, opening anyway" `warn` once the logger exists | `crates/app/src/lib.rs` |
+| `launch_elevated_shell` fn pointer + its two test doubles | `crates/state/src/commands.rs`, `crates/app/src/init.rs`, `crates/state/src/services.rs`, `crates/terminal-view/src/panel/tests.rs` |
+| `PanelSpec::DefaultShell` reads `initial_shell()` — the argument *replaces* the default shell (`DEC-0016`) | `crates/terminal-view/src/panel/terminal_panel.rs` |
+| `Win32_UI_Shell`, `Win32_UI_WindowsAndMessaging`, `Win32_System_Registry` | `Cargo.toml` |
+
+### Commands
+
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+- `cargo test --workspace` — green; `oneterm-core` 75 tests (was 52), including the parser's
+  ten rejection cases, the three trusted-path cases and the two `trusted_shell_config` ones.
+- `python scripts/verify-dependency-graph.py` — *"Dependency graph policy passed for 20
+  workspace packages and 20 explicit members"*. `crates/core` still has no `windows-sys`.
+- `pwsh scripts/ci-local.ps1` — run at the end of `US-0132`, green (see that packet).
+
+### E2E actually performed here (non-elevated side only)
+
+- `oneterm.exe --elevated-shell zsh` → one message box naming the flag and its three accepted
+  values, **exit code 2**, no window.
+  `evidence/US-0130-bad-argument-message.png`.
+- `oneterm.exe --elevated-shell cmd` from an **un**elevated prompt → one Command Prompt tab
+  and nothing else added; title bar reads `OneTerm` with no marker and the ordinary border;
+  the right dock and its mode toggles are present, i.e. fully unrestricted. One log line:
+  *"--elevated-shell was given to a process that is not elevated: opening Command Prompt with
+  no elevation and no restrictions"*. `evidence/US-0130-nonelevated-argument-opens-cmd.png`.
+  This is the M5 proof from the other side: the argument cannot forge the marker.
+
+### Deviations from the detail design, all reconciled into it in the same commit
+
+1. `set_initial_shell` takes an `ElevatedShell`, not a `ShellKind`, so the global cannot hold
+   `Custom` even by mistake. `initial_shell()` still returns `Option<ShellKind>`.
+2. `Win32_System_Registry` joins the `windows-sys` feature list: windows-sys 0.59 gates the
+   whole `SHELLEXECUTEINFOW` struct behind it because the struct carries an `HKEY` field. No
+   registry key is read; pwsh is still resolved by scanning `%ProgramFiles%\PowerShell`.
+3. **Exit 3 is checked only when the process is elevated.** A process that is not elevated is
+   unrestricted by definition — it paid no consent prompt and resolves the shell the ordinary
+   way — so refusing to open a window there would contradict *the token decides everything
+   else*. Recorded in the detail design's exit-code table.
+4. `trusted_shell_config` is a named function taking an injected resolver, rather than
+   inline code in `resolve_shell`, so M3 has a unit test that needs neither Windows nor the
+   process global.
+
+### Reconciliation
+
+`docs/terminal-backend.md` and `docs/gui-layout.md` were **deliberately left to `US-0132`**,
+as this packet's Documentation Action says: nothing here is user-reachable until the menu
+rows exist. `DEC-0019` is unchanged; `low-level-design/elevated-instance.md` was corrected
+for the four deviations above in the implementation commit.
+
+### Acceptance rework, 2026-09-21 — MAJ-1
+
+Independent verification (`evidence/IN-0043-verify.md`) found this packet's own security
+deliverable incomplete and marked it **FAIL**. Reworked rather than opened as a new BUG:
+the behaviour was never accepted.
+
+**What was wrong.** M3 dropped `program` and `args` and kept everything else, because the
+trusted config was built with `..cfg.clone()`. Two fields of `terminal.json`'s shell block
+still directed what the elevated process executed:
+
+- `shell.env` — the ConPTY environment block writes custom entries **ahead** of the
+  inherited ones, so `"env": { "PATH": "C:\\Users\\me\\bin" }` handed the elevated
+  `cmd.exe` an attacker-chosen `PATH`; the first `net`, `sc`, `reg` or `icacls` the user
+  typed would have run an attacker binary with a high-integrity token. For PowerShell the
+  same field reaches `PSModulePath`.
+- `shell.cwd` — and not even through the trusted config: `LocalSession::spawn` read
+  `cfg.cwd` from the **original** config, so clearing it in `trusted_shell_config` would not
+  have helped. `cmd.exe` searches the working directory before `PATH`.
+
+A same-user process with no privilege writes one JSON file and waits for the user to open an
+administrator shell. The user sees a correct UAC prompt for OneTerm, consents to OneTerm, and
+gets an elevated shell whose command resolution someone else owns. That is the failure mode
+option D was rejected for, reached by the back door.
+
+**What changed.**
+
+- `trusted_shell_config` builds the config **field by field**, deliberately not with
+  struct-update syntax: `env` empty, `cwd` `None`, `args` empty, `program` trusted, and only
+  `utf8` (the console codepage) crosses. The next field added to `LocalShellConfig` now
+  fails the build until somebody decides which side of the boundary it is on.
+- `ResolvedShell` gained `cwd`, and `LocalSession::spawn` takes it from there. Everything a
+  spawn needs now comes out of `resolve_shell` — which is what makes the single guard at the
+  top of that function complete, instead of a guard a sibling field walks around.
+- `is_elevated()` became `is_restricted()` everywhere (see `US-0131`, MIN-3).
+
+**Test:** `config::elevation::tests::an_elevated_config_keeps_no_field_of_the_configured_one`
+(`oneterm-core`). It asserts *emptiness*, not equality, on every field. Mutation-checked:
+restoring `env: cfg.env.clone()` fails it with *"no configured environment entry may survive:
+PATH and PSModulePath decide what runs"*.
+
+### Acceptance rework, 2026-09-21 (second) — the click crashed the app
+
+The owner ran the branch and clicked `Run as administrator › PowerShell`. OneTerm logged
+ten `ERROR RefCell already borrowed` lines inside a second and then aborted with
+`0xc0000409` at
+`gpui-pre-0.3.3/src/app/async_context.rs:65:27: RefCell already borrowed`, **at the moment
+the UAC prompt appeared**. Reopened rather than filed as a new BUG: the packet was never
+accepted.
+
+**The backtrace, which names the whole mechanism** (frames as reported):
+
+```text
+48-61  App::update                      <- the mouse-up dispatch: the App RefCell is
+                                           borrowed for the whole click
+  42   terminal_panel.rs:779            <- the menu row's on_click
+  41   elevation::launch_elevated_shell (elevation.rs:133)
+  40   elevation::launch               (elevation.rs:214)
+  39   ShellExecuteExW
+  38   CFileOperationRecorder_CreateInstance
+  37   SetAppStartingCursor
+  36   RealShellExecuteW
+  35   SHChangeNotifyRegister
+  34   IsWindowUnicode
+  33   CallWindowProcW                  <- the shell pumps the calling thread's messages
+  32   gpui_windows::platform::window_procedure
+  26   handle_msg
+  25   handle_gpui_events
+  24   run_foreground_task              <- gpui runs a queued foreground task, re-entrantly
+  17   gpui::app::context::spawn
+  16   oneterm_terminal_view::terminal_view::view::new  (view.rs:249)
+  15   WeakEntity::update
+  14   AsyncApp::update_entity          (async_context.rs:65)  -> borrow_mut() -> PANIC
+```
+
+**Cause.** `ShellExecuteExW` is modal while the AppInfo consent request is outstanding, and
+it pumps the calling thread's message queue to stay responsive — frames 39→33 are the shell
+doing exactly that. The call was made synchronously from the menu's `on_click`, which gpui
+invokes from inside `App::update` with the `App` `RefCell` **already mutably borrowed**
+(frames 48–61). So the pump re-entered OneTerm's own window procedure (frame 32), gpui
+dispatched a queued foreground task (frame 24), and that task's `AsyncApp::update_entity`
+asked for a second mutable borrow (frame 14) and aborted the process. The ten `ERROR` lines
+before it are the same re-entrancy hitting gpui's non-fatal borrow diagnostics once per
+pumped message.
+
+Nothing about elevation is special here. Any blocking Win32 call that pumps messages, made
+from a gpui callback, does this. What made it certain rather than occasional is that the
+consent prompt takes hundreds of milliseconds, so there is always a queued task to hit — in
+the owner's trace, a terminal view's own start-up closure.
+
+**The fix, at the root.** `ShellExecuteExW` now runs on a thread of its own and never
+touches gpui:
+
+- `ElevationRequest` owns everything the call needs (`current_exe`, the
+  `--elevated-shell <token>` string, `current_dir`). Built on the UI thread — it only reads
+  process state and formats a string, neither of which pumps — so a failure is still
+  reported without a round trip, and the construction of what crosses the trust boundary
+  stays next to the security argument for it.
+- `ElevationRequest::execute` runs on `std::thread::Builder::new().name("oneterm-elevate")`,
+  initialises **its own** COM apartment (`CoInitializeEx`, `COINIT_APARTMENTTHREADED` —
+  `ShellExecuteEx` delegates to COM shell extensions) and uninitialises it before returning.
+  `fMask` gains `SEE_MASK_NOASYNC` beside `SEE_MASK_FLAG_NO_UI`: that thread has no message
+  loop and exits as soon as the call returns, so the operation must complete before it does.
+  `runas`, `lpDirectory` and the absence of `SEE_MASK_NOCLOSEPROCESS` are unchanged — the
+  security shape of the call did not move, only the thread it runs on.
+- The outcome comes back over an `async_channel` and is consumed by a plain foreground
+  `window.spawn(cx, ..)`; the notification is pushed from inside that task's `cx.update`.
+  **The menu handler returns immediately after spawning**, so the `App` borrow from the
+  click is released long before the consent prompt appears.
+- `LaunchOutcome` gained `Failed(String)` so "what happened" is one value, and the two pure
+  halves — `outcome_of(started, last_error)` and `notification_for(&outcome)` — are
+  testable without launching anything.
+
+**Re-entrancy audit of the rest of the path.** `commands(cx)` at the call site reads a
+global and returns; `notify` / `push_notification` build and enqueue; `ElevationRequest::build`
+does `current_exe`, `current_dir` and a `format!`. None pumps messages. `fatal_message`'s
+`MessageBoxW` **is** modal and pumping, and is fine: it runs in `read_process_identity()`,
+the first statement of `run()`, before gpui exists at all — there is no `App` to borrow. The
+trusted-path resolution's `read_dir` / `is_file` block but do not pump. `ShellExecuteExW` was
+the only message-pumping call reachable from a gpui callback.
+
+**The guard against a refactor undoing this.** `run()` records the gpui thread's id
+(`remember_ui_thread()`), and `execute()` opens with
+`debug_assert_ne!(current().id(), UI_THREAD)`. A future change that "simplifies" the launch
+back onto the calling thread trips it in every dev build, on the first click, with the
+reason in the message. That is the cheap structural check the rework asked for; the
+alternative — asserting "no `App` borrow is held" — is not expressible, because **every**
+gpui callback holds one. The borrow was never the bug; a pumping call underneath it was.
+
+**Verification.**
+
+- `cargo test -p oneterm-app -p oneterm-core` — green. New:
+  `elevation::tests::a_declined_prompt_says_nothing_and_a_failure_says_why` (the outcome
+  mapping: `ERROR_CANCELLED` → silent, anything else → one notification naming the code) and
+  `elevation::tests::error_cancelled_matches_windows` (the cross-platform constant against
+  `windows_sys`' own).
+- **Threading probe, with a benign verb.** A temporary test drove the same mechanism — worker
+  thread, `CoInitializeEx`, `SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI`, `async_channel` hop —
+  with verb **`open`** on `cmd.exe /c exit`, never `runas`, so no consent prompt was raised:
+
+  ```text
+  PROBE: ui=ThreadId(2) worker=ThreadId(3) outcome=Started
+  test elevation::tests::probe_worker_thread_and_channel_hop ... ok
+  ```
+
+  The FFI ran on a different thread from the caller and the outcome came back through the
+  channel. Probe removed afterwards.
+- **Not verified here:** that the real `runas` path no longer crashes. That needs a consent
+  prompt, which this session must not raise. `US-0131`'s checklist **step 0** is the
+  closing evidence.
+
+### Acceptance rework, 2026-09-21 (third) — a console window came with the elevated window
+
+Owner acceptance: **step 0 passed** — the click no longer logs `RefCell already borrowed`
+and the launching window stays alive, so the re-entrancy fix is accepted. The elevated
+window then opened **with a separate console window beside it**.
+
+**Cause, confirmed by reading.** `crates/app/src/bin/oneterm.rs:7-10` sets
+`windows_subsystem = "windows"` only under `not(debug_assertions)`:
+
+```rust
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+```
+
+So a **release** build is a GUI-subsystem binary and gets no console at all — nothing to fix
+there, and the packet says so rather than leaving it to be assumed. A **debug or `fast-dev`**
+build is a console-subsystem binary, which is deliberate (it is how a developer reads
+`log::info!` output). Windows allocates a console for such a process when it has none to
+inherit, and a process started through `runas` never inherits one: the launcher's console
+belongs to a different integrity level. Hence a fresh, visible console for the elevated
+instance, every time, in exactly the build the owner runs.
+
+**`nShow = SW_HIDE` was tried first, and does not work.** It was the cheap fix, and it hides
+the wrong window as well. Probed against the real `fast-dev` binary with verb **`open`**
+(never `runas`, so no consent prompt), enumerating the launched process's own top-level
+windows:
+
+```text
+nShow = SW_HIDE (0):
+  ShellExecuteExW ok=True lastError=0
+  hidden  cls=Zed::Window        title='OneTerm'          <- the app window, hidden
+  hidden  cls=ConsoleWindowClass title='...\oneterm.exe'
+
+nShow = SW_SHOWNORMAL (1):
+  ShellExecuteExW ok=True lastError=0
+  VISIBLE cls=Zed::Window        title='OneTerm'
+```
+
+`nShow` becomes the process's default show command, and gpui's window inherits it — the
+elevated window would simply never appear. `SW_SHOWNORMAL` stays.
+
+**The fix: the elevated process disowns its console.** In `run()`, before logging is
+initialised and only when `is_restricted()`:
+
+- `GetConsoleWindow()` is null in a release build (GUI subsystem, no console) — nothing to
+  do, so the code is a no-op there rather than being `cfg`-gated on the build profile.
+- Otherwise `GetConsoleProcessList` says how many processes are attached. **One** means the
+  console was allocated for this process alone, which is the `runas` case — `FreeConsole()`
+  disowns it and the window goes with it. **More than one** means the console was inherited
+  from whoever started us, most likely an administrator prompt running
+  `oneterm.exe --elevated-shell cmd` by hand; that window is not ours to close, no
+  unexpected window appeared, and the log stays where the person who started it can read it.
+
+That distinction is the whole reason this is six lines rather than one. `FreeConsole()`
+unconditionally would detach from a console the user opened themselves and silently throw
+away the output they started the process to see.
+
+**What the elevated instance's logging costs.** After `FreeConsole` its `stderr` goes
+nowhere, so the `runas`-launched instance has no live log. It is **not** redirected to a
+file: a log under the configuration directory is a write, and M4's promise is that an
+elevated window leaves nothing behind — under over-the-shoulder elevation, nothing in the
+administrator's profile — which the manual checklist's step 12 checks literally ("the only
+new path may be `crashes\elevated\`"). Diagnosing an elevated instance therefore goes
+through the crash store, which M7 already keeps in `crashes/elevated/`, or by starting it
+from an administrator console by hand, which is the case the process-count check
+deliberately preserves.
+
+### Gaps
+
+- **The elevated side is unverified in this environment.** The consent prompt is drawn by the
+  AppInfo service on the secure desktop, which this project's posted-message GUI walks cannot
+  reach, and this session must not raise a UAC prompt at all. E3, E6 and the accept path of
+  the launch are therefore **not run**: they are the owner's manual checklist in `US-0131`.
+- Over-the-shoulder elevation needs a second account; none is available here, so it was **not
+  exercised**.
+- `cfg(unix)` behaviour is compile-and-unit-tested only; no Linux or macOS desktop run is
+  available in this environment.
+- `launch_elevated_shell`'s own error map (`ERROR_CANCELLED` vs everything else) is
+  **unexercised at run time**: reaching it needs a real `ShellExecuteExW` failure. The
+  mapping is now unit-tested as pure data, but no real failure has been observed.
+- **The crash fix is unproven against `runas`.** The mechanism is verified (probe above,
+  benign verb) and the cause is confirmed by the owner's backtrace, but nobody has clicked
+  the row since the fix — that raises a consent prompt. Checklist step 0 is what proves it.
 
 ## Handoff
 

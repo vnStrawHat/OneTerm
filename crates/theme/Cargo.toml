@@ -20,3 +20,9 @@ gpui-component.workspace = true
 anyhow.workspace = true
 log.workspace = true
 rust-embed.workspace = true
+
+[dev-dependencies]
+# `warning_is_the_value_the_theme_file_names` drives the kit's real
+# `Theme::apply_config`: the only way to prove a theme key is one the kit
+# actually reads, rather than one it silently drops (`IN-0043` MAJ-5).
+gpui = { workspace = true, features = ["test-support"] }

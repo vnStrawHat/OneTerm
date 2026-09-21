@@ -73,6 +73,7 @@ pub(crate) fn init(cx: &mut App) {
             open_about: oneterm_settings_ui::open_about_dialog,
             find_in_active_terminal: oneterm_terminal_view::find_in_active_terminal,
             setup_key_bindings: oneterm_settings_ui::setup_key_bindings,
+            launch_elevated_shell: crate::elevation::launch_elevated_shell,
         },
         oneterm_terminal_view::status_metrics(),
         oneterm_terminal_view::agent_focuser(),

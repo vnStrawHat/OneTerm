@@ -55,15 +55,44 @@ pub(crate) fn open_window(
         window
             .update(cx, |root, window, cx| {
                 window.activate_window();
-                start_auto_check(window, cx);
-                show_crash_reports(
-                    pending_crash_reports,
-                    crate::crash_report::delete_pending_report,
-                    root,
-                    window,
-                    cx,
-                );
-                window.set_window_title("OneTerm");
+                let elevated = oneterm_core::elevation::is_restricted();
+                if !elevated {
+                    // M2: an elevated updater can write `C:\Program Files` and
+                    // leave files the ordinary instance cannot replace, which
+                    // would silently change the install for the normal window
+                    // too. So the elevated instance never checks at all.
+                    start_auto_check(window, cx);
+                    // M7: the reports were still loaded, promoted and pruned —
+                    // only the GitHub-draft dialog is suppressed, so an elevated
+                    // window is not a route to a browser and a prefilled issue.
+                    show_crash_reports(
+                        pending_crash_reports,
+                        crate::crash_report::delete_pending_report,
+                        root,
+                        window,
+                        cx,
+                    );
+                }
+                // M5: the marker is in the OS title, so the taskbar, Alt-Tab and
+                // every screenshot carry it.
+                window.set_window_title(oneterm_core::elevation::window_title(
+                    oneterm_core::elevation::elevation(),
+                ));
+                // Over-the-shoulder elevation puts this process in another
+                // account's profile, so it has none of the user's settings. Say
+                // so once; the marker is still correct, because it comes from
+                // the token and not from the configuration.
+                if elevated && oneterm_settings::UiConfig::global(cx).read(cx).persist_blocked {
+                    gpui_component::WindowExt::push_notification(
+                        window,
+                        oneterm_theme::notif_ext::notify(
+                            gpui_component::notification::NotificationType::Info,
+                            "Settings could not be read for this account; this window is using the defaults.",
+                            cx,
+                        ),
+                        cx,
+                    );
+                }
                 // Closing the main window quits the app. The workspace persists
                 // its final layout synchronously in its own release hook; gpui
                 // runs it in the same effect flush (the root drops the workspace

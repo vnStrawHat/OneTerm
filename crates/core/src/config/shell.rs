@@ -141,6 +141,16 @@ pub struct ResolvedShell {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
+    /// Working directory, or `None` for the spawner's default (the user's home).
+    ///
+    /// Carried here rather than read from the caller's [`LocalShellConfig`] so
+    /// that **everything** a spawn needs comes out of [`resolve_shell`]. That is
+    /// what makes the elevation guard at the top of that function complete: a
+    /// spawner that reads the original config for one more field would walk
+    /// around the guard, which is exactly how `cwd` crossed the trust boundary
+    /// before (`IN-0043` MAJ-1). `cmd.exe` searches the working directory before
+    /// `PATH`, so this field decides what runs just as surely as `program` does.
+    pub cwd: Option<PathBuf>,
 }
 
 const CMD_OSC7_PROMPT: &str = "$E]7;$P$E\\$E]133;A$E\\$P$G$E]133;B$E\\";
@@ -233,6 +243,19 @@ fn shell_not_found(shell: &str) -> AppError {
 ///
 /// Returns an error if `Custom` has no `program`, or the default shell cannot be found.
 pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> {
+    // M3 (`DEC-0019` rule 4, `IN-0043`): an elevated process never lets
+    // `terminal.json` name the program it executes or add arguments to it. One
+    // guard here covers every local spawn in that process, because every one of
+    // them resolves through this function.
+    let trusted;
+    let cfg = if super::elevation::is_restricted() {
+        trusted =
+            super::elevation::trusted_shell_config(cfg, super::elevation::trusted_program_for)?;
+        &trusted
+    } else {
+        cfg
+    };
+
     let mut env = base_env();
     // User env overrides (override the base).
     for (k, v) in &cfg.env {
@@ -367,7 +390,12 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
     // User's extra args (after the default args).
     args.extend(cfg.args.iter().cloned());
 
-    Ok(ResolvedShell { program, args, env })
+    Ok(ResolvedShell {
+        program,
+        args,
+        env,
+        cwd: cfg.cwd.clone(),
+    })
 }
 
 #[cfg(test)]

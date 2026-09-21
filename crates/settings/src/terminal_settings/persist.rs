@@ -153,8 +153,8 @@ impl TerminalSettings {
     /// Refused with [`AppError::ConfigLoad`] while [`Self::persist_blocked`] is
     /// set: the file on disk could not be read and may still be the user's.
     pub fn save(&self) -> Result<(), AppError> {
-        if self.persist_blocked {
-            return Err(Self::persist_blocked_error());
+        if let Some(refusal) = self.write_refusal(oneterm_core::elevation::is_restricted()) {
+            return Err(refusal);
         }
         self.to_config().save()?;
         Ok(())
@@ -167,11 +167,25 @@ impl TerminalSettings {
         )
     }
 
+    /// Why this write is refused, or `None` when it may go ahead — the file
+    /// could not be read and may still be the user's (CORR-61), or this is an
+    /// elevated window, which writes no configuration (`DEC-0019` M4). Both
+    /// shared write entry points ask here.
+    fn write_refusal(&self, elevated: bool) -> Option<AppError> {
+        if elevated {
+            return Some(AppError::config_load(
+                "terminal.json",
+                "an elevated OneTerm window writes no configuration",
+            ));
+        }
+        self.persist_blocked.then(Self::persist_blocked_error)
+    }
+
     /// Schedule persistence of the current global settings off the UI thread.
     pub fn persist_global(cx: &App) {
         let settings = Self::global(cx).read(cx);
-        if settings.persist_blocked {
-            log::warn!("{}", Self::persist_blocked_error());
+        if let Some(refusal) = settings.write_refusal(oneterm_core::elevation::is_restricted()) {
+            log::warn!("{refusal}");
             return;
         }
         let config = settings.to_config();

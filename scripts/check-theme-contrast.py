@@ -205,6 +205,41 @@ SURFACES: dict[str, tuple[str, ...]] = {
     # `table.head.foreground` -- SFTP and session column headers
     # (`crates/sftp-ui/src/table_delegate.rs:440`).
     "table.head.foreground": ("table.head.background",),
+    # `warning.background` -- despite the name, OneTerm draws this token as **text**, and
+    # has for longer than `IN-0043`. `Theme::warning` is what `cx.theme().warning` returns,
+    # and the sites are:
+    #   title_bar.background  the elevation suffix, "(Administrator)" or "(elevation
+    #                         unknown)", beside the plain app name
+    #                         (`crates/workspace/src/layout/title_bar.rs`). A *marker*, so it
+    #                         has to be read at a glance, not merely noticed
+    #                         (`IN-0043`, `DEC-0019` M5)
+    #   background            the settings window's read-only note
+    #                         (`crates/settings-ui/src/panel.rs`), the key-bindings notice
+    #                         (`crates/settings-ui/src/key_bindings/key_bindings_ui.rs:216`),
+    #                         the port-forwarding row's warning
+    #                         (`crates/session-ui/src/forward_rows.rs:292`), the terminal's
+    #                         own warning line and `Alert::warning`
+    #                         (`crates/terminal-view/src/terminal_view/render.rs:510,603`),
+    #                         and the Agent card's Blocked/Stale colour
+    #                         (`crates/agent-ui/src/card.rs:65,75`)
+    #   popover.background    a `Warning` notification's whole body
+    #                         (`crates/theme/src/notif_ext.rs:86`), which is popover-backed
+    #
+    # **The name is the trap this entry exists to close.** `ThemeConfigColors` renames the
+    # field to `warning.background` (`gpui-component/src/theme/schema.rs:617`) while
+    # `HighlightThemeStyle` accepts a bare `warning` -- and the struct has no
+    # `deny_unknown_fields`, so the wrong spelling inside `colors` is dropped in silence and
+    # this script happily measures a value the window never draws. `IN-0043` did exactly
+    # that for one round. `oneterm-theme`'s `warning_is_the_value_the_theme_file_names`
+    # drives the kit's real `apply_config` and is what makes this row honest.
+    #
+    # Every variant now sets it explicitly. Without that the kit falls back to
+    # `self.yellow` (`schema.rs:878`) -- not a fixed amber but each theme's own base yellow,
+    # which is not in this JSON and so is not measurable here at all. 16 variants were below
+    # the floor as rendered and took a lightness-only correction of their own hue; the other
+    # 23 have their existing colour written out verbatim, which changes nothing on screen
+    # and everything about what this gate can prove.
+    "warning.background": ("title_bar.background", "background", "popover.background"),
 }
 
 # The hierarchy rule, as (primary, secondary) pairs. On every surface both tokens are drawn

@@ -1,0 +1,31 @@
+# Every `#[ignore]`d test in the workspace, one per line.
+#
+# An ignored test runs in no gate by default. This file is diffed by
+# `scripts/check-ignored-tests.py` so a new one cannot appear unnoticed:
+# when the gate fails here, decide what the test is before recording it.
+#
+# The five `an_elevated_*` / `the_elevated_*` entries are security checks
+# (`IN-0043` M1/M4). They flip a process-global switch, so they cannot share
+# a test process — which is why they are ignored rather than ordinary — and
+# `ci-local` runs them explicitly, per crate, with `--test-threads=1`. A new
+# elevation test belongs in one of the three crates that run names, or the
+# gate must grow a fourth line.
+#
+# Re-record with: python scripts/check-ignored-tests.py --write
+crates/state/src/form_dialog.rs - form_dialog::FormDialog (line 154)
+crates/theme/src/icon.rs - icon (line 22)
+crates/theme/src/notif_ext.rs - notif_ext::notify (line 43)
+deep_scrollback_search_is_linear
+event_loop::event_loop_tests::flood_throughput_while_a_renderer_takes_frames
+ext_memory_stays_bounded
+layout::workspace::layout_tests::an_elevated_window_never_reads_the_saved_layout
+layout::workspace::layout_tests::the_elevated_startup_path_yields_a_dock_state_with_no_right_dock
+layout::workspace::persistence::tests::an_elevated_window_writes_no_dock_layout
+reflow::tests::resize_latency
+render::element::element_tests::frame_time_under_output
+render::shapes::shapes_tests::shape_bitmaps_for_visual_review
+render::shapes::shapes_tests::thickness_table_for_docs
+session::session_orphan_tests::orphan_liveness_table
+session_state::tests::an_elevated_window_writes_no_saved_sessions
+snapshot::bench::render_state_build_cost_per_frame
+updates::config::tests::an_elevated_window_queues_no_update_config_write

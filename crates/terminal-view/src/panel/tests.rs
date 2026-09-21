@@ -20,6 +20,34 @@ use crate::panel::{PanelSpec, TerminalPanel};
 use crate::space::{CloseOutcome, SplitDir};
 use crate::terminal_view::TerminalView;
 
+/// The scroll estimate must count the rows the menu really emits, in both modes
+/// — a literal would go stale the next time a row is added (`IN-0043`).
+#[test]
+fn the_menu_row_count_matches_the_rows_each_mode_emits() {
+    use crate::panel::terminal_panel::menu_rows;
+
+    // 3 shells + (on Windows) the "Run as administrator" submenu row + the
+    // "SSH Sessions" heading + n sessions + the closing separator +
+    // "Quick Connect..." + "New Saved Session...".
+    #[cfg(windows)]
+    {
+        assert_eq!(menu_rows(false, 0), 8);
+        assert_eq!(menu_rows(false, 5), 13);
+    }
+    #[cfg(not(windows))]
+    {
+        assert_eq!(menu_rows(false, 0), 7);
+        assert_eq!(menu_rows(false, 5), 12);
+    }
+    // M1: an elevated window emits the three shells and nothing else.
+    assert_eq!(menu_rows(true, 0), 3);
+    assert_eq!(
+        menu_rows(true, 5),
+        3,
+        "an elevated window lists no saved sessions to count"
+    );
+}
+
 /// A `PanelSpec` wrapping an existing session without duplication metadata.
 fn session_spec(session: Box<dyn TerminalSession>, title: &str) -> PanelSpec {
     PanelSpec::Session {
@@ -455,6 +483,7 @@ fn duplicate_test_commands() -> WorkspaceCommands {
         Vec::new()
     }
     fn open_saved_session(_: u64, _: &mut gpui::Window, _: &mut gpui::App) {}
+    fn elevated(_: oneterm_core::ShellKind, _: &mut gpui::Window, _: &mut gpui::App) {}
 
     WorkspaceCommands {
         new_terminal_with_shell: terminal,
@@ -467,6 +496,7 @@ fn duplicate_test_commands() -> WorkspaceCommands {
         open_about: window,
         find_in_active_terminal: dock,
         setup_key_bindings: app,
+        launch_elevated_shell: elevated,
     }
 }
 
