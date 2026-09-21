@@ -606,7 +606,14 @@ a compile-time-checked change with no runtime surface.
       resolve it from `USERPROFILE` and are unaffected. Developer-build-only, accepted.
 - [ ] **A future single-instance guard.** Forbidden to forward an `--elevated-shell`
       argument. `DEC-0019` rule 3 / M6, repeated in the parser's doc comment.
-- [ ] **Token query failure.** Treated as not elevated, logged at `error`.
+- [ ] **Token query failure.** `Elevation::Unknown`, which is **restricted** — every gate of
+      M1-M4 and M7 applies — while the marker reads `OneTerm (elevation unknown)` rather than
+      claiming an elevation the token never confirmed (`DEC-0019` rule 2). Fail closed on the
+      restrictions, fail honest on the marker; an earlier draft of this line said "treated as
+      not elevated", which was fail-**open** and would have left a genuinely elevated process
+      running SSH, SFTP, the updater and `terminal.json`'s program unmarked. The variant
+      carries a `&'static str` naming which call failed, because the query runs before
+      `env_logger` exists; `run()` logs it once the logger is up (`IN-0043` MIN-3, NEW-9).
 - [ ] **A second elevation request while an elevated window is open.** Served: a second
       consent prompt, a second elevated window. No coalescing, by M6.
 - [ ] **A second *click* while the first consent prompt is still up.** Ignored. The launch

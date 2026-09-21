@@ -911,6 +911,47 @@ key), all at or above 4.5:1.
   everything the elevated process needs was fixed before the thread started — and now
   written down.
 
+### Follow-up, 2026-09-21 — NEW-11 and NEW-12
+
+Re-verification returned **PASS**. Two leftovers closed.
+
+**NEW-11 — a stale line in the detail design.** The edge-case list still said *"Token query
+failure. Treated as not elevated"*, which is the **fail-open** behaviour MIN-3 replaced and
+the opposite of what the code does. Rewritten to the `Unknown` contract: restricted on every
+gate, honest in the marker, with the reason carried for the one log line `run()` emits once
+the logger exists. A stale line in a design document is how the next change re-derives the
+old behaviour and calls it a fix.
+
+**NEW-12 — the two themes the gate could never see.** The theme menu and the Appearance page
+both list `ThemeRegistry::themes()`, which holds `gpui-component`'s own `Default Light` and
+`Default Dark` as well as our 39. `Default Light` renders `warning` as `#eab308` on
+`#f8f8f8` — **1.81:1**, illegible — and it is selectable today.
+
+It cannot be fixed by shipping a file: `load_themes_from_str` **skips a name already
+present** (`registry.rs:154`), and `init_default_themes` overwrites the whole `themes` map
+from the kit's own JSON during `gpui_component::init`, before OneTerm's theme init runs. The
+map is private and has no insert API. So an override "in the registry" is not reachable
+through the kit's public surface at all.
+
+The correction therefore goes where every theme application already passes:
+`apply_warning_legibility`, called beside `apply_list_style_override` at all six sites (the
+two action handlers, the saved-theme restore, the startup default, and the Appearance page's
+two). It is **lightness only** — hue and saturation untouched — and a **no-op for anything
+that already reads**, which is all 39 of ours, so it changes nothing this branch just
+measured.
+
+That placement buys something a file override could not: `ThemeRegistry` also watches a user
+`./themes` directory, and a theme loaded from there can never be covered by
+`scripts/check-theme-contrast.py`. Now it is covered anyway.
+
+**Tests.** `every_selectable_theme_keeps_the_warning_marker_legible` drives the kit's real
+`apply_config` over **every theme in the registry**, not only the embedded ones, and asserts
+the floor on all three surfaces after the correction — plus that **at least one theme was
+actually corrected**, so the test cannot pass by the correction doing nothing.
+`a_legible_warning_is_left_alone` pins the two halves of the rule: a colour that reads is
+returned unchanged, and one that does not moves in lightness only, never in hue or
+saturation.
+
 ### Gaps
 
 - **The whole elevated side is unverified here**, for the reason above. Items 2-12 are the

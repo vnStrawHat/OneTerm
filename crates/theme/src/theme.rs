@@ -13,7 +13,7 @@
 //! (usually = content background) and `tab_bar.background` (darker), giving the
 //! "active tab merges with content" effect used by code editors, with no override needed.
 
-use gpui::{Anchor, App, Rgba, px, rgb};
+use gpui::{Anchor, App, Hsla, Rgba, px, rgb};
 use gpui_component::{Theme, ThemeRegistry, scroll::ScrollbarMode};
 
 use oneterm_actions::{SwitchTheme, SwitchThemeMode};
@@ -76,6 +76,99 @@ pub fn apply_list_style_override(cx: &mut App) {
     theme.table_active_border = gpui::transparent_black();
 }
 
+/// WCAG 2.1 AA for body text, the floor `scripts/check-theme-contrast.py` holds
+/// the shipped themes to.
+const CONTRAST_FLOOR: f32 = 4.5;
+
+/// Relative luminance, WCAG 2.1.
+fn luminance(color: Hsla) -> f32 {
+    let rgba = Rgba::from(color);
+    let channel = |c: f32| {
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(rgba.r) + 0.7152 * channel(rgba.g) + 0.0722 * channel(rgba.b)
+}
+
+fn contrast(a: Hsla, b: Hsla) -> f32 {
+    let (x, y) = (luminance(a), luminance(b));
+    let (lo, hi) = if x < y { (x, y) } else { (y, x) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// `warning`, darkened or lightened until it reads on every surface OneTerm
+/// draws it on — or unchanged, when it already does.
+///
+/// **Why this exists at run time and not only in the theme files.** `warning` is
+/// drawn as *text*: the elevation marker in the title bar (`DEC-0019` M5), the
+/// settings read-only note, the terminal's warning line, a `Warning` toast. The
+/// 39 themes this repository ships are held to the floor by
+/// `scripts/check-theme-contrast.py`, but two selectable themes are not ours to
+/// check — `gpui-component`'s own `Default Light` and `Default Dark`, which the
+/// theme menu lists and whose `warning` renders `#eab308` on `#f8f8f8`, a 1.81:1
+/// that is close to invisible (`IN-0043` NEW-12). The kit's registry skips a
+/// theme whose name is already present, so they cannot be overridden by shipping
+/// a file; and `ThemeRegistry` also watches a user `./themes` directory, which no
+/// gate can ever cover.
+///
+/// So the correction is applied where every theme application passes: lightness
+/// only, hue and saturation untouched, and a no-op for every theme that already
+/// reads — which is all 39 of ours.
+fn legible_warning(warning: Hsla, surfaces: [Hsla; 3]) -> Hsla {
+    let worst = |color: Hsla| {
+        surfaces
+            .iter()
+            .map(|surface| contrast(color, *surface))
+            .fold(f32::INFINITY, f32::min)
+    };
+    if worst(warning) >= CONTRAST_FLOOR {
+        return warning;
+    }
+    // Both directions, nearest first: a light theme wants a darker warning and a
+    // dark theme a lighter one, and which is which is the surface's business.
+    let mut best = warning;
+    let mut best_ratio = worst(warning);
+    for step in 1..=1000 {
+        for candidate in [
+            Hsla {
+                l: (warning.l - step as f32 / 1000.0).max(0.0),
+                ..warning
+            },
+            Hsla {
+                l: (warning.l + step as f32 / 1000.0).min(1.0),
+                ..warning
+            },
+        ] {
+            let ratio = worst(candidate);
+            if ratio > best_ratio {
+                best = candidate;
+                best_ratio = ratio;
+            }
+            if ratio >= CONTRAST_FLOOR {
+                return candidate;
+            }
+        }
+    }
+    // Unreachable for any real surface — pure black and pure white are 21:1
+    // apart — but returning the best found beats returning the illegible input.
+    best
+}
+
+/// Keep the `warning` marker legible in whatever theme is now applied.
+///
+/// Called wherever `apply_list_style_override` is, and for the same reason: the
+/// theme application resets the value from the config every time.
+pub fn apply_warning_legibility(cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+    theme.warning = legible_warning(
+        theme.warning,
+        [theme.title_bar, theme.background, theme.popover],
+    );
+}
+
 /// The OneTerm logo cyan (`#58c4dc`) — an identity tint that must not follow
 /// the theme (title-bar icon, About page mark, empty-Space placeholder).
 pub fn brand_accent() -> Rgba {
@@ -100,6 +193,7 @@ pub fn init(cx: &mut App) {
             Some(theme_config) => {
                 Theme::global_mut(cx).apply_config(&theme_config);
                 apply_list_style_override(cx);
+                apply_warning_legibility(cx);
             }
             // A stale key binding or menu entry can name a theme that is not
             // registered; say so instead of ignoring the action (ERR-10).
@@ -112,6 +206,7 @@ pub fn init(cx: &mut App) {
         let mode = switch.0;
         Theme::change(mode, None, cx);
         apply_list_style_override(cx);
+        apply_warning_legibility(cx);
         cx.refresh_windows();
     });
 
@@ -148,6 +243,7 @@ pub fn init(cx: &mut App) {
             {
                 Theme::global_mut(cx).apply_config(&theme_config);
                 apply_list_style_override(cx);
+                apply_warning_legibility(cx);
             } else {
                 log::warn!("Saved theme {name:?} not found — using default");
             }
@@ -174,6 +270,8 @@ pub fn init(cx: &mut App) {
     // Selected item = hover look: bg = list_hover, no border.
     // Must be called after Theme::change (apply_config resets these fields).
     apply_list_style_override(cx);
+    // ...and the `warning` marker must read on whatever was just applied.
+    apply_warning_legibility(cx);
 
     // Notifications display in the bottom-right corner (gpui-component default is TopRight).
     // `notification` is a `#[serde(skip)]` field — not reset by `apply_config`/`change`,
@@ -248,6 +346,94 @@ mod tests {
                 );
             }
         });
+    }
+
+    /// Every theme the user can actually pick keeps the `warning` marker legible.
+    ///
+    /// Not just the 39 this repository ships: the theme menu and the Appearance
+    /// page both list `ThemeRegistry::themes()`, which also holds
+    /// `gpui-component`'s own `Default Light` and `Default Dark`. `Default
+    /// Light` renders `warning` as `#eab308` on `#f8f8f8` — **1.81:1**, a marker
+    /// nobody can read — and the kit's registry skips a theme whose name is
+    /// already present, so it cannot be corrected by shipping a file
+    /// (`IN-0043` NEW-12). `apply_warning_legibility` corrects it where every
+    /// theme application passes, and this is the test that the gate's floor
+    /// holds for everything selectable rather than only for what
+    /// `check-theme-contrast.py` can see.
+    #[gpui::test]
+    fn every_selectable_theme_keeps_the_warning_marker_legible(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let registry = ThemeRegistry::global_mut(cx);
+            for (_, content) in EMBEDDED_THEME_FILES {
+                registry.load_themes_from_str(content).unwrap();
+            }
+            let configs: Vec<_> = ThemeRegistry::global(cx)
+                .themes()
+                .values()
+                .cloned()
+                .collect();
+            assert!(
+                configs.len() > EMBEDDED_THEME_FILES.len(),
+                "the registry must hold the kit's own themes as well as ours"
+            );
+            let mut corrected = 0;
+            for config in configs {
+                let name = config.name.clone();
+                Theme::global_mut(cx).apply_config(&config);
+                let before = Theme::global(cx).warning;
+                apply_warning_legibility(cx);
+                let theme = Theme::global(cx);
+                if theme.warning != before {
+                    corrected += 1;
+                }
+                for (surface, label) in [
+                    (theme.title_bar, "title_bar"),
+                    (theme.background, "background"),
+                    (theme.popover, "popover"),
+                ] {
+                    let ratio = contrast(theme.warning, surface);
+                    assert!(
+                        ratio >= CONTRAST_FLOOR,
+                        "{name}: warning on {label} is {ratio:.2}:1"
+                    );
+                }
+            }
+            assert!(
+                corrected > 0,
+                "no theme needed correcting, so this test proves nothing — \
+                 `Default Light` renders warning at 1.81:1 and must be one of them"
+            );
+        });
+    }
+
+    /// The correction is lightness only, and a no-op for a colour that reads.
+    #[test]
+    fn a_legible_warning_is_left_alone() {
+        let surfaces = [
+            gpui::rgb(0xf8f8f8).into(),
+            gpui::rgb(0xffffff).into(),
+            gpui::rgb(0xffffff).into(),
+        ];
+        let already_fine: gpui::Hsla = gpui::rgb(0x854d0e).into();
+        assert_eq!(legible_warning(already_fine, surfaces), already_fine);
+
+        // The kit's `Default Light` value, which does not read on its own surfaces.
+        let illegible: gpui::Hsla = gpui::rgb(0xeab308).into();
+        let fixed = legible_warning(illegible, surfaces);
+        assert_ne!(fixed, illegible);
+        assert!((fixed.h - illegible.h).abs() < 1e-6, "hue must not move");
+        assert!(
+            (fixed.s - illegible.s).abs() < 1e-6,
+            "saturation must not move"
+        );
+        assert!(
+            fixed.l < illegible.l,
+            "a light surface wants a darker warning"
+        );
+        for surface in surfaces {
+            assert!(contrast(fixed, surface) >= CONTRAST_FLOOR);
+        }
     }
 
     /// Two colours are the same to within one 8-bit step per channel, which is
