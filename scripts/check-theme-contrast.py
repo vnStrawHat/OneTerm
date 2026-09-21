@@ -205,6 +205,18 @@ SURFACES: dict[str, tuple[str, ...]] = {
     # `table.head.foreground` -- SFTP and session column headers
     # (`crates/sftp-ui/src/table_delegate.rs:440`).
     "table.head.foreground": ("table.head.background",),
+    # `warning` -- the elevation suffix in the app title bar, "(Administrator)" or
+    # "(elevation unknown)", drawn beside the plain app name
+    # (`crates/workspace/src/layout/title_bar.rs`, the span after the menu bar). It is a
+    # *marker*, so it has to be legible in every theme rather than merely visible: this is
+    # the one token whose job is to be read at a glance under an administrator token
+    # (`IN-0043`, `DEC-0019` M5).
+    #
+    # The kit leaves `warning` to its own default -- an amber that reads on a dark title bar
+    # and fails on a light one -- so every theme here now sets it explicitly: the 27 dark
+    # variants keep exactly the kit's `#facc15`, and the 12 light ones take a darker shade of
+    # the kit's own yellow ramp. Lightness only, same hue family.
+    "warning": ("title_bar.background",),
 }
 
 # The hierarchy rule, as (primary, secondary) pairs. On every surface both tokens are drawn

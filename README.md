@@ -115,10 +115,11 @@ prompt does nothing at all.
 The elevated window is deliberately a smaller application, and it says what it is:
 
 - **It is marked**, from the process token and never from how it was started:
-  `OneTerm (Administrator)` in the taskbar and in the title bar. The title text is the whole
-  marker — no colour, because a theme can change any colour and the text cannot be themed
-  away. A window elevated any other way — right-click ▸ Run as administrator, a policy — is
-  marked and restricted in exactly the same way.
+  `OneTerm (Administrator)` in the taskbar and in the title bar. The **words** are the
+  marker — a theme can change any colour, so the text is what has to carry it — and in
+  OneTerm's own title bar the `(Administrator)` part is highlighted beside the name so it
+  catches the eye. A window elevated any other way — right-click ▸ Run as administrator, a
+  policy — is marked and restricted in exactly the same way.
 - **No console window comes with it.** A debug build of OneTerm keeps a console so
   developers can read the log; an elevated one gives that console up at start-up, because a
   window started through `runas` gets a console of its own that nobody asked for. A release

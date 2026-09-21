@@ -95,6 +95,7 @@
         "table.row.border": "#dcdfe8b3",
         "tiles.background": "#f0f0f1",
         "title_bar.background": "#f0f0f1",
+        "warning": "#854d0e",
         "title_bar.border": "#dcdfe8",
         "status_bar.background": "#f0f0f1",
         "status_bar.border": "#dcdfe8",

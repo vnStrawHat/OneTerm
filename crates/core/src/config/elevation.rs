@@ -338,6 +338,23 @@ pub fn window_title(elevation: Elevation) -> &'static str {
     }
 }
 
+/// The same title, split where the **app** title bar colours it: the plain
+/// application name, and the elevation suffix drawn beside it in the theme's
+/// `warning` (`DEC-0019` M5, amended by the owner 2026-09-21 to highlight the
+/// suffix).
+///
+/// The OS title bar takes [`window_title`] whole and plain — a window title is
+/// not a place with spans — so the two must not drift. They cannot:
+/// `the_two_spans_are_exactly_the_window_title` concatenates these and asserts
+/// the result *is* `window_title(elevation)`, for every variant.
+pub fn window_title_parts(elevation: Elevation) -> (&'static str, Option<&'static str>) {
+    match elevation {
+        Elevation::NotElevated => ("OneTerm", None),
+        Elevation::Elevated => ("OneTerm", Some(" (Administrator)")),
+        Elevation::Unknown => ("OneTerm", Some(" (elevation unknown)")),
+    }
+}
+
 /// Record what the process token said. Called once, from `run()`.
 pub fn set_elevation(value: Elevation) {
     ELEVATION.store(value as u8, Ordering::Relaxed);
@@ -487,6 +504,39 @@ mod tests {
         assert_eq!(elevation(), Elevation::NotElevated);
         assert!(!is_restricted());
         assert_eq!(window_title(elevation()), "OneTerm");
+    }
+
+    /// The app title bar draws the suffix in its own colour, so it draws two
+    /// spans — and the OS title bar draws one plain string. This is what keeps
+    /// them the same words: the split is a view of `window_title`, not a second
+    /// copy of it that can drift.
+    #[test]
+    fn the_two_spans_are_exactly_the_window_title() {
+        for elevation in [
+            Elevation::NotElevated,
+            Elevation::Elevated,
+            Elevation::Unknown,
+        ] {
+            let (name, suffix) = window_title_parts(elevation);
+            assert_eq!(
+                format!("{name}{}", suffix.unwrap_or_default()),
+                window_title(elevation),
+                "the spans must concatenate to exactly the OS title for {elevation:?}"
+            );
+        }
+    }
+
+    /// An ordinary window has no suffix to highlight, so there is no second span
+    /// at all — not an empty one, which would still occupy the layout.
+    #[test]
+    fn an_unrestricted_window_has_no_suffix_span() {
+        let (name, suffix) = window_title_parts(Elevation::NotElevated);
+        assert_eq!(name, "OneTerm");
+        assert_eq!(suffix, None);
+        // ...and both restricted states do have one, so the test above is not
+        // vacuously true.
+        assert!(window_title_parts(Elevation::Elevated).1.is_some());
+        assert!(window_title_parts(Elevation::Unknown).1.is_some());
     }
 
     #[test]

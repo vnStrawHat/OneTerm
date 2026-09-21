@@ -306,8 +306,12 @@ impl OneTermWorkspace {
         let title_bar = cx.new(|cx| {
             // M5: the same string the OS title bar carries, from one source, so
             // the two markers cannot disagree.
+            // The plain application name only: the app menu bar renders this, and
+            // the kit gives a menu name no place for a second colour. The
+            // elevation suffix is drawn beside it by `AppTitleBar::render`, which
+            // is ours to colour (`DEC-0019` M5 as amended).
             let bar = AppTitleBar::new(
-                oneterm_core::elevation::window_title(oneterm_core::elevation::elevation()),
+                oneterm_core::elevation::window_title_parts(oneterm_core::elevation::elevation()).0,
                 window,
                 cx,
             );

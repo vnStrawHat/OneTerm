@@ -430,9 +430,11 @@ under `~\.OneTerm\`.
    "file not found" rather than as a difference, and the old wording would have missed it.
 3. **E2 — the marked window.** Right-click `oneterm.exe` → *Run as administrator*, consent.
    Screenshot showing **both** markers at once: the taskbar / OS title reading
-   `OneTerm (Administrator)`, and the in-app title bar reading the same. The title text is
-   the whole marker — there is deliberately **no** coloured title-bar border (owner ruling,
-   `DEC-0019` M5 as amended), so a coloured border appearing here is a failure, not a pass.
+   `OneTerm (Administrator)` **plain**, and the in-app title bar reading the same words with
+   **`(Administrator)` highlighted** beside the application name — the theme's warning
+   colour, bold. There is deliberately **no** coloured title-bar *border* (owner ruling,
+   `DEC-0019` M5 as amended twice), so a coloured border appearing here is a failure, not a
+   pass; and the OS title bar must stay plain, because a window title cannot carry a colour.
    `evidence/US-0131-E2-marked-window.png`.
 
 3b. **No console window.** The elevated window must open **alone** — no console window
@@ -497,9 +499,13 @@ under `~\.OneTerm\`.
    saying changes here are not saved.
    `evidence/US-0131-E8-about-updates.png`, `evidence/US-0131-E8-settings-readonly.png`.
 10. **Theme check.** Switch the elevated window between one light and one dark built-in theme
-    and confirm **the title still reads `OneTerm (Administrator)` in both**. The point of the
-    step outlives the border's removal, and is now the stronger one: a theme can change any
-    colour, so the marker had to be something a theme cannot touch.
+    and confirm **the title still reads `OneTerm (Administrator)` in both**, and that the
+    highlighted suffix is still *legible* in both — not merely coloured. The words are what a
+    theme cannot take away; the colour is checked by
+    `python scripts/check-theme-contrast.py`, which now measures `warning` against
+    `title_bar.background` in all 39 variants, so this step is confirming the gate rather
+    than substituting for it. A light theme is the one worth looking at: the kit's own amber
+    fails there, which is why every theme sets the token explicitly.
 11. **E9 — the crash store.** In an elevated debug build, trigger a panic. The report must
     land in `<config>\crashes\elevated\`, **no** crash dialog may appear in the elevated
     window, and the normal window's dialog on its next launch must not show it.
@@ -726,6 +732,79 @@ left `scripts/check-theme-contrast.py`'s `SURFACES` table untouched. Removing it
 removes a marker, not a constraint — the contrast gate is unaffected in both directions, and
 `DEC-0019`'s own rule that "colour alone is not a marker" always meant the text was carrying
 the weight.
+
+### Acceptance tweak, 2026-09-21 — the suffix is highlighted in the app title bar
+
+Owner acceptance: **checklist steps 3-15 all passed**. One tweak on top: in the **app**
+title bar the suffix must stand out in a prominent colour. The **OS** title bar stays plain.
+
+**Shape.** Two spans, and the second one is ours. The app title bar's title is the app
+*menu's* name, which the kit renders as a single string with no place for a second colour —
+and `docs/PROJECT.md` forbids patching `gpui-component`. So the menu keeps the plain
+`OneTerm` and `AppTitleBar::render` draws ` (Administrator)` beside it, in
+`cx.theme().warning`, bold.
+
+`window_title()` stays the single source: `window_title_parts()` is a **view** of it, not a
+second copy, and `the_two_spans_are_exactly_the_window_title` concatenates the spans and
+asserts the result *is* `window_title(elevation)` for all three states. That is what stops
+the coloured form and the plain OS form drifting apart.
+`an_unrestricted_window_has_no_suffix_span` checks the other direction, and asserts both
+restricted states *do* have one so it cannot pass vacuously.
+
+**The token, and why this was not one line.** `warning` looked like the natural choice and
+turned out not to be a per-theme token at all: **no theme in `crates/theme/themes/` defined
+it**, so all 39 variants were inheriting the kit's own default — an amber (`yellow-400` /
+`yellow-500`) that the contrast gate could not even see, because it is not in the JSON the
+gate reads.
+
+Measured against every variant's `title_bar.background`, that kit amber **fails on all 12
+light themes** (1.24:1 on Hybrid Light, 1.40 on Gruvbox Light — yellow on a pale title bar).
+It passes comfortably on all 27 dark ones. Surveying every token the themes *do* define, only
+four clear the floor there at all — `accent.foreground` (5.92), `foreground` (5.65),
+`muted.foreground` (5.00), `secondary.foreground` (4.88) — and not one of them is a
+highlight: three are the ordinary text colours and the fourth is "text on an accent fill".
+There was no existing token that was both prominent and legible everywhere.
+
+So **`warning` is now an explicit OneTerm theme token**, set by all 39 variants:
+
+- the **27 dark** variants take exactly `#facc15`, the kit's own value — what they already
+  rendered, so nothing changes visually there;
+- the **12 light** variants take a darker shade of the kit's own yellow ramp. Lightness only,
+  same hue family, the smallest move that clears the floor with a little margin:
+
+  | Variant | Value | Ratio on its title bar |
+  | --- | --- | --- |
+  | Aurora Light | `#a16207` | 4.71 |
+  | macOS Classic Light | `#a16207` | 4.88 |
+  | Gruvbox Light | `#854d0e` | 4.99 |
+  | Mellifluous Light | `#854d0e` | 5.14 |
+  | Catppuccin Latte | `#854d0e` | 5.18 |
+  | Molokai Light | `#854d0e` | 5.38 |
+  | Hybrid Light | `#713f12` | 5.62 |
+  | Ayu Light | `#854d0e` | 5.80 |
+  | Solarized Light | `#854d0e` | 5.82 |
+  | Flexoki Light | `#854d0e` | 5.99 |
+  | Zed One Light | `#854d0e` | 6.02 |
+  | Everforest Light | `#854d0e` | 6.27 |
+
+**12 variants changed appearance; 39 gained the explicit token.** Making it explicit
+everywhere — rather than only in the 12 that needed it — is what lets the gate measure it the
+same way it measures every other token, from the repository's own JSON. The alternative was
+teaching `check-theme-contrast.py` a literal copied out of `gpui-component`'s default theme,
+which would silently go stale the next time the kit is bumped.
+
+`warning` on `title_bar.background` joined `SURFACES` with its draw site, as the script's own
+contract requires. The gate now reports **1404 pairings across 390 rows** (was 1365 / 351),
+all at or above 4.5:1.
+
+**Tests:** `config::elevation::tests::the_two_spans_are_exactly_the_window_title` and
+`::an_unrestricted_window_has_no_suffix_span` (`oneterm-core`), plus
+`python scripts/check-theme-contrast.py` for the colour.
+
+**Frame:** `evidence/US-0132-title-bar-unelevated.png` — the non-elevated title bar,
+unchanged, with no suffix span at all. The elevated form cannot be framed from this session
+(no consent prompt), which is why the split is proven at unit level and the colour by the
+gate; checklist steps 3 and 10 are the closing evidence.
 
 ### Gaps
 

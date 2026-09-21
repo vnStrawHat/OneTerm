@@ -81,7 +81,8 @@ impl Render for AppTitleBar {
                             .flex_none()
                             .path("icons/terminal.svg"),
                     )
-                    .child(self.app_menu_bar.clone()),
+                    .child(self.app_menu_bar.clone())
+                    .children(elevation_suffix(cx)),
             )
             .child(
                 div()
@@ -94,6 +95,35 @@ impl Render for AppTitleBar {
                     .child((self.child.clone())(window, cx)),
             )
     }
+}
+
+/// The elevation suffix, highlighted, or nothing at all in an ordinary window.
+///
+/// The marker is the **title text** (`DEC-0019` M5, amended by the owner
+/// 2026-09-21 — a warning-coloured border came first and was removed), and this
+/// is the half of it that is coloured. The OS title bar carries the same words
+/// plain, because a window title has no spans; `window_title_parts` is a view of
+/// `window_title` rather than a second copy, so the two cannot drift.
+///
+/// It is a sibling of the app menu bar rather than part of it: the kit renders a
+/// menu name as one string and gives it no place for a second colour, and
+/// patching `gpui-component` is not allowed (`docs/PROJECT.md`).
+///
+/// `warning` is now set explicitly by every theme in `crates/theme/themes/` and
+/// is checked against `title_bar.background` by
+/// `scripts/check-theme-contrast.py`, so the marker is legible in all 39
+/// variants rather than merely coloured.
+fn elevation_suffix(cx: &App) -> Option<AnyElement> {
+    let (_, suffix) =
+        oneterm_core::elevation::window_title_parts(oneterm_core::elevation::elevation());
+    Some(
+        div()
+            .flex_none()
+            .font_weight(gpui::FontWeight::BOLD)
+            .text_color(cx.theme().warning)
+            .child(suffix?)
+            .into_any_element(),
+    )
 }
 
 /// Build the right-dock mode toggle group used in the title bar.
