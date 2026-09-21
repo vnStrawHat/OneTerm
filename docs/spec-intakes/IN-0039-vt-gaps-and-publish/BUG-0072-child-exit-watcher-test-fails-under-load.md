@@ -104,7 +104,8 @@ branch out of `register`, must be able to see from the docs that they are breaki
 
 ### Reconciliation
 
-Changed: `docs/terminal-backend.md` § 6.3 (the "Child exit" bullet) and the module doc of
+Changed: `docs/terminal-backend.md` § 6.3 (the "Child exit" bullet) and § 6.2 (the sentence
+that named the wrong wake mechanism — verifier note F2), and the module doc of
 `crates/vt/src/pty/windows/child.rs`. `crates/vt/src/pty/mod.rs`'s "Both are race-free"
 was re-read and is now true as written, so it stays. `docs/agents/*` and the `IN-0029` LLD
 describe the seam, not the ordering inside the watcher, and needed no edit.
@@ -249,10 +250,20 @@ it constrains this one file, not future work elsewhere, so it does not earn a `D
 - `deregister` clears the interest only — the flag is the record that the exit happened, and
   a re-registration after a deregistration must still wake.
 
-Tests: `an_exit_before_registration_still_wakes_the_poller` (new, deterministic — it spins on
-the internal `exited` flag under a 5 s deadline, so `register` is provably second, with no
-sleep), and `wait_for_exit` re-shaped as described above. The 200 ms poll timeout is kept: it
-is what lets the loop re-poll rather than block forever if a wake is genuinely lost.
+- `Notify` also carries `posted`, so the recorded exit is posted once per registration and a
+  `reregister` after the wake posts nothing (verifier note F3); `deregister` clears it.
+
+Tests — three new, one re-shaped, all seam-free (each reads only the `exited` flag the product
+already keeps):
+
+- `an_exit_before_registration_still_wakes_the_poller` — the defect itself. It spins on the
+  recorded exit under a 5 s deadline, so `register` is provably second, with no sleep.
+- `the_exit_is_queued_before_it_is_recorded` — the other ordering, over 30 children and with no
+  poller in it at all.
+- `a_recorded_exit_is_posted_once_per_registration` — the 1 / 0 / 1 wake counts across
+  `register` / `reregister` / `deregister` + `register`.
+- `wait_for_exit` re-shaped as described above. The 200 ms poll timeout is kept: it is what
+  lets the loop re-poll rather than block forever if a wake is genuinely lost.
 
 ### Runs
 
@@ -277,26 +288,67 @@ fix each rather than reverting the type:
 
 | Mutation | Result |
 |---|---|
-| `register` stops posting when the exit is already recorded | `an_exit_before_registration_still_wakes_the_poller` **FAIL 3/3**, "registering after the exit must still wake the poller", each run spending the full 5 s on the poll |
-| The callback stops recording the exit (`notify.exited = true` deleted) | **FAIL 3/3** on the 5 s deadline, "the wait callback never ran for an already-exited child" |
-| The callback posts **before** it sends (notify-before-enqueue) | Not deterministically detectable; not run. See Gaps. |
+| m1: `register` stops posting when the exit is already recorded | `an_exit_before_registration_still_wakes_the_poller` **FAIL 3/3**, "registering after the exit must still wake the poller", each run spending the full 5 s on the poll |
+| m2: the callback stops recording the exit (`notify.exited = true` deleted) | **FAIL 3/3** on the 5 s deadline, "the wait callback never ran for an already-exited child" |
+| m3: the callback posts **before** it sends (notify-before-enqueue) | `the_exit_is_queued_before_it_is_recorded` **FAIL 10/10**; the five tests that shipped before it detect m3 **0/10** |
+| m4: `register` posts on every registration, not once | `a_recorded_exit_is_posted_once_per_registration` **FAIL 3/3**, "re-registering must not post the same exit again", left: 2 |
+
+m1 and m2 are **not** equal halves, and the first version of this table implied they were
+(`evidence/BUG-0072-verify.md` F4). m1 is the one that pins the user-visible behaviour — a late
+`register` that never wakes. m2 fails on the test's own *precondition*: with the exit never
+recorded, the spin that orders the test times out after 5 s and the wake assertion is never
+reached. m2 shows the flag is load-bearing for the test, not that the product contract is
+guarded twice.
 
 The unfixed product itself is covered by the probe in Context: `woken=false` with the event
-already in the channel, reproducible on every run once the callback is given a head start.
+already in the channel, reproducible on every run once the callback is given a head start. The
+independent verifier reproduced it 4/4 on `main` and `woken=true` 5/5 on the fix.
+
+### Rework after independent verification (2026-09-21)
+
+`evidence/BUG-0072-verify.md` — **PASS WITH NOTES**, four notes, all four taken:
+
+- **F1 (medium) — the "enqueue before wake is unpinnable" gap was wrong on its own terms, and
+  is retracted.** The first version of this packet argued that pinning the ordering needed a
+  test seam in production code. It does not: the callback already sequences `send` →
+  `exited = true` under the lock, and the new test already reads that flag, so *"the recorded
+  exit is already in the channel"* states exactly the ordering with nothing injected.
+  `the_exit_is_queued_before_it_is_recorded` does that over 30 children and takes no poller at
+  all. Measured against m3: the new test fails 10/10 where the five shipped tests failed 0/10.
+  The gap is now a guard.
+- **F2 (low) — `docs/terminal-backend.md` § 6.2 described the wrong wake mechanism.** It said
+  the child watcher calls `poller.notify()`. It posts a keyed `CompletionPacket`, and that is
+  not interchangeable: a `notify()` wake arrives as a keyless interrupt, which
+  `event_loop.rs:373-375` `continue`s past before it compares the token — the sentence
+  described a mechanism that would lose the exit the same way this defect did. Corrected, with
+  the reason, one paragraph above the § 6.3 bullet this packet rewrote.
+- **F3 (low) — every re-registration re-posted the exit.** On Windows `register` *is*
+  `reregister` (`crates/vt/src/pty/windows.rs`), and the first version posted unconditionally
+  whenever the exit was recorded. No workspace consumer registers more than once, but
+  `EventedReadWrite::reregister` is part of the surface this intake owns, and the
+  Alacritty-shaped loop this API descends from re-registers every iteration to toggle write
+  interest: such an embedder, still polling after the exit to drain trailing output, would have
+  spun at 100 % CPU. `Notify` now carries a `posted` mark, so the wake is owed **once per
+  registration**. `deregister` clears it — the transport cannot know whether the event was read,
+  and a missed wake costs more than a spare one — so the rule is *exit → register = 1 wake,
+  re-register = 0, deregister + register = 1*. Chosen, documented in § 6.3 and the module doc,
+  and pinned by `a_recorded_exit_is_posted_once_per_registration` (m4: FAIL 3/3).
+- **F4 (low) — the mutation record presented m1 and m2 as equal halves.** Corrected above.
+
+The verifier's own probes (40 children × 2000 register/deregister cycles against live
+callbacks, the `Arc<Poller>` keeping the poller alive under the interest, and the wake counts
+around deregistration) found no deadlock, no use-after-free and the documented wake counts.
+Nothing in the shipped fix changed as a result of F1, F2 or F4; F3 is the one behaviour change,
+and it only removes wakes that no consumer in this repository ever asked for.
 
 ### Gaps
 
-- **The enqueue-before-wake half of the contract is documented, not pinned by a test.** Moving
-  the `send` below the `post` leaves a window of a few instructions; `wait_for_exit` would fail
-  only when a 200 ms poll expires inside it. Pinning it would mean injecting the callback's two
-  steps behind a test seam in production code — a seam for a two-line ordering that the module
-  doc and § 6.3 now both state at the point of change. Not taken; recorded here instead.
 - **Windows only.** The Unix reaper was read and has no equivalent hole (a level-triggered
   socket byte survives a late registration), but nothing on Unix was run from here. CI covers it.
-- **The benign double-post is untested.** Registering twice around an exit posts two packets
-  and the second carries no event. Both consumers `continue` on that path, which is
-  pre-existing behaviour (`deregistering_keeps_the_exit_observable` already covers the
-  channel's side), so no test was added for it.
+- **The eventless wake after `deregister` + `register` is asserted as a count, not followed
+  through a consumer.** `a_recorded_exit_is_posted_once_per_registration` proves the 1 / 0 / 1
+  pattern at the watcher; that both shipped consumers `continue` past a wake whose
+  `next_child_event()` is `None` is read from their code, not measured.
 - **No consumer-level regression test.** `crates/local-shell`'s loop is unit-tested against a
   loopback PTY (`event_loop_tests.rs`) whose stub child watcher has no such race, so the fix is
   proved at the watcher, not through the session. Reproducing it through a real shell would

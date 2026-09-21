@@ -25,6 +25,10 @@
 //!    poller is registered on yet; `register` then finds the exit already
 //!    recorded and posts the packet itself.
 //!
+//! One wake per registration, not per call: re-registering after the exit has
+//! been posted posts nothing more, and a poller registered after a
+//! [`ChildExitWatcher::deregister`] is woken again.
+//!
 //! The shape — a wait callback feeding an `mpsc` channel plus an IOCP completion
 //! packet, with the poll interest behind a mutex — follows Alacritty's
 //! `alacritty_terminal/src/tty/windows/child.rs`
@@ -80,16 +84,23 @@ struct Interest {
 #[derive(Default)]
 struct Notify {
     interest: Option<Interest>,
-    /// Set by the callback once the exit is in the channel.
+    /// Set by the callback once the exit is in the channel — never before, so
+    /// a watcher that can see this can already receive the event.
     exited: bool,
+    /// Whether the exit's wake has been posted to the interest installed
+    /// *now*. Registering is re-registering on Windows, so without this an
+    /// embedder whose loop re-registers to toggle write interest would be
+    /// handed a fresh wake on every pass once the child had exited.
+    posted: bool,
 }
 
 impl Notify {
     /// Wake the registered poller, if there is one. Best effort: a dead poller
     /// means the caller is already gone.
-    fn post(&self) {
+    fn post(&mut self) {
         if let Some(interest) = self.interest.as_ref() {
             let _ = interest.poller.post(CompletionPacket::new(interest.event));
+            self.posted = true;
         }
     }
 }
@@ -201,22 +212,30 @@ impl ChildExitWatcher {
     /// Record where to post the child's exit — and post it at once when the
     /// child has already exited, because the callback that fired before this
     /// call had nowhere to post to.
+    ///
+    /// At most one wake per registration: re-registering an interest that has
+    /// already been woken posts nothing, so a loop that re-registers every
+    /// iteration does not spin once the child is gone.
     pub(super) fn register(&self, poller: &Arc<Poller>, event: Event) {
         let mut notify = self.sender.notify();
         notify.interest = Some(Interest {
             poller: poller.clone(),
             event,
         });
-        if notify.exited {
+        if notify.exited && !notify.posted {
             notify.post();
         }
     }
 
-    /// Stop waking a poller that no longer cares. The recorded exit stays: a
-    /// watcher registered again afterwards is owed the wake as much as a
-    /// watcher registered for the first time.
+    /// Stop waking a poller that no longer cares.
+    ///
+    /// The recorded exit stays, and so does the wake that goes with it: a
+    /// poller registered after this one is owed it as much as the first was,
+    /// because nothing here knows whether the event was ever read.
     pub(super) fn deregister(&self) {
-        self.sender.notify().interest = None;
+        let mut notify = self.sender.notify();
+        notify.interest = None;
+        notify.posted = false;
     }
 
     // `DEC-0016`, and the client that provoked it is `BUG-0055`.
@@ -287,6 +306,32 @@ mod tests {
         // SAFETY: `Child` hands over its own process handle exactly once.
         let handle = unsafe { OwnedHandle::from_raw_handle(child.into_raw_handle()) };
         (ChildExitWatcher::new(handle).expect("watch the child"), pid)
+    }
+
+    /// Block until the callback has recorded the exit, so that whatever the
+    /// test does next is provably second.
+    fn wait_until_recorded(watcher: &ChildExitWatcher) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !watcher.sender.notify().exited {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the wait callback never ran for an already-exited child"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    /// One `poller.wait` with a short timeout: how many child-token wakes are
+    /// pending right now.
+    fn pending_wakes(poller: &Arc<Poller>) -> usize {
+        let mut events = polling::Events::new();
+        poller
+            .wait(&mut events, Some(Duration::from_millis(200)))
+            .expect("poll");
+        events
+            .iter()
+            .filter(|e| e.key == PTY_CHILD_EVENT_TOKEN)
+            .count()
     }
 
     /// Poll until the child token wakes us, and require the exit to be there on
@@ -370,15 +415,7 @@ mod tests {
             .unwrap();
         child.wait().expect("reap the child first");
         let (watcher, _) = watcher_for(child);
-
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !watcher.sender.notify().exited {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the wait callback never ran for an already-exited child"
-            );
-            std::thread::yield_now();
-        }
+        wait_until_recorded(&watcher);
 
         watcher.register(&poller, Event::readable(PTY_CHILD_EVENT_TOKEN));
 
@@ -393,6 +430,72 @@ mod tests {
         assert_eq!(
             watcher.next_event(),
             Some(ChildEvent::Exited(Some(ExitStatus::from_raw(5))))
+        );
+    }
+
+    /// The first half of the contract, with no poller in it: the callback
+    /// queues the exit **before** it records it, and it records it under the
+    /// same lock it posts the wake from — so a watcher that can see the
+    /// recorded exit can already receive the event, and a wake can never
+    /// arrive ahead of it.
+    ///
+    /// Repeated, because a reversed order leaves a window only a few
+    /// instructions wide: 30 children make it land.
+    #[test]
+    fn the_exit_is_queued_before_it_is_recorded() {
+        for _ in 0..30 {
+            let mut child = Command::new("cmd.exe")
+                .args(["/c", "exit 0"])
+                .spawn()
+                .unwrap();
+            child.wait().expect("reap the child first");
+            let (watcher, _) = watcher_for(child);
+            wait_until_recorded(&watcher);
+
+            assert!(
+                watcher.next_event().is_some(),
+                "the exit must be in the channel before anything can observe it, \
+                 because the wake is posted from there on"
+            );
+        }
+    }
+
+    /// One wake per registration. Re-registering is what an embedder's loop
+    /// does to toggle write interest, and on Windows it lands on the very same
+    /// `register`; posting again each time would spin such a loop at 100 % CPU
+    /// for as long as the exited session stayed open.
+    #[test]
+    fn a_recorded_exit_is_posted_once_per_registration() {
+        let poller = Arc::new(Poller::new().unwrap());
+        let mut child = Command::new("cmd.exe")
+            .args(["/c", "exit 0"])
+            .spawn()
+            .unwrap();
+        child.wait().expect("reap the child first");
+        let (watcher, _) = watcher_for(child);
+        wait_until_recorded(&watcher);
+
+        let interest = Event::readable(PTY_CHILD_EVENT_TOKEN);
+        watcher.register(&poller, interest);
+        assert_eq!(pending_wakes(&poller), 1, "the exit is owed one wake");
+        assert!(watcher.next_event().is_some(), "and that wake carries it");
+
+        watcher.register(&poller, interest);
+        watcher.register(&poller, interest);
+        assert_eq!(
+            pending_wakes(&poller),
+            0,
+            "re-registering must not post the same exit again"
+        );
+
+        // A new poller has not been woken yet, and nothing here knows whether
+        // the event was read, so the wake is owed again.
+        watcher.deregister();
+        watcher.register(&poller, interest);
+        assert_eq!(
+            pending_wakes(&poller),
+            1,
+            "a registration after a deregistration is owed the wake"
         );
     }
 
