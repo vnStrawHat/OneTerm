@@ -109,6 +109,17 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings   # also type-checks every target (no separate build step)
 cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings
 cargo test --workspace
+# The `#[ignore]`d elevation tests (`IN-0043` M1/M4): they flip a process-global switch,
+# so they cannot share a test process — which is why they are ignored — and an ignored
+# test runs in no gate unless something asks for it. These five are the only automated
+# proof of the M1 restore gate and three M4 guards. Per crate, not per test name, so a
+# new elevation test in one of the three is picked up for free.
+cargo test -p oneterm-workspace --lib -- --ignored --test-threads=1
+cargo test -p oneterm-session-ui --lib -- --ignored --test-threads=1
+cargo test -p oneterm-settings-ui --lib -- --ignored --test-threads=1
+python scripts/check-ignored-tests.py # ...and every OTHER ignored test is accounted for,
+                                      # so a new one anywhere fails the gate until someone
+                                      # decides what it is (re-record with --write)
 cargo test -p oneterm-vt --features vt-paranoid # the VT engine's whole-history integrity walk
 cargo test -p oneterm-vt --features regex # the optional regex matcher, and the literal half under it
 # `oneterm-vt` is consumed by other projects as a git dependency (it is not

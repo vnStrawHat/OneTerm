@@ -104,7 +104,7 @@ mod tests {
     /// queue is the deterministic observation point. The packet previously
     /// called this untestable. It is not.
     #[gpui::test]
-    #[ignore = "flips the process-global elevation switch; run alone with --exact"]
+    #[ignore = "flips the process-global elevation switch; run with --test-threads=1"]
     fn an_elevated_window_queues_no_update_config_write(cx: &mut gpui::TestAppContext) {
         struct RestrictedElevation;
         impl Drop for RestrictedElevation {

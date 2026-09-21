@@ -394,6 +394,11 @@ the first version's step 9 not falsifiable and steps 2-4 unable to catch three o
 majors. Two of the steps below are one keystroke each and both **failed** on the branch the
 verifier read.
 
+**`Elevation::Unknown` has no step here, deliberately.** The token query cannot be made to
+fail by hand, so there is nothing for a person to do; it is covered by
+`an_unknown_token_is_restricted_but_claims_no_elevation` and end to end by the two
+re-verification probes, which drove the whole spawn and layout paths under `Unknown`.
+
 **Which directory to hash.** A `fast-dev` build resolves `config_dir()` to the *relative*
 `target/`, so the five documents live under the **launcher's working directory**, not
 necessarily the repository root. Start the normal window from the repository root and hash
@@ -420,13 +425,15 @@ under `~\.OneTerm\`.
    marker alone is not proof; this is.
 5. **The two one-keystroke checks the old checklist could not catch.** Both failed before
    this rework.
-   - **MAJ-1.** In the elevated tab run `echo %PATH%` (or `$env:PATH` in PowerShell) and
-     `where.exe cmd`. `PATH` must be the machine's, with **no** entry from `terminal.json`'s
-     `shell.env`, and `cmd` must resolve under `%SystemRoot%\System32`. Also `cd` with no
-     argument: the working directory must be the profile's home, not a `shell.cwd` from
-     `terminal.json`. To make the check mean something, set
-     `"shell": { "env": { "PATH": "C:\\Users\\<you>\\bin" }, "cwd": "C:\\Users\\<you>\\stage" }`
-     in `terminal.json` **before** step 3 and confirm neither appears.
+   - **MAJ-1.** Before step 3, poison `terminal.json` so the check can fail:
+     `"shell": { "env": { "PATH": "C:\\Users\\<you>\\bin", "PSModulePath": "C:\\Users\\<you>\\modules" }, "cwd": "C:\\Users\\<you>\\stage" }`.
+     Then in the elevated **Command Prompt** tab run `echo %PATH%` and `where.exe cmd`:
+     `PATH` must be the machine's with **no** entry from that file, and `cmd` must resolve
+     under `%SystemRoot%\System32`. In an elevated **PowerShell** tab run `$env:PATH` and
+     `$env:PSModulePath` — `PSModulePath` is the PowerShell-specific vector, because it
+     autoloads a module on the first unresolved command name, so it is the one to check in
+     the shell that has it. Finally `cd` with no argument: the working directory must be the
+     profile's home, not the `shell.cwd` above.
      `evidence/US-0131-E11-path-and-cwd.png`.
    - **MAJ-3.** Press `Ctrl+Shift+N` in the elevated window. **Nothing must open** — no Quick
      Connect dialog, no session dialog. `evidence/US-0131-E12-ctrl-shift-n.png`.
@@ -437,11 +444,24 @@ under `~\.OneTerm\`.
    **no right dock at all** — no Session tree, no SFTP Browser, no Agent panel — and no
    SSH Client / Agent / None segments in the title bar.
    `evidence/US-0131-E4-elevated-plus-menu.png`, `evidence/US-0131-E4-no-right-dock.png`.
+
+   **Then the other direction**, which nothing else in this list checks: `apply_key_bindings`
+   re-adds only the *allowed* actions, so a typo in the policy table would silently unbind
+   the terminal itself and an elevated window that cannot open a tab would look like a build
+   problem rather than a classification one. In the elevated window confirm **`Ctrl+T` opens
+   a tab**, **`Ctrl+Shift+C` / `Ctrl+Shift+V` copy and paste**, **a split works** (context
+   menu ▸ Split Right) and **`Ctrl+F` opens the search bar**. The packet's own risk 4 is a
+   guard whose condition is wrong in the other direction; this is that check.
+   `evidence/US-0131-E14-allowed-actions.png`.
 7. **No-argument case.** That window was started with **no** argument, which is the proof
    there is no elevated-but-unrestricted state: it is marked and restricted anyway.
-8. **MAJ-4 — no log file.** Set `"logging": { "local": true, "directory": "<a temp dir>",
-   "write_mode": "overwrite" }` in `terminal.json` before step 3. After opening the elevated
-   window, that directory must contain **no new file**.
+8. **MAJ-4 — no log file, and nothing truncated.** Before step 3, create a directory holding
+   one file with known content (`"keep me" > <dir>\canary.log`), record its hash, and set
+   `"logging": { "local": true, "directory": "<dir>", "write_mode": "overwrite" }` in
+   `terminal.json`. After opening the elevated window that directory must contain **no new
+   file** *and* `canary.log` must still hash the same. The existing file is the point:
+   "no new file" catches creation, and `overwrite` — which truncates — is the destructive
+   half of MAJ-4 and would leave the file count unchanged.
    `evidence/US-0131-E13-no-terminal-log.png`.
 9. **E8 — the updater is absent.** OneTerm ▸ About in the elevated window: one line,
    *"Updates are checked and installed from the normal OneTerm window."*, no status, no
@@ -576,6 +596,81 @@ only the release `config_dir()` (from `%USERPROFILE%`) makes that harmless. A de
 `fast-dev` build resolves `config_dir()` relative to the launcher's working directory, which
 any same-user process chooses when it calls `ShellExecuteExW` itself. Recorded in the detail
 design as a developer-build-only exposure and a severity multiplier, not a finding on its own.
+
+### Final pass, 2026-09-21 — the re-verification's six new items
+
+Re-verification (`evidence/IN-0043-verify.md`, "Re-verification of 24226d4c") returned
+**PASS** on all three packets and recorded six new minors, none blocking. All six are closed.
+
+**NEW-4 — the five security tests ran in no gate.** The one that mattered: they are the only
+automated proof of the M1 restore gate and three M4 guards, and `cargo test --workspace`
+skips an ignored test. A reader would reasonably have assumed CI covered them. Four lines
+now, added to `scripts/ci-local.ps1`, `scripts/ci-local.sh`, `AGENTS.md` §4 and the **Full
+workspace quality gate** job of `.github/workflows/ci.yml`, immediately after
+`cargo test --workspace`:
+
+```text
+cargo test -p oneterm-workspace   --lib -- --ignored --test-threads=1   # 3 tests
+cargo test -p oneterm-session-ui  --lib -- --ignored --test-threads=1   # 1
+cargo test -p oneterm-settings-ui --lib -- --ignored --test-threads=1   # 1
+python scripts/check-ignored-tests.py                                   # the census
+```
+
+Per **crate**, not per test name, so a new elevation test in one of the three is picked up
+for free where a hand-written list of five names would silently not be. `--ignored` already
+selects only the ignored tests and `--test-threads=1` makes them sequential in one process,
+each restoring the global on `Drop` before the next starts — so the `#[ignore]` reason text
+relaxed from *"run alone with `--exact`"* to *"run with `--test-threads=1`"*, which is what
+the gate actually does. Linux-only in CI: all five drive pure logic and gpui's
+`TestAppContext`, with no `cfg(windows)` site in them.
+
+The census (`scripts/check-ignored-tests.py` + `scripts/ignored-tests.txt`, **17** entries
+today) is what stops the scoping rotting: it diffs the full `--ignored --list` against a
+checked-in file, so **any** new ignored test anywhere fails the gate until someone records it
+and decides whether it belongs in the elevation run. Same pattern as `elevated_policy` — an
+exhaustive table where unclassified fails the build — applied to the ignore list. Re-record
+with `--write` after a deliberate change.
+
+**NEW-1 — the LLD's Interfaces block still declared the removed API.** The behavioural prose
+was reconciled thoroughly and the interface contract was not: `set_elevated(bool)`,
+`is_elevated()` and `process_is_elevated() -> bool` were still declared, with `bool`
+signatures contradicting the three-valued `Elevation` the same document describes. Fixed,
+along with the diagram, the start-up sequence, the token-query snippet and the two prose
+mentions. The snippet now shows the real three-valued body and the paragraph beneath it says
+why a `bool` was the wrong shape.
+
+**NEW-3 — `open_duplicate_ssh_dialog` consults the policy**, like the other three
+`session-ui` entry points. Unreachable today, and that is precisely the reasoning the policy
+table rejects for the `sftp_*` ids: *"unreachable is a property of the current layout and
+this is a property of the action."* One `if`.
+
+**NEW-2, NEW-5, NEW-6 — three documentation gaps, all real.**
+
+- The README said `docks.json` was "read and never written". It is not **read** either, and
+  the visible consequence — an administrator window never restores your saved layout — is
+  the load-bearing half of the MAJ-2 fix and was not stated for users. Now it is, with the
+  reason.
+- `cwd: None` means Duplicate tab and New Terminal Here no longer inherit the live OSC 7
+  working directory in an elevated window. Correct security answer, real behaviour change,
+  documented nowhere. Now in `docs/terminal-backend.md` §6.1.1, the LLD and the README.
+- `docs/agents/persistence.md` — the document `AGENTS.md` tells every agent to read *before
+  changing persisted schemas or storage mechanics* — had no mention of elevation, although
+  this branch made a whole class of writes conditional. It now carries the matrix and the
+  three rules that were each missed once: a first-run default write is a write, a quarantine
+  is a write, and the guard belongs in the shared function — the one place gated at a
+  *builder* instead of at the *restore* is the one that shipped a hole.
+
+**Checklist, three additions.** A step exercising the **allowed** side (`Ctrl+T`, copy/paste,
+split, `Ctrl+F`), because `apply_key_bindings` re-adds only allowed actions and a table typo
+would silently unbind the terminal itself — the packet's own risk 4, and nothing else checked
+it. Step 5 now names `PSModulePath` beside `PATH` and checks it in a PowerShell tab, where it
+autoloads on the first unresolved command. Step 8 points `logging.directory` at a directory
+holding a known file, so `Overwrite` **truncation** is caught and not only creation. Plus one
+preamble sentence saying `Elevation::Unknown` has no manual step deliberately — the query
+cannot be made to fail by hand.
+
+**New test:** `elevated_policy::tests::the_local_terminal_stays_usable_in_an_elevated_window`
+(`oneterm-actions`) — the allowed side, asserted rather than assumed.
 
 ### Gaps
 

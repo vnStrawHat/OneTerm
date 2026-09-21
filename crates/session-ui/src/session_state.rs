@@ -744,7 +744,7 @@ mod tests {
     ///
     /// The packet previously called this untestable. It is not.
     #[test]
-    #[ignore = "flips the process-global elevation switch; run alone with --exact"]
+    #[ignore = "flips the process-global elevation switch; run with --test-threads=1"]
     fn an_elevated_window_writes_no_saved_sessions() {
         struct RestrictedElevation;
         impl Drop for RestrictedElevation {

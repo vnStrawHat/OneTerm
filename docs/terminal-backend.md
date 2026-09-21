@@ -472,7 +472,13 @@ they are not the only ones dropped:
 `ResolvedShell` carries the working directory for the same reason the others are dropped:
 the spawn takes **everything** from `resolve_shell`'s result, so the single guard at the top
 of that function cannot be walked around by a spawner that reads one more field off the
-original configuration. The three directories above are writable only by
+original configuration.
+
+One user-visible consequence, because `cwd` is dropped unconditionally: in an elevated
+window **Duplicate tab** and **New Terminal Here** open at the home directory rather than
+inheriting the tab's live OSC 7 working directory. An elevated shell takes its working
+directory from nothing outside itself — `cmd.exe` searches it before `PATH`, so a cwd is a
+code-execution input and not a convenience. The three directories above are writable only by
 `TrustedInstaller` and the Administrators group, so after resolution the path is checked
 for existence and nothing else. The resolution happens **inside** the elevated process:
 resolving first and passing the path as an argument would make the unelevated process the

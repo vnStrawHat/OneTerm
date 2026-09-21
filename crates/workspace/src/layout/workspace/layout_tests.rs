@@ -715,7 +715,7 @@ impl Drop for RestrictedElevation {
 /// name, so anything that reaches it has already lost. The injected reader
 /// panics if it is called.
 #[test]
-#[ignore = "flips the process-global elevation switch; run alone with --exact"]
+#[ignore = "flips the process-global elevation switch; run with --test-threads=1"]
 fn an_elevated_window_never_reads_the_saved_layout() {
     let _restricted = RestrictedElevation::new();
     let document = startup_dock_document(true, || {
@@ -743,7 +743,7 @@ fn an_elevated_window_never_reads_the_saved_layout() {
 /// have. The pre-existing dock stands in for what `load_layout` used to leave
 /// behind, so the assertion holds whichever way a dock arrives.
 #[test]
-#[ignore = "flips the process-global elevation switch; run alone with --exact"]
+#[ignore = "flips the process-global elevation switch; run with --test-threads=1"]
 fn the_elevated_startup_path_yields_a_dock_state_with_no_right_dock() {
     let mut app = gpui::TestAppContext::single();
     let (dock_area, cx) = dock_area(&mut app);

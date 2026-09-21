@@ -29,6 +29,19 @@ step cargo clippy --workspace --all-targets -- -D warnings
 # `terminal-diagnostics` guards ~200 lines no other step compiles (`US-0090`).
 step cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings
 step cargo test --workspace
+# The `#[ignore]`d elevation tests (`IN-0043` M1/M4). They flip a process-global
+# switch so they cannot share a test process, which is why they are ignored --
+# and an ignored test runs in no gate unless something asks for it. These are
+# the only automated proof of the M1 restore gate and three M4 guards, so the
+# gate asks. Per crate, not per test name: a new elevation test in one of these
+# three is picked up for free, and the census below catches one that lands
+# anywhere else.
+step cargo test -p oneterm-workspace --lib -- --ignored --test-threads=1
+step cargo test -p oneterm-session-ui --lib -- --ignored --test-threads=1
+step cargo test -p oneterm-settings-ui --lib -- --ignored --test-threads=1
+# ...and every other ignored test in the workspace is accounted for, so a new
+# one cannot appear without somebody deciding what it is.
+step python scripts/check-ignored-tests.py
 # IN-0029 R-28: the VT engine's integrity walk is bounded to the rows an
 # operation touched unless `vt-paranoid` is on. This is where the unbounded
 # whole-history invariants are gated.

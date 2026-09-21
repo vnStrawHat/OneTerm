@@ -30,7 +30,7 @@ security boundary.
 | oneterm.exe (the user's window)  |              | oneterm.exe --elevated-shell pwsh|
 |                                  |              |                                  |
 | "+" menu row                     |              | run():                           |
-|   -> WorkspaceCommands           |              |  1 set_elevated(token query)     |
+|   -> WorkspaceCommands           |              |  1 set_elevation(token query)    |
 |      .launch_elevated_shell(kind)|              |  2 parse argv -> ElevatedShell   |
 |         (crates/state)           |              |  3 set_initial_shell(kind)       |
 |   -> crate::elevation (app)      |              |  4 crash paths (crashes/elevated)|
@@ -64,7 +64,7 @@ The HLD left the owning crate open. Split by what each half needs:
 
 | Piece | Crate | Why |
 | --- | --- | --- |
-| `ElevatedShell` enum, argument parser, trusted-path resolution, the `is_elevated()` / `initial_shell()` process globals | `crates/core`, new `src/config/elevation.rs` | pure data and `std` only; `core` is the one crate `settings`, `workspace`, `terminal-view`, `state` and `app` can all name (`crates/state/src/panel_names.rs:9-12`), and it already owns `ShellKind` and `config_dir()` (`crates/core/src/config/shell.rs:17-32`, `:109-124`) |
+| `ElevatedShell` enum, argument parser, trusted-path resolution, the `Elevation` enum, the `is_restricted()` / `initial_shell()` process globals | `crates/core`, new `src/config/elevation.rs` | pure data and `std` only; `core` is the one crate `settings`, `workspace`, `terminal-view`, `state` and `app` can all name (`crates/state/src/panel_names.rs:9-12`), and it already owns `ShellKind` and `config_dir()` (`crates/core/src/config/shell.rs:17-32`, `:109-124`) |
 | The token query, the `ShellExecuteExW` call, the fatal `MessageBoxW` | `crates/app`, new `src/elevation.rs`, `#[cfg(windows)]` | `crates/app` already owns every process-level concern — the allocator (`crates/app/src/lib.rs:28-29`), the crash handlers (`:34-72`), the console Ctrl handler (`:78-93`) — and is the composition root that installs `WorkspaceCommands` (`crates/app/src/init.rs:62-80`). It is also the only crate that already depends on `windows-sys` outside the VT engine (`crates/app/Cargo.toml:67`). |
 
 This keeps `crates/core` free of a `windows-sys` dependency it does not have today, and
@@ -73,7 +73,7 @@ the process global that everyone else reads:
 
 ```rust
 // crates/app/src/lib.rs, first statement of run()
-oneterm_core::elevation::set_elevated(crate::elevation::process_is_elevated());
+oneterm_core::elevation::set_elevation(crate::elevation::process_elevation());
 ```
 
 `crates/terminal-view` never performs the effect; it calls a new `WorkspaceCommands` fn
@@ -91,7 +91,7 @@ process is elevated (M7):
 
 | Step | Call | Notes |
 | --- | --- | --- |
-| 1 | `oneterm_core::elevation::set_elevated(process_is_elevated())` | the token query, section 5. The only source of the marker and of every gate. |
+| 1 | `oneterm_core::elevation::set_elevation(process_elevation())` | the token query, section 5. The only source of the marker and of every gate. Three-valued: a failed query is `Unknown`, which is **restricted** and claims no elevation. |
 | 2 | `oneterm_core::elevation::parse(std::env::args_os())` | section 4. `Err` -> `fatal_message(...)` + `std::process::exit(2)`. `Ok(Some(shell))` -> when elevated, `trusted_program_for(shell)` or exit 3; then `set_initial_shell(shell)`. Steps 1 and 2 are one function, `read_process_identity()`, the first statement of `run()`. |
 | 3 | `oom::init_ballast()` | unchanged (`lib.rs:33`) |
 | 4 | `crash_report::prepare_capture_paths()` | unchanged call site (`lib.rs:34`); `crashes_dir()` now resolves to `<config>/crashes/elevated` when step 1 said elevated |
@@ -290,6 +290,15 @@ decides which side it is on.
 bypassed by construction. Everything a spawn needs now comes out of `resolve_shell`, which
 is what makes that one guard complete.
 
+**The behaviour change this costs, stated rather than discovered.** `cwd: None` is
+unconditional in an elevated window, so **Duplicate tab** and **New Terminal Here** open at
+the home directory instead of inheriting the tab's live OSC 7 working directory
+(`crates/terminal-view/src/panel/duplicate.rs` sets it; the guard discards it). That is the
+correct security answer — the cwd of a live shell is not a value this process may take
+instructions from once it is elevated, and `cmd.exe` searches the working directory before
+`PATH` — and it is a real difference a user will notice between an ordinary window and an
+administrator one. `docs/terminal-backend.md` §6.1.1 says so for users.
+
 Once resolved, the shell is spawned through the ordinary path:
 `PanelSpec::Shell`-equivalent -> `LocalSession::spawn`
 (`crates/local-shell/src/session.rs:37-120`) -> `CreatePseudoConsole` +
@@ -370,7 +379,7 @@ comment carries the rule so the next person to add coalescing reads it.
 
 ### 7. The elevated-mode switch and every seam it gates
 
-**One switch, and it is the token.** `oneterm_core::elevation::is_elevated()` returns the
+**One switch, and it is the token.** `oneterm_core::elevation::is_restricted()` reads the
 value set in step 1 of section 3. The command-line argument selects *which shell opens* and
 nothing else; it never contributes to the marker or to any gate. Stated as one sentence,
 because it is the rule that makes M5 true:
@@ -392,20 +401,35 @@ The token query:
 
 ```rust
 // crates/app/src/elevation.rs   #[cfg(windows)]
-pub fn process_is_elevated() -> bool {
+pub(crate) fn process_elevation() -> Elevation {
     let mut token = std::ptr::null_mut();
-    if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == FALSE { return false; }
+    if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == FALSE {
+        return Elevation::Unknown;              // restricted, and claims nothing
+    }
     let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
     let mut returned = 0u32;
     let ok = GetTokenInformation(token, TokenElevation, (&mut elevation as *mut _).cast(),
                                  size_of::<TOKEN_ELEVATION>() as u32, &mut returned);
     CloseHandle(token);
-    ok != FALSE && elevation.TokenIsElevated != 0
+    if ok == FALSE { return Elevation::Unknown; }
+    if elevation.TokenIsElevated != 0 { Elevation::Elevated } else { Elevation::NotElevated }
 }
 ```
 
-`#[cfg(not(windows))]` it is a `const fn` returning `false`, so every gate below compiles
-away to the current behaviour on Linux and macOS and no surface is `#[cfg]`-duplicated.
+`#[cfg(not(windows))]` it is a `const fn` returning `Elevation::NotElevated`, so every gate
+below compiles away to the current behaviour on Linux and macOS and no surface is
+`#[cfg]`-duplicated.
+
+**Why three values and not a `bool`.** A failed query has two honest answers and they are
+different ones. On the restrictions, fail **closed**: a process that *is* elevated and
+cannot prove it would otherwise run SSH, SFTP, the updater and `terminal.json`'s program
+under an administrator token with none of M1-M7 applied, and the corollary below — *there is
+no elevated-but-unrestricted state to reach* — would be false in exactly that branch. On the
+marker, fail **honest**: `DEC-0019` rule 2 forbids a window claiming an elevation the token
+did not confirm, so `Unknown` reads `OneTerm (elevation unknown)` rather than
+`(Administrator)`. `is_restricted()` is the only predicate the gates read; there is
+deliberately no `is_elevated()` beside it, because two predicates differing only in this
+case is an invitation to guard a security seam with the weaker one.
 
 Seams, one row per gate, with the line each one sits on today:
 
@@ -414,7 +438,7 @@ Seams, one row per gate, with the line each one sits on today:
 | M5 | OS window title | `crates/app/src/window.rs:66` — `window.set_window_title("OneTerm")` | `"OneTerm (Administrator)"`, so the taskbar, Alt-Tab and every screenshot carry it |
 | M5 | in-app title bar text | `crates/workspace/src/layout/workspace/mod.rs:262` — `AppTitleBar::new("OneTerm", window, cx)` | `"OneTerm (Administrator)"` |
 | M5 | title-bar border | `crates/workspace/src/layout/title_bar.rs:63` — `.border_color(cx.theme().border)` | `cx.theme().warning`. A **border**, not a background: a border introduces no new text surface, so `scripts/check-theme-contrast.py`'s `SURFACES` table is untouched. If a later change tints `title_bar.background` instead, that surface must be added to `SURFACES` (and to `PARENTS`) in the same commit. |
-| M1 | the "+" menu shell list | `crates/terminal-view/src/panel/terminal_panel.rs:697-704` | the three Windows kinds only, and **no "Run as administrator" rows** — `is_elevated()` suppresses them, so an elevated window cannot spawn a second identical one |
+| M1 | the "+" menu shell list | `crates/terminal-view/src/panel/terminal_panel.rs:697-704` | the three Windows kinds only, and **no "Run as administrator" rows** — `is_restricted()` suppresses them, so an elevated window cannot spawn a second identical one |
 | M1 | the "+" menu SSH block | `terminal_panel.rs:705-742` — "SSH Sessions" separator, saved rows, "Quick Connect...", "New Saved Session..." | absent in full. `FIXED_ROWS` (`:763`) is computed for the rows actually emitted, so the scroll estimate stays honest in both modes |
 | M1 | right dock content | `crates/workspace/src/layout/workspace/mod.rs` (`startup_dock_document`), `layout.rs` (`right_dock`) | **`docks.json` is not read at all** (as built, `IN-0043` MAJ-2). Gating the two layout *builders* was necessary and not sufficient: `load_layout` restores the side docks **by name**, so a saved `ssh_client` or `agent` dock is built before either builder runs, and declining to call `set_dock(Right, ..)` does not remove a dock that is already there — it leaves it. An elevated window therefore starts from the fixed default layout, every time, and `right_dock`'s `None` arm now calls `remove_dock` rather than merely skipping `set_dock`. `sync_right_dock_mode` and `apply_right_dock_width` early-return on `!has_dock(Right)` as before |
 | M1 | right-dock mode toggles | `crates/workspace/src/layout/workspace/mod.rs:263` — `.child(|_, cx| title_bar::mode_toggle_group(cx))` | the child is not attached. The three segments ("SSH Client" / "Agent" / "None", `title_bar.rs:110-152`) are absent rather than disabled: there is nothing to switch to |
@@ -497,16 +521,27 @@ pub fn trusted_program_for(shell: ElevatedShell) -> Result<std::path::PathBuf, s
 /// the trusted program, the kind's own args, and nothing from `terminal.json`.
 /// `resolve` is `trusted_program_for` in production and injected in tests, so the
 /// rule is unit-tested without the process global and without a Windows host.
-/// `resolve_shell` calls this behind `if is_elevated()`; that one guard covers
+/// `resolve_shell` calls this behind `if is_restricted()`; that one guard covers
 /// every local spawn, because every one of them resolves through it.
 pub fn trusted_shell_config(
     cfg: &LocalShellConfig,
     resolve: impl Fn(ElevatedShell) -> Result<std::path::PathBuf, std::path::PathBuf>,
 ) -> Result<LocalShellConfig, AppError>;
 
+/// What the process token said. Three-valued: see section 7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Elevation { #[default] NotElevated, Elevated, Unknown }
+impl Elevation { pub fn is_restricted(self) -> bool; }   // true for Elevated AND Unknown
+
+/// The window title, for the OS title bar and the in-app one -- one function for
+/// both, so the two markers cannot disagree. Takes the value rather than reading
+/// the global, so the rule is testable without mutating process state.
+pub fn window_title(elevation: Elevation) -> &'static str;
+
 /// Process globals, set exactly once in run() before any UI exists.
-pub fn set_elevated(value: bool);
-pub fn is_elevated() -> bool;              // false until set, and on non-Windows
+pub fn set_elevation(value: Elevation);
+pub fn elevation() -> Elevation;           // NotElevated until set, and on non-Windows
+pub fn is_restricted() -> bool;            // the ONE predicate every gate reads
 /// Takes an `ElevatedShell`, not a `ShellKind`, as built: the global then cannot
 /// hold `Custom` even by mistake, which is the same argument the enum itself makes.
 pub fn set_initial_shell(shell: ElevatedShell);
@@ -514,7 +549,7 @@ pub fn initial_shell() -> Option<crate::ShellKind>;   // what the panel needs
 
 // ── crates/app/src/elevation.rs (new; the Win32 bodies are #[cfg(windows)],
 //    the module is not, because the fn pointer field exists on every platform) ──
-pub(crate) fn process_is_elevated() -> bool;   // a const fn returning false off Windows
+pub(crate) fn process_elevation() -> Elevation; // a const fn returning NotElevated off Windows
 pub(crate) fn fatal_message(text: &str);   // MessageBoxW; used before the gpui app starts
 pub(crate) fn launch_elevated_shell(kind: oneterm_core::ShellKind, window: &mut Window, cx: &mut App);
 

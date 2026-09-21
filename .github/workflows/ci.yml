@@ -120,6 +120,23 @@ jobs:
       # nothing (`US-0109`).
       - name: Test workspace
         run: cargo test --workspace
+      # The `#[ignore]`d elevation tests (`IN-0043` M1/M4). They flip a
+      # process-global switch so they cannot share a test process, which is why
+      # they are ignored -- and an ignored test runs in no gate unless something
+      # asks for it. These are the only automated proof of the M1 restore gate
+      # and three M4 guards, so the gate asks. Linux only: all five drive pure
+      # logic and gpui's `TestAppContext` with no `cfg(windows)` site in them.
+      #
+      # Per crate, not per test name: a new elevation test in one of these three
+      # is picked up for free, and the census step catches one that lands
+      # anywhere else.
+      - name: Test elevation guards (ignored tests, single-threaded)
+        run: |
+          cargo test -p oneterm-workspace --lib -- --ignored --test-threads=1
+          cargo test -p oneterm-session-ui --lib -- --ignored --test-threads=1
+          cargo test -p oneterm-settings-ui --lib -- --ignored --test-threads=1
+      - name: Account for every ignored test
+        run: python scripts/check-ignored-tests.py
 
   vt-package:
     # `oneterm-vt` is not published (owner ruling 2026-09-15), but other projects

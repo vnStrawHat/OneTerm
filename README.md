@@ -123,10 +123,17 @@ The elevated window is deliberately a smaller application, and it says what it i
 - **It does not have**: SSH, SFTP, saved sessions, Quick Connect, the Agent panel, the right
   dock or its mode toggles, updates (those are done from the normal window), or its own
   "Run as administrator" entries.
-- **It writes no settings.** `docks.json`, `ui_config.json`, `terminal.json`,
-  `ssh_session.json` and `update_config.json` are read and never written, so an elevated
-  session cannot change what your ordinary window opens with. Its crash reports go to
-  `crashes/elevated/` and it shows no crash dialog.
+- **It writes no settings.** `ui_config.json`, `terminal.json`, `ssh_session.json` and
+  `update_config.json` are read and never written, so an elevated session cannot change
+  what your ordinary window opens with — not even by leaving a corrupt file quarantined.
+  Its crash reports go to `crashes/elevated/` and it shows no crash dialog.
+- **Your saved layout never carries over.** `docks.json` is not read at all there, so an
+  administrator window always opens on the default layout: one terminal tab, no right dock.
+  That is deliberate and it is what keeps the SSH and SFTP panels out — restoring a saved
+  layout would rebuild them by name, before anything had a chance to decline.
+- **Duplicate tab and New Terminal Here open at your home directory**, not at the tab's
+  current directory. An elevated window does not take a working directory from anything
+  outside itself, because `cmd.exe` searches it before `PATH`.
 - **Drag-and-drop from Explorer does not work into any elevated window.** Windows forbids a
   drop from a medium-integrity Explorer onto a high-integrity window. It is inherent to
   elevation and cannot be fixed; under the list above there is no SFTP panel there to drop

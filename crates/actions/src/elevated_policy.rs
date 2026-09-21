@@ -150,6 +150,45 @@ mod tests {
         }
     }
 
+    /// The **other** direction, and the one the packet's own risk 4 names: "a
+    /// guard whose condition is wrong in the other direction".
+    ///
+    /// A typo in the denied table would silently unbind `Ctrl+T`, copy, paste or
+    /// the splits in an elevated window — `apply_key_bindings` re-adds only the
+    /// allowed ids, so a misclassified one ends with **no binding at all**. An
+    /// elevated window that cannot open a tab is a broken window, and nothing
+    /// else here would notice.
+    #[test]
+    fn the_local_terminal_stays_usable_in_an_elevated_window() {
+        for id in [
+            // What the window is for.
+            "new_terminal_tab",
+            "split_left",
+            "split_right",
+            "split_up",
+            "split_down",
+            "close_space",
+            "close_panel",
+            // ...and the things a terminal is useless without.
+            "find",
+            "terminal_copy",
+            "terminal_paste",
+            "terminal_select_all",
+            "terminal_clear",
+            // ...and the window chrome, which M1 never touched.
+            "open_settings",
+            "about",
+            "quit",
+            "toggle_zoom",
+        ] {
+            assert_eq!(
+                action_classified_for_elevated_window(id),
+                Some(true),
+                "{id} must keep working in an elevated window"
+            );
+        }
+    }
+
     #[test]
     fn an_unelevated_process_may_run_everything() {
         // The process global is `NotElevated` here, so the table is not consulted.
