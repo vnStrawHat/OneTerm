@@ -912,3 +912,334 @@ above. Worth one sentence in the checklist's preamble so its absence reads as de
   elevated window. Checklist step 8 is the closing evidence.
 - Over-the-shoulder elevation, Group Policy denial and a real `ShellExecuteExW` failure
   remain unexercised, as before.
+
+---
+
+# Re-verification of 16d32217 — 2026-09-21
+
+Target: `feat/elevated-shell` @ `16d32217`, the four commits added after the last
+independent PASS (`c135b425`): `21597918` (the `runas` launch moved off the gpui thread),
+`d67ee77c` (a merge of `main`), `8113440e` (the title-bar border removed, and the elevated
+instance's console released) and `16d32217` (the `(Administrator)` suffix highlighted).
+Scope: those four deltas only. Same constraints as the two sections above: no UAC prompt is
+raised, no elevated process is started, and the elevated side remains the owner's manual
+acceptance — which he has already passed on `8113440e` for steps 0 and 3–15.
+
+## Verdicts
+
+| Delta | Verdict |
+| --- | --- |
+| **1 — the `runas` launch on its own thread** (`21597918`) | **PASS.** The security shape of the call is byte-for-byte what it was, the only mask change is the one the new thread requires, and every failure path is a logged best effort rather than a panic. Two minors (NEW-8, NEW-10). |
+| **2 — the warning-coloured border removed** (`8113440e`) | **PASS.** No conditional colour is left in `title_bar.rs`, and `DEC-0019` M5 carries the amendment. |
+| **3 — the elevated instance releases its own console** (`8113440e`) | **PASS.** The sole-owner test is the right test, the buffer probe cannot misread, an inherited console is kept, and nothing reaches the console before it goes. One minor (NEW-9). |
+| **4 — the highlighted suffix** (`16d32217`) | **FAIL — MAJ-5.** The `"warning"` key the 39 themes gained is not a key `gpui-component` reads. Nothing about the rendering changed, the marker is still below 4.5:1 in **16 of 39** variants (1.64:1 on Ayu Light), and the gate's 39 new pairings measure a value the application never draws. |
+| **Overall** | **FAIL — do not accept `16d32217`.** Deltas 1–3 are sound and stand on their own. Delta 4 is one wrong JSON key away from being correct; until it is fixed, the legibility claim in `US-0131`'s second acceptance tweak and in `DEC-0019` M5's second amendment is not true of the running application. |
+
+---
+
+## MAJ-5 — the 39 `warning` entries are inert, and the gate is a false green
+
+`crates/theme/themes/*.json` (all 24 files, 39 variants),
+`scripts/check-theme-contrast.py:208-219`,
+`crates/workspace/src/layout/title_bar.rs:116-126`
+
+**The key does not exist.** In `gpui-component` 0.6.0 — the published crate this workspace
+builds against (`Cargo.lock`: `gpui-component 0.6.0`, `registry+…crates.io-index`), and the
+pinned `reference/gpui-kit` agrees — the theme-colour struct spells the token
+**`warning.background`**:
+
+```rust
+// gpui-component-0.6.0/src/theme/schema.rs:616-618
+/// Warning background color.
+#[serde(rename = "warning.background")]
+pub warning: Option<SharedString>,
+```
+
+`ThemeConfigColors` has no `deny_unknown_fields`, so a `"warning"` key inside `colors` is
+read by nobody and dropped in silence. A plain `"warning"` **is** a valid key — but only in
+`HighlightThemeStyle`, the syntax-highlighting block, which these themes already fill in
+(`crates/theme/themes/ayu.json:97-99, 322-324`). `reference/gpui-kit/.theme-schema.json`
+says exactly that:
+
+```
+ThemeConfigColors    ['warning.background', 'warning.active.background',
+                      'warning.hover.background', 'warning.foreground']
+HighlightThemeStyle  ['warning', 'warning.background', 'warning.border']
+```
+
+**Probed, twice, rather than read.** Both probes were added temporarily, run, and removed;
+`git status` is clean.
+
+1. *Does the key survive deserialisation?* A probe in `crates/theme/src/theme.rs` loaded
+   every embedded theme through the kit's own `ThemeRegistry::load_themes_from_str` and
+   printed the parsed field:
+
+   ```
+   PROBE light.colors.warning = None; dark.colors.warning = None
+   ```
+
+   — for `Ayu Light` and `Ayu Dark`, whose JSON now carries `"warning": "#854d0e"` and
+   `"warning": "#facc15"`. The value never reaches the kit.
+
+2. *What does the application actually draw, then?* A probe in
+   `crates/workspace/src/layout/workspace/layout_tests.rs`, under `gpui::TestAppContext`,
+   registered all 39 variants and called the real `Theme::apply_config` on each, then read
+   `Theme::global(cx).warning` and `.title_bar` — the two values
+   `elevation_suffix()` composites. Every one of them is the theme's own `base.yellow`,
+   because the kit's fallback is `apply_background_color!(warning, fallback = self.yellow)`
+   (`schema.rs:878`). A sample against what the JSON claims:
+
+   | Variant | JSON now says | Actually rendered |
+   | --- | --- | --- |
+   | Ayu Dark | `#facc15` | `#feb454` |
+   | Ayu Light | `#854d0e` | `#f1ad49` |
+   | Hybrid Light | `#713f12` | `#948000` |
+   | Aurora Light | `#a16207` | `#eab308` |
+   | Matrix | `#facc15` | `#ffea00` |
+
+**The marker is illegible in 16 of 39 variants.** Feeding the probe's 39 measured
+`(warning, title_bar.background)` pairs through a WCAG 2.1 relative-luminance ratio written
+for this review — independent of `check-theme-contrast.py`, and cross-checked against that
+script's own numbers on the JSON values, which it reproduces to the hundredth:
+
+```
+1.64 Ayu Light          1.67 Everforest Light   1.74 Molokai Light
+1.92 Aurora Light       1.98 Catppuccin Latte   2.07 Flexoki Light
+2.09 Mellifluous Light  2.44 Solarized DARK     2.55 Hybrid Light
+2.74 macOS Classic Light 2.75 Gruvbox Light     2.81 Zed One Light
+3.22 Fahrenheit (DARK)  3.43 Molokai Dark       3.59 Hybrid Dark
+4.32 Solarized Light
+```
+
+All twelve light variants, **and four dark ones**. The lowest, Ayu Light at 1.64:1, is
+amber-on-off-white: the word `(Administrator)` is close to invisible in exactly the place
+the decision put it. `US-0131`'s rework asserts the opposite — *"the 27 dark variants take
+exactly `#facc15`, the kit's own value — what they already rendered, so nothing changes
+visually there"* — and no dark variant rendered `#facc15` before or after.
+
+**Where the reasoning went wrong, precisely.** The rework's premise is *"no theme in
+`crates/theme/themes/` defined it, so all 39 variants were inheriting the kit's own default
+— an amber (`yellow-400` / `yellow-500`)"*. The first half is right; the second is not. The
+kit's fallback for `warning` is not a fixed amber, it is **`self.yellow`** — and every one
+of the 39 variants *does* define `base.yellow`, so each was already rendering its own. The
+survey that followed ("fails on all 12 light themes, 1.24:1 on Hybrid Light") measured a
+colour no theme uses. The real figure for Hybrid Light is 2.55:1 — still a failure, so the
+problem was real; the cure was applied to the wrong key.
+
+**The gate now certifies a value the renderer cannot see.** `check-theme-contrast.py`'s own
+contract is stated in its header: *"a foreground paired with a surface the application never
+paints under it proves nothing"*. Its 39 new `warning` rows read the same dead key, so
+`1404 pairings … all >= 4.5:1` is true of the repository's JSON and false of the
+application. This is worse than leaving `warning` out of `SURFACES`, because the gate now
+asserts the property rather than being silent about it.
+
+**The fix is one word, 39 times.** Rename the key to `"warning.background"` in the theme
+files and in `SURFACES`'s comment. Re-derived with the same function, that lands the
+27 dark variants on `#facc15` (worst 8.93:1, Solarized Dark) and the 12 light ones on the
+values already chosen (worst 4.71:1, Aurora Light) — every variant over the floor, the four
+failing dark themes fixed as a side effect, and the gate's number becomes a fact about the
+window. Re-run both probes above afterwards: reading the JSON back is what missed this.
+
+---
+
+## Minor findings
+
+- **NEW-7 (minor, and the other half of MAJ-5).** `warning` is drawn as **text** on four
+  surfaces `SURFACES` does not list: the settings window's read-only note
+  (`crates/settings-ui/src/panel.rs:157`) and its key-bindings note
+  (`key_bindings/key_bindings_ui.rs:216`) on `background`; the forwarding row's warning
+  (`crates/session-ui/src/forward_rows.rs:292`); the terminal's own warning line
+  (`crates/terminal-view/src/terminal_view/render.rs:603`, and `Alert::warning` at `:510`);
+  and a `Warning` notification's whole body (`crates/theme/src/notif_ext.rs:86`) on
+  `popover.background`. The agent card's Blocked/Stale colour (`crates/agent-ui/src/card.rs:65,75`,
+  `view.rs:410,641`) is a fifth. As rendered today, `warning` clears 4.5:1 on `background` in
+  only 24 of 39 variants and on `popover.background` in 24 of 39. None of this is a
+  regression — every one of those sites rendered the same colour before this branch — but
+  the script's own rule is *"when a component starts drawing one of these tokens on a
+  background that is not listed, add the surface"*, and this branch brought `warning` under
+  the gate with one of its six surfaces. The settings read-only note is the one worth
+  naming: it is `MIN-4`'s fix from the previous round, and in an elevated window on a light
+  theme it is the sentence explaining why the page does nothing.
+- **NEW-8 (minor, behaviour).** The launch is now asynchronous and nothing debounces it.
+  `launch_elevated_shell` spawns a thread and returns; clicking `Run as administrator ›
+  PowerShell` five times spawns five threads and five consent requests, and consenting five
+  times opens five administrator windows. Before `21597918` the modal call made a second
+  click impossible. Not a privilege problem — every window still costs its own consent — but
+  one `AtomicBool` held for the lifetime of the outstanding request would close it.
+- **NEW-9 (minor, diagnostics).** The two `log::error!` lines in `process_elevation()`
+  (`crates/app/src/elevation.rs:49, 65`) can never be emitted: `read_process_identity()` is
+  the first statement of `run()` (`lib.rs:86`) and `env_logger …init()` is at `:111`, so the
+  `Elevation::Unknown` branch — the fail-closed one — is silent in every build. The window
+  still says `(elevation unknown)`, so nothing is unsafe; but "why is this window
+  restricted" has no answer in the log. It also happens to be *why* the claim "nothing is
+  written to a console that is about to go away" holds, so the two are worth fixing
+  together: a deferred buffer, or move the query's reporting after the logger exists.
+- **NEW-10 (minor, undocumented).** The helper thread is detached, so quitting OneTerm while
+  the consent prompt is up terminates it inside `ShellExecuteExW`: `CoUninitialize` never
+  runs, and if the user then approves, an elevated OneTerm starts with no launcher left. It
+  is harmless — the verb, the file and the parameters were fixed before the thread started —
+  but it is neither exercised nor written down.
+
+---
+
+## What was verified as correct
+
+**Delta 1 — the background-thread `runas`.**
+
+- *The security shape did not move.* `git diff c135b425 21597918 -- crates/app/src/elevation.rs`
+  restricted to the call's fields: `lpVerb = "runas"`, `lpFile = current_exe()`,
+  `lpParameters = "--elevated-shell <token>"` from the closed three-variant enum,
+  `lpDirectory = current_dir()`, `nShow = SW_SHOWNORMAL`, `hwnd` left null by
+  `mem::zeroed()` — all unchanged. The **only** difference is
+  `fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI` in place of `SEE_MASK_FLAG_NO_UI`, which
+  is required rather than optional: the helper thread has no message loop and exits as soon
+  as the call returns, and without `NOASYNC` `ShellExecuteEx` is allowed to complete the
+  operation after that. `SEE_MASK_NOCLOSEPROCESS` is still unset and nothing reads
+  `hProcess`. `SHELLEXECUTEINFOW` has no environment member, so there is still no way for an
+  environment block to cross, by construction rather than by omission.
+- *The receiver cannot outlive the window destructively.* `async_channel::bounded(1)`;
+  the foreground half is a plain `window.spawn(cx, …).detach()`, so when the window is
+  dropped the task is dropped with it and the receiver goes. `send_blocking` on a channel
+  whose receivers are gone returns `Err` — it does not block and does not panic — and that
+  `Err` goes through `oneterm_core::report_best_effort`, which is a `log::warn!` and nothing
+  else (`crates/core/src/lib.rs:59-66`). On the foreground side `receiver.recv().await`
+  returning `Err` is an early `return`, and the notification's `cx.update(…)` result is
+  likewise a best effort. There is no `unwrap`, no `expect`, and no weak handle to upgrade
+  anywhere on the path, so "the window closed before the prompt was answered" costs one log
+  line.
+- *`remember_ui_thread()` runs before any possible launch.* It is called at
+  `crates/app/src/lib.rs:89`, inside `run()`, before `oom::init_ballast()` and long before a
+  window, a menu or the `commands` service exists. The only production route to
+  `launch_elevated_shell` is `crates/app/src/init.rs:76` → the `commands` service →
+  `crates/terminal-view/src/panel/terminal_panel.rs:780`, the "+" menu row.
+- *The `debug_assert` is fired by no test path.* `ElevationRequest::execute` has exactly one
+  call site in the workspace — the closure in `launch_elevated_shell`. The one test that
+  touches this seam substitutes a fake for the service function
+  (`crates/terminal-view/src/panel/tests.rs:499`). And a test binary that *did* reach it
+  would pass rather than false-fail: `UI_THREAD` is a `OnceLock` nobody sets outside `run()`,
+  so `debug_assert_ne!(Some(&current), None)` holds.
+- `outcome_of` / `notification_for` are pure and tested, including that `ERROR_CANCELLED`
+  is silent and that the code number reaches the user on any other failure; and
+  `error_cancelled_matches_windows` pins the spelled-out `1223` to `windows_sys`' own
+  constant on Windows.
+
+**Delta 2 — the border.** `crates/workspace/src/layout/title_bar.rs:70` is now an
+unconditional `.border_color(cx.theme().border)`. A grep of that file for `is_restricted`
+and `elevation` returns only the new suffix element (`:85`, `:116-118`) — no conditional
+colour anywhere. `DEC-0019` M5 carries **both** amendments, newest first, and the earlier
+one keeps the reason the colour cost nothing to lose (*"colour alone is not a marker: themes
+are user-editable"*).
+
+**Delta 3 — the console.**
+
+- *The buffer probe cannot misread a count.* `GetConsoleProcessList` is documented to return
+  the **required** element count when the buffer is too small, storing nothing. With
+  `[0u32; 2]`: one owner returns 1 → `Free`; any larger set returns its true count, which is
+  > 1 → `Keep`. A count of exactly 1 from a too-small buffer is not a state the API can
+  produce. A failed call returns 0, which `console_action(true, 0)` maps to `Keep` — asserted
+  in the test, with the reason in the comment.
+- *A legitimately inherited console is kept.* The case the finding asks about — an
+  administrator prompt running `oneterm.exe --elevated-shell cmd` by hand — is `owners >= 2`
+  and therefore `Keep`, asserted at `(true, 2)` and `(true, 8)`. Confirmed for the ConPTY
+  case too: a debug build started from a shell inside OneTerm or Windows Terminal counts the
+  host and the shell as well, so it is never 1.
+- *Nothing logs before the release.* The only output reachable before
+  `release_own_console()` is `fatal_message`'s `eprintln!` — and every one of its call sites
+  is followed immediately by `process::exit`, so the release is not reached on that path and
+  the message stays on screen. `process_elevation`'s two `log::error!` calls run before
+  `env_logger` is installed and are discarded (NEW-9). *After* `FreeConsole`, `env_logger`
+  writes to a handle that is no longer valid; it ignores write errors, so there is no panic
+  and no second failure — the elevated instance simply has no live log, which the packet
+  states and justifies against M4.
+- *The gate is `is_restricted()` **and** sole ownership*, in that order
+  (`crates/app/src/lib.rs:90-96`), so an ordinary developer build never loses its console,
+  and a release build stops at `GetConsoleWindow()` being null.
+- *The `SW_HIDE` probe is recorded honestly.* `US-0130`'s third rework prints the real
+  output of both runs, including that `SW_HIDE` hid `Zed::Window` as well as
+  `ConsoleWindowClass`, names the benign verb it used (`open`, never `runas`), and the
+  conclusion it draws — `SW_SHOWNORMAL` stays — is what the code does.
+
+**Delta 4 — the half that is right.** `window_title_parts` is a *view* of `window_title`,
+not a copy: `the_two_spans_are_exactly_the_window_title` concatenates the two spans and
+asserts the result **is** `window_title(elevation)` for all three states, and
+`an_unrestricted_window_has_no_suffix_span` checks the other direction while asserting both
+restricted states do have a suffix, so it cannot pass vacuously. The suffix is a sibling
+`div` after `self.app_menu_bar` (`title_bar.rs:85`), so `gpui-component` is not patched.
+`Option<AnyElement>` plus `.children(…)` means an ordinary window renders no element at all
+rather than an empty one.
+
+**And one question answered in the negative.** *Does adding an explicit `warning` change any
+existing rendering — the danger/warning toasts, the git status widget, the agent card — in
+any theme?* **No, in none of them, in any of the 39 variants.** Because the key is inert,
+`Warning` notifications (`notif_ext.rs:86`), the agent card's Blocked/Stale colour and its
+context-usage `success → warning → danger` tint (`card.rs:65,75,582`), the terminal's paused
+progress and `Alert::warning` (`render.rs:510,533,603`), the forwarding-row warning and the
+two settings notes all render exactly what they rendered at `c135b425`. (The git status
+widget does not read `warning` at all: a grep of `crates/workspace/src/widgets/` for it
+returns nothing.) That total absence of
+any visual change is the tell: a token that 12 light themes were supposed to have restyled
+should not be invisible in a diff of the rendered output.
+
+---
+
+## Mutation checks
+
+One per delta that owns a test, each reverted immediately (`git status` clean afterwards).
+
+| Mutation | Test | How it failed |
+| --- | --- | --- |
+| `console_action`: `owners == 1` → `owners >= 1` | `elevation::tests::only_a_console_of_our_own_is_released` | `assertion left == right failed  left: Free  right: Keep` — the inherited-console case, which is the one that matters |
+| `window_title_parts`: `Elevation::Elevated => ("OneTerm", None)` | `config::elevation::tests::the_two_spans_are_exactly_the_window_title` | `the spans must concatenate to exactly the OS title for Elevated  left: "OneTerm"  right: "OneTerm (Administrator)"` |
+
+Both tests are load-bearing rather than decorative. Note what the second one does **not**
+catch, and cannot: it pins the *words*, and MAJ-5 is about the *colour*. There is no test
+anywhere that reads the colour the suffix is drawn in — which is why a dead JSON key
+survived a green gate.
+
+## Commands
+
+All at `16d32217`, `$env:CARGO_BUILD_JOBS=6`.
+
+```
+cargo test -p oneterm-app -p oneterm-core -p oneterm-workspace -p oneterm-theme
+  -> exit 0. oneterm-app 24, oneterm-core 78, oneterm-theme 2,
+     oneterm-workspace 36 (+3 ignored, the elevation ones). 0 failed in every binary.
+
+python scripts/check-theme-contrast.py
+  -> check-theme-contrast: 1404 foreground/surface pairings across 390 token/variant rows,
+     all >= 4.5:1; primary text out-reads muted.foreground on all 585 shared-surface
+     comparisons
+     (exit 0 -- and 39 of those 1404 measure a key gpui-component does not read: MAJ-5)
+
+pwsh scripts/ci-local.ps1
+  -> exit 0, final line: ci-local: all checks passed.
+```
+
+Probes, both added temporarily and removed (`git status` clean):
+
+```
+crates/theme/src/theme.rs                                -> parsed colors.warning is None
+crates/workspace/src/layout/workspace/layout_tests.rs    -> Theme::warning for all 39
+                                                            variants after apply_config
+```
+
+`target/fast-dev` was not built, so there is nothing to delete.
+
+## Gaps in this re-verification
+
+- **The elevated side is still unrun**, for the same reason as both sections above: the
+  consent prompt is drawn on the secure desktop and this session may not raise one. No
+  elevated process was started, and no `oneterm.exe` was enumerated or signalled.
+- **`release_own_console()` was never executed.** Its decision half is asserted
+  (`console_action`) and its query half is asserted to be self-consistent
+  (`the_console_queries_agree_with_each_other`), but `FreeConsole()` itself is only reached
+  in an elevated, console-subsystem process. The owner's step-0 run on `8113440e` is the
+  only evidence that the console actually disappears, and the *kept* branch — starting the
+  elevated exe from an administrator console by hand — has no evidence at all.
+- **MAJ-5 is proven at the token, not at the pixel.** The probe reads the `Hsla` the
+  renderer would use; nobody photographed an illegible title bar. A screenshot of an
+  elevated Ayu Light window would close it, and needs an elevated window.
+- **No GUI walk.** Nothing in these four deltas changes the unelevated rendering path except
+  the suffix element, which renders nothing at all when the window is not restricted.
+- Over-the-shoulder elevation, Group Policy denial and a real `ShellExecuteExW` failure
+  remain unexercised, as in both earlier sections.
