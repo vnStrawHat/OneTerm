@@ -4,8 +4,18 @@ Date: 2026-09-21
 
 ## Status
 
-**Proposed** (draft for the owner, `IN-0043`). Nothing may be implemented against it until
-it is accepted.
+**Accepted 2026-09-21 by the owner (option A with M1-M7).**
+
+The owner reviewed the four options and selected **A**: a "Run as administrator" entry per
+Windows shell in the "+" menu launches a **new elevated OneTerm window** through
+`ShellExecuteExW` with the `runas` verb on `current_exe()`, carrying an explicit argument
+naming the shell to open. All seven mitigations proposed with the option were accepted and
+are inherited rules; they are listed in [Inherited rules (M1-M7)](#inherited-rules-m1-m7)
+below.
+
+The detail design required by the high-risk lane is
+`docs/spec-intakes/IN-0043-run-shell-as-administrator/low-level-design/elevated-instance.md`.
+Work packets `US-0130`, `US-0131` and `US-0132` implement it, in that order.
 
 ## Context
 
@@ -67,6 +77,64 @@ Future work inherits four rules.
    `LocalShellConfig::program` and `args` (`crates/core/src/config/shell.rs:68-81`), so
    this rule has to be defended by the detail design, not assumed.
 
+### Inherited rules (M1-M7)
+
+The seven mitigations the owner accepted with option A. They are not advice: each one is a
+constraint future work inherits, and each is a seam the detail design names with a file and
+line.
+
+- **M1 — the elevated instance is local shells only.** No SSH Sessions panel, no SFTP, no
+  Quick Connect and no New Saved Session rows, no Agent panel. The right dock is `None` and
+  its title-bar mode toggles are absent, not disabled. The "+" menu lists only the Windows
+  shells, and **no "Run as administrator" rows again**: an elevated window cannot spawn a
+  second identical one. The elevated window answers the request that was made and offers no
+  surface that nothing about elevation requires — the smaller the elevated application, the
+  smaller the tradeoff below.
+- **M2 — the elevated instance never checks, downloads or installs updates.** Its
+  About/Updates surface says so in one line and offers no control. An elevated updater can
+  write `C:\Program Files` and can leave files whose owner or ACL the ordinary instance
+  cannot replace, which would silently change the install for the non-elevated window too.
+  This settles the follow-up the first draft of this decision left open.
+- **M3 — the elevated instance does not read `terminal.json`'s `program` / `args` to decide
+  what to run.** The shell arrives as a value from a closed three-token enum
+  (`--elevated-shell cmd|powershell|pwsh`) and OneTerm resolves it itself to an absolute
+  path it trusts — `%SystemRoot%\System32\cmd.exe`,
+  `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`, and pwsh from its
+  install location under `%ProgramFiles%` — **never** through `PATH`, `COMSPEC` or user
+  configuration. `ShellKind::Custom` cannot be elevated at all. An unknown or missing
+  argument shows one message and exits without opening a window. This is rule 4 made
+  concrete: `terminal.json` is a file the unelevated process can write, so the elevated
+  process must not take instructions from it.
+- **M4 — the elevated instance reads configuration and writes none of it.** Theme, font and
+  key bindings are read; `docks.json`, `ui_config.json`, `ssh_session.json`, `terminal.json`
+  and `update_config.json` are never written. One writer for those documents remains the
+  unelevated instance, so the "two concurrent writers" hazard this feature would otherwise
+  make routine does not arise, and an over-the-shoulder elevation leaves no trace in the
+  administrator's profile.
+- **M5 — the elevation marker derives from the process token, never from the argument.**
+  `GetTokenInformation(TokenElevation)` is the only source. The title reads
+  `OneTerm (Administrator)` in both the OS title bar and the in-app title bar, and the
+  title bar carries a distinct background or border from a theme token. Stated as one
+  sentence: *the argument selects the shell, the token decides everything else.* A window
+  elevated by any route says so; no window can be made to claim an elevation it does not
+  have.
+- **M6 — no single-instance forwarding.** Every elevation request is served by the process
+  that received it. OneTerm has no instance coalescing today, so this is free now and stops
+  being free the moment someone adds it: forwarding an elevation request to an existing
+  unelevated instance would answer it without elevating.
+- **M7 — the elevated instance's crash reports go to `crashes/elevated/`, and the elevated
+  window never shows the GitHub-draft dialog.** A separate subdirectory keeps a report
+  written under an administrator token from wedging the ordinary instance's promotion and
+  retention pass; suppressing the dialog keeps an elevated window from being a route to a
+  browser and a prefilled issue.
+
+Failure paths accepted with the mitigations: a declined UAC prompt (`ERROR_CANCELLED`,
+1223) is a **silent no-op**; any other `runas` failure produces **one** notification; an
+elevated instance that cannot read configuration falls back to defaults and **says so
+once**. `lpDirectory` must be set explicitly, because debug builds resolve `config_dir()`
+relative to the working directory (`crates/core/src/config/shell.rs:109-124`) and the
+`runas` verb does not inherit the caller's.
+
 ## Alternatives
 
 - [x] **A — a new elevated OneTerm window (selected above).** Answers the request with a
@@ -105,24 +173,29 @@ Future work inherits four rules.
       tabs, connections and transfers unelevated.
 - [ ] **Benefit to confirm:** nobody can be confused about what they are typing into. Every
       elevated window is marked, and the marker cannot lie because it comes from the token.
-- [ ] **Tradeoff:** an elevated OneTerm runs *everything* elevated. SSH and SFTP, key and
-      `known_hosts` handling, config writes and the auto-updater all run with an
-      administrator token in that window. Nothing about the feature needs that; it is what
-      per-process elevation means. It must be stated in `docs/gui-layout.md`,
-      `docs/terminal-backend.md`, `docs/auto-update.md` and `docs/crash-reporting.md`.
-- [ ] **Tradeoff:** drag-and-drop upload from Explorer does not work in the elevated
+- [ ] **Tradeoff:** an elevated OneTerm runs *everything* it runs with an administrator
+      token — that is what per-process elevation means, and no design can undo it. M1, M2
+      and M4 shrink the surface instead: SSH, SFTP, the session store, the Agent panel and
+      the updater are all absent from the elevated instance, and it writes no
+      configuration. What remains elevated is the local shell the user asked for, which is
+      the point. The shrinking must be stated in `docs/gui-layout.md`,
+      `docs/terminal-backend.md`, `docs/auto-update.md` and `docs/crash-reporting.md`, so a
+      user is not surprised that the elevated window is a smaller application.
+- [ ] **Tradeoff:** drag-and-drop upload from Explorer does not work in any elevated
       window. `crates/sftp-ui/src/render.rs:436-451` accepts `ExternalPaths` drops;
       Explorer is medium integrity and UIPI forbids the drop onto a high-integrity window.
-      Inherent, not fixable, must be documented.
+      Inherent, not fixable, must be documented. Under M1 there is no SFTP panel in the
+      elevated instance to drop onto, so this bites only a OneTerm the user elevated by
+      hand.
 - [ ] **Tradeoff:** under over-the-shoulder elevation (a standard user typing an
       administrator's credentials) the elevated process runs as that other account, so
       `USERPROFILE` and therefore `~/.OneTerm` differ
       (`crates/core/src/config/shell.rs:91-96`, `:109-124`). The elevated window then has
-      no saved sessions, no theme, no dock layout and its own crash store. Whether that is
-      explained in place or only documented is an open question in `IN-0043`.
+      no theme, no font override and no key-binding overrides, and its own crash store. It
+      starts on the defaults and **says so once** (accepted with the mitigations); under M4
+      it writes nothing into that other profile, so it leaves no trace there.
 - [ ] **Follow-up:** OneTerm gains a public command line where it had none. The argument
       vocabulary is new public surface for the binary and is the first thing a future
-      single-instance feature will collide with — rule 3 exists for that collision.
-- [ ] **Follow-up:** decide whether the in-app updater should refuse to run from an
-      elevated window. An elevated update can write `C:\Program Files` and can leave files
-      the ordinary instance cannot replace.
+      single-instance feature will collide with — rule 3 / M6 exists for that collision.
+- [x] **Settled by M2:** the in-app updater does not run from an elevated window at all.
+      The About/Updates surface there says updates are done from the normal window.
