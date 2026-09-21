@@ -609,6 +609,19 @@ a compile-time-checked change with no runtime surface.
 - [ ] **Token query failure.** Treated as not elevated, logged at `error`.
 - [ ] **A second elevation request while an elevated window is open.** Served: a second
       consent prompt, a second elevated window. No coalescing, by M6.
+- [ ] **A second *click* while the first consent prompt is still up.** Ignored. The launch
+      became asynchronous when it moved off the gpui thread, and with it went the accidental
+      debounce the modal call gave for free; one flag, held for the lifetime of the
+      outstanding request, restores it (`IN-0043` NEW-8). This is about clicks, not about
+      requests: M6 is untouched, and two *separate* elevation requests still get two prompts.
+- [ ] **Quitting OneTerm while the consent prompt is up.** The helper thread is detached, so
+      the process exits with that thread inside `ShellExecuteExW`: its `CoUninitialize` never
+      runs, and if the user then approves the prompt an elevated OneTerm starts with no
+      launcher left to tell. Harmless, and worth writing down rather than discovering
+      (`IN-0043` NEW-10). Nothing the elevated process needs came from the launcher: the
+      verb, the executable and the one-token parameter were all fixed before the thread
+      started, and the COM apartment dies with the process. The window that opens is a
+      normal elevated OneTerm; only the `log::info!` saying it started is lost.
 
 ## Verification
 

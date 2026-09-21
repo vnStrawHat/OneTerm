@@ -47,7 +47,7 @@
         "tab.background": "#0D020800",
         "tab.foreground": "#88FF88",
         "title_bar.background": "#020d02",
-        "warning": "#facc15",
+        "warning.background": "#ffea00",
         "title_bar.border": "#12410E",
         "base.red": "#FF0000",
         "base.green": "#00FF00",

@@ -34,7 +34,7 @@
         "secondary.hover.background": "#20202099",
         "tab.foreground": "#808080",
         "title_bar.background": "#0e0e0e",
-        "warning": "#facc15",
+        "warning.background": "#8e7b02",
         "table.background": "#1e1e1e00",
         "table.hover.background": "#1E1E1E",
         "ring": "#570101",

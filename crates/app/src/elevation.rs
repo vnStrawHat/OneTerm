@@ -11,6 +11,8 @@
 //! returning [`Elevation::NotElevated`], so every gate compiles away to today's
 //! behaviour, and the launch logs and returns.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use gpui::{App, Window};
 use oneterm_core::elevation::Elevation;
 
@@ -46,10 +48,8 @@ pub(crate) fn process_elevation() -> Elevation {
         let mut token: HANDLE = std::ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == FALSE {
             // Theoretical: querying one's own token cannot be denied.
-            log::error!(
-                "failed to open the process token; this window is restricted and claims no elevation"
-            );
-            return Elevation::Unknown;
+            // Not logged here: `run()` calls this before `env_logger` exists.
+            return Elevation::Unknown("OpenProcessToken(TOKEN_QUERY) failed");
         }
         let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
         let mut returned = 0u32;
@@ -62,10 +62,7 @@ pub(crate) fn process_elevation() -> Elevation {
         );
         CloseHandle(token);
         if queried == FALSE {
-            log::error!(
-                "failed to read TokenElevation; this window is restricted and claims no elevation"
-            );
-            return Elevation::Unknown;
+            return Elevation::Unknown("GetTokenInformation(TokenElevation) failed");
         }
         if elevation.TokenIsElevated != 0 {
             Elevation::Elevated
@@ -200,6 +197,24 @@ fn console_action(has_console: bool, owners: u32) -> ConsoleAction {
     } else {
         ConsoleAction::Keep
     }
+}
+
+/// Whether a `runas` request is outstanding.
+///
+/// The launch became asynchronous when it moved off the gpui thread, and with
+/// it went the accidental debounce a modal call gave for free: five clicks on
+/// `Run as administrator › PowerShell` used to be impossible, and became five
+/// threads, five consent prompts and five administrator windows (`IN-0043`
+/// NEW-8). Not a privilege problem — each window still costs its own consent —
+/// but not what anybody meant by clicking twice.
+static LAUNCH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Whether this click should start a launch, given one already outstanding.
+///
+/// Pure, so the rule is tested without a consent prompt: the whole point is the
+/// case that needs two clicks and a UAC dialog to reach by hand.
+fn should_start_launch(in_flight: bool) -> bool {
+    !in_flight
 }
 
 /// Remember the thread that owns the gpui `App`.
@@ -408,6 +423,13 @@ pub(crate) fn launch_elevated_shell(
         }
     };
 
+    // One request at a time. `swap` rather than load-then-store: two clicks
+    // dispatched in the same frame must not both see `false`.
+    if !should_start_launch(LAUNCH_IN_FLIGHT.swap(true, Ordering::SeqCst)) {
+        log::info!("an elevation request is already awaiting consent; ignoring this one");
+        return;
+    }
+
     let (sender, receiver) = async_channel::bounded(1);
     let token = shell.token();
     if let Err(error) = std::thread::Builder::new()
@@ -422,6 +444,7 @@ pub(crate) fn launch_elevated_shell(
             );
         })
     {
+        LAUNCH_IN_FLIGHT.store(false, Ordering::SeqCst);
         report(
             LaunchOutcome::Failed(format!("could not start the elevation helper: {error}")),
             window,
@@ -432,7 +455,11 @@ pub(crate) fn launch_elevated_shell(
 
     window
         .spawn(cx, async move |cx| {
-            let Ok(outcome) = receiver.recv().await else {
+            let outcome = receiver.recv().await;
+            // Released here and on every other exit path, so a failed launch
+            // does not wedge the menu row for the rest of the session.
+            LAUNCH_IN_FLIGHT.store(false, Ordering::SeqCst);
+            let Ok(outcome) = outcome else {
                 // The helper thread died without answering; it has already
                 // logged whatever it knew.
                 return;
@@ -485,6 +512,23 @@ fn notify_outcome(outcome: &LaunchOutcome, window: &mut Window, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `NEW-8`: one consent prompt per click, not one per click **plus** every
+    /// click that lands while the first is still up.
+    #[test]
+    fn a_second_click_is_ignored_while_a_prompt_is_outstanding() {
+        assert!(
+            should_start_launch(false),
+            "the first click must start a launch"
+        );
+        assert!(
+            !should_start_launch(true),
+            "a click while a consent prompt is outstanding must be ignored"
+        );
+        // ...and the flag is not sticky: the next click after the outcome
+        // arrives starts a launch again.
+        assert!(should_start_launch(false));
+    }
 
     #[test]
     fn a_declined_prompt_says_nothing_and_a_failure_says_why() {

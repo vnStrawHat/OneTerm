@@ -806,6 +806,111 @@ unchanged, with no suffix span at all. The elevated form cannot be framed from t
 (no consent prompt), which is why the split is proven at unit level and the colour by the
 gate; checklist steps 3 and 10 are the closing evidence.
 
+### Acceptance rework, 2026-09-21 — MAJ-5: the highlight was inert
+
+Re-verification marked the suffix highlight **FAIL**. It was right, and the failure is worth
+stating plainly: **I validated the JSON I had written instead of the colour the window
+draws.**
+
+`ThemeConfigColors` renames the field to `warning.background`
+(`gpui-component/src/theme/schema.rs:617`). A bare `"warning"` inside `colors` is a key the
+kit never reads — and because the struct has no `deny_unknown_fields`, it is dropped in
+silence. So all 39 entries were inert, the rendered colour stayed each theme's own
+`base.yellow` (the kit's fallback is `self.yellow`, `schema.rs:878` — **not** a fixed amber,
+which is where the previous round's survey went wrong), and the contrast gate's 39 new rows
+measured a value the application never drew. A green gate asserting a property that was
+false is worse than no gate row at all.
+
+To confuse it further, a bare `"warning"` **is** valid — in `HighlightThemeStyle`, the syntax
+block these themes already fill in. Two keys, same spelling, different objects. A blind
+rename corrupted 23 themes' syntax colours on the first attempt, and a second attempt
+overwrote five themes' *highlight* `warning.background` instead of adding one to `colors`;
+both were caught by re-probing rather than by reading, which is the lesson repeating itself.
+Every edit is now confined to the variant's own `"colors": { … }` span by brace matching.
+
+**What the runtime actually said.** A probe drove the kit's own `Theme::apply_config` over
+all 39 shipped variants and read back `Theme::warning` with the three surfaces it is drawn
+on. **17 of 41 were below 4.5:1** (16 of the 39 this repository ships, plus the kit's own
+`Default Light` at 1.80, which is not ours to edit and not in the gate's scope). The worst
+was Ayu Light at **1.64:1** — amber on off-white, in the place the decision put the marker.
+
+**The fix, and the judgement in it.** The rework's instruction was to put the kit's amber on
+27 dark variants and a darker ramp shade on 12 light ones. The probe made that premise
+false: there was no such split, because no variant was rendering the kit's amber. Applying
+it anyway would have replaced 23 themes' tasteful, already-legible warning colours
+(Gruvbox's `#d79921`, Tokyo Night's `#e0af68`) with one generic amber, across toasts, agent
+cards, terminal alerts and settings notes. So instead:
+
+- the **16 failing** variants take a **lightness-only** correction of their own hue — same
+  `h`, same `s`, `l` moved the smallest distance that clears the floor on all three surfaces;
+- the **23 passing** variants have their **existing rendered colour written out verbatim**.
+  Nothing changes on screen. It is written down because the gate can only measure what is in
+  the JSON: a variant relying on the kit's `self.yellow` is a variant the gate cannot check
+  at all, and that invisibility is what let the original bug through.
+
+| Variant | Before | After | Worst ratio (was) |
+| --- | --- | --- | --- |
+| Ayu Light | `#f1ad49` | `#955d0b` | 4.62 (1.64) |
+| Everforest Light | `#dbbc7f` | `#8b6927` | 4.63 (1.67) |
+| Molokai Light | `#ccac0a` | `#766306` | 4.64 (1.74) |
+| Aurora Light | `#eab308` | `#8c6b05` | 4.76 (1.92) |
+| Catppuccin Latte | `#df8e1d` | `#895712` | 4.62 (1.98) |
+| Flexoki Light | `#d0a215` | `#85680d` | 4.61 (2.07) |
+| Mellifluous Light | `#c98f54` | `#85582a` | 4.60 (2.09) |
+| Solarized Dark | `#7d650d` | `#b59213` | 4.62 (2.44) |
+| macOS Classic Light | `#b59a00` | `#816e00` | 4.63 (2.54) |
+| Hybrid Light | `#948000` | `#665800` | 4.60 (2.55) |
+| Gruvbox Light | `#b57614` | `#84560f` | 4.61 (2.75) |
+| Zed One Light | `#c18401` | `#916301` | 4.62 (2.81) |
+| Fahrenheit | `#726302` | `#8e7b02` | 4.58 (3.22) |
+| Molokai Dark | `#807607` | `#988c08` | 4.63 (3.43) |
+| Hybrid Dark | `#8a7c15` | `#9f8f18` | 4.64 (3.59) |
+| Solarized Light | `#756e58` | `#706a54` | 4.60 (4.32) |
+
+**These 16 change more than the new marker.** `cx.theme().warning` was already drawn by the
+settings read-only note, the key-bindings notice, the port-forwarding row's warning, the
+terminal's warning line and `Alert::warning`, the Agent card's Blocked/Stale colour, and a
+`Warning` notification's whole body. In those 16 themes all of them shift to the corrected
+colour — which is the point: every one of those sites was illegible in those themes too, and
+nobody had measured them. The other 23 themes are untouched at every one of those sites.
+
+**NEW-7 — the other five surfaces.** `warning` is drawn on `background` and
+`popover.background` as well as `title_bar.background`, and `SURFACES` listed one of the
+three. All three are now listed with their draw sites, and every value above clears the floor
+on **all three**, not just the title bar. That is what turned a 4.62 on the title bar into a
+4.42 on Aurora Light once the other two were counted — caught by the gate, and corrected.
+
+**The test that makes this un-repeatable.**
+`oneterm-theme::theme::tests::warning_is_the_value_the_theme_file_names` drives the kit's real
+`apply_config` and asserts `Theme::warning` **is** the hex the file names, for one light and
+one dark theme. Mutation-checked: renaming Ayu Light's key back to the dead `"warning"` fails
+it with *"the key in `colors` is not one `ThemeConfigColors` reads"*. A static check could
+not have caught this and did not; only driving the kit can. `crates/theme` gained a
+`dev-dependencies` entry on gpui's `test-support` for it.
+
+The gate now reports **1482 pairings across 390 rows** (was 1404 / 390 measuring the dead
+key), all at or above 4.5:1.
+
+### Also in this round
+
+- **NEW-8 — the launch is debounced.** Moving the `runas` call off the gpui thread also
+  removed the accidental debounce a modal call gave for free: five clicks became five
+  consent prompts and five administrator windows. One flag, claimed with `swap` so two
+  clicks in a frame cannot both win, released on every exit path including the
+  thread-failed-to-start one so a failure cannot wedge the row. Test:
+  `a_second_click_is_ignored_while_a_prompt_is_outstanding`.
+- **NEW-9 — the token-query failure has a reason, and it is logged.** Both `log::error!`
+  lines in `process_elevation()` were unreachable: the query is the first statement of
+  `run()` and `env_logger` is installed 25 lines later, so the **fail-closed** branch was
+  silent in every build. `Elevation::Unknown` now carries a `&'static str` naming which call
+  failed, and `run()` logs it once the logger exists. Test:
+  `an_unknown_elevation_carries_its_reason`.
+- **NEW-10 — quitting while the prompt is up** is documented in the detail design's edge
+  cases: the detached helper dies inside `ShellExecuteExW`, its `CoUninitialize` never runs,
+  and an approval after that starts an elevated OneTerm with no launcher left. Harmless —
+  everything the elevated process needs was fixed before the thread started — and now
+  written down.
+
 ### Gaps
 
 - **The whole elevated side is unverified here**, for the reason above. Items 2-12 are the

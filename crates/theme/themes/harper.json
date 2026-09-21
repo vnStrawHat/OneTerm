@@ -34,7 +34,7 @@
         "tab.active.foreground": "#a8a49d",
         "tab.foreground": "#787878",
         "title_bar.background": "#101010",
-        "warning": "#facc15",
+        "warning.background": "#f8b63f",
         "base.red": "#ff5874",
         "base.red.light": "#ff587499",
         "base.green": "#489e48",

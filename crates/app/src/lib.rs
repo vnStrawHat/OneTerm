@@ -117,6 +117,12 @@ pub fn run() {
     .format_timestamp_secs()
     .init();
     log::info!("OneTerm starting up");
+    // Both were decided before the logger existed; report them now.
+    if let Some(reason) = oneterm_core::elevation::elevation().unknown_reason() {
+        log::error!(
+            "the process token could not be read ({reason}); this window is restricted and claims no elevation"
+        );
+    }
     // The command line was read before the logger existed; report it now.
     if let Some(kind) = oneterm_core::elevation::initial_shell() {
         if oneterm_core::elevation::is_restricted() {

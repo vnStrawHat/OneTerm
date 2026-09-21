@@ -34,7 +34,7 @@
         "tab_bar.background": "#1E1E1E",
         "table.background": "#1e1e1e00",
         "title_bar.background": "#1e1e1e",
-        "warning": "#facc15",
+        "warning.background": "#c2a86c",
         "title_bar.border": "#343434",
         "base.red": "#c06d44",
         "base.red.light": "#de7c4c",

@@ -301,10 +301,16 @@ pub enum Elevation {
     NotElevated,
     /// The token says this process is elevated.
     Elevated,
-    /// The query failed. Theoretical — `OpenProcessToken` on one's own process
-    /// with `TOKEN_QUERY` cannot be denied — but fail-open on a security switch
-    /// is the wrong default even for a branch nobody expects to reach.
-    Unknown,
+    /// The query failed, and why. Theoretical — `OpenProcessToken` on one's own
+    /// process with `TOKEN_QUERY` cannot be denied — but fail-open on a security
+    /// switch is the wrong default even for a branch nobody expects to reach.
+    ///
+    /// The reason is carried rather than logged where it happens: the query runs
+    /// as the first statement of `run()`, long before `env_logger` exists, so a
+    /// `log::error!` there goes nowhere and "why is this window restricted" has
+    /// no answer anywhere (`IN-0043` NEW-9). `run()` reports it once the logger
+    /// is up.
+    Unknown(&'static str),
 }
 
 impl Elevation {
@@ -315,10 +321,21 @@ impl Elevation {
     pub fn is_restricted(self) -> bool {
         !matches!(self, Self::NotElevated)
     }
+
+    /// Why the token query failed, for the one log line `run()` emits once the
+    /// logger exists.
+    pub fn unknown_reason(self) -> Option<&'static str> {
+        match self {
+            Self::Unknown(reason) => Some(reason),
+            _ => None,
+        }
+    }
 }
 
-/// `0`/`1`/`2` = the [`Elevation`] discriminant.
+/// `0` = not elevated, `1` = elevated, `2` = unknown. The `Unknown` reason is a
+/// `&'static str` and lives beside it.
 static ELEVATION: AtomicU8 = AtomicU8::new(0);
+static UNKNOWN_REASON: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
 /// `0` = no shell requested; otherwise the [`ElevatedShell`] discriminant + 1.
 static INITIAL_SHELL: AtomicU8 = AtomicU8::new(0);
 
@@ -334,7 +351,7 @@ pub fn window_title(elevation: Elevation) -> &'static str {
         // Restricted, and it says what it actually knows. Claiming
         // "(Administrator)" here would be a marker asserting something the token
         // never confirmed, which `DEC-0019` rule 2 forbids.
-        Elevation::Unknown => "OneTerm (elevation unknown)",
+        Elevation::Unknown(_) => "OneTerm (elevation unknown)",
     }
 }
 
@@ -351,13 +368,23 @@ pub fn window_title_parts(elevation: Elevation) -> (&'static str, Option<&'stati
     match elevation {
         Elevation::NotElevated => ("OneTerm", None),
         Elevation::Elevated => ("OneTerm", Some(" (Administrator)")),
-        Elevation::Unknown => ("OneTerm", Some(" (elevation unknown)")),
+        Elevation::Unknown(_) => ("OneTerm", Some(" (elevation unknown)")),
     }
 }
 
 /// Record what the process token said. Called once, from `run()`.
 pub fn set_elevation(value: Elevation) {
-    ELEVATION.store(value as u8, Ordering::Relaxed);
+    if let Elevation::Unknown(reason) = value {
+        let _ = UNKNOWN_REASON.set(reason);
+    }
+    ELEVATION.store(
+        match value {
+            Elevation::NotElevated => 0,
+            Elevation::Elevated => 1,
+            Elevation::Unknown(_) => 2,
+        },
+        Ordering::Relaxed,
+    );
 }
 
 /// What the process token said. [`Elevation::NotElevated`] until set, and always
@@ -367,7 +394,12 @@ pub fn set_elevation(value: Elevation) {
 pub fn elevation() -> Elevation {
     match ELEVATION.load(Ordering::Relaxed) {
         1 => Elevation::Elevated,
-        2 => Elevation::Unknown,
+        2 => Elevation::Unknown(
+            UNKNOWN_REASON
+                .get()
+                .copied()
+                .unwrap_or("reason not recorded"),
+        ),
         _ => Elevation::NotElevated,
     }
 }
@@ -515,7 +547,7 @@ mod tests {
         for elevation in [
             Elevation::NotElevated,
             Elevation::Elevated,
-            Elevation::Unknown,
+            Elevation::Unknown("the token query failed"),
         ] {
             let (name, suffix) = window_title_parts(elevation);
             assert_eq!(
@@ -536,7 +568,11 @@ mod tests {
         // ...and both restricted states do have one, so the test above is not
         // vacuously true.
         assert!(window_title_parts(Elevation::Elevated).1.is_some());
-        assert!(window_title_parts(Elevation::Unknown).1.is_some());
+        assert!(
+            window_title_parts(Elevation::Unknown("the token query failed"))
+                .1
+                .is_some()
+        );
     }
 
     #[test]
@@ -551,16 +587,27 @@ mod tests {
     /// to contain an administrator token, so the two answers differ.
     #[test]
     fn an_unknown_token_is_restricted_but_claims_no_elevation() {
+        let unknown = Elevation::Unknown("the token query failed");
         assert!(
-            Elevation::Unknown.is_restricted(),
+            unknown.is_restricted(),
             "a process that cannot prove it is ordinary must be treated as though it were not"
         );
-        assert_eq!(
-            window_title(Elevation::Unknown),
-            "OneTerm (elevation unknown)"
-        );
+        assert_eq!(window_title(unknown), "OneTerm (elevation unknown)");
         assert!(Elevation::Elevated.is_restricted());
         assert!(!Elevation::NotElevated.is_restricted());
+    }
+
+    /// `NEW-9`: the reason survives into the state, so the one log line `run()`
+    /// emits after the logger exists can say *why* the window is restricted.
+    /// Logging it where the query happens would write to a logger that does not
+    /// exist yet.
+    #[test]
+    fn an_unknown_elevation_carries_its_reason() {
+        let unknown = Elevation::Unknown("OpenProcessToken failed");
+        assert_eq!(unknown.unknown_reason(), Some("OpenProcessToken failed"));
+        assert!(unknown.is_restricted());
+        assert_eq!(Elevation::Elevated.unknown_reason(), None);
+        assert_eq!(Elevation::NotElevated.unknown_reason(), None);
     }
 
     #[test]

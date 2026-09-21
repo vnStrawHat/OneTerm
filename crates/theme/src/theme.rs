@@ -205,6 +205,61 @@ mod tests {
         }
     }
 
+    /// The theme files name a key the kit actually reads.
+    ///
+    /// This is a **spelling** test, and it exists because a wrong spelling is
+    /// silent. `ThemeConfigColors` has no `deny_unknown_fields`, so a key the
+    /// kit does not know is dropped without a word: `IN-0043` shipped 39
+    /// themes carrying `"warning"` inside `colors`, which is a *syntax
+    /// highlighting* key and not the colour the window draws
+    /// (`schema.rs:617` renames the field to `warning.background`). Every
+    /// static check passed — the JSON parsed, the contrast gate measured the
+    /// value and reported it legible — and the application rendered something
+    /// else entirely.
+    ///
+    /// So the assertion is made the only way that could have caught it: drive
+    /// the kit's own `apply_config` and compare what `Theme` ends up holding
+    /// against what the file says.
+    #[gpui::test]
+    fn warning_is_the_value_the_theme_file_names(cx: &mut gpui::TestAppContext) {
+        // Two themes, one of each mode, whose `warning.background` differs from
+        // every fallback the kit could substitute.
+        const EXPECTED: &[(&str, u32)] = &[("Ayu Light", 0x955d0b), ("Hybrid Dark", 0x9f8f18)];
+
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let registry = ThemeRegistry::global_mut(cx);
+            for (_, content) in EMBEDDED_THEME_FILES {
+                registry.load_themes_from_str(content).unwrap();
+            }
+            for (name, rgb) in EXPECTED {
+                let config = ThemeRegistry::global(cx)
+                    .themes()
+                    .get(*name)
+                    .unwrap_or_else(|| panic!("{name} is not in the registry"))
+                    .clone();
+                Theme::global_mut(cx).apply_config(&config);
+                let rendered = Theme::global(cx).warning;
+                let expected = gpui::rgb(*rgb);
+                assert!(
+                    hsla_close(rendered, expected.into()),
+                    "{name}: the file names #{rgb:06x} but the kit renders {rendered:?} — \
+                     the key in `colors` is not one `ThemeConfigColors` reads"
+                );
+            }
+        });
+    }
+
+    /// Two colours are the same to within one 8-bit step per channel, which is
+    /// all a hex value can express.
+    #[cfg(test)]
+    fn hsla_close(a: gpui::Hsla, b: gpui::Hsla) -> bool {
+        let (x, y) = (gpui::Rgba::from(a), gpui::Rgba::from(b));
+        [(x.r, y.r), (x.g, y.g), (x.b, y.b)]
+            .iter()
+            .all(|(p, q)| (p - q).abs() <= 1.5 / 255.0)
+    }
+
     #[test]
     fn zed_default_themes_are_present_under_their_registry_names() {
         // `init` looks these names up to install the Zed defaults; a rename in
