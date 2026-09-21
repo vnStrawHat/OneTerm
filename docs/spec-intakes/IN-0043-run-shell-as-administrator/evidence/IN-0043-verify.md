@@ -1,0 +1,612 @@
+# Independent verification — US-0130, US-0131, US-0132 (IN-0043)
+
+Verifier: an independent session, adversarial and security-minded, with no part in the
+implementation. Target: `feat/elevated-shell` @ `0ac3f8dc`, six commits on `main`
+@ `590dd23e`. Read: `AGENTS.md`, `docs/HARNESS.md`, the whole intake folder
+(`IN-0043.md`, `high-level-design.md`, `research/windows-elevation-and-conpty.md`,
+`low-level-design/elevated-instance.md`, the three packets),
+`docs/decisions/DEC-0019-elevated-shells-open-in-an-elevated-window.md`, and
+`git diff main...HEAD` in full.
+
+**The elevated side was not run.** The consent prompt is drawn by the AppInfo service on
+the secure desktop; this session is forbidden to raise one. Everything below about an
+elevated process is derived from reading, from unit tests, and from one **probe** that sets
+the process global in a test binary and exercises the real code path. Where a claim rests
+only on reading, it says so.
+
+## Verdicts
+
+| Packet | Verdict |
+| --- | --- |
+| **US-0130** — the launcher and the command line | **FAIL** — the launcher, the parser and the trusted-path table are all correct and well tested; the M3 guard this packet owns is not complete (MAJ-1), and M3 is the packet's own security deliverable |
+| **US-0131** — the elevated instance mode | **FAIL** (MAJ-2, MAJ-3, MAJ-4: M1 and M4 are each breached on a default path) |
+| **US-0132** — the menu rows and the docs | **PASS** (the rows and the docs are correct for what they claim; `docs/gui-layout.md`'s right-dock sentence inherits MAJ-2) |
+| **Overall (IN-0043)** | **FAIL — do not accept.** Four majors, all of them holes in the two mitigations the decision exists to enforce (M3/rule 4, M1/M4). Three are exploitable as medium-integrity → high-integrity privilege escalation by a same-user process. |
+
+The design is sound and the code is careful. What is wrong is not the mechanism but its
+**coverage**: `DEC-0019` rule 4 is defended against `LocalShellConfig::program` and `args`
+and against nothing else in the same document, and M1/M4 are defended against the paths
+that *build* or *write* and not against the path that *restores*.
+
+---
+
+## 1. Trust boundary (DEC-0019 rule 4 / M3)
+
+Every input the elevated process consumes that the unelevated process — or any other
+process running as the same user — can write.
+
+Threat model used: **split-token elevation**, the common case the LLD names
+(`low-level-design/elevated-instance.md` § Edge Cases). Same SID, same `USERPROFILE`, therefore the
+same `~/.OneTerm`. A medium-integrity process running as the user writes those files; the
+high-integrity process reads them. That is exactly the channel rule 4 forbids.
+
+| Input | Reached by the unelevated side? | Read by the elevated process? | Acted on? | Elevated branch tested? |
+| --- | --- | --- | --- | --- |
+| Command line (`argv`) | yes — it is the whole channel | yes, `crates/app/src/lib.rs:53` | closed 3-value enum, no tolerant branch (`crates/core/src/config/elevation.rs:109-134`) | **yes**, 10 rejection tests + `a_custom_shell_token_is_rejected` |
+| Process environment block | **no** — `SHELLEXECUTEINFOW` carries none; AppInfo builds it from the elevated token's profile | `%SystemRoot%`, `%ProgramFiles%` at `elevation.rs:213-217` | trusted-path resolution | resolution tested with injected roots; the *absence of the channel* is a Win32 fact, read not run |
+| `lpDirectory` → process cwd | **yes** — the launcher passes `current_dir()` (`crates/app/src/elevation.rs:166-169`); any same-user process can call `ShellExecuteExW` itself with any directory | **debug/fast-dev only**: `config_dir()` is the relative `target/` (`crates/core/src/config/shell.rs:109-112`) | selects the whole configuration root | no — see MIN-1 |
+| `terminal.json` → `shell.program` | yes | yes | **dropped** (`elevation.rs:256`) | **yes** (`an_elevated_config_takes_the_trusted_program_and_drops_the_configured_one`) |
+| `terminal.json` → `shell.args` | yes | yes | **dropped** (`elevation.rs:257`, and `shell.rs:381` then extends an empty vec) | **yes**, same test |
+| `terminal.json` → `shell.env` | yes | yes | **APPLIED** — `..cfg.clone()` keeps it (`elevation.rs:258`), `shell.rs:251` merges it over `base_env()`, and the ConPTY block puts custom entries **before** the parent so they win (`crates/vt/src/pty/windows/conpty.rs:437-450`) | **no — MAJ-1** |
+| `terminal.json` → `shell.cwd` | yes | yes | **APPLIED** — and not even through the trusted config: `crates/local-shell/src/session.rs:53` reads `cfg.cwd` from the **original** config, so clearing it in `trusted_shell_config` would not help | **no — MAJ-1** |
+| `terminal.json` → `logging.{local,directory,write_mode}` | yes | yes | **APPLIED** — `crates/terminal-view/src/panel/terminal_panel.rs:364` → `LocalSession::spawn(.., logging)`; `LogWriteMode::Overwrite` truncates | **no — MAJ-4** |
+| `terminal.json` → theme name, font family/size, scrollback, OSC security policy | yes | yes | presentation and policy only; fonts are family **names**, never paths (`crates/settings/src/terminal_config/font.rs:9-25`); themes are embedded, no user theme file is read (`crates/theme/src/theme.rs:28,89`) | n/a — no code-execution surface |
+| `terminal.json` (corrupt) | yes | yes | **quarantine renames the file** (`crates/settings/src/terminal_config/document.rs:146`) — outside every M4 guard | no — MIN-2 |
+| `ui_config.json` | yes | yes (`crates/settings/src/ui_config.rs:93`) | theme, `right_dock_mode`, key-binding overrides. Bindings map to a closed `BINDABLE_ACTIONS` table, so the worst case is *reaching an action that should be unreachable* — see MAJ-3 | write side tested (`write_refusal`); the **read** side is not gated |
+| `ui_config.json` (corrupt) | yes | yes | **quarantine renames the file** (`ui_config.rs:108`) | no — MIN-2 |
+| `docks.json` | yes | **yes** — `read_dock_document()` then `load_layout()` (`crates/workspace/src/layout/workspace/mod.rs:183-192`) | **BUILDS THE SIDE DOCKS BY NAME** — SSH Client / SFTP / Agent panels are constructed in the elevated window | **no — MAJ-2**, and the packet's own verification-plan item for this was never written |
+| `ssh_session.json` | yes | **yes** — `oneterm_session_ui::init` runs unconditionally (`crates/app/src/init.rs:42`) and installs `SshSessionStore::global` | the "+" menu does not list it when elevated; but the store is live and `saved_ssh_sessions` works, and a restored session panel (MAJ-2) renders it | write guarded (`crates/session-ui/src/session_state.rs:453`), untested |
+| `update_config.json` | yes | yes | M2 removes every check/download/install path (`crates/settings-ui/src/updates/mod.rs:23-28`, `actions.rs:12,90`, `install.rs:14`). **No network call is reachable**: `start_auto_check` is not called at all (`crates/app/src/window.rs:64`), `check_now` and `download_and_install_update` early-return. The crash dialog — the one surface with a GitHub link — is not shown (`crates/app/src/window.rs:68`) | write guarded (`updates/config.rs:64`), untested |
+| `~/.ssh/known_hosts` | yes | only if an SSH connection is attempted — which MAJ-3 and MAJ-2 both make possible | read + (on approval) append, under the administrator token | no |
+| `crashes/elevated/**` | separate store (M7) | yes | own subdirectory, one `join` (`crates/app/src/crash_report.rs:98-104`) | **yes**, both directions + the path validator |
+
+### Confirmed for the record
+
+- **M3 covers every local spawn path.** There is exactly one production call site of
+  `LocalSession::spawn` (`crates/app/src/session_factory.rs:24`), reached by every route —
+  the startup default shell, `AddPanelWithShell`, the "+" menu rows, split, duplicate tab,
+  `new_terminal_here`. All of them go through `resolve_shell`, and the guard is at the top
+  of that one function (`crates/core/src/config/shell.rs:241-248`). The *placement* of the
+  guard is right. Its *contents* are not (MAJ-1).
+- **No registry key is read anywhere in the workspace** (grep for `HKEY`, `RegGetValue`,
+  `RegOpenKey`, `System::Registry`: zero hits outside the `Cargo.toml` comment), so
+  `Win32_System_Registry` is justified by the `SHELLEXECUTEINFOW` struct alone, as claimed.
+- **No user theme file and no font path** is read from the config directory, so the two
+  obvious "config → code execution" routes a terminal usually has are genuinely absent.
+
+---
+
+## 2. Findings
+
+### MAJ-1 — M3 drops `program` and `args` and keeps `env`, `cwd` and the log destination
+
+`crates/core/src/config/elevation.rs:255-259`
+
+```rust
+Ok(LocalShellConfig {
+    program: Some(program),
+    args: Vec::new(),
+    ..cfg.clone()          // <- env, cwd and utf8 survive
+})
+```
+
+`DEC-0019` rule 4 is *"nothing the unelevated process writes may direct what the elevated
+process executes"*. `program` and `args` are not the only fields of `terminal.json` that
+direct what executes.
+
+1. **`shell.env`.** `crates/core/src/config/shell.rs:251` merges `cfg.env` over
+   `base_env()`, and `crates/vt/src/pty/windows/conpty.rs:437-450` writes the custom
+   entries into the child's environment block **before** the inherited ones and skips any
+   inherited duplicate. A `terminal.json` containing
+   `"shell": { "kind": "cmd", "env": { "PATH": "C:\\Users\\me\\bin" } }` therefore gives the
+   elevated `cmd.exe` an attacker-chosen `PATH`. The first `net`, `sc`, `reg` or `icacls`
+   the user types in that administrator window runs the attacker's binary with a high
+   integrity token. For PowerShell the same field reaches `PSModulePath`, which autoloads
+   on first use of any unresolved command name.
+2. **`shell.cwd`.** `crates/local-shell/src/session.rs:53` —
+   `working_directory: cfg.cwd.clone().or_else(home_dir)` — reads the **untrusted original**
+   `cfg`, not the value `resolve_shell` substituted. Even clearing `cwd` in
+   `trusted_shell_config` would not close this; the guard is bypassed by construction.
+   `cmd.exe` searches the current directory before `PATH`, so a `cwd` alone is the same
+   escalation with one fewer field.
+
+Severity: a same-user, no-privilege process writes one JSON file and waits for the user to
+open an administrator shell from the "+" menu. The user is shown a correct UAC prompt for
+OneTerm, consents to OneTerm, and gets an elevated shell whose command resolution the
+attacker owns. This is the exact failure mode option D was rejected for.
+
+Suggested fix, in the shape the module already uses — replace the struct-update syntax
+with an explicit construction, so the next field added to `LocalShellConfig` fails the
+build rather than silently crossing the boundary:
+
+```rust
+Ok(LocalShellConfig {
+    kind: cfg.kind,
+    program: Some(program),
+    args: Vec::new(),
+    env: HashMap::new(),   // or an allowlist of the OSC-integration keys
+    cwd: None,             // and fix session.rs:53 to read the trusted cfg
+    utf8: cfg.utf8,
+})
+```
+
+and a test in the style of the existing one, asserting emptiness rather than equality.
+Note that `session.rs:53` must be fixed in the same change or the `cwd` half stays open.
+
+### MAJ-2 — an elevated window **does** get a right dock, restored from `docks.json`
+
+`crates/workspace/src/layout/workspace/mod.rs:183-205`,
+`crates/workspace/src/layout/workspace/persistence.rs:42-84`,
+`crates/workspace/src/layout/workspace/layout.rs:38,70-78`
+
+The M1 gate was placed on the two *builders*. It was not placed on the *restore*:
+
+1. `read_dock_document()` reads `docks.json` (`mod.rs:183`).
+2. `load_layout()` calls `dock_area.load(state, ..)` (`persistence.rs:82`). Its own doc
+   comment states the contract: the **center** is blanked deliberately, and *"Side docks,
+   sizes and open state load as before"* (`persistence.rs:40-41`). The SSH Client panel —
+   and therefore the Session tree and the SFTP browser, or the Agent panel — is built here,
+   by name, with no elevation check.
+3. `loaded == true`, so `reset_center_only` → `apply_center_reset` runs. When elevated,
+   `right_dock()` returns `Some(None)` and the `if let Some(right)` at `layout.rs:50` is
+   skipped — so `set_dock(Right, ..)` is **not called**, which is what the design asked
+   for, and which is exactly why the dock loaded at step 2 is **left in place**.
+4. `switch_right_dock_mode` then early-returns when elevated (`actions.rs:196`), so even a
+   persisted `RightDockMode::None` cannot hide it afterwards.
+
+`right_dock()`'s own doc comment says *"`sync_right_dock_mode` and `apply_right_dock_width`
+both early-return on `!has_dock(Right)`, so no further guard is needed"* (`layout.rs:63-65`).
+That is true of those two functions (`mod.rs:332-334`) and false as an argument, because the
+premise it rests on — that an elevated window has no right dock — is the thing being proved.
+
+`reset_default_layout` — the path the design and the packet reason about — only runs on a
+**first ever launch**. Every user who has run OneTerm once has a `docks.json` with a right
+dock, so the *default* path in practice is the broken one.
+
+**Probe (run here).** Temporarily added to
+`crates/workspace/src/layout/workspace/layout_tests.rs`, run with `--exact` so the process
+global did not touch any other test, then removed:
+
+```rust
+let (dock_area, cx) = dock_area(cx);
+set_right_dock(&dock_area, panel_names::SSH_CLIENT, px(333.), true, cx);  // what load_layout leaves
+oneterm_core::elevation::set_elevated(true);
+cx.update(|window, cx| { layout::apply_center_reset(dock_area.downgrade(), window, cx); });
+let observed = right_dock(&dock_area, cx);
+oneterm_core::elevation::set_elevated(false);
+assert_eq!((observed.0, observed.1, observed.2.as_str()),
+           (333., true, panel_names::SSH_CLIENT));
+```
+
+```
+test layout::workspace::layout_tests::verify_elevated_center_reset_leaves_a_loaded_right_dock_in_place ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out
+```
+
+The assertion that **passed** is the one that says M1 is broken: after the elevated center
+reset the right dock is still there, still 333px, still open, still `ssh-client`.
+
+Consequences: SSH, SFTP and the Agent panel are all present in an elevated OneTerm window.
+That makes SSH connections, SFTP transfers and `known_hosts` writes run under an
+administrator token — the three things M1 exists to remove — and it re-opens the UIPI
+drag-and-drop tradeoff `DEC-0019` said "under M1 there is no SFTP panel in the elevated
+instance to drop onto".
+
+`docs/gui-layout.md:38` states this as fact — *"`ssh_client_panel` is never built,
+`set_dock(Right, ..)` is never called"* — and is wrong for the same reason.
+
+`US-0131`'s own verification plan has the item that would have caught this: *"The elevated
+start-up path yields a dock state with no right dock and does not name
+`panel_names::SSH_CLIENT`"*. No such test exists in `layout_tests.rs`, yet the packet's
+proof block is marked `[x] Unit proof`.
+
+Suggested fix: one guard where the restore happens, not at the builders — in `load_layout`,
+drop the side docks when elevated the same way the center is already dropped, or in
+`OneTermWorkspace::new` force `reset_default_layout` when elevated. Then add the test the
+plan already asks for, driving the **whole** startup path and not just `apply_center_reset`.
+
+### MAJ-3 — `ctrl-shift-n` opens Quick Connect in an elevated window
+
+`crates/workspace/src/layout/workspace/actions.rs:121-128`,
+`crates/settings-ui/src/key_bindings/key_bindings_actions.rs:88-96`
+
+`new_ssh_session` ships bound to `ctrl-shift-n` with `context: None`, so it is a global
+binding, installed by `setup_key_bindings` in every process including the elevated one. The
+handler has no elevation guard:
+
+```rust
+pub(crate) fn on_action_new_session(&mut self, _: &NewSession, window: &mut Window, cx: &mut Context<Self>) {
+    (commands(cx).open_quick_connect_dialog)(window, cx);
+}
+```
+
+`open_quick_connect_dialog` (`crates/session-ui/src/quick_connect_dialog.rs:160`) has no
+guard either. The dialog opens and connects. M1 names Quick Connect explicitly as absent
+from the elevated instance; the *row* is absent, the *action* is not.
+
+This is the sibling case the packet's own risk list calls "a surface left ungated means
+SSH … running under an administrator token", and it is precisely the case the
+`switch_right_dock_mode` guard was placed in the shared function to prevent — the same
+reasoning was not applied one function further down the file.
+
+Suggested fix: one `if oneterm_core::elevation::is_elevated() { return; }` at the top of
+`on_action_new_session`, matching `on_action_set_right_dock_mode`'s guard four lines above
+it; plus a unit test over the handler-visible predicate.
+
+### MAJ-4 — terminal logging gives an elevated window an arbitrary file write
+
+`crates/terminal-view/src/panel/terminal_panel.rs:359-366`,
+`crates/settings/src/terminal_config/logging.rs:11-23`,
+`crates/core/src/terminal_logging.rs:17-34`
+
+`terminal.json` carries `logging.local` (bool), `logging.directory` (an arbitrary
+`PathBuf`) and `logging.write_mode` (`Append` | **`Overwrite`**, "truncate the file once
+when logging starts"). Nothing in this branch gates any of them. An elevated OneTerm with
+`logging.local = true` opens a file at an attacker-chosen path **as Administrator** on the
+first tab, and with `Overwrite` truncates it.
+
+This is two findings in one:
+
+- **M4.** "The elevated instance reads configuration and writes none of it" — it writes a
+  log file, in a location the unelevated side chose, on a default-shaped path.
+- **Privilege escalation.** Create-or-truncate at an arbitrary path with a high integrity
+  token is a destructive primitive on its own (truncate a service binary, a driver, a
+  signed catalog), and an append primitive whose content is terminal output is enough to
+  reach an administrator-run `.ps1` profile or a `.bat`.
+
+Suggested fix: force `TerminalLogConfig::enabled = false` when elevated, in
+`LoggingConfig::runtime_config` — one function, both the local and the SSH caller — and
+say so in `docs/terminal-backend.md` beside the M3 table.
+
+### MIN-1 — `lpDirectory` chooses the elevated instance's configuration root in debug builds
+
+`crates/app/src/elevation.rs:163-172`, `crates/core/src/config/shell.rs:109-112`
+
+The launcher passes its own `current_dir()`, which is correct and load-bearing for the
+reason the comment gives. But the field is attacker-chosen in the general case: any
+same-user process may call `ShellExecuteExW(runas, oneterm.exe, "--elevated-shell cmd")`
+with any `lpDirectory`. In a debug or `fast-dev` build `config_dir()` is the relative
+`target/`, so the elevated instance is pointed at `<attacker dir>/target/terminal.json` —
+and then MAJ-1 and MAJ-4 apply without needing write access to the user's real profile.
+Release builds resolve from `USERPROFILE` and are unaffected, which is why this is ranked
+minor on its own; it is a severity multiplier for MAJ-1/MAJ-4 rather than a finding that
+stands alone.
+
+Worth one sentence in the LLD: the `lpDirectory` argument is inside the trust boundary, not
+outside it, and only the release `config_dir()` makes that harmless.
+
+### MIN-2 — a corrupt config document is quarantined (renamed) by the elevated process
+
+`crates/settings/src/ui_config.rs:105-111`, `crates/settings/src/terminal_config/document.rs:144-148`
+
+The M4 guards sit on the *write* entry points and on the *missing-file default*. The
+quarantine rename on a parse failure sits on neither. An elevated window that meets a
+corrupt `ui_config.json` renames the user's file to its quarantine sibling. Under
+over-the-shoulder elevation that is a modification in the other account's profile, which is
+the exact trace M4 says is never left. Small blast radius, needs a corrupt file — but it
+contradicts a stated invariant and the manual checklist's step 9 would not catch it (all
+five hashes would be unchanged; a *sixth*, renamed file appeared).
+
+### MIN-3 — the token query's failure branch is the unsafe direction, not the safe one
+
+`crates/app/src/elevation.rs:28-67`
+
+The mechanics are correct: `OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, ..)`, a
+correctly sized `TOKEN_ELEVATION`, `CloseHandle` on every path, `returned` ignored (fine),
+`TokenIsElevated != 0`. The initialisation order is correct: `read_process_identity()` is
+the first statement of `run()` (`crates/app/src/lib.rs:86`), `main()` does nothing before
+it (`crates/app/src/bin/oneterm.rs:12-14`), and the first reader — `crashes_dir()` via
+`prepare_capture_paths()` — runs after. `Relaxed` ordering is adequate: one flag, written
+once on the main thread before any task is spawned, and every background reader is reached
+through a task submission that already carries the happens-before.
+
+The argument to make both ways, as asked:
+
+- **For "false is safe":** the code's own reason — no window should claim an elevation it
+  cannot prove. A window wrongly marked "(Administrator)" trains users to ignore the marker.
+- **Against:** a process that **is** elevated and fails the query gets `is_elevated() ==
+  false`, and therefore **none of M1, M2, M3, M4 or M7 apply**. It runs SSH, SFTP, the
+  updater and `terminal.json`'s `program`/`args` under an administrator token, unmarked.
+  The LLD's corollary — *"there is no elevated-but-unrestricted state to reach"*
+  (section 7) — is false in this branch. Fail-open on a security switch is the wrong
+  default even when the branch is theoretical.
+
+Risk accepted here as **minor** only because `OpenProcessToken` on one's own process with
+`TOKEN_QUERY` cannot be denied. If it is ever reachable, the honest answer is to **exit**
+with a message rather than to pick a direction: a process that cannot tell what it is
+should not open a terminal. Recommend recording that in the LLD's error table rather than
+changing code now.
+
+### MIN-4 — an elevated window's Settings page accepts edits and silently discards them
+
+`crates/settings/src/terminal_settings/persist.rs:185-190`, `crates/settings/src/ui_config.rs:254-259`
+
+`persist_global` / `persist` log a `warn` and return. There is no user-visible feedback, and
+Settings is fully present in an elevated window (`open_settings` is ungated). The user
+changes a font size in an administrator window, it applies for the session, and it is gone
+next time with no explanation. Not a security issue; it is the honesty half of M4. One
+notification, or a disabled Settings surface, closes it.
+
+The same page carries the other half: `network_page` — *"GitHub Connection: how OneTerm
+reaches GitHub Releases to check for and download updates"*, with proxy and
+certificate-verification controls — is **not** gated
+(`crates/settings-ui/src/updates/groups.rs:60-78`), so an elevated window still offers a
+settings page configuring a feature M2 removed, whose edits are then discarded. M2 replaced
+the Updates group with one line; the Network page should get the same treatment or be
+hidden.
+
+### MIN-5 — three of the five M4 guards have no test, and one of them can be tested
+
+`US-0131`'s Gaps section says the `docks.json`, `ssh_session.json` and `update_config.json`
+guards are untestable because "flipping the global in a test would race every other test in
+the same binary". That is true for a shared test binary and **not** true in general: the
+probe in MAJ-2 above flipped the global, ran the real code path and restored it, using
+`cargo test -- --exact` so it was the only test in the process. The same technique gives
+`save_state_logged` a real elevated-branch test in `oneterm-workspace` at the cost of one
+`--exact` invocation, or a dedicated `tests/` integration binary at the cost of none.
+The claim as written is stronger than the evidence for it.
+
+---
+
+## 3. What was verified as correct
+
+Recorded so a re-review does not re-derive it.
+
+**The launcher (US-0130), `crates/app/src/elevation.rs:152-211`.**
+
+- `lpVerb = "runas"` — the only supported medium→high route; correct.
+- `fMask = SEE_MASK_FLAG_NO_UI` and nothing else. `SEE_MASK_FLAG_NO_UI` (0x400) suppresses
+  the **shell's own error message box** only. It does **not** suppress the UAC consent
+  prompt, which is drawn by `consent.exe` on the secure desktop under the AppInfo service
+  and which no caller flag can suppress. The code comment says exactly this and is right.
+- `SEE_MASK_NOCLOSEPROCESS` absent → `hProcess` is not returned → no handle to leak.
+  Verified by reading the single `fMask` assignment; nothing else sets a bit.
+- `lpFile = std::env::current_exe()`, never a name, never `argv[0]`. Spaces in the path are
+  a non-issue: `lpFile` is its own field, not a command line, so no quoting is involved. A
+  `current_exe()` failure aborts the launch with one notification and guesses nothing
+  (`crates/app/src/elevation.rs:160-162`).
+- `lpParameters` is `format!("{FLAG} {token}")` where `token` is a `&'static str` from a
+  `match` on a three-variant enum. No user text can reach it, so there is no quoting hazard
+  and no quoting code.
+- `lpDirectory = current_dir()` with `current_exe().parent()` as fallback — matches the
+  design. See MIN-1 for the boundary note.
+- `ERROR_CANCELLED` mapping: `GetLastError()` is called inside the same `unsafe` block
+  immediately after `ShellExecuteExW` with no intervening call that could clobber it
+  (`crates/app/src/elevation.rs:194-200`). 1223 → silent `Declined`; everything else → one notification.
+  `GetLastError` (not `hInstApp`) is the documented accessor for `ShellExecuteEx`. Correct.
+- `Win32_System_Registry` is pulled in for the `HKEY` field of `SHELLEXECUTEINFOW` and
+  nothing else; zero registry calls exist in the workspace.
+
+**The command line (US-0130).**
+
+- The grammar has no tolerant branch. Every rejection path returns
+  `CliError::Unrecognized` → `fatal_message` → `exit(2)` (`crates/app/src/lib.rs:56-59`).
+  Ten rejection tests, including `custom`, `bash`/`zsh`/`sh`, the flag twice, the joined
+  `--elevated-shell=cmd` form, a bare positional and a trailing extra.
+- The argument list is joined for the message and **never interpreted**
+  (`elevation.rs:82-96`, `:118-127`).
+- Exit 3 is checked only when elevated (`lib.rs:67-76`) — a deliberate, recorded deviation,
+  and the right one: a non-elevated process paid no consent prompt.
+- Trusted-path resolution consults neither `PATH` nor `COMSPEC` nor `terminal.json`;
+  `%SystemRoot%` / `%ProgramFiles%` are read in the elevated process only
+  (`elevation.rs:201-229`). pwsh takes the highest numeric directory under
+  `%ProgramFiles%\PowerShell`, re-deriving the directory name from the parsed integer so a
+  `07` cannot be smuggled through, and reports `…\7\pwsh.exe` when none exists. Six
+  resolution tests, all against injected roots — a test that passed by reading the host
+  would fail there. In a 64-bit elevated process `%ProgramFiles%` is the native
+  `C:\Program Files`, and OneTerm ships x64.
+
+**The token switch (US-0131, M5).**
+
+- One source: `process_is_elevated()`. One title helper: `window_title(elevated)`, used by
+  both the OS title (`crates/app/src/window.rs:78`) and the in-app bar
+  (`crates/workspace/src/layout/workspace/mod.rs:270`), which also feeds
+  `app_menus::init` (`title_bar.rs:42`), so all three strings come from one function.
+- The argument cannot set the flag — `parse` touches no global; test
+  `the_argument_never_makes_the_process_elevated`.
+- The warning border reads `cx.theme().warning` (`title_bar.rs:68`) — a border, not a new
+  text surface, so `scripts/check-theme-contrast.py` is untouched. Confirmed: the script is
+  absent from `git diff main...HEAD`, and the gate passes it unchanged.
+- Mutation-tested: see §4.
+
+**M2 (US-0131).** No network call is reachable in an elevated instance. `start_auto_check`
+is not called at all (`crates/app/src/window.rs:58-70`), `check_now` and `download_and_install_update`
+early-return through the single `elevated_never_updates()` helper, `persist_update_config`
+returns before touching the queue, the Updates group is one label, and the About **dialog**
+drops its footer button too — a correct extension beyond what the design named. The crash
+dialog, the only other route to a browser, is not shown.
+
+**M7 (US-0131).** `crashes_dir_in(config_dir, elevated)` behind one `crashes_dir()`, so the
+writer, the reader and the path validator cannot drift; the validator was **not** loosened
+to fit (new test `deleting_a_report_outside_the_current_store_is_refused`). `load_pending_reports`
+still runs when elevated, so promotion and the newest-20 retention still happen — only the
+dialog is suppressed.
+
+**M1, the parts that hold.** The "+" menu returns after the three shells
+(`terminal_panel.rs:761-763`) — no submenu, no SSH block, no Quick Connect row, no New
+Saved Session row — and `menu_rows` counts what each mode emits rather than a literal. The
+mode-toggle group is not attached (`mod.rs:270-278`). `switch_right_dock_mode` is guarded in
+the shared function, so a key binding on `SetRightDockMode` cannot build a dock either.
+`oneterm_agent_ui::init` still runs, correctly, for the install-order invariant.
+
+**M4, the parts that hold.** `write_refusal(elevated)` is one function per document asked
+by both shared write entry points, and it keeps `persist_blocked`'s own meaning rather than
+overloading it — the deviation from the design is an improvement, and the packet's
+reasoning for it is correct: setting `persist_blocked` at load would **not** have stopped
+the first-run default write, which happens *during* the load. That catch is the best thing
+in this branch. `save_state_logged` is guarded once for all four callers.
+
+---
+
+## 4. Commands
+
+Run in this worktree at `0ac3f8dc`, `$env:CARGO_BUILD_JOBS=6`.
+
+```
+cargo test -p oneterm-core -p oneterm-app -p oneterm-settings -p oneterm-settings-ui -p oneterm-terminal-view -p oneterm-workspace
+  -> exit 0. Counts confirmed against the mutation runs below: oneterm-core 75,
+     oneterm-terminal-view 353, oneterm-workspace 36; oneterm-settings, oneterm-settings-ui
+     and oneterm-app all green. 0 failed in every binary, doc-tests included.
+```
+
+```
+python scripts/verify-dependency-graph.py
+  -> Dependency graph policy passed for 20 workspace packages and 20 explicit members,
+     and no tracked path is over 150 characters.
+```
+
+**Mutation testing** — four decisions mutated, each caught by the test that owns it, all
+restored with `git checkout --` afterwards (`git status` clean).
+
+| Mutation | File | Test that failed |
+| --- | --- | --- |
+| the parser accepts `custom` (`from_token` returns `Cmd`) | `crates/core/src/config/elevation.rs` | `config::elevation::tests::a_custom_shell_token_is_rejected` |
+| `trusted_shell_config` keeps `cfg.args` | same | `…::an_elevated_config_takes_the_trusted_program_and_drops_the_configured_one` |
+| `window_title` ignores elevation | same | `…::only_an_elevated_window_is_marked` |
+| `menu_rows` shows the submenu when elevated | `crates/terminal-view/src/panel/terminal_panel.rs` | `panel::tests::the_menu_row_count_matches_the_rows_each_mode_emits` |
+
+```
+cargo test -p oneterm-core          (3 mutations live)
+  -> test result: FAILED. 72 passed; 3 failed
+cargo test -p oneterm-terminal-view (1 mutation live)
+  -> test result: FAILED. 352 passed; 1 failed
+```
+
+The four guards are real. Note what the mutation set also shows: there is **no** test that
+fails when M1's right dock, M3's `env`/`cwd`, M4's logging write or the `NewSession`
+handler are wrong, because no test covers them.
+
+```
+pwsh scripts/ci-local.ps1
+  -> exit 0, final line: ci-local: all checks passed.
+  Notable lines from that run:
+    check-theme-contrast: 1365 foreground/surface pairings across 351 token/variant rows,
+      all >= 4.5:1; primary text out-reads muted.foreground on all 585 shared-surface comparisons
+    Doc path check passed for 203 current paths in 11 documents.
+    English contributor-text check passed for 980 files.
+    Dependency graph policy passed for 20 workspace packages and 20 explicit members.
+    THIRD-PARTY-NOTICES.md is up to date.
+```
+
+---
+
+## 5. Non-elevated walk
+
+Own `fast-dev` build, own pids, `PrintWindow` for the captures, posted messages only. No
+UAC prompt was raised and **no submenu row was clicked**. `target/fast-dev` was deleted
+afterwards; the owner's own OneTerm (pid 21060, `dist\oneterm-x86_64-pc-windows-msvc`) was
+never touched — every process acted on here was started by this session and addressed by
+its own pid.
+
+**A — a command line OneTerm does not understand.** `oneterm.exe --elevated-shell zsh`:
+
+```
+cls=#32770 title='OneTerm'          <- a real MessageBoxW dialog, not a OneTerm window
+cls=PseudoConsoleWindow title=''
+EXITCODE = 2
+```
+
+`evidence/IN-0043-verify-bad-argument.png` — the box names the rejected arguments verbatim
+(`--elevated-shell zsh`) and the three accepted forms, and nothing was interpreted. **Exit
+code 2**, no OneTerm window. This capture is byte-for-byte the same size (7670 bytes) as the
+implementer's `US-0130-bad-argument-message.png`, i.e. independently reproduced pixel for
+pixel.
+
+**B — the same flag in a process that is not elevated.**
+`oneterm.exe --elevated-shell cmd` from an unelevated session:
+
+```
+TITLE = 'OneTerm'  cls=Zed::Window
+client = 1280x831
+```
+
+`evidence/IN-0043-verify-nonelevated-cmd.png`. The window title is `OneTerm` with **no**
+`(Administrator)` suffix and no warning border; there is exactly one tab, `Command Prompt`,
+so the argument *replaced* the default shell rather than adding a tab (`DEC-0016` holds);
+and the right dock (Session + SFTP Browser) and all three mode toggles are present, i.e.
+the process is fully unrestricted. This is M5 proven from the side that can be tested here:
+**the argument cannot forge the marker, and it cannot impose the restrictions either.**
+
+**C — the "+" menu and the `Run as administrator ›` submenu.**
+`evidence/IN-0043-verify-plus-menu.png` and `evidence/IN-0043-verify-plus-submenu.png`.
+Top to bottom: `Command Prompt`, `PowerShell`, `PowerShell 7`, `Run as administrator ›`
+(opening onto the same three names, as a separate hit target with no modifier and no
+overlap), the `SSH Sessions` separator, `No saved sessions`, a plain separator,
+`Quick Connect...  Ctrl+Shift+N`, `New Saved Session...`. The owner-fixed order below the
+shell block is undisturbed and no scrollbar appears at this length. Reproduced
+independently of the implementer's `US-0132-plus-menu-run-as-admin.png` and matching it.
+
+Note what the same screenshot shows for MAJ-2: this is the right dock a normal session
+leaves in `docks.json`, and it is the dock an elevated window then restores.
+
+---
+
+## 6. The manual checklist in US-0131 — review and corrections
+
+The checklist (US-0131 § *Manual acceptance checklist*) is unusually good: it is ordered,
+it names the artefact for each step, and it separates "the marker says so" from "the token
+says so". Four corrections, one addition, before it goes to the owner.
+
+1. **Step 9 is not falsifiable as written.** "Also confirm no new file appeared in the
+   config directory" **will fail every time**: `prepare_capture_paths()` calls
+   `create_private_dir(crashes_dir())` on every start (`crates/app/src/crash_report.rs:33-35`),
+   so an elevated run always creates `<config>\crashes\elevated\`. That is M7 working, not
+   M4 breaking. Reword to: *"the five documents are byte-identical, and the only new path
+   under the config directory is `crashes\elevated\`."* Add the sibling check MIN-2 needs:
+   *"and no `*.bak` / quarantine sibling of any of the five appeared."*
+2. **"Unchanged" needs to be said per document, and the five hashes are not enough.**
+   `docks.json` is the one most likely to move and the one the current step already flags —
+   but `ui_config.json` can be *renamed* rather than rewritten (MIN-2), which a hash
+   comparison of the same path reports as "file not found", not as a difference. Say
+   explicitly: *for each of the five, the file must still exist, at the same path, with the
+   same hash, and with no sibling that did not exist before.*
+3. **Step 4 must include the right dock as a hash-level check, not only a screenshot.**
+   Given MAJ-2, "no right dock in the window at all" is the single most important line in
+   the whole checklist and it currently rests on one screenshot of a machine whose
+   `docks.json` state is unstated. Make the precondition explicit: *"before step 2, open the
+   normal window, ensure the right dock is open on SSH Client, close it so `docks.json`
+   records that, then elevate."* That is the state every real user is in, and it is the
+   state the bug needs.
+4. **Step 11 (declined UAC) should also record the exit path.** "Nothing at all" is right
+   but unverifiable from a screenshot; add *"and `Get-Process oneterm` shows no new
+   process"*, so a window that opened and closed quickly cannot pass as "nothing".
+5. **Add a step between 3 and 4, for MAJ-1 and MAJ-3** — the two things the current
+   checklist cannot catch:
+   - *In the elevated tab, run `where.exe cmd` and `$env:PATH` (or `echo %PATH%`) and
+     confirm `PATH` is the machine's and not one from `terminal.json`.*
+   - *Press `Ctrl+Shift+N` in the elevated window. Nothing must open.*
+
+   Both are one keystroke and both currently fail.
+
+Also, three wording notes:
+
+- Step 1 names `target\*.json` for the fast-dev build. Correct, and worth adding *why*:
+  a debug build's `config_dir()` is the relative `target/`, so the hashes must be taken
+  from the directory the elevated process will actually resolve — which is the launcher's
+  `current_dir()`, not necessarily the repo root (MIN-1).
+- Step 12's condition, `elevated && persist_blocked`, only fires when `ui_config.json` is
+  **absent** in the other profile. If that account has ever run OneTerm, the notification
+  will correctly not appear; say so, or the step reads as a failure.
+- The screenshot names are consistent and unambiguous
+  (`evidence/US-0131-E<n>-<slug>.png`) and match the three already in `evidence/`. No
+  change needed.
+
+---
+
+## 7. Gaps in this verification
+
+- **The elevated side was never run.** Every claim about a high-integrity process is from
+  reading, from unit tests, or from the MAJ-2 probe, which sets the process global in a
+  test binary — real code path, real assertion, but not a real elevated token.
+- **MAJ-1 and MAJ-4 are not demonstrated end to end.** Demonstrating them needs an elevated
+  window, which this session may not open. They are derived from a complete read of the
+  chain (`terminal.json` → `TerminalSettings` → `resolve_shell` / `LocalSession::spawn` →
+  `environment_block`), each link cited above, with the decisive one — custom env entries
+  beating the inherited block — confirmed by that function's own unit tests
+  (`conpty.rs:547`: *"the parent environment must be appended after the custom entries"*).
+- **`cfg(unix)` paths** are compile-and-unit-tested only, as in the packets.
+- **Over-the-shoulder elevation** needs a second administrator account; none here.
+- **Group Policy "deny elevation"** and any real `ShellExecuteExW` failure remain
+  unexercised, so the non-`ERROR_CANCELLED` notification branch is read, not run.
+- No attempt was made to audit `gpui-component`'s `DockArea::load` beyond its behaviour as
+  documented in `load_layout`'s own comment and as observed by the probe.
