@@ -113,11 +113,18 @@ line.
   administrator's profile.
 - **M5 — the elevation marker derives from the process token, never from the argument.**
   `GetTokenInformation(TokenElevation)` is the only source. The title reads
-  `OneTerm (Administrator)` in both the OS title bar and the in-app title bar, and the
-  title bar carries a distinct background or border from a theme token. Stated as one
+  `OneTerm (Administrator)` in both the OS title bar and the in-app title bar. Stated as one
   sentence: *the argument selects the shell, the token decides everything else.* A window
   elevated by any route says so; no window can be made to claim an elevation it does not
   have.
+
+  > **Amended 2026-09-21 by the owner: title text only, no colour.** The rule first asked
+  > for "a distinct background or border from a theme token" as well, and that border was
+  > built and then removed on the owner's ruling after seeing it. The marker is the title
+  > text. This is consistent with what the rule always said — *colour alone is not a marker:
+  > themes are user-editable* — so the text was carrying the weight either way; the colour
+  > is simply gone rather than demoted. A token query that fails reads
+  > `OneTerm (elevation unknown)`, which claims nothing the token did not confirm.
 - **M6 — no single-instance forwarding.** Every elevation request is served by the process
   that received it. OneTerm has no instance coalescing today, so this is free now and stops
   being free the moment someone adds it: forwarding an elevation request to an existing

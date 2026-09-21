@@ -40,7 +40,7 @@ security boundary.
 |   lpFile  = current_exe()        | ----------->  |     -> CreatePseudoConsole HERE  |
 |   lpParams= "--elevated-shell .."|   + UAC on   |                                  |
 |   lpDir   = current_dir()        |  secure      | title: "OneTerm (Administrator)" |
-|   fMask   = SEE_MASK_FLAG_NO_UI  |  desktop     | title-bar border: warning token  |
+|   fMask   = SEE_MASK_NOASYNC     |  desktop     | (title text is the whole marker) |
 | }                                |              | right dock: absent               |
 +----------------------------------+              +----------------------------------+
 ```
@@ -437,7 +437,7 @@ Seams, one row per gate, with the line each one sits on today:
 | --- | --- | --- | --- |
 | M5 | OS window title | `crates/app/src/window.rs:66` — `window.set_window_title("OneTerm")` | `"OneTerm (Administrator)"`, so the taskbar, Alt-Tab and every screenshot carry it |
 | M5 | in-app title bar text | `crates/workspace/src/layout/workspace/mod.rs:262` — `AppTitleBar::new("OneTerm", window, cx)` | `"OneTerm (Administrator)"` |
-| M5 | title-bar border | `crates/workspace/src/layout/title_bar.rs:63` — `.border_color(cx.theme().border)` | `cx.theme().warning`. A **border**, not a background: a border introduces no new text surface, so `scripts/check-theme-contrast.py`'s `SURFACES` table is untouched. If a later change tints `title_bar.background` instead, that surface must be added to `SURFACES` (and to `PARENTS`) in the same commit. |
+| M5 | ~~title-bar border~~ | `crates/workspace/src/layout/title_bar.rs` | **Removed** (owner ruling 2026-09-21, `DEC-0019` M5 as amended): the marker is the **title text only**. The border briefly carried `cx.theme().warning`; it was chosen as a border precisely so it added no text surface, so removing it leaves `scripts/check-theme-contrast.py` untouched in both directions. If a later change ever tints `title_bar.background`, that surface must be added to `SURFACES` (and to `PARENTS`) in the same commit — the note outlives the border it was written for. |
 | M1 | the "+" menu shell list | `crates/terminal-view/src/panel/terminal_panel.rs:697-704` | the three Windows kinds only, and **no "Run as administrator" rows** — `is_restricted()` suppresses them, so an elevated window cannot spawn a second identical one |
 | M1 | the "+" menu SSH block | `terminal_panel.rs:705-742` — "SSH Sessions" separator, saved rows, "Quick Connect...", "New Saved Session..." | absent in full. `FIXED_ROWS` (`:763`) is computed for the rows actually emitted, so the scroll estimate stays honest in both modes |
 | M1 | right dock content | `crates/workspace/src/layout/workspace/mod.rs` (`startup_dock_document`), `layout.rs` (`right_dock`) | **`docks.json` is not read at all** (as built, `IN-0043` MAJ-2). Gating the two layout *builders* was necessary and not sufficient: `load_layout` restores the side docks **by name**, so a saved `ssh_client` or `agent` dock is built before either builder runs, and declining to call `set_dock(Right, ..)` does not remove a dock that is already there — it leaves it. An elevated window therefore starts from the fixed default layout, every time, and `right_dock`'s `None` arm now calls `remove_dock` rather than merely skipping `set_dock`. `sync_right_dock_mode` and `apply_right_dock_width` early-return on `!has_dock(Right)` as before |
@@ -657,7 +657,8 @@ that first produces one:
       Click one; screenshot the UAC prompt naming `oneterm.exe`.
 - [ ] **E2 — the marked window.** Screenshot of the elevated window showing all three
       markers at once: the OS title bar / taskbar reading `OneTerm (Administrator)`, the
-      in-app title bar reading the same, and the title-bar border in the warning colour.
+      in-app title bar reading the same. The title text is the whole marker: the warning-
+      coloured border was removed on the owner's ruling (`DEC-0019` M5 as amended).
 - [ ] **E3 — really elevated.** `whoami /groups` in the elevated tab, screenshot showing
       `Mandatory Label\High Mandatory Level`. This is the proof that the feature did what
       it claims; the marker alone is not.

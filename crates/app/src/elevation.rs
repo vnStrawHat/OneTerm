@@ -113,6 +113,95 @@ fn wide(value: &str) -> Vec<u16> {
         .collect()
 }
 
+/// Give up the console Windows allocated for this process, if it is ours alone.
+///
+/// A **release** build is a GUI-subsystem binary
+/// (`windows_subsystem = "windows"`, `src/bin/oneterm.rs`) and has no console at
+/// all, so `GetConsoleWindow()` is null and this does nothing. A **debug** or
+/// `fast-dev` build is console-subsystem on purpose — it is how a developer
+/// reads the log — and Windows gives such a process a console when it has none
+/// to inherit. A process started through `runas` never inherits one, because the
+/// launcher's console belongs to a different integrity level. So an elevated
+/// OneTerm opened with a bare console window beside it, every time, in exactly
+/// the build the owner runs (`IN-0043`, `US-0130` third rework).
+///
+/// Hiding it from the launching side does not work: `nShow` becomes the new
+/// process's default show command and gpui's window inherits it, so
+/// `SEE_MASK`/`SW_HIDE` hides the app window too (probed, `US-0130`).
+///
+/// **Only when the console is this process's alone.** `GetConsoleProcessList`
+/// returning 1 means Windows allocated it for us — the `runas` case, and the
+/// window nobody asked for. More than one means we inherited it from whoever
+/// started us, most likely an administrator prompt running
+/// `oneterm.exe --elevated-shell cmd` by hand: that window is not ours to close,
+/// no unexpected window appeared, and the log belongs to the person reading it.
+/// `FreeConsole()` unconditionally would throw away output somebody started the
+/// process to see.
+///
+/// Called from `run()` **before logging is initialised**, so nothing is written
+/// to a console that is about to go away. The elevated instance's `stderr` then
+/// goes nowhere and is deliberately **not** redirected to a file: a log under the
+/// configuration directory is a write, and M4's promise is that an elevated
+/// window leaves nothing behind. Its diagnostics are the crash store, which M7
+/// already keeps in `crashes/elevated/`.
+#[cfg(not(windows))]
+pub(crate) fn release_own_console() {}
+
+#[cfg(windows)]
+pub(crate) fn release_own_console() {
+    use windows_sys::Win32::System::Console::{
+        FreeConsole, GetConsoleProcessList, GetConsoleWindow,
+    };
+
+    // SAFETY: both queries are parameterless or take a buffer we own, and
+    // neither keeps a pointer past the call.
+    let (has_console, owners) = unsafe {
+        if GetConsoleWindow().is_null() {
+            (false, 0)
+        } else {
+            let mut list = [0u32; 2];
+            (
+                true,
+                GetConsoleProcessList(list.as_mut_ptr(), list.len() as u32),
+            )
+        }
+    };
+
+    if console_action(has_console, owners) == ConsoleAction::Keep {
+        return;
+    }
+    // SAFETY: parameterless, and nothing has been written to this console yet —
+    // `run()` calls this before the logger is initialised.
+    if unsafe { FreeConsole() } == windows_sys::Win32::Foundation::FALSE {
+        // Nothing is broken by failing: the window stays and the log still
+        // works. Worth a line, and this runs before the logger exists.
+        eprintln!("OneTerm: could not release the console window");
+    }
+}
+
+/// What to do about the console this process is attached to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConsoleAction {
+    /// Leave it: there is none, or it is not ours alone.
+    Keep,
+    /// Ours alone, allocated for us. Disown it and the window goes with it.
+    Free,
+}
+
+/// The decision, split out from the Win32 queries so it is testable on every
+/// platform and so the "not ours to close" case is asserted rather than trusted.
+///
+/// `owners` is `GetConsoleProcessList`'s count, which is `0` when the call
+/// fails — treated as "leave it alone", because a console we cannot count is
+/// not one we should be closing.
+fn console_action(has_console: bool, owners: u32) -> ConsoleAction {
+    if has_console && owners == 1 {
+        ConsoleAction::Free
+    } else {
+        ConsoleAction::Keep
+    }
+}
+
 /// Remember the thread that owns the gpui `App`.
 ///
 /// Called once from `run()`, before the application starts. It exists for one
@@ -419,6 +508,47 @@ mod tests {
         let message = notification_for(&denied).expect("a failure must be reported once");
         assert!(message.contains("1260"), "{message}");
         assert!(message.contains("administrator window"), "{message}");
+    }
+
+    /// Only a console this process owns alone is disowned. The `runas` case is
+    /// exactly `owners == 1`: Windows allocated it for us and nobody asked for
+    /// the window. Anything else is somebody else's console.
+    #[test]
+    fn only_a_console_of_our_own_is_released() {
+        // A release build: GUI subsystem, no console ever existed.
+        assert_eq!(console_action(false, 0), ConsoleAction::Keep);
+        // A debug build started by `runas`: a console allocated for us alone.
+        assert_eq!(console_action(true, 1), ConsoleAction::Free);
+        // Started from somebody's administrator prompt: their window, their log.
+        assert_eq!(console_action(true, 2), ConsoleAction::Keep);
+        assert_eq!(console_action(true, 8), ConsoleAction::Keep);
+        // `GetConsoleProcessList` failed. A console we cannot count is not one
+        // to close.
+        assert_eq!(console_action(true, 0), ConsoleAction::Keep);
+    }
+
+    /// The queries behave as the decision above assumes: a process with a
+    /// console reports at least one owner. Never calls `FreeConsole` — that
+    /// would detach the test harness from the console running it.
+    #[cfg(windows)]
+    #[test]
+    fn the_console_queries_agree_with_each_other() {
+        use windows_sys::Win32::System::Console::{GetConsoleProcessList, GetConsoleWindow};
+
+        // SAFETY: parameterless / a buffer we own; neither mutates process state.
+        let (has_console, owners) = unsafe {
+            let mut list = [0u32; 8];
+            (
+                !GetConsoleWindow().is_null(),
+                GetConsoleProcessList(list.as_mut_ptr(), list.len() as u32),
+            )
+        };
+        if has_console {
+            assert!(
+                owners >= 1,
+                "a process attached to a console must be counted among its owners"
+            );
+        }
     }
 
     #[cfg(windows)]

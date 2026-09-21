@@ -495,6 +495,75 @@ gpui callback holds one. The borrow was never the bug; a pumping call underneath
   prompt, which this session must not raise. `US-0131`'s checklist **step 0** is the
   closing evidence.
 
+### Acceptance rework, 2026-09-21 (third) — a console window came with the elevated window
+
+Owner acceptance: **step 0 passed** — the click no longer logs `RefCell already borrowed`
+and the launching window stays alive, so the re-entrancy fix is accepted. The elevated
+window then opened **with a separate console window beside it**.
+
+**Cause, confirmed by reading.** `crates/app/src/bin/oneterm.rs:7-10` sets
+`windows_subsystem = "windows"` only under `not(debug_assertions)`:
+
+```rust
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+```
+
+So a **release** build is a GUI-subsystem binary and gets no console at all — nothing to fix
+there, and the packet says so rather than leaving it to be assumed. A **debug or `fast-dev`**
+build is a console-subsystem binary, which is deliberate (it is how a developer reads
+`log::info!` output). Windows allocates a console for such a process when it has none to
+inherit, and a process started through `runas` never inherits one: the launcher's console
+belongs to a different integrity level. Hence a fresh, visible console for the elevated
+instance, every time, in exactly the build the owner runs.
+
+**`nShow = SW_HIDE` was tried first, and does not work.** It was the cheap fix, and it hides
+the wrong window as well. Probed against the real `fast-dev` binary with verb **`open`**
+(never `runas`, so no consent prompt), enumerating the launched process's own top-level
+windows:
+
+```text
+nShow = SW_HIDE (0):
+  ShellExecuteExW ok=True lastError=0
+  hidden  cls=Zed::Window        title='OneTerm'          <- the app window, hidden
+  hidden  cls=ConsoleWindowClass title='...\oneterm.exe'
+
+nShow = SW_SHOWNORMAL (1):
+  ShellExecuteExW ok=True lastError=0
+  VISIBLE cls=Zed::Window        title='OneTerm'
+```
+
+`nShow` becomes the process's default show command, and gpui's window inherits it — the
+elevated window would simply never appear. `SW_SHOWNORMAL` stays.
+
+**The fix: the elevated process disowns its console.** In `run()`, before logging is
+initialised and only when `is_restricted()`:
+
+- `GetConsoleWindow()` is null in a release build (GUI subsystem, no console) — nothing to
+  do, so the code is a no-op there rather than being `cfg`-gated on the build profile.
+- Otherwise `GetConsoleProcessList` says how many processes are attached. **One** means the
+  console was allocated for this process alone, which is the `runas` case — `FreeConsole()`
+  disowns it and the window goes with it. **More than one** means the console was inherited
+  from whoever started us, most likely an administrator prompt running
+  `oneterm.exe --elevated-shell cmd` by hand; that window is not ours to close, no
+  unexpected window appeared, and the log stays where the person who started it can read it.
+
+That distinction is the whole reason this is six lines rather than one. `FreeConsole()`
+unconditionally would detach from a console the user opened themselves and silently throw
+away the output they started the process to see.
+
+**What the elevated instance's logging costs.** After `FreeConsole` its `stderr` goes
+nowhere, so the `runas`-launched instance has no live log. It is **not** redirected to a
+file: a log under the configuration directory is a write, and M4's promise is that an
+elevated window leaves nothing behind — under over-the-shoulder elevation, nothing in the
+administrator's profile — which the manual checklist's step 12 checks literally ("the only
+new path may be `crashes\elevated\`"). Diagnosing an elevated instance therefore goes
+through the crash store, which M7 already keeps in `crashes/elevated/`, or by starting it
+from an administrator console by hand, which is the case the process-count check
+deliberately preserves.
+
 ### Gaps
 
 - **The elevated side is unverified in this environment.** The consent prompt is drawn by the

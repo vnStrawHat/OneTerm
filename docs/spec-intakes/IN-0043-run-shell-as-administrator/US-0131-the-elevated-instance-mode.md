@@ -429,9 +429,24 @@ under `~\.OneTerm\`.
    the point: a quarantine **renames** a document, which a hash of the same path reports as
    "file not found" rather than as a difference, and the old wording would have missed it.
 3. **E2 — the marked window.** Right-click `oneterm.exe` → *Run as administrator*, consent.
-   Screenshot showing all three markers at once: the taskbar / OS title reading
-   `OneTerm (Administrator)`, the in-app title bar reading the same, and the title-bar border
-   in the warning colour. `evidence/US-0131-E2-marked-window.png`.
+   Screenshot showing **both** markers at once: the taskbar / OS title reading
+   `OneTerm (Administrator)`, and the in-app title bar reading the same. The title text is
+   the whole marker — there is deliberately **no** coloured title-bar border (owner ruling,
+   `DEC-0019` M5 as amended), so a coloured border appearing here is a failure, not a pass.
+   `evidence/US-0131-E2-marked-window.png`.
+
+3b. **No console window.** The elevated window must open **alone** — no console window
+   beside it, and none behind it in Alt-Tab or on the taskbar. Check in the **debug /
+   `fast-dev`** build specifically: that is the console-subsystem one, and `runas` gives such
+   a process a console of its own, which is what the owner saw. A release build is
+   GUI-subsystem and never had a console.
+   `evidence/US-0131-E3b-no-console.png`.
+
+    Consequence to expect, and not a failure: the elevated instance has **no live log**. It
+    gives the console up rather than redirecting to a file, which an elevated window has no
+    business writing (M4, and checklist step 12 checks exactly that). To read its log, start
+    it from an already-elevated prompt with `oneterm.exe --elevated-shell cmd` — that console
+    is inherited rather than allocated, so it is kept and written to.
 4. **E3 — really elevated.** `whoami /groups` in the elevated tab; screenshot the line
    `Mandatory Label\High Mandatory Level`. `evidence/US-0131-E3-whoami-groups.png`. The
    marker alone is not proof; this is.
@@ -482,7 +497,9 @@ under `~\.OneTerm\`.
    saying changes here are not saved.
    `evidence/US-0131-E8-about-updates.png`, `evidence/US-0131-E8-settings-readonly.png`.
 10. **Theme check.** Switch the elevated window between one light and one dark built-in theme
-    and confirm the title-bar border reads as a marker in both.
+    and confirm **the title still reads `OneTerm (Administrator)` in both**. The point of the
+    step outlives the border's removal, and is now the stronger one: a theme can change any
+    colour, so the marker had to be something a theme cannot touch.
 11. **E9 — the crash store.** In an elevated debug build, trigger a panic. The report must
     land in `<config>\crashes\elevated\`, **no** crash dialog may appear in the elevated
     window, and the normal window's dialog on its next launch must not show it.
@@ -683,6 +700,32 @@ cannot be made to fail by hand.
 
 **New test:** `elevated_policy::tests::the_local_terminal_stays_usable_in_an_elevated_window`
 (`oneterm-actions`) — the allowed side, asserted rather than assumed.
+
+### Acceptance rework, 2026-09-21 — M5 is the title text, and nothing else
+
+Owner ruling on the built work: **remove the warning-coloured title-bar border entirely.**
+The marker is the title text alone — `OneTerm (Administrator)` (or
+`OneTerm (elevation unknown)`) in the OS title bar and in the in-app title bar.
+
+`DEC-0019`'s M5 is amended in place rather than reinterpreted, because it is an inherited
+rule and the next reader must not find the old wording and re-add the colour: *"Amended
+2026-09-21 by the owner: title text only, no colour."* The detail design's marker section,
+this packet's acceptance, `docs/gui-layout.md`, the README and checklist steps 3 and 10
+follow it. Step 10 stops being "is the border visible in both themes" and becomes **"the
+title reads the same in a light and a dark theme"**, which is the thing that still has to be
+true.
+
+What this does **not** change: the marker still derives from the process token and never
+from the launch argument, and the two title surfaces still come from one
+`window_title(elevation)` so they cannot disagree. Those tests stay. The border code and
+the theme assertion that went with it are deleted.
+
+Worth recording why the colour was there and why losing it costs nothing the decision
+relied on: it was chosen as a *border* specifically so it introduced no new text surface and
+left `scripts/check-theme-contrast.py`'s `SURFACES` table untouched. Removing it therefore
+removes a marker, not a constraint — the contrast gate is unaffected in both directions, and
+`DEC-0019`'s own rule that "colour alone is not a marker" always meant the text was carrying
+the weight.
 
 ### Gaps
 

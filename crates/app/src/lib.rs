@@ -87,6 +87,13 @@ pub fn run() {
     // For one debug assertion: the `runas` launch must never run on this thread
     // (`IN-0043`, `crate::elevation::ElevationRequest::execute`).
     crate::elevation::remember_ui_thread();
+    if oneterm_core::elevation::is_restricted() {
+        // Before the logger exists, so nothing is written to a console that is
+        // about to go away. A debug build is console-subsystem and `runas` hands
+        // it a console of its own, which would otherwise sit beside the elevated
+        // window for its whole life (`IN-0043`).
+        crate::elevation::release_own_console();
+    }
     oom::init_ballast();
     let crash_capture_paths = match crash_report::prepare_capture_paths() {
         Ok(paths) => {

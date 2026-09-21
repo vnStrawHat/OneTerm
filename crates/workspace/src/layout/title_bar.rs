@@ -60,16 +60,15 @@ impl AppTitleBar {
 impl Render for AppTitleBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         TitleBar::new()
-            // Sync the bottom border color with the Dock border (cx.theme().border),
-            // except in an elevated window, which wears the theme's warning colour
-            // so it is recognisable at a glance (`DEC-0019` M5). A border rather
-            // than a background: it introduces no new text surface, so the
-            // contrast gate's `SURFACES` table is untouched.
-            .border_color(if oneterm_core::elevation::is_restricted() {
-                cx.theme().warning
-            } else {
-                cx.theme().border
-            })
+            // Sync the bottom border color with the Dock border.
+            //
+            // An elevated window is marked by its **title text** and nothing
+            // else (`DEC-0019` M5, amended by the owner 2026-09-21): the border
+            // briefly carried the theme's warning colour and no longer does.
+            // Colour was never the marker the decision relied on — "colour alone
+            // is not a marker: themes are user-editable" — so what is left is
+            // what was always carrying the weight.
+            .border_color(cx.theme().border)
             // left side
             .child(
                 div()
