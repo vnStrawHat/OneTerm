@@ -92,16 +92,35 @@ static PROMPT_UNIX: LazyLock<Regex> =
 pub(crate) const UNIX_PROMPT_PATTERN: &str =
     r"^(?:\([^)\s]*\) )?(?:\[[^\]]*\]|[^\s]*[@:~/\]][^\s]*)?[\$#%](?: |$)";
 
-/// cmd.exe prompt: `C:\path>` or `>`. The trailing space is optional so the
-/// prompt is detected even when the user has typed right after `>` (the blank
-/// cell after `>` is replaced by the typed char, removing the trailing space).
-static PROMPT_CMD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:[A-Za-z]:[^\s>]*>[ ]?)|(?:^>[ ]?)").expect("cmd prompt regex is valid")
-});
+/// The path body of a Windows prompt, between the drive (or `PS`) and the `>`.
+///
+/// It **may contain spaces**: `C:\Users\John Doe\Documents>` is the ordinary
+/// shape of a Windows profile directory, and `PS C:\path>` puts a space right
+/// after the `PS` — the old `[^\s>]*` matched neither, so a cwd with a space was
+/// never a prompt and a PowerShell prompt was never detected at all
+/// (`BUG-0071`). It excludes `< > | " * ?`, which cannot appear in a Windows
+/// path, and its last character must not be a space, so an output line like
+/// `C:\log size > 3` is not read as a prompt. Because `>` is excluded, the match
+/// ends at the **first** `>`, which is the prompt sign: a redirection later on
+/// the line (`dir > out.txt`) stays outside the prompt region.
+const WIN_PATH_BODY: &str = r#"[^<>|"*?\r\n]*[^\s<>|"*?]"#;
 
-/// PowerShell prompt: `PS C:\path>` or `>>`.
+/// cmd.exe prompt: `C:\path>`, a UNC path `\\server\share>`, or a bare `>`. The
+/// trailing space is optional so the prompt is detected even when the user has
+/// typed right after `>` (the blank cell after `>` is replaced by the typed
+/// char, removing the trailing space).
+pub(crate) static PROMPT_CMD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&cmd_prompt_pattern()).expect("cmd prompt regex is valid"));
+
+/// The cmd pattern, shared with the scanner's universal fallback.
+pub(crate) fn cmd_prompt_pattern() -> String {
+    format!(r"^(?:(?:[A-Za-z]:|\\\\){WIN_PATH_BODY}>[ ]?)|(?:^>[ ]?)")
+}
+
+/// PowerShell prompt: `PS C:\path>`, the bare `PS>`, or the `>>` continuation.
 static PROMPT_PWSH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:PS[^\s>]*>[ ]?)|(?:^>+[ ]?)").expect("PowerShell prompt regex is valid")
+    Regex::new(&format!(r"^(?:PS(?: {WIN_PATH_BODY})?>[ ]?)|(?:^>+[ ]?)"))
+        .expect("PowerShell prompt regex is valid")
 });
 
 /// Dumb / serial / router — most permissive prefix (`Router#`, `Router>`),
@@ -158,6 +177,65 @@ mod tests {
     fn cmd_prompt_matches() {
         assert!(PROMPT_CMD.is_match("C:\\Users\\me> "));
         assert!(PROMPT_CMD.is_match("> dir"));
+    }
+
+    /// `BUG-0071` F2: a Windows cwd may contain spaces, and the match must stop
+    /// at the prompt's own `>` so a later redirection is not swallowed.
+    #[test]
+    fn cmd_prompt_accepts_spaces_unc_and_stops_at_the_sign() {
+        for (line, want) in [
+            (
+                r"C:\Users\John Doe\Documents>echo hi",
+                Some(r"C:\Users\John Doe\Documents>"),
+            ),
+            (
+                r"C:\Users\John Doe\oneterm workspace\deep> ",
+                Some(r"C:\Users\John Doe\oneterm workspace\deep> "),
+            ),
+            (r"C:\>", Some(r"C:\>")),
+            (
+                r"\\server\share\My Files>dir",
+                Some(r"\\server\share\My Files>"),
+            ),
+            // The prompt ends at its own sign; `dir > out.txt` is not part of it.
+            (r"C:\work>dir > out.txt", Some(r"C:\work>")),
+            (r"> dir", Some("> ")),
+            // Output, not a prompt: a space right before the sign, and a line
+            // that does not start at a drive or a UNC root.
+            (r"C:\log size > 3", None),
+            ("total 100%", None),
+            ("see C:\\x> not a prompt", None),
+        ] {
+            let got = PROMPT_CMD.find(line).map(|m| m.as_str());
+            assert_eq!(got, want, "{line:?}");
+        }
+    }
+
+    /// `BUG-0071` F1: `PS C:\path>` has a space after `PS`, so the old
+    /// `[^\s>]*` never matched a PowerShell prompt at all.
+    #[test]
+    fn powershell_prompt_matches() {
+        for (line, want) in [
+            (r"PS C:\Users\me> ", Some(r"PS C:\Users\me> ")),
+            (
+                r"PS C:\Users\John Doe\Documents> echo hi",
+                Some(r"PS C:\Users\John Doe\Documents> "),
+            ),
+            (
+                r"PS \\server\share\My Files> dir",
+                Some(r"PS \\server\share\My Files> "),
+            ),
+            (r"PS>", Some("PS>")),
+            (r">> ", Some(">> ")),
+            (r"PS C:\work> dir > out.txt", Some(r"PS C:\work> ")),
+            // Output.
+            ("PS is > 3", None),
+            ("PSReadLine loaded", None),
+            ("hello world", None),
+        ] {
+            let got = PROMPT_PWSH.find(line).map(|m| m.as_str());
+            assert_eq!(got, want, "{line:?}");
+        }
     }
 
     #[test]

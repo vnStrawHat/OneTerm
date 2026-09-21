@@ -484,6 +484,7 @@ pub(crate) fn class_rows_into(
     wraps: &[bool],
     range: Range<usize>,
     scratch: &mut Scratch,
+    stats: &mut FrameStats,
 ) {
     debug_assert!(range.end <= classes.len() && range.end <= wraps.len());
     for r in range.clone() {
@@ -491,6 +492,7 @@ pub(crate) fn class_rows_into(
         out.clear();
         out.resize(frame.row(r).len(), Class::Default as u8);
     }
+    stats.class_rows_scanned += range.len() as u32;
 
     let mut start = range.start;
     while start < range.end {
@@ -498,6 +500,7 @@ pub(crate) fn class_rows_into(
         while end + 1 < range.end && wraps[end] {
             end += 1;
         }
+        stats.class_scans += 1;
         scan_logical_line(frame, overlay, classes, start..=end, scratch);
         start = end + 1;
     }
@@ -656,10 +659,14 @@ mod tests {
 
     impl Fixture {
         fn new(semantic: bool) -> Self {
+            Self::with_profile(semantic, ShellProfile::Unix)
+        }
+
+        fn with_profile(semantic: bool, profile: ShellProfile) -> Self {
             Self {
                 theme: build_terminal_theme(&gpui_component::Theme::default()),
                 fonts: FontSet::new(&font(), px(13.0)),
-                semantic: semantic.then(|| SemanticOverlay::new(ShellProfile::Unix, true)),
+                semantic: semantic.then(|| SemanticOverlay::new(profile, true)),
                 font_weight: FontWeight::NORMAL.0,
                 reverse_video: false,
             }
@@ -692,6 +699,7 @@ mod tests {
                 &wraps,
                 0..rows,
                 &mut Scratch::new(),
+                &mut FrameStats::default(),
             );
             classes
         }
@@ -1268,27 +1276,79 @@ mod tests {
     /// wrap drops them — the case the owner reported as a long cwd. Before the
     /// fix a prompt whose sign fell on a later row was not recognised as a
     /// prompt at all, so nothing after it was a command.
+    ///
+    /// The Windows fixtures are the ones that matter here: a Unix prompt's tail
+    /// row re-matches the Unix pattern on its own, so a Unix-only fixture
+    /// passes even with the scan put back per visual row (`BUG-0071` F4). Each
+    /// of these lines is built so that **no** visual row is a prompt by itself
+    /// — the drive letter and the `>` land on different rows.
     #[test]
     fn a_prompt_that_wraps_keeps_its_sign_and_command() {
-        let fx = Fixture::new(true);
-        // The same prompt, pushed onto a second row by a long cwd.
-        let long = "user@host:/srv/customer/acme/backend/services/gateway$ echo hello";
+        for (profile, long) in [
+            (
+                ShellProfile::Unix,
+                "user@host:/srv/customer/acme/backend/services/gateway$ echo hello",
+            ),
+            (
+                ShellProfile::Cmd,
+                r"C:\Users\John Doe\customer\acme\backend\gateway>echo hello",
+            ),
+            (
+                ShellProfile::PowerShell,
+                r"PS C:\Users\John Doe\customer\acme\gateway> echo hello",
+            ),
+        ] {
+            let fx = Fixture::with_profile(true, profile);
+            let classes = flat_classes(&fx, &wrapped_frame(long, 20));
+            let sign = long.find(['$', '>']).expect("the prompt sign");
+            assert!(
+                sign >= 20,
+                "{long:?}: the sign must land past the first row"
+            );
+            assert_eq!(
+                classes[sign],
+                Class::PromptSign as u8,
+                "{long:?}: the sign is on row {}",
+                sign / 20
+            );
+            let echo = long.find("echo").expect("the command");
+            assert!(
+                classes[echo..echo + 4]
+                    .iter()
+                    .all(|&c| c == Class::Command as u8),
+                "{long:?}: the command after a wrapped prompt: {:?}",
+                &classes[echo..echo + 4]
+            );
+        }
+    }
+
+    /// A wrapped Windows cwd is one `Path` run, spaces and all: the visible
+    /// half of the owner's report (`BUG-0071` F2).
+    #[test]
+    fn a_wrapped_windows_cwd_is_one_path_run() {
+        let long = r"C:\Users\John Doe\customer\acme workspace\gateway>dir";
+        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
         let classes = flat_classes(&fx, &wrapped_frame(long, 20));
-        let sign = long.find('$').expect("the prompt sign");
-        assert_eq!(
-            classes[sign],
-            Class::PromptSign as u8,
-            "the sign is on row {}",
-            sign / 20
-        );
-        let echo = long.find("echo").expect("the command");
+        let sign = long.find('>').expect("the prompt sign");
         assert!(
-            classes[echo..echo + 4]
-                .iter()
-                .all(|&c| c == Class::Command as u8),
-            "the command after a wrapped prompt: {:?}",
-            &classes[echo..echo + 4]
+            classes[..sign].iter().all(|&c| c == Class::Path as u8),
+            "the cwd is not one run: {:?}",
+            &classes[..sign]
         );
+    }
+
+    /// A wrapped line carrying CJK: the classes must land on the same
+    /// characters they land on unwrapped (`BUG-0071` F3).
+    #[test]
+    fn a_wrapped_run_with_cjk_keeps_its_classes_on_the_right_chars() {
+        let fx = Fixture::new(true);
+        let line = "\u{65e5}\u{672c}\u{8a9e} error here and a path /etc/hosts at the end";
+        let narrow = flat_classes(&fx, &wrapped_frame(line, 20));
+        let wide = flat_classes(&fx, &wrapped_frame(line, 120));
+        let shared = narrow.len().min(wide.len());
+        assert_eq!(narrow[..shared], wide[..shared], "{narrow:?}");
+        let error = line.chars().position(|c| c == 'e').expect("the keyword");
+        assert_eq!(narrow[error], Class::Error as u8, "{narrow:?}");
     }
 
     /// A quoted string opened on one row still ends on the row its closing

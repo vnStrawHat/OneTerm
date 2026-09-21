@@ -128,6 +128,14 @@ stored separately — see §7). After the sign + one space, switch to `CommandMo
 **CommandMode**: first non-space token → `Command`; subsequent `--x`/`-x`/`/x` tokens →
 `Option`; `;`/`|`/`&&`/`||` reset to expect a new `Command`. End at EOL.
 
+**Arguments stay `Default` in CommandMode** — no `String`, no `Path`, no `Number`. This
+is deliberate: what the user is typing is not output to be parsed, and the shell's own
+input colouring (PSReadLine, `zsh-syntax-highlighting`) is kept by §9's merge policy. It
+has a visible consequence worth stating, because `BUG-0071` made it reachable for the
+first time on a **wrapped** prompt: once such a line is correctly recognised as a prompt,
+its quoted arguments and path arguments lose the colours the output-mode matchers used to
+give them by mistake. Coloured strings and paths happen on **output** lines.
+
 **OutputMode** (no prompt): run the flat matcher set in **priority order**, first match
 wins per span (non-overlapping):
 
@@ -385,18 +393,37 @@ colorization — overriding only the *default* foreground, never explicit SGR co
 
 ## 10. Performance budget
 
+The unit of a scan is the **logical line**, so a line is up to `cols × rows` characters,
+not `cols` (`BUG-0071`). The table is per logical line:
+
 | Cost | Source | Estimate |
 |---|---|---|
-| Keyword pass | one `aho_corasick` find_iter over ≤200 chars | < 1 µs/line (SIMD) |
-| Structural regexes | ~3 `regex` is_match over short strings | ~1-2 µs/line |
-| Hand-written probes | char-class scans | < 0.5 µs/line |
+| Keyword pass | one `aho_corasick` find_iter over the logical line (≤ cols × rows chars) | < 1 µs per 200 chars (SIMD) |
+| Structural regexes | ~3 `regex` is_match over the logical line | ~1-2 µs per 200 chars |
+| Hand-written probes | char-class scans | < 0.5 µs per 200 chars |
 | Per-cell theme lookup | `styles.style(class).fg` × cells | branchless, negligible |
-| Cache hit | hash compare | skip lex+layout entirely |
+| Cache hit | the row's `(RowId, SeqNo)` plus the class/mask delta | skip lex+layout entirely |
 
-Only **visible viewport** lines are lexed (≤~50/frame). With the hash cache, steady
-output re-lexes only the newly-appended lines + the active input line. Target: zero
-perceptual cost at 120 fps scroll. No C dependency, no backtracking (ReDoS-safe),
-no per-line JSON interpretation, no string-scope hashing.
+Only **visible viewport** rows are lexed. The scope of one frame's rescan is the dirty
+rows **closed under wrap runs**: a scanner state cannot reach a row it is not
+wrap-connected to, so for ordinary content (a wrapped prompt is 2-4 rows) the rescan is
+a handful of rows and the number of scanner calls *falls*, because one run is one call
+instead of one per row. The bound is the wrap run, and it is tight — but a logical line
+longer than the viewport makes that run **the whole viewport**, so "never the viewport"
+is not the guarantee and this document does not claim it.
+
+Worst case, measured: a single logical line filling a 40×200 viewport (8 000 chars) is
+one scan of 8 000 chars, and one keystroke on it re-scans all of it. At `opt-level = 0`
+that measured **4.14 ms** — which is why `oneterm-highlight` is in
+`[profile.fast-dev.package]` alongside the other hot-path crates. `release` optimizes it.
+For the shapes users actually meet this is far below a frame.
+
+No C dependency, no backtracking (ReDoS-safe), no per-line JSON interpretation, no
+string-scope hashing.
+
+`FrameStats` counts the class pass separately from the URL pass (`class_scans`,
+`class_rows_scanned`): the two share a row scope but the class pass does nothing while
+semantic highlighting is off.
 
 ---
 
@@ -613,6 +640,22 @@ for ic in line_cells {
 The line string fed to the scanner is built by the *same* cell iteration (skip spacer,
 emit one `char` per non-spacer cell, append zerowidth), so `char_idx` and the scanner's
 char index stay in lockstep. This is the single source of truth for char<->column mapping.
+
+**Corrected by `BUG-0071` F3.** That lockstep only holds if the *scanner* really emits
+char indices. It did not: the keyword automaton and the structural regexes match on
+**bytes**, and the scanner's byte→char map pushed one entry per char instead of one per
+byte, so it was the identity and every byte-matched class was written at the byte offset.
+On any line with a non-ASCII char, the classes after it were shifted right by that char's
+extra UTF-8 bytes — `日本語 error here` painted `here` as `Error`. The view's flatten was
+always correct; the map it was handed was not. The map is now one entry per byte, and a
+wrapped run containing CJK is a regression case (`a_wrapped_run_with_cjk_keeps_its_classes_on_the_right_chars`).
+
+One consequence of the cell iteration is worth stating: a `LEADING_WIDE_CHAR_SPACER` —
+the blank the engine leaves in the last column when a wide char will not fit — is a
+spacer, so no class is written to it and it stays `Default`. For a class that only sets a
+foreground the cell is blank and this is invisible; for one carrying a background it
+would leave a one-cell hole at the wrap boundary. It matters when §8 item 6
+(`prompt_line_bg`) is implemented, not before.
 
 ### Q5. Re-lex cost & cold scroll — ride the existing cache, viewport-only
 

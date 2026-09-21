@@ -74,9 +74,14 @@ prompt never leaves a row coloured from a stale or truncated scan.
       exactly like a short prompt: the path carries `Path`, the `>` carries `PromptSign`, and
       the typed command after it carries `Command`/`Option` — whichever visual row each part
       lands on.
-- [x] A command being typed that wraps keeps one classification across the boundary: a quoted
-      string opened on row 1 stays `String` on row 2, and a URL or path split by the wrap is
-      one run, not two differently coloured halves.
+- [x] A command being typed that wraps keeps one classification across the boundary, whatever
+      that classification is: the line is classified as one line, not as N independent rows.
+- [x] **On an output line**, a quoted string opened on row 1 stays `String` on row 2, and a
+      URL or path split by the wrap is one run, not two differently coloured halves.
+      (Qualified during rework — `F6`. On a *command* line, arguments are deliberately
+      unclassified: see §4.1. A wrapped command line therefore shows **less** colour than it
+      did before this fix, because it used to be mis-scanned as output. That is the design,
+      and it is now stated in §4.1.)
 - [x] Printed output that wraps behaves the same.
 - [x] Editing any row of a wrapped line re-classifies every row of that line, so no row keeps
       classes from the text it had before.
@@ -85,8 +90,10 @@ prompt never leaves a row coloured from a stale or truncated scan.
 - [x] Narrowing and widening the window so the wrap point moves produces the same colours as
       the unwrapped line, with no row left behind.
 - [x] The performance budget of §10 holds: the rows a frame classifies stay the dirty rows
-      closed under their wrap runs, never the viewport, and the number of scanner invocations
-      per frame does not rise.
+      closed under their wrap runs, and the number of scanner invocations per frame does not
+      rise. (Qualified during rework — `F5`. The bound is the **wrap run**; for a logical
+      line longer than the viewport that run *is* the viewport, and §10 now says so instead
+      of claiming "never the viewport".)
 - [x] `cargo test -p oneterm-highlight -p oneterm-terminal-view` passes.
 - [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
@@ -148,7 +155,7 @@ was checked:
 | `crates/terminal-view/src/highlight/overlay.rs` `scan_into(line, display_row, …)` | **Yes** — `display_row` indexed `RowRoles` as if the row were the line | Fixed: the parameter is the logical line's first row, and it is the run's first row that supplies the role. |
 | `crates/terminal-view/src/url/mask.rs` `url_masks_rows_into` | **No** — extends a URL across `WRAPLINE` already (`US-0092`) | Correct; it is the pattern the fix reuses. |
 | `crates/terminal-view/src/url/detect.rs` (`URL_WINDOW`) | **No** — reads a window of rows around the pointer | Correct. |
-| `crates/highlight/src/scanner/**` | Line-oriented by construction; takes a `&str`, has no row concept | No change needed — feeding it a longer string is the whole fix. |
+| `crates/highlight/src/scanner/**` | Line-oriented by construction; takes a `&str`, has no row concept | **Corrected during rework.** The audit's original "no change needed" was wrong twice over: the Windows prompt regexes could not match a cwd containing a space and never matched a PowerShell prompt at all (`F1`/`F2`), and `byte_to_char_map` pushed per char instead of per byte, so every byte-matched class on a line with a non-ASCII char landed on the wrong column (`F3`). All three are fixed here — they are the same defect the owner reported, not adjacent to it. |
 | `crates/highlight/src/role.rs` `RowRoles` | **Yes** by design (§4.2 stores a role *per display row*) | Never populated today (see Gaps), so it is inert. Left as is; sourcing roles from OSC 133 is out of scope and must, when implemented, key off the row that starts the logical line. |
 | `ClassStyles::prompt_line_bg` (§8 item 6) | Would be per row | Parsed from the theme asset, read by nothing. No prompt-line background is painted at all, wrapped or not (see Gaps). |
 
@@ -230,7 +237,8 @@ cwd is long enough to wrap, cmd.exe tab, window 1000x640:
 
 ### Root cause
 
-`crates/terminal-view/src/render/row_plan.rs:457` (pre-fix `classify`) called
+`crates/terminal-view/src/render/row_plan.rs:463` (pre-fix `classify`, which starts at 452
+and reads the row's text at 457) called
 `overlay.scan_into(&scratch.line_text, row.index(), …)` with **one visual row's** text, and
 `crates/terminal-view/src/highlight/overlay.rs:74` handed that row straight to
 `scan_line_into`. The scanner owns the whole line state — the quote begin/end mini-state,
@@ -296,10 +304,61 @@ changed". Both still hold, and the scan got cheaper rather than dearer:
   a corpus replay for the VT engine, no `cargo bench`), so this is an argument from the
   rescan scope and the call count, not a measured number. Recorded as a gap.
 
+### Rework after independent verification (2026-09-21)
+
+A second session verified `3c0e9976` adversarially — **PASS with findings**, trace at
+`evidence/BUG-0071-verify.md`. Its mechanism checks, mutations, reflow and scroll walks all
+confirmed the fix; three of its findings were defects in the adjoining scanner that this
+packet's audit had wrongly cleared, and they are the owner's own case, so they are fixed
+here rather than deferred.
+
+| Finding | Action taken |
+| --- | --- |
+| **F1** `PROMPT_PWSH` never matched a PowerShell prompt (`PS` is followed by a space, the pattern forbade whitespace) | Rewritten. `crates/highlight/src/profile.rs`. |
+| **F2** `PROMPT_CMD` never matched a cwd containing a space (`C:\Users\John Doe\…>`) — the same population the owner's report comes from | Rewritten, plus UNC support, plus the prompt-region path colouring (`path_probe` stops at a space, so half a spaced cwd stayed uncoloured). |
+| **F3** `byte_to_char_map` pushed per char, so every byte-matched class on a line with a non-ASCII char landed on the wrong column | Fixed: one entry per byte. `crates/highlight/src/scanner/mod.rs`. |
+| **F4** the wrapped-prompt test passed under the per-row mutation (its Unix fixture re-matches per row) | The test is now a table over `Unix`, `Cmd` and `PowerShell` fixtures built so no visual row is a prompt on its own; it **fails** under the mutation (verified). |
+| **F5** "never the viewport" is not the guarantee | §10, the code comment and Acceptance item 7 now say "the wrap run, which for a longer line is the viewport", and a test asserts exactly that. `oneterm-highlight` added to `[profile.fast-dev.package]` with the measured 4.14 ms worst case recorded. |
+| **F6** "a quoted string stays `String`" only holds on output lines | Acceptance item 2 qualified; §4.1 now states that command arguments are deliberately unclassified and that this fix therefore *reduces* colour on a wrapped command line. Design unchanged. |
+| **F7** the `class_prev` rotation was untested | `scrolling_keeps_the_classes_with_their_rows` plus a `#[cfg(test)] PlanCache::classes(r)` accessor; it **fails** when the rotation is disabled (verified). |
+| **F8** citation drift (457 vs 463) | Corrected above. |
+| **F9** §10's cost table was not reconciled | Rewritten per logical line, with the scope, the bound and the worst case. |
+| **F10** class scans counted as URL scans | `FrameStats::class_scans` / `class_rows_scanned` added and logged separately. |
+
+The new regexes:
+
+```rust
+// the shared path body: spaces allowed, no `< > | " * ?`, last char not a space
+const WIN_PATH_BODY: &str = r#"[^<>|"*?\r\n]*[^\s<>|"*?]"#;
+// cmd.exe
+format!(r"^(?:(?:[A-Za-z]:|\\\\){WIN_PATH_BODY}>[ ]?)|(?:^>[ ]?)")
+// PowerShell
+format!(r"^(?:PS(?: {WIN_PATH_BODY})?>[ ]?)|(?:^>+[ ]?)")
+```
+
+Because `>` is excluded from the body, the match ends at the prompt's **own** sign, so
+`C:\work>dir > out.txt` keeps the redirection out of the prompt region; and because the
+body's last character cannot be a space, output like `C:\log size > 3` or `PS is > 3` is
+not misread as a prompt. The scanner now takes the sign position from the match instead of
+hunting left to right for the first glyph, which is what a path containing spaces requires.
+
+Rework frames, from a home directory named `home John Doe rework`:
+
+- `evidence/BUG-0071-after-05-cmd-cwd-with-spaces.png` and `-after-06-…-command.png` — the
+  three-row cmd prompt with spaces in the cwd: the whole path is `Path`, `>` is
+  `PromptSign`, `cd` is `Command`, `/d` is `Option`. On `main` and on `3c0e9976` none of
+  that happened: the line was scanned as output.
+- `evidence/BUG-0071-after-07-powershell-wrapped-prompt.png` — the PowerShell tab. The
+  four-row `PS C:\…\home John Doe rework>` now carries a `PromptSign`, which the verifier's
+  `BUG-0071-verify-after-05-powershell-prompt.png` shows it did not.
+
 ### Gaps
 
-- **Not measured.** There is no render-path benchmark in the repo, so the §10 claim above
-  rests on the unchanged rescan scope and the reduced call count rather than a timing run.
+- **No benchmark harness.** There is still no `cargo bench` for the render path. The one
+  timing number in §10 (8 000-char logical line, 4.14 ms at `opt-level = 0`) comes from the
+  verifier's ad-hoc probe on a debug build, not from a committed benchmark, and no `release`
+  timing was taken. `oneterm-highlight` is now optimized in `fast-dev`, so the shipped
+  figure is pessimistic — but it is not re-measured.
 - **A logical line whose head has scrolled above the top of the viewport** is classified from
   its first *visible* row, because the view only holds the viewport. Its colours can change
   as it scrolls. This is the viewport-only contract of §10/Q5 and is the same limit the URL
@@ -315,8 +374,11 @@ changed". Both still hold, and the scan got cheaper rather than dearer:
   each other (`clsecho`, `clscd` in the frames). The frames are still a valid before/after
   pair because both runs used the identical script and the defect is in how the *rendered*
   text is coloured.
-- **cmd.exe only.** The same code path serves PowerShell and Unix profiles and the unit
-  tests cover the Unix profile, but no PowerShell tab was captured in the walk.
+- **A `LEADING_WIDE_CHAR_SPACER`** — the blank the engine leaves when a wide char will not
+  fit the last column — is skipped by `append_text_into`, so it keeps `Class::Default`.
+  Invisible for a foreground-only class; it would leave a one-cell hole for a class with a
+  background. Noted from reading, not reproduced; it matters when §8 item 6 is implemented.
+- **Unix (`cfg(unix)`) behaviour is unverifiable on this host**, as always for this repo.
 
 ## Handoff
 

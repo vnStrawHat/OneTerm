@@ -118,6 +118,13 @@ impl PlanCache {
         self.mask_prev.get(r).map(Vec::as_slice).unwrap_or(&[])
     }
 
+    /// The semantic classes of display row `r` as of the last update (empty
+    /// while semantic highlighting is off).
+    #[cfg(test)]
+    pub(crate) fn classes(&self, r: usize) -> &[u8] {
+        self.class_prev.get(r).map(Vec::as_slice).unwrap_or(&[])
+    }
+
     /// Bring the plans up to date with `frame`.
     pub(crate) fn update(
         &mut self,
@@ -217,6 +224,7 @@ impl PlanCache {
                         &self.wraps,
                         start..r,
                         scratch,
+                        stats,
                     ),
                     None => self.class_cur[start..r].iter_mut().for_each(Vec::clear),
                 }
@@ -1191,34 +1199,133 @@ mod tests {
         assert_eq!(h.cache.row(1).map(|p| p.decorations.len()), Some(1));
     }
 
-    /// `BUG-0071`: a class depends on the whole logical line, so rewriting row
-    /// 0 of a wrapped line must replan row 1 — which is untouched, and whose
-    /// `(RowId, SeqNo)` therefore did not change.
+    fn semantic_key() -> StyleKey {
+        let mut key = style_key(13.0);
+        key.semantic_enabled = true;
+        key
+    }
+
+    /// `BUG-0071`: a class depends on the whole logical line, so rewriting the
+    /// head row of a wrapped line must replan its continuation row — which is
+    /// untouched, and whose `(RowId, SeqNo)` therefore did not change.
+    ///
+    /// The wrapped line is rows 4-5 of a 12-row viewport so the scan bound is
+    /// actually tested: `2`, not `12` (`BUG-0071` F5 — the guarantee is the
+    /// wrap run, which for a longer line can equal the viewport).
     #[gpui::test]
     fn class_delta_replans_the_continuation_row(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
-        let mut key = style_key(13.0);
-        key.semantic_enabled = true;
+        let key = semantic_key();
         let mut h = Harness::semantic();
-        let (mut frame, mut fixture) = FrameBuilder::new(3, 10)
-            .text(0, 0, "echo \"aaa")
-            .flags(0, 9, CellFlags::WRAPLINE)
-            .text(1, 0, "bbb\" tail")
+        let (mut frame, mut fixture) = FrameBuilder::new(12, 10)
+            .text(4, 0, "echo \"aaa")
+            .flags(4, 9, CellFlags::WRAPLINE)
+            .text(5, 0, "bbb\" tail")
             .build_with_fixture();
         h.update(cx, &frame, key);
-        let inside_string = h.cache.row(1).map(|p| p.colors.clone());
+        let inside_string = h.cache.classes(5).to_vec();
 
-        // Row 0 stops opening the quote; row 1 is not touched at all.
-        rewrite_row(&mut frame, &mut fixture, 0, "echo  aaa");
+        // Row 4 stops opening the quote; row 5 is not touched at all.
+        rewrite_row(&mut frame, &mut fixture, 4, "echo  aaa");
         let stats = h.update(cx, &frame, key);
         assert_ne!(
-            h.cache.row(1).map(|p| p.colors.clone()),
+            h.cache.classes(5),
             inside_string,
-            "row 1 kept the classes of a string that no longer opens"
+            "row 5 kept the classes of a string that no longer opens"
         );
-        assert!(
-            stats.url_rows_scanned <= 2,
-            "the rescan must stay the wrap run, not the viewport: {stats:?}"
+        assert_eq!(stats.rows_planned, 2, "{stats:?}");
+        assert_eq!(
+            stats.class_rows_scanned, 2,
+            "exactly the wrap run, not the 12-row viewport: {stats:?}"
         );
+        assert_eq!(stats.class_scans, 1, "one scan for one logical line");
+    }
+
+    /// A logical line longer than the viewport: the bound is still the wrap
+    /// run, and the wrap run is then the whole viewport (`BUG-0071` F5). The
+    /// honest guarantee, asserted rather than claimed away.
+    #[gpui::test]
+    fn a_line_longer_than_the_viewport_scans_the_viewport(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let key = semantic_key();
+        let mut h = Harness::semantic();
+        let (mut frame, mut fixture) = FrameBuilder::new(6, 10).build_with_fixture();
+        // No newline anywhere: the whole viewport is the tail of one wrap run.
+        fixture.feed(format!("echo \"{}\"", "x".repeat(300)).as_bytes());
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, key);
+
+        // One keystroke on the last row of that run.
+        fixture.feed(b"z");
+        resnapshot(&mut frame, &mut fixture);
+        let stats = h.update(cx, &frame, key);
+        assert_eq!(stats.rows_candidate, 1, "one row changed: {stats:?}");
+        assert_eq!(stats.class_scans, 1, "still one scan: {stats:?}");
+        assert_eq!(
+            stats.class_rows_scanned, stats.rows_total,
+            "the run is the viewport, and the bound says so: {stats:?}"
+        );
+    }
+
+    /// Scrolling moves plans with their rows, and `shift` must move the classes
+    /// with them too. Without the `class_prev` rotation a row keeps the colours
+    /// of whatever row used to sit at its index (`BUG-0071` F7).
+    #[gpui::test]
+    fn scrolling_keeps_the_classes_with_their_rows(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let key = semantic_key();
+        let mut h = Harness::semantic();
+        let (mut frame, mut fixture) = FrameBuilder::new(5, 24).build_with_fixture();
+        fixture.feed(
+            b"user@host:~$ echo \"a wrapped string that runs past the row\"\r\nplain\r\nmore\r\nlast\r\ntail\r\ntail2",
+        );
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, key);
+        assert_classes_match_a_full_rescan(&mut h, &frame, key, cx, "before scrolling");
+
+        for back in 1..=3 {
+            fixture.scroll_back(1);
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, key);
+            assert_classes_match_a_full_rescan(
+                &mut h,
+                &frame,
+                key,
+                cx,
+                &format!("scrolled back {back}"),
+            );
+        }
+        for fwd in 1..=3 {
+            fixture.scroll_forward(1);
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, key);
+            assert_classes_match_a_full_rescan(
+                &mut h,
+                &frame,
+                key,
+                cx,
+                &format!("scrolled forward {fwd}"),
+            );
+        }
+    }
+
+    /// The incremental classes of every row must equal a from-scratch scan of
+    /// the same frame by a cache that has never seen anything else.
+    fn assert_classes_match_a_full_rescan(
+        h: &mut Harness,
+        frame: &Frame,
+        key: StyleKey,
+        cx: &mut VisualTestContext,
+        when: &str,
+    ) {
+        let mut fresh = Harness::semantic();
+        fresh.update(cx, frame, key);
+        for r in 0..usize::from(frame.size().rows) {
+            assert_eq!(
+                h.cache.classes(r),
+                fresh.cache.classes(r),
+                "row {r} classes drifted {when}"
+            );
+        }
     }
 }

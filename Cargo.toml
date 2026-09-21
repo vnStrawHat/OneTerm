@@ -212,6 +212,10 @@ smol = { opt-level = 3 }
 # optimized here rather than left at `dev`'s opt-level = 0.
 oneterm-vt = { opt-level = 3 }
 oneterm-terminal-view = { opt-level = 3 }
+# The semantic scanner (`BUG-0071`): it runs once per logical line of the
+# viewport, and a logical line can be the whole viewport. Unoptimized, one scan
+# of an 8 000-char line measured 4.14 ms — a frame's worth on its own.
+oneterm-highlight = { opt-level = 3 }
 oneterm-core = { opt-level = 3 }
 oneterm-terminal = { opt-level = 3 }
 oneterm-settings = { opt-level = 3 }

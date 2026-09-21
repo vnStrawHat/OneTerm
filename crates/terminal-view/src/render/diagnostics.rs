@@ -24,8 +24,15 @@ pub(crate) struct FrameStats {
     /// URL rescan *events*: one per frame that had any dirty row.
     pub url_scans: u32,
     /// Display rows that rescan actually walked — the dirty rows closed under
-    /// their wrap runs, not the viewport (`US-0092`).
+    /// their wrap runs (`US-0092`). That closure is the bound, and for a
+    /// logical line longer than the viewport it *is* the viewport.
     pub url_rows_scanned: u32,
+    /// Semantic-class scanner calls: one per logical line, not per row
+    /// (`BUG-0071`). Zero while semantic highlighting is off, which is why it
+    /// is counted apart from the URL pass that shares the same row scope.
+    pub class_scans: u32,
+    /// Display rows the class pass wrote, across those calls.
+    pub class_rows_scanned: u32,
     pub quads: u32,
     pub glyphs: u32,
     /// `paint_glyph` failures (missing glyph); counted, never propagated.
@@ -117,7 +124,8 @@ impl DiagnosticsLog {
         let p99 = latency.percentile(0.99);
         log::debug!(
             "terminal render: rows {}/{} candidate, {} planned, {} shaped, {} glyph hits, \
-             {} url scans over {} rows, {} quads, {} glyphs, {} layers, \
+             {} url scans over {} rows, {} class scans over {} rows, \
+             {} quads, {} glyphs, {} layers, \
              prepaint {} us, paint {} us, \
              p95 {} us, p99 {} us over {} frames",
             stats.rows_candidate,
@@ -127,6 +135,8 @@ impl DiagnosticsLog {
             stats.glyph_hits,
             stats.url_scans,
             stats.url_rows_scanned,
+            stats.class_scans,
+            stats.class_rows_scanned,
             stats.quads,
             stats.glyphs,
             stats.layers,

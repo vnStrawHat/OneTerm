@@ -49,12 +49,12 @@ pub fn scan_line_into(
     let classes = out.as_mut_slice();
 
     match role {
-        RowRole::Prompt => prompt::scan_prompt_line(&chars, classes, profile),
+        RowRole::Prompt => prompt::scan_prompt_line(&chars, classes, profile, None),
         RowRole::Command => command::scan_command_mode(&chars, classes, profile),
         RowRole::Output => {
             // Fallback: if the line looks like a prompt, treat it as one.
-            if prompt::looks_like_prompt(line, profile) {
-                prompt::scan_prompt_line(&chars, classes, profile);
+            if let Some(sign) = prompt::prompt_sign(line, profile) {
+                prompt::scan_prompt_line(&chars, classes, profile, Some(sign));
             } else {
                 // The byte-based matchers (keyword automaton, structural
                 // regexes) share one text + byte→char map built here once.
@@ -81,7 +81,8 @@ impl LineText<'_> {
         self.byte_to_char
             .get(byte)
             .copied()
-            .unwrap_or_else(|| self.byte_to_char.len().saturating_sub(1))
+            // Past the end: the sentinel, which is the char count.
+            .unwrap_or_else(|| self.byte_to_char.last().copied().unwrap_or(0))
     }
 }
 
@@ -97,13 +98,17 @@ pub(super) fn is_word_char(c: char) -> bool {
 /// The keyword automaton and structural regexes match on bytes, but the class
 /// buffer is indexed per char. This lets a byte match range be converted to a
 /// char range (see [`LineText`]).
+///
+/// One entry **per byte**, not per char: a multi-byte char occupies as many
+/// entries as it has bytes, all naming that char. Pushing once per char made
+/// the map the identity, so every keyword and structural class on a line with
+/// any non-ASCII char was written shifted right by the extra UTF-8 bytes before
+/// it — `日本語 error here` painted `here` as `Error` (`BUG-0071` F3).
 fn byte_to_char_map(s: &str) -> Vec<usize> {
     let mut map: Vec<usize> = Vec::with_capacity(s.len() + 1);
-    let mut char_index = 0;
-    for _ in s.char_indices() {
-        map.push(char_index);
-        char_index += 1;
+    for (char_index, c) in s.chars().enumerate() {
+        map.resize(map.len() + c.len_utf8(), char_index);
     }
-    map.push(char_index); // sentinel for end
+    map.push(s.chars().count()); // sentinel for end
     map
 }
