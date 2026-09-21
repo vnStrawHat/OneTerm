@@ -10,8 +10,8 @@ Created: 2026-09-21
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -281,24 +281,83 @@ Platform:
       -- -D warnings` and the Linux/macOS compile of every `#[cfg(windows)]` seam.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record the commands, their results, and every gap. Known in advance
-and to be restated with the outcome:
+### What was built
 
-- The UAC prompt cannot be automated; E3, E6 and E10 are manual with screenshots.
-- Over-the-shoulder elevation (a standard user typing an administrator's credentials)
-  needs a second account and is not exercised on the development machine unless one is
-  available; if it is not, say so rather than implying it was tested.
-- `cfg(unix)` behaviour of the new module is compile-and-unit-tested only; no Linux or
-  macOS desktop run is available in this environment.
+| Piece | File |
+| --- | --- |
+| `ElevatedShell`, `CliError`, `ELEVATED_SHELL_FLAG`, `parse`, `trusted_program`, `trusted_program_for`, `trusted_shell_config`, `window_title`, the `is_elevated` / `initial_shell` globals | `crates/core/src/config/elevation.rs` (new, pure `std`, 24 unit tests) |
+| The M3 guard: one `if` at the top of `resolve_shell` that replaces the config with `trusted_shell_config`'s, so every local spawn in an elevated process takes its program from the trusted table and its args from the kind's own arm | `crates/core/src/config/shell.rs` |
+| `process_is_elevated` (`GetTokenInformation(TokenElevation)`), `fatal_message` (`MessageBoxW`), `launch_elevated_shell` (`ShellExecuteExW`, `runas`, explicit `lpDirectory`, `SEE_MASK_FLAG_NO_UI`, no `SEE_MASK_NOCLOSEPROCESS`) | `crates/app/src/elevation.rs` (new) |
+| `read_process_identity()` — the token, then the parse, as the first statement of `run()`; the "not elevated, opening anyway" `warn` once the logger exists | `crates/app/src/lib.rs` |
+| `launch_elevated_shell` fn pointer + its two test doubles | `crates/state/src/commands.rs`, `crates/app/src/init.rs`, `crates/state/src/services.rs`, `crates/terminal-view/src/panel/tests.rs` |
+| `PanelSpec::DefaultShell` reads `initial_shell()` — the argument *replaces* the default shell (`DEC-0016`) | `crates/terminal-view/src/panel/terminal_panel.rs` |
+| `Win32_UI_Shell`, `Win32_UI_WindowsAndMessaging`, `Win32_System_Registry` | `Cargo.toml` |
+
+### Commands
+
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+- `cargo test --workspace` — green; `oneterm-core` 75 tests (was 52), including the parser's
+  ten rejection cases, the three trusted-path cases and the two `trusted_shell_config` ones.
+- `python scripts/verify-dependency-graph.py` — *"Dependency graph policy passed for 20
+  workspace packages and 20 explicit members"*. `crates/core` still has no `windows-sys`.
+- `pwsh scripts/ci-local.ps1` — run at the end of `US-0132`, green (see that packet).
+
+### E2E actually performed here (non-elevated side only)
+
+- `oneterm.exe --elevated-shell zsh` → one message box naming the flag and its three accepted
+  values, **exit code 2**, no window.
+  `evidence/US-0130-bad-argument-message.png`.
+- `oneterm.exe --elevated-shell cmd` from an **un**elevated prompt → one Command Prompt tab
+  and nothing else added; title bar reads `OneTerm` with no marker and the ordinary border;
+  the right dock and its mode toggles are present, i.e. fully unrestricted. One log line:
+  *"--elevated-shell was given to a process that is not elevated: opening Command Prompt with
+  no elevation and no restrictions"*. `evidence/US-0130-nonelevated-argument-opens-cmd.png`.
+  This is the M5 proof from the other side: the argument cannot forge the marker.
+
+### Deviations from the detail design, all reconciled into it in the same commit
+
+1. `set_initial_shell` takes an `ElevatedShell`, not a `ShellKind`, so the global cannot hold
+   `Custom` even by mistake. `initial_shell()` still returns `Option<ShellKind>`.
+2. `Win32_System_Registry` joins the `windows-sys` feature list: windows-sys 0.59 gates the
+   whole `SHELLEXECUTEINFOW` struct behind it because the struct carries an `HKEY` field. No
+   registry key is read; pwsh is still resolved by scanning `%ProgramFiles%\PowerShell`.
+3. **Exit 3 is checked only when the process is elevated.** A process that is not elevated is
+   unrestricted by definition — it paid no consent prompt and resolves the shell the ordinary
+   way — so refusing to open a window there would contradict *the token decides everything
+   else*. Recorded in the detail design's exit-code table.
+4. `trusted_shell_config` is a named function taking an injected resolver, rather than
+   inline code in `resolve_shell`, so M3 has a unit test that needs neither Windows nor the
+   process global.
+
+### Reconciliation
+
+`docs/terminal-backend.md` and `docs/gui-layout.md` were **deliberately left to `US-0132`**,
+as this packet's Documentation Action says: nothing here is user-reachable until the menu
+rows exist. `DEC-0019` is unchanged; `low-level-design/elevated-instance.md` was corrected
+for the four deviations above in the implementation commit.
+
+### Gaps
+
+- **The elevated side is unverified in this environment.** The consent prompt is drawn by the
+  AppInfo service on the secure desktop, which this project's posted-message GUI walks cannot
+  reach, and this session must not raise a UAC prompt at all. E3, E6 and the accept path of
+  the launch are therefore **not run**: they are the owner's manual checklist in `US-0131`.
+- Over-the-shoulder elevation needs a second account; none is available here, so it was **not
+  exercised**.
+- `cfg(unix)` behaviour is compile-and-unit-tested only; no Linux or macOS desktop run is
+  available in this environment.
+- `launch_elevated_shell`'s own error map (`ERROR_CANCELLED` vs everything else) is
+  **unexercised at run time**: reaching it needs a real `ShellExecuteExW` failure. It is read
+  against the design, not proven.
 
 ## Handoff
 
