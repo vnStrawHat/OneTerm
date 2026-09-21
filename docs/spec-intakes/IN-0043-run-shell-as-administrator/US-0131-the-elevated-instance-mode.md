@@ -10,8 +10,8 @@ Created: 2026-09-21
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -206,6 +206,15 @@ line for line (if a seam moved, fix the table in the same commit), and record he
 `docs/gui-layout.md`, `docs/auto-update.md` and `docs/crash-reporting.md` are deliberately
 deferred to `US-0132` with that packet named.
 
+**Done.** The detail design's section 7 seam table matches the code, with the three
+differences recorded in Evidence below and written back into the design in the same commit:
+the M4 guard is a `write_refusal(elevated)` per document rather than a `persist_blocked` set
+at load, the first-run default write is also suppressed, and M2 covers the About **dialog**
+as well as the settings group. `docs/gui-layout.md`, `docs/auto-update.md` and
+`docs/crash-reporting.md` are deliberately deferred to **`US-0132`**, which is the packet
+that makes an elevated window reachable and therefore the first point at which a reader
+could meet any of it.
+
 ## Context
 
 - **`persist_blocked` already exists and means exactly this.** `ui_config.rs:133-145` and
@@ -307,25 +316,134 @@ Platform:
       `SURFACES` table was not updated).
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record commands, results and gaps. Known in advance:
+### The seam table as built
 
-- The consent prompt cannot be automated; E2-E9 are manual with screenshots.
-- Over-the-shoulder elevation needs a second account. If one is not available, the
-  "starts on defaults and says so once" clause is verified by pointing the configuration
-  directory elsewhere, and the difference from a real second account is stated rather than
-  glossed over.
+| M | Seam | As built |
+| --- | --- | --- |
+| M5 | `crates/app/src/elevation.rs` | `process_is_elevated()` — `OpenProcessToken` + `GetTokenInformation(TokenElevation)`; a `const fn` returning `false` off Windows. A failed query is treated as **not** elevated and logged at `error`. Landed with `US-0130`, because `run()` calls it before the crash paths |
+| M5 | `crates/core/src/config/elevation.rs` | `window_title(elevated)` — the one source both title bars read |
+| M5 | `crates/app/src/window.rs` | `set_window_title(window_title(elevated))` |
+| M5 | `crates/workspace/src/layout/workspace/mod.rs` | `AppTitleBar::new(window_title(elevated), ..)` |
+| M5 | `crates/workspace/src/layout/title_bar.rs` | `.border_color(cx.theme().warning)` when elevated. No theme JSON touched, no new text surface |
+| M1 | `crates/terminal-view/src/panel/terminal_panel.rs` | the menu returns after the three shells; `FIXED_ROWS` is gone, replaced by `menu_rows(elevated, session_rows)`, and `menu_scrolls(rows, window)` carries the estimate's existing `ponytail:` caveat |
+| M1 | `crates/workspace/src/layout/workspace/layout.rs` | `right_dock()` returns "no dock" when elevated, so `SSH_CLIENT` is not built and `set_dock(Right, ..)` is not called by either layout builder |
+| M1 | `crates/workspace/src/layout/workspace/actions.rs` | `switch_right_dock_mode` returns early — one guard in the shared function, so the startup apply *and* a key binding on `SetRightDockMode` are both covered |
+| M1 | `crates/workspace/src/layout/workspace/mod.rs` | the title bar's `child` (the mode toggle group) is not attached |
+| M2 | `crates/settings-ui/src/updates/mod.rs` | `elevated_never_updates()` — one helper, called by `start_auto_check`, `check_now` and `download_and_install_update` (before its confirm dialog) |
+| M2 | `crates/settings-ui/src/updates/groups.rs`, `crates/settings-ui/src/about.rs` | the Updates group is one line, `ELEVATED_UPDATES_TEXT`; the same line replaces the About **dialog**'s controls and its "Check for Updates" footer button — the design named only the settings group, and the dialog is the surface a user actually reaches |
+| M4 | `crates/settings/src/ui_config.rs`, `crates/settings/src/terminal_settings/persist.rs` | `write_refusal(elevated)` — one function per document, asked by both shared write entry points |
+| M4 | `crates/settings/src/ui_config.rs`, `crates/settings/src/terminal_config/document.rs` | the **first-run default is no longer written** when elevated |
+| M4 | `crates/workspace/src/layout/workspace/persistence.rs` | one guard in `save_state_logged`, covering all four call sites |
+| M4 | `crates/session-ui/src/session_state.rs`, `crates/settings-ui/src/updates/config.rs` | one guard in `save` / `persist_update_config` |
+| M7 | `crates/app/src/crash_report.rs` | `crashes_dir_in(config_dir, elevated)` behind `crashes_dir()`; the writer, the reader and the path validator all still go through the one function |
+| M7 | `crates/app/src/window.rs` | `show_crash_reports` not called; `load_pending_reports()` still runs, so promotion and the newest-20 retention still happen in `crashes/elevated/` |
+
+### Deviation worth the owner's attention
+
+The design said M4 would "reuse the mechanism that is already there" by setting
+`persist_blocked` at load. As built the guard is a separate reason inside each document's
+shared write function, and `persist_blocked` keeps its own meaning ("the file could not be
+read; it may still be the user's"). Two things fall out of that, both wanted:
+
+1. The **first-run default write** is now covered. Setting `persist_blocked` after load
+   would not have stopped it, because `UiConfig::load_from` and `TerminalConfig::load_from`
+   write the default file *during* the load. Under over-the-shoulder elevation that is a
+   file created in the administrator's profile — exactly the trace M4 forbids.
+2. `persist_blocked` stays available as the "this window is on the defaults" signal, which
+   is what drives the one info notification M4's failure path asks for.
+
+### Commands
+
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+- `cargo test --workspace` — green. New tests: `window_title` both ways and *the argument
+  never makes the process elevated* (`oneterm-core`); `crashes_dir_in` both ways and *a
+  delete outside the current store is still refused* (`oneterm-app`); `write_refusal` for
+  `ui_config.json` and `terminal.json`, each proving the elevated refusal **and** that the
+  unreadable-file refusal still stands on its own reason (`oneterm-settings`);
+  `menu_rows` in both modes (`oneterm-terminal-view`).
+- `python scripts/check-theme-contrast.py` — passes **untouched**, which is the proof the
+  marker was done as a border and not as text on a new surface.
+- `pwsh scripts/ci-local.ps1` — run at the end of `US-0132`, green.
+
+### E2E actually performed here
+
+Only the **unelevated** side, which is this packet's regression clause: with
+`--elevated-shell cmd` given to a non-elevated process the window is titled `OneTerm`, has
+the ordinary border, the right dock and all three mode toggles
+(`evidence/US-0130-nonelevated-argument-opens-cmd.png`), and with the "+" menu open it shows
+the full unelevated row set (`evidence/US-0132-plus-menu-run-as-admin.png`). Every gate is a
+no-op there, which is the direction most likely to be got backwards.
+
+### Manual acceptance checklist — for the owner, on an interactive desktop
+
+This session cannot run any of it: the consent prompt is drawn by the AppInfo service on the
+secure desktop, and this session is forbidden to raise one. Build with
+`cargo build -p oneterm-app --profile fast-dev`; the binary is `target/fast-dev/oneterm.exe`.
+
+1. **E7 setup.** `Get-FileHash target\ui_config.json, target\terminal.json, target\docks.json,
+   target\ssh_session.json, target\update_config.json > before.txt` (release build: the same
+   five under `~\.OneTerm\`). Keep `before.txt`.
+2. **E2 — the marked window.** Right-click `oneterm.exe` → *Run as administrator*, consent.
+   Screenshot showing all three markers at once: the taskbar / OS title reading
+   `OneTerm (Administrator)`, the in-app title bar reading the same, and the title-bar border
+   in the warning colour. Save as `evidence/US-0131-E2-marked-window.png`.
+3. **E3 — really elevated.** In the elevated tab run `whoami /groups` and screenshot the line
+   `Mandatory Label\High Mandatory Level`. `evidence/US-0131-E3-whoami-groups.png`. The
+   marker alone is not proof; this is.
+4. **E4 — the smaller application.** Screenshot the elevated window's "+" menu: exactly three
+   rows (Command Prompt, PowerShell, PowerShell 7), **no** `Run as administrator >` row, no
+   "SSH Sessions" separator, no saved sessions, no "Quick Connect...", no "New Saved
+   Session...". Second screenshot of its title bar: no SSH Client / Agent / None segments,
+   and no right dock in the window at all.
+   `evidence/US-0131-E4-elevated-plus-menu.png`, `evidence/US-0131-E4-no-right-dock.png`.
+5. **No-argument case.** That window was started with **no** argument, which is the proof
+   there is no elevated-but-unrestricted state: it is marked and restricted anyway.
+6. **E8 — the updater is absent.** OneTerm ▸ About in the elevated window: screenshot showing
+   the single line *"Updates are checked and installed from the normal OneTerm window."*, no
+   status, no preferences, and **no "Check for Updates" button in the dialog footer**. Same
+   on Settings ▸ About. `evidence/US-0131-E8-about-updates.png`.
+7. **Theme check.** Switch the elevated window between one light and one dark built-in theme
+   and confirm the title-bar border reads as a marker in both.
+8. **E9 — the crash store.** In an elevated debug build, trigger a panic. Confirm the report
+   lands in `<config>\crashes\elevated\`, that **no** crash dialog appears in the elevated
+   window, and that the normal window's dialog on its next launch does not show it.
+9. **E7 — five hashes.** Close the elevated window (this is the step that matters: the
+   exit-time layout write is the write most likely to be missed). Re-hash the same five files
+   and diff against `before.txt`. **All five must be byte-identical.** Also confirm no new
+   file appeared in the config directory.
+10. **E5 — the normal window is untouched.** In the same session, the unelevated window still
+    has its tabs, a live SSH connection still responding, and its own unmarked title bar.
+11. **E6 — declined.** From the unelevated window, "+" ▸ *Run as administrator* ▸ any shell,
+    then **decline** the prompt. Nothing at all: no window, no notification, no change to the
+    launching window's tabs, connections or transfers; one `info` log line.
+    `evidence/US-0131-E6-declined.png`.
+12. **Over-the-shoulder, only if a second administrator account exists.** Elevate with that
+    account's credentials and confirm the window starts on the defaults, says so once as an
+    info notification, and leaves **no** file behind in that account's `~\.OneTerm`.
+
+### Gaps
+
+- **The whole elevated side is unverified here**, for the reason above. Items 2-12 are the
+  owner's. Nothing in this packet's acceptance may be read as proven until they are run.
+- Over-the-shoulder elevation needs a second account; none is available here, so the
+  different-profile behaviour — including the "says so once" notification, whose condition
+  is `elevated && persist_blocked` — is **not exercised at run time**.
 - UIPI drag-and-drop into an elevated window is not exercised: under M1 there is no SFTP
   panel there to drop onto.
 - `cfg(unix)` gates are compile-and-unit-tested only.
+- The `docks.json`, `ssh_session.json` and `update_config.json` guards are one-line `if`s on
+  the process global rather than parameterized functions, so unlike `ui_config.json` and
+  `terminal.json` their elevated branch has **no unit test**. Flipping the global in a test
+  would race every other test in the same binary; item 9 above is what actually proves them.
 
 ## Handoff
 
