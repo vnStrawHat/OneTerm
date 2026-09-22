@@ -11,7 +11,7 @@ Created: 2026-09-22
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -53,12 +53,18 @@ local shell. The exit-code tint of `US-0133` had no input.
   - `crates/ssh/src/session.rs` — `SHELL_INTEGRATION_BOOTSTRAP`, the line typed into the
     remote shell after `request_shell`.
   - Unit tests over the generated strings, per shell.
-  - `docs/terminal-backend.md` §6.1.1 (renamed: it is now the whole shell-integration
-    contract, not only cwd) and `docs/terminal-semantic-highlighting.md` §4.2.
+  - `crates/terminal/src/backend/osc_router.rs` — one `log::debug!` of each routed
+    `ShellMark`. Not a behaviour change: it is the only way to observe a mark without a
+    renderer, and it is what turned the Windows walk into evidence.
+  - `docs/terminal-backend.md` §6.1.1 (rewritten as §6.1.2, "What each shell integration
+    emits": the duplicate §6.1.1 numbering it shared with the elevated-shell section of
+    `IN-0043` is resolved in that section's favour, since every existing citation of §6.1.1
+    means that one) and `docs/terminal-semantic-highlighting.md` §4.2.
 - [ ] Out of scope:
   - Any consumer change. The engine already parses `A`/`B`/`C`/`D;<code>`
     (`crates/vt/src/terminal/dispatch.rs:2105-2110`) and the router already routes them
-    (`crates/terminal/src/backend/osc_router.rs:229-240`). Nothing downstream is touched.
+    (`crates/terminal/src/backend/osc_router.rs:229-240`). Nothing downstream changes
+    behaviour; the one edit there is a diagnostic log line.
   - Reading the marks in the renderer — `US-0133`.
   - Any new injection route. The integration stays env-based (local) and one typed
     bootstrap line (SSH), opt-out exactly as today. No temp file, no `ZDOTDIR`, no profile
@@ -67,23 +73,23 @@ local shell. The exit-code tint of `US-0133` had no input.
 
 ## Acceptance
 
-- [ ] bash emits `A`, `B`, `C` and `D;<code>`; the `<code>` is the exit status of the user's
+- [x] bash emits `A`, `B`, `C` and `D;<code>`; the `<code>` is the exit status of the user's
       command, and `$?` is restored before any user-supplied `PROMPT_COMMAND` runs.
-- [ ] A user-supplied `PROMPT_COMMAND` is preserved, not replaced: OneTerm's part runs
+- [x] A user-supplied `PROMPT_COMMAND` is preserved, not replaced: OneTerm's part runs
       first and the user's follows it, separated by `;`.
-- [ ] A user-supplied `PS1` is preserved, not replaced: `B` is appended to whatever `PS1`
+- [x] A user-supplied `PS1` is preserved, not replaced: `B` is appended to whatever `PS1`
       holds at prompt time (after every rc file has run), once and only once.
-- [ ] zsh emits `A`, `B` and `D;<code>` from the generated `PS1`; the code comes from zsh's
+- [x] zsh emits `A`, `B` and `D;<code>` from the generated `PS1`; the code comes from zsh's
       own `%?`. `C` is recorded as a limit, not claimed.
-- [ ] PowerShell and pwsh emit `A`, `B`, `C` and `D;<code>`; the original `prompt` function
+- [x] PowerShell and pwsh emit `A`, `B`, `C` and `D;<code>`; the original `prompt` function
       is still called and its output still appears.
-- [ ] `cmd /c exit 3` inside pwsh produces `133;D;3`.
-- [ ] `cmd.exe` is unchanged and still emits `A` + `B`; the doc states that `C`/`D` are not
+- [x] `cmd /c exit 3` inside pwsh produces `133;D;3`.
+- [x] `cmd.exe` is unchanged and still emits `A` + `B`; the doc states that `C`/`D` are not
       reachable from `PROMPT`.
-- [ ] The SSH bootstrap installs the bash set or the zsh set according to the remote shell
+- [x] The SSH bootstrap installs the bash set or the zsh set according to the remote shell
       it detects, and still exports `COLORTERM` first (`BUG-0038`).
-- [ ] No `D` is emitted before the first command of a session.
-- [ ] Every generated string is unit-tested for its exact bytes: one backslash after ESC,
+- [x] No `D` is emitted before the first command of a session.
+- [x] Every generated string is unit-tested for its exact bytes: one backslash after ESC,
       the `133;D;<code>` form the engine parses, and no `"` in the PowerShell `-Command`
       argument.
 
@@ -91,7 +97,7 @@ local shell. The exit-code tint of `US-0133` had no input.
 
 ### Owning Docs Reviewed
 
-- `docs/terminal-backend.md` §6.1.1 — the generated-prompt contract per Windows shell, and
+- `docs/terminal-backend.md` §6.1.1 (cwd reporting) — the generated-prompt contract per Windows shell, and
   §6.2's note that the elevated instance re-runs `resolve_shell` so `PROMPT`,
   `PROMPT_COMMAND`, `PS1` and `TERM` survive. The new `PS0` joins that list.
 - `docs/terminal-semantic-highlighting.md` §4.2 — the OSC 133 fast path, which names the
@@ -102,26 +108,29 @@ local shell. The exit-code tint of `US-0133` had no input.
 - `docs/terminal-backend.md` §6.1 / §6.2 — the integration route itself: environment
   variables only for a local shell, opt-out because every generated variable yields to a
   user-supplied one, and no file written or profile edited. There is no decision record for
-  it; §6.1.1 and §6.2 are where it is written down. Honoured as-is.
+  it; §6.1 and §6.2 are where it is written down. Honoured as-is.
 
 ### Documentation Action
 
 Update required:
 
-- `docs/terminal-backend.md` §6.1.1 — becomes the per-shell mark table (what each
-  integration emits, by which mechanism, and what it cannot emit), not only the OSC 7
-  paragraph.
+- `docs/terminal-backend.md` §6.1.1 (cwd reporting) — becomes §6.1.2, the per-shell mark
+  table: what each integration emits, by which mechanism, and what it cannot emit, instead
+  of only the OSC 7 paragraph.
 - `docs/terminal-semantic-highlighting.md` §4.2 — a pointer to that table, so the fast
   path's reader knows which shells actually feed it.
 
 Reason: the behaviour of the producer side changes for four of the five integrations, and
-§6.1.1 is the only place that documents it.
+that section is the only place that documents it.
 
 ### Reconciliation
 
-Changed: `docs/terminal-backend.md` §6.1.1 (per-shell mark table, renamed section),
-`docs/terminal-semantic-highlighting.md` §4.2 (a paragraph pointing at it). No other owning
-doc needed a change: the engine and router contracts are unchanged by this packet.
+Changed: `docs/terminal-backend.md` — the old §6.1.1 "Windows local cwd reporting" is now
+§6.1.2 "What each shell integration emits (OSC 7 and OSC 133)", carrying the per-shell mark
+table, the reason for each gap and the never-replace rule; and
+`docs/terminal-semantic-highlighting.md` §4.2, a paragraph naming which shells feed the
+fast path and pointing at that table. No other owning doc needed a change: the engine and
+router contracts are unchanged by this packet.
 
 ## Context
 
@@ -175,13 +184,13 @@ completed block that never ran.
 
 ## Plan
 
-- [ ] bash: `PROMPT_COMMAND` (D + OSC 7 + A, `PS1` append for B, `$?` restored) and `PS0` (C).
-- [ ] zsh: `PS1` gains `133;D;%?` ahead of `A`.
-- [ ] PowerShell/pwsh: the `prompt` wrapper emits D + OSC 7 + A and returns the original
+- [x] bash: `PROMPT_COMMAND` (D + OSC 7 + A, `PS1` append for B, `$?` restored) and `PS0` (C).
+- [x] zsh: `PS1` gains `133;D;%?` ahead of `A`.
+- [x] PowerShell/pwsh: the `prompt` wrapper emits D + OSC 7 + A and returns the original
       prompt with B appended; a PSReadLine `Enter` handler emits C.
-- [ ] SSH bootstrap: branch on `$ZSH_VERSION`; bash set or zsh set.
-- [ ] Unit tests per shell over the generated strings.
-- [ ] Reconcile `docs/terminal-backend.md` §6.1.1 and `docs/terminal-semantic-highlighting.md` §4.2.
+- [x] SSH bootstrap: branch on `$ZSH_VERSION`; bash set or zsh set.
+- [x] Unit tests per shell over the generated strings.
+- [x] Reconcile `docs/terminal-backend.md` §6.1.2 and `docs/terminal-semantic-highlighting.md` §4.2.
 
 ## Decisions
 
@@ -200,18 +209,34 @@ choice here is one future work must inherit.
   `pwsh scripts/ci-local.ps1`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
+- [x] Unit proof
 - [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Recorded after implementation; see `evidence/US-0136-verify.md`.
+Full record: `evidence/US-0136-verify.md`, with the frame
+`evidence/US-0136-verify-pwsh-tab.png`.
 
-Expected gaps:
+The live Windows walk (OneTerm `fast-dev`, `RUST_LOG=debug`, one run per shell kind, two
+commands typed into the tab) is the load-bearing proof:
+
+```
+cmd        : PromptStart PromptEnd  x3                     -- no C, no D
+pwsh       : PromptStart PromptEnd OutputStart OutputEnd
+             PromptStart PromptEnd OutputStart OutputEnd
+             PromptStart PromptEnd
+             OutputEnd { exit_code: Some(3) } | OutputEnd { exit_code: Some(0) }
+powershell : identical to pwsh
+```
+
+`cargo test -p oneterm-core -p oneterm-ssh -p oneterm-terminal` green;
+`pwsh scripts/ci-local.ps1` ends with `ci-local: all checks passed`.
+
+Gaps:
 
 - **bash and zsh are unit-tested only.** No Unix host is available in this session, so the
   generated `PROMPT_COMMAND` / `PS0` / `PS1` are proven as strings, not as behaviour in a

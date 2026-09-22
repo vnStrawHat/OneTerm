@@ -490,15 +490,55 @@ code 3 and one message naming the path it looked for. The one accepted argument 
 exit code 2, with no window. See
 [`spec-intakes/IN-0043-run-shell-as-administrator/low-level-design/elevated-instance.md`](spec-intakes/IN-0043-run-shell-as-administrator/low-level-design/elevated-instance.md).
 
-### 6.1.1 Windows local cwd reporting
+### 6.1.2 What each shell integration emits (OSC 7 and OSC 133)
 
-OneTerm's generated prompt integration emits OSC 7 whenever it controls the Windows shell prompt:
+OneTerm injects its own prompt integration so a tab can report its working directory
+(OSC 7) and the boundaries of each command (OSC 133 `A` prompt start, `B` prompt end /
+input start, `C` output start, `D;<code>` command done). The engine parses all of them
+(`crates/vt/src/terminal/dispatch.rs`); the marks are what
+[`terminal-semantic-highlighting.md` §4.2](terminal-semantic-highlighting.md) calls the
+fast path, and `D`'s code is the only source of the exit-code tint.
 
-- `cmd.exe`: the generated `PROMPT` emits the current `$P` path before OSC 133 markers. A user-supplied `LocalShellConfig.env["PROMPT"]` remains authoritative and may omit cwd reporting.
-- Windows PowerShell and pwsh: the startup command wraps the existing global `prompt` function, emits the current `$pwd.Path` as OSC 7, then invokes the original prompt. This preserves the shell's normal prompt output while making cwd updates observable after `cd`/`Set-Location`.
-- Custom shells or user prompt overrides must emit OSC 7 themselves if live cwd tracking is required.
+**The route decides the ceiling.** A local shell is reached through the *spawn environment*
+only — no file written, no profile edited, and every generated variable yields to a
+user-supplied one, which is the integration's opt-out. An SSH shell is reached by typing
+one line into the shell after it starts, so there OneTerm can define functions.
 
-The engine parses OSC 7 itself and reports the host and the path unresolved; the router sanitises the path into `SessionEvent::Cwd` and updates `TerminalSession::cwd()`.
+| Shell | A | B | C | D | Mechanism |
+| --- | :-: | :-: | :-: | :-: | --- |
+| `cmd.exe` | ✓ | ✓ | — | — | `PROMPT`: `$E]7;$P$E\` + `A` + `$P$G` + `B` |
+| PowerShell / pwsh | ✓ | ✓ | ✓ | ✓ | `-Command` startup: the global `prompt` function is wrapped (writes `D;<code>`, OSC 7 and `A`, returns the original prompt with `B` appended); `C` from a PSReadLine `Enter` handler |
+| bash (local) | ✓ | ✓ | ✓ | ✓ | `PROMPT_COMMAND` (`D;<code>`, OSC 7, `A`, and the one-time `B` append to `PS1`) + `PS0` (`C`) |
+| zsh (local) | ✓ | ✓ | — | ✓ | `PS1`, with zsh's own `%?` supplying `D`'s code |
+| bash (SSH) | ✓ | ✓ | ✓ | ✓ | typed bootstrap: `PROMPT_COMMAND` + `PS0` + `PS1` append |
+| zsh (SSH) | ✓ | ✓ | ✓ | ✓ | typed bootstrap: `precmd_functions` + `preexec_functions` + `PS1` append |
+| `sh` / `dash` (SSH) | ✓ | — | — | — | typed bootstrap: one OSC 7 + `A` at connect, nothing per prompt |
+| Custom shell, or a user prompt override | — | — | — | — | the shell must emit the sequences itself |
+
+The gaps in that table are the route's, not oversights:
+
+- **`cmd.exe` has one hook.** `PROMPT` is expanded once before the prompt and its `$` codes
+  contain nothing for the error level, so there is no place to put `C` or `D`.
+- **Local zsh cannot reach `C`.** `preexec` is a *function* and no environment variable
+  carries zsh code; installing one needs a sourced file, which the env-only route excludes.
+  Remote zsh does emit `C`, because the bootstrap is typed into a running shell.
+- **PowerShell's `C` needs PSReadLine.** The `Enter` handler is installed only when
+  `Set-PSReadLineKeyHandler` resolves, so a host without PSReadLine keeps its own `Enter`
+  and reports `A`/`B`/`D` only.
+
+**Nothing OneTerm generates replaces what the user has.** A user-supplied `PROMPT`, `PS1`
+or `PS0` wins outright; a user-supplied `PROMPT_COMMAND` is *appended to*, with OneTerm's
+part first and `$?` restored by a trailing subshell so the user's hook still sees the real
+exit status. `B` is appended to `PS1` from inside `PROMPT_COMMAND` (local bash) or by the
+bootstrap (SSH) rather than injected as a `PS1` variable, because an rc file sets `PS1`
+after the environment is read and would drop the marker. No integration emits `D` before
+the first command of the session, except local zsh, whose `PS1`-only route has nowhere to
+hold the flag.
+
+The engine parses OSC 7 itself and reports the host and the path unresolved; the router
+sanitises the path into `SessionEvent::Cwd` and updates `TerminalSession::cwd()`. The OSC
+133 marks reach the cells as `SnapshotCell::semantic` and the router as
+`SessionEvent::ShellIntegration`, whose `D` updates `SharedState::last_exit_code`.
 
 ### 6.2. Spawn via `oneterm_vt::pty`
 
