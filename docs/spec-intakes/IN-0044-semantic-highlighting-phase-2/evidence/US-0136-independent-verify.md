@@ -709,3 +709,236 @@ zsh remains unproven, local and remote. No SSH server was reachable, so MED-1 is
 running the bootstrap's own text in a real bash rather than through a `russh` channel.
 `cfg(unix)` is unverifiable here. And PSReadLine's handling of an exception thrown inside a
 key handler was not observed in a real console host.
+
+---
+
+# Re-verification of `9e83e07d`
+
+Date: 2026-09-22
+Subject: `feat/shell-integration-osc133-full-set` @ `9e83e07d`, one commit on `100bf423`
+after merging `main` @ `b5d83702`. Same host, same method; only `NEW-MAJ-1`, `NEW-MIN-1`,
+the recorded `AmbiguousMatchException` gap, and the live mark logs were re-checked.
+
+## Verdict
+
+**PASS.**
+
+Both findings are closed, each by a change that removes the *class* of defect rather than
+the instance. The `Enter` guard now asks whether the bound name is callable instead of what
+it is called, which is the question that was always being asked; a new test runs the real
+init in both real hosts over the four bindings, and reverting the guard makes it fail on the
+described row and only that row. The bash `B` mark is now four raw bytes with no backslash
+anywhere, so neither end of the concatenation has anything prompt expansion can act on —
+the seam that produced MAJ-1 and then NEW-MIN-1 no longer exists.
+
+The `AmbiguousMatchException` gap is real but unreachable through the binding path and safe
+through the only route that remains.
+
+| # | Finding | Status |
+|---|---|---|
+| NEW-MAJ-1 | described `Enter` script block made `Enter` throw | **FIXED** — guard, test, mutation, and a live tab with a real `$PROFILE` |
+| NEW-MIN-1 | a user `PS1` ending in a lone backslash swallowed the mark's `\[` | **FIXED** — raw `\001 ESC ]133;B BEL \002`, no `0x5c` at all |
+| `AmbiguousMatchException` | overloaded names such as `Insert` | **safe** — unreachable via `-Function`, and the one remaining route declines correctly |
+| MAJ-1, MED-1, MED-2, MIN-1, MIN-2 | earlier rounds | still fixed; re-measured where the change could have touched them |
+
+---
+
+## NEW-MAJ-1 — fixed
+
+`crates/core/src/config/shell.rs:277-279` now reads
+
+```powershell
+$b=Get-PSReadLineKeyHandler -Bound|Where-Object{$_.Key -eq 'Enter'}|Select-Object -First 1;
+$f=if($b){$b.Function}else{'AcceptLine'};
+if([Microsoft.PowerShell.PSConsoleReadLine].GetMethod($f)){ ... }
+```
+
+**The five bindings, run through the real init extracted from the source, in both hosts.**
+Identical results in pwsh 7.6.6 / PSReadLine 2.4.5 and Windows PowerShell 5.1.26100 /
+PSReadLine 2.0.0:
+
+| `Enter` bound to | init error | prompt wrapped | `Enter` before → after | chained to |
+| --- | --- | :-: | --- | --- |
+| `-Function AcceptLine` | none | yes | `AcceptLine` → `CustomAction` (OneTerm's) | `AcceptLine` |
+| `-Function ValidateAndAcceptLine` | none | yes | `ValidateAndAcceptLine` → `CustomAction` | `ValidateAndAcceptLine` |
+| `-ScriptBlock { }` | none | yes | `CustomAction` → **unchanged** | none, so no `C` |
+| `-ScriptBlock { } -BriefDescription 'SmartEnter'` | none | yes | `SmartEnter` → **unchanged** | none, so no `C` |
+| `-ScriptBlock { } -BriefDescription 'Insert'` | `AmbiguousMatchException` | **yes** | `Insert` → **unchanged** | none, so no `C` |
+
+The fourth row is the one that broke before: the guard now declines it, the user keeps their
+handler, and nothing calls a method that does not exist.
+
+**The test.** `powershell_enter_guard_decides_the_four_bindings`
+(`crates/core/src/config/shell.rs:868-903`) writes the generated init to a temp script, runs
+it in `powershell.exe` and `pwsh.exe` with each binding already applied, and reads back
+`INSTALLED:<name>` or `DECLINED`. It passes here in 2.92 s — eight real host launches, so it
+is not silently skipping — and asserts `hosts > 0` so an all-skip cannot read as a pass.
+
+**The mutation.** Putting `if($f -ne 'CustomAction'){` back makes it fail on the described
+row, and only there; the three rows before it passed in the same run:
+
+```
+powershell.exe with described: Set-PSReadLineKeyHandler -Key Enter -ScriptBlock
+  { [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine() } -BriefDescription 'SmartEnter'
+  left: "INSTALLED:SmartEnter"
+ right: "DECLINED"
+```
+
+Restored; `git status` clean apart from this evidence.
+
+**Live, with a real profile.** A `$PROFILE` in the walk's scratch home — `$PROFILE` follows
+the redirected `USERPROFILE`, so nothing outside the worktree was touched — binding `Enter`
+to a described script block, then a normal pwsh tab:
+
+```
+marks: PromptStart PromptEnd  PromptStart PromptEnd  PromptStart PromptEnd
+```
+
+and `US-0136-verify5-pwsh-described-enter.png` shows `cmd /c exit 3` and `cmd /c exit 0`
+both submitted and both followed by a fresh prompt. `A`/`B` only, no `C`, no `D`, no error
+on screen. The implementer's own `US-0136-verify4-pwsh-described-enter.png` shows the same
+thing with `Write-Output oneterm-accepted` printing its output — both frames support the
+claim.
+
+`D` is absent as well as `C`, because `$global:__OneTermRan` is only ever set inside the
+handler. Section 6.1.2 says "that tab reports `A`/`B` only", which is exactly right; the
+wording from the round before it ("`A`/`B`/`D` only") would not have been.
+
+---
+
+## The `AmbiguousMatchException` gap — safe, twice over
+
+`[Type].GetMethod(name)` throws when the name is overloaded. Enumerated on this host, the
+same seven in both PowerShell versions:
+
+```
+GetBufferState, GetKeyHandlers, Insert, ReadLine, SetKeyHandler,
+ViDeleteToBeforeChar, ViDeleteToChar
+```
+
+**Through `-Function` the gap is unreachable.** Five of the seven are not PSReadLine
+function names at all. The two that are — `ViDeleteToChar` and `ViDeleteToBeforeChar` —
+cannot be bound, because PSReadLine resolves them by the same reflection and refuses first:
+
+```
+Set-PSReadLineKeyHandler -Key Enter -Function ViDeleteToChar
+  -> Ambiguous match found for 'Microsoft.PowerShell.PSConsoleReadLine
+     Void ViDeleteToChar(System.Nullable`1[System.ConsoleKeyInfo], System.Object)'.
+```
+
+**The one route that remains is a described script block whose description happens to name
+an overloaded static** — `-BriefDescription 'Insert'`. Measured end to end in both hosts
+(the last row of the table above): the exception is raised by the `if` condition, which is
+the **last statement of the init**, so everything before it has already run. The prompt
+wrapper is installed and works (`prompt` returns `user> ESC]133;B ESC\`), the user's `Enter`
+is untouched, `$global:__OneTermEnter` stays empty, and PowerShell continues — an uncaught
+run of the init prints one error record and then reaches the next statement:
+
+```
+MethodInvocationException: Exception calling "GetMethod" with "1" argument(s):
+  "Ambiguous match found for 'Microsoft.PowerShell.PSConsoleReadLine Void Insert(Char)'."
+STILL-RUNNING
+```
+
+So the failure mode is the documented decline — `A`/`B`, no `C`, the user's `Enter` kept —
+plus one error blob printed once at startup. **Safe**, as recorded. The blob is the only
+cost and it needs a profile that names its `Enter` block after one of seven methods; a
+`try{...}catch{}` around the guard would remove even that, if anyone ever sees it.
+
+---
+
+## NEW-MIN-1 — fixed
+
+The mark is now the value of `$'\001\033]133;B\007\002'` (local,
+`crates/core/src/config/shell.rs:215`) and of `$(printf '\001\033]133;B\007\002')` (SSH,
+`crates/ssh/src/session.rs:746`) — `\001` and `\002` are `RL_PROMPT_START_IGNORE` and
+`RL_PROMPT_END_IGNORE`, which is what `\[` and `\]` expand to, so the region is marked
+without writing a backslash anywhere.
+
+```
+mark bytes : 001 033 ] 1 3 3 ; B \a 002      len 10      0x5c count 0
+```
+
+**Five `PS1` shapes, variable and `${PS1@P}`, measured in bash 5.3.15:**
+
+| user `PS1` | expanded | SOH / STX | `0x5c` in the whole prompt |
+| --- | --- | :-: | :-: |
+| `x` | `x 001 033 ]133;B \a 002` | 1 / 1 | 0 |
+| `x\` | `x \ 001 033 ]133;B \a 002` | 1 / 1 | 1 (the user's own) |
+| `x\\` | `x \ 001 033 ]133;B \a 002` | 1 / 1 | 1 (the user's own) |
+| `\u@\h:\w\$ ` | `trunglt@...$ 001 033 ]133;B \a 002` | 1 / 1 | 0 |
+| `\[\e[32m\]\u\[\e[0m\]\$ ` | `033[32m trunglt 033[0m $ 001 033 ]133;B \a 002` | 1 / 1 | 0 |
+
+`x\` is NEW-MIN-1's case: the user's backslash arrives intact and the mark still opens and
+closes its region exactly once. Idempotence holds — five expansions leave one SOH, one STX,
+`PS1` length 11 — and readline strips both control bytes before writing, so **none reach the
+terminal** (measured: zero `001`/`002` on the wire from a real interactive bash).
+
+A real interactive bash under the generated environment still gives
+`A B C D;7 A B C D;0 A B C`, with `033 ] 1 3 3 ; B \a` running straight into the echoed
+command.
+
+**SSH bootstrap.** `dash -n` and `bash -n` both exit 0; 880 bytes; `printf` rather than
+`$'…'` because a POSIX `sh` must parse the line. `PS1` expands to
+`u$ 001 033 ]133;B \a 002` (SOH 1, STX 1), `PS0` still to `033 ]133;C 033 \`, and MED-1 still
+holds: prompt 1 carries no `D`, prompt 2 after `(exit 7)` carries `D;7`, `$?` comes back as
+5. `dash` still reaches neither branch and emits one OSC 7 plus `133;A`.
+
+**Test extensions present.** `bash_ps1_mark_survives_prompt_expansion`
+(`crates/core/src/config/shell.rs:692-721`) now decodes the shell literal with a small
+`ansi_c_bytes` helper and asserts the exact four-byte shape, one `\001`, one `\002`, and
+`!mark.contains(&b'\\')` — the invariant, not the instance — then concatenates the mark
+after six `PS1` tails including `x\` and re-counts. `crates/ssh` asserts its own copy and
+that neither earlier form survives anywhere.
+
+---
+
+## Live mark logs — unchanged
+
+```
+kind=cmd         A B  A B  A B
+kind=pwsh        A B C D;3  A B C D;0  A B
+kind=powershell  A B C D;3  A B C D;0  A B
+kind=bash        A B C D;7  A B C D;0  A B
+```
+
+Frame `US-0136-verify5-bash-tab.png`: the prompt still reads `$ (exit 7)`, no stray
+character.
+
+## Commands
+
+```powershell
+git reset --hard 9e83e07d
+cargo build -p oneterm-app --profile fast-dev
+pwsh walk.ps1 -Kind cmd|pwsh|powershell 'cmd /c exit 3' 'cmd /c exit 0'
+pwsh walk.ps1 -Kind bash '(exit 7)' 'true'
+pwsh walk-profile.ps1 -Kind pwsh 'cmd /c exit 3' 'cmd /c exit 0'   # seeds a described-Enter $PROFILE
+cargo test -p oneterm-core powershell_enter_guard_decides_the_four_bindings -- --nocapture
+cargo test -p oneterm-core -p oneterm-ssh -p oneterm-local-shell -p oneterm-terminal
+pwsh scripts/ci-local.ps1
+```
+
+```bash
+bash --norc --noprofile f1.sh   # five PS1 shapes, the mark's bytes, idempotence, the wire
+bash --norc --noprofile f2.sh   # the bootstrap: parse, PS1/PS0, MED-1, dash
+pwsh / powershell -NoProfile -File ps-amb.ps1 , ps-amb2.ps1   # overloaded names; five bindings
+```
+
+## Tests and gate
+
+`cargo test -p oneterm-core -p oneterm-ssh -p oneterm-local-shell -p oneterm-terminal` —
+green: 89, 102, 34 with 2 ignored, and 218.
+
+`pwsh scripts/ci-local.ps1` — every step green, ending:
+
+```
+ci-local: all checks passed.
+```
+
+## Gaps unchanged
+
+zsh remains unproven, local and remote. No SSH server was reachable, so the bootstrap is
+proved by running its own text in a real bash rather than through a `russh` channel.
+`cfg(unix)` is unverifiable here. PSReadLine's behaviour when a key handler throws was not
+observed in a real console host — it did not need to be, because no handler that can throw
+is now installed.
