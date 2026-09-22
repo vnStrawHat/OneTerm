@@ -507,7 +507,7 @@ pub(crate) fn class_rows_into(
     overlay: &SemanticOverlay,
     classes: &mut [Vec<u8>],
     roles: &mut [Option<RowRole>],
-    heads: &mut [Semantic],
+    marks: &mut [LineMark],
     wraps: &[bool],
     range: Range<usize>,
     scratch: &mut Scratch,
@@ -519,7 +519,7 @@ pub(crate) fn class_rows_into(
         out.clear();
         out.resize(frame.row(r).len(), Class::Default as u8);
         roles[r] = None;
-        heads[r] = Semantic::None;
+        marks[r] = LineMark::default();
     }
     stats.class_rows_scanned += range.len() as u32;
 
@@ -530,29 +530,52 @@ pub(crate) fn class_rows_into(
             end += 1;
         }
         stats.class_scans += 1;
-        scan_logical_line(frame, overlay, classes, roles, heads, start..=end, scratch);
+        scan_logical_line(frame, overlay, classes, roles, marks, start..=end, scratch);
         start = end + 1;
     }
 }
 
-/// The OSC 133 region of a logical line: the region of its **first marked
-/// character**, or `Semantic::None` when no character of it is marked.
+/// What the OSC 133 marks say about one logical line, before the transition
+/// rule below is applied.
 ///
-/// This is the raw reading, before the transition rule below. It is kept per
-/// row so the next logical line can ask what the previous one was.
-fn line_head_region(char_semantic: &[Semantic]) -> Semantic {
-    char_semantic
+/// Kept per display row so the next logical line can ask what the previous one
+/// was, which is the whole of the rule's input.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LineMark {
+    /// The region of the line's **first marked character**, or
+    /// `Semantic::None` when no character of it is marked.
+    head: Semantic,
+    /// Whether the line carries an `Input` region, i.e. the shell closed its
+    /// prompt with `OSC 133;B` somewhere on it. Only meaningful — and only
+    /// computed — for a `Prompt`-headed line.
+    closed_prompt: bool,
+}
+
+/// Read a logical line's marks, and the char index its typed command starts at.
+fn line_mark(char_semantic: &[Semantic]) -> (LineMark, Option<usize>) {
+    let head = char_semantic
         .iter()
         .copied()
         .find(|&s| s != Semantic::None)
-        .unwrap_or(Semantic::None)
+        .unwrap_or(Semantic::None);
+    // Only a `Prompt`-headed line is ever asked whether it closed its prompt:
+    // for every other head the transition below is already satisfied.
+    let input_at = (head == Semantic::Prompt)
+        .then(|| char_semantic.iter().position(|&s| s == Semantic::Input))
+        .flatten();
+    (
+        LineMark {
+            head,
+            closed_prompt: input_at.is_some(),
+        },
+        input_at,
+    )
 }
 
-/// The role of one logical line and the char index its typed command starts at.
+/// The role of one logical line, from its own marks and the previous line's.
 ///
-/// `head` is this line's region ([`line_head_region`]) and `prev` the previous
-/// logical line's, or `None` when there is no previous line inside the viewport
-/// — which is *unknown*, not "not a prompt".
+/// `prev` is `None` when there is no previous line inside the viewport — which
+/// is *unknown*, not "not a prompt".
 ///
 /// **A prompt line is a line the region TRANSITIONS into.** The OSC 133 region
 /// is a sticky cell attribute: `OSC 133;A` puts `Semantic::Prompt` on the cell
@@ -562,10 +585,14 @@ fn line_head_region(char_semantic: &[Semantic]) -> Semantic {
 /// (`crates/ssh/src/session.rs`), which runs on *every* remote session — leaves
 /// every line it prints afterwards tagged `Prompt`. Reading the tag alone made
 /// a whole screen of output into prompt lines, with invented signs, command
-/// colouring and a background band on every row. Requiring the transition costs
-/// nothing where the shell closes the region (`A`/`B`: the prompt follows an
-/// `Input` or `Output` line; `A`/`B`/`C`/`D`: it follows `Output`) and falls back
-/// to the prompt regex — today's behaviour — where it does not.
+/// colouring and a background band on every row.
+///
+/// Two prompt lines **can** sit on adjacent rows, though: that is what a command
+/// which printed nothing (`cd`, `export`, `set`) leaves behind on any shell
+/// whose prompt has no leading blank line — `ZSH_OSC133_PS1` is exactly that
+/// shape. So a `Prompt`-headed predecessor is still a transition **when it
+/// closed its own prompt** with `OSC 133;B`, which its `Input` region records. A
+/// shell that never emits `B` has no `Input` anywhere, so the flood stays shut.
 ///
 /// The same reasoning in the other direction is the `Input` rule: a line that
 /// *starts* in `Input` is not trusted as command input, because `cmd.exe`'s
@@ -573,18 +600,16 @@ fn line_head_region(char_semantic: &[Semantic]) -> Semantic {
 /// afterwards is tagged `Input`. A typed command is unaffected: it continues its
 /// prompt's logical line, which is `Prompt`-headed and carries `input_at`.
 fn line_role(
-    head: Semantic,
-    prev: Option<Semantic>,
-    char_semantic: &[Semantic],
+    mark: LineMark,
+    prev: Option<LineMark>,
+    input_at: Option<usize>,
 ) -> (Option<RowRole>, Option<usize>) {
-    match head {
+    let transition = |p: LineMark| p.head != Semantic::Prompt || p.closed_prompt;
+    match mark.head {
         // A mixed-region line — the prompt and the command the user typed on one
         // row — starts in `PromptLine` and switches where the region changes, so
         // the boundary column travels with the role rather than being guessed.
-        Semantic::Prompt if prev.is_some_and(|p| p != Semantic::Prompt) => (
-            Some(RowRole::Prompt),
-            char_semantic.iter().position(|&s| s == Semantic::Input),
-        ),
+        Semantic::Prompt if prev.is_some_and(transition) => (Some(RowRole::Prompt), input_at),
         Semantic::Output => (Some(RowRole::Output), None),
         Semantic::Prompt | Semantic::Input | Semantic::None => (None, None),
     }
@@ -598,7 +623,7 @@ fn scan_logical_line(
     overlay: &SemanticOverlay,
     classes: &mut [Vec<u8>],
     roles: &mut [Option<RowRole>],
-    heads: &mut [Semantic],
+    marks: &mut [LineMark],
     rows: std::ops::RangeInclusive<usize>,
     scratch: &mut Scratch,
 ) {
@@ -617,16 +642,16 @@ fn scan_logical_line(
         );
     }
     // The previous logical line's region, for the transition rule. The last row
-    // before this run belongs to it, and `heads` is authoritative for every row
+    // before this run belongs to it, and `marks` is authoritative for every row
     // of the viewport (a row outside this frame's rescan did not change, so
     // neither did its region). No previous row means the viewport's top edge cut
     // the history: unknown, not "not a prompt".
-    let prev = rows.start().checked_sub(1).map(|r| heads[r]);
-    let head = line_head_region(&scratch.char_semantic);
-    let (role, input_at) = line_role(head, prev, &scratch.char_semantic);
+    let prev = rows.start().checked_sub(1).map(|r| marks[r]);
+    let (mark, boundary) = line_mark(&scratch.char_semantic);
+    let (role, input_at) = line_role(mark, prev, boundary);
     for r in rows {
         roles[r] = role;
-        heads[r] = head;
+        marks[r] = mark;
     }
     // A blank line carries nothing to classify; skip the scanner entirely.
     if scratch.line_text.trim().is_empty() {
@@ -848,14 +873,14 @@ mod tests {
             self.scan(frame).0
         }
 
-        /// The whole frame'''s semantic classes and per-row roles, logical line
+        /// The whole frame's semantic classes and per-row roles, logical line
         /// by logical line — what the plan cache computes before it rebuilds a
         /// row.
         fn scan(&self, frame: &Frame) -> (Vec<Vec<u8>>, Vec<Option<RowRole>>) {
             let rows = usize::from(frame.size().rows);
             let mut classes = vec![Vec::new(); rows];
             let mut roles = vec![None; rows];
-            let mut heads = vec![Semantic::None; rows];
+            let mut marks = vec![LineMark::default(); rows];
             let Some(overlay) = self.semantic.as_ref() else {
                 return (classes, roles);
             };
@@ -866,7 +891,7 @@ mod tests {
                 overlay,
                 &mut classes,
                 &mut roles,
-                &mut heads,
+                &mut marks,
                 &wraps,
                 0..rows,
                 &mut Scratch::new(),
@@ -1862,6 +1887,48 @@ mod tests {
         assert_eq!(roles[0], None);
         // ...and the regex fallback still colours it exactly as it always did.
         assert_eq!(classes[0][5], Class::PromptSign as u8, "{:?}", classes[0]);
+    }
+
+    /// **Back-to-back prompts (`RV-MAJ-1`).** A command that printed nothing
+    /// leaves two prompt lines on adjacent rows, which is what every shell whose
+    /// prompt has no leading blank line does — `ZSH_OSC133_PS1` among them. The
+    /// second one is still a prompt, because the first *closed* its own prompt
+    /// with `OSC 133;B`.
+    #[test]
+    fn two_prompts_on_adjacent_rows_are_both_prompts() {
+        let fx = Fixture::new(true);
+        let first = "user@host:~$ cd ..";
+        let boundary = first.find("cd").unwrap();
+        let frame = FrameBuilder::new(3, 32)
+            .text(0, 0, "previous output")
+            .mark(0, 0..15, Semantic::Output)
+            .text(1, 0, first)
+            .mark(1, 0..boundary, Semantic::Prompt)
+            .mark(1, boundary..first.len(), Semantic::Input)
+            .text(2, 0, "user@host:~$ ")
+            .mark(2, 0..13, Semantic::Prompt)
+            .build();
+        let (classes, roles) = fx.scan(&frame);
+        assert_eq!(roles[1], Some(RowRole::Prompt), "the command that ran");
+        assert_eq!(roles[2], Some(RowRole::Prompt), "the prompt it left behind");
+        assert_eq!(classes[2][11], Class::PromptSign as u8, "{:?}", classes[2]);
+    }
+
+    /// ...and the flood stays shut, because an `A`-only shell never writes an
+    /// `Input` cell, so no `Prompt`-headed line ever closed its prompt.
+    #[test]
+    fn a_prompt_headed_predecessor_that_never_closed_is_still_no_transition() {
+        let fx = Fixture::new(true);
+        let frame = FrameBuilder::new(3, 32)
+            .text(0, 0, "starting")
+            .text(1, 0, "user@host:~$ ls")
+            .mark(1, 0..15, Semantic::Prompt)
+            .text(2, 0, "ERROR: 100% nope")
+            .mark(2, 0..16, Semantic::Prompt)
+            .build();
+        let roles = fx.scan(&frame).1;
+        assert_eq!(roles[1], Some(RowRole::Prompt), "the real prompt");
+        assert_eq!(roles[2], None, "no `Input` on row 1, so no transition");
     }
 
     /// A marked output row never reaches the prompt regex, so a line the regex

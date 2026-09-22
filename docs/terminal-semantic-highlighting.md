@@ -185,8 +185,8 @@ line above it:
 
 | First marked character of the logical line | Role |
 |---|---|
-| `Semantic::Prompt`, and the previous logical line's region is known and is **not** `Prompt` | `Prompt`, plus the char index of the line's first `Input` character — the prompt/command boundary `OSC 133;B` drew |
-| `Semantic::Prompt` otherwise (no transition, or no previous line on screen) | **no mark** — see below |
+| `Semantic::Prompt`, and the previous logical line's region is known and is either **not** `Prompt` or is a `Prompt` that carried an `Input` region | `Prompt`, plus the char index of the line's first `Input` character — the prompt/command boundary `OSC 133;B` drew |
+| `Semantic::Prompt` otherwise (a `Prompt` predecessor that never closed, or no previous line on screen) | **no mark** — see below |
 | `Semantic::Output` | `Output` |
 | `Semantic::Input` | **no mark** — see below |
 | nothing is marked | no mark |
@@ -223,11 +223,19 @@ Two consequences, and both are rules rather than omissions:
 - **A prompt line is a line the region transitions *into*.** Under `bash` and over SSH the
   region never leaves `Prompt`, so reading the tag alone made a whole screen of output into
   prompt lines — invented signs, command colouring and a background band on every row. The
-  role is therefore given only when the previous logical line's region is *known* and is not
-  `Prompt`. Where the shell closes the region this costs nothing: under `A`/`B` the prompt
-  follows an `Input` line, under `A`/`B`/`C`/`D` it follows an `Output` line, and the first
-  prompt of a session follows unmarked text. Where it does not, every line falls back to the
-  prompt regex, which is what happened before the fast path existed.
+  role is therefore given only when the previous logical line's region is *known* and is
+  either not `Prompt`, **or** is a `Prompt` that closed itself with `OSC 133;B` — which its
+  `Input` region records. Where the shell closes the region this costs nothing: under
+  `A`/`B` the prompt follows an `Input` line, under `A`/`B`/`C`/`D` it follows an `Output`
+  line, and the first prompt of a session follows unmarked text. Where it does not, every
+  line falls back to the prompt regex, which is what happened before the fast path existed.
+
+  The second half of that condition is what lets **two prompts sit on adjacent rows**, which
+  is what a command that printed nothing (`cd`, `export`, `set`) leaves behind on any shell
+  whose prompt has no leading blank line — `ZSH_OSC133_PS1` is exactly that shape. Without
+  it the second prompt lost its role, its band and its tint, and gained them back the moment
+  a command printed something: the flashing row `US-0134`'s own fallback rule exists to
+  avoid. An `A`-only shell never writes an `Input` cell, so the flood stays shut.
 - **An `Input`-headed line is not trusted.** `cmd.exe` emits `A` and `B` and never `C`, so
   every line its command prints is still tagged `Input`; treating that as `RowRole::Command`
   would scan a screen of output in command mode. A typed command is unaffected — it
@@ -275,22 +283,6 @@ beside the URL masks and the classes (§13 Q5), and is authoritative for every r
 same reason they are: a row outside the rescan did not change, so neither did its role. The tint is applied later, over classes the scan already produced,
 because *which* prompt owns the code is a fact about the whole viewport rather than about
 the line being scanned.
-
-**The Windows sign rule** (`BUG-0073`) — the one subtle part of that fallback, because on
-Windows the sign is `>`, a character that ordinary output reaches all the time:
-
-> The prompt sign is the **first `>` of the logical line whose head — everything before
-> it — is a plausible Windows prompt path**: rooted at a drive (`C:`) or a UNC share
-> (`\\`), optionally behind PowerShell's `PS `; containing none of `< > | " * ? :`, none
-> of which may appear in a path component; and ending in neither a space nor `-`.
-
-"First" is forced rather than chosen: `>` cannot occur in a Windows path, so the head of
-any *later* `>` contains one and is never plausible. That is what keeps the redirection in
-`C:\work>dir > out.txt` outside the prompt region, and it is why the rule is stated on the
-head alone — what follows the sign is deliberately not part of it (§13 Q7). The rule is
-applied to the **logical** line, the joined wrap run, exactly as every other class is
-(`BUG-0071`); applied per visual row it would read the `> C:\dst` half of a wrapped
-`C:\src -> C:\dst` as `cmd`'s continuation prompt.
 
 **The Windows sign rule** (`BUG-0073`) — the one subtle part of that fallback, because on
 Windows the sign is `>`, a character that ordinary output reaches all the time:
@@ -574,13 +566,20 @@ not `cols` (`BUG-0071`). The table is per logical line:
 | Per-cell theme lookup | `styles.style(class).fg` × cells | branchless, negligible |
 | Cache hit | the row's `(RowId, SeqNo)` plus the class/mask delta | skip lex+layout entirely |
 
-Only **visible viewport** rows are lexed. The scope of one frame's rescan is the dirty
-rows **closed under wrap runs**: a scanner state cannot reach a row it is not
-wrap-connected to, so for ordinary content (a wrapped prompt is 2-4 rows) the rescan is
-a handful of rows and the number of scanner calls *falls*, because one run is one call
-instead of one per row. The bound is the wrap run, and it is tight — but a logical line
-longer than the viewport makes that run **the whole viewport**, so "never the viewport"
-is not the guarantee and this document does not claim it.
+Only **visible viewport** rows are lexed. The scope of one frame's URL rescan is the dirty
+rows **closed under wrap runs**: a URL cannot reach a row it is not wrap-connected to, so
+for ordinary content (a wrapped prompt is 2-4 rows) the rescan is a handful of rows and the
+number of scanner calls *falls*, because one run is one call instead of one per row. The
+bound is the wrap run, and it is tight — but a logical line longer than the viewport makes
+that run **the whole viewport**, so "never the viewport" is not the guarantee and this
+document does not claim it.
+
+The **semantic** rescan is that scope **plus the one logical line after each changed run**
+(`US-0133`): a line's OSC 133 role is read from the region its predecessor started in, so a
+run whose content changed can move the role of the line below it. The chain is exactly one
+line long — a line pulled in that way did not itself change, so its own region did not
+either — and the two passes run in separate loops precisely so that only this one pays for
+it.
 
 ### 10.1 Measured (`US-0135`)
 
@@ -638,13 +637,14 @@ No C dependency, no backtracking (ReDoS-safe), no per-line JSON interpretation, 
 string-scope hashing.
 
 `FrameStats` counts the class pass separately from the URL pass (`class_scans`,
-`class_rows_scanned`): the two share a row scope but the class pass does nothing while
-semantic highlighting is off. The scope above is **asserted** with those two counters
-rather than argued (`crates/terminal-view/src/render/plan_cache.rs`): an edit inside a
-wrapped line scans the wrap run and nothing else — `class_rows_scanned == 2` in a 12-row
-viewport, `class_scans == 1` — and a logical line longer than the viewport scans the
-viewport, `class_rows_scanned == rows_total`, still in one scan. Those are the two halves
-of the bound this section states.
+`class_rows_scanned`), which is what makes the two bounds visible apart. The scope above is
+**asserted** with those counters rather than argued
+(`crates/terminal-view/src/render/plan_cache.rs`): an edit inside a wrapped line in a 12-row
+viewport scans `url_rows_scanned == 2` — the wrap run and nothing else — and
+`class_rows_scanned == 3`, `class_scans == 2`, the wrap run plus the one line below it whose
+role depends on the region this one starts in. A logical line longer than the viewport
+scans the viewport, `class_rows_scanned == rows_total`, still in one scan. Those are the
+halves of the bound this section states.
 
 ---
 
@@ -904,11 +904,19 @@ frame behind (progressive).
 **Amended by `BUG-0071`.** "Rows that changed" is not "rows whose own text changed": a
 class depends on the whole logical line, so the scan scope is the dirty rows **closed
 under wrap runs**, and the classes of the rows in that scope are compared with the
-previous frame's to decide which plans to rebuild. This is the same scope and the same
-delta the URL masks already use (`US-0092`), so it adds no new invalidation surface — one
-`Vec<u8>` per display row beside the existing `Vec<bool>` mask. It stays viewport-only and
-it lowers the number of scanner invocations per frame, because one run of rows is now one
-scan instead of one scan each.
+previous frame's to decide which plans to rebuild. It stays viewport-only and it lowers the
+number of scanner invocations per frame, because one run of rows is now one scan instead of
+one scan each.
+
+**Amended again by `US-0133`.** That was "the same scope and the same delta the URL masks
+already use"; it no longer is. A line's OSC 133 role is read from the region its predecessor
+started in, so the **semantic** scope is the dirty runs *plus the one logical line after
+each changed run*, while the URL scope keeps the `US-0092` bound exactly. The two therefore
+run in separate loops over separate sets, and the per-row delta is taken per array so a row
+in only one of them never compares against the other's stale scratch. The chain is one line
+long by construction: a line pulled in by the carry did not itself change, so its own region
+did not either. The added state is one byte-sized `LineMark` per display row beside the
+`Vec<u8>` of classes and the `Vec<bool>` mask, rotated with them on scroll.
 
 **Confirmed by `US-0135`, with the measurement in hand.** "Viewport-only" has a second
 edge that `BUG-0071` left implied: a wrap run whose head is *above* the viewport is scanned

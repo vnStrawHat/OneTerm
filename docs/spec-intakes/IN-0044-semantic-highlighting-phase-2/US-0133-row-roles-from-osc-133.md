@@ -301,6 +301,22 @@ so the region does transition — still carry theirs. Compare
 `US-0133-US-0134-verify-a-only-flood.png`, the same scene before the fix, where every one of
 those rows was a banded prompt line.
 
+**Second rework frame.** `us-0133-back-to-back-prompts.png` carries both scenes in one
+`cmd` tab, fed as raw bytes so the wire stream is exactly what the integrations send.
+
+- *A-only*, top: the first line after `OSC 133;A` is a prompt (it transitions out of
+  unmarked text) and is banded; the three output lines below it are **not**, and keep their
+  output classes — `ERROR` and `failed` red, `100%` a number, `-o` an option.
+- *Back-to-back*, bottom: a full `A`/`B`/`C`/`D` stream whose commands printed nothing.
+  `user@host:~$ cd ..`, `user@host:~$ export X=1` and the bare `user@host:~$` sit on three
+  adjacent rows and **all three carry the band** (measured: `#373f49` band against a
+  `#23272e` background on rows 9-11, none on the flood rows above).
+- And the **exit-code tint fires**, for the first time on a real stream rather than a
+  hand-instrumented prompt function: the sign of the second-to-last prompt run is
+  `#98C379` green (`Class::Success`) from `OSC 133;D;0`, while the two prompts above it keep
+  the red `Class::PromptSign`. That is `MAJ-2`'s mechanism working — it is the *emitters*
+  that are missing, which is `US-0136`.
+
 Two notes from re-running the walk, because they cost time: the stripe on the row the cursor
 sits on is **not** the band (it is in the pre-`US-0134` frames too), and OneTerm's `cmd` tab
 has an unmarked blank line above its first prompt, so that prompt does have a predecessor
@@ -376,6 +392,43 @@ Not changed, with reasons: the `Input`-headed rule (the verification confirmed i
 `prompt_line_bg`'s explicit override ignores `reverse_video` (unreachable — nothing ships an
 override).
 
+### Second acceptance rework after re-verification (2026-09-22)
+
+Re-verified on `e0d85801`; report appended to `evidence/US-0133-US-0134-verify.md`
+(`US-0134` **ACCEPT**, `US-0133` **ACCEPT WITH CHANGES**). MAJ-1, MAJ-3, MED-2 and
+MIN-1/2/3 were confirmed fixed and pinned by mutation. What changed here:
+
+- **RV-MAJ-1 — two prompts on adjacent rows.** The transition rule read only the previous
+  logical line's *head*, and a prompt line's head is `Prompt`, so the second of two adjacent
+  prompts did not transition: no role, no band, no tint. That is what a command which
+  printed nothing (`cd`, `export`, `set`) leaves behind on any shell whose prompt has no
+  leading blank line — `ZSH_OSC133_PS1` is exactly that shape, and `zsh` is one of the two
+  shells OneTerm gives `A`/`B` to. Windows `cmd` was accidentally immune because its `$P$G`
+  prompt is preceded by a newline, so the defect was invisible in every frame taken here.
+
+  **Rule as it now stands:** a `Prompt`-headed line is a marked prompt when the previous
+  logical line's region is known **and** either is not `Prompt`, **or** is a `Prompt` that
+  carried an `Input` region — i.e. that prompt closed itself with `OSC 133;B`, so what
+  follows is a new one. The per-row state grew from a bare `Semantic` to a `LineMark`
+  (`head` + `closed_prompt`), one byte, still rotated with `roles` on scroll. An `A`-only
+  shell never writes an `Input` cell, so the flood stays shut, and a top-of-viewport prompt
+  is still unknown and still unmarked.
+
+- **RV-MED-1** — the `e0d85801` merge had duplicated the "Windows sign rule (`BUG-0073`)"
+  block in §4.2 verbatim; one copy removed.
+- **RV-MED-2** — §10, §10.1, §13 Q5 and `US-0135` (Decision 3 and its acceptance box) still
+  stated the pre-rework class bound. All four now say the semantic pass covers the wrap run
+  **plus one logical line** (`class_rows_scanned == 3`, `class_scans == 2`) while the URL
+  pass keeps `US-0092`'s bound on its own counter, and say why the two passes were split.
+- **RV-NIT-1** the bench baseline's `"measured"` label, **RV-NIT-2** a collapsed line break
+  in an assertion message, **RV-NIT-3** `assert_band_between` now asserts `band == bg` on
+  the degenerate pair instead of returning early (and the pair is in the fixture list),
+  **NIT-1** the `'''s` typo.
+
+Mutations re-run: ignoring `prev` fails **5** tests; dropping the new `closed_prompt`
+clause fails **2** (`two_prompts_on_adjacent_rows_are_both_prompts`,
+`back_to_back_prompts_are_both_marked_and_the_older_one_is_tinted`).
+
 ### Gaps
 
 - **`RowRole::Command` is not produced by the derivation.** A logical line that starts in
@@ -401,6 +454,13 @@ override).
   the viewport needs an engine read path the view does not have — the same viewport-only
   limit §13 Q5 already states for the class and URL passes.
 - **The exit-code tint is unreachable with every shipped integration** (MAJ-2). `US-0136`.
+  It is now demonstrated end to end on a real wire stream, though — see the frame below.
+- **A prompt whose command line was never typed into does not count as closed.**
+  `closed_prompt` is read from `Input` *cells*, and `OSC 133;B` writes none until something
+  is echoed after it. So an empty `Enter` at a prompt — the one case that leaves two
+  adjacent prompts where the first has no typed command — still leaves the second unmarked
+  until the next real command. It self-heals, and the mark itself is not in the snapshot to
+  read instead.
 - The `cfg(unix)` half of shell integration (bash `PROMPT_COMMAND`, zsh `PS1`) and a live
   SSH remote are not exercisable on this machine. The mark streams they put on the wire are
   reproduced exactly — as synthetic frames in the unit tests and as raw bytes in the GUI

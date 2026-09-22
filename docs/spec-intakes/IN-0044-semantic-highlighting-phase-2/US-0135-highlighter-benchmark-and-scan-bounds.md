@@ -86,7 +86,13 @@ viewport — are each decided with that number in hand and written down as rules
       decision cites the measurement either way.
 - [x] The view-side scope claim is asserted, not argued: a test shows `class_scans` and
       `class_rows_scanned` stay at the wrap run for an edit inside a wrapped line, and reach
-      the viewport only when one logical line fills it.
+      the viewport only when one logical line fills it. **Superseded in part by `US-0133`,
+      which merged after this packet:** a line's OSC 133 role is read from the region its
+      predecessor started in, so the *semantic* scope is now the wrap run **plus the one
+      logical line after it** (`class_rows_scanned == 3`, `class_scans == 2` in the same
+      12-row fixture). The URL scope is unchanged and is asserted separately
+      (`url_rows_scanned == 2`), which is why the two passes were split. The second half —
+      the viewport cap for a line that fills it — is untouched.
 - [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
@@ -250,12 +256,20 @@ lifting one and not the other would make one cache contract into two. Recorded i
 that future work must inherit beyond the rule, which the contract now carries.
 
 **Decision 3 — the view-side scope is asserted, not argued,** and it already was: the two
-`plan_cache.rs` tests `class_delta_replans_the_continuation_row` (`class_rows_scanned` is
-2 in a 12-row viewport, `class_scans` is 1) and
+`plan_cache.rs` tests `class_delta_replans_the_continuation_row` and
 `a_line_longer_than_the_viewport_scans_the_viewport` (`class_rows_scanned` equals
-`rows_total`, `class_scans` is 1) are exactly the two halves this packet asks for — one
-scan per wrap run, rows scanned = the run length capped at the viewport. A third test would
-have restated them, so §10 now cites them instead.
+`rows_total`, `class_scans` is 1) are exactly the two halves this packet asks for — rows
+scanned = the run length capped at the viewport. A third test would have restated them, so
+§10 cites them instead.
+
+> **Reconciled with `US-0133` (merged after this packet).** The first test asserted
+> `class_rows_scanned == 2`, `class_scans == 1` in a 12-row viewport. `US-0133` made a
+> line's role depend on the region its predecessor started in, so the semantic pass now
+> covers the wrap run **plus the one logical line after each changed run** and the same
+> test asserts `3` / `2`. The chain is one line long by construction. The URL pass keeps
+> this packet's bound unchanged and now asserts it on its own counter
+> (`url_rows_scanned == 2`, in `roles_ride_the_class_rescan`), which is why the two passes
+> no longer share a loop. §10.1 and §13 `Q5` carry the same correction.
 
 **Commands.**
 

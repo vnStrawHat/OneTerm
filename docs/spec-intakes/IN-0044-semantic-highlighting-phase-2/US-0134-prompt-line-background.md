@@ -289,6 +289,20 @@ session. That is fixed in `US-0133` by the transition rule and asserted here by
 `NIT-2` (the explicit `promptLineBg` override ignores `reverse_video`) is left as it is:
 nothing ships an override, so it is unreachable.
 
+### Re-verification (2026-09-22) — ACCEPT
+
+Both of this packet's findings were confirmed closed and pinned by mutation (inverting the
+band's direction now fails `the_band_sits_between_the_background_and_the_text` and
+`every_prompt_row_foreground_clears_the_band`). Two follow-ups landed here:
+
+- The band it inherited from `US-0133`'s `RV-MAJ-1` — one prompt row of a back-to-back pair
+  losing its band, which is the flashing row this packet's own fallback rule exists to
+  avoid — is fixed in `US-0133` and shown in `evidence/us-0133-back-to-back-prompts.png`,
+  where all three adjacent prompt rows are banded.
+- **RV-NIT-3**: `assert_band_between` returned early on a zero fg/bg gap, the one pair it
+  most needed to judge. It now asserts `band == bg` there — the cap really did hold — and
+  `0.50/0.50` is in the fixture list.
+
 ### Gaps
 
 - **`TerminalTheme::fg` right after a theme switch.** The walk showed the running theme's

@@ -183,6 +183,13 @@ mod tests {
     /// A command that printed nothing leaves two prompts on adjacent rows. They
     /// are two logical lines, not one wrapped prompt, and the newer one's code
     /// must tint the older one.
+    ///
+    /// `[Prompt, Prompt]` with a hard newline between them is a shape the view's
+    /// derivation really produces: a `Prompt`-headed line whose predecessor
+    /// closed its own prompt with `OSC 133;B` is a transition
+    /// (`back_to_back_prompts_are_both_marked_and_the_older_one_is_tinted` drives
+    /// it end to end through the engine). Before `RV-MAJ-1` that half of this
+    /// test pinned nothing the pipeline could reach.
     #[test]
     fn two_prompts_on_adjacent_rows_are_two_runs() {
         let r = roles(&[P, P]);

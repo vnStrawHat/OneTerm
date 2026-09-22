@@ -14,12 +14,12 @@
 //! layout.
 
 use oneterm_highlight::RowRoles;
-use oneterm_terminal::{Semantic, SnapshotUpdate};
+use oneterm_terminal::SnapshotUpdate;
 
 use super::diagnostics::FrameStats;
 use super::frame::{Frame, GridSize, RowKey};
 use super::glyphs::GlyphCache;
-use super::row_plan::{PlanContext, RowPlan, Scratch, build_row_plan, class_rows_into};
+use super::row_plan::{LineMark, PlanContext, RowPlan, Scratch, build_row_plan, class_rows_into};
 use super::shapes::CellSizeDevicePx;
 use crate::highlight::SemanticOverlay;
 use crate::url::{fill_wraps, url_masks_rows_into};
@@ -68,11 +68,12 @@ pub(crate) struct PlanCache {
     /// neither did its role (`US-0133`).
     roles: RowRoles,
     roles_cur: RowRoles,
-    /// The OSC 133 region each display row's logical line *starts* in, before
-    /// the transition rule. Authoritative for every row like `roles`, because
-    /// a line asks its predecessor what region it was in and the predecessor is
-    /// often outside this frame's rescan (`US-0133` rework, MAJ-1).
-    heads: Vec<Semantic>,
+    /// What the OSC 133 marks say about each display row's logical line before
+    /// the transition rule: the region it starts in, and whether it closed its
+    /// prompt. Authoritative for every row like `roles`, because a line asks its
+    /// predecessor and the predecessor is often outside this frame's rescan
+    /// (`US-0133` rework, MAJ-1 and RV-MAJ-1).
+    line_marks: Vec<LineMark>,
     /// The prompt run the exit code tints, and the code, as of the last update.
     /// A change dirties both the run it leaves and the run it lands on.
     tint: Option<(std::ops::Range<usize>, i32)>,
@@ -121,7 +122,7 @@ impl PlanCache {
             class_cur: Vec::new(),
             roles: RowRoles::default(),
             roles_cur: RowRoles::default(),
-            heads: Vec::new(),
+            line_marks: Vec::new(),
             tint: None,
             exit_code: None,
             wraps: Vec::new(),
@@ -251,7 +252,7 @@ impl PlanCache {
             self.class_cur.resize_with(rows, Vec::new);
             self.roles.role.resize(rows, None);
             self.roles_cur.role.resize(rows, None);
-            self.heads.resize(rows, Semantic::None);
+            self.line_marks.resize(rows, LineMark::default());
             self.mark_scan_runs(rows, scrolled_seam);
             stats.url_scans += 1;
 
@@ -290,7 +291,7 @@ impl PlanCache {
                         overlay,
                         &mut self.class_cur,
                         &mut self.roles_cur.role,
-                        &mut self.heads,
+                        &mut self.line_marks,
                         &self.wraps,
                         start..r,
                         scratch,
@@ -299,7 +300,7 @@ impl PlanCache {
                     None => {
                         self.class_cur[start..r].iter_mut().for_each(Vec::clear);
                         self.roles_cur.role[start..r].fill(None);
-                        self.heads[start..r].fill(Semantic::None);
+                        self.line_marks[start..r].fill(LineMark::default());
                     }
                 }
             }
@@ -500,11 +501,11 @@ impl PlanCache {
                 self.roles.role.rotate_right(distance);
             }
         }
-        if self.heads.len() == len {
+        if self.line_marks.len() == len {
             if scrolled > 0 {
-                self.heads.rotate_left(distance);
+                self.line_marks.rotate_left(distance);
             } else {
-                self.heads.rotate_right(distance);
+                self.line_marks.rotate_right(distance);
             }
         }
         if self.wraps_prev.len() == len {
@@ -1397,7 +1398,7 @@ mod tests {
         assert_eq!(stats.rows_planned, 2, "{stats:?}");
         assert_eq!(
             stats.class_rows_scanned, 3,
-            "the wrap run plus the one line below it whose role depends on the              region this one starts in (`US-0133`), not the 12-row viewport: {stats:?}"
+            "the wrap run plus the one line below it, whose role depends on the region              this one starts in (`US-0133`), not the 12-row viewport: {stats:?}"
         );
         assert_eq!(stats.class_scans, 2, "the run, and the line after it");
     }
@@ -1599,6 +1600,41 @@ mod tests {
     /// A real OSC 133 stream, fed to the engine rather than hand-marked: three
     /// plain lines, a prompt with its command, and the command's output.
     const MARKED_STREAM: &[u8] = b"one\r\ntwo\r\nthree\r\n\x1b]133;A\x1b\\user@host:~$ \x1b]133;B\x1b\\ls\r\n\x1b]133;C\x1b\\a.txt\r\nb.txt\r\n";
+
+    /// A full `A`/`B`/`C`/`D` stream where the command printed nothing, so the
+    /// next prompt lands directly under it (`RV-MAJ-1`). Fed to the engine.
+    const BACK_TO_BACK_STREAM: &[u8] = b"one\r\n\x1b]133;A\x1b\\user@host:~$ \x1b]133;B\x1b\\true\r\n\x1b]133;C\x1b\\\x1b]133;D;0\x1b\\\x1b]133;A\x1b\\user@host:~$ \x1b]133;B\x1b\\";
+
+    /// Two prompts on adjacent rows are both prompts, and the older one takes
+    /// the tint its `OSC 133;D;0` reported.
+    #[gpui::test]
+    fn back_to_back_prompts_are_both_marked_and_the_older_one_is_tinted(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let key = semantic_key();
+        let mut h = Harness::semantic();
+        if let Some(overlay) = h.semantic.as_mut() {
+            overlay.set_exit_code(Some(0));
+        }
+        let (mut frame, mut fixture) = FrameBuilder::new(6, 32).build_with_fixture();
+        fixture.feed(BACK_TO_BACK_STREAM);
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, key);
+        assert_eq!(
+            h.cache.role(1),
+            Some(RowRole::Prompt),
+            "the command that ran"
+        );
+        assert_eq!(
+            h.cache.role(2),
+            Some(RowRole::Prompt),
+            "the prompt it left behind, with no output between them"
+        );
+        assert_eq!(
+            h.cache.tint(),
+            Some((1..2, 0)),
+            "two prompt runs, so the older one is the completed block"
+        );
+    }
 
     /// The viewport's top line has no predecessor on screen, so its region is
     /// unknown and it is never a marked prompt — and that answer does not

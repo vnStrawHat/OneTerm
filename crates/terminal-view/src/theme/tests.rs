@@ -193,8 +193,14 @@ mod tests {
     fn assert_band_between(bg: Hsla, fg: Hsla, band: Hsla, label: &str) {
         let gap = fg.l - bg.l;
         if gap.abs() < f32::EPSILON {
-            // No pair to sit between: the text is invisible on its own
-            // background, and nothing this function asserts is meaningful.
+            // No pair to sit between — the text is invisible on its own
+            // background — so "strictly between" has no meaning. What *is*
+            // meaningful is that the cap held: the band did not step off a
+            // background it has nowhere to step away from.
+            assert_eq!(
+                band.l, bg.l,
+                "{label}: the band moved although the text is on the background"
+            );
             return;
         }
         let moved = band.l - bg.l;
@@ -232,6 +238,7 @@ mod tests {
             (0.50, 0.55),
             (0.50, 0.45),
             (0.50, 0.52),
+            (0.50, 0.50),
             (0.00, 1.00),
             (1.00, 0.00),
         ] {
