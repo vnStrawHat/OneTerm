@@ -92,23 +92,51 @@ static PROMPT_UNIX: LazyLock<Regex> =
 pub(crate) const UNIX_PROMPT_PATTERN: &str =
     r"^(?:\([^)\s]*\) )?(?:\[[^\]]*\]|[^\s]*[@:~/\]][^\s]*)?[\$#%](?: |$)";
 
-/// The path body of a Windows prompt, between the drive (or `PS`) and the `>`.
+/// The rule, in one sentence (`BUG-0073`): **the prompt sign is the first `>`
+/// of the logical line whose head — everything before it — is a plausible
+/// Windows prompt path.**
 ///
-/// It **may contain spaces**: `C:\Users\John Doe\Documents>` is the ordinary
-/// shape of a Windows profile directory, and `PS C:\path>` puts a space right
-/// after the `PS` — the old `[^\s>]*` matched neither, so a cwd with a space was
-/// never a prompt and a PowerShell prompt was never detected at all
-/// (`BUG-0071`). It excludes `< > | " * ?`, which cannot appear in a Windows
-/// path, and its last character must not be a space, so an output line like
-/// `C:\log size > 3` is not read as a prompt. Because `>` is excluded, the match
-/// ends at the **first** `>`, which is the prompt sign: a redirection later on
-/// the line (`dir > out.txt`) stays outside the prompt region.
+/// "First" is not a choice: `>` cannot appear in a Windows path, so the head of
+/// any later `>` contains one and is never plausible. That is what keeps the
+/// redirection in `C:\work>dir > out.txt` outside the prompt region.
 ///
-/// Two costs of that trade, both bounded and cosmetic (`BUG-0071` N2/N3): a
-/// drive-anchored line whose first `>` is not preceded by a space is read as a
-/// prompt (`C:\src -> C:\dst`), and a cwd that legally ends in a space
-/// (`C:\trailing >`) is not.
-const WIN_PATH_BODY: &str = r#"[^<>|"*?\r\n]*[^\s<>|"*?]"#;
+/// What the sign is *followed* by is deliberately **not** part of the rule. The
+/// obvious reading — a prompt is `path>` and then optionally ` command`, so the
+/// sign ends the line or is followed by a space — is wrong for the commonest
+/// prompt on Windows: `cmd.exe` writes `C:\work>` and the typed command lands in
+/// the very next cell, so `C:\work>dir` (`BUG-0071` F2) is a prompt with no
+/// space after the sign. Everything this bug is about is therefore decided on
+/// the head alone.
+///
+/// The path body, between the root ([`WIN_PATH_ROOT`]) and the `>`:
+///
+/// - It **may contain spaces**: `C:\Users\John Doe\Documents>` is the ordinary
+///   shape of a Windows profile directory, and `PS C:\path>` puts a space right
+///   after the `PS` — the old `[^\s>]*` matched neither, so a cwd with a space
+///   was never a prompt and a PowerShell prompt was never detected at all
+///   (`BUG-0071`).
+/// - It excludes `< > | " * ? :`, none of which can appear in a Windows path
+///   component (the drive's own colon belongs to the root, not the body). The
+///   colon is what rejects `c:\proj\x.cpp(5): error C2059: syntax error: '>'`,
+///   an MSVC diagnostic that is drive-anchored and reaches a `>` (`BUG-0073`).
+/// - Its last character must be neither a space nor `-`, which rejects
+///   `C:\log size > 3` and `C:\src -> C:\dst`, the arrow `mklink` and `dir /AL`
+///   print (`BUG-0073`).
+///
+/// Two cosmetic costs remain, both the other side of the same rule
+/// (`BUG-0071` N3, `BUG-0073`): a cwd that legally ends in a space
+/// (`C:\trailing >`) or in a hyphen (`C:\build->`) is not read as a prompt.
+const WIN_PATH_BODY: &str = r#"[^<>|"*?:\r\n]*[^\s<>|"*?:-]"#;
+
+/// Where a Windows prompt path is rooted: a drive (`C:`) or a UNC share (`\\`).
+///
+/// Requiring a root is what keeps `see C:\x> not a prompt` out — the head has to
+/// *start* at a path, not merely contain one.
+const WIN_PATH_ROOT: &str = r"(?:[A-Za-z]:|\\\\)";
+
+/// PowerShell roots at those two plus a PSDrive (`Env:`, `HKLM:`, `Cert:`) and,
+/// on pwsh for Unix, `/`.
+const PWSH_PATH_ROOT: &str = r"(?:[A-Za-z]+:|\\\\|/)";
 
 /// cmd.exe prompt: `C:\path>`, a UNC path `\\server\share>`, or a bare `>`. The
 /// trailing space is optional so the prompt is detected even when the user has
@@ -129,13 +157,17 @@ pub(crate) static PROMPT_CMD: LazyLock<Regex> = LazyLock::new(|| {
 /// where they are output. Sharing one pattern string briefly made every profile
 /// read them as prompts (`BUG-0071` N1).
 pub(crate) fn win_path_prompt_pattern() -> String {
-    format!(r"^(?:(?:[A-Za-z]:|\\\\){WIN_PATH_BODY}>[ ]?)")
+    format!(r"^(?:{WIN_PATH_ROOT}{WIN_PATH_BODY}>[ ]?)")
 }
 
 /// PowerShell prompt: `PS C:\path>`, the bare `PS>`, or the `>>` continuation.
+/// The path after `PS ` obeys the same head rule as [`WIN_PATH_BODY`] states,
+/// over PowerShell's wider set of roots.
 static PROMPT_PWSH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"^(?:PS(?: {WIN_PATH_BODY})?>[ ]?)|(?:^>+[ ]?)"))
-        .expect("PowerShell prompt regex is valid")
+    Regex::new(&format!(
+        r"^(?:PS(?: {PWSH_PATH_ROOT}(?:{WIN_PATH_BODY})?)?>[ ]?)|(?:^>+[ ]?)"
+    ))
+    .expect("PowerShell prompt regex is valid")
 });
 
 /// Dumb / serial / router — most permissive prefix (`Router#`, `Router>`),
@@ -223,6 +255,55 @@ mod tests {
         ] {
             let got = PROMPT_CMD.find(line).map(|m| m.as_str());
             assert_eq!(got, want, "{line:?}");
+        }
+    }
+
+    /// `BUG-0073`: the head before the sign must be a plausible path. The two
+    /// measured false positives and every prompt shape `BUG-0071` established,
+    /// in one table over both Windows patterns.
+    #[test]
+    fn a_drive_anchored_line_is_a_prompt_only_when_its_head_is_a_path() {
+        // (line, cmd match, PowerShell match)
+        for (line, cmd, pwsh) in [
+            // The two measured false positives: an arrow (the head ends in `-`)
+            // and an MSVC diagnostic (the head has a `:` past the drive).
+            (r"C:\src -> C:\dst", None, None),
+            (r"PS C:\src -> C:\dst", None, None),
+            (
+                r"c:\proj\x.cpp(5): error C2059: syntax error: '>'",
+                None,
+                None,
+            ),
+            // ...and the prompts that must survive the tightening.
+            (
+                r"C:\Users\John Doe\projects>",
+                Some(r"C:\Users\John Doe\projects>"),
+                None,
+            ),
+            (r"C:\work>dir > out.txt", Some(r"C:\work>"), None),
+            (r"\\server\share>", Some(r"\\server\share>"), None),
+            (r"PS C:\Users\me> ", None, Some(r"PS C:\Users\me> ")),
+            (r"PS Env:\> dir", None, Some(r"PS Env:\> ")),
+            (r"PS>", None, Some("PS>")),
+            // `cmd`'s branch is a single `>`; PowerShell's is `>+`.
+            (">> ", Some(">"), Some(">> ")),
+            // A `(` alone is legal in a cwd: `C:\Program Files (x86)` is one.
+            (
+                r"C:\Program Files (x86)>cd ..",
+                Some(r"C:\Program Files (x86)>"),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                PROMPT_CMD.find(line).map(|m| m.as_str()),
+                cmd,
+                "cmd: {line:?}"
+            );
+            assert_eq!(
+                PROMPT_PWSH.find(line).map(|m| m.as_str()),
+                pwsh,
+                "pwsh: {line:?}"
+            );
         }
     }
 

@@ -184,6 +184,22 @@ When `RowRoles` is absent (shell without integration — raw serial, router, bar
 fall back to the **`ShellProfile` prompt regex** to detect prompt lines. The scanner is
 the same; only the row-role source differs.
 
+**The Windows sign rule** (`BUG-0073`) — the one subtle part of that fallback, because on
+Windows the sign is `>`, a character that ordinary output reaches all the time:
+
+> The prompt sign is the **first `>` of the logical line whose head — everything before
+> it — is a plausible Windows prompt path**: rooted at a drive (`C:`) or a UNC share
+> (`\\`), optionally behind PowerShell's `PS `; containing none of `< > | " * ? :`, none
+> of which may appear in a path component; and ending in neither a space nor `-`.
+
+"First" is forced rather than chosen: `>` cannot occur in a Windows path, so the head of
+any *later* `>` contains one and is never plausible. That is what keeps the redirection in
+`C:\work>dir > out.txt` outside the prompt region, and it is why the rule is stated on the
+head alone — what follows the sign is deliberately not part of it (§13 Q7). The rule is
+applied to the **logical** line, the joined wrap run, exactly as every other class is
+(`BUG-0071`); applied per visual row it would read the `> C:\dst` half of a wrapped
+`C:\src -> C:\dst` as `cmd`'s continuation prompt.
+
 ---
 
 ## 5. Rule data (compiled once, not interpreted per line)
@@ -735,6 +751,39 @@ Do **not** add `Custom(u8)` as a real variant yet — just reserve the numeric r
 `COUNT = 32` and leave the variants unconstructed. A future feature adds the variant and
 begins emitting it; themes that don't define it get `None` (no-op), same as any
 unstyled class.
+
+### Q7. What follows the Windows prompt sign — not part of the rule
+
+**Question.** A prompt reads as `path>` and then optionally ` command`, so the obvious
+tightening for `BUG-0073` is to require the sign to end the logical line or be followed by
+a space. Both false positives satisfy that reading — `C:\src -> C:\dst` has a space after
+its `>`, `c:\proj\x.cpp(5): error C2059: syntax error: '>'` has a `'` — so should the rule
+be "the first `>` whose head is a path **and** whose next character is a space or the end"?
+
+**Decision.** **No — the rule is stated on the head alone.** The "space or end" half cannot
+be required, and the counterexample is the commonest prompt on Windows: `cmd.exe` writes
+`C:\work>` and the typed command lands in the very next cell, so `C:\work>dir` has no space
+after its sign and must stay a prompt (`BUG-0071` F2, a committed test). Requiring it would
+trade two cosmetic false positives for a false *negative* on every `cmd` prompt with typing
+on it, including the one the user is looking at.
+
+**Rationale.** Both measured false positives are rejected by the head test alone, which is
+therefore the whole rule and the smaller mechanism (`BUG-0073` offered a head test or a
+token test after the sign, and stated the acceptance on behaviour, not mechanism):
+
+| Line | Head before the first `>` | Why it is not a path |
+|---|---|---|
+| `C:\src -> C:\dst` | `C:\src -` | ends in `-` |
+| `c:\proj\x.cpp(5): error C2059: syntax error: '` | as shown | a `:` past the drive |
+| `C:\log size > 3` | `C:\log size ` | ends in a space (`BUG-0071`) |
+| `see C:\x> not a prompt` | `see C:\x` | not rooted at a drive or UNC share |
+
+**Implementation.** `WIN_PATH_BODY`, `WIN_PATH_ROOT` and `PWSH_PATH_ROOT` in
+`crates/highlight/src/profile.rs`; the rule and this reconciliation are written on
+`WIN_PATH_BODY`. Two cosmetic costs remain, the other side of the same rule: a cwd that
+legally ends in a space (`C:\trailing >`, `BUG-0071` N3) or in a hyphen (`C:\build->`) is
+not read as a prompt. Both are one directory name away from ordinary, and the failure is a
+prompt that looks like output rather than output that looks like a prompt.
 
 ---
 

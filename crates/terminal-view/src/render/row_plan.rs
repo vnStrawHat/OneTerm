@@ -1337,6 +1337,23 @@ mod tests {
         );
     }
 
+    /// `BUG-0073`: drive-anchored output that reaches an unspaced `>` is
+    /// output, and the rule is applied to the **logical** line. Wrapped at 8
+    /// the second row is `> C:\dst`, which on its own is `cmd`'s continuation
+    /// prompt — joining the run is what keeps the whole line output.
+    #[test]
+    fn a_wrapped_arrow_line_is_not_a_prompt() {
+        let line = r"C:\src -> C:\dst";
+        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
+        let frame = wrapped_frame(line, 8);
+        assert_eq!(usize::from(frame.size().rows), 2, "the text must wrap");
+        let classes = flat_classes(&fx, &frame);
+        assert!(
+            !classes.contains(&(Class::PromptSign as u8)),
+            "the arrow line is output, on every row: {classes:?}"
+        );
+    }
+
     /// A wrapped line carrying CJK: the classes must land on the same
     /// characters they land on unwrapped (`BUG-0071` F3).
     #[test]
