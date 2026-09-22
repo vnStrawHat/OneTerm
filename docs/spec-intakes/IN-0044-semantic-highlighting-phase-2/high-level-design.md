@@ -64,15 +64,16 @@ shell said nothing.
                          └──────────────────────────────►  scan_line_into(line, role)
                               (the one fact NOT in a cell)             │
                                                                        ▼
-                                                            build_row_plan  (US-0134:
-                                                            band first, then cell bg)
+                                                            build_row_plan
+                                                            (cell backgrounds only)
 ```
 
 ## UI Wireframe
 
-The surface is the terminal grid itself. `US-0133` changes which colour a glyph takes;
-`US-0134` adds one visible element, a background band behind the prompt line. No control,
-menu, dialog or setting is added.
+The surface is the terminal grid itself. `US-0133` changes which colour a glyph takes. No
+control, menu, dialog or setting is added. `US-0134` was to add one visible element, a
+background band behind the prompt line; the owner withdrew it on 2026-09-22 after trying the
+build, so the intake changes foregrounds only (item 7).
 
 ```text
 Before (today) — a prompt whose cwd wraps, no band, roles guessed by regex
@@ -84,29 +85,25 @@ Before (today) — a prompt whose cwd wraps, no band, roles guessed by regex
 | C:\Users\John Doe\projects\oneterm> _                       |
 +------------------------------------------------------------+
 
-After — roles from OSC 133, band under every row of the prompt line, sign tinted by exit code
+After — roles from OSC 133, sign tinted by exit code, and no band
 +------------------------------------------------------------+
-|############################################################|   <- prompt_line_bg,
-|#C:\Users\John Doe\projects\oneterm\crates\terminal-view\src#|      the full row width,
-|#\render> cargo test -p oneterm-highlight                   #|      every row of the run
-|############################################################|
-| running 71 tests                                            |
-| test result: ok. 71 passed; 0 failed                        |
-|############################################################|
-|#C:\Users\John Doe\projects\oneterm> _                      #|   <- `>` tinted Success
-|############################################################|      (exit code 0)
-+------------------------------------------------------------+
-     ^                    ^
-     |                    the band spans column 0..cols on every row of the logical
-     |                    line, so a LEADING_WIDE_CHAR_SPACER at the wrap boundary
-     |                    is covered rather than left as a one-cell hole (Q4)
-     the band is one rect under the row, painted before any per-cell background
+| C:\Users\John Doe\projects\oneterm\crates\terminal-view\src |   <- one logical line:
+| \render> cargo test -p oneterm-highlight                    |      sign + Command +
+| running 71 tests                                            |      Option across both
+| test result: ok. 71 passed; 0 failed                        |      of its rows
+| C:\Users\John Doe\projects\oneterm> _                       |   <- `>` tinted Success
++------------------------------------------------------------+      (exit code 0)
+     ^
+     the rows a prompt line owns are now known exactly (OSC 133), which is what
+     the regex used to guess — but nothing is painted *under* them. The band this
+     sketch used to show was built under `US-0134` and withdrawn by the owner on
+     2026-09-22 after trying it; see item 7.
 ```
 
 A failing command, for the tint's other sign:
 
 ```text
-|#C:\Users\John Doe\projects\oneterm> cargo buidl             #|
+| C:\Users\John Doe\projects\oneterm> cargo buidl              |
 |                                   ^ `>` tinted Error (exit code 101)
 ```
 
@@ -183,69 +180,41 @@ A failing command, for the tint's other sign:
    `Class::PromptSign` becomes `Class::Success` on exit code `0` and `Class::Error`
    otherwise. It is a class substitution at the sign's column, not a new class and not a new
    theme entry.
-7. **The prompt-line background (`US-0134`).** `ClassStyles::prompt_line_bg` is parsed
-   (`crates/terminal-view/src/highlight/bridge.rs:51`) and read by nothing. It becomes one
-   `BgSpan` covering `0..cols`, pushed into the row plan **before** the per-cell loop in
-   `build_row_plan` (`crates/terminal-view/src/render/row_plan.rs:575`, the function §8
-   item 6 calls `layout_row`):
+7. **The prompt-line background (`US-0134`) — WITHDRAWN by the owner, 2026-09-22.**
+   This item and item 8 below described a full-width `BgSpan` under every marked prompt
+   row, in a theme-relative colour. Both were built and shipped, and the owner removed them
+   after trying the build: a band under the prompt line is not the look OneTerm wants. The
+   decision is a **withdrawal, not a deferral** — no later phase of
+   `docs/terminal-semantic-highlighting.md` §11 picks it up.
 
-   ```rust
-   plan.clear();
-   classify(&row, classes, url_mask, scratch);
-   if ctx.prompt_line_bg(role_of_this_row) { push_bg_span(plan, 0, cols, band); }  // NEW
-   for (col, cell) in row.cells().enumerate() { /* ... push_bg(…) as today … */ }
-   ```
+   What the withdrawal removed: `push_prompt_band` and the `BgSpan` it pushed,
+   `TerminalTheme::prompt_line_bg` and `PROMPT_BAND_MIX`, the `promptLineBg` parsing and the
+   `ClassStyles::prompt_line_bg` field, `oneterm_theme::embedded_theme_files()` (added only
+   for the band's per-theme contrast sweep), and every band test. `build_row_plan` no longer
+   takes a row role: the band was its only paint-time reader.
 
-   Order matters and is the whole of the mechanism: `RowPlan::bg` is painted in push order,
-   so the band goes down first and every explicit cell background — a selection, an ANSI
-   `bg`, an inverse cell — paints on top of it exactly as it does on any other row. Nothing
-   in `resolve_style` changes, and `paint_bg` stays `inverse || bg_color != Color::Background`,
-   so a default-background cell on a prompt row still emits no span of its own and the band
-   shows through. Painting it as one row-wide rect rather than per cell also closes the
-   `LEADING_WIDE_CHAR_SPACER` hole §13 Q4 and `BUG-0071` both flagged as the thing that would
-   bite when this item was implemented: the spacer has no class, but it is inside `0..cols`.
+   What the withdrawal keeps, because none of it depends on the band: the row roles of
+   step 4 and their transition rule, the regex fallback, the exit-code tint on the prompt
+   sign, and `resolve_style`'s contrast pass — which measures against the cell's own
+   background again, since with nothing painted under the row that *is* what is behind the
+   glyph. The `LEADING_WIDE_CHAR_SPACER` hole the full-width rect closed returns to the
+   state §13 Q4 describes: invisible until a class-level background or line decoration
+   ships, and that packet's problem.
+8. **Where the band's colour came from (`US-0134`) — WITHDRAWN with item 7.** The band was
+   resolved per theme in `build_terminal_theme()` (the terminal background moved a fixed
+   fraction of the room it had toward the side the foreground was on), because one fixed hex
+   for every theme is a dark stripe under dark text on a light one. That reasoning is
+   recorded in the packet and is now history.
 
-   Which rows get it: every row whose role is `Prompt` or `Command`, which for a wrapped
-   prompt is every row of the run, because each carries the mark on its own cells (step 4).
-   Under the regex fallback the band is painted on the rows the fallback calls prompt rows,
-   which is the same set the sign colouring already uses — the packet decides whether to
-   ship the band in the fallback case at all, and the safe default is not to: a band that
-   appears and disappears as a regex changes its mind is the flicker `BUG-0071` was reported
-   for, while a wrong *foreground* on one word is not.
-8. **Where the band's colour comes from (`US-0134`).** Today it is one fixed hex in
-   `crates/terminal-view/assets/highlight/default.json`, applied to every theme, and
-   `TerminalTheme::class_styles` is a `&'static ClassStyles` pointing straight at it
-   (`crates/terminal-view/src/theme/terminal_theme.rs:49,105`). On a light theme that is a
-   dark band under dark text. The band must therefore be **theme-relative**: resolved in
-   `build_terminal_theme()` from the theme's own terminal background, nudged toward the
-   terminal foreground by a small fixed alpha, with the asset value (and any future
-   per-theme `terminal.semantic.promptLineBg`) kept as an explicit override. A band defined
-   as "the background, slightly toward the text" cannot invert a theme, and it keeps §7's
-   rule that a theme which says nothing still gets something sane.
-
-   **The contrast gate.** `scripts/check-theme-contrast.py` is the repository's readability
-   contract, and the rule `AGENTS.md` states is that text drawn on a surface the `SURFACES`
-   table does not list is simply not checked — so a new surface must be added. Two facts
-   make that not directly applicable here, and both must be in the packet rather than
-   discovered during it:
-
-   - The script measures **kit UI tokens** (`foreground`, `muted.foreground`,
-     `popover.foreground`, ...) read out of `crates/theme/themes/*.json`. Terminal grid text
-     is none of those. It is an ANSI palette entry or a semantic `Class` foreground, and the
-     semantic palette is not in a theme file at all — it is in
-     `crates/terminal-view/assets/highlight/default.json`, which the script never opens.
-   - Adding `prompt_line_bg` to `SURFACES` therefore only means something once there is a
-     *checked foreground token* drawn on it. There is not one today.
-
-   The proposal is to keep the gate's scope as it is and prove the band in Rust instead: a
-   test in `crates/terminal-view` that resolves the band for every embedded theme and asserts
-   the floor of 4.5:1 for the terminal foreground and for each semantic class foreground
-   drawn on a prompt row (`PromptSign`, `Command`, `Option`, `Path`, plus `Success`/`Error`
-   for the tint) against the resolved band. That is the same arithmetic the Python script
-   uses, applied where the colours actually live, and it runs inside `cargo test --workspace`
-   with no change to what `check-theme-contrast.py` is for. Extending `SURFACES` to terminal
-   tokens is the alternative; it is a larger change to that gate's scope and is recorded as
-   an owner question in the intake, not assumed here.
+   **The contrast gate is unaffected, and the open question survives the band.**
+   `scripts/check-theme-contrast.py` measures **kit UI tokens** read out of
+   `crates/theme/themes/*.json`; terminal grid text is an ANSI palette entry or a semantic
+   `Class` foreground, and the semantic palette lives in
+   `crates/terminal-view/assets/highlight/default.json`, which the script never opens. That
+   was true before the band, during it and after it, and it is why the band's floor was
+   proved by a Rust test rather than by a new `SURFACES` row. Extending `SURFACES` to
+   terminal tokens remains an owner question in the intake's Open Decisions — the band was
+   the motivation for asking, not the reason the gap exists.
 9. **The benchmark (`US-0135`).** The repository has no `criterion` and no `[[bench]]`
    anywhere; its bench style is a plain binary in `crates/tools` that measures, prints a
    table, writes JSON and is compared against a committed baseline by hand

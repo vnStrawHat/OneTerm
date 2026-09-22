@@ -184,17 +184,11 @@ struct CellStyle {
     class: ClassStyle,
 }
 
-/// `row_bg` is what is actually behind a cell that paints no background of its
-/// own: the terminal background, or the prompt-line band on a prompt row
-/// (`US-0134`). It is the reference the contrast pass measures against, which is
-/// what keeps every foreground legible on the band without extending the theme
-/// contrast gate to colours it cannot see.
 fn resolve_style(
     cell: &Cell<'_>,
     class: u8,
     theme: &TerminalTheme,
     reverse_video: bool,
-    row_bg: Hsla,
 ) -> CellStyle {
     let inverse = cell.flags.contains(CellFlags::INVERSE);
     let (fg_color, bg_color) = if inverse {
@@ -223,16 +217,13 @@ fn resolve_style(
     if cell.flags.contains(CellFlags::DIM) {
         fg.a *= DIM_ALPHA;
     }
-    let paint_bg = inverse || bg_color != Color::Background;
     if !fg_color.is_app_chosen_exact() && !is_decorative_character(cell.ch) {
-        // A cell that paints no background of its own shows whatever is under
-        // the row, which on a prompt row is the band and not the theme default.
-        fg = theme.ensure_contrast(fg, if paint_bg { bg } else { row_bg });
+        fg = theme.ensure_contrast(fg, bg);
     }
     CellStyle {
         fg,
         bg,
-        paint_bg,
+        paint_bg: inverse || bg_color != Color::Background,
         bold: cell.flags.contains(CellFlags::BOLD) || class.font.bold,
         italic: cell.flags.contains(CellFlags::ITALIC) || class.font.italic,
         class,
@@ -708,58 +699,18 @@ fn classify(
     }
 }
 
-/// Push the prompt-line background band (§8 item 6) and return what is behind a
-/// cell that paints no background of its own.
-///
-/// Order is the whole of the mechanism: `RowPlan::bg` is painted in push order,
-/// so one full-width rect pushed **before** the per-cell loop goes down first
-/// and every explicit cell background — a selection, an ANSI `bg`, an inverse
-/// cell — paints on top of it exactly as it does on any other row. Spanning
-/// `0..cols` rather than per cell is also what covers a
-/// `LEADING_WIDE_CHAR_SPACER` at a wrap boundary: the spacer carries no class,
-/// and per-cell painting would leave it as a one-cell hole (§13 Q4).
-///
-/// Only a **marked** row gets the band. Under the regex fallback a line-level,
-/// full-width element that appears and disappears as the regex changes its mind
-/// flashes the whole row, which is the defect `BUG-0071` was reported for; a
-/// wrong foreground on one word is not.
-fn push_prompt_band(
-    plan: &mut RowPlan,
-    role: Option<RowRole>,
-    cols: u16,
-    ctx: &PlanContext<'_>,
-) -> Hsla {
-    let default_bg = ctx.theme.color(if ctx.reverse_video {
-        Color::Foreground
-    } else {
-        Color::Background
-    });
-    if !matches!(role, Some(RowRole::Prompt | RowRole::Command)) || cols == 0 {
-        return default_bg;
-    }
-    let band = ctx.theme.prompt_line_bg(ctx.reverse_video);
-    plan.bg.push(BgSpan {
-        col: 0,
-        cols,
-        color: band,
-    });
-    band
-}
-
 /// Rebuild `plan` for `row`. `classes` holds the row's semantic classes as
 /// [`class_rows_into`] computed them for its logical line, and `url_mask` the
 /// row's URL columns; either may be shorter than the row (or empty) when
 /// semantic highlighting is off or no URL was detected. `tint` is the exit code
 /// of the command this row's prompt launched, when it is the most recently
-/// completed one (`US-0133`), and `role` is its OSC 133 role, which is what
-/// decides the prompt-line band (`US-0134`).
+/// completed one (`US-0133`).
 #[allow(clippy::too_many_arguments)] // the frame-constant half is already in `ctx`
 pub(crate) fn build_row_plan(
     row: FrameRow<'_>,
     ctx: &PlanContext<'_>,
     classes: &[u8],
     url_mask: &[bool],
-    role: Option<RowRole>,
     tint: Option<i32>,
     scratch: &mut Scratch,
     glyphs: &mut GlyphCache,
@@ -771,7 +722,6 @@ pub(crate) fn build_row_plan(
     scratch.run_text.clear();
     scratch.open_prev.clear();
     let theme = ctx.theme;
-    let row_bg = push_prompt_band(plan, role, row.len() as u16, ctx);
     let mut builder = RowBuilder {
         ctx,
         scratch,
@@ -785,7 +735,7 @@ pub(crate) fn build_row_plan(
     for (col, cell) in row.cells().enumerate() {
         let col16 = col as u16;
         let class = builder.scratch.class[col];
-        let style = resolve_style(&cell, class, theme, ctx.reverse_video, row_bg);
+        let style = resolve_style(&cell, class, theme, ctx.reverse_video);
         if style.paint_bg {
             push_bg(builder.plan, col16, style.bg);
         }
@@ -929,7 +879,6 @@ mod tests {
                     &ctx,
                     &self.classes(frame)[row],
                     mask,
-                    self.scan(frame).1[row],
                     None,
                     &mut scratch,
                     &mut glyphs,
@@ -1957,171 +1906,5 @@ mod tests {
             fx.scan(&plain).0[0],
             "the mark changes the answer"
         );
-    }
-
-    // ── The prompt-line background (`US-0134`) ─────────────────────────────
-
-    /// The band of a row's plan, when it has one: the first `bg` span, which is
-    /// the one pushed before the per-cell loop.
-    fn band_of(plan: &RowPlan, cols: u16, band: Hsla) -> Option<&BgSpan> {
-        plan.bg
-            .first()
-            .filter(|s| s.col == 0 && s.cols == cols && s.color == band)
-    }
-
-    /// One marked prompt at row 1, with the previous command's output above it
-    /// so the region transitions.
-    fn marked_prompt_frame(cols: usize, text: &str, boundary: usize) -> Frame {
-        FrameBuilder::new(2, cols)
-            .text(0, 0, PREV_OUTPUT)
-            .mark(0, 0..PREV_OUTPUT.len(), Semantic::Output)
-            .text(1, 0, text)
-            .mark(1, 0..boundary, Semantic::Prompt)
-            .mark(1, boundary..text.len(), Semantic::Input)
-            .build()
-    }
-
-    #[gpui::test]
-    fn a_marked_prompt_row_carries_a_full_width_band(cx: &mut TestAppContext) {
-        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
-        let frame = marked_prompt_frame(20, r"C:\ws> dir", 6);
-        let plan = fx.plan(cx, &frame, 1, &[]);
-        let band = fx.theme.prompt_line_bg(false);
-        assert!(
-            band_of(&plan, 20, band).is_some(),
-            "expected one 0..20 band first: {:?}",
-            plan.bg
-        );
-    }
-
-    /// Every row of a wrapped prompt gets it, including the row that holds only
-    /// the tail of the cwd and the typed command.
-    #[gpui::test]
-    fn every_row_of_a_wrapped_prompt_carries_the_band(cx: &mut TestAppContext) {
-        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
-        let frame = marked_wrapped_prompt();
-        let band = fx.theme.prompt_line_bg(false);
-        for row in 1..3 {
-            let plan = fx.plan(cx, &frame, row, &[]);
-            assert!(
-                band_of(&plan, 20, band).is_some(),
-                "row {row} has no band: {:?}",
-                plan.bg
-            );
-        }
-        // Neither the output line above nor the blank row below is part of it.
-        for row in [0, 3] {
-            let plan = fx.plan(cx, &frame, row, &[]);
-            assert!(plan.bg.is_empty(), "row {row}: {:?}", plan.bg);
-        }
-    }
-
-    /// An A-only session gets no band anywhere: nothing is a marked prompt.
-    #[gpui::test]
-    fn an_a_only_shell_paints_no_band(cx: &mut TestAppContext) {
-        let fx = Fixture::new(true);
-        let frame = FrameBuilder::new(3, 32)
-            .text(0, 0, "user@host:~$ ls")
-            .mark(0, 0..15, Semantic::Prompt)
-            .text(1, 0, "ERROR: 100% nope")
-            .mark(1, 0..16, Semantic::Prompt)
-            .text(2, 0, "done in 12s")
-            .mark(2, 0..11, Semantic::Prompt)
-            .build();
-        for row in 0..3 {
-            let plan = fx.plan(cx, &frame, row, &[]);
-            assert!(plan.bg.is_empty(), "row {row} was banded: {:?}", plan.bg);
-        }
-    }
-
-    /// The band goes down first, so a selection or an ANSI background paints on
-    /// top of it and looks exactly as it does on a non-prompt row.
-    #[gpui::test]
-    fn the_band_is_painted_under_the_per_cell_backgrounds(cx: &mut TestAppContext) {
-        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
-        let frame = FrameBuilder::new(2, 20)
-            .text(0, 0, PREV_OUTPUT)
-            .mark(0, 0..PREV_OUTPUT.len(), Semantic::Output)
-            .text(1, 0, r"C:\ws> dir")
-            .mark(1, 0..6, Semantic::Prompt)
-            .mark(1, 6..10, Semantic::Input)
-            .styled(
-                1,
-                7,
-                'i',
-                Color::Foreground,
-                Color::Ansi(1),
-                CellFlags::NONE,
-            )
-            .build();
-        let plan = fx.plan(cx, &frame, 1, &[]);
-        let band = fx.theme.prompt_line_bg(false);
-        assert_eq!(plan.bg[0].color, band, "the band is first: {:?}", plan.bg);
-        let ansi = plan.bg[1];
-        assert_eq!((ansi.col, ansi.cols), (7, 1));
-        assert_eq!(ansi.color, fx.theme.color(Color::Ansi(1)));
-    }
-
-    /// A `LEADING_WIDE_CHAR_SPACER` carries no class and paints no background of
-    /// its own, so only a full-width band covers it (§13 Q4).
-    #[gpui::test]
-    fn the_band_covers_a_leading_wide_char_spacer(cx: &mut TestAppContext) {
-        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
-        let frame = FrameBuilder::new(2, 8)
-            .text(0, 0, "done")
-            .mark(0, 0..4, Semantic::Output)
-            .text(1, 0, r"C:\ws> ")
-            .mark(1, 0..8, Semantic::Prompt)
-            .flags(1, 7, CellFlags::LEADING_WIDE_CHAR_SPACER)
-            .build();
-        assert!(frame.row(1).cell(7).is_spacer());
-        let plan = fx.plan(cx, &frame, 1, &[]);
-        let band = *band_of(&plan, 8, fx.theme.prompt_line_bg(false))
-            .unwrap_or_else(|| panic!("no band: {:?}", plan.bg));
-        assert!(
-            (band.col..band.col + band.cols).contains(&7),
-            "the spacer column is inside the band"
-        );
-    }
-
-    /// Under the regex fallback there is no band at all, even on a row the
-    /// fallback does read as a prompt.
-    #[gpui::test]
-    fn an_unmarked_prompt_row_gets_no_band(cx: &mut TestAppContext) {
-        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
-        let frame = FrameBuilder::new(1, 20).text(0, 0, r"C:\ws> dir").build();
-        assert_eq!(fx.scan(&frame).0[0][5], Class::PromptSign as u8);
-        let plan = fx.plan(cx, &frame, 0, &[]);
-        assert!(plan.bg.is_empty(), "no band without a mark: {:?}", plan.bg);
-    }
-
-    /// The contrast pass measures against the band, not against the theme
-    /// background: every glyph the plan paints on a prompt row clears 4.5:1
-    /// against what is actually behind it. (The per-theme sweep of the same
-    /// floor lives in `crate::theme::tests`.)
-    #[gpui::test]
-    fn every_glyph_on_a_prompt_row_clears_the_band(cx: &mut TestAppContext) {
-        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
-        let frame = marked_prompt_frame(24, r"C:\ws> dir /b", 6);
-        let plan = fx.plan(cx, &frame, 1, &[]);
-        let band = fx.theme.prompt_line_bg(false);
-        assert_eq!(plan.bg[0].color, band);
-        assert!(!plan.colors.is_empty(), "the row has shaped text");
-        for span in &plan.colors {
-            let ratio = crate::theme::contrast_ratio(span.color, band);
-            assert!(ratio >= 4.5, "{:?} on the band is {ratio:.2}:1", span.color);
-        }
-    }
-
-    /// A marked **output** row gets no band either.
-    #[gpui::test]
-    fn a_marked_output_row_gets_no_band(cx: &mut TestAppContext) {
-        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
-        let frame = FrameBuilder::new(1, 20)
-            .text(0, 0, "a.txt")
-            .mark(0, 0..5, Semantic::Output)
-            .build();
-        let plan = fx.plan(cx, &frame, 0, &[]);
-        assert!(plan.bg.is_empty(), "{:?}", plan.bg);
     }
 }

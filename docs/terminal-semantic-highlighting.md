@@ -380,10 +380,11 @@ pub struct ClassStyles {
     pub bg:   [Option<gpui::Hsla>; Class::COUNT],
     pub font: [FontStyle; Class::COUNT],        // additive OR with cell flags
     pub deco: [Decoration; Class::COUNT],       // None | Underline | Box | LineBg(color)
-    /// Line-level (not per-cell): prompt-line background.
-    pub prompt_line_bg: Option<gpui::Hsla>,
 }
 ```
+
+> The `prompt_line_bg` field this block used to carry is gone: the prompt-line background
+> was withdrawn by owner decision (`US-0134`, 2026-09-22). See §8 item 6.
 
 Theme JSON gains an optional block (themes without it → all `None` → layer 2 is a no-op,
 fully backwards compatible):
@@ -393,7 +394,6 @@ fully backwards compatible):
   "name": "Molokai",
   "terminal": {
     "semantic": {
-      "promptLineBg": "#262626",
       "styles": {
         "promptSign": { "foreground": "#F92672" },
         "command":    { "foreground": "#66D9EF" },
@@ -421,31 +421,19 @@ A shipped **default `semantic` block** (in `crates/ui/assets/highlight/default.j
 merged under any per-theme overrides, so every theme gets sane colors automatically —
 only the ANSI palette + accents come from the gpui-component theme.
 
-**`promptLineBg` is the exception (`US-0134`).** It is not a foreground on top of a
-theme-independent background; it *is* a background, painted under text whose legibility
-depends on the theme. One fixed hex applied to every theme is a dark band under dark text
-on a light one, so the shipped asset no longer sets it and
-`TerminalTheme::prompt_line_bg()` derives it per theme instead: **the theme's own terminal
-background moved a small fixed fraction toward its terminal foreground**, lightness only.
-A band defined that way is always on the background's side of the pair and can never invert
-a theme, and it introduces no hue of its own. `DECSCNM` swaps the pair the screen is drawn
-with, so the band follows it.
+**`promptLineBg` is gone (`US-0134`, withdrawn 2026-09-22).** There is no prompt-line
+background, so the key has no meaning: `parse_semantic_json` ignores it like any other
+unknown key, and a theme that still names one gets nothing rather than a colour nobody
+paints. `ClassStyles` no longer carries the field. The rest of this section is unchanged:
+every remaining entry is a *foreground* (plus decoration / font) on top of whatever the
+terminal already draws, which is why one shipped asset can serve every theme.
 
-The asset key — and a future per-theme `terminal.semantic.promptLineBg` — remain an
-**explicit override**: a theme that names a colour gets exactly that colour, and a theme
-that says nothing still gets something sane, which is this section's rule for the whole
-block.
-
-Readability is enforced where the colours are. `scripts/check-theme-contrast.py` measures
-kit UI tokens read out of `crates/theme/themes/*.json`; terminal grid text is an ANSI
-palette entry or a semantic `Class` foreground, and the semantic palette is not in a theme
-file at all, so a `SURFACES` row naming the band would have no foreground to measure against
-it. Instead `resolve_style` uses the band as the contrast reference for any cell that paints
-no background of its own — what is behind the glyph on a prompt row *is* the band — and two
-Rust tests hold the floor: one resolves the band for every embedded theme variant and checks
-every prompt-row foreground against it, the other checks every colour a prompt row's plan
-actually paints. Extending `SURFACES` to terminal tokens is a change to that gate's scope
-and is an owner question in `IN-0044`.
+Because the only terminal background a semantic style could name is gone, the readability
+question this section used to answer — how text stays legible on a colour
+`scripts/check-theme-contrast.py` cannot see — no longer arises here. `resolve_style`
+measures a foreground against the cell's own background, as it did before `US-0134`.
+Extending `SURFACES` to terminal tokens remains an open owner question in `IN-0044`, now
+without a band to motivate it.
 
 **Render-time cost**: `styles.style(class).fg` — one array index. No string scope, no
 selector matching, no hashmap. This is the headline Rust win over the TextMate model.
@@ -490,29 +478,27 @@ Changes:
 5. **A `SemanticOverlay` per view** holds `(ShellProfile, &'static RuleSet, RowRoles)`
    and produces `cell_class` for the visible viewport each frame.
 
-6. **Prompt-line background** (shipped, `US-0134`): one `BgSpan` covering `0..cols`, pushed
-   into the row plan by `build_row_plan` **before** the per-cell loop. `RowPlan::bg` is
-   painted in push order, so the band goes down first and every explicit cell background — a
-   selection, an ANSI `bg`, an inverse cell — paints on top of it and looks exactly as it
-   does on any other row. Nothing in `resolve_style`'s `paint_bg` rule changes, so a
-   default-background cell still emits no span of its own and the band shows through.
-   Painting it as one row-wide rect rather than per cell is also what covers a
-   `LEADING_WIDE_CHAR_SPACER` at a wrap boundary, which carries no class and would otherwise
-   be a one-cell hole (§13 Q4).
+6. **Prompt-line background — withdrawn (`US-0134`, owner decision 2026-09-22).** It was
+   built (one `BgSpan` covering `0..cols`, pushed before the per-cell loop, on marked
+   `Prompt`/`Command` rows only, in a colour derived from the theme) and then removed after
+   the owner tried it: a full-width band under every prompt line is not the look OneTerm
+   wants. This is a **withdrawal, not a deferral** — there is no later phase that ships it.
+   Re-open it only if the owner asks.
 
-   **Which rows.** Every row whose OSC 133 role is `Prompt` or `Command` — for a wrapped
-   prompt that is every row of the run, because the role is the *logical line's* (§4.2).
+   Nothing in this design depends on the band. The row roles it was painted from
+   (`RowRole::Prompt`/`Command`, §4.2), the regex fallback and the exit-code tint on the
+   prompt sign are all `US-0133` and are shipped and unchanged; the band was the only reader
+   of the role at *paint* time, so `build_row_plan` no longer takes a role at all.
 
-   **Not under the regex fallback.** A row with no mark gets no band, as a rule rather than
-   as an omission: the band is a line-level, full-width element, so a regex that changes its
-   mind between frames flashes the whole row, which is the defect `BUG-0071` was reported
-   for. A wrong foreground on one word is not. The band's colour comes from the theme (§7).
+   `resolve_style` measures a foreground against the cell's own background again, as it did
+   before the band existed: with nothing painted under the row, "what is behind the glyph"
+   and "the cell's background" are the same colour, so the separate `row_bg` reference had
+   nothing left to say.
 
-   **The contrast reference moves with it.** `resolve_style`'s `paint_bg` rule is unchanged,
-   but the background it measures a foreground against is now whatever is *behind* the
-   glyph: the band on a prompt row, the terminal background everywhere else. That is the
-   load-bearing half of the change — it is what keeps every foreground legible on the band
-   without extending `scripts/check-theme-contrast.py` to colours it cannot see (§7).
+   The `LEADING_WIDE_CHAR_SPACER` hole the full-width rect closed returns to its pre-band
+   state, which is where §13 Q4 left it: a spacer carries no class, and no class carries a
+   background today, so the hole is invisible. It becomes real again only for a future
+   class-level background or line decoration (§11 Phase 3).
 
 The unit of a scan is the **logical line**, not the visual row. A soft wrap does not end
 a line: the scanner's state — inside a quoted string, after the prompt sign, mid-token —
@@ -545,13 +531,14 @@ snapshot → viewport rows
 | Cell state | `Class` | Resulting fg | Resulting bg / decoration |
 |---|---|---|---|
 | default fg (no SGR) | non-Default | **class fg** | class bg/deco (if any) — *the headline case* |
-| explicit ANSI fg | non-Default | **keep ANSI fg** | class bg/deco apply additively (prompt-line bg, error underline) |
+| explicit ANSI fg | non-Default | **keep ANSI fg** | class bg/deco apply additively (error underline) |
 | explicit ANSI fg | Default | ANSI fg | ANSI bg |
 | default fg | Default | theme fg | theme bg |
 
 Rules:
 
-- **Prompt-line bg** always paints (line-level, not per-cell) — doesn't touch fg.
+- **Prompt-line bg**: withdrawn (§8 item 6). No line-level background is painted; the only
+  backgrounds a row carries are the cell's own (ANSI, inverse, selection).
 - **Decorations** (underline/box for `Error`/`Warn`/`Url`) are *additive* on top of ANSI
   fg — they never replace color.
 - **`font` (bold/italic)** ORs with the cell's existing `Flags`, never removes.
@@ -672,6 +659,11 @@ halves of the bound this section states.
 | **5** (opt-in) | Triggers | Generalize `url_mask`→`Class::Url` into a small configurable regex→action list (open URL, ping-IP menu, number tooltip). Shares the overlay plumbing, independent of the scanner. |
 
 Phases 0–3 are the core proposal.
+
+**Not in any phase: the prompt-line background.** It belonged to phase 2, was built under
+`US-0134`, and the owner removed it after trying it (2026-09-22). It is **withdrawn, not
+deferred**: no later phase picks it up, and it is not a gap in phase 2's delivery. Phase 3's
+decorations are per-class underlines and boxes, not a line-level band.
 
 ---
 
@@ -899,8 +891,15 @@ One consequence of the cell iteration is worth stating: a `LEADING_WIDE_CHAR_SPA
 the blank the engine leaves in the last column when a wide char will not fit — is a
 spacer, so no class is written to it and it stays `Default`. For a class that only sets a
 foreground the cell is blank and this is invisible; for one carrying a background it
-would leave a one-cell hole at the wrap boundary. It matters when §8 item 6
-(`prompt_line_bg`) is implemented, not before.
+would leave a one-cell hole at the wrap boundary.
+
+**Still open, as it was before `US-0134` (2026-09-22).** The prompt-line band of §8 item 6
+did close this hole for prompt rows — a rect spanning `0..cols` covers a spacer that has no
+class of its own — but the band was withdrawn by owner decision, so this note returns to
+exactly its original state: nothing paints a background that is not the cell's own, no class
+today carries one, and the hole is therefore invisible rather than fixed. It becomes real
+the first time a class-level background or a line decoration ships (§11 phase 3), and that
+packet owns it.
 
 ### Q5. Re-lex cost & cold scroll — ride the existing cache, viewport-only
 

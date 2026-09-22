@@ -1,8 +1,15 @@
-# Work: The prompt line gets its background
+# Work: The prompt line gets its background — WITHDRAWN
 
 ID: US-0134
 Intake: IN-0044
 Created: 2026-09-22
+
+> **Owner ruling, 2026-09-22 (acceptance rework #2): remove the prompt-line background
+> entirely.** The band was built, verified twice and accepted on paper; the owner then ran
+> the build and decided he does not want a band under the prompt line at all. This packet is
+> **Reopened** and its outcome is now the removal. Everything below the line is the original
+> record, kept as history — read it as "what was built and then taken out", not as current
+> behaviour. The current state is in **Acceptance rework #2** near the end of this file.
 
 > Pre-code gate: complete Outcome, Scope, Acceptance, Documentation, and Verification Plan before editing implementation files. Harness synchronizes only the marked status/proof blocks; keep authored checklists current.
 
@@ -30,9 +37,15 @@ not.
 
 ## Outcome
 
-`ClassStyles::prompt_line_bg` is painted: a background band across the full width of every
-row of a prompt line, wrapped or not, in a colour that is correct on a light theme and on a
-dark one, under any ANSI or selection background rather than over it.
+**Current (after the owner's 2026-09-22 ruling).** There is no prompt-line background. The
+band and everything that existed only to serve it are removed from the code, the tests and
+the design docs; the row roles, the regex fallback and the exit-code tint — which are
+`US-0133` and do not depend on the band — stay exactly as they are.
+
+**Original (built, then withdrawn).** `ClassStyles::prompt_line_bg` is painted: a background
+band across the full width of every row of a prompt line, wrapped or not, in a colour that is
+correct on a light theme and on a dark one, under any ANSI or selection background rather
+than over it.
 
 ## Scope
 
@@ -57,6 +70,29 @@ dark one, under any ANSI or selection background rather than over it.
 
 ## Acceptance
 
+**Superseded 2026-09-22 by the owner's ruling.** The criteria below were all met by the band
+that was built; they are void because the band is gone. The criteria that now decide this
+packet are:
+
+- [x] No prompt row carries a background band, on any theme, marked or not.
+- [x] `push_prompt_band`, `TerminalTheme::prompt_line_bg`, `PROMPT_BAND_MIX`, the
+      `promptLineBg` parsing, the `ClassStyles::prompt_line_bg` field and
+      `oneterm_theme::embedded_theme_files()` are gone; no dead code and no dead key is left
+      behind.
+- [x] `resolve_style` is back to measuring contrast against the cell's own background: with
+      no band, `row_bg` and that background are the same colour, so the extra reference had
+      nothing left to say.
+- [x] What is kept still works: row roles and the transition rule, the regex fallback, the
+      exit-code tint. Their tests are untouched and green.
+- [x] `docs/terminal-semantic-highlighting.md` §7, §8 item 6, §9, §11 and §13 Q4 say the band
+      is **withdrawn by owner decision**, not deferred to a later phase; §13 Q4 records that
+      the `LEADING_WIDE_CHAR_SPACER` hole returns to its pre-`US-0134` state.
+- [x] `cargo test -p oneterm-terminal-view -p oneterm-theme -p oneterm-highlight`,
+      `cargo clippy --workspace --all-targets -- -D warnings` and `pwsh scripts/ci-local.ps1`
+      all pass.
+
+<details><summary>Original acceptance (void — the band it describes no longer exists)</summary>
+
 - [x] A prompt row carries a background band across all of `0..cols`.
 - [x] Every row of a **wrapped** prompt carries it, including the row that holds only the
       tail of the cwd and the row that holds only the typed command.
@@ -79,6 +115,8 @@ dark one, under any ANSI or selection background rather than over it.
 - [x] `cargo test -p oneterm-terminal-view` passes.
 - [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed", including
       `python scripts/check-theme-contrast.py`.
+
+</details>
 
 ## Documentation
 
@@ -133,6 +171,9 @@ foreground to measure against it. The gate is unchanged and the floor is held by
 tests plus the render path itself (see Evidence).
 
 ### Reconciliation
+
+> Superseded by **Acceptance rework #2** below: those sections were rewritten again when the
+> owner withdrew the band. The paragraph that follows records the band's own doc pass.
 
 Changed: `docs/terminal-semantic-highlighting.md` §7 (a new paragraph: `promptLineBg` is
 derived per theme, the asset no longer pins one value, the override rule, and where
@@ -322,7 +363,106 @@ band's direction now fails `the_band_sits_between_the_background_and_the_text` a
 - The contrast floor is proved in Rust, not by `scripts/check-theme-contrast.py`; extending
   `SURFACES` to terminal tokens remains the owner question recorded in `IN-0044`.
 
+## Acceptance rework #2 (2026-09-22) — the owner removed the band
+
+**Ruling.** The owner ran the build and decided against the feature itself: **remove the
+prompt-line background entirely.** Not a defect in the band — both verification rounds found
+it correct — a product decision that a full-width band under the prompt line is not the look
+OneTerm wants. It is a **withdrawal, not a deferral**: no later phase ships it, and
+`docs/terminal-semantic-highlighting.md` §11 now says so in those words, because "deferred"
+would leave the next reader hunting for the packet that finishes it.
+
+### Removed
+
+| Thing | Where |
+| --- | --- |
+| `push_prompt_band()` and the `BgSpan` it pushed | `crates/terminal-view/src/render/row_plan.rs` |
+| the `role: Option<RowRole>` parameter of `build_row_plan` and its caller's argument | `row_plan.rs`, `plan_cache.rs` |
+| `TerminalTheme::prompt_line_bg()`, `PROMPT_BAND_MIX` | `crates/terminal-view/src/theme/terminal_theme.rs` |
+| `promptLineBg` parsing, and the `ClassStyles::prompt_line_bg` field it wrote | `crates/terminal-view/src/highlight/bridge.rs`, `crates/highlight/src/theme.rs` |
+| `embedded_theme_files()` and its re-export — added for the band's per-theme sweep, no other caller | `crates/theme/src/theme.rs`, `crates/theme/src/lib.rs` |
+| `#[cfg(test)] pub(crate) use contrast::contrast_ratio` — same, no other caller | `crates/terminal-view/src/theme/mod.rs` |
+| the 11 band tests: `the_band_sits_between_the_background_and_the_text`, `the_shipped_asset_leaves_the_band_to_the_theme`, `every_prompt_row_foreground_clears_the_band` and its `assert_band_between` / `PROMPT_ROW_CLASSES` / `class_name` helpers, `a_marked_prompt_row_carries_a_full_width_band`, `every_row_of_a_wrapped_prompt_carries_the_band`, `the_band_is_painted_under_the_per_cell_backgrounds`, `the_band_covers_a_leading_wide_char_spacer`, `an_unmarked_prompt_row_gets_no_band`, `a_marked_output_row_gets_no_band`, `every_glyph_on_a_prompt_row_clears_the_band`, `an_a_only_shell_paints_no_band`, `prompt_line_bg_is_parsed_when_a_theme_sets_it`, and the band assertion inside `default_styles_loaded` | `row_plan.rs`, `theme/tests.rs`, `highlight/bridge.rs` |
+
+The asset key needed nothing: `crates/terminal-view/assets/highlight/default.json` has not
+carried `promptLineBg` since the band was made theme-relative. With the parsing gone the key
+is simply an unknown key, which `parse_semantic_json` has always ignored — the simpler of the
+two options the ruling offered (ignore vs. reject), and it is recorded in §7, in the
+function's own doc comment, and pinned by a one-line test (`a_prompt_line_bg_key_is_ignored`).
+
+### Kept, and why
+
+- **Row roles and the transition rule** (`US-0133`): they decide which rows the scanner reads
+  in prompt mode and where the prompt/command boundary is. Nothing about them was the band.
+- **The regex fallback**: unchanged. The "no band under the fallback" rule it motivated is
+  moot, and §8 item 6 says so rather than leaving a rule about a thing that does not exist.
+- **The exit-code tint on the prompt sign** (`US-0133`): a foreground class substitution, no
+  background involved.
+- **`resolve_style`'s contrast pass**, but **not** the `row_bg` reference the band added. The
+  ruling's own test applies: `row_bg` was only ever consulted when `paint_bg` was false, and a
+  cell that paints no background of its own now sits on exactly `theme.color(Color::Background)`
+  — which is the `bg` local already in scope. (Under `DECSCNM` a default-background cell has
+  `bg_color == Color::Foreground` after `swap_default`, so `paint_bg` is true and the branch
+  is not reached at all.) The two were the same colour in every reachable case, so the
+  parameter was pure ceremony and `resolve_style` is byte-for-byte its pre-`US-0134` self.
+- **`RowRole` itself and `PlanCache::roles`**: still used by the scanner and by `US-0133`'s
+  tests. Only the paint-time reader is gone.
+
+### The `LEADING_WIDE_CHAR_SPACER` hole
+
+Recorded in `docs/terminal-semantic-highlighting.md` §13 Q4, as the ruling requires. The
+full-width rect did close it for prompt rows; with the band gone the note returns to exactly
+its original state — a spacer carries no class, no class carries a background today, so the
+hole is **invisible rather than fixed**. It becomes real the first time a class-level
+background or line decoration ships (§11 phase 3), and that packet owns it. The HLD says the
+same (item 7).
+
+### Docs reconciled
+
+- `docs/terminal-semantic-highlighting.md` §7 (the `ClassStyles` sketch, the theme JSON
+  sample and the `promptLineBg` paragraph), §8 item 6 (rewritten as the withdrawal, with what
+  is kept and why the contrast reference went with it), §9 (the merge-policy row and the
+  "prompt-line bg always paints" rule, which were false the moment the band left), §11 (a
+  paragraph under the phase table: withdrawn, not deferred, and phase 3's decorations are not
+  this), §13 Q4.
+- `docs/spec-intakes/IN-0044-semantic-highlighting-phase-2/high-level-design.md` — the data
+  flow box, the UI Wireframe (the "after" sketch no longer shows a band) and design items 7
+  and 8, both marked WITHDRAWN with the removed/kept split.
+- `docs/spec-intakes/IN-0044-semantic-highlighting-phase-2/IN-0044.md` — the Themes and Users
+  impact bullets, and the contrast-gate Open Decision, which is still open but no longer
+  blocks anything.
+- No `US-0126`-style before/after report mentions this packet: the only one in the repository
+  is `IN-0042`'s, and it predates `IN-0044`. Nothing to update there.
+- `DEC-NNNN`: none. The ruling is a product preference about one visual element, recorded
+  here and in the two design docs; there is no rule future work has to inherit beyond "there
+  is no band", which §8 item 6 states.
+
+### Verification
+
+- `cargo test -p oneterm-terminal-view -p oneterm-theme -p oneterm-highlight` — 388 + 5 + 96
+  passed, 0 failed (3 ignored, pre-existing).
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean. Nothing was left dangling:
+  the unused `to_gpui_hsla` import in `terminal_theme.rs` and the test-only `contrast_ratio`
+  re-export went with the code that used them.
+- `pwsh scripts/ci-local.ps1` — see the final line quoted below. `python
+  scripts/check-theme-contrast.py` is unchanged and still passes; it never saw the band.
+- GUI (Windows, `fast-dev`): `evidence/us-0134-band-removed.png` — a `cmd` tab with several
+  marked prompts and no band on any of them.
+
+### Gaps after the removal
+
+- The two band frames from the original walk
+  (`evidence/us-0134-band-dark-theme.png`, `evidence/us-0134-band-light-theme.png`) are kept
+  as the record of what was built and rejected. They no longer describe the product.
+- The `TerminalTheme::fg`-after-a-theme-switch observation in Gaps above stands. It was never
+  caused by this packet and nothing now depends on it, so it is even less urgent; still worth
+  a `BUG` if the owner sees washed-out terminal text after switching themes.
+- The contrast floor for terminal grid text is now proved by nothing in particular — the band
+  was the only thing that measured it. That is the pre-`US-0134` state: `ensure_contrast`
+  still runs per cell against the cell's own background at render time, which is what it did
+  before, and the open `SURFACES` question in `IN-0044` is where the gap is recorded.
+
 ## Handoff
 
-Implemented. `US-0135` and `BUG-0073` are the remaining `IN-0044` packets and are
+**Withdrawn.** `US-0135` and `BUG-0073` are the remaining `IN-0044` packets and are
 independent of this one.
