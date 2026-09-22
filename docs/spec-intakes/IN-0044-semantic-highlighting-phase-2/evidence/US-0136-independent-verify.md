@@ -416,3 +416,296 @@ the one unit test that touches the `PS1` append asserts the defective literal.
   host under a pty to compare the native rendering of a multi-value prompt.
 - **`cfg(unix)` paths are unverifiable on this host**, as always here.
 - I did not re-run the `US-0133` consumer; this verification is about the producer only.
+
+---
+
+# Re-verification of `56524fb1`
+
+Date: 2026-09-22
+Subject: `feat/shell-integration-osc133-full-set` @ `56524fb1`, one commit on `6045dfe1`
+(the FAIL above). Same host, same method; only the findings above were re-checked, plus
+whatever the fixes themselves introduce.
+
+## Verdict
+
+**FAIL — the four findings are fixed, and the fix for MED-3 introduces a new major.**
+
+MAJ-1 and MED-1 are closed conclusively, by measurement and by a mutation that brings the
+old symptom straight back. MED-2, MIN-1 and MIN-2 are closed. MED-3's *chaining* half works
+in both hosts. But its *decline* half rests on `Get-PSReadLineKeyHandler` reporting the
+string `CustomAction` for a script-block binding, and it only does that when the block was
+bound **without** a `-BriefDescription`. Bind one with a description — the idiomatic form,
+and the one PSReadLine's own examples use — and `Function` is that description, the guard
+passes, and OneTerm installs a handler whose body calls a static method that does not
+exist. That user's `Enter` throws instead of submitting.
+
+Before the rework that user lost `ValidateAndAcceptLine` and kept a working terminal. After
+it they keep nothing: the fix made their case strictly worse. That is what the FAIL is for,
+and it is a one-expression change.
+
+| # | Finding | Status |
+|---|---|---|
+| MAJ-1 | stray `]` on every bash prompt | **FIXED** — measured, mutation-proved, visible in the tab and the popup |
+| MED-1 | `D` before the first command over SSH | **FIXED** — measured against the old line as a control |
+| MED-2 | no opt-out for the bash integration | **FIXED** — with two residual ceilings, below |
+| MED-3 | PSReadLine `Enter` replaced silently | **PARTIAL, and now worse.** Chaining works; the decline guard misses the common case (**NEW-MAJ-1**) |
+| MIN-1 | a throwing `prompt` loses `B` | **FIXED** — both hosts |
+| MIN-2 | `-join ''` collapses a multi-value prompt | **FIXED** — `[Environment]::NewLine` |
+| MIN-3 | bootstrap length and echo | unchanged by design; now 862 bytes |
+| MIN-4 | the evidence measured the variable, not the expansion | **FIXED** — `US-0136-verify.md` now expands |
+| NEW-MAJ-1 | a profile `Enter` script block **with** a `-BriefDescription` makes `Enter` throw | **new, major** |
+| NEW-MIN-1 | a user `PS1` ending in a lone backslash swallows the mark's `\[` | new, minor |
+
+---
+
+## NEW-MAJ-1 — the `CustomAction` guard misses the common case, and `Enter` then throws
+
+`crates/core/src/config/shell.rs:262-266`:
+
+```powershell
+$b=Get-PSReadLineKeyHandler -Bound|Where-Object{$_.Key -eq 'Enter'}|Select-Object -First 1;
+$f=if($b){$b.Function}else{'AcceptLine'};
+if($f -ne 'CustomAction'){ $global:__OneTermEnter=$f; Set-PSReadLineKeyHandler -Key Enter -ScriptBlock{
+  $m=$global:__OneTermEnter;[Microsoft.PowerShell.PSConsoleReadLine]::$m(); ... }}
+```
+
+What `-Bound` actually reports for `Enter`, measured in pwsh 7.6.6 / PSReadLine 2.4.5 and in
+Windows PowerShell 5.1.26100 / PSReadLine 2.0.0 — identical in both:
+
+| How `Enter` was bound | `.Function` | shipped guard installs? | a real static method? |
+| --- | --- | :-: | :-: |
+| `-Function AcceptLine` (the default) | `AcceptLine` | yes | yes |
+| `-Function ValidateAndAcceptLine` | `ValidateAndAcceptLine` | yes | yes |
+| `-ScriptBlock { }` | `CustomAction` | **no** | no |
+| `-ScriptBlock { } -BriefDescription 'SmartEnter'` | `SmartEnter` | **yes** | **no** |
+
+The last row is the hole. `Function` carries the brief description when there is one, so the
+literal comparison against `CustomAction` never fires, OneTerm stores `SmartEnter` in
+`$global:__OneTermEnter`, and every `Enter` press evaluates
+`[Microsoft.PowerShell.PSConsoleReadLine]::SmartEnter()`:
+
+```
+ENTER WOULD THROW: RuntimeException: Method invocation failed because
+[Microsoft.PowerShell.PSConsoleReadLine] does not contain a method named 'SmartEnter'.
+```
+
+Measured in both hosts. The accept never happens, so the line is not submitted — the tab
+cannot run a command. (What I measured is the invocation throwing; whether PSReadLine
+swallows that exception or surfaces it needs a real console host, which I do not have here.
+Either way nothing accepts the line.)
+
+`-BriefDescription` is not an exotic option: it is how PSReadLine's own documentation binds
+script blocks, and a described `Enter` block is exactly the "smart enter" pattern the MED-3
+fix exists to protect.
+
+**Fix**, measured on this host across all four rows and both hosts — replace the string
+comparison with the question it was trying to ask, "can I call this by name afterwards":
+
+```powershell
+if([Microsoft.PowerShell.PSConsoleReadLine].GetMethod($f)){ ... }
+```
+
+| case | shipped guard | `GetMethod` guard |
+| --- | :-: | :-: |
+| `AcceptLine` | installs | installs |
+| `ValidateAndAcceptLine` | installs | installs |
+| script block, no description | declines | declines |
+| script block, **with** description | **installs, and breaks Enter** | **declines** |
+
+It contains no `"`, so the one-argument `-Command` rule still holds. OneTerm's own handler is
+bound without a description, so it still reports `CustomAction`: a second run of the init
+still declines, and that re-entrancy guard survives the change.
+
+The unit test asserts the defective literal (`shell.rs:740`,
+`assert!(init.contains("if($f -ne 'CustomAction'){"))`), so it locks the hole in rather than
+catching it. The invariant it wants — reject any name that is not a public static of
+`PSConsoleReadLine` — cannot be evaluated from Rust; this one needs the corrected expression
+plus a line in the packet's gaps.
+
+---
+
+## MAJ-1 — fixed
+
+The mark is now `\[\e]133;B\a\]`: prompt escapes, BEL-terminated, so no backslash ever
+touches the closing `\]`. Both call sites carry the same literal
+(`crates/core/src/config/shell.rs:188`, `crates/ssh/src/session.rs:729`).
+
+**The expansion, measured in bash 5.3.15, old against new.** "Trailing" is everything left
+after the `B` sequence and its terminator:
+
+```
+new   expanded = X 033 ] 1 3 3 ; B \a           trailing = []     len 0
+old   expanded = X 033 ] 1 3 3 ; B 033 \ ]      trailing = []]    len 1
+```
+
+- **Idempotence.** Five expansions leave exactly one copy of the literal; `PS1` grows from 1
+  to 15 characters and stops. The `case` pattern quotes the mark, so its `[` and `]` stay
+  literal instead of acting as a glob bracket expression.
+- **Region balance.** The literal holds exactly one `\[` and one `\]`, in that order, with
+  `\a` — not a backslash — before the close. A user `PS1` carrying its own `\[...\]` pairs
+  expands cleanly: `ESC[32m trunglt ESC[0m $ ESC]133;B BEL`.
+- **Real interactive bash** under the generated environment: `A B C D;7 A B C D;0 A B C`,
+  and the bytes drawn on the prompt row are `033 ] 1 3 3 ; B \a` followed immediately by the
+  echoed command, with nothing in between.
+- **The SSH bootstrap's `PS1`** expands to `u$ 033 ] 1 3 3 ; B \a`; `PS0` still expands to
+  `033 ] 1 3 3 ; C 033 \`.
+- **BEL reaches the engine.** The live bash tab reports `PromptEnd`, so the BEL-terminated
+  `B` parses; `crates/vt/src/terminal/terminal_tests.rs:1781` already feeds `\x07` marks.
+
+**In the app.** A real Git for Windows bash tab, `US-0136-verify3-bash-tab.png`:
+
+```
+trunglt@TrungLT-PC MINGW64 ~
+$ (exit 7)
+```
+
+against the previous round's `$ ](exit 7)`. And in `US-0136-verify3-bash-completion.png` the
+history rows now read `true` and `(exit`, not `]true` and `](exit`.
+
+**The mutation.** Reverting `BASH_OSC133_PROMPT_COMMAND` to the shipped MAJ-1 form makes
+`bash_prompt_draws_no_stray_bracket` fail with the reported symptom, quoting the grid:
+
+```
+the generated bash prompt must print no bracket (`US-0136` MAJ-1); grid:
+"... trunglt@TrungLT-PC MSYS ~   $ \n]echo oneterm-prompt-drawn ..."
+```
+
+The test really runs here — it printed no skip message and spawned a real bash through the
+real PTY in 0.58 s. Restored afterwards; `git status` clean before the gate.
+
+---
+
+## MED-1 — fixed
+
+`crates/ssh/src/session.rs:729` now ends `__oneterm_precmd; __oneterm_seen=; stty echo`.
+Driven in a real bash with no subshell between the calls — a pipeline is a subshell and
+loses the flag, which is what made my first pass of this measurement read as a false
+negative:
+
+```
+new bootstrap   prompt1                = 033 ] 7 ; file://...              <- no D
+                prompt2 after (exit 7) = 033 ] 1 3 3 ; D ; 7 033 \ 033 ] 7 ; f...
+                prompt3 after true     = 033 ] 1 3 3 ; D ; 0 033 \ 033 ] 7 ; f...
+                $? after the hook      = 5
+old bootstrap   prompt1                = 033 ] 1 3 3 ; D ; 0 033 \ 033 ] 7 ; f...   <- the defect
+```
+
+`dash -n` and `bash -n` both exit 0 on the new line; it is 862 bytes. The local bash
+`PROMPT_COMMAND` behaves the same way: prompt 1 has no `D`, prompt 2 carries `D;7`.
+
+---
+
+## MED-2 — fixed, with two ceilings worth recording
+
+`crates/core/src/config/shell.rs:497-512`: a user `PROMPT_COMMAND` whose value contains
+`133;` is left untouched, and `PS0` with it; any other value is appended to; an absent one
+gets OneTerm's. `bash_yields_to_a_prompt_command_that_already_emits_osc133` and
+`bash_appends_to_a_user_prompt_command` both pass and pin the two halves. Section 6.1.2 now
+states the three rules and no longer claims a general "every generated variable yields"
+opt-out.
+
+Two ceilings the section does not mention:
+
+- The opt-out is a substring test on the value in `terminal.json`'s `shell.env`. A user
+  whose own integration is installed by `.bashrc` — `eval "$(starship init bash)"`, a sourced
+  `vte.sh` — sets nothing there and so cannot express it.
+- `133;` is a loose match. A `PROMPT_COMMAND` that emits an unrelated sequence containing it
+  (`printf '\033[133;1H'`, a cursor move to row 133) silently disables the whole
+  integration. Contrived, but impossible to diagnose from the UI.
+
+---
+
+## MED-3's chaining half, MIN-1 and MIN-2 — fixed
+
+Measured in pwsh 7.6.6 and Windows PowerShell 5.1, identical in both:
+
+- **Chaining.** Default `Enter` gives `__OneTermEnter=AcceptLine`. A profile's
+  `ValidateAndAcceptLine` gives `__OneTermEnter=ValidateAndAcceptLine`, and
+  `[Microsoft.PowerShell.PSConsoleReadLine].GetMethod(...)` resolves it, so that user keeps
+  validating. Dynamic `::$m()` works on both hosts.
+- **MIN-1.** A `prompt` that throws now returns the fallback `PS <path>> ` plus
+  `ESC]133;B ESC\`: the region closes, and `A` is no longer left open forever.
+- **MIN-2.** `function prompt { "top"; "bot> " }` returns `top<NL>bot> ` plus `B`, so a
+  two-line prompt stays two lines.
+- **The exit-code rule still holds.** `cmd /c exit 3` gives `D;3`; a successful `Get-Item`
+  with `$LASTEXITCODE` still 3 gives `D;0`.
+
+---
+
+## NEW-MIN-1 — a user `PS1` ending in a lone backslash swallows the mark's `\[`
+
+The same class as MAJ-1, from the other side. The mark is now safe at its *end*; its
+*beginning* is still a backslash, so a user `PS1` whose last character is an odd trailing
+backslash merges with it:
+
+```
+user PS1 = x\    expanded = x \ [ 033 ] 1 3 3 ; B \a
+```
+
+The `[` prints and the non-printing region never opens, so readline counts the mark's nine
+bytes as visible width. A trailing lone backslash in `PS1` is pathological, and this is not a
+regression against `main`, which appended nothing. It is simply what
+`bash_ps1_mark_survives_prompt_expansion` cannot see: that test reads the mark in isolation,
+never concatenated to an arbitrary user prompt. `x\\`, `x%`, `x]`, `x\$ ` and a `PS1` full of
+proper `\[...\]` pairs all expand cleanly.
+
+---
+
+## Live mark log, re-run
+
+Fresh `target/terminal.json`, `docks.json` and `ui_config.json` per run; scratch `HOME`; own
+pid; `RUST_LOG=debug`; the router's own `shell mark` line read back from the child's stderr.
+
+```
+kind=cmd         A B  A B  A B
+kind=pwsh        A B C D;3  A B C D;0  A B
+kind=powershell  A B C D;3  A B C D;0  A B
+kind=bash        A B C D;7  A B C D;0  A B
+```
+
+All four match the packet. One incidental observation from a misconfigured run of my own
+driver: when `shell.program` names something unrunnable the panel logs
+`Failed to spawn local terminal session: ...` and creates an empty tree rather than
+panicking, and an invalid `terminal.json` is quarantined — the error policy's "user input"
+and "persistence" rows, behaving.
+
+## Commands
+
+```powershell
+git reset --hard 56524fb1
+cargo build -p oneterm-app --profile fast-dev
+pwsh walk.ps1 -Kind cmd|pwsh|powershell 'cmd /c exit 3' 'cmd /c exit 0'
+pwsh walk.ps1 -Kind bash '(exit 7)' 'true'          # WALK_PROGRAM = Git bash
+cargo test -p oneterm-local-shell bash_prompt_draws_no_stray_bracket -- --nocapture
+cargo test -p oneterm-core -p oneterm-ssh -p oneterm-local-shell -p oneterm-terminal
+pwsh scripts/ci-local.ps1
+```
+
+```bash
+bash --norc --noprofile r1.sh   # ${PS1@P}, five expansions, interactive marks, raw bytes
+bash --norc --noprofile r2.sh   # old against new trailing bytes; bootstrap parse and expansion
+bash --norc --noprofile r3.sh   # the MED-1 prompt sequence, with the old line as control
+bash --norc --noprofile r4.sh   # adversarial user PS1 values
+pwsh / powershell -NoProfile -File ps-drive3.ps1 , ps-med3c.ps1 , ps-fix.ps1
+```
+
+## Tests and gate
+
+`cargo test -p oneterm-core -p oneterm-ssh -p oneterm-local-shell -p oneterm-terminal` —
+green: 88, 102, 34 with 2 ignored, and 218.
+
+`pwsh scripts/ci-local.ps1` — every step green, ending:
+
+```
+ci-local: all checks passed.
+```
+
+The gate passing is not evidence against NEW-MAJ-1: nothing in it binds a PSReadLine key
+handler, and the one unit test that touches the guard asserts the defective literal.
+
+## Gaps unchanged
+
+zsh remains unproven, local and remote. No SSH server was reachable, so MED-1 is proved by
+running the bootstrap's own text in a real bash rather than through a `russh` channel.
+`cfg(unix)` is unverifiable here. And PSReadLine's handling of an exception thrown inside a
+key handler was not observed in a real console host.
