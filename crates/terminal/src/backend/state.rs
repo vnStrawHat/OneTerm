@@ -180,6 +180,11 @@ impl SharedSessionState {
         self.lock().prompt_count
     }
 
+    /// Exit code of the most recently completed command block (OSC 133;D).
+    pub fn last_exit_code(&self) -> Option<i32> {
+        self.lock().last_exit_code
+    }
+
     /// Replace the theme defaults used for colour-query replies.
     pub fn set_default_colors(&self, colors: DefaultColors) {
         self.lock().default_colors = colors;

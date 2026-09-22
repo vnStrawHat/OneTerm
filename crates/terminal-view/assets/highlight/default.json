@@ -1,5 +1,4 @@
 {
-  "promptLineBg": "#1a1a1a",
   "styles": {
     "promptSign": { "foreground": "#E06C75" },
     "command": { "foreground": "#D19A66" },

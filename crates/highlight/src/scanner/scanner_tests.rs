@@ -6,10 +6,10 @@ use crate::role::RowRole;
 use crate::rules::RuleSet;
 use crate::scanner::scan_line;
 
-fn scan(line: &str, role: RowRole) -> Vec<Class> {
+fn scan(line: &str, role: Option<RowRole>) -> Vec<Class> {
     let rules = RuleSet::global();
     let profile = ShellProfile::Unix;
-    scan_line(line, rules, &profile, role)
+    scan_line(line, rules, &profile, role, None)
         .into_iter()
         .map(Class::from_u8)
         .collect()
@@ -17,7 +17,7 @@ fn scan(line: &str, role: RowRole) -> Vec<Class> {
 
 #[test]
 fn error_keyword_tagged() {
-    let c = scan("error: something failed", RowRole::Output);
+    let c = scan("error: something failed", None);
     // "error" at chars 0..5 → Error
     assert_eq!(c[0], Class::Error);
     assert_eq!(c[4], Class::Error);
@@ -29,14 +29,14 @@ fn error_keyword_tagged() {
 #[test]
 fn word_boundary_prevents_false_match() {
     // "node" should NOT match "no" (word boundary).
-    let c = scan("node server", RowRole::Output);
+    let c = scan("node server", None);
     assert_eq!(c[0], Class::Default); // 'n' in "node"
     assert_eq!(c[1], Class::Default); // 'o' in "node"
 }
 
 #[test]
 fn ipv4_tagged() {
-    let c = scan("ping 192.168.1.1", RowRole::Output);
+    let c = scan("ping 192.168.1.1", None);
     let ip_pos = "ping 192.168.1.1".find("192").unwrap();
     assert_eq!(c[ip_pos], Class::Ip);
     assert_eq!(c[ip_pos + 10], Class::Ip); // last '1'
@@ -45,7 +45,7 @@ fn ipv4_tagged() {
 #[test]
 fn ipv6_compressed_full_address_tagged() {
     let line = "Resolved example.com -> 2607:f8b0:4004:80a::200e";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let pos = line.find("2607").unwrap();
     let addr = "2607:f8b0:4004:80a::200e";
     for (i, _ch) in addr.chars().enumerate() {
@@ -56,7 +56,7 @@ fn ipv6_compressed_full_address_tagged() {
 #[test]
 fn ipv6_zone_id_not_tagged() {
     let line = "IPv6 link-local: fe80::1c2d:3e4f:5a6b%eth0";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let pos = line.find("fe80").unwrap();
     // Address chars are Ip...
     let addr = "fe80::1c2d:3e4f:5a6b";
@@ -72,7 +72,7 @@ fn ipv6_zone_id_not_tagged() {
 #[test]
 fn ipv6_leading_double_colon_tagged() {
     let line = "localhost ::1";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let pos = line.find("::1").unwrap();
     assert_eq!(c[pos], Class::Ip); // ':'
     assert_eq!(c[pos + 1], Class::Ip); // ':'
@@ -82,7 +82,7 @@ fn ipv6_leading_double_colon_tagged() {
 #[test]
 fn ipv4_not_partial() {
     // 1.2.3.4.5 should not be tagged as IPv4 (too many octets).
-    let c = scan("1.2.3.4.5", RowRole::Output);
+    let c = scan("1.2.3.4.5", None);
     // The first 4 octets should not be tagged because the next char is a digit/dot.
     for cls in &c {
         assert_ne!(*cls, Class::Ip);
@@ -91,7 +91,7 @@ fn ipv4_not_partial() {
 
 #[test]
 fn path_tagged() {
-    let c = scan("cat /usr/bin/env", RowRole::Output);
+    let c = scan("cat /usr/bin/env", None);
     let path_pos = "cat /usr/bin/env".find("/usr").unwrap();
     assert_eq!(c[path_pos], Class::Path);
 }
@@ -100,7 +100,7 @@ fn path_tagged() {
 fn path_relative_multi_segment_tagged() {
     // `src/views/terminal/mod.rs` should highlight `src` too.
     let line = "Found 3 matches in src/views/terminal/mod.rs:128";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let p = line.find("src").unwrap();
     let end = p + "src/views/terminal/mod.rs".len();
     for i in p..end {
@@ -112,7 +112,7 @@ fn path_relative_multi_segment_tagged() {
 fn path_relative_with_extension_tagged() {
     // `src/main.rs` has one separator but a file extension → path.
     let line = "edit src/main.rs now";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let p = line.find("src").unwrap();
     let end = p + "src/main.rs".len();
     for i in p..end {
@@ -128,7 +128,7 @@ fn slash_word_not_path() {
         "Throughput: 1_048_576 bytes/sec, latency: 2.5ms",
         "DEBUG: retrying connection (attempt 3/5)",
     ] {
-        let c = scan(line, RowRole::Output);
+        let c = scan(line, None);
         for (i, cls) in c.iter().enumerate() {
             assert_ne!(*cls, Class::Path, "char {i} of '{line}'");
         }
@@ -137,14 +137,14 @@ fn slash_word_not_path() {
 
 #[test]
 fn number_tagged() {
-    let c = scan("port 8080", RowRole::Output);
+    let c = scan("port 8080", None);
     let num_pos = "port 8080".find("8080").unwrap();
     assert_eq!(c[num_pos], Class::Number);
 }
 
 #[test]
 fn number_with_percent_tagged() {
-    let c = scan("usage 89% detected", RowRole::Output);
+    let c = scan("usage 89% detected", None);
     let pos = "usage 89% detected".find("89").unwrap();
     assert_eq!(c[pos], Class::Number); // '8'
     assert_eq!(c[pos + 1], Class::Number); // '9'
@@ -153,14 +153,14 @@ fn number_with_percent_tagged() {
 
 #[test]
 fn hex_number_tagged() {
-    let c = scan("addr 0x1F", RowRole::Output);
+    let c = scan("addr 0x1F", None);
     let hex_pos = "addr 0x1F".find("0x1F").unwrap();
     assert_eq!(c[hex_pos], Class::Number);
 }
 
 #[test]
 fn string_tagged() {
-    let c = scan(r#"echo "hello world""#, RowRole::Output);
+    let c = scan(r#"echo "hello world""#, None);
     let q_pos = r#"echo "hello world""#.find('"').unwrap();
     assert_eq!(c[q_pos], Class::String);
     assert_eq!(c[q_pos + 5], Class::String); // inside the string
@@ -170,7 +170,7 @@ fn string_tagged() {
 fn permission_block_tagged() {
     //       - r w - r - - r - -
     // pos: 0 1 2 3 4 5 6 7 8 9
-    let c = scan("-rw-r--r--  2 user group", RowRole::Output);
+    let c = scan("-rw-r--r--  2 user group", None);
     // Position 0 = type char → PermType.
     assert_eq!(c[0], Class::PermType);
     // r at positions 1, 4, 7 → PermRead.
@@ -189,7 +189,7 @@ fn permission_block_tagged() {
 
 #[test]
 fn permission_block_special_bits() {
-    let c = scan("drwsr-sr-t  2 user group", RowRole::Output);
+    let c = scan("drwsr-sr-t  2 user group", None);
     assert_eq!(c[0], Class::PermType); // d
     assert_eq!(c[1], Class::PermRead); // r
     assert_eq!(c[2], Class::PermWrite); // w
@@ -200,7 +200,7 @@ fn permission_block_special_bits() {
 
 #[test]
 fn operator_and_bracket_tagged() {
-    let c = scan("(a | b)", RowRole::Output);
+    let c = scan("(a | b)", None);
     assert_eq!(c[0], Class::Bracket); // '('
     assert_eq!(c[6], Class::Bracket); // ')'
     // '|' is an operator
@@ -210,7 +210,7 @@ fn operator_and_bracket_tagged() {
 
 #[test]
 fn prompt_line_tagged() {
-    let c = scan("$ ls -la", RowRole::Output);
+    let c = scan("$ ls -la", None);
     assert_eq!(c[0], Class::PromptSign); // '$'
     // "ls" is the command
     let ls_pos = "$ ls -la".find("ls").unwrap();
@@ -224,7 +224,7 @@ fn prompt_line_tagged() {
 /// output, not as prompt + command.
 #[test]
 fn output_with_prompt_glyph_is_not_a_prompt_line() {
-    let c = scan("100% done", RowRole::Output);
+    let c = scan("100% done", None);
     let pct = "100% done".find('%').unwrap();
     assert_ne!(c[pct], Class::PromptSign);
     let done = "100% done".find("done").unwrap();
@@ -232,16 +232,16 @@ fn output_with_prompt_glyph_is_not_a_prompt_line() {
     // `100` is still recognised as a number in output mode.
     assert_eq!(c[0], Class::Number);
 
-    let c = scan("#include <stdio.h>", RowRole::Output);
+    let c = scan("#include <stdio.h>", None);
     assert_ne!(c[0], Class::PromptSign);
     assert_ne!(c[1], Class::Command);
 
-    let c = scan("$HOME=/root", RowRole::Output);
+    let c = scan("$HOME=/root", None);
     assert_ne!(c[0], Class::PromptSign);
     assert_ne!(c[1], Class::Command);
 
     // Real prompts still switch to command mode.
-    let c = scan("user@host:~$ ls", RowRole::Output);
+    let c = scan("user@host:~$ ls", None);
     let dollar = "user@host:~$ ls".find('$').unwrap();
     assert_eq!(c[dollar], Class::PromptSign);
     assert_eq!(c[dollar + 2], Class::Command);
@@ -255,29 +255,29 @@ fn scan_line_into_matches_scan_line_and_reuses_buffer() {
     let profile = ShellProfile::Unix;
     let mut out = vec![7u8; 100];
     for line in ["error: x", "$ ls -la", "ping 192.168.1.1", ""] {
-        crate::scanner::scan_line_into(line, rules, &profile, RowRole::Output, &mut out);
-        assert_eq!(out, scan_line(line, rules, &profile, RowRole::Output));
+        crate::scanner::scan_line_into(line, rules, &profile, None, None, &mut out);
+        assert_eq!(out, scan_line(line, rules, &profile, None, None));
     }
 }
 
 #[test]
 fn command_role_skips_prompt() {
-    // RowRole::Command → first token = Command directly.
-    let c = scan("git status", RowRole::Command);
+    // Some(RowRole::Command) → first token = Command directly.
+    let c = scan("git status", Some(RowRole::Command));
     assert_eq!(c[0], Class::Command); // 'g' in "git"
     assert_eq!(c[2], Class::Command); // 't' in "git"
 }
 
 #[test]
 fn command_separator_resets() {
-    let c = scan("echo hi ; cat file", RowRole::Command);
+    let c = scan("echo hi ; cat file", Some(RowRole::Command));
     let cat_pos = "echo hi ; cat file".find("cat").unwrap();
     assert_eq!(c[cat_pos], Class::Command); // "cat" is a new command after ';'
 }
 
 #[test]
 fn datetime_tagged() {
-    let c = scan("2026-06-23 log entry", RowRole::Output);
+    let c = scan("2026-06-23 log entry", None);
     assert_eq!(c[0], Class::DateTime);
 }
 
@@ -292,7 +292,7 @@ fn datetime_full_patterns_tagged() {
         ("Build finished at 2024-03-01T14:22:08.123Z", 18..42),
     ];
     for (line, span) in cases {
-        let c = scan(line, RowRole::Output);
+        let c = scan(line, None);
         for i in span.clone() {
             assert_eq!(c[i], Class::DateTime, "char {i} of '{line}'");
         }
@@ -311,7 +311,7 @@ fn datetime_full_patterns_tagged() {
 #[test]
 fn clock_time_is_datetime_not_ip() {
     let line = "2024-01-15 09:30:45";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let time_pos = line.find("09:30").unwrap();
     assert_eq!(c[time_pos], Class::DateTime);
     assert_eq!(c[time_pos + 1], Class::DateTime);
@@ -321,7 +321,7 @@ fn clock_time_is_datetime_not_ip() {
 
 #[test]
 fn mac_tagged() {
-    let c = scan("mac aa:bb:cc:dd:ee:ff", RowRole::Output);
+    let c = scan("mac aa:bb:cc:dd:ee:ff", None);
     let mac_pos = "mac aa:bb:cc:dd:ee:ff".find("aa:").unwrap();
     assert_eq!(c[mac_pos], Class::Mac);
 }
@@ -331,7 +331,7 @@ fn mac_with_digits_tagged_full() {
     // A MAC that contains a digit-only triplet must not be partially
     // stolen by the DateTime time regex.
     let line = "mac aa:bb:cc:11:22:33 ok";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let mac_start = line.find("aa:").unwrap();
     let mac_end = mac_start + "aa:bb:cc:11:22:33".len();
     for i in mac_start..mac_end {
@@ -344,7 +344,7 @@ fn ipv6_not_inside_path() {
     // Compressed IPv6-like short sequences inside paths/identifiers must not be
     // highlighted as Ip.
     let line = "warning: unused import: std::collections::HashMap";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     for (i, cls) in c.iter().enumerate() {
         assert_ne!(*cls, Class::Ip, "char {i} of '{line}'");
     }
@@ -352,21 +352,21 @@ fn ipv6_not_inside_path() {
 
 #[test]
 fn empty_line() {
-    let c = scan("", RowRole::Output);
+    let c = scan("", None);
     assert!(c.is_empty());
 }
 
 #[test]
 fn priority_string_over_keyword() {
     // "error" inside a string should be String, not Error.
-    let c = scan(r#""error""#, RowRole::Output);
+    let c = scan(r#""error""#, None);
     for cls in &c {
         assert_eq!(*cls, Class::String);
     }
 }
-fn scan_with_profile(line: &str, role: RowRole, profile: ShellProfile) -> Vec<Class> {
+fn scan_with_profile(line: &str, role: Option<RowRole>, profile: ShellProfile) -> Vec<Class> {
     let rules = RuleSet::global();
-    scan_line(line, rules, &profile, role)
+    scan_line(line, rules, &profile, role, None)
         .into_iter()
         .map(Class::from_u8)
         .collect()
@@ -376,7 +376,7 @@ fn scan_with_profile(line: &str, role: RowRole, profile: ShellProfile) -> Vec<Cl
 fn prompt_sign_only_is_tagged() {
     // Only the sign char itself should be PromptSign, not the preceding path.
     let line = "user@host:~/dir$ ls";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let dollar = line.find('$').unwrap();
     for i in 0..dollar {
         assert_ne!(c[i], Class::PromptSign, "char {i} '{line}'");
@@ -388,7 +388,7 @@ fn prompt_sign_only_is_tagged() {
 fn unix_prompt_path_before_sign_is_highlighted() {
     // The path `~/dir` before `$` should be tagged as Path.
     let line = "user@host:~/dir$ ls";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let tilde = line.find('~').unwrap();
     let dollar = line.find('$').unwrap();
     assert_eq!(c[tilde], Class::Path, "'~' should be Path");
@@ -402,7 +402,7 @@ fn unix_prompt_path_before_sign_is_highlighted() {
 #[test]
 fn windows_prompt_sign_only_is_tagged() {
     let line = r"C:\Users\foo> dir";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
     let gt = line.find('>').unwrap();
     for i in 0..gt {
         assert_ne!(c[i], Class::PromptSign, "char {i} of '{line}'");
@@ -416,7 +416,7 @@ fn windows_prompt_path_before_sign_is_highlighted() {
     // not left as `Default` (white). This was the root cause of the bug where
     // the path was white initially but became highlighted when the user typed.
     let line = r"C:\Users\foo> dir";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
     let gt = line.find('>').unwrap();
     // The path `C:\Users\foo` should be tagged as Path.
     assert_eq!(c[0], Class::Path, "drive letter 'C' should be Path");
@@ -434,7 +434,7 @@ fn windows_prompt_path_highlighted_without_trailing_space() {
     // should still match and the path should be highlighted as Path, with `>`
     // tagged as PromptSign (not Operator).
     let line = r"D:\TrungKFC-Research\Rust\myTerm2>dir";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
     let gt = line.find('>').unwrap();
     // Path before `>` should be tagged as Path.
     assert_eq!(c[0], Class::Path, "drive letter should be Path");
@@ -455,7 +455,7 @@ fn windows_prompt_path_highlighted_at_end_of_line() {
     // `D:\path>` at end of line (no trailing space, no user input) — the prompt
     // regex should still match so the path is highlighted and `>` is PromptSign.
     let line = r"D:\TrungKFC-Research\Rust\myTerm2>";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
     let gt = line.find('>').unwrap();
     assert_eq!(c[0], Class::Path, "drive letter should be Path");
     assert_eq!(
@@ -471,7 +471,7 @@ fn windows_prompt_path_highlighted_with_trailing_space() {
     // `D:\path> ` (with trailing space — initial state when no user input).
     // The blank cell after `>` is converted to space, so the prompt regex matches.
     let line = r"D:\TrungKFC-Research\Rust\myTerm2> ";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
     let gt = line.find('>').unwrap();
     assert_eq!(c[0], Class::Path, "drive letter should be Path");
     assert_eq!(
@@ -486,7 +486,7 @@ fn windows_prompt_path_highlighted_with_trailing_space() {
 fn windows_prompt_path_highlighted_with_input_after_space() {
     // `D:\path> x` (with trailing space + user input).
     let line = r"D:\TrungKFC-Research\Rust\myTerm2> x";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
     let gt = line.find('>').unwrap();
     assert_eq!(c[0], Class::Path, "drive letter should be Path");
     assert_eq!(
@@ -503,7 +503,7 @@ fn windows_prompt_path_highlighted_with_input_after_space() {
 fn output_option_long_and_short() {
     // --help output: both long and short options should be Option.
     let line = " -d, --data <data>  HTTP POST data";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let d_pos = line.find(" -d").unwrap() + 1;
     let data_pos = line.find("--data").unwrap();
     assert_eq!(c[d_pos], Class::Option);
@@ -516,7 +516,7 @@ fn output_option_long_and_short() {
 fn option_not_tagged_inside_filename() {
     // Filenames with hyphens must not have embedded segments highlighted as options.
     let line = "drwxr-xr-x 2 root root 4.0K May 21 2025 container-diff-linux-amd64";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     for (i, cls) in c.iter().enumerate() {
         assert_ne!(*cls, Class::Option, "char {i} of '{line}'");
     }
@@ -526,7 +526,7 @@ fn option_not_tagged_inside_filename() {
 fn number_not_tagged_inside_identifier() {
     // `math-2`, `file_v2`, `step-1` must not highlight the trailing digit.
     for line in ["result: math-2 ok", "read file_v2 now", "stage step-1 done"] {
-        let c = scan(line, RowRole::Output);
+        let c = scan(line, None);
         for (i, cls) in c.iter().enumerate() {
             assert_ne!(*cls, Class::Number, "char {i} of '{line}'");
         }
@@ -536,7 +536,7 @@ fn number_not_tagged_inside_identifier() {
 #[test]
 fn standalone_number_still_tagged() {
     let line = "error -1 happened at 89%";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let minus_one = line.find("-1").unwrap();
     let percent = line.find("89").unwrap();
     assert_eq!(c[minus_one], Class::Number);
@@ -551,7 +551,7 @@ fn cross_shell_prompt_unix_inside_cmd() {
     // Running `wsl` inside cmd.exe: prompt becomes Unix ($) but the terminal
     // profile may still be Cmd. The universal fallback should detect it.
     let line = "user@host:~$ echo hi";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
     let dollar = line.find('$').unwrap();
     assert_eq!(c[dollar], Class::PromptSign);
     // echo should be command
@@ -563,7 +563,7 @@ fn cross_shell_prompt_unix_inside_cmd() {
 
 /// The class of the char that starts `needle` in `line`.
 fn class_at(line: &str, profile: ShellProfile, needle: &str) -> Class {
-    let c = scan_with_profile(line, RowRole::Output, profile);
+    let c = scan_with_profile(line, None, profile);
     let byte = line.find(needle).expect("needle is in the line");
     c[line[..byte].chars().count()]
 }
@@ -572,7 +572,7 @@ fn class_at(line: &str, profile: ShellProfile, needle: &str) -> Class {
 #[test]
 fn cmd_prompt_with_spaces_in_the_cwd_is_a_prompt() {
     let line = r"C:\Users\John Doe\oneterm workspace>echo hi";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
     let gt = line.find('>').unwrap();
     assert_eq!(c[gt], Class::PromptSign);
     assert_eq!(c[0], Class::Path, "the drive letter is part of the path");
@@ -584,7 +584,7 @@ fn cmd_prompt_with_spaces_in_the_cwd_is_a_prompt() {
 #[test]
 fn powershell_prompt_is_a_prompt() {
     let line = r"PS C:\Users\John Doe\ws> echo hi -Force";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::PowerShell);
+    let c = scan_with_profile(line, None, ShellProfile::PowerShell);
     let gt = line.find('>').unwrap();
     assert_eq!(c[gt], Class::PromptSign, "{c:?}");
     assert_eq!(c[gt - 1], Class::Path, "{c:?}");
@@ -605,7 +605,7 @@ fn unc_prompt_is_a_prompt() {
         (r"\\server\share\My Files>dir", ShellProfile::Cmd),
         (r"PS \\server\share\My Files> dir", ShellProfile::PowerShell),
     ] {
-        let c = scan_with_profile(line, RowRole::Output, profile);
+        let c = scan_with_profile(line, None, profile);
         let gt = line.find('>').unwrap();
         assert_eq!(c[gt], Class::PromptSign, "{line:?}");
         assert_eq!(class_at(line, profile, "dir"), Class::Command, "{line:?}");
@@ -616,7 +616,7 @@ fn unc_prompt_is_a_prompt() {
 #[test]
 fn a_redirection_is_not_the_prompt_sign() {
     let line = r"C:\work>dir > out.txt";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
     let first = line.find('>').unwrap();
     let last = line.rfind('>').unwrap();
     assert_eq!(c[first], Class::PromptSign);
@@ -631,7 +631,7 @@ fn windows_output_is_not_a_prompt() {
         ("PS is > 3", ShellProfile::PowerShell),
         ("see C:\\x> not a prompt", ShellProfile::Cmd),
     ] {
-        let c = scan_with_profile(line, RowRole::Output, profile);
+        let c = scan_with_profile(line, None, profile);
         assert!(
             !c.contains(&Class::PromptSign),
             "{line:?} must not be a prompt: {c:?}"
@@ -656,7 +656,7 @@ fn drive_anchored_output_with_an_unspaced_angle_bracket_is_output() {
             ShellProfile::Unix,
             ShellProfile::Dumb,
         ] {
-            let c = scan_with_profile(line, RowRole::Output, profile);
+            let c = scan_with_profile(line, None, profile);
             assert!(
                 !c.contains(&Class::PromptSign),
                 "{line:?} on {profile:?} must not be a prompt: {c:?}"
@@ -666,7 +666,7 @@ fn drive_anchored_output_with_an_unspaced_angle_bracket_is_output() {
 
     // The diagnostic keeps the colouring the prompt branch used to eat.
     let line = r"c:\proj\x.cpp(5): error C2059: syntax error: '>'";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
     let error = line.find("error").unwrap();
     assert_eq!(c[error], Class::Error, "{c:?}");
 
@@ -674,7 +674,7 @@ fn drive_anchored_output_with_an_unspaced_angle_bracket_is_output() {
     // by the prompt branch filling everything before the sign: the arrow
     // between them stays unclassified.
     let line = r"C:\src -> C:\dst";
-    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
     let arrow = line.find("->").unwrap();
     assert_ne!(c[arrow + 1], Class::Path, "the arrow is not a path: {c:?}");
     assert_eq!(c[0], Class::Path, "{c:?}");
@@ -686,13 +686,13 @@ fn drive_anchored_output_with_an_unspaced_angle_bracket_is_output() {
 #[test]
 fn a_bare_angle_bracket_is_a_prompt_only_on_the_windows_profiles() {
     for line in ["> quoted text from a mail reply", "> 3 files changed"] {
-        let unix = scan_with_profile(line, RowRole::Output, ShellProfile::Unix);
+        let unix = scan_with_profile(line, None, ShellProfile::Unix);
         assert!(
             !unix.contains(&Class::PromptSign),
             "{line:?} is output on a Unix tab: {unix:?}"
         );
         for profile in [ShellProfile::Cmd, ShellProfile::PowerShell] {
-            let c = scan_with_profile(line, RowRole::Output, profile);
+            let c = scan_with_profile(line, None, profile);
             assert_eq!(
                 c[0],
                 Class::PromptSign,
@@ -701,7 +701,7 @@ fn a_bare_angle_bracket_is_a_prompt_only_on_the_windows_profiles() {
         }
     }
     // The PowerShell `>>` continuation still matches.
-    let c = scan_with_profile(">> Get-Date", RowRole::Output, ShellProfile::PowerShell);
+    let c = scan_with_profile(">> Get-Date", None, ShellProfile::PowerShell);
     assert!(c.contains(&Class::PromptSign), "{c:?}");
 }
 
@@ -710,7 +710,7 @@ fn a_bare_angle_bracket_is_a_prompt_only_on_the_windows_profiles() {
 #[test]
 fn multibyte_text_does_not_shift_keyword_classes() {
     let line = "日本語 error here";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let error = line.chars().position(|ch| ch == 'e').unwrap();
     for i in error..error + 5 {
         assert_eq!(c[i], Class::Error, "char {i} of {line:?}: {c:?}");
@@ -727,7 +727,7 @@ fn multibyte_text_does_not_shift_keyword_classes() {
 #[test]
 fn a_structural_match_after_an_emoji_lands_on_the_right_chars() {
     let line = "🚀 2026-09-21 10:00:00 done";
-    let c = scan(line, RowRole::Output);
+    let c = scan(line, None);
     let stamp = line.chars().position(|ch| ch == '2').unwrap();
     assert_eq!(stamp, 2, "the emoji is one char and three extra bytes");
     for i in stamp..stamp + 19 {
@@ -735,4 +735,130 @@ fn a_structural_match_after_an_emoji_lands_on_the_right_chars() {
     }
     assert_eq!(c[0], Class::Default, "the emoji is not part of the stamp");
     assert_eq!(c[line.chars().count() - 1], Class::Default, "{c:?}");
+}
+
+// ── The OSC 133 fast path (`US-0133`) ──────────────────────────────────────
+
+/// A marked line: `role` from the shell, `input_at` from `OSC 133;B`.
+fn scan_marked(
+    line: &str,
+    role: RowRole,
+    input_at: Option<usize>,
+    profile: ShellProfile,
+) -> Vec<Class> {
+    scan_line(line, RuleSet::global(), &profile, Some(role), input_at)
+        .into_iter()
+        .map(Class::from_u8)
+        .collect()
+}
+
+/// The mixed-region line — a prompt and the typed command on one row. The
+/// scanner starts in `PromptLine` and switches where the region changes, which
+/// the mark gives exactly instead of the glyph hunt that a space defeats.
+#[test]
+fn a_marked_prompt_with_a_space_in_it_still_finds_its_sign() {
+    // `PS ` in front and a space inside the path: the unmarked fallback's
+    // left-to-right hunt stops at the first space and finds nothing at all.
+    let line = r"PS C:\Program Files> dir";
+    let sign = line.find('>').unwrap();
+    let c = scan_marked(
+        line,
+        RowRole::Prompt,
+        Some(sign + 2),
+        ShellProfile::PowerShell,
+    );
+    assert_eq!(c[sign], Class::PromptSign, "{c:?}");
+    assert_eq!(
+        c[3],
+        Class::Path,
+        "the cwd before the sign is a path: {c:?}"
+    );
+    assert_eq!(c[sign + 2], Class::Command, "`dir` is the command: {c:?}");
+}
+
+/// Without the boundary the region is the whole line, and the sign is the last
+/// prompt glyph in it.
+#[test]
+fn a_marked_prompt_without_a_boundary_uses_the_whole_line() {
+    let line = r"C:\work>";
+    let c = scan_marked(line, RowRole::Prompt, None, ShellProfile::Cmd);
+    assert_eq!(c[line.len() - 1], Class::PromptSign, "{c:?}");
+    assert_eq!(c[0], Class::Path, "{c:?}");
+}
+
+/// A prompt whose final glyph is not one this crate knows still gets a sign:
+/// the last non-space character of the marked region, where the shell left the
+/// cursor.
+#[test]
+fn a_marked_prompt_with_an_unknown_glyph_uses_its_last_character() {
+    let line = "~/src| ls";
+    let c = scan_marked(line, RowRole::Prompt, Some(7), ShellProfile::Unix);
+    assert_eq!(c[5], Class::PromptSign, "{c:?}");
+    assert_eq!(c[7], Class::Command, "{c:?}");
+}
+
+/// `RowRole::Command` enters command mode with no prompt sign at all.
+#[test]
+fn a_marked_command_line_is_command_mode() {
+    let c = scan_marked(
+        "cargo test --lib",
+        RowRole::Command,
+        None,
+        ShellProfile::Unix,
+    );
+    assert_eq!(c[0], Class::Command, "{c:?}");
+    assert_eq!(c[12], Class::Option, "{c:?}");
+}
+
+/// Marked output never runs the prompt regex — which is exactly what would have
+/// called this line a prompt (`BUG-0073`'s shape, closed here by the mark).
+#[test]
+fn marked_output_never_runs_the_prompt_regex() {
+    let line = r"C:\src -> C:\dst";
+    let marked = scan_marked(line, RowRole::Output, None, ShellProfile::Cmd);
+    assert!(
+        !marked.contains(&Class::PromptSign),
+        "a marked output row must not be read as a prompt: {marked:?}"
+    );
+    // The unmarked fallback reaches the same answer since `BUG-0073` tightened
+    // the prompt sign's rule — but it reaches it by *deciding* the line is not a
+    // prompt, where the marked path never asks. The line the regex still gets
+    // wrong is the one below.
+    let redirect = r"C:\work>dir > out.txt";
+    let marked = scan_marked(redirect, RowRole::Output, None, ShellProfile::Cmd);
+    assert!(
+        !marked.contains(&Class::PromptSign),
+        "a marked output row must not be read as a prompt: {marked:?}"
+    );
+    assert_ne!(
+        marked,
+        scan_with_profile(redirect, None, ShellProfile::Cmd),
+        "the mark has to change the answer for a line the regex does read as a prompt"
+    );
+}
+
+#[test]
+fn the_exit_code_tints_the_sign() {
+    let line = "user@host:~$ ls";
+    let sign = line.find('$').unwrap();
+    for (code, expected) in [(0, Class::Success), (101, Class::Error), (-1, Class::Error)] {
+        let mut classes = scan_line(line, RuleSet::global(), &ShellProfile::Unix, None, None);
+        crate::tint_prompt_sign(&mut classes, code);
+        assert_eq!(Class::from_u8(classes[sign]), expected, "exit code {code}");
+        assert_eq!(
+            Class::from_u8(classes[sign + 2]),
+            Class::Command,
+            "the tint touches the sign only"
+        );
+    }
+}
+
+#[test]
+fn an_untinted_sign_keeps_its_class() {
+    let line = "user@host:~$ ls";
+    let classes = scan_line(line, RuleSet::global(), &ShellProfile::Unix, None, None);
+    assert_eq!(
+        Class::from_u8(classes[line.find('$').unwrap()]),
+        Class::PromptSign
+    );
 }

@@ -175,7 +175,7 @@ fn search_reports_matches_on_their_rows() {
         b"alpha\r\nbeta\r\nalpha",
         ResizePolicy::BottomAnchor,
     );
-    let info = model.terminal_info(0, 0);
+    let info = model.terminal_info(0, 0, None);
     let matches = model.search("alpha", crate::SearchOptions::default());
     assert_eq!(matches.len(), 2);
     // The first match scrolled into history; the second is on the last row.

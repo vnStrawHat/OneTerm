@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use oneterm_highlight::{RowRole, RuleSet, ShellProfile, scan_line_into};
+use oneterm_highlight::{RuleSet, ShellProfile, scan_line_into};
 
 const USAGE: &str = "highlight-bench [--runs N] [--machine TEXT] [--json PATH]";
 
@@ -160,14 +160,14 @@ fn measure(line: &str, profile: ShellProfile, runs: usize) -> (Duration, f64) {
     // One untimed cycle so the first sample is not the one that warms the
     // buffer and the branch predictors.
     for _ in 0..iterations {
-        scan_line_into(line, rules, &profile, RowRole::Output, &mut out);
+        scan_line_into(line, rules, &profile, None, None, &mut out);
     }
 
     let mut samples: Vec<Duration> = Vec::with_capacity(runs);
     for _ in 0..runs {
         let start = Instant::now();
         for _ in 0..iterations {
-            scan_line_into(line, rules, &profile, RowRole::Output, &mut out);
+            scan_line_into(line, rules, &profile, None, None, &mut out);
         }
         samples.push(start.elapsed() / iterations as u32);
     }
@@ -251,7 +251,7 @@ fn json(cells: &[Cell], machine: &str, runs: usize) -> String {
         .collect();
     let doc = serde_json::json!({
         "engine": "oneterm-highlight",
-        "measured": "scan_line_into, RowRole::Output",
+        "measured": "scan_line_into, unmarked (the prompt-regex fallback)",
         "machine": machine,
         "runs": runs,
         "note": "Recorded, never gated. When this file is a committed baseline, \
@@ -353,7 +353,7 @@ mod tests {
         let classes = |shape: Shape, profile: ShellProfile| {
             let line = shape.fixture(2_000);
             let mut out = Vec::new();
-            scan_line_into(&line, rules, &profile, RowRole::Output, &mut out);
+            scan_line_into(&line, rules, &profile, None, None, &mut out);
             (line, out)
         };
 

@@ -1587,7 +1587,7 @@
   ],
   "engine": "oneterm-highlight",
   "machine": "Intel Core i7-12700 (12 cores / 20 threads), Windows 11 26200, rustc 1.96.0, release profile, 2026-09-22",
-  "measured": "scan_line_into, RowRole::Output",
+  "measured": "scan_line_into, unmarked (the prompt-regex fallback)",
   "note": "Recorded, never gated. When this file is a committed baseline, refresh it only in a commit that says why the number moved. The wrap width does not change what the scanner sees (the unit is the logical line): the rows column is how many display rows one scan covers, and the spread between the three widths of one cell is the table's noise floor.",
   "runs": 9
 }

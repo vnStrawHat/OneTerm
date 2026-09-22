@@ -149,40 +149,140 @@ wins per span (non-overlapping):
 
 ### 4.2 The OSC 133 fast path (the OneTerm advantage)
 
-OneTerm **already** parses OSC 133 in `crates/core/src/terminal/osc.rs` (`Osc133Kind`)
-and forwards `SessionEvent::ShellIntegration(kind)`:
-`PromptStart` / `PromptEnd` / `OutputStart` / `OutputEnd { exit_code }` (note: the code enum is `OutputStart`, i.e. OSC 133;C — the command-input region is `PromptEnd..OutputStart`; see §13 Q1).
+OneTerm **already** parses OSC 133 — in `crates/vt` (the engine), as
+`ShellMark { PromptStart, PromptEnd, OutputStart, OutputEnd { exit_code } }`, which reaches
+the backend's router as a `VtEvent`. (The `crates/core/src/terminal/osc.rs` this section
+used to cite was the pre-`IN-0029` parser and no longer exists.) Note that the code enum is
+`OutputStart`, i.e. OSC 133;C — the command-input region is `PromptEnd..OutputStart`; see
+§13 Q1.
 
-Today these only update `prompt_count` and `last_exit_code` (`crates/local/src/state.rs`).
-The proposal: **attach the markers to grid rows** so the renderer knows each row's role
-*authoritatively* — no prompt regex needed for integrated shells:
+**Where the roles come from (`US-0133`).** This section, and §13 Q1 with it, originally
+said `RowRoles` would be rebuilt "in the pump ... alongside the grid snapshot" by tracking
+the OSC 133 *event* stream and attributing rows to regions as they were appended. The
+engine `IN-0029` shipped makes that unnecessary: it puts the region **on the cell**
+(`Semantic::None | Prompt | Input | Output`, two bits, set from the cell template by
+`OSC 133;A/B/C`) and carries it out in the snapshot the view already reads. The fact
+therefore travels with its content through scroll, scrollback, trimming and reflow,
+because it *is* the content — no anchor to maintain, no event to replay, no row id to
+reconcile, and nobody keeping bookkeeping. The event-to-role table in §13 Q1 stays correct
+as a description of what the marks *mean*; what changed is who stores them.
+
+The view derives one role per **logical line** (a wrap-connected run of display rows,
+which is the scanner's unit) and records it on every row of the run:
 
 ```rust
-// new, alongside the grid snapshot
 pub struct RowRoles {
-    /// Per display row: Prompt | Command | Output  (from OSC 133 boundaries)
-    pub role: Box<[RowRole]>,
-    /// Exit code of the command that produced each Output row (for failure tinting)
-    pub exit_code: Box<[Option<i32>]>,
+    /// Per display row: its logical line's role, or `None` when the row carries
+    /// no mark at all and the prompt regex decides instead.
+    pub role: Vec<Option<RowRole>>,
 }
 #[repr(u8)]
 pub enum RowRole { Output = 0, Prompt = 1, Command = 2 }
 ```
 
-When `RowRoles` is present (shell emits OSC 133):
+The role is the region of the line's **first marked character**, plus one condition on the
+line above it:
 
-- Rows with `RowRole::Prompt` → scanner starts in `PromptLine` state **and** the prompt
-  sign region is known (between `PromptStart` and `PromptEnd` columns if we track them,
-  else fall back to sign-glyph detection within the row).
-- Rows with `RowRole::Command` → scanner starts in `CommandMode` directly.
-- Rows with `RowRole::Output` → `OutputMode`.
-- `OutputEnd { exit_code }` → tint the preceding command/prompt `PromptSign` `Success`
-  (code 0) or `Error` (non-zero) — a reliable, regex-free success/failure cue that is
-  only possible with shell-integration markers.
+| First marked character of the logical line | Role |
+|---|---|
+| `Semantic::Prompt`, and the previous logical line's region is known and is either **not** `Prompt` or is a `Prompt` that carried an `Input` region | `Prompt`, plus the char index of the line's first `Input` character — the prompt/command boundary `OSC 133;B` drew |
+| `Semantic::Prompt` otherwise (a `Prompt` predecessor that never closed, or no previous line on screen) | **no mark** — see below |
+| `Semantic::Output` | `Output` |
+| `Semantic::Input` | **no mark** — see below |
+| nothing is marked | no mark |
 
-When `RowRoles` is absent (shell without integration — raw serial, router, bare `sh`),
-fall back to the **`ShellProfile` prompt regex** to detect prompt lines. The scanner is
-the same; only the row-role source differs.
+- `Prompt` → the scanner starts in `PromptLine`. A **mixed-region row** — the prompt and
+  the command the user typed on one row, which is the normal case — is handled by the
+  boundary rather than by a second role: inside `0..input_at` the sign is the last
+  recognized prompt glyph, or the last non-space character when the prompt ends in a glyph
+  this crate does not know, and the scanner's own state machine (§4.1) takes the command
+  from there. That is strictly better than the sign-glyph hunt, which stops at the first
+  space and so found nothing at all in `PS C:\src>` or `[user@host ~]$`.
+- `Command` → the scanner starts in `CommandMode`.
+- `Output` → `OutputMode`, and the prompt regex **does not run**, which is what closes the
+  Windows false positives on a marked row.
+- **No mark** → the `ShellProfile` prompt regex decides, exactly as before. This is decided
+  **per row**, not per session: a session can start under a shell without integration, gain
+  it later, or print unmarked output between two marked prompts.
+
+**The region is sticky, so only a transition counts.** `OSC 133;A/B/C` set the region on the
+**cell template**, and nothing but another OSC 133 (or `RIS`) takes it off. Every line a
+shell prints after a mark it never closes therefore carries that mark. What each shipped
+integration actually emits:
+
+| Shell | What OneTerm injects | Marks |
+|---|---|---|
+| `cmd` | `CMD_OSC7_PROMPT`, `crates/core/src/config/shell.rs` | `A`, `B` |
+| `zsh` | `ZSH_OSC133_PS1`, same file | `A`, `B` |
+| `bash` | `PROMPT_COMMAND`, same file | `A` |
+| `powershell` / `pwsh` | `POWERSHELL_OSC7_PROMPT_INIT`, same file | none (OSC 7 only) |
+| SSH (every remote) | `SHELL_INTEGRATION_BOOTSTRAP`, `crates/ssh/src/session.rs` | `A` |
+
+Two consequences, and both are rules rather than omissions:
+
+- **A prompt line is a line the region transitions *into*.** Under `bash` and over SSH the
+  region never leaves `Prompt`, so reading the tag alone made a whole screen of output into
+  prompt lines — invented signs, command colouring and a background band on every row. The
+  role is therefore given only when the previous logical line's region is *known* and is
+  either not `Prompt`, **or** is a `Prompt` that closed itself with `OSC 133;B` — which its
+  `Input` region records. Where the shell closes the region this costs nothing: under
+  `A`/`B` the prompt follows an `Input` line, under `A`/`B`/`C`/`D` it follows an `Output`
+  line, and the first prompt of a session follows unmarked text. Where it does not, every
+  line falls back to the prompt regex, which is what happened before the fast path existed.
+
+  The second half of that condition is what lets **two prompts sit on adjacent rows**, which
+  is what a command that printed nothing (`cd`, `export`, `set`) leaves behind on any shell
+  whose prompt has no leading blank line — `ZSH_OSC133_PS1` is exactly that shape. Without
+  it the second prompt lost its role, its band and its tint, and gained them back the moment
+  a command printed something: the flashing row `US-0134`'s own fallback rule exists to
+  avoid. An `A`-only shell never writes an `Input` cell, so the flood stays shut.
+- **An `Input`-headed line is not trusted.** `cmd.exe` emits `A` and `B` and never `C`, so
+  every line its command prints is still tagged `Input`; treating that as `RowRole::Command`
+  would scan a screen of output in command mode. A typed command is unaffected — it
+  continues its prompt's logical line, whose head is `Prompt` and which carries `input_at`.
+
+> **Stated limit.** "The previous logical line" means the previous line *on screen*. The
+> viewport's top line has no predecessor, so it is never a marked prompt and falls back to
+> the regex; a prompt scrolled to the top edge loses its band. That is deliberate and
+> deterministic — the same answer at the same scroll position, every frame — and it is the
+> same viewport-only contract §13 Q5 already states for the class and URL passes. Reading
+> the row above the viewport needs an engine read path the view does not have.
+
+Because a line's role depends on the line above it, the semantic rescan covers the dirty
+rows closed under wrap runs **plus the one logical line after each changed run**. The chain
+is exactly one line long: a line pulled in this way did not itself change, so its own region
+did not either. The URL pass keeps the narrower `US-0092` bound.
+
+**The exit-code tint, and how far it reaches.** `OSC 133;D` is an event with no row
+attached (`crates/vt/src/events/vt_event.rs`), and the engine exposes no way to ask *which*
+row a block ended on. The only fact available is the backend's `last_exit_code` — the code
+of the most recently completed block — which reaches the view through
+`TerminalInfo::last_exit_code`. So the tint is applied to **the second-to-last prompt run
+on screen**: a newer prompt below it is exactly the evidence that its command ended, and
+while a command is still running there is no prompt below it, so nothing is tinted with a
+stale code. That prompt's `Class::PromptSign` becomes `Class::Success` on `0` and
+`Class::Error` otherwise — a class substitution, not a new class and not a new theme entry.
+
+> **Stated limit.** Only that one prompt is tinted. A prompt further back in scrollback
+> keeps an untinted sign, and the tint is suppressed entirely while the viewport is
+> scrolled up (`display_offset > 0`), because the newest prompt on screen is then somebody
+> else's. Two prompts separated by a *hard* newline are two runs; two prompts separated by
+> nothing but a soft wrap are one, so the wrap flags are part of the decision. Tinting
+> history needs a per-block record, which needs the engine to report the row a block ended
+> on — a public API change with a `scripts/vt-public-api.py` snapshot behind it, and out of
+> scope here.
+>
+> **It needs a shell that emits `OSC 133;D`, and none of the integrations above does.**
+> `last_exit_code` is written from `ShellMark::OutputEnd` and nothing else, so out of the
+> box the sign stays `Class::PromptSign` on every shipped shell and the tint is reachable
+> only for a user who writes their own prompt function. Completing the emitters is
+> `US-0136`, not this section.
+
+Because the role is derived from the frame, it is computed inside the plan cache's rescan,
+beside the URL masks and the classes (§13 Q5), and is authoritative for every row for the
+same reason they are: a row outside the rescan did not change, so neither did its role. The tint is applied later, over classes the scan already produced,
+because *which* prompt owns the code is a fact about the whole viewport rather than about
+the line being scanned.
 
 **The Windows sign rule** (`BUG-0073`) — the one subtle part of that fallback, because on
 Windows the sign is `>`, a character that ordinary output reaches all the time:
@@ -309,6 +409,32 @@ A shipped **default `semantic` block** (in `crates/ui/assets/highlight/default.j
 merged under any per-theme overrides, so every theme gets sane colors automatically —
 only the ANSI palette + accents come from the gpui-component theme.
 
+**`promptLineBg` is the exception (`US-0134`).** It is not a foreground on top of a
+theme-independent background; it *is* a background, painted under text whose legibility
+depends on the theme. One fixed hex applied to every theme is a dark band under dark text
+on a light one, so the shipped asset no longer sets it and
+`TerminalTheme::prompt_line_bg()` derives it per theme instead: **the theme's own terminal
+background moved a small fixed fraction toward its terminal foreground**, lightness only.
+A band defined that way is always on the background's side of the pair and can never invert
+a theme, and it introduces no hue of its own. `DECSCNM` swaps the pair the screen is drawn
+with, so the band follows it.
+
+The asset key — and a future per-theme `terminal.semantic.promptLineBg` — remain an
+**explicit override**: a theme that names a colour gets exactly that colour, and a theme
+that says nothing still gets something sane, which is this section's rule for the whole
+block.
+
+Readability is enforced where the colours are. `scripts/check-theme-contrast.py` measures
+kit UI tokens read out of `crates/theme/themes/*.json`; terminal grid text is an ANSI
+palette entry or a semantic `Class` foreground, and the semantic palette is not in a theme
+file at all, so a `SURFACES` row naming the band would have no foreground to measure against
+it. Instead `resolve_style` uses the band as the contrast reference for any cell that paints
+no background of its own — what is behind the glyph on a prompt row *is* the band — and two
+Rust tests hold the floor: one resolves the band for every embedded theme variant and checks
+every prompt-row foreground against it, the other checks every colour a prompt row's plan
+actually paints. Extending `SURFACES` to terminal tokens is a change to that gate's scope
+and is an owner question in `IN-0044`.
+
 **Render-time cost**: `styles.style(class).fg` — one array index. No string scope, no
 selector matching, no hashmap. This is the headline Rust win over the TextMate model.
 
@@ -352,9 +478,29 @@ Changes:
 5. **A `SemanticOverlay` per view** holds `(ShellProfile, &'static RuleSet, RowRoles)`
    and produces `cell_class` for the visible viewport each frame.
 
-6. **Prompt-line background**: paint under the whole prompt+command row (a `LayoutRect`
-   with `prompt_line_bg`), inserted before per-cell backgrounds — orthogonal to per-cell
-   fg, emitted as one rect.
+6. **Prompt-line background** (shipped, `US-0134`): one `BgSpan` covering `0..cols`, pushed
+   into the row plan by `build_row_plan` **before** the per-cell loop. `RowPlan::bg` is
+   painted in push order, so the band goes down first and every explicit cell background — a
+   selection, an ANSI `bg`, an inverse cell — paints on top of it and looks exactly as it
+   does on any other row. Nothing in `resolve_style`'s `paint_bg` rule changes, so a
+   default-background cell still emits no span of its own and the band shows through.
+   Painting it as one row-wide rect rather than per cell is also what covers a
+   `LEADING_WIDE_CHAR_SPACER` at a wrap boundary, which carries no class and would otherwise
+   be a one-cell hole (§13 Q4).
+
+   **Which rows.** Every row whose OSC 133 role is `Prompt` or `Command` — for a wrapped
+   prompt that is every row of the run, because the role is the *logical line's* (§4.2).
+
+   **Not under the regex fallback.** A row with no mark gets no band, as a rule rather than
+   as an omission: the band is a line-level, full-width element, so a regex that changes its
+   mind between frames flashes the whole row, which is the defect `BUG-0071` was reported
+   for. A wrong foreground on one word is not. The band's colour comes from the theme (§7).
+
+   **The contrast reference moves with it.** `resolve_style`'s `paint_bg` rule is unchanged,
+   but the background it measures a foreground against is now whatever is *behind* the
+   glyph: the band on a prompt row, the terminal background everywhere else. That is the
+   load-bearing half of the change — it is what keeps every foreground legible on the band
+   without extending `scripts/check-theme-contrast.py` to colours it cannot see (§7).
 
 The unit of a scan is the **logical line**, not the visual row. A soft wrap does not end
 a line: the scanner's state — inside a quoted string, after the prompt sign, mid-token —
@@ -420,13 +566,20 @@ not `cols` (`BUG-0071`). The table is per logical line:
 | Per-cell theme lookup | `styles.style(class).fg` × cells | branchless, negligible |
 | Cache hit | the row's `(RowId, SeqNo)` plus the class/mask delta | skip lex+layout entirely |
 
-Only **visible viewport** rows are lexed. The scope of one frame's rescan is the dirty
-rows **closed under wrap runs**: a scanner state cannot reach a row it is not
-wrap-connected to, so for ordinary content (a wrapped prompt is 2-4 rows) the rescan is
-a handful of rows and the number of scanner calls *falls*, because one run is one call
-instead of one per row. The bound is the wrap run, and it is tight — but a logical line
-longer than the viewport makes that run **the whole viewport**, so "never the viewport"
-is not the guarantee and this document does not claim it.
+Only **visible viewport** rows are lexed. The scope of one frame's URL rescan is the dirty
+rows **closed under wrap runs**: a URL cannot reach a row it is not wrap-connected to, so
+for ordinary content (a wrapped prompt is 2-4 rows) the rescan is a handful of rows and the
+number of scanner calls *falls*, because one run is one call instead of one per row. The
+bound is the wrap run, and it is tight — but a logical line longer than the viewport makes
+that run **the whole viewport**, so "never the viewport" is not the guarantee and this
+document does not claim it.
+
+The **semantic** rescan is that scope **plus the one logical line after each changed run**
+(`US-0133`): a line's OSC 133 role is read from the region its predecessor started in, so a
+run whose content changed can move the role of the line below it. The chain is exactly one
+line long — a line pulled in that way did not itself change, so its own region did not
+either — and the two passes run in separate loops precisely so that only this one pays for
+it.
 
 ### 10.1 Measured (`US-0135`)
 
@@ -484,13 +637,14 @@ No C dependency, no backtracking (ReDoS-safe), no per-line JSON interpretation, 
 string-scope hashing.
 
 `FrameStats` counts the class pass separately from the URL pass (`class_scans`,
-`class_rows_scanned`): the two share a row scope but the class pass does nothing while
-semantic highlighting is off. The scope above is **asserted** with those two counters
-rather than argued (`crates/terminal-view/src/render/plan_cache.rs`): an edit inside a
-wrapped line scans the wrap run and nothing else — `class_rows_scanned == 2` in a 12-row
-viewport, `class_scans == 1` — and a logical line longer than the viewport scans the
-viewport, `class_rows_scanned == rows_total`, still in one scan. Those are the two halves
-of the bound this section states.
+`class_rows_scanned`), which is what makes the two bounds visible apart. The scope above is
+**asserted** with those counters rather than argued
+(`crates/terminal-view/src/render/plan_cache.rs`): an edit inside a wrapped line in a 12-row
+viewport scans `url_rows_scanned == 2` — the wrap run and nothing else — and
+`class_rows_scanned == 3`, `class_scans == 2`, the wrap run plus the one line below it whose
+role depends on the region this one starts in. A logical line longer than the viewport
+scans the viewport, `class_rows_scanned == rows_total`, still in one scan. Those are the
+halves of the bound this section states.
 
 ---
 
@@ -500,7 +654,7 @@ of the bound this section states.
 |---|---|---|
 | **0** | Spike | `crates/highlight`: `Class`, `RuleSet` (keywords via aho-corasick + IPv4/path/number probes), `scan_line` for `OutputMode` only. Hardcode one shell. Show error/warn/success/path/IP colored on `cat`/log output. Validate merge policy. |
 | **1** | Core | `ShellProfile` + prompt detection (regex fallback). `ClassStyles` + theme JSON `terminal.semantic` + default asset. Merge into `cell_colors` / `layout_row` batching. Per-line hash cache. `terminal.semantic_highlighting: auto/on/off` setting. |
-| **2** | OSC 133 fast path | Attach `RowRoles` (+ exit code) to the snapshot from `SessionEvent::ShellIntegration`. Scanner consumes roles; regex prompt detection becomes fallback. Success/failure tint on `PromptSign` from `OutputEnd{exit_code}`. |
+| **2** | OSC 133 fast path | **Shipped (`IN-0044`).** `RowRoles` is derived per logical line from the `Semantic` region the engine already stores on every cell — not attached to the snapshot from the event stream (§4.2). The scanner consumes roles, the prompt boundary from `OSC 133;B` locates the sign, and the regex is the fallback for a row with no mark. Success/failure tint on the most recently completed block's `PromptSign`, with the reach stated in §4.2. |
 | **3** | Shells & polish | `Cmd` / `PowerShell` profiles. Decorations (underline/box for error/warn/url). Per-theme overrides. Contrast-on-merged. `Permission` block (ls -l); optional per-bit coloring (`r`=info,`w`=warn,`x`=error). |
 | **4** (opt-in) | Substrate | Prompt-block folding, command outline (scroll-to-prompt already implied by `prompt_count`), bracket/quote pair matching — all read the same `RowRoles`/`cell_class`. |
 | **5** (opt-in) | Triggers | Generalize `url_mask`→`Class::Url` into a small configurable regex→action list (open URL, ping-IP menu, number tooltip). Shares the overlay plumbing, independent of the scanner. |
@@ -550,9 +704,10 @@ implementer should follow; they are no longer open.
 
 ### Q1. OSC 133 granularity — row roles, not column boundaries
 
-**Question.** OneTerm already parses OSC 133 (`crates/core/src/terminal/osc.rs`) into
-`Osc133Kind { PromptStart, PromptEnd, OutputStart, OutputEnd { exit_code } }` and
-forwards it via `SessionEvent::ShellIntegration` (`crates/local/src/listener.rs`). These
+**Question.** OneTerm already parses OSC 133 (at the time of writing, in the pre-`IN-0029`
+`crates/core/src/terminal/osc.rs`; today in `crates/vt`) into
+`{ PromptStart, PromptEnd, OutputStart, OutputEnd { exit_code } }` and forwards it as an
+event. These
 are **row-level** events — they arrive *between* rendered grid rows, with no column
 index. Do we need column-level prompt/sign boundaries, or is row-level role + an in-row
 sign-glyph probe enough?
@@ -593,10 +748,21 @@ Map the OSC 133 stream to roles by tracking the *current* region as rows are app
 | `OutputStart` (C) | next rows -> `RowRole::Output` until `OutputEnd` |
 | `OutputEnd { exit_code }` (D) | record `exit_code` onto the just-finished `Output` rows; tint the preceding `Prompt`/`Command` rows' `PromptSign` with `Success`/`Error` |
 
-`RowRoles` is rebuilt in the pump (where `SessionEvent::ShellIntegration` is already
-handled in `listener.rs`) alongside the grid snapshot, then read by the scanner. When
-`RowRoles` is absent (no shell integration), the scanner falls back to the
-`ShellProfile` prompt regex to derive a best-effort `RowRole::Prompt` for the row.
+**Superseded by `US-0133`.** `RowRoles` is *not* rebuilt in the pump. The engine
+`IN-0029` shipped stores the region on the cell, so the view derives the roles from the
+snapshot it already reads (see §4.2), one role per logical line, recorded on every row of
+the run. The table above still says what each mark means; nobody keeps the bookkeeping.
+Two further corrections `US-0133` makes to this answer:
+- The sign is **not** found by a glyph probe when the shell marked the line. `OSC 133;B`
+  gives the prompt/command boundary, and the sign is the last prompt glyph — or the last
+  non-space character — before it. The probe survives only as the fallback for a line with
+  no mark.
+- `OSC 133;D` records no exit code *per row*, because the engine attaches no row to it.
+  `RowRoles` therefore carries no `exit_code` column; the one code the backend keeps tints
+  one prompt, and §4.2 states which and why.
+
+When a row carries no mark, the scanner falls back to the `ShellProfile` prompt regex to
+derive a best-effort `RowRole::Prompt` for its line.
 
 > **Correction to §4.2**: the code enum is `OutputStart` (OSC 133;C), not `CommandStart`.
 > The command-input region is `PromptEnd..OutputStart`; `OutputStart` begins the command
@@ -738,11 +904,19 @@ frame behind (progressive).
 **Amended by `BUG-0071`.** "Rows that changed" is not "rows whose own text changed": a
 class depends on the whole logical line, so the scan scope is the dirty rows **closed
 under wrap runs**, and the classes of the rows in that scope are compared with the
-previous frame's to decide which plans to rebuild. This is the same scope and the same
-delta the URL masks already use (`US-0092`), so it adds no new invalidation surface — one
-`Vec<u8>` per display row beside the existing `Vec<bool>` mask. It stays viewport-only and
-it lowers the number of scanner invocations per frame, because one run of rows is now one
-scan instead of one scan each.
+previous frame's to decide which plans to rebuild. It stays viewport-only and it lowers the
+number of scanner invocations per frame, because one run of rows is now one scan instead of
+one scan each.
+
+**Amended again by `US-0133`.** That was "the same scope and the same delta the URL masks
+already use"; it no longer is. A line's OSC 133 role is read from the region its predecessor
+started in, so the **semantic** scope is the dirty runs *plus the one logical line after
+each changed run*, while the URL scope keeps the `US-0092` bound exactly. The two therefore
+run in separate loops over separate sets, and the per-row delta is taken per array so a row
+in only one of them never compares against the other's stale scratch. The chain is one line
+long by construction: a line pulled in by the carry did not itself change, so its own region
+did not either. The added state is one byte-sized `LineMark` per display row beside the
+`Vec<u8>` of classes and the `Vec<bool>` mask, rotated with them on scroll.
 
 **Confirmed by `US-0135`, with the measurement in hand.** "Viewport-only" has a second
 edge that `BUG-0071` left implied: a wrap run whose head is *above* the viewport is scanned

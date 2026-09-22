@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use oneterm_terminal::{
     Attrs, CellWidth, Color as EngineColor, CursorShape as EngineCursorShape, GraphicData,
-    GraphicId, HyperlinkId, ModeSnapshot, NamedColor, RowId, SeqNo, SnapshotContent,
+    GraphicId, HyperlinkId, ModeSnapshot, NamedColor, RowId, Semantic, SeqNo, SnapshotContent,
     SnapshotPlacement, SnapshotRow, SnapshotUpdate, Style, TerminalContent, TerminalSession,
 };
 
@@ -306,6 +306,10 @@ pub(crate) struct Cell<'a> {
     pub hyperlink: Option<HyperlinkId>,
     /// Image painted over this cell, if any.
     pub graphic: Option<GraphicId>,
+    /// The OSC 133 region the shell was in when this cell was written. The one
+    /// authoritative row-role source (`US-0133`): it travels with its content
+    /// through scroll, trimming and reflow because it *is* the content.
+    pub semantic: Semantic,
 }
 
 impl Cell<'_> {
@@ -358,6 +362,7 @@ impl<'a> FrameRow<'a> {
             zerowidth,
             hyperlink: cell.hyperlink,
             graphic: cell.graphic,
+            semantic: cell.semantic,
         }
     }
 
@@ -373,19 +378,22 @@ impl<'a> FrameRow<'a> {
     /// Append the row's display text for the semantic scanner: one entry per
     /// non-spacer cell (`\0` and tab read as a space, zero-width chars are
     /// skipped because classes are per column), with the display row and column
-    /// of every char and whether it is a wide char so classes can be flattened
-    /// back.
+    /// of every char, whether it is a wide char so classes can be flattened
+    /// back, and the OSC 133 region it was written in.
     ///
     /// It appends rather than clears because a logical line is scanned as one
     /// string: the wrap-connected rows are joined here, and the row index each
     /// char came from is what slices the resulting classes back per visual row
-    /// (`BUG-0071`).
+    /// (`BUG-0071`). The region rides the same loop for the same reason §13 Q4
+    /// gives for the columns: one iteration is one source of truth, so the
+    /// scanner's char indices and the marks it is given cannot drift apart.
     pub(crate) fn append_text_into(
         &self,
         text: &mut String,
         char_rows: &mut Vec<u16>,
         char_cols: &mut Vec<u16>,
         char_wide: &mut Vec<bool>,
+        char_semantic: &mut Vec<Semantic>,
     ) {
         for (col, cell) in self.cells().enumerate() {
             if cell.is_spacer() {
@@ -398,6 +406,7 @@ impl<'a> FrameRow<'a> {
             char_rows.push(self.index as u16);
             char_cols.push(col as u16);
             char_wide.push(cell.flags.contains(CellFlags::WIDE_CHAR));
+            char_semantic.push(cell.semantic);
         }
     }
 }
@@ -702,6 +711,21 @@ pub(crate) mod test_support {
             self
         }
 
+        /// Stamp the OSC 133 region the shell was in on `cols` cells from
+        /// `(row, col)` — a synthetic mark stream, with no live shell
+        /// (`US-0133`).
+        pub(crate) fn mark(
+            mut self,
+            row: usize,
+            cols: std::ops::Range<usize>,
+            semantic: oneterm_terminal::Semantic,
+        ) -> Self {
+            for col in cols {
+                self.cell_mut(row, col).semantic = semantic;
+            }
+            self
+        }
+
         pub(crate) fn zerowidth(mut self, row: usize, col: usize, marks: &[char]) -> Self {
             self.cell_mut(row, col).zerowidth.extend_from_slice(marks);
             self
@@ -985,7 +1009,8 @@ mod tests {
         let mut rows = Vec::new();
         let mut cols = Vec::new();
         let mut wide = Vec::new();
-        row.append_text_into(&mut text, &mut rows, &mut cols, &mut wide);
+        let mut semantic = Vec::new();
+        row.append_text_into(&mut text, &mut rows, &mut cols, &mut wide, &mut semantic);
         assert_eq!(text, "a日b  ");
         assert_eq!(rows, vec![0, 0, 0, 0, 0]);
         assert_eq!(cols, vec![0, 1, 3, 4, 5]);

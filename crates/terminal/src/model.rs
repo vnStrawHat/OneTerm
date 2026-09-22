@@ -117,7 +117,12 @@ impl TerminalModel {
 
     /// Terminal info (total_lines, cursor, display_offset, etc.).
     /// `absolute_line_count` and `clear_epoch` come from the session's state.
-    pub fn terminal_info(&self, absolute_line_count: usize, clear_epoch: usize) -> TerminalInfo {
+    pub fn terminal_info(
+        &self,
+        absolute_line_count: usize,
+        clear_epoch: usize,
+        last_exit_code: Option<i32>,
+    ) -> TerminalInfo {
         let term = self.term.lock();
         let screen = term.screen();
         let total_lines = screen.history_len() as usize + usize::from(screen.rows());
@@ -131,6 +136,7 @@ impl TerminalModel {
             num_cols: usize::from(screen.cols()),
             display_offset: screen.scroll_offset() as usize,
             clear_epoch,
+            last_exit_code,
         }
     }
 
