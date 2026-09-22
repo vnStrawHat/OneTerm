@@ -682,3 +682,171 @@ before `$P$G` is what hides RV-MAJ-1 on Windows.
   numbers settle the *workload* question (the CJK figure matches) but are too noisy to
   judge the `prompt` shape against the recorded baseline. Whether `BUG-0073`'s new sign
   rule moved that row is `US-0135`'s question, not this branch's.
+
+---
+
+# Re-verification of `f6722d78` — 2026-09-22
+
+Same verifier as the `e0d85801` pass, scoped to the `RV-*` findings that pass raised.
+
+Under test: `feat/semantic-row-roles` @ `f6722d78` — the rework commit `ba0b8d1a` on this
+file's previous commit `f639f3a3`, then `main` @ `e94ef5f7` merged (`git diff
+ba0b8d1a f6722d78` is `Cargo.toml` + `Cargo.lock`, the `v0.6.2` bump, and nothing else).
+Worktree `.claude/worktrees/agent-a045c7f23df73bf81`. Every probe and mutation was
+reverted; `git status` clean before the commit carrying this section.
+
+## Verdict
+
+| Packet | Verdict |
+|---|---|
+| `US-0133` — row roles come from the shell's OSC 133 marks | **ACCEPT** |
+| `US-0134` — the prompt line gets its background | **ACCEPT** |
+| Overall | **ACCEPT** — every `RV-*` finding is closed, the new rule is pinned by two mutations, and the one gap it leaves is real, bounded and honestly recorded. |
+
+## Findings
+
+| ID | Status | Evidence |
+|---|---|---|
+| **RV-MAJ-1** — two prompts on adjacent rows, the second unmarked | **FIXED** | `LineMark { head, closed_prompt }` (`row_plan.rs:543-552`); `closed_prompt = input_at.is_some()`, and `input_at` is computed **only** for a `Prompt`-headed line (`(head == Semantic::Prompt).then(…)`, `:562-565`), so no other head pays for it. `line_role`'s `transition = \|p\| p.head != Semantic::Prompt \|\| p.closed_prompt` (`:604`). Asserted end to end through the engine by `back_to_back_prompts_are_both_marked_and_the_older_one_is_tinted` (roles 1 and 2 both `Prompt`, `tint == Some((1..2, 0))` — my own `e0d85801` probe stream, now a shipped test) and on a synthetic frame by `two_prompts_on_adjacent_rows_are_both_prompts`. Re-run in the GUI: see the walk below. |
+| **RV-MAJ-1 regression guard** — the A-only flood must stay shut | **HOLDS** | `a_prompt_headed_predecessor_that_never_closed_is_still_no_transition` (row 1 `Prompt`, row 2 `None`) plus the unchanged `an_a_only_shell_does_not_turn_its_output_into_prompts` and `an_a_only_shell_paints_no_band`. An `A`-only shell writes no `Input` cell anywhere, so `closed_prompt` is false for every line it produces — the new clause cannot fire for it. |
+| **cmd unchanged** | **HOLDS** | `output_left_tagged_input_by_a_shell_without_osc_133_c_is_unmarked`, `a_marked_prompt_is_classified_the_same_wrapped_or_not`, `a_marked_prompt_row_carries_a_full_width_band` all unchanged and green; the real `cmd` tab in the GUI walk is unchanged from the `e0d85801` frame. |
+| **top-of-viewport unchanged** | **HOLDS** | `a_prompt_at_the_top_of_the_viewport_is_unmarked_and_stays_so` unchanged; `prev` is still `None` at row 0 and `is_some_and` still rejects it. It is one of the five tests mutation A breaks. |
+| **RV-MED-1** — the merge duplicated a §4.2 block | **FIXED** | "The Windows sign rule" now occurs once in `docs/terminal-semantic-highlighting.md`. |
+| **RV-MED-2** — §10/§10.1/§13 Q5/`US-0135` quoted the pre-rework bound | **FIXED** | §10.1 now says `url_rows_scanned == 2` and `class_rows_scanned == 3`, `class_scans == 2`, "the wrap run plus the one line below it whose role depends on the region this one starts in". §13 Q5 carries an "Amended again by `US-0133`" paragraph that states the two scopes are no longer the same and why they run in separate loops. `US-0135` Decision 3 carries a "Reconciled with `US-0133`" blockquote with the same numbers and the one-line-chain reason. |
+| **RV-NIT-1** — stale `"measured"` label in the bench baseline | **FIXED** | `crates/tools/highlight-bench-baseline.json:1590` now reads `"scan_line_into, unmarked (the prompt-regex fallback)"`. The numbers were not re-measured and did not need to be — the `e0d85801` pass established that `main`'s `RowRole::Output` *was* the fallback arm, so the workload never moved. |
+| **RV-NIT-3** — `assert_band_between` vacuous on a zero gap | **FIXED** | it now asserts `band.l == bg.l` there ("the cap really did hold") and `(0.50, 0.50)` is in the fixture list. |
+| **NIT-1** — `The whole frame'''s` | **FIXED** | no occurrence left in `row_plan.rs`. |
+| **RV-NIT-2** — collapsed line break in an assertion message | **NOT FIXED** | `crates/terminal-view/src/render/plan_cache.rs:1401` still carries a run of fourteen spaces; the edit moved it (`"…the region              this one starts in…"`) rather than closing it up. Cosmetic, and only visible in a failure message. |
+
+## The new gap: an empty `Enter` at a prompt
+
+The packet records it under Gaps: `closed_prompt` is read from `Input` **cells**, and
+`OSC 133;B` writes none until something is echoed after it, so a prompt the user pressed
+`Enter` at without typing anything does not count as closed.
+
+**It is real.** Probe (reverted), a full `A`/`B`/`C`/`D` stream fed to the engine —
+`one`, then `133;A user@host:~$ 133;B` with nothing typed, `\r\n`, `133;C`, `133;D;0`,
+`133;A user@host:~$ 133;B`:
+
+```
+roles = [None, Some(Prompt), None, None]      tint = None
+```
+
+Row 1 (the prompt that was `Enter`ed at) is a prompt; row 2 (the one it left behind) is
+unmarked, and the block is not tinted because there is only one prompt run.
+
+**It is bounded, but "self-heals" is a little generous on two points.** Continuing the same
+probe — `ls` typed at row 2, run, one line of output, next prompt:
+
+```
+roles = [None, Some(Prompt), None, Some(Output), Some(Prompt), None, None, None]
+tint (exit code 0) = Some((1..2, 0))
+```
+
+- Everything **after** the affected line recovers: row 3 is `Output`, row 4 is a marked
+  prompt. The damage does not propagate, and the incremental answer equals a full rescan.
+- But row 2 itself never recovers. Typing into it gives it an `Input` cell of its own, which
+  is about *its* `closed_prompt`, not its predecessor's — so that one prompt row carries no
+  band for as long as it is on screen.
+- And the tint is **mis-attributed by one block** rather than merely absent: `ls` ran from
+  row 2, its `D;0` lands on row 1's sign, because `last_completed_prompt` counts prompt
+  *runs* and row 2 is not one. Unreachable today (`MAJ-2` — nothing ships `D`), and it
+  scrolls away, but it is worth a line in the Gaps that is not there now.
+
+**Is there a cheap signal?** Mechanically yes, and it is worth recording that it was
+considered and why it is not taken:
+
+- `ShellMark::PromptEnd` already crosses out of the engine. `crates/terminal/src/backend/
+  osc_router.rs:229-240` matches on it today and keeps `prompt_count` and `last_exit_code`
+  in `backend/state.rs:56-59`, and `session.rs:598` publishes `last_exit_code` into
+  `TerminalInfo` — which is exactly the wiring `SemanticOverlay::set_exit_code` already
+  rides. A `emits_prompt_end: bool` beside `prompt_count` would therefore cost one match
+  arm, one getter and one field, with **no `crates/vt` change and no
+  `scripts/vt-public-api.py` snapshot**.
+- But it is **session-scoped, and that makes it unsafe**. It would say "this session has
+  seen a `B`, so trust any `Prompt`-headed predecessor" — and a third-party `A`-only
+  integration reached from inside a `B`-emitting session (an `ssh` typed into a `cmd` or
+  `zsh` tab into a remote whose own dotfiles emit `133;A` and nothing else) would then be
+  trusted, which is `MAJ-1` reopened inside that session. `closed_prompt` is per-line cell
+  evidence and cannot be fooled that way.
+- The **safe** signal is the row the `B` mark landed on, or the cell template's current
+  region. `SnapshotState` exposes neither (`crates/vt/src/snapshot/state.rs` — `rows`,
+  `cursor`, `modes`, `watermark`, … and no region accessor), so adding one is the
+  `crates/vt` public-API change §4.2 already defers for the tint.
+
+So the packet's sentence — "the mark itself is not in the snapshot to read instead" — is
+correct. The only thing it under-states is that a cheap *approximation* exists and is
+rejected for a reason, which is worth one line so the next reader does not re-derive it.
+
+## Commands
+
+```
+git reset --hard f6722d78
+cargo test -p oneterm-highlight -p oneterm-terminal-view -p oneterm-theme -p oneterm-tools
+    -> 96 / 399 (3 ignored) / 5 / 14 passed (+ 2 in the bench binary), 0 failed
+```
+
+Mutations (each applied alone, then reverted):
+
+| Mutation | Expected | Result |
+|---|---|---|
+| `line_role`: ignore `prev` (`\|\| true` on the guard) | must fail | **FAILED 5**: `a_prompt_at_the_top_of_the_viewport_is_unmarked_and_stays_so`, `a_prompt_headed_predecessor_that_never_closed_is_still_no_transition`, `an_a_only_shell_does_not_turn_its_output_into_prompts`, `an_a_only_shell_paints_no_band`, `the_viewports_first_line_is_never_a_prompt` |
+| `transition`: drop the `closed_prompt` clause (`\|\| false`) | must fail | **FAILED 2**: `back_to_back_prompts_are_both_marked_and_the_older_one_is_tinted`, `two_prompts_on_adjacent_rows_are_both_prompts` |
+
+Probe (reverted): the empty-`Enter` sequence above, incremental roles equal to a full
+rescan at every step.
+
+Gate:
+
+```
+pwsh scripts/ci-local.ps1
+```
+
+final line:
+
+```
+ci-local: all checks passed.
+```
+
+## GUI walk
+
+`cargo build -p oneterm-app --profile fast-dev`, own pid, posted `WM_CHAR`/`WM_KEYDOWN`,
+`PrintWindow(hwnd, dc, 2)`, `target/fast-dev` deleted afterwards.
+
+**`evidence/US-0133-US-0134-reverify2-back-to-back.png`** — the same three scenes this
+verifier ran against `e0d85801`, re-fed as raw bytes into one `cmd` tab.
+
+- *A-only*: still no band on any of the five output rows, output classes intact. The fix
+  for `MAJ-1` is untouched by the new clause.
+- *`A`/`B` with output*: `C:\ws>dir` and `C:\ws>echo hi` banded, `a.txt` and `hi` not.
+- *`A`/`B` with nothing printed*: `C:\ws>cd ..`, `C:\ws>rem quiet` and the bare `C:\ws>`
+  are now **all three banded**. Against
+  `US-0133-US-0134-reverify-a-only-and-back-to-back.png` — the same scene at `e0d85801`,
+  where the second and third rows had no band — that is `RV-MAJ-1` closed in pixels.
+- A fourth scene was added here: a full `A`/`B`/`C`/`D` block that puts `OSC 133;D;0`
+  **on the wire**. Sampling the frame, the prompt sign of the second-to-last prompt run is
+  `#98C379` — `Class::Success` — while the run above it keeps the red `Class::PromptSign`
+  (`#B05249`/`#E68B86` at the same column). That independently confirms the packet's claim
+  that the tint works end to end from a real stream: the shipped unit test
+  (`back_to_back_prompts_are_both_marked_and_the_older_one_is_tinted`) calls
+  `SemanticOverlay::set_exit_code` directly, so it does **not** cover
+  `ShellMark::OutputEnd` -> `osc_router` -> `TerminalInfo` -> the overlay. This walk does.
+  The band measured `#373E49` against a `#23272E` background.
+
+## Gaps in this re-verification
+
+- Scope was the `RV-*` findings only, as asked. `MAJ-2` (no shipped integration emits
+  `133;D`) is unchanged and still deferred to `US-0136`; the packet now shows the tint
+  firing on a real wire stream, which is the mechanism and not the emitters.
+- The `cfg(unix)` integrations and a live SSH remote were again not exercised; `zsh`'s
+  reachability of `RV-MAJ-1` remains an inference from `ZSH_OSC133_PS1`'s shape.
+- The nested-`ssh` hazard that rules out the session-level `emits_prompt_end` signal is an
+  argument from the injected strings and the router's scope, not a demonstration — it needs
+  a remote with its own `A`-only integration.
+- The empty-`Enter` gap is recorded in `US-0133`'s Gaps but not in §4.2's "Stated limit"
+  blockquote, where the other two limits of the same rule live.
+- The tint's *attribution* was not re-checked against a real session shape: the walk's
+  fourth scene is followed by the tab's own `cmd` prompt, so the second-to-last run on
+  screen is the block after the one that reported `D;0`. That is §4.2's stated heuristic
+  behaving as written, not a defect, but it means the walk proves the path fires rather
+  than that it fires on the right prompt.
