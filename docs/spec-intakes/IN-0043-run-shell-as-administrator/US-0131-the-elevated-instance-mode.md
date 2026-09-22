@@ -970,6 +970,48 @@ saturation.
   `cargo test --workspace` and must be invoked individually, which is why the five commands
   are written out above rather than left to be rediscovered.
 
+### Acceptance rework, 2026-09-22 — the census is a union across platforms
+
+The owner's push failed the ubuntu **Full workspace quality gate** at
+`python scripts/check-ignored-tests.py`:
+
+```text
+  - session::session_orphan_tests::orphan_liveness_table
+check-ignored-tests: the ignore list changed.
+```
+
+**Cause.** The census was written as a *diff* (`observed == expected`), which silently
+assumed every runner collects the same ignore list. It does not.
+`session::session_orphan_tests::orphan_liveness_table` lives behind
+`#[cfg(all(test, windows))]` in `crates/local-shell/src/session.rs` — its module spawns the
+real `cmd.exe` — so a Linux runner never builds it, the collected set is a strict subset of
+the recorded one, and the equality check read the missing row as a removal. The census was
+recorded on Windows, so the failure was guaranteed on the first Linux run: the check was
+wrong, not the file.
+
+**Fix.** The file is the **union across platforms**, and the script treats it that way:
+
+- The check is a **subset** test. Every ignored test collected on the current platform must
+  be recorded; that is the pass condition. Entries recorded but not collected here are
+  printed as informational (`recorded elsewhere, not built on this platform`) and never
+  fail.
+- An ignored test **collected but not recorded** remains the only failure, with the same
+  guidance text — which is the property the census exists for, untouched.
+- `--write` **merges** the collected set into the existing file (union, sorted) instead of
+  overwriting it, so re-recording on one OS cannot drop another OS's entries — the way this
+  file would otherwise lose `orphan_liveness_table` the first time somebody re-recorded on
+  Linux.
+
+The union rule is stated in the script header, in the header `--write` writes into
+`scripts/ignored-tests.txt`, and in the `AGENTS.md` §4 comment beside the step.
+
+**Test.** `scripts/test_check_ignored_tests.py`, run by `python -m unittest` next to
+`scripts/test_check_english.py` in `scripts/ci-local.ps1`, `scripts/ci-local.sh` and the
+lint job of `.github/workflows/ci.yml`. It drives `main()` against a temporary census with a
+stubbed collector and pins the three rules: a subset passes and names the rest, an
+unrecorded test still exits 1, and `--write` keeps an entry the current platform does not
+collect. Cheap, because none of it shells out to cargo.
+
 ## Handoff
 
 Next: `US-0132` (the menu rows and the documentation). It depends on this packet because

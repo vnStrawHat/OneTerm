@@ -75,6 +75,8 @@ jobs:
         run: python scripts/third-party-notices.py --check
       - name: Test contributor-facing text checker
         run: python -m unittest scripts/test_check_english.py
+      - name: Test the ignored-test census
+        run: python -m unittest scripts/test_check_ignored_tests.py
       - name: Verify contributor-facing text language
         run: python scripts/check-english.py
 
@@ -135,6 +137,9 @@ jobs:
           cargo test -p oneterm-workspace --lib -- --ignored --test-threads=1
           cargo test -p oneterm-session-ui --lib -- --ignored --test-threads=1
           cargo test -p oneterm-settings-ui --lib -- --ignored --test-threads=1
+      # The census is the union across platforms: an entry `cfg`-gated to one
+      # OS is not collected on the other, so this asks that every ignored test
+      # collected HERE is recorded, and reports the rest as informational.
       - name: Account for every ignored test
         run: python scripts/check-ignored-tests.py
 

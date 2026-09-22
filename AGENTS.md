@@ -119,7 +119,12 @@ cargo test -p oneterm-session-ui --lib -- --ignored --test-threads=1
 cargo test -p oneterm-settings-ui --lib -- --ignored --test-threads=1
 python scripts/check-ignored-tests.py # ...and every OTHER ignored test is accounted for,
                                       # so a new one anywhere fails the gate until someone
-                                      # decides what it is (re-record with --write)
+                                      # decides what it is (re-record with --write). The
+                                      # census is the UNION across platforms: an entry
+                                      # cfg-gated to one OS is not collected on the other,
+                                      # so the check is a subset test (recorded-but-not-
+                                      # built is informational) and --write MERGES, so
+                                      # recording on one OS never drops another OS's rows
 cargo test -p oneterm-vt --features vt-paranoid # the VT engine's whole-history integrity walk
 cargo test -p oneterm-vt --features regex # the optional regex matcher, and the literal half under it
 # `oneterm-vt` is consumed by other projects as a git dependency (it is not
@@ -141,6 +146,7 @@ cargo package -p oneterm-vt --allow-dirty --list | python scripts/verify-depende
 python scripts/verify-dependency-graph.py     # crate graph policy + workspace version inheritance
 python scripts/check-doc-paths.py             # architecture doc paths
 python -m unittest scripts/test_check_english.py
+python -m unittest scripts/test_check_ignored_tests.py
 python scripts/check-english.py               # English-only contributor text
 python scripts/completion-catalog.py validate # completion catalogs vs schema
 python scripts/check-theme-contrast.py        # text >= 4.5:1 in every built-in theme, primary above secondary
