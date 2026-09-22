@@ -31,16 +31,13 @@ pub fn load_default_styles() -> &'static ClassStyles {
 
 /// Parse a semantic style JSON block into `ClassStyles`.
 ///
-/// `promptLineBg` is an **override**: the shipped asset does not set it, and a
-/// theme that leaves it out gets the band `TerminalTheme::prompt_line_bg`
-/// derives from its own terminal background (`US-0134`). One fixed hex applied
-/// to every theme is what made the band a dark stripe under dark text on a light
-/// theme.
+/// Unknown keys are ignored, `promptLineBg` among them: the prompt-line band was
+/// withdrawn by owner decision (`US-0134`), so a theme that still names one gets
+/// nothing rather than a colour nobody paints.
 ///
 /// Expected format (see `docs/terminal-semantic-highlighting.md` §7):
 /// ```jsonc
 /// {
-///   "promptLineBg": "#262626",
 ///   "styles": {
 ///     "promptSign": { "foreground": "#F92672" },
 ///     "url": { "foreground": "#66D9EF", "decoration": "underline" }
@@ -53,12 +50,6 @@ pub fn parse_semantic_json(json: &str) -> ClassStyles {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
         return styles;
     };
-
-    if let Some(bg) = v.get("promptLineBg").and_then(|s| s.as_str()) {
-        if let Some(c) = parse_hex(bg) {
-            styles.prompt_line_bg = Some(c);
-        }
-    }
 
     if let Some(obj) = v.get("styles").and_then(|s| s.as_object()) {
         for (key, val) in obj {
@@ -134,17 +125,12 @@ mod tests {
         assert!(s.style(Class::Error as u8).fg.is_some());
         assert!(s.style(Class::Url as u8).fg.is_some());
         assert_eq!(s.style(Class::Url as u8).deco, Decoration::Underline);
-        assert!(
-            s.prompt_line_bg.is_none(),
-            "the shipped asset must not pin one band colour for every theme"
-        );
     }
 
-    /// A theme that *does* name a band still gets exactly that colour.
+    /// The withdrawn band's key is just an unknown key now (`US-0134`).
     #[test]
-    fn prompt_line_bg_is_parsed_when_a_theme_sets_it() {
-        let s = parse_semantic_json(r##"{"promptLineBg": "#262626"}"##);
-        assert_eq!(s.prompt_line_bg, parse_hex("#262626"));
+    fn a_prompt_line_bg_key_is_ignored() {
+        assert!(!parse_semantic_json(r##"{"promptLineBg": "#262626"}"##).is_active());
     }
 
     #[test]

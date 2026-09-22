@@ -10,6 +10,4 @@ pub mod notif_ext;
 pub mod theme;
 
 pub use icon::{AppIcon, UiAssets};
-pub use theme::{
-    apply_list_style_override, apply_warning_legibility, brand_accent, embedded_theme_files, init,
-};
+pub use theme::{apply_list_style_override, apply_warning_legibility, brand_accent, init};

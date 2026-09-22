@@ -50,15 +50,12 @@ pub struct ClassStyle {
 pub struct ClassStyles {
     /// Resolved style per class.
     styles: Box<[ClassStyle; Class::COUNT]>,
-    /// Line-level: prompt-line background.
-    pub prompt_line_bg: Option<Hsla>,
 }
 
 impl Default for ClassStyles {
     fn default() -> Self {
         Self {
             styles: Box::new([const { ClassStyle::empty() }; Class::COUNT]),
-            prompt_line_bg: None,
         }
     }
 }
@@ -110,7 +107,6 @@ impl ClassStyles {
         self.styles
             .iter()
             .any(|style| style.fg.is_some() || style.bg.is_some())
-            || self.prompt_line_bg.is_some()
     }
 }
 

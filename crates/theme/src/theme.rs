@@ -60,18 +60,6 @@ const EMBEDDED_THEME_FILES: &[(&str, &str)] = &[
     ("twilight", include_str!("../themes/twilight.json")),
 ];
 
-/// The embedded theme JSON files, as `(label, contents)`.
-///
-/// Exposed so another crate can register every variant in a `ThemeRegistry` of
-/// its own and measure what the application will actually draw, without calling
-/// [`init`] (which needs the app globals a unit test has no reason to build).
-/// `US-0134` uses it for the terminal prompt band's contrast floor, which
-/// `scripts/check-theme-contrast.py` cannot see: the semantic palette is not in
-/// a theme file.
-pub fn embedded_theme_files() -> &'static [(&'static str, &'static str)] {
-    EMBEDDED_THEME_FILES
-}
-
 /// Override list selection style: the selected item looks like hover (bg =
 /// `list_hover`, no border).
 ///
