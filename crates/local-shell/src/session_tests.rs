@@ -165,6 +165,58 @@ fn pwsh_prompt_emits_cwd_without_parser_errors() {
     assert_powershell_prompt_emits_cwd(oneterm_core::ShellKind::Pwsh, "pwsh");
 }
 
+/// `US-0136` MAJ-1, the behavioural half of
+/// `oneterm_core`'s `bash_ps1_mark_survives_prompt_expansion`.
+///
+/// The `B` mark OneTerm appends to a bash `PS1` is *prompt escape text*: what
+/// matters is what bash prints after expanding it, which no string assertion
+/// can see. The first shipped form ended in `ESC \` next to the `\]` that
+/// closes the non-printing region, bash merged the two backslashes, and every
+/// prompt grew a stray `]` that landed inside the `Semantic::Input` region and
+/// leaked into the completion popup. So: spawn a real bash through the real
+/// PTY, let it draw a real prompt, and read the grid.
+///
+/// Skipped rather than failed when there is no bash on the host — this is a
+/// regression guard, not a reason to require bash to build OneTerm.
+#[test]
+fn bash_prompt_draws_no_stray_bracket() {
+    let cfg = oneterm_core::LocalShellConfig {
+        kind: oneterm_core::ShellKind::Bash,
+        ..Default::default()
+    };
+    let Ok(session) = spawn_guarded(cfg) else {
+        eprintln!("no bash on this host; skipping the prompt-expansion guard");
+        return;
+    };
+    // Waiting on `cwd()`, or on the first `$`, both snapshot mid-draw: OSC 7 is
+    // emitted *inside* `PROMPT_COMMAND`, and the `B` marker is the last thing
+    // written on the prompt row. Key on the shell instead — run a command and
+    // wait for its output, which cannot arrive before a whole prompt has been
+    // drawn, echoed and submitted.
+    let marker = "oneterm-prompt-drawn";
+    let _ = session.write(format!("echo {marker}\r").as_bytes());
+    // Twice: the echoed command line, then the command's own output.
+    if !wait_until(SHELL_ROUND_TRIP, || {
+        session.snapshot().text().matches(marker).count() >= 2
+    }) {
+        eprintln!(
+            "bash never completed a prompt; skipping the prompt-expansion guard. lines: {:?}",
+            snapshot_lines(&session)
+        );
+        let _ = session.close();
+        return;
+    }
+    let text = session.snapshot().text();
+    // `]` cannot appear in a prompt OneTerm generated: every mark is
+    // non-printing, and the shipped bug printed exactly this character, right
+    // after the prompt and inside the `Semantic::Input` region `B` opens.
+    assert!(
+        !text.contains(']'),
+        "the generated bash prompt must print no bracket (`US-0136` MAJ-1); grid: {text:?}"
+    );
+    session.close().expect("close bash");
+}
+
 /// DEC-0008: a ConPTY session must not pull scrollback into a grown viewport.
 #[test]
 fn local_session_grow_policy_matches_conpty() {

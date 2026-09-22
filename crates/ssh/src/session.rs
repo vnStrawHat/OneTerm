@@ -704,11 +704,46 @@ async fn request_remote_shell_env(
     Ok(())
 }
 
-/// Bootstrap command injected after `request_shell(true)` to install the
-/// OSC 7 prompt hook in the running shell without showing the script itself.
-/// The leading export guarantees `COLORTERM=truecolor` even on servers whose
-/// sshd ignores env requests (default OpenSSH `AcceptEnv LANG LC_*`).
-const SHELL_INTEGRATION_BOOTSTRAP: &str = r#"export COLORTERM=truecolor; __oneterm_osc7() { printf '\x1b]7;file://%s%s\x1b\\' "${HOSTNAME:-$(hostname)}" "$PWD"; printf '\x1b]133;A\x1b\\'; }; case ";${PROMPT_COMMAND:-};" in *";__oneterm_osc7;"*) ;; *) PROMPT_COMMAND="__oneterm_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;; esac; __oneterm_osc7; stty echo 2>/dev/null"#;
+/// Bootstrap command injected after `request_shell(true)` to install the OSC 7
+/// and OSC 133 prompt hooks in the running shell without showing the script
+/// itself. The leading export guarantees `COLORTERM=truecolor` even on servers
+/// whose sshd ignores env requests (default OpenSSH `AcceptEnv LANG LC_*`).
+///
+/// Unlike a local shell, which OneTerm can only reach through environment
+/// variables, this line is *typed into a running shell* — so it can define
+/// functions, and both branches emit the full OSC 133 set (`US-0136`):
+///
+/// * zsh — `precmd_functions` for `D;<code>` + OSC 7 + `A`, `preexec_functions`
+///   for `C`, and `B` appended to the live `PS1`. The array assignments sit
+///   inside an `eval` because a POSIX `sh` parses the whole line before running
+///   any of it and `name=(...)` is a syntax error there.
+/// * bash — `PROMPT_COMMAND` for `D` + OSC 7 + `A`, `PS0` for `C`, and `B`
+///   appended to the live `PS1`.
+///
+/// Both append rather than replace: the `case` guard keeps OneTerm's function
+/// first in an existing `PROMPT_COMMAND`, `precmd_functions` keeps the user's
+/// entries, and `PS1` is extended, not overwritten. `__oneterm_precmd` restores
+/// `$?` so whatever runs after it still sees the user's exit status. Any other
+/// shell (`dash`, `ash`) reaches neither branch and gets what it got before:
+/// the one-shot OSC 7 + `A` from the final `__oneterm_precmd` call.
+///
+/// Two details are easy to get wrong and were (`US-0136` MAJ-1, MED-1):
+///
+/// * bash's `B` goes into `PS1` as the four **raw bytes**
+///   `\001 ESC ]133;B BEL \002`, never as `__oneterm_mark`'s ST-terminated
+///   output and never as backslash escapes. `\001`/`\002` are what bash's
+///   `\[`/`\]` expand to, so the mark carries nothing prompt expansion can
+///   touch: an `ESC \` next to `\]` merged into `\\` and printed a stray `]`
+///   (`US-0136` MAJ-1), and a leading `\[` was swallowed by a user `PS1` ending
+///   in a lone backslash (NEW-MIN-1). `printf` builds them rather than `$'…'`,
+///   which a POSIX `sh` cannot parse and this whole line must parse everywhere.
+///   zsh is unaffected — it expands no backslashes in a prompt — so its `%{…%}`
+///   group still carries `__oneterm_mark`'s bytes.
+/// * the closing `__oneterm_precmd` (the one that paints the first prompt's
+///   OSC 7 and `A`) **clears the seen flag again**. Without that it consumes
+///   the guard itself and the first prompt the user ever sees reports a `D` for
+///   a command they never ran.
+const SHELL_INTEGRATION_BOOTSTRAP: &str = r#"export COLORTERM=truecolor; __oneterm_mark() { printf '\033]133;%s\033\\' "$1"; }; __oneterm_precmd() { __oneterm_status=$?; if [ -n "${__oneterm_seen-}" ]; then __oneterm_mark "D;$__oneterm_status"; fi; __oneterm_seen=1; printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-$(hostname)}" "$PWD"; __oneterm_mark A; return $__oneterm_status; }; __oneterm_preexec() { __oneterm_mark C; }; if [ -n "${ZSH_VERSION-}" ]; then eval 'precmd_functions=(__oneterm_precmd $precmd_functions); preexec_functions=($preexec_functions __oneterm_preexec)'; PS1="$PS1%{$(__oneterm_mark B)%}"; elif [ -n "${BASH_VERSION-}" ]; then case ";${PROMPT_COMMAND:-};" in *";__oneterm_precmd;"*) ;; *) PROMPT_COMMAND="__oneterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;; esac; PS0="$(__oneterm_mark C)"; PS1="$PS1$(printf '\001\033]133;B\007\002')"; fi; __oneterm_precmd; __oneterm_seen=; stty echo 2>/dev/null"#;
 
 /// Send the shell-integration bootstrap after the shell is open.
 async fn send_shell_integration_bootstrap(
@@ -1126,6 +1161,77 @@ mod tests {
             SHELL_INTEGRATION_BOOTSTRAP.starts_with("export COLORTERM=truecolor;"),
             "{SHELL_INTEGRATION_BOOTSTRAP}"
         );
+    }
+
+    /// `US-0136`: the bootstrap installs the whole OSC 133 set, and `D` carries
+    /// the exit code in the `133;D;<code>` form the engine parses.
+    #[test]
+    fn shell_integration_bootstrap_installs_the_full_mark_set() {
+        let s = SHELL_INTEGRATION_BOOTSTRAP;
+        // One helper, one ST (`ESC \`) — a doubled backslash would print.
+        assert!(
+            s.contains(r"__oneterm_mark() { printf '\033]133;%s\033\\' "),
+            "{s}"
+        );
+        assert!(s.contains(r#"__oneterm_mark "D;$__oneterm_status""#), "{s}");
+        assert!(s.contains("__oneterm_mark A;"), "{s}");
+        assert!(
+            s.contains("__oneterm_preexec() { __oneterm_mark C; }"),
+            "{s}"
+        );
+        assert!(s.contains("$(__oneterm_mark B)"), "{s}");
+        // `$?` survives the hook.
+        assert!(s.contains(r#"if [ -n "${__oneterm_seen-}" ]"#), "{s}");
+        assert!(s.contains("return $__oneterm_status;"), "{s}");
+        // `US-0136` MED-1: the closing call paints the first prompt's OSC 7 and
+        // `A` — and must then put the guard back. Without the reset it consumes
+        // the guard itself and the first prompt the user sees reports a `D` for
+        // a command they never ran.
+        assert!(
+            s.ends_with("__oneterm_precmd; __oneterm_seen=; stty echo 2>/dev/null"),
+            "{s}"
+        );
+        // One typed line: a newline would run half of it as its own command.
+        assert!(!s.contains('\n'), "{s}");
+    }
+
+    /// The remote shell decides the mechanism, and neither branch replaces what
+    /// the user already had.
+    #[test]
+    fn shell_integration_bootstrap_branches_on_the_remote_shell() {
+        let s = SHELL_INTEGRATION_BOOTSTRAP;
+        assert!(s.contains(r#"if [ -n "${ZSH_VERSION-}" ]"#), "{s}");
+        assert!(s.contains(r#"elif [ -n "${BASH_VERSION-}" ]"#), "{s}");
+        // zsh: precmd/preexec, appended to the user's arrays. The assignments
+        // live in an `eval` because a POSIX `sh` parses the whole line first and
+        // `name=(...)` is a syntax error there.
+        assert!(
+            s.contains("eval 'precmd_functions=(__oneterm_precmd $precmd_functions); preexec_functions=($preexec_functions __oneterm_preexec)'"),
+            "{s}"
+        );
+        assert!(s.contains(r#"PS1="$PS1%{$(__oneterm_mark B)%}""#), "{s}");
+        // bash: PROMPT_COMMAND kept, PS0 for C, PS1 extended with the `\[…\]`
+        // zero-width wrapper.
+        assert!(
+            s.contains(r#"PROMPT_COMMAND="__oneterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}""#),
+            "{s}"
+        );
+        assert!(s.contains(r#"PS0="$(__oneterm_mark C)""#), "{s}");
+        // `US-0136` MAJ-1 and NEW-MIN-1: bash's `B` goes into `PS1` as four raw
+        // bytes — `\001 ESC ]133;B BEL \002` — and no backslash, so neither end
+        // of the concatenation has anything prompt expansion can act on. `\001`
+        // and `\002` are what bash's `\[` and `\]` expand to. `printf` builds
+        // them because a POSIX `sh` must still *parse* this line and has no
+        // `$'…'`. Same four bytes as `oneterm_core`'s local `__ot_b`.
+        assert!(
+            s.contains(r#"PS1="$PS1$(printf '\001\033]133;B\007\002')""#),
+            "{s}"
+        );
+        assert!(!s.contains(r"\[$(__oneterm_mark B)\]"), "{s}");
+        assert!(!s.contains(r"'\[\e]133;B\a\]'"), "{s}");
+        // zsh is unaffected — it expands no backslashes in a prompt — so its
+        // group still carries the bytes.
+        assert!(s.contains(r#"PS1="$PS1%{$(__oneterm_mark B)%}""#), "{s}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

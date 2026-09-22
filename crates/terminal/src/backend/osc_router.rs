@@ -227,6 +227,11 @@ impl<T: PtyTransport> OscRouter<T> {
             }
             // ── OSC 133: shell integration ─────────────────────────────
             VtEvent::ShellMark(mark) => {
+                // The one place a mark can be observed without a renderer.
+                // Which marks a shell actually emits is the per-shell question
+                // `docs/terminal-backend.md` §6.1.2 answers, and `RUST_LOG=debug`
+                // is how a walk checks it against a live tab (`US-0136`).
+                log::debug!("OscRouter: shell mark {mark:?}");
                 {
                     let mut st = self.state.lock();
                     match mark {

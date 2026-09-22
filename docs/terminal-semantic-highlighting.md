@@ -284,6 +284,18 @@ same reason they are: a row outside the rescan did not change, so neither did it
 because *which* prompt owns the code is a fact about the whole viewport rather than about
 the line being scanned.
 
+**Which shells actually feed this path** (`US-0136`). The fast path is only as good as its
+producer, and the producer is OneTerm's own injected integration, whose ceiling is set by
+how it reaches each shell — the spawn environment for a local shell, one typed line for
+SSH. `cmd.exe` emits `A` and `B` only (`PROMPT` is its one hook and has no error-level
+code), local zsh emits `A`, `B` and `D` (`preexec` is a function no environment variable
+can carry), and everything else — PowerShell, pwsh, local bash, and both branches of the
+SSH bootstrap — emits the full set. The per-shell table, the mechanism behind each mark and
+the reason for each gap live in
+[`terminal-backend.md` §6.1.2](terminal-backend.md). Treat a missing `C` or `D` as normal:
+a row with no mark takes the regex fallback, and a prompt with no `D` behind it is simply
+untinted.
+
 **The Windows sign rule** (`BUG-0073`) — the one subtle part of that fallback, because on
 Windows the sign is `>`, a character that ordinary output reaches all the time:
 

@@ -153,20 +153,146 @@ pub struct ResolvedShell {
     pub cwd: Option<PathBuf>,
 }
 
+/// `cmd.exe` `PROMPT`: OSC 7 (cwd), OSC 133 `A`, the prompt text, OSC 133 `B`.
+/// `$E` = ESC, `$P` = cwd, `$G` = `>`.
+///
+/// `A` and `B` are the whole set `cmd` can reach: `PROMPT` is its only hook, it
+/// is expanded once before the prompt, and its `$` codes have nothing for the
+/// error level — so there is no place to put `C` (output start) or `D` (command
+/// done). See `docs/terminal-backend.md` §6.1.2.
 const CMD_OSC7_PROMPT: &str = "$E]7;$P$E\\$E]133;A$E\\$P$G$E]133;B$E\\";
-/// zsh PS1 with OSC 133 A/B markers. Each OSC is terminated by `ESC \` (ST);
-/// the wire must carry exactly one backslash after ESC — a doubled `\\` in
-/// the Rust literal would print a stray `\` and skew the `%{…%}` width.
-const ZSH_OSC133_PS1: &str = "%{\x1b]133;A\x1b\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\%}";
-const POWERSHELL_OSC7_PROMPT_INIT: &str = r#"$global:__OneTermOriginalPrompt=$function:prompt;function global:prompt{$e=[char]27;[Console]::Write($e+']7;'+$pwd.Path+$e+'\');& $global:__OneTermOriginalPrompt}"#;
+/// zsh PS1 with OSC 133 `D`/`A`/`B` markers. Each OSC is terminated by `ESC \`
+/// (ST); the wire must carry exactly one backslash after ESC — a doubled `\\`
+/// in the Rust literal would print a stray `\` and skew the `%{…%}` width.
+///
+/// `%?` is zsh's own prompt escape for the last command's exit status, which is
+/// what makes `D;<code>` reachable from `PS1` alone. `C` (output start) is not:
+/// it needs `preexec`, which is a *function*, and no environment variable
+/// carries zsh code (`US-0136`).
+const ZSH_OSC133_PS1: &str =
+    "%{\x1b]133;D;%?\x1b\\\x1b]133;A\x1b\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\%}";
+/// bash `PROMPT_COMMAND`: OSC 133 `D;<code>`, OSC 7 (cwd), OSC 133 `A`, and the
+/// one-time append of `B` to whatever `PS1` holds.
+///
+/// Three things are deliberate:
+///
+/// * `$?` is captured first and restored by the trailing subshell, so a
+///   user-supplied `PROMPT_COMMAND` appended after this one still sees the
+///   status of *their* command.
+/// * `B` is appended to `PS1` here rather than injected as a `PS1` environment
+///   variable, because an rc file sets `PS1` after the environment is read and
+///   would drop the marker. `PROMPT_COMMAND` runs after every rc file; the
+///   `case` keeps the append to one.
+/// * `D` is skipped on the first prompt (`__ot_seen`): a `D` before any `C`
+///   would report a completed command that never ran.
+///
+/// **`__ot_b`, the `B` mark, is `$'\001\033]133;B\007\002'` — four raw bytes and
+/// no backslash at all.** `\001` and `\002` are `RL_PROMPT_START_IGNORE` and
+/// `RL_PROMPT_END_IGNORE`, which is exactly what bash's `\[` and `\]` expand to;
+/// putting them in the value directly means the mark carries nothing that prompt
+/// expansion can touch, at either end.
+///
+/// That is the third form this mark has taken, and both earlier ones failed at a
+/// seam a backslash created (`US-0136` MAJ-1, then NEW-MIN-1):
+///
+/// * `\[` + `ESC \` + `\]` — the ST's trailing backslash and the `\` of `\]`
+///   merge into the escape `\\`, so bash printed one backslash and a bare `]`,
+///   and the non-printing region never closed.
+/// * `\[\e]133;B\a\]` — fixed that end by terminating with BEL, but still *began*
+///   with a backslash, so a user `PS1` ending in a lone `\` swallowed the `\[`
+///   and the region never opened.
+///
+/// With raw bytes there is no end to get wrong: whatever the user's `PS1` ends
+/// in, the concatenation cannot change how either side expands. BEL stays the
+/// terminator — the engine accepts it as readily as ST
+/// (`crates/vt/src/terminal/dispatch.rs`;
+/// `osc_133_marks_reach_the_cells_and_the_anchor_list` feeds `\x07`) — and the
+/// `case` guard compares the same bytes it appends, which is what stops a second
+/// copy appearing on the second prompt.
+///
+/// The SSH bootstrap builds the same four bytes with `printf`, because its line
+/// must also *parse* in a POSIX `sh` that has no `$'…'`.
+const BASH_OSC133_PROMPT_COMMAND: &str = r#"__ot=$?; __ot_b=$'\001\033]133;B\007\002'; if [ -n "${__ot_seen-}" ]; then printf '\033]133;D;%s\033\\' "$__ot"; fi; __ot_seen=1; printf '\033]7;file://%s%s\033\\' "$HOSTNAME" "$PWD"; printf '\033]133;A\033\\'; case $PS1 in *"$__ot_b"*) ;; *) PS1="$PS1$__ot_b" ;; esac; ( exit $__ot )"#;
+/// What a user-supplied `PROMPT_COMMAND` must contain for OneTerm to stay out
+/// of it entirely: an OSC 133 mark of their own. `US-0136` MED-2 — the local
+/// integration has no on/off switch, so the opt-out has to be something the
+/// user can express in the value itself, and "I already emit these" is the one
+/// statement that makes OneTerm's copy redundant rather than merely unwanted.
+const OSC133_OPT_OUT: &str = "133;";
+/// bash `PS0` — expanded after a complete command is read and before it runs
+/// (bash ≥ 4.4), which is exactly OSC 133 `C`. `\e` and `\\` are prompt
+/// escapes, so the wire carries `ESC ] 1 3 3 ; C ESC \`.
+const BASH_OSC133_PS0: &str = r"\e]133;C\e\\";
+/// The PowerShell / pwsh `-Command` startup string: wrap the global `prompt`
+/// function so it emits `D;<code>`, OSC 7 and `A` before the original prompt
+/// and `B` after it, and bind `Enter` through PSReadLine so `C` is emitted when
+/// a command is submitted.
+///
+/// * The exit code is `$?` first and `$LASTEXITCODE` only as the *number* for a
+///   failure: `$LASTEXITCODE` is stale after a cmdlet (measured — `cmd /c exit 3`
+///   then `Get-Item .` leaves it at 3 with `$?` true), and `$?` carries no number.
+/// * `B` is appended to the original prompt's return value rather than written
+///   to the console, because the host writes that value *after* this function
+///   returns; writing `B` here would put it before the prompt text. The
+///   delegation sits in a `try`, so a user `prompt` that throws costs its own
+///   text and nothing else — `A` has already gone out, and a region opened and
+///   never closed is worse than a fallback prompt. Several returned objects are
+///   joined with the host's own newline rather than concatenated, so a
+///   two-line prompt stays two lines.
+/// * The `Enter` handler **chains**: it reads what `Enter` is bound to now and
+///   calls that, so a profile's `ValidateAndAcceptLine` keeps validating. It
+///   installs only when that name is a real public static of
+///   `PSConsoleReadLine` — `[…PSConsoleReadLine].GetMethod($f)` — because that
+///   is the question being asked: *can I still call this afterwards?*
+///   Comparing against the string `CustomAction` instead is not the same
+///   question and got it wrong (`US-0136` NEW-MAJ-1):
+///   `Get-PSReadLineKeyHandler` reports `CustomAction` only for a script block
+///   bound **without** a `-BriefDescription`; with one — the idiomatic form —
+///   `Function` *is* that description, so the comparison passed and every
+///   `Enter` then called a static method that does not exist and never
+///   submitted the line. `GetMethod` declines both script-block shapes, and
+///   OneTerm's own handler is bound without a description, so a second run of
+///   the init still declines and the re-entrancy guard survives.
+///   It is installed at all only when `Set-PSReadLineKeyHandler` resolves; a
+///   host without PSReadLine keeps its own `Enter`. The alternative, replacing
+///   `PSConsoleHostReadLine`, costs the user their line editor when it is wrong.
+/// * No `"` anywhere: this is one `-Command` argument and goes through Windows
+///   command-line quoting.
+const POWERSHELL_OSC133_PROMPT_INIT: &str = concat!(
+    r"$global:__OneTermOriginalPrompt=$function:prompt;",
+    r"function global:prompt{",
+    r"$ok=$?;$e=[char]27;",
+    r"if($global:__OneTermRan){",
+    r"$global:__OneTermRan=$false;",
+    r"$c=if($ok){0}elseif($global:LASTEXITCODE -gt 0){$global:LASTEXITCODE}else{1};",
+    r"[Console]::Write($e+']133;D;'+$c+$e+'\')",
+    r"};",
+    r"[Console]::Write($e+']7;'+$pwd.Path+$e+'\'+$e+']133;A'+$e+'\');",
+    r"$p='';",
+    r"try{$p=(& $global:__OneTermOriginalPrompt) -join [Environment]::NewLine}",
+    r"catch{$p='PS '+$pwd.Path+'> '};",
+    r"$p+$e+']133;B'+$e+'\'",
+    r"};",
+    r"if(Get-Command Set-PSReadLineKeyHandler -ErrorAction Ignore){",
+    r"$b=Get-PSReadLineKeyHandler -Bound|Where-Object{$_.Key -eq 'Enter'}|Select-Object -First 1;",
+    r"$f=if($b){$b.Function}else{'AcceptLine'};",
+    r"if([Microsoft.PowerShell.PSConsoleReadLine].GetMethod($f)){",
+    r"$global:__OneTermEnter=$f;",
+    r"Set-PSReadLineKeyHandler -Key Enter -ScriptBlock{",
+    r"$m=$global:__OneTermEnter;",
+    r"[Microsoft.PowerShell.PSConsoleReadLine]::$m();",
+    r"$global:__OneTermRan=$true;",
+    r"[Console]::Write([char]27+']133;C'+[char]27+'\')",
+    r"}}}",
+);
 
 fn powershell_init(utf8: bool) -> String {
     if utf8 {
         format!(
-            "[Console]::OutputEncoding=[Text.UTF8Encoding]::new();{POWERSHELL_OSC7_PROMPT_INIT}"
+            "[Console]::OutputEncoding=[Text.UTF8Encoding]::new();{POWERSHELL_OSC133_PROMPT_INIT}"
         )
     } else {
-        POWERSHELL_OSC7_PROMPT_INIT.to_string()
+        POWERSHELL_OSC133_PROMPT_INIT.to_string()
     }
 }
 
@@ -368,13 +494,36 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             }
         }
         ShellKind::Bash => {
-            // PROMPT_COMMAND runs before each prompt — emit OSC 7 (cwd) + OSC 133 A.
-            if !env.contains_key("PROMPT_COMMAND") {
-                env.insert(
-                    "PROMPT_COMMAND".into(),
-                    "printf '\\x1b]7;file://%s%s\\x1b\\\\' \"$HOSTNAME\" \"$PWD\"; printf '\\x1b]133;A\\x1b\\\\'"
-                        .into(),
-                );
+            // PROMPT_COMMAND runs before each prompt (D + OSC 7 + A, and the
+            // PS1 append for B); PS0 runs between reading a command and running
+            // it (C).
+            //
+            // Two rules, not one, because "yield to the user" and "do not break
+            // the user" want opposite things here (`US-0136`, MED-2):
+            //
+            // * a user `PROMPT_COMMAND` that **already emits OSC 133** is left
+            //   exactly as it is. That is the opt-out: a user running their own
+            //   shell integration says so by emitting the marks, and two sets of
+            //   marks per prompt is worse than none of OneTerm's.
+            // * any other user `PROMPT_COMMAND` is **appended to**, never
+            //   replaced — OneTerm's part restores `$?` before it runs, so the
+            //   user's hook still sees its own command's status.
+            match env.get("PROMPT_COMMAND") {
+                Some(user) if user.contains(OSC133_OPT_OUT) => {}
+                Some(user) if !user.trim().is_empty() => {
+                    let value = format!("{BASH_OSC133_PROMPT_COMMAND}; {user}");
+                    env.insert("PROMPT_COMMAND".into(), value);
+                    env.entry("PS0".into())
+                        .or_insert_with(|| BASH_OSC133_PS0.to_string());
+                }
+                _ => {
+                    env.insert(
+                        "PROMPT_COMMAND".into(),
+                        BASH_OSC133_PROMPT_COMMAND.to_string(),
+                    );
+                    env.entry("PS0".into())
+                        .or_insert_with(|| BASH_OSC133_PS0.to_string());
+                }
             }
         }
         ShellKind::Zsh => {
@@ -402,23 +551,72 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
 mod tests {
     use super::*;
 
-    #[test]
-    fn generated_windows_prompts_emit_osc_7() {
-        assert!(CMD_OSC7_PROMPT.contains("$E]7;$P$E\\"));
-        assert!(POWERSHELL_OSC7_PROMPT_INIT.contains("']7;'+$pwd.Path"));
-        assert!(POWERSHELL_OSC7_PROMPT_INIT.contains("& $global:__OneTermOriginalPrompt"));
-        assert!(!POWERSHELL_OSC7_PROMPT_INIT.contains('"'));
+    /// The shell literal whose *value* bash's `PS1` must end up carrying
+    /// (`US-0136` MAJ-1, then NEW-MIN-1). The expectation, written out here:
+    /// `BASH_OSC133_PROMPT_COMMAND` embeds it, and `crates/ssh`'s bootstrap
+    /// builds the same four bytes with `printf`.
+    const BASH_PS1_MARK: &str = r"$'\001\033]133;B\007\002'";
+
+    /// The bytes a shell ANSI-C literal `$'…'` stands for, for the `\ooo`
+    /// octal escapes this one uses. Enough to check the mark, not a general
+    /// `$'…'` parser.
+    fn ansi_c_bytes(literal: &str) -> Vec<u8> {
+        let body = literal
+            .strip_prefix("$'")
+            .and_then(|rest| rest.strip_suffix('\''))
+            .unwrap_or_else(|| panic!("not an ANSI-C literal: {literal}"));
+        let mut out = Vec::new();
+        let mut chars = body.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c as u8);
+                continue;
+            }
+            let mut octal = String::new();
+            while octal.len() < 3 {
+                match chars.peek() {
+                    Some(digit) if digit.is_digit(8) => octal.push(*digit),
+                    _ => break,
+                }
+                chars.next();
+            }
+            assert!(!octal.is_empty(), "only octal escapes are used: {literal}");
+            out.push(u8::from_str_radix(&octal, 8).expect("octal byte"));
+        }
+        out
     }
 
     #[test]
-    fn zsh_ps1_carries_exactly_one_backslash_after_esc() {
-        // OSC 133 A/B must be terminated by ST = ESC + one backslash; a second
+    fn generated_windows_prompts_emit_osc_7() {
+        assert!(CMD_OSC7_PROMPT.contains("$E]7;$P$E\\"));
+        assert!(POWERSHELL_OSC133_PROMPT_INIT.contains("']7;'+$pwd.Path"));
+        assert!(POWERSHELL_OSC133_PROMPT_INIT.contains("& $global:__OneTermOriginalPrompt"));
+        assert!(!POWERSHELL_OSC133_PROMPT_INIT.contains('"'));
+    }
+
+    /// `US-0136`: `cmd.exe` marks the prompt region and nothing else — its only
+    /// hook is `PROMPT`, which runs once before the prompt and has no `$` code
+    /// for the error level, so `C` and `D` are unreachable.
+    #[test]
+    fn cmd_prompt_emits_the_prompt_region_only() {
+        assert!(CMD_OSC7_PROMPT.contains("$E]133;A$E\\"));
+        assert!(CMD_OSC7_PROMPT.contains("$E]133;B$E\\"));
+        assert!(!CMD_OSC7_PROMPT.contains("133;C"));
+        assert!(!CMD_OSC7_PROMPT.contains("133;D"));
+    }
+
+    #[test]
+    fn zsh_ps1_carries_the_exit_code_and_one_backslash_after_esc() {
+        // OSC 133 D/A/B must be terminated by ST = ESC + one backslash; a second
         // backslash would print and skew the %{…%} zero-width accounting.
+        // `%?` is zsh's own last-exit-status escape — `US-0136`.
         assert_eq!(
             ZSH_OSC133_PS1.as_bytes(),
-            b"%{\x1b]133;A\x1b\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\%}"
+            b"%{\x1b]133;D;%?\x1b\\\x1b]133;A\x1b\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\%}"
         );
         assert!(!ZSH_OSC133_PS1.contains("\\\\"));
+        // `C` needs `preexec`, which no environment variable can carry.
+        assert!(!ZSH_OSC133_PS1.contains("133;C"));
     }
 
     #[test]
@@ -431,6 +629,270 @@ mod tests {
         let r = resolve_shell(&cfg).unwrap();
         assert_eq!(r.env.get("PS1").map(String::as_str), Some(ZSH_OSC133_PS1));
         assert_eq!(r.args, vec!["-l"]);
+    }
+
+    fn resolved_bash(env: &[(&str, &str)]) -> ResolvedShell {
+        let cfg = LocalShellConfig {
+            kind: ShellKind::Bash,
+            program: Some(PathBuf::from("/bin/bash")),
+            env: env
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            ..Default::default()
+        };
+        resolve_shell(&cfg).unwrap()
+    }
+
+    /// `US-0136`: bash reaches all four marks — `D` and `A` from
+    /// `PROMPT_COMMAND`, `C` from `PS0`, `B` appended to `PS1` at prompt time.
+    #[test]
+    fn bash_emits_the_full_mark_set() {
+        let r = resolved_bash(&[]);
+        let pc = r.env.get("PROMPT_COMMAND").expect("PROMPT_COMMAND");
+        // `D` carries the exit code in the form the engine parses
+        // (`crates/vt/src/terminal/dispatch.rs`, `133;D;<code>`).
+        assert!(
+            pc.contains(r#"printf '\033]133;D;%s\033\\' "$__ot""#),
+            "{pc}"
+        );
+        assert!(pc.contains(r"printf '\033]133;A\033\\'"), "{pc}");
+        // The append is one concatenation of the mark, and the idempotence
+        // guard compares the very text it appends.
+        assert!(pc.contains(&format!("__ot_b={BASH_PS1_MARK};")), "{pc}");
+        assert!(
+            pc.contains(r#"case $PS1 in *"$__ot_b"*) ;; *) PS1="$PS1$__ot_b""#),
+            "{pc}"
+        );
+        assert_eq!(r.env.get("PS0").map(String::as_str), Some(BASH_OSC133_PS0));
+        assert_eq!(BASH_OSC133_PS0, r"\e]133;C\e\\");
+    }
+
+    /// `US-0136` MAJ-1 and NEW-MIN-1, the two regressions this test exists
+    /// for: the `B` mark appended to a bash `PS1` must survive **prompt
+    /// expansion**, and must survive it whatever the user's `PS1` ends in.
+    ///
+    /// Two forms failed before this one, each at a seam a backslash created:
+    ///
+    /// * `\[` + `ESC \` + `\]` — the ST's trailing backslash merged with the
+    ///   `\` of `\]` into the escape `\\`, so bash printed a bare `]` and never
+    ///   closed the non-printing region.
+    /// * `\[\e]133;B\a\]` — safe at the end, but it still *began* with a
+    ///   backslash, so a user `PS1` ending in a lone `\` swallowed the `\[`.
+    ///
+    /// The invariant that makes both impossible, and which a Rust test can
+    /// hold: the value is raw bytes, it starts with `RL_PROMPT_START_IGNORE`
+    /// and ends with `RL_PROMPT_END_IGNORE`, and it contains no backslash at
+    /// all — so neither end of the concatenation has anything prompt expansion
+    /// can act on. The measured half is in the packet's evidence (`${PS1@P}`
+    /// over five `PS1` shapes) and in
+    /// `crates/local-shell/src/session_tests.rs`, which draws a real prompt
+    /// through a real PTY.
+    #[test]
+    fn bash_ps1_mark_survives_prompt_expansion() {
+        // Spelled out here rather than read back out of the production string:
+        // a test that derives its expectation from the thing under test cannot
+        // fail. `crates/ssh` asserts its own copy of the same four bytes.
+        assert!(
+            BASH_OSC133_PROMPT_COMMAND.contains(&format!("__ot_b={BASH_PS1_MARK};")),
+            "{BASH_OSC133_PROMPT_COMMAND}"
+        );
+        let mark = ansi_c_bytes(BASH_PS1_MARK);
+        // `\001`/`\002` are exactly what bash's `\[`/`\]` expand to, so the
+        // region is marked without writing a backslash anywhere. BEL, not ST,
+        // ends the sequence; the engine accepts either
+        // (`crates/vt/src/terminal/terminal_tests.rs`
+        // `osc_133_marks_reach_the_cells_and_the_anchor_list` feeds `\x07`).
+        assert_eq!(mark, b"\x01\x1b]133;B\x07\x02");
+        assert_eq!(mark.first(), Some(&0x01));
+        assert_eq!(mark.last(), Some(&0x02));
+        assert_eq!(mark.iter().filter(|b| **b == 0x01).count(), 1);
+        assert_eq!(mark.iter().filter(|b| **b == 0x02).count(), 1);
+        // The whole point: nothing here can merge with a neighbour.
+        assert!(!mark.contains(&b'\\'), "{mark:?}");
+        // Concatenated after a `PS1` that ends badly, the mark still arrives
+        // whole and the region still balances. `x\` is NEW-MIN-1's case.
+        for tail in ["x", "x\\", "x\\\\", "x]", "x%", "\\u@\\h:\\w\\$ "] {
+            let mut prompt = tail.as_bytes().to_vec();
+            prompt.extend_from_slice(&mark);
+            assert!(prompt.ends_with(&mark), "{tail:?}");
+            assert!(prompt.starts_with(tail.as_bytes()), "{tail:?}");
+            assert_eq!(prompt.iter().filter(|b| **b == 0x01).count(), 1, "{tail:?}");
+            assert_eq!(prompt.iter().filter(|b| **b == 0x02).count(), 1, "{tail:?}");
+        }
+    }
+
+    /// `US-0136` MED-2: the opt-out. A user `PROMPT_COMMAND` that already emits
+    /// OSC 133 means "I run my own integration", so OneTerm touches neither
+    /// `PROMPT_COMMAND` nor `PS0` — two sets of marks per prompt is worse than
+    /// none of OneTerm's.
+    #[test]
+    fn bash_yields_to_a_prompt_command_that_already_emits_osc133() {
+        let user = r#"printf '\033]133;A\033\\'"#;
+        let r = resolved_bash(&[("PROMPT_COMMAND", user)]);
+        assert_eq!(r.env.get("PROMPT_COMMAND").map(String::as_str), Some(user));
+        assert_eq!(r.env.get("PS0"), None, "the opt-out covers `C` too");
+    }
+
+    /// The command's status must survive OneTerm's hook: captured first,
+    /// skipped on the very first prompt, restored by the trailing subshell.
+    #[test]
+    fn bash_preserves_the_exit_status_and_skips_the_first_prompt() {
+        let pc = BASH_OSC133_PROMPT_COMMAND;
+        assert!(pc.starts_with("__ot=$?;"), "{pc}");
+        assert!(pc.trim_end().ends_with("( exit $__ot )"), "{pc}");
+        assert!(pc.contains(r#"if [ -n "${__ot_seen-}" ]"#), "{pc}");
+    }
+
+    /// A user's own `PROMPT_COMMAND` is appended to, never replaced — and it
+    /// runs after the subshell that restores `$?`.
+    #[test]
+    fn bash_appends_to_a_user_prompt_command() {
+        let r = resolved_bash(&[("PROMPT_COMMAND", "my_hook")]);
+        let pc = r.env.get("PROMPT_COMMAND").expect("PROMPT_COMMAND");
+        assert_eq!(pc, &format!("{BASH_OSC133_PROMPT_COMMAND}; my_hook"));
+        assert!(pc.starts_with(BASH_OSC133_PROMPT_COMMAND));
+        assert!(pc.ends_with("; my_hook"));
+    }
+
+    /// A user's own `PS0` wins outright; there is nothing to append to a single
+    /// expansion point.
+    #[test]
+    fn bash_keeps_a_user_ps0() {
+        let r = resolved_bash(&[("PS0", "mine")]);
+        assert_eq!(r.env.get("PS0").map(String::as_str), Some("mine"));
+    }
+
+    /// `US-0136`: the PowerShell prompt wrapper emits `D` + OSC 7 + `A` before
+    /// the original prompt, appends `B` to what it returns, and binds `Enter`
+    /// for `C` only when PSReadLine is there.
+    #[test]
+    fn powershell_init_emits_the_full_mark_set() {
+        let init = powershell_init(true);
+        assert!(init.starts_with("[Console]::OutputEncoding="));
+        for marker in [
+            "']133;D;'+$c+$e+'\\'",
+            "']133;A'+$e+'\\'",
+            "']133;B'+$e+'\\'",
+            "']133;C'+[char]27+'\\'",
+        ] {
+            assert!(init.contains(marker), "missing {marker} in {init}");
+        }
+        // `$?` first, `$LASTEXITCODE` only as the number for a failure: it is
+        // stale after a cmdlet.
+        assert!(init.contains("$ok=$?;"));
+        assert!(init.contains("$c=if($ok){0}elseif($global:LASTEXITCODE -gt 0)"));
+        // `C` is optional, never at the cost of the line editor.
+        assert!(init.contains("if(Get-Command Set-PSReadLineKeyHandler -ErrorAction Ignore){"));
+        // `US-0136` MED-3: the `Enter` handler *chains* — it reads the current
+        // binding and calls it, so a profile's `ValidateAndAcceptLine` keeps
+        // validating instead of being silently replaced by plain `AcceptLine`.
+        assert!(init.contains(
+            "$b=Get-PSReadLineKeyHandler -Bound|Where-Object{$_.Key -eq 'Enter'}\
+             |Select-Object -First 1;"
+        ));
+        assert!(init.contains("$f=if($b){$b.Function}else{'AcceptLine'};"));
+        assert!(init.contains("[Microsoft.PowerShell.PSConsoleReadLine]::$m();"));
+        // `US-0136` NEW-MAJ-1: the guard asks whether the bound name is a real
+        // public static it can call afterwards. Comparing against the string
+        // `CustomAction` asked a different question and got the common case
+        // wrong — `Get-PSReadLineKeyHandler` reports that string only for a
+        // script block bound *without* a `-BriefDescription`.
+        assert!(init.contains("if([Microsoft.PowerShell.PSConsoleReadLine].GetMethod($f)){"));
+        assert!(!init.contains("-ne 'CustomAction'"), "{init}");
+        // `US-0136` MIN-1/MIN-2: a user `prompt` that throws still closes the
+        // region, and several returned objects keep the host's own line break.
+        assert!(
+            init.contains(
+                "try{$p=(& $global:__OneTermOriginalPrompt) -join [Environment]::NewLine}"
+            )
+        );
+        assert!(init.contains("catch{$p='PS '+$pwd.Path+'> '};"));
+        // No `D` before the first command.
+        assert!(init.contains("if($global:__OneTermRan){"));
+        // One `-Command` argument, so no double quote may appear in it.
+        assert!(!init.contains('"'));
+        assert_eq!(powershell_init(false), POWERSHELL_OSC133_PROMPT_INIT);
+    }
+
+    /// Run the generated init in `exe` with `binding` already applied, and
+    /// report whether it installed its `Enter` handler and what it chained to.
+    ///
+    /// `None` = that host is not on this machine.
+    #[cfg(windows)]
+    fn enter_guard_verdict(exe: &str, label: &str, binding: &str) -> Option<String> {
+        use std::io::Write;
+
+        let script = std::env::temp_dir().join(format!("oneterm-us0136-{label}.ps1"));
+        let body = format!(
+            "Import-Module PSReadLine -ErrorAction SilentlyContinue\n\
+             {binding}\n\
+             {POWERSHELL_OSC133_PROMPT_INIT}\n\
+             if ($global:__OneTermEnter) {{ 'INSTALLED:' + $global:__OneTermEnter }} \
+             else {{ 'DECLINED' }}\n"
+        );
+        std::fs::File::create(&script)
+            .and_then(|mut file| file.write_all(body.as_bytes()))
+            .expect("write the probe script");
+        let output = std::process::Command::new(exe)
+            .args(["-NoLogo", "-NoProfile", "-File"])
+            .arg(&script)
+            .output();
+        let _ = std::fs::remove_file(&script);
+        let output = output.ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Some(
+            stdout
+                .lines()
+                .rfind(|line| !line.trim().is_empty())
+                .unwrap_or_default()
+                .trim()
+                .to_owned(),
+        )
+    }
+
+    /// `US-0136` NEW-MAJ-1. The `Enter` guard must chain to a binding it can
+    /// call by name and decline every binding it cannot — and "cannot" is not
+    /// the same question as "is the string `CustomAction`".
+    ///
+    /// `Get-PSReadLineKeyHandler` reports `CustomAction` for a script block
+    /// only when it was bound **without** a `-BriefDescription`. With one — the
+    /// idiomatic form, and what a "smart Enter" looks like — `Function` is that
+    /// description, so a string comparison installed a handler that called a
+    /// static method which does not exist, and `Enter` stopped submitting
+    /// anything at all. A string assertion cannot see that; only the shell can.
+    /// So this one runs the real init in the real hosts, over the four bindings
+    /// the guard has to tell apart.
+    #[cfg(windows)]
+    #[test]
+    fn powershell_enter_guard_decides_the_four_bindings() {
+        const SCRIPT_BLOCK: &str = "Set-PSReadLineKeyHandler -Key Enter -ScriptBlock \
+             { [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine() }";
+        let cases = [
+            ("default", "", "INSTALLED:AcceptLine"),
+            (
+                "validate",
+                "Set-PSReadLineKeyHandler -Key Enter -Function ValidateAndAcceptLine",
+                "INSTALLED:ValidateAndAcceptLine",
+            ),
+            ("block", SCRIPT_BLOCK, "DECLINED"),
+            (
+                "described",
+                &format!("{SCRIPT_BLOCK} -BriefDescription 'SmartEnter'"),
+                "DECLINED",
+            ),
+        ];
+        let mut hosts = 0;
+        for exe in ["powershell.exe", "pwsh.exe"] {
+            for (label, binding, expected) in &cases {
+                let Some(verdict) = enter_guard_verdict(exe, label, binding) else {
+                    continue;
+                };
+                hosts += 1;
+                assert_eq!(&verdict, expected, "{exe} with {label}: {binding}");
+            }
+        }
+        assert!(hosts > 0, "no PowerShell host on this machine");
     }
 
     /// `resolve_unix_shell` against a fake PATH and filesystem.
