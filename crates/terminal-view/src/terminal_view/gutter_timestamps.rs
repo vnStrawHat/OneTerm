@@ -148,6 +148,7 @@ mod tests {
             num_cols: 80,
             display_offset: 0,
             clear_epoch,
+            last_exit_code: None,
         }
     }
 

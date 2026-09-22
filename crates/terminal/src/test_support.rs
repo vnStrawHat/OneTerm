@@ -15,7 +15,7 @@ use async_channel::{Receiver, Sender, TrySendError};
 use oneterm_vt::MouseReporting;
 use oneterm_vt::{
     Cell, CellContent, CellWidth, CursorShape, EventBatch, Extras, ModeSnapshot, Pos, Rgb,
-    SelectionKind, Side, Size, Style, Terminal, VtEvent,
+    SelectionKind, Semantic, Side, Size, Style, Terminal, VtEvent,
 };
 
 use crate::content::{LineRangeCells, TerminalContent};
@@ -40,6 +40,8 @@ pub struct FixtureCell {
     pub width: CellWidth,
     /// `(id, uri)` of an OSC 8 link; an empty `id` means the stream gave none.
     pub hyperlink: Option<(String, String)>,
+    /// The OSC 133 region this cell was written in (`US-0133`).
+    pub semantic: Semantic,
 }
 
 impl Default for FixtureCell {
@@ -50,6 +52,7 @@ impl Default for FixtureCell {
             style: Style::DEFAULT,
             width: CellWidth::Narrow,
             hyperlink: None,
+            semantic: Semantic::None,
         }
     }
 }
@@ -148,7 +151,8 @@ impl GridFixture {
             .with_content(content)
             .with_style(style)
             .with_width(cell.width)
-            .with_extras(extras);
+            .with_extras(extras)
+            .with_semantic(cell.semantic);
         let id = self.term.screen().screen_top() + row as u64;
         // `set` clears the row's wrap flag, so a caller that wants one calls
         // `set_wrapped` after its writes — exactly as the engine's print path
@@ -558,6 +562,7 @@ impl TerminalRender for FakeTerminalSession {
             num_cols: usize::from(screen.cols()),
             display_offset: screen.scroll_offset() as usize,
             clear_epoch: 0,
+            last_exit_code: None,
         }
     }
 

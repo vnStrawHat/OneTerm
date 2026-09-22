@@ -153,36 +153,87 @@ OneTerm **already** parses OSC 133 in `crates/core/src/terminal/osc.rs` (`Osc133
 and forwards `SessionEvent::ShellIntegration(kind)`:
 `PromptStart` / `PromptEnd` / `OutputStart` / `OutputEnd { exit_code }` (note: the code enum is `OutputStart`, i.e. OSC 133;C — the command-input region is `PromptEnd..OutputStart`; see §13 Q1).
 
-Today these only update `prompt_count` and `last_exit_code` (`crates/local/src/state.rs`).
-The proposal: **attach the markers to grid rows** so the renderer knows each row's role
-*authoritatively* — no prompt regex needed for integrated shells:
+**Where the roles come from (`US-0133`).** This section, and §13 Q1 with it, originally
+said `RowRoles` would be rebuilt "in the pump ... alongside the grid snapshot" by tracking
+the OSC 133 *event* stream and attributing rows to regions as they were appended. The
+engine `IN-0029` shipped makes that unnecessary: it puts the region **on the cell**
+(`Semantic::None | Prompt | Input | Output`, two bits, set from the cell template by
+`OSC 133;A/B/C`) and carries it out in the snapshot the view already reads. The fact
+therefore travels with its content through scroll, scrollback, trimming and reflow,
+because it *is* the content — no anchor to maintain, no event to replay, no row id to
+reconcile, and nobody keeping bookkeeping. The event-to-role table in §13 Q1 stays correct
+as a description of what the marks *mean*; what changed is who stores them.
+
+The view derives one role per **logical line** (a wrap-connected run of display rows,
+which is the scanner's unit) and records it on every row of the run:
 
 ```rust
-// new, alongside the grid snapshot
 pub struct RowRoles {
-    /// Per display row: Prompt | Command | Output  (from OSC 133 boundaries)
-    pub role: Box<[RowRole]>,
-    /// Exit code of the command that produced each Output row (for failure tinting)
-    pub exit_code: Box<[Option<i32>]>,
+    /// Per display row: its logical line's role, or `None` when the row carries
+    /// no mark at all and the prompt regex decides instead.
+    pub role: Vec<Option<RowRole>>,
 }
 #[repr(u8)]
 pub enum RowRole { Output = 0, Prompt = 1, Command = 2 }
 ```
 
-When `RowRoles` is present (shell emits OSC 133):
+The role is the region of the line's **first marked character**:
 
-- Rows with `RowRole::Prompt` → scanner starts in `PromptLine` state **and** the prompt
-  sign region is known (between `PromptStart` and `PromptEnd` columns if we track them,
-  else fall back to sign-glyph detection within the row).
-- Rows with `RowRole::Command` → scanner starts in `CommandMode` directly.
-- Rows with `RowRole::Output` → `OutputMode`.
-- `OutputEnd { exit_code }` → tint the preceding command/prompt `PromptSign` `Success`
-  (code 0) or `Error` (non-zero) — a reliable, regex-free success/failure cue that is
-  only possible with shell-integration markers.
+| First marked character of the logical line | Role |
+|---|---|
+| `Semantic::Prompt` | `Prompt`, plus the char index of the line's first `Input` character — the prompt/command boundary `OSC 133;B` drew |
+| `Semantic::Output` | `Output` |
+| `Semantic::Input` | **no mark** — see below |
+| nothing is marked | no mark |
 
-When `RowRoles` is absent (shell without integration — raw serial, router, bare `sh`),
-fall back to the **`ShellProfile` prompt regex** to detect prompt lines. The scanner is
-the same; only the row-role source differs.
+- `Prompt` → the scanner starts in `PromptLine`. A **mixed-region row** — the prompt and
+  the command the user typed on one row, which is the normal case — is handled by the
+  boundary rather than by a second role: inside `0..input_at` the sign is the last
+  recognized prompt glyph, or the last non-space character when the prompt ends in a glyph
+  this crate does not know, and the scanner's own state machine (§4.1) takes the command
+  from there. That is strictly better than the sign-glyph hunt, which stops at the first
+  space and so found nothing at all in `PS C:\src>` or `[user@host ~]$`.
+- `Command` → the scanner starts in `CommandMode`.
+- `Output` → `OutputMode`, and the prompt regex **does not run**, which is what closes the
+  Windows false positives on a marked row.
+- **No mark** → the `ShellProfile` prompt regex decides, exactly as before. This is decided
+  **per row**, not per session: a session can start under a shell without integration, gain
+  it later, or print unmarked output between two marked prompts.
+
+**Why an `Input`-headed line is not trusted.** `OSC 133;B` sets the template to `Input` and
+only `OSC 133;C` clears it. `cmd.exe`'s built-in `PROMPT` (see `CMD_OSC7_PROMPT` in
+`crates/core/src/config/shell.rs`) emits `A` and `B` and never `C`, so every line the
+command prints is still tagged `Input`. Treating that as `RowRole::Command` would scan a
+whole screen of output in command mode. A logical line that *starts* in `Input` — i.e. one
+with no prompt on it — is therefore reported unmarked and the regex decides, which is what
+happened before this packet. A typed command that wraps is unaffected: it continues the
+prompt's logical line, whose head is `Prompt`.
+
+**The exit-code tint, and how far it reaches.** `OSC 133;D` is an event with no row
+attached (`crates/vt/src/events/vt_event.rs`), and the engine exposes no way to ask *which*
+row a block ended on. The only fact available is the backend's `last_exit_code` — the code
+of the most recently completed block — which reaches the view through
+`TerminalInfo::last_exit_code`. So the tint is applied to **the second-to-last prompt run
+on screen**: a newer prompt below it is exactly the evidence that its command ended, and
+while a command is still running there is no prompt below it, so nothing is tinted with a
+stale code. That prompt's `Class::PromptSign` becomes `Class::Success` on `0` and
+`Class::Error` otherwise — a class substitution, not a new class and not a new theme entry.
+
+> **Stated limit.** Only that one prompt is tinted. A prompt further back in scrollback
+> keeps an untinted sign, and the tint is suppressed entirely while the viewport is
+> scrolled up (`display_offset > 0`), because the newest prompt on screen is then somebody
+> else's. Two prompts separated by a *hard* newline are two runs; two prompts separated by
+> nothing but a soft wrap are one, so the wrap flags are part of the decision. Tinting
+> history needs a per-block record, which needs the engine to report the row a block ended
+> on — a public API change with a `scripts/vt-public-api.py` snapshot behind it, and out of
+> scope here.
+
+Because the role is derived from the frame, it is computed inside the plan cache's existing
+wrap-run-closed rescan, beside the URL masks and the classes (§13 Q5), and is authoritative
+for every row for the same reason they are: a row outside the rescan did not change, so
+neither did its role. The tint is applied later, over classes the scan already produced,
+because *which* prompt owns the code is a fact about the whole viewport rather than about
+the line being scanned.
 
 ---
 
@@ -433,7 +484,7 @@ semantic highlighting is off.
 |---|---|---|
 | **0** | Spike | `crates/highlight`: `Class`, `RuleSet` (keywords via aho-corasick + IPv4/path/number probes), `scan_line` for `OutputMode` only. Hardcode one shell. Show error/warn/success/path/IP colored on `cat`/log output. Validate merge policy. |
 | **1** | Core | `ShellProfile` + prompt detection (regex fallback). `ClassStyles` + theme JSON `terminal.semantic` + default asset. Merge into `cell_colors` / `layout_row` batching. Per-line hash cache. `terminal.semantic_highlighting: auto/on/off` setting. |
-| **2** | OSC 133 fast path | Attach `RowRoles` (+ exit code) to the snapshot from `SessionEvent::ShellIntegration`. Scanner consumes roles; regex prompt detection becomes fallback. Success/failure tint on `PromptSign` from `OutputEnd{exit_code}`. |
+| **2** | OSC 133 fast path | **Shipped (`IN-0044`).** `RowRoles` is derived per logical line from the `Semantic` region the engine already stores on every cell — not attached to the snapshot from the event stream (§4.2). The scanner consumes roles, the prompt boundary from `OSC 133;B` locates the sign, and the regex is the fallback for a row with no mark. Success/failure tint on the most recently completed block's `PromptSign`, with the reach stated in §4.2. |
 | **3** | Shells & polish | `Cmd` / `PowerShell` profiles. Decorations (underline/box for error/warn/url). Per-theme overrides. Contrast-on-merged. `Permission` block (ls -l); optional per-bit coloring (`r`=info,`w`=warn,`x`=error). |
 | **4** (opt-in) | Substrate | Prompt-block folding, command outline (scroll-to-prompt already implied by `prompt_count`), bracket/quote pair matching — all read the same `RowRoles`/`cell_class`. |
 | **5** (opt-in) | Triggers | Generalize `url_mask`→`Class::Url` into a small configurable regex→action list (open URL, ping-IP menu, number tooltip). Shares the overlay plumbing, independent of the scanner. |
@@ -526,10 +577,21 @@ Map the OSC 133 stream to roles by tracking the *current* region as rows are app
 | `OutputStart` (C) | next rows -> `RowRole::Output` until `OutputEnd` |
 | `OutputEnd { exit_code }` (D) | record `exit_code` onto the just-finished `Output` rows; tint the preceding `Prompt`/`Command` rows' `PromptSign` with `Success`/`Error` |
 
-`RowRoles` is rebuilt in the pump (where `SessionEvent::ShellIntegration` is already
-handled in `listener.rs`) alongside the grid snapshot, then read by the scanner. When
-`RowRoles` is absent (no shell integration), the scanner falls back to the
-`ShellProfile` prompt regex to derive a best-effort `RowRole::Prompt` for the row.
+**Superseded by `US-0133`.** `RowRoles` is *not* rebuilt in the pump. The engine
+`IN-0029` shipped stores the region on the cell, so the view derives the roles from the
+snapshot it already reads (see §4.2), one role per logical line, recorded on every row of
+the run. The table above still says what each mark means; nobody keeps the bookkeeping.
+Two further corrections `US-0133` makes to this answer:
+- The sign is **not** found by a glyph probe when the shell marked the line. `OSC 133;B`
+  gives the prompt/command boundary, and the sign is the last prompt glyph — or the last
+  non-space character — before it. The probe survives only as the fallback for a line with
+  no mark.
+- `OSC 133;D` records no exit code *per row*, because the engine attaches no row to it.
+  `RowRoles` therefore carries no `exit_code` column; the one code the backend keeps tints
+  one prompt, and §4.2 states which and why.
+
+When a row carries no mark, the scanner falls back to the `ShellProfile` prompt regex to
+derive a best-effort `RowRole::Prompt` for its line.
 
 > **Correction to §4.2**: the code enum is `OutputStart` (OSC 133;C), not `CommandStart`.
 > The command-input region is `PromptEnd..OutputStart`; `OutputStart` begins the command

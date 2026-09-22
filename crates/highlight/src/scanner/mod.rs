@@ -4,7 +4,7 @@
 //! the input string). The `ui` layer flattens this to per-column classes (see
 //! §Q4 of the design doc).
 //!
-//! The scanner has two states driven by the row role:
+//! The scanner has three states driven by the row role:
 //! - `PromptLine` → tag the prompt sign, then switch to `CommandMode`.
 //! - `CommandMode` → first token = `Command`, options = `Option`, `;`/`|`/`&&`/`||` reset.
 //! - `OutputMode` → run the flat matcher set in priority order.
@@ -23,23 +23,40 @@ use crate::profile::ShellProfile;
 use crate::role::RowRole;
 use crate::rules::RuleSet;
 
+pub use prompt::tint_prompt_sign;
+
 /// Scan one line of terminal text → `Vec<u8>` of `Class` (one per char).
 ///
-/// `line` is the display text of one row (cells joined, spacers skipped). The
-/// output length equals `line.chars().count()`.
-pub fn scan_line(line: &str, rules: &RuleSet, profile: &ShellProfile, role: RowRole) -> Vec<u8> {
+/// `line` is the display text of one **logical** line (the wrap-connected rows
+/// joined, spacers skipped). The output length equals `line.chars().count()`.
+///
+/// `role` is what the shell's OSC 133 marks say about the line, and `None` means
+/// the shell said nothing — only then does the prompt regex run (§4.2).
+pub fn scan_line(
+    line: &str,
+    rules: &RuleSet,
+    profile: &ShellProfile,
+    role: Option<RowRole>,
+    input_at: Option<usize>,
+) -> Vec<u8> {
     let mut classes = Vec::new();
-    scan_line_into(line, rules, profile, role, &mut classes);
+    scan_line_into(line, rules, profile, role, input_at, &mut classes);
     classes
 }
 
 /// [`scan_line`] into a caller-owned buffer: `out` is cleared and refilled, so
 /// a per-frame scan reuses one allocation per row (PERF-23).
+///
+/// `input_at` is the char index where the typed command begins (`OSC 133;B`) and
+/// is honoured only for [`RowRole::Prompt`]: it bounds the prompt region, so the
+/// sign is found exactly instead of guessed by a glyph hunt that a prompt
+/// containing a space (`PS C:\src>`, `[user@host ~]$`) defeats.
 pub fn scan_line_into(
     line: &str,
     rules: &RuleSet,
     profile: &ShellProfile,
-    role: RowRole,
+    role: Option<RowRole>,
+    input_at: Option<usize>,
     out: &mut Vec<u8>,
 ) {
     let chars: Vec<char> = line.chars().collect();
@@ -49,23 +66,39 @@ pub fn scan_line_into(
     let classes = out.as_mut_slice();
 
     match role {
-        RowRole::Prompt => prompt::scan_prompt_line(&chars, classes, profile, None),
-        RowRole::Command => command::scan_command_mode(&chars, classes, profile),
-        RowRole::Output => {
-            // Fallback: if the line looks like a prompt, treat it as one.
+        Some(RowRole::Prompt) => {
+            let sign = prompt::marked_sign(&chars, profile, input_at);
+            prompt::scan_prompt_line(&chars, classes, profile, sign);
+        }
+        Some(RowRole::Command) => command::scan_command_mode(&chars, classes, profile),
+        // Marked as output: the shell was explicit, so the prompt regex — the
+        // only reason a marked row could still be misread — never runs.
+        Some(RowRole::Output) => scan_output_mode(line, &chars, classes, rules, profile),
+        None => {
+            // No mark: if the line looks like a prompt, treat it as one.
             if let Some(sign) = prompt::prompt_sign(line, profile) {
                 prompt::scan_prompt_line(&chars, classes, profile, Some(sign));
             } else {
-                // The byte-based matchers (keyword automaton, structural
-                // regexes) share one text + byte→char map built here once.
-                let text = LineText {
-                    text: line,
-                    byte_to_char: byte_to_char_map(line),
-                };
-                output::scan_output(&text, &chars, classes, rules, profile);
+                scan_output_mode(line, &chars, classes, rules, profile);
             }
         }
     }
+}
+
+/// The byte-based matchers (keyword automaton, structural regexes) share one
+/// text + byte→char map, built here once per line.
+fn scan_output_mode(
+    line: &str,
+    chars: &[char],
+    classes: &mut [u8],
+    rules: &RuleSet,
+    profile: &ShellProfile,
+) {
+    let text = LineText {
+        text: line,
+        byte_to_char: byte_to_char_map(line),
+    };
+    output::scan_output(&text, chars, classes, rules, profile);
 }
 
 /// One line as the byte-based matchers see it: the original `&str` plus its

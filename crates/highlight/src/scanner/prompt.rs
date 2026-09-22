@@ -55,6 +55,50 @@ pub(super) fn prompt_sign(line: &str, profile: &ShellProfile) -> Option<usize> {
         .map(|back| line[..end].chars().count() - 1 - back)
 }
 
+/// The char index of the prompt sign when **OSC 133 marked the line** — no
+/// regex, and no glyph hunt that a space can stop.
+///
+/// `input_at` is where the typed command begins (`OSC 133;B`); the prompt region
+/// is everything before it, or the whole line when the boundary is not on this
+/// logical line (the user has not typed yet). Inside that region the sign is the
+/// last recognized prompt glyph, and — when the shell's prompt ends in a glyph
+/// this crate does not know (a themed `┐`, a bare `]`) — the last non-space
+/// character, which is where the shell put the cursor. Both rules beat the
+/// fallback's left-to-right hunt, which gives up at the first space and so found
+/// nothing at all in `PS C:\src>` or `[user@host ~]$`.
+pub(super) fn marked_sign(
+    chars: &[char],
+    profile: &ShellProfile,
+    input_at: Option<usize>,
+) -> Option<usize> {
+    let end = input_at.unwrap_or(chars.len()).min(chars.len());
+    let head = &chars[..end];
+    head.iter()
+        .rposition(|&c| profile.is_prompt_sign(c))
+        .or_else(|| head.iter().rposition(|&c| c != ' '))
+}
+
+/// Re-tag a prompt sign with the exit code of the command it launched
+/// (`OSC 133;D`): `Class::Success` on `0`, `Class::Error` otherwise.
+///
+/// A class substitution over classes the scanner already produced, not a new
+/// class and not a new theme entry (§4.2, §13 Q1). It is applied by the render
+/// path rather than inside [`scan_line_into`](crate::scan_line_into) because
+/// *which* prompt the code belongs to is a fact about the whole viewport — the
+/// most recent completed block — and not about the line being scanned.
+pub fn tint_prompt_sign(classes: &mut [u8], exit_code: i32) {
+    let tint = if exit_code == 0 {
+        Class::Success
+    } else {
+        Class::Error
+    } as u8;
+    for class in classes.iter_mut() {
+        if *class == Class::PromptSign as u8 {
+            *class = tint;
+        }
+    }
+}
+
 /// Where the path starts in the prompt region `head`, when that region is a
 /// Windows prompt path: a drive root (`C:\`), a UNC root (`\\`), or either of
 /// those after PowerShell's `PS ` prefix. `None` for every other prompt shape
@@ -73,9 +117,10 @@ fn windows_prompt_path(head: &[char]) -> Option<usize> {
 
 /// Tag the prompt sign glyph, then switch to `CommandMode` after the sign + space.
 ///
-/// `sign` is the char index of the prompt sign when the detector found one. It
-/// is `None` only on the OSC 133 path (`RowRole::Prompt`), where no regex ran;
-/// the first prompt glyph is used then.
+/// `sign` is the char index of the prompt sign: from [`prompt_sign`] on the
+/// regex fallback, from [`marked_sign`] on the OSC 133 path. It is `None` only
+/// when neither found one (a blank prompt region), and the last resort is the
+/// first prompt glyph before the first space.
 pub(super) fn scan_prompt_line(
     chars: &[char],
     classes: &mut [u8],

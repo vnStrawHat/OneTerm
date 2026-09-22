@@ -13,6 +13,7 @@
 //! An `Unchanged` frame returns before any of that: no key scan, no URL scan, no
 //! layout.
 
+use oneterm_highlight::RowRoles;
 use oneterm_terminal::SnapshotUpdate;
 
 use super::diagnostics::FrameStats;
@@ -20,6 +21,7 @@ use super::frame::{Frame, GridSize, RowKey};
 use super::glyphs::GlyphCache;
 use super::row_plan::{PlanContext, RowPlan, Scratch, build_row_plan, class_rows_into};
 use super::shapes::CellSizeDevicePx;
+use crate::highlight::SemanticOverlay;
 use crate::url::{fill_wraps, url_masks_rows_into};
 
 /// Everything besides cell content that changes how a row is planned. A
@@ -60,6 +62,15 @@ pub(crate) struct PlanCache {
     /// (`BUG-0071`). Empty per row while semantic highlighting is off.
     class_prev: Vec<Vec<u8>>,
     class_cur: Vec<Vec<u8>>,
+    /// The OSC 133 role of each display row's logical line, as of the last
+    /// update — authoritative for every row for the same reason the masks and
+    /// the classes are: a row outside this frame's rescan did not change, so
+    /// neither did its role (`US-0133`).
+    roles: RowRoles,
+    roles_cur: RowRoles,
+    /// The prompt run the exit code tints, and the code, as of the last update.
+    /// A change dirties both the run it leaves and the run it lands on.
+    tint: Option<(std::ops::Range<usize>, i32)>,
     /// This frame's per-row `WRAPLINE` flags.
     wraps: Vec<bool>,
     /// The previous frame's, aligned with `mask_prev` (so `shift` rotates it
@@ -95,6 +106,9 @@ impl PlanCache {
             mask_cur: Vec::new(),
             class_prev: Vec::new(),
             class_cur: Vec::new(),
+            roles: RowRoles::default(),
+            roles_cur: RowRoles::default(),
+            tint: None,
             wraps: Vec::new(),
             wraps_prev: Vec::new(),
             scan: Vec::new(),
@@ -123,6 +137,18 @@ impl PlanCache {
     #[cfg(test)]
     pub(crate) fn classes(&self, r: usize) -> &[u8] {
         self.class_prev.get(r).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// The OSC 133 role of display row `r` as of the last update.
+    #[cfg(test)]
+    pub(crate) fn role(&self, r: usize) -> Option<oneterm_highlight::RowRole> {
+        self.roles.role_at(r)
+    }
+
+    /// The prompt run the exit code tints, and the code.
+    #[cfg(test)]
+    pub(crate) fn tint(&self) -> Option<(std::ops::Range<usize>, i32)> {
+        self.tint.clone()
     }
 
     /// Bring the plans up to date with `frame`.
@@ -201,6 +227,8 @@ impl PlanCache {
             self.mask_cur.resize_with(rows, Vec::new);
             self.class_prev.resize_with(rows, Vec::new);
             self.class_cur.resize_with(rows, Vec::new);
+            self.roles.role.resize(rows, None);
+            self.roles_cur.role.resize(rows, None);
             self.mark_scan_runs(rows, scrolled_seam);
             stats.url_scans += 1;
 
@@ -221,36 +249,54 @@ impl PlanCache {
                         frame,
                         overlay,
                         &mut self.class_cur,
+                        &mut self.roles_cur.role,
                         &self.wraps,
                         start..r,
                         scratch,
                         stats,
                     ),
-                    None => self.class_cur[start..r].iter_mut().for_each(Vec::clear),
+                    None => {
+                        self.class_cur[start..r].iter_mut().for_each(Vec::clear);
+                        self.roles_cur.role[start..r].fill(None);
+                    }
                 }
                 for row in start..r {
                     if self.mask_cur[row] != self.mask_prev[row]
                         || self.class_cur[row] != self.class_prev[row]
+                        || self.roles_cur.role[row] != self.roles.role[row]
                     {
                         self.dirty[row] = true;
                     }
                     std::mem::swap(&mut self.mask_prev[row], &mut self.mask_cur[row]);
                     std::mem::swap(&mut self.class_prev[row], &mut self.class_cur[row]);
+                    self.roles.role[row] = self.roles_cur.role[row];
                 }
             }
             self.wraps_prev.copy_from_slice(&self.wraps);
         }
+
+        // Phase 2b: the exit-code tint. `self.roles` is authoritative for the
+        // whole viewport once the rescan is in, so the prompt the most recently
+        // completed block belongs to is decided here rather than inside the
+        // scan — where it would depend on rows the scan deliberately skipped.
+        self.update_tint(ctx.semantic.and_then(SemanticOverlay::exit_code), rows);
 
         // Phase 3: rebuild.
         for r in 0..rows {
             if !self.dirty[r] {
                 continue;
             }
+            let tint = self
+                .tint
+                .as_ref()
+                .filter(|(run, _)| run.contains(&r))
+                .map(|(_, code)| *code);
             build_row_plan(
                 frame.row(r),
                 ctx,
                 &self.class_prev[r],
                 &self.mask_prev[r],
+                tint,
                 scratch,
                 glyphs,
                 stats,
@@ -265,6 +311,33 @@ impl PlanCache {
         self.grid = Some(size);
         self.style = Some(style_key);
         self.cell = Some(cell);
+    }
+
+    /// Point the exit-code tint at the prompt of the most recently completed
+    /// command block, and dirty the rows it moved off and on to.
+    ///
+    /// No rescan is needed for either: the tint is a class substitution the row
+    /// plan applies over classes that are already correct, so a plan rebuild is
+    /// the whole of the invalidation.
+    fn update_tint(&mut self, exit_code: Option<i32>, rows: usize) {
+        let next = match exit_code.filter(|_| self.roles.role.len() == rows) {
+            Some(code) => self
+                .roles
+                .last_completed_prompt(&self.wraps)
+                .map(|run| (run, code)),
+            None => None,
+        };
+        if next == self.tint {
+            return;
+        }
+        for run in [self.tint.as_ref(), next.as_ref()].into_iter().flatten() {
+            for r in run.0.clone() {
+                if let Some(dirty) = self.dirty.get_mut(r) {
+                    *dirty = true;
+                }
+            }
+        }
+        self.tint = next;
     }
 
     /// Fill `self.scan` with the rows a URL rescan must cover: the dirty rows,
@@ -348,6 +421,13 @@ impl PlanCache {
                 self.class_prev.rotate_right(distance);
             }
         }
+        if self.roles.role.len() == len {
+            if scrolled > 0 {
+                self.roles.role.rotate_left(distance);
+            } else {
+                self.roles.role.rotate_right(distance);
+            }
+        }
         if self.wraps_prev.len() == len {
             if scrolled > 0 {
                 self.wraps_prev.rotate_left(distance);
@@ -361,6 +441,8 @@ impl PlanCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oneterm_highlight::RowRole;
+    use oneterm_terminal::Semantic;
     use oneterm_terminal::test_support::FixtureCell;
 
     use crate::highlight::SemanticOverlay;
@@ -1307,6 +1389,142 @@ mod tests {
                 &format!("scrolled forward {fwd}"),
             );
         }
+    }
+
+    // ── Roles and the exit-code tint (`US-0133`) ───────────────────────────
+
+    /// A viewport of two command blocks, marked the way an integrated shell
+    /// marks them: prompt, the typed command after `OSC 133;B`, its output after
+    /// `OSC 133;C`, then the next prompt.
+    fn two_marked_blocks() -> FrameBuilder {
+        FrameBuilder::new(4, 24)
+            .text(0, 0, "user@host:~$ ls")
+            .mark(0, 0..13, Semantic::Prompt)
+            .mark(0, 13..15, Semantic::Input)
+            .text(1, 0, "a.txt")
+            .mark(1, 0..5, Semantic::Output)
+            .text(2, 0, "b.txt")
+            .mark(2, 0..5, Semantic::Output)
+            .text(3, 0, "user@host:~$ ")
+            .mark(3, 0..13, Semantic::Prompt)
+    }
+
+    /// The roles a frame derives ride the class pass, so they cover exactly the
+    /// rows the class and URL passes already scan — never more.
+    #[gpui::test]
+    fn roles_ride_the_class_rescan(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let key = semantic_key();
+        let mut h = Harness::semantic();
+        let (mut frame, mut fixture) = FrameBuilder::new(12, 10)
+            .text(4, 0, "echo \"aaa")
+            .flags(4, 9, CellFlags::WRAPLINE)
+            .text(5, 0, "bbb\" tail")
+            .build_with_fixture();
+        h.update(cx, &frame, key);
+        rewrite_row(&mut frame, &mut fixture, 4, "echo  aaa");
+        let stats = h.update(cx, &frame, key);
+        assert_eq!(
+            stats.class_rows_scanned, 2,
+            "the role pass did not widen the rescan: {stats:?}"
+        );
+        for r in 0..12 {
+            assert_eq!(h.cache.role(r), None, "row {r} carries no mark");
+        }
+    }
+
+    /// Every row of a marked block gets its logical line's role, and an unmarked
+    /// session keeps `None` per row.
+    #[gpui::test]
+    fn roles_are_read_from_the_marks(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::semantic();
+        let frame = two_marked_blocks().build();
+        h.update(cx, &frame, semantic_key());
+        assert_eq!(h.cache.role(0), Some(RowRole::Prompt));
+        assert_eq!(h.cache.role(1), Some(RowRole::Output));
+        assert_eq!(h.cache.role(2), Some(RowRole::Output));
+        assert_eq!(h.cache.role(3), Some(RowRole::Prompt));
+    }
+
+    /// A row whose role changes is replanned even though its own classes might
+    /// not move: the role is an input of the plan (`US-0134` paints from it).
+    #[gpui::test]
+    fn a_role_change_replans_its_run(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let key = semantic_key();
+        let mut h = Harness::semantic();
+        const TEXT: &str = "plain output";
+        let (mut frame, mut fixture) = FrameBuilder::new(4, 24)
+            .text(1, 0, TEXT)
+            .build_with_fixture();
+        h.update(cx, &frame, key);
+        assert_eq!(h.cache.role(1), None);
+
+        // The same text, now inside a marked output region.
+        fixture.begin_batch();
+        for (col, ch) in TEXT.chars().enumerate() {
+            fixture.write(
+                1,
+                col,
+                &FixtureCell {
+                    ch,
+                    semantic: Semantic::Output,
+                    ..FixtureCell::default()
+                },
+            );
+        }
+        resnapshot(&mut frame, &mut fixture);
+        let stats = h.update(cx, &frame, key);
+        assert_eq!(h.cache.role(1), Some(RowRole::Output));
+        assert_eq!(stats.rows_planned, 1, "only its own run: {stats:?}");
+    }
+
+    /// The tint reaches the prompt of the most recently completed block, and
+    /// only that one.
+    #[gpui::test]
+    fn the_tint_lands_on_the_completed_block(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let key = semantic_key();
+        let mut h = Harness::semantic();
+        let frame = two_marked_blocks().build();
+        h.update(cx, &frame, key);
+        assert_eq!(h.cache.tint(), None, "no exit code reported yet");
+
+        if let Some(overlay) = h.semantic.as_mut() {
+            overlay.set_exit_code(Some(0));
+        }
+        let stats = h.update(cx, &frame, key);
+        assert_eq!(
+            h.cache.tint(),
+            Some((0..1, 0)),
+            "the older prompt, not row 3"
+        );
+        assert_eq!(stats.rows_planned, 1, "only the row it moved on to");
+        assert_eq!(
+            stats.class_rows_scanned, 0,
+            "the tint needs no rescan: {stats:?}"
+        );
+    }
+
+    /// A viewport with one prompt on it — a command still running — is not
+    /// tinted with the code of whatever finished before.
+    #[gpui::test]
+    fn a_single_prompt_is_never_tinted(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::semantic();
+        if let Some(overlay) = h.semantic.as_mut() {
+            overlay.set_exit_code(Some(101));
+        }
+        let frame = FrameBuilder::new(3, 24)
+            .text(0, 0, "user@host:~$ sleep")
+            .mark(0, 0..13, Semantic::Prompt)
+            .mark(0, 13..18, Semantic::Input)
+            .text(1, 0, "working")
+            .mark(1, 0..7, Semantic::Output)
+            .build();
+        h.update(cx, &frame, semantic_key());
+        assert_eq!(h.cache.tint(), None);
     }
 
     /// The incremental classes of every row must equal a from-scratch scan of

@@ -96,6 +96,11 @@ pub struct TerminalInfo {
     pub num_cols: usize,
     /// Display offset (0 = bottom, >0 = scrolled up).
     pub display_offset: usize,
+    /// Exit code of the most recently completed command block (`OSC 133;D`).
+    /// `None` under a shell that reports none. It carries no row: which prompt
+    /// it belongs to is decided by the renderer from the OSC 133 regions the
+    /// cells carry (`US-0133`).
+    pub last_exit_code: Option<i32>,
     /// Number of times the screen was cleared (`clear`/`cls`/RIS). Monotonically increasing.
     /// The UI compares it with the previous value to reset per-line timestamps (gutter):
     /// after `clear`, the absolute line counter resets → new content reuses old
@@ -587,8 +592,11 @@ impl<O: PtyOwner> TerminalRender for PtySession<O> {
     }
 
     fn terminal_info(&self) -> TerminalInfo {
-        self.model()
-            .terminal_info(self.state.absolute_line_count(), self.state.clear_epoch())
+        self.model().terminal_info(
+            self.state.absolute_line_count(),
+            self.state.clear_epoch(),
+            self.state.last_exit_code(),
+        )
     }
 
     fn is_alt_screen(&self) -> bool {

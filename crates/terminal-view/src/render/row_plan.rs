@@ -6,8 +6,8 @@
 use std::ops::Range;
 
 use gpui::{Hsla, Pixels, ShapedLine, Window};
-use oneterm_highlight::{Class, ClassStyle, Decoration};
-use oneterm_terminal::is_decorative_character;
+use oneterm_highlight::{Class, ClassStyle, Decoration, RowRole, tint_prompt_sign};
+use oneterm_terminal::{Semantic, is_decorative_character};
 
 use super::diagnostics::FrameStats;
 use super::frame::{Cell, CellFlags, Color, Frame, FrameRow};
@@ -118,6 +118,8 @@ pub(crate) struct Scratch {
     pub char_rows: Vec<u16>,
     pub char_cols: Vec<u16>,
     pub char_wide: Vec<bool>,
+    /// The OSC 133 region every char of `line_text` was written in.
+    pub char_semantic: Vec<Semantic>,
     pub class_chars: Vec<u8>,
     pub class: Vec<u8>,
     pub run_text: String,
@@ -136,6 +138,7 @@ impl Scratch {
             char_rows: Vec::with_capacity(256),
             char_cols: Vec::with_capacity(256),
             char_wide: Vec::with_capacity(256),
+            char_semantic: Vec::with_capacity(256),
             class_chars: Vec::with_capacity(256),
             class: Vec::with_capacity(256),
             run_text: String::with_capacity(256),
@@ -468,8 +471,10 @@ impl RowBuilder<'_, '_> {
 /// string opened on one row ended at the row edge, and a resize that moved the
 /// wrap point changed the colours of text that had not changed.
 ///
-/// The run's **first** row supplies the role, because that is where the logical
-/// line starts. `wraps` holds the frame's per-row `WRAPLINE` flags
+/// The logical line's own cells supply its role (`US-0133`): `roles[r]` is set
+/// for every row of the run, so a wrapped prompt is a prompt on all of its rows
+/// — which is what the prompt-line background reads (`US-0134`). `wraps` holds
+/// the frame's per-row `WRAPLINE` flags
 /// ([`fill_wraps`](crate::url::fill_wraps)), and the inner buffers of the rows
 /// in `range` are reused so a per-frame recomputation allocates nothing.
 ///
@@ -477,10 +482,12 @@ impl RowBuilder<'_, '_> {
 /// every class in the range then depends only on rows inside it, which is what
 /// lets the caller rescan the changed runs rather than the viewport (§10 of
 /// `docs/terminal-semantic-highlighting.md`).
+#[allow(clippy::too_many_arguments)] // one output buffer per pass, plus the bounds
 pub(crate) fn class_rows_into(
     frame: &Frame,
     overlay: &SemanticOverlay,
     classes: &mut [Vec<u8>],
+    roles: &mut [Option<RowRole>],
     wraps: &[bool],
     range: Range<usize>,
     scratch: &mut Scratch,
@@ -491,6 +498,7 @@ pub(crate) fn class_rows_into(
         let out = &mut classes[r];
         out.clear();
         out.resize(frame.row(r).len(), Class::Default as u8);
+        roles[r] = None;
     }
     stats.class_rows_scanned += range.len() as u32;
 
@@ -501,8 +509,35 @@ pub(crate) fn class_rows_into(
             end += 1;
         }
         stats.class_scans += 1;
-        scan_logical_line(frame, overlay, classes, start..=end, scratch);
+        scan_logical_line(frame, overlay, classes, roles, start..=end, scratch);
         start = end + 1;
+    }
+}
+
+/// The role of one logical line and the char index its typed command starts at,
+/// from the OSC 133 region each of its characters was written in.
+///
+/// The first marked character decides, because that is where the shell's region
+/// for this line begins. A line that starts in `Input` is **not** trusted as
+/// command input: `OSC 133;B` with no following `OSC 133;C` — which is exactly
+/// what `cmd.exe`'s built-in `PROMPT` emits — leaves every later line tagged
+/// `Input`, so treating it as a role would scan a whole screen of output in
+/// command mode. Such a line is reported unmarked and the prompt regex decides,
+/// which is what it did before this packet.
+fn line_role(char_semantic: &[Semantic]) -> (Option<RowRole>, Option<usize>) {
+    let Some(first) = char_semantic.iter().position(|&s| s != Semantic::None) else {
+        return (None, None);
+    };
+    match char_semantic[first] {
+        // A mixed-region line — the prompt and the command the user typed on one
+        // row — starts in `PromptLine` and switches where the region changes, so
+        // the boundary column travels with the role rather than being guessed.
+        Semantic::Prompt => (
+            Some(RowRole::Prompt),
+            char_semantic.iter().position(|&s| s == Semantic::Input),
+        ),
+        Semantic::Output => (Some(RowRole::Output), None),
+        Semantic::Input | Semantic::None => (None, None),
     }
 }
 
@@ -512,27 +547,33 @@ fn scan_logical_line(
     frame: &Frame,
     overlay: &SemanticOverlay,
     classes: &mut [Vec<u8>],
+    roles: &mut [Option<RowRole>],
     rows: std::ops::RangeInclusive<usize>,
     scratch: &mut Scratch,
 ) {
-    let first = *rows.start();
     scratch.line_text.clear();
     scratch.char_rows.clear();
     scratch.char_cols.clear();
     scratch.char_wide.clear();
-    for r in rows {
+    scratch.char_semantic.clear();
+    for r in rows.clone() {
         frame.row(r).append_text_into(
             &mut scratch.line_text,
             &mut scratch.char_rows,
             &mut scratch.char_cols,
             &mut scratch.char_wide,
+            &mut scratch.char_semantic,
         );
+    }
+    let (role, input_at) = line_role(&scratch.char_semantic);
+    for r in rows {
+        roles[r] = role;
     }
     // A blank line carries nothing to classify; skip the scanner entirely.
     if scratch.line_text.trim().is_empty() {
         return;
     }
-    overlay.scan_into(&scratch.line_text, first, &mut scratch.class_chars);
+    overlay.scan_into(&scratch.line_text, role, input_at, &mut scratch.class_chars);
     for (i, &class) in scratch.class_chars.iter().enumerate() {
         let (Some(&row), Some(&col)) = (scratch.char_rows.get(i), scratch.char_cols.get(i)) else {
             break;
@@ -553,13 +594,29 @@ fn scan_logical_line(
 }
 
 /// Fill `scratch.class` with one class byte per column of `row`: the semantic
-/// classes computed for its logical line, with URL columns on top.
-fn classify(row: &FrameRow<'_>, classes: &[u8], url_mask: &[bool], scratch: &mut Scratch) {
+/// classes computed for its logical line, with URL columns on top and, when
+/// this row belongs to the most recently completed command block, its prompt
+/// sign re-tagged from the exit code (`US-0133`).
+///
+/// The tint is applied here rather than inside the scanner because *which*
+/// prompt the code belongs to is a fact about the whole viewport, not about the
+/// line being scanned — and because a tint that changed inside the scan would
+/// have to invalidate a rescan the plan cache has already decided not to do.
+fn classify(
+    row: &FrameRow<'_>,
+    classes: &[u8],
+    url_mask: &[bool],
+    tint: Option<i32>,
+    scratch: &mut Scratch,
+) {
     let cols = row.len();
     scratch.class.clear();
     scratch.class.resize(cols, Class::Default as u8);
     let shared = cols.min(classes.len());
     scratch.class[..shared].copy_from_slice(&classes[..shared]);
+    if let Some(exit_code) = tint {
+        tint_prompt_sign(&mut scratch.class, exit_code);
+    }
     for (col, &masked) in url_mask.iter().enumerate().take(cols) {
         if masked {
             scratch.class[col] = Class::Url as u8;
@@ -570,20 +627,23 @@ fn classify(row: &FrameRow<'_>, classes: &[u8], url_mask: &[bool], scratch: &mut
 /// Rebuild `plan` for `row`. `classes` holds the row's semantic classes as
 /// [`class_rows_into`] computed them for its logical line, and `url_mask` the
 /// row's URL columns; either may be shorter than the row (or empty) when
-/// semantic highlighting is off or no URL was detected.
+/// semantic highlighting is off or no URL was detected. `tint` is the exit code
+/// of the command this row's prompt launched, when it is the most recently
+/// completed one (`US-0133`).
 #[allow(clippy::too_many_arguments)] // the frame-constant half is already in `ctx`
 pub(crate) fn build_row_plan(
     row: FrameRow<'_>,
     ctx: &PlanContext<'_>,
     classes: &[u8],
     url_mask: &[bool],
+    tint: Option<i32>,
     scratch: &mut Scratch,
     glyphs: &mut GlyphCache,
     stats: &mut FrameStats,
     plan: &mut RowPlan,
 ) {
     plan.clear();
-    classify(&row, classes, url_mask, scratch);
+    classify(&row, classes, url_mask, tint, scratch);
     scratch.run_text.clear();
     scratch.open_prev.clear();
     let theme = ctx.theme;
@@ -685,10 +745,18 @@ mod tests {
         /// The whole frame's semantic classes, logical line by logical line —
         /// what the plan cache computes before it rebuilds a row.
         fn classes(&self, frame: &Frame) -> Vec<Vec<u8>> {
+            self.scan(frame).0
+        }
+
+        /// The whole frame'''s semantic classes and per-row roles, logical line
+        /// by logical line — what the plan cache computes before it rebuilds a
+        /// row.
+        fn scan(&self, frame: &Frame) -> (Vec<Vec<u8>>, Vec<Option<RowRole>>) {
             let rows = usize::from(frame.size().rows);
             let mut classes = vec![Vec::new(); rows];
+            let mut roles = vec![None; rows];
             let Some(overlay) = self.semantic.as_ref() else {
-                return classes;
+                return (classes, roles);
             };
             let mut wraps = Vec::new();
             fill_wraps(frame, &mut wraps);
@@ -696,12 +764,13 @@ mod tests {
                 frame,
                 overlay,
                 &mut classes,
+                &mut roles,
                 &wraps,
                 0..rows,
                 &mut Scratch::new(),
                 &mut FrameStats::default(),
             );
-            classes
+            (classes, roles)
         }
 
         fn plan(
@@ -733,6 +802,7 @@ mod tests {
                     &ctx,
                     &self.classes(frame)[row],
                     mask,
+                    None,
                     &mut scratch,
                     &mut glyphs,
                     &mut stats,
@@ -1414,6 +1484,166 @@ mod tests {
             fx.classes(&opened)[1],
             fx.classes(&closed)[1],
             "row 1 must follow the quote opened on row 0"
+        );
+    }
+
+    // ── Roles from the OSC 133 marks (`US-0133`) ───────────────────────────
+
+    /// A prompt whose cwd wraps, with the marks a shell emits: the whole prompt
+    /// region is `Prompt`, the typed command after `OSC 133;B` is `Input`.
+    ///
+    /// `cwd` is 26 chars, so at 20 columns the prompt runs onto row 1 and the
+    /// input straddles the wrap.
+    fn marked_wrapped_prompt() -> Frame {
+        const PROMPT: &str = r"C:\Users\John Doe\ws\src> cargo build";
+        let chars: Vec<char> = PROMPT.chars().collect();
+        let boundary = PROMPT.find("cargo").unwrap();
+        let mut b = FrameBuilder::new(3, 20);
+        for (r, chunk) in chars.chunks(20).enumerate() {
+            let text: String = chunk.iter().collect();
+            b = b.text(r, 0, &text);
+            let start = r * 20;
+            let end = start + chunk.len();
+            let split = boundary.clamp(start, end) - start;
+            b = b.mark(r, 0..split, Semantic::Prompt);
+            b = b.mark(r, split..chunk.len(), Semantic::Input);
+            if end < chars.len() {
+                b = b.flags(r, 19, CellFlags::WRAPLINE);
+            }
+        }
+        b.build()
+    }
+
+    /// The marks put every row of the run in `Prompt`, and the boundary — not a
+    /// glyph hunt — finds the sign, on the row the cwd happened to end on.
+    #[test]
+    fn a_wrapped_prompt_takes_its_role_from_the_marks() {
+        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
+        let frame = marked_wrapped_prompt();
+        let (classes, roles) = fx.scan(&frame);
+        assert_eq!(roles[0], Some(RowRole::Prompt));
+        assert_eq!(roles[1], Some(RowRole::Prompt), "the continuation row too");
+        assert_eq!(roles[2], None, "the blank row below carries no mark");
+        // `>` is char 24 of the logical line, i.e. row 1 column 4.
+        assert_eq!(classes[1][4], Class::PromptSign as u8, "{:?}", classes[1]);
+        // `cargo` starts at char 26 = row 1 column 6.
+        assert_eq!(classes[1][6], Class::Command as u8, "{:?}", classes[1]);
+        assert_eq!(classes[0][0], Class::Path as u8, "{:?}", classes[0]);
+    }
+
+    /// The same prompt on one row gets the same answer as the wrapped one.
+    #[test]
+    fn a_marked_prompt_is_classified_the_same_wrapped_or_not() {
+        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
+        const PROMPT: &str = r"C:\Users\John Doe\ws\src> cargo build";
+        let boundary = PROMPT.find("cargo").unwrap();
+        let flat = FrameBuilder::new(1, 40)
+            .text(0, 0, PROMPT)
+            .mark(0, 0..boundary, Semantic::Prompt)
+            .mark(0, boundary..PROMPT.len(), Semantic::Input)
+            .build();
+        let wrapped: Vec<u8> = fx
+            .scan(&marked_wrapped_prompt())
+            .0
+            .into_iter()
+            .flatten()
+            .take(PROMPT.len())
+            .collect();
+        assert_eq!(&fx.scan(&flat).0[0][..PROMPT.len()], &wrapped[..]);
+    }
+
+    /// A continuation row whose own cells carry no mark does not drag the run
+    /// away from the role its head declared.
+    #[test]
+    fn an_unmarked_continuation_row_keeps_the_runs_role() {
+        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
+        let frame = FrameBuilder::new(2, 20)
+            .text(0, 0, r"C:\Users\John Doe\ws")
+            .mark(0, 0..20, Semantic::Prompt)
+            .flags(0, 19, CellFlags::WRAPLINE)
+            .text(1, 0, r"\src> dir")
+            .build();
+        let (classes, roles) = fx.scan(&frame);
+        assert_eq!(roles[0], Some(RowRole::Prompt));
+        assert_eq!(roles[1], Some(RowRole::Prompt), "the run's head decides");
+        assert_eq!(classes[1][4], Class::PromptSign as u8, "{:?}", classes[1]);
+    }
+
+    /// A session with no marks at all is classified exactly as before: the
+    /// prompt regex still finds the prompt.
+    #[test]
+    fn a_session_with_no_marks_falls_back_to_the_regex() {
+        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
+        let frame = FrameBuilder::new(1, 20).text(0, 0, r"C:\ws> dir").build();
+        let (classes, roles) = fx.scan(&frame);
+        assert_eq!(roles[0], None);
+        assert_eq!(classes[0][5], Class::PromptSign as u8, "{:?}", classes[0]);
+    }
+
+    /// Marks that appear mid-session: the unmarked rows keep the regex and the
+    /// marked ones do not run it. "No mark" is per row, not per session.
+    #[test]
+    fn marks_appearing_mid_session_are_decided_per_row() {
+        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
+        let frame = FrameBuilder::new(2, 20)
+            .text(0, 0, r"C:\ws> dir")
+            .text(1, 0, r"C:\ws> dir")
+            .mark(1, 0..6, Semantic::Prompt)
+            .mark(1, 6..10, Semantic::Input)
+            .build();
+        let (classes, roles) = fx.scan(&frame);
+        assert_eq!(roles[0], None);
+        assert_eq!(roles[1], Some(RowRole::Prompt));
+        assert_eq!(classes[0], classes[1], "both find the same prompt sign");
+    }
+
+    /// `cmd.exe`'s built-in `PROMPT` emits `OSC 133;A` and `;B` and never `;C`,
+    /// so every output line after it is still tagged `Input`. A line that starts
+    /// in `Input` with no prompt on it is therefore reported unmarked, and the
+    /// output is classified as output rather than as a command line.
+    #[test]
+    fn output_left_tagged_input_by_a_shell_without_osc_133_c_is_unmarked() {
+        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
+        let frame = FrameBuilder::new(2, 20)
+            .text(0, 0, r"C:\ws> dir")
+            .mark(0, 0..6, Semantic::Prompt)
+            .mark(0, 6..10, Semantic::Input)
+            .text(1, 0, "error: no files")
+            .mark(1, 0..15, Semantic::Input)
+            .build();
+        let (classes, roles) = fx.scan(&frame);
+        assert_eq!(roles[0], Some(RowRole::Prompt));
+        assert_eq!(roles[1], None, "an Input-headed line is not trusted");
+        assert_eq!(
+            classes[1][0],
+            Class::Error as u8,
+            "output matchers, not command mode: {:?}",
+            classes[1]
+        );
+    }
+
+    /// A marked output row never reaches the prompt regex, so a line the regex
+    /// reads as a prompt keeps its output classes.
+    #[test]
+    fn a_marked_output_row_is_not_read_as_a_prompt() {
+        let fx = Fixture::with_profile(true, ShellProfile::Cmd);
+        let line = r"C:\src -> C:\dst";
+        let marked = FrameBuilder::new(1, 20)
+            .text(0, 0, line)
+            .mark(0, 0..line.len(), Semantic::Output)
+            .build();
+        let plain = FrameBuilder::new(1, 20).text(0, 0, line).build();
+        let (marked, roles) = fx.scan(&marked);
+        assert_eq!(roles[0], Some(RowRole::Output));
+        assert!(
+            !marked[0].contains(&(Class::PromptSign as u8)),
+            "{:?}",
+            marked[0]
+        );
+        assert_ne!(
+            marked[0],
+            fx.scan(&plain).0[0],
+            "the mark changes the answer"
         );
     }
 }
