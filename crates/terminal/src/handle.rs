@@ -316,8 +316,9 @@ mod tests {
     ///    joined — a panic that skips the join leaves a thread spinning at full
     ///    speed for the rest of the binary;
     /// 2. with the demand standing and nobody taking the lock, the pump's chunk
-    ///    rate over a fixed window must collapse to its park — *keeps* yielding,
-    ///    not yielded once;
+    ///    rate over a fixed window must collapse by three orders of magnitude —
+    ///    *keeps* yielding, not yielded once. The bound there is an order of
+    ///    magnitude, not a park count: see `STANDING_BOUND`;
     /// 3. only then does the frame take the lock, and the chunks it costs are
     ///    counted from the mark taken immediately before, against a pump that is
     ///    already throttled to one `PUMP_PARK` per chunk.
@@ -345,6 +346,28 @@ mod tests {
         /// How long the frame holds the demand up without taking the lock, to
         /// watch what the pump does with a demand that stands.
         const STANDING_WINDOW: std::time::Duration = std::time::Duration::from_millis(20);
+        /// Chunks the pump may take during that window and still count as
+        /// yielding.
+        ///
+        /// It is deliberately **not** `STANDING_WINDOW / PUMP_PARK`. That ratio
+        /// bounds nothing: the window is itself a `sleep`, so the wall time
+        /// between the two chunk reads is those 20 ms *plus* whatever the
+        /// scheduler takes to run this thread again, while the pump's park is
+        /// only a floor — `thread::sleep` never sleeps less, but nothing
+        /// promises it sleeps no more. The ratio was 81 against a theoretical
+        /// 80, i.e. no margin at all, and a Linux CI job fitted 100 chunks into
+        /// the real window: its timers reach the 250 us floor that Windows
+        /// rounds up to ~500 us, so a few ms of overshoot on the window was
+        /// enough (`BUG-0070`, acceptance rework 2026-09-22).
+        ///
+        /// What this has to discriminate is *yielding from spinning*, and those
+        /// are four orders of magnitude apart: measured, a yielding pump fits
+        /// 34-38 chunks here and ~100 on Linux, while both mutations of a pump
+        /// that stops yielding fit 519 549 - 607 271. 2 000 leaves an honest
+        /// pump a >50x margin — it is half a second of window at one park per
+        /// chunk — and still fails a broken one by >250x. The bound proves
+        /// "the pump yields", not "the pump sleeps exactly `PUMP_PARK`".
+        const STANDING_BOUND: u64 = 2_000;
 
         let engine = Arc::new(Mutex::new(0u64));
         let demand = Demand::new();
@@ -414,8 +437,11 @@ mod tests {
                 // asking, is back to full speed here and takes orders of
                 // magnitude more.
                 let before_standing = chunks.load(Ordering::Relaxed);
+                let standing = std::time::Instant::now();
                 std::thread::sleep(STANDING_WINDOW);
                 let while_standing = chunks.load(Ordering::Relaxed) - before_standing;
+                // The window the count is actually over, not the one asked for.
+                let stood_for = standing.elapsed();
 
                 // Now contend. The mark is taken here, not at the raise: from
                 // the ask above the pump is throttled, so this delta is the
@@ -435,6 +461,7 @@ mod tests {
                 measured = Some((
                     asked,
                     while_standing,
+                    stood_for,
                     at_contend,
                     chunks_in,
                     waiting.elapsed(),
@@ -446,16 +473,15 @@ mod tests {
         pump.join().expect("the pump thread panicked");
 
         assert!(steady, "the pump never reached its steady state");
-        let (asked_at, while_standing, at_contend, chunks_in, waited) =
+        let (asked_at, while_standing, stood_for, at_contend, chunks_in, waited) =
             measured.expect("the pump never asked while a frame was waiting");
-        let parks_in_window = (STANDING_WINDOW.as_micros() / PUMP_PARK.as_micros()) as u64 + 1;
         let chunks_waited = chunks_in.saturating_sub(at_contend);
 
         assert!(
-            while_standing <= parks_in_window,
-            "the pump took {while_standing} chunks in {STANDING_WINDOW:?} with a frame waiting \
-             (it asked at chunk {asked_at}); a pump that keeps yielding fits \
-             {parks_in_window}"
+            while_standing <= STANDING_BOUND,
+            "the pump took {while_standing} chunks in {stood_for:?} with a frame waiting (it \
+             asked at chunk {asked_at}); a pump that parks at every chunk boundary fits a few \
+             hundred, one that spins fits hundreds of thousands, so the bound is {STANDING_BOUND}"
         );
         assert!(
             waited < std::time::Duration::from_secs(2),
