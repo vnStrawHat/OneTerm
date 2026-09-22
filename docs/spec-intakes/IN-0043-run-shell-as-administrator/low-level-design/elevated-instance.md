@@ -65,7 +65,7 @@ The HLD left the owning crate open. Split by what each half needs:
 | Piece | Crate | Why |
 | --- | --- | --- |
 | `ElevatedShell` enum, argument parser, trusted-path resolution, the `Elevation` enum, the `is_restricted()` / `initial_shell()` process globals | `crates/core`, new `src/config/elevation.rs` | pure data and `std` only; `core` is the one crate `settings`, `workspace`, `terminal-view`, `state` and `app` can all name (`crates/state/src/panel_names.rs:9-12`), and it already owns `ShellKind` and `config_dir()` (`crates/core/src/config/shell.rs:17-32`, `:109-124`) |
-| The token query, the `ShellExecuteExW` call, the fatal `MessageBoxW` | `crates/app`, new `src/elevation.rs`, `#[cfg(windows)]` | `crates/app` already owns every process-level concern — the allocator (`crates/app/src/lib.rs:28-29`), the crash handlers (`:34-72`), the console Ctrl handler (`:78-93`) — and is the composition root that installs `WorkspaceCommands` (`crates/app/src/init.rs:62-80`). It is also the only crate that already depends on `windows-sys` outside the VT engine (`crates/app/Cargo.toml:67`). |
+| The token query, the `ShellExecuteExW` call, the fatal `MessageBoxW` | `crates/app`, new `src/elevation.rs`, **the FFI calls alone `#[cfg(windows)]`** — every decision taken around them (the console-ownership rule, the launch-outcome mapping, the notification, the in-flight debounce) is plain `std` beside them, so it compiles and is unit-tested on all three runners rather than becoming dead code off Windows (`US-0130`, rework 2026-09-22) | `crates/app` already owns every process-level concern — the allocator (`crates/app/src/lib.rs:28-29`), the crash handlers (`:34-72`), the console Ctrl handler (`:78-93`) — and is the composition root that installs `WorkspaceCommands` (`crates/app/src/init.rs:62-80`). It is also the only crate that already depends on `windows-sys` outside the VT engine (`crates/app/Cargo.toml:67`). |
 
 This keeps `crates/core` free of a `windows-sys` dependency it does not have today, and
 keeps the external effect in the crate whose job is external effects. `crates/app` sets
@@ -247,12 +247,20 @@ Linux and macOS CI runners without touching the host:
 ```rust
 pub fn trusted_program(
     shell: ElevatedShell,
-    system_root: &Path,
-    program_files: &Path,
-    versions: impl Fn(&Path) -> Vec<std::ffi::OsString>, // read_dir in production
-    exists: impl Fn(&Path) -> bool,                      // Path::is_file in production
-) -> Result<PathBuf, PathBuf>; // Err carries the path that was looked for, for the message
+    system_root: &str,
+    program_files: &str,
+    versions: impl Fn(&str) -> Vec<String>, // read_dir in production
+    exists: impl Fn(&str) -> bool,          // Path::new(..).is_file() in production
+) -> Result<String, String>; // Err carries the path that was looked for, for the message
 ```
+
+**Strings, not `PathBuf`, and a private `win_join(&[&str]) -> String`.** `std::path` is
+host-flavoured: `PathBuf::join` separates with `/` on the Linux and macOS runners, so the
+resolution built `X:\Windows/System32/cmd.exe` there and the tests that assert the real
+Windows path went red on two of the three OSes (`US-0130`, rework 2026-09-22 — the same
+lesson as `US-0114`). These paths are Windows paths by definition, so they are built as
+strings with `\` spelled out and the injected lookup/existence seams stay string-based.
+The result is turned into a `PathBuf` once, where `LocalShellConfig::program` needs one.
 
 **Why the resolution runs in the elevated process and not in the launching one.** Resolving
 first and passing the resolved path as an argument would make the unelevated process the
@@ -508,15 +516,16 @@ pub fn parse<I, S>(args: I) -> Result<Option<ElevatedShell>, CliError>
 where I: IntoIterator<Item = S>, S: AsRef<std::ffi::OsStr>;
 
 /// Resolve to an absolute path OneTerm trusts. Err carries the path looked for.
+/// Strings, never `PathBuf`: these are Windows paths on every host (section 5).
 pub fn trusted_program(
     shell: ElevatedShell,
-    system_root: &std::path::Path,
-    program_files: &std::path::Path,
-    versions: impl Fn(&std::path::Path) -> Vec<std::ffi::OsString>,
-    exists: impl Fn(&std::path::Path) -> bool,
-) -> Result<std::path::PathBuf, std::path::PathBuf>;
+    system_root: &str,
+    program_files: &str,
+    versions: impl Fn(&str) -> Vec<String>,
+    exists: impl Fn(&str) -> bool,
+) -> Result<String, String>;
 /// The same, against this machine (`%SystemRoot%`, `%ProgramFiles%`, read_dir, is_file).
-pub fn trusted_program_for(shell: ElevatedShell) -> Result<std::path::PathBuf, std::path::PathBuf>;
+pub fn trusted_program_for(shell: ElevatedShell) -> Result<String, String>;
 
 /// M3 as one function: the config an elevated process may spawn for `cfg.kind` --
 /// the trusted program, the kind's own args, and nothing from `terminal.json`.
@@ -526,7 +535,7 @@ pub fn trusted_program_for(shell: ElevatedShell) -> Result<std::path::PathBuf, s
 /// every local spawn, because every one of them resolves through it.
 pub fn trusted_shell_config(
     cfg: &LocalShellConfig,
-    resolve: impl Fn(ElevatedShell) -> Result<std::path::PathBuf, std::path::PathBuf>,
+    resolve: impl Fn(ElevatedShell) -> Result<String, String>,
 ) -> Result<LocalShellConfig, AppError>;
 
 /// What the process token said. Three-valued: see section 7.
