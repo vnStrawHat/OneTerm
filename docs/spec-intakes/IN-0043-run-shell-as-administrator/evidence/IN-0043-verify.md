@@ -1454,3 +1454,205 @@ popover}`. `target/fast-dev` was not built, so there was nothing to delete.
   those themes will fail the gate — which is the gate working, and worth expecting.
 - Over-the-shoulder elevation, Group Policy denial and a real `ShellExecuteExW` failure remain
   unexercised, as in every section above.
+
+---
+
+# Acceptance rework 2026-09-22 (platform split) — verification
+
+Target: `fix/elevation-platform-split` @ `0426e2e6`, two commits on `main` @ `3f913c90`
+(`fix(core): build the trusted Windows shell paths as strings, not std::path`,
+`fix(app): gate the elevation FFI, not the decisions around it`). Scope: **the rework
+only** — the two CI failures the owner's push produced (ubuntu `-D warnings` dead code in
+`crates/app/src/elevation.rs`, macOS six red tests in `crates/core/src/config/elevation.rs`)
+and what the fix for them changed. Everything verified in the sections above is unchanged
+by these two commits and was not re-examined. Same constraints as every section above: no
+consent prompt raised, no elevated process started, no `oneterm.exe` enumerated.
+
+## Verdict
+
+**PASS — accept `0426e2e6`.** Both failures are fixed at the root rather than silenced. The
+platform seam now sits on the FFI calls themselves, so `ConsoleAction`, `console_action`,
+`LaunchOutcome`, `ERROR_CANCELLED_CODE`, `outcome_of` and all three `ElevationRequest`
+fields are read on every OS; the trusted-path resolution is string-based end to end and its
+expected values are Windows paths on every host. The security shape of the launch is
+byte-for-byte what it was. Three minors below, none blocking, all recorded rather than
+fixed.
+
+## 1. The diff, read in full
+
+`git diff main...HEAD` — six files, 337 insertions / 141 deletions. Two source files, one
+`lib.rs` format-string change, three documents.
+
+- **No `#[allow(dead_code)]`, and no `#[allow(unused...)]`,** anywhere in the diff or in
+  either file's final text. The module header says an `allow` there would mean the split is
+  in the wrong place, and the code keeps to it.
+- **`cfg(windows)` on tests — two remain, both pre-existing and both genuinely Win32.**
+  `crates/app/src/elevation.rs:647 the_console_queries_agree_with_each_other` (it calls
+  `GetConsoleWindow` / `GetConsoleProcessList`) and `:668 error_cancelled_matches_windows`
+  (it compares `ERROR_CANCELLED_CODE` against the `windows-sys` constant). Neither is
+  touched by this diff — `git show main:crates/app/src/elevation.rs` carries both — and
+  neither *can* be un-gated: each one's body is an FFI call or a `windows-sys` item. Every
+  **decision** test is ungated and runs on all three runners, including the new
+  `the_request_carries_the_flag_and_one_token`. `crates/core/src/config/elevation.rs`
+  contains no `cfg(windows)` at all, so none of the six macOS-red tests is gated away —
+  which was the risk worth checking, because gating them would have "fixed" macOS by
+  deleting the M3 argument from two of the three OSes.
+- **The security shape of the launch is unchanged.** The Win32 block moved from
+  `ElevationRequest::execute` into `request_elevation` verbatim: `wide("runas")` as the
+  verb; `lpFile` from the owned `std::env::current_exe()` (never a name, never `PATH`,
+  never `argv[0]`); `lpParameters` still `format!("{ELEVATED_SHELL_FLAG} {token}")` =
+  `--elevated-shell <cmd|powershell|pwsh>` from the closed enum, with no user text on the
+  path and therefore still no quoting code; `lpDirectory` still set from the owned
+  `directory`; `fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI` and **no**
+  `SEE_MASK_NOCLOSEPROCESS`, with the comment saying why; `nShow = SW_SHOWNORMAL`;
+  `CoInitializeEx(COINIT_APARTMENTTHREADED)` / `CoUninitialize` around it. The call still
+  happens on the named `oneterm-elevate` thread with the `debug_assert_ne!` against the
+  gpui thread id kept in `execute`, and the outcome still returns through the
+  `async_channel`. The only change is *where* `started != FALSE` is evaluated: the FFI
+  function now returns `(bool, u32)` and `outcome_of` is applied one level up, on every OS.
+- **`trusted_program` still consults nothing.** Its only inputs are its four parameters;
+  the only environment reads in the module are `protected_root("SystemRoot")` and
+  `protected_root("ProgramFiles")` in `trusted_program_for`. No `PATH`, no `COMSPEC` (the
+  comment refusing it survives), no `terminal.json`, no registry. `trusted_shell_config`
+  still builds `LocalShellConfig` field by field rather than with `..cfg.clone()`.
+
+## 2. The non-Windows compile, reproduced independently
+
+The packet's `fakeunix` simulation was repeated from scratch rather than taken on trust:
+`crates/app/src/elevation.rs`'s twelve attributes rewritten `#[cfg(windows)]` to
+`#[cfg(all(windows, not(fakeunix)))]` and `#[cfg(not(windows))]` to
+`#[cfg(any(not(windows), fakeunix))]`, then
+
+```
+cargo rustc -p oneterm-app  --lib -- --cfg fakeunix
+  -> Finished. warning: `oneterm-app` (lib) generated 10 warnings
+     -- all ten `unexpected cfg condition name: fakeunix`, at
+     elevation.rs:40,45,91,113,167,172,192,195,386,396.
+     Zero dead_code. Zero unused_*. Zero errors.
+cargo rustc -p oneterm-core --lib -- --cfg fakeunix
+  -> Finished, zero warnings.
+```
+
+The attributes were restored from a copy taken before the edit and `git status` is clean.
+The count matches the packet's claim exactly (ten), and the diagnostic the ubuntu job
+emitted six times is gone. Two caveats on what this proves:
+
+- The `oneterm-core` half of the simulation is **vacuous**: that module has no
+  `cfg(windows)` to flip, so the command is an ordinary build. Its real proof is the test
+  run and the mutation in section 4.
+- Only the **lib** target was compiled under `fakeunix`, which is the target ubuntu failed
+  on. The **test** target's non-Windows shape was not compiled: on a real Unix runner the
+  two `cfg(windows)` tests drop out and the remaining four are pure `std`, so nothing
+  suggests a problem, but this session did not prove it. The CI runners remain the only
+  proof that either crate links on a Unix host — as the packet's own Gaps entry now says.
+
+## 3. `win_join` edge cases
+
+Extracted verbatim into a standalone program and exercised (backslashes shown as they
+appear in the produced string):
+
+| Input components | Output | Reading |
+| --- | --- | --- |
+| `X:\` , `Windows` | `X:\Windows` | a drive root does not double the separator (this is the pinned case) |
+| `X:` , `Windows` | `X:\Windows` | a bare drive is joined, not left drive-relative |
+| `X:\Windows\\\` , `System32` | `X:\Windows\System32` | `trim_end_matches` eats a run, not just one |
+| `\\srv\share\` , `System32` | `\\srv\share\System32` | a UNC root survives; only the *trailing* separator is trimmed |
+| `X:\Windows` , `` (empty) , `cmd.exe` | `X:\Windows\\cmd.exe` | **an empty component doubles the separator** |
+| `` (empty) , `System32` , `cmd.exe` | `\System32\cmd.exe` | an empty *root* yields a drive-relative path |
+| `X:/Windows` , `System32` | `X:/Windows\System32` | **a forward slash is left alone** — not normalised, not trimmed (`X:/Windows/` gives `X:/Windows/\System32`) |
+| (no components) | `` (empty) | — |
+
+**Answer to "should a forward slash be left alone?" — for this function, yes.** `win_join`
+is private, and every component but the two roots is a literal in the same file; the roots
+come from `%SystemRoot%` / `%ProgramFiles%` read inside the elevated process, from an
+environment block the launcher cannot reach. So neither the empty nor the forward-slash
+case is reachable today, and both remain *safe* if they ever are: Win32 accepts `/` as a
+separator and collapses a repeated one, so a mixed or doubled result still resolves to the
+same file, and the path is only ever handed to an existence check and then to
+`LocalShellConfig::program`. Normalising would add a rule for a caller that does not exist.
+Worth one line in `win_join`'s doc if it is ever made `pub`, and nothing more.
+
+**The six macOS-red tests' expected strings contain only backslashes.** Checked literal by
+literal: `X:\Windows\System32\cmd.exe` (twice),
+`X:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+`X:\Program Files\PowerShell\8\pwsh.exe`, `X:\Program Files\PowerShell\7\pwsh.exe` (twice),
+plus the injected roots `X:\Windows` and `X:\Program Files` — all Rust raw strings, no
+forward slash anywhere, and **unchanged in value** from `main`: the diff turns
+`PathBuf::from(..)` into `.to_string()` and touches nothing inside the literals. The tests
+were right before the fix and are right after it.
+
+## 4. Commands
+
+All at `0426e2e6`, `$env:CARGO_BUILD_JOBS=6`, in an isolated worktree.
+
+```
+cargo test -p oneterm-core -p oneterm-app
+  -> exit 0. oneterm-app lib 26, oneterm-core lib 80, 0 failed in every binary.
+     (matches the packet's claim exactly)
+cargo clippy --workspace --all-targets -- -D warnings
+  -> exit 0, no diagnostic of any kind.
+cargo fmt --all -- --check          -> exit 0
+python scripts/check-english.py     -> passed for 986 files
+python scripts/check-doc-paths.py   -> passed for 205 current paths in 11 documents
+```
+
+Mutation, reverted immediately (`git status` clean afterwards):
+
+```
+crates/core/src/config/elevation.rs: win_join joins with "/" instead of "\"
+  -> 7 FAILED / 73 passed:
+     windows_components_are_joined_with_a_backslash_on_every_os
+     cmd_resolves_under_system32_and_never_through_comspec
+     windows_powershell_resolves_under_the_v1_0_directory
+     a_missing_system_shell_reports_the_path_it_looked_for
+     pwsh_takes_the_highest_numeric_directory
+     pwsh_skips_a_numeric_directory_that_holds_no_executable
+     pwsh_with_no_install_reports_the_version_7_path
+```
+
+That is exactly the six tests macOS reported plus the new pin — the suite fails for the
+original reason, on this host, the moment the separator is wrong. The tests are the guard
+the fix claims they are, and they are no longer host-dependent.
+
+`target/fast-dev` was not built, so there was nothing to delete.
+
+## New findings — three minors, none blocking
+
+- **NEW-13 (behaviour, unreachable).** Off Windows `execute()` used to return
+  `Failed("running as administrator is a Windows feature")`; it now returns
+  `outcome_of(false, 50)` = `Failed("Windows error 50")`, which a user would see as
+  *"Could not start an administrator window: Windows error 50"*. Unreachable — the
+  `Run as administrator` submenu is `cfg(windows)`
+  (`crates/terminal-view/src/panel/terminal_panel.rs:126,748,768`), confirmed — and the
+  trade is deliberate: one outcome path on all three OSes is worth more than a message
+  nobody can reach. If `launch_elevated_shell` ever gains a non-menu caller, the string
+  needs to come back.
+- **NEW-14 (behaviour, benign).** `protected_root` moved from `env::var_os` to `env::var`,
+  so a `%SystemRoot%` or `%ProgramFiles%` that is not valid UTF-8 now silently falls back to
+  `C:\Windows` / `C:\Program Files` instead of being used. The doc comment says so. The
+  direction is safe — the fallback is a protected directory, and a wrong root fails the
+  existence check and produces the named error rather than resolving something else — so
+  this is a fail-closed narrowing, not a hole.
+- **NEW-15 (doc, cosmetic).** `US-0130`'s rework note says the new rule is *"build and read
+  it as a string with `\` (and `/`) spelled out"*, while the rule as written into
+  `docs/agents/code-style.md` ends *"with `\` spelled out"*. The parenthesis is the
+  `US-0114` half — reading a Windows path on a Unix host, where the forward slash matters
+  too — and it did not survive into the standing rule. One clause, in the file agents
+  actually read.
+
+## Gaps in this verification
+
+- **Nothing elevated was run**, for the same reason as every section above: the consent
+  prompt is drawn on the secure desktop and this session may not raise one. The `runas`
+  call, `FreeConsole()` and the elevated process's own `trusted_program_for` remain
+  unexecuted here.
+- **The non-Windows half is a simulation, on one target.** `--cfg fakeunix` against the msvc
+  toolchain proves the non-Windows arms type-check and are reachable in the **lib**; it does
+  not prove the crate links on Linux or macOS, and it did not cover the test target. Only
+  the CI runners close this, and closing it is the whole point of the push that is about to
+  be retried.
+- **`cargo clippy` was run once**, without the `terminal-diagnostics` feature and without
+  the rest of `ci-local`. The packet records a full `ci-local.ps1` pass at this commit; this
+  session confirmed the four checks it was asked for and did not repeat the other twenty.
+- The two `cfg(windows)` tests still run on one runner only. That is inherent — their
+  bodies are Win32 — and it is the reason the *decision* tests being ungated matters.

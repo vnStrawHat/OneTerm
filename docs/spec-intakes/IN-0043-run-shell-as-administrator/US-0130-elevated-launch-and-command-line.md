@@ -564,6 +564,99 @@ through the crash store, which M7 already keeps in `crashes/elevated/`, or by st
 from an administrator console by hand, which is the case the process-count check
 deliberately preserves.
 
+### Acceptance rework, 2026-09-22 (fourth) — the push turned two CI jobs red
+
+Both failures are the same root cause wearing two hats: **this packet's code was written on a
+Windows host and reasoned about as though Windows were the only host**, while `crates/core`'s
+half exists precisely so the security argument is verified on the Linux and macOS runners too.
+
+**1. "Full workspace quality gate" (ubuntu) — `-D warnings`, dead code in
+`crates/app/src/elevation.rs`:**
+
+```
+error: enum `ConsoleAction` is never used                     (elevation.rs:181)
+error: function `console_action` is never used                (elevation.rs:194)
+error: constant `ERROR_CANCELLED_CODE` is never used          (elevation.rs:237)
+error: variants `Started` and `Declined` are never constructed (elevation.rs:242-244)
+error: function `outcome_of` is never used                    (elevation.rs:251)
+error: fields `executable`, `parameters` and `directory` are never read (elevation.rs:283-292)
+```
+
+**2. "Backend tests" (macOS) — six tests in `crates/core/src/config/elevation.rs`:**
+
+```
+cmd_resolves_under_system32_and_never_through_comspec        (:669)
+windows_powershell_resolves_under_the_v1_0_directory         (:678)
+a_missing_system_shell_reports_the_path_it_looked_for        (:690)
+pwsh_takes_the_highest_numeric_directory                     (:698)
+pwsh_skips_a_numeric_directory_that_holds_no_executable      (:713)
+pwsh_with_no_install_reports_the_version_7_path              (:725)
+
+left:  Err("X:\\Windows/System32/cmd.exe")
+right: Err("X:\\Windows\\System32\\cmd.exe")
+```
+
+**Cause (1): the platform split was drawn one level too high.** `console_action`,
+`outcome_of`, `LaunchOutcome` and `ElevationRequest`'s fields are pure decisions with no Win32
+in them, but each was reached *only* from inside a `#[cfg(windows)]` body — `release_own_console`
+and `ElevationRequest::execute` were each written twice, once per platform, with the whole
+decision inside the Windows copy. Off Windows the decisions were therefore unreachable, which is
+exactly what `dead_code` says. They were not unused: they were unused **on two of the three OSes
+this code is compiled for**, and the tests that prove the rules ran only on the third.
+
+**Fix (1): the `cfg` moved down onto the FFI calls, and nothing else** — no `#[allow(dead_code)]`,
+which would have preserved the mistake and silenced the report of it.
+
+| Was | Is |
+| --- | --- |
+| `release_own_console` written twice: a no-op, and a Windows copy holding the queries, the decision and `FreeConsole` | one `release_own_console` — `console_owners()` (`cfg`, the two Win32 queries / `(false, 0)`), then `console_action`, then `free_console()` (`cfg`, `FreeConsole` / unreachable no-op) |
+| `ElevationRequest::execute` written twice: a `Failed("…is a Windows feature")` stub, and a Windows copy holding the strings, the call and the mapping | one `execute` — the debug assertion, then `request_elevation(&executable, &parameters, &directory)` (`cfg`, `ShellExecuteExW` / `(false, 50)`), then `outcome_of` |
+
+So `ConsoleAction`, `console_action`, `LaunchOutcome`, `ERROR_CANCELLED_CODE`, `outcome_of` and
+all three `ElevationRequest` fields are now read on every OS, and their tests
+(`only_a_console_of_our_own_is_released`, `a_declined_prompt_says_nothing_and_a_failure_says_why`,
+`a_second_click_is_ignored_while_a_prompt_is_outstanding`, plus a new
+`the_request_carries_the_flag_and_one_token` asserting `--elevated-shell pwsh` and an absolute
+executable) run on all three runners rather than on Windows alone. The module header now states
+where the split is and that an `#[allow(dead_code)]` there would mean it is in the wrong place.
+
+**Verified without a Linux toolchain** (only the msvc target is installed here): the module's
+`#[cfg(windows)]` / `#[cfg(not(windows))]` attributes were temporarily rewritten to
+`#[cfg(all(windows, not(fakeunix)))]` / `#[cfg(any(not(windows), fakeunix))]` and the crate
+compiled with `cargo rustc -p oneterm-app --lib -- --cfg fakeunix`, i.e. the non-Windows half of
+this file against a Windows toolchain. Result: the non-Windows arms type-check and the build
+produces **no `dead_code` diagnostic at all** (ten `unexpected cfg` warnings for `fakeunix`, and
+nothing else). The attributes were restored immediately afterwards.
+
+**Cause (2): `std::path` is host-flavoured.** `trusted_program` built its three paths with
+`PathBuf::join`, which separates with the *host's* separator — `/` on Linux and macOS. The
+trusted paths are Windows paths by definition (they are resolved in the elevated Windows process
+and executed nowhere else), so on the Unix runners the function produced
+`X:\Windows/System32/cmd.exe`: a string that is neither a Windows path nor what the tests assert.
+**The tests were right and the function was wrong on two of the three OSes** — the same lesson as
+`US-0114`'s 2026-09-18 rework, where `Path::file_stem` read a Windows program path as one
+component on Linux.
+
+**Fix (2): build them as strings.** A private `win_join(&[&str]) -> String` joins with `\`
+explicitly (and trims a trailing `\` off each part, so a `SystemRoot` of `X:\` does not double
+it). `trusted_program`, `trusted_program_for` and `trusted_shell_config`'s injected `resolve` are
+now `String`-based end to end — `versions: impl Fn(&str) -> Vec<String>`,
+`exists: impl Fn(&str) -> bool`, `Result<String, String>` — so the seams cannot reintroduce a
+host-flavoured join either. The one `PathBuf` left is where `LocalShellConfig::program` needs one.
+The six tests keep their expected values unchanged and now hold on every OS by construction; a
+new `windows_components_are_joined_with_a_backslash_on_every_os` pins `win_join` itself. None
+were `cfg(windows)`-ed away: the resolution rules are the M3 argument, and the crate split exists
+so they are verified on the Linux and macOS runners.
+
+**The rule, now in `docs/agents/code-style.md`:** *Windows-shaped strings are never built with
+`std::path`* — `Path`/`PathBuf` use the host's separator and the host's component rules, so a
+Windows path constructed or split on a Linux or macOS runner is wrong; build and read it as a
+string with `\` (and `/`) spelled out.
+
+**Checks.** `cargo test -p oneterm-core -p oneterm-app` — green (`oneterm-core` lib 80,
+`oneterm-app` lib 26). `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+`pwsh scripts/ci-local.ps1` — *"ci-local: all checks passed"*.
+
 ### Gaps
 
 - **The elevated side is unverified in this environment.** The consent prompt is drawn by the
@@ -573,7 +666,10 @@ deliberately preserves.
 - Over-the-shoulder elevation needs a second account; none is available here, so it was **not
   exercised**.
 - `cfg(unix)` behaviour is compile-and-unit-tested only; no Linux or macOS desktop run is
-  available in this environment.
+  available in this environment. The 2026-09-22 rework's non-Windows compile is a
+  **simulation** — the module's `cfg` attributes flipped by a `--cfg fakeunix` predicate and
+  built against the msvc toolchain, which proves the non-Windows arms type-check and are
+  reachable, not that the crate links on a Unix host. Only the CI runners prove that.
 - `launch_elevated_shell`'s own error map (`ERROR_CANCELLED` vs everything else) is
   **unexercised at run time**: reaching it needs a real `ShellExecuteExW` failure. The
   mapping is now unit-tested as pure data, but no real failure has been observed.

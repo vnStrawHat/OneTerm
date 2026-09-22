@@ -67,9 +67,8 @@ fn read_process_identity() {
         // extra steps (`DEC-0019` rule 4).
         if let Err(looked_for) = elevation::trusted_program_for(shell) {
             crate::elevation::fatal_message(&format!(
-                "OneTerm cannot run {} as administrator: {} is not installed.",
+                "OneTerm cannot run {} as administrator: {looked_for} is not installed.",
                 shell.shell_kind().display_name(),
-                looked_for.display()
             ));
             std::process::exit(EXIT_SHELL_NOT_INSTALLED);
         }

@@ -9,7 +9,16 @@
 //!
 //! Off Windows nothing here has a meaning: [`process_elevation`] is a `const fn`
 //! returning [`Elevation::NotElevated`], so every gate compiles away to today's
-//! behaviour, and the launch logs and returns.
+//! behaviour, and the launch is unreachable because the menu row that reaches it
+//! is `cfg(windows)`.
+//!
+//! **Where the platform split is.** `cfg(windows)` covers the FFI calls and
+//! nothing else — [`process_elevation`], [`console_owners`], [`free_console`],
+//! [`request_elevation`] and [`fatal_message`]'s message box. Every decision
+//! taken around them — [`console_action`], [`outcome_of`], [`notification_for`],
+//! [`should_start_launch`] — is plain `std`, compiled and unit-tested on all
+//! three CI runners. An `#[allow(dead_code)]` here would mean the split is in
+//! the wrong place (`US-0130`, rework 2026-09-22).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -141,18 +150,32 @@ fn wide(value: &str) -> Vec<u16> {
 /// configuration directory is a write, and M4's promise is that an elevated
 /// window leaves nothing behind. Its diagnostics are the crash store, which M7
 /// already keeps in `crashes/elevated/`.
+///
+/// The decision is [`console_action`] and is compiled and tested on every OS;
+/// only the two Win32 queries and `FreeConsole` itself are `cfg(windows)`.
+pub(crate) fn release_own_console() {
+    let (has_console, owners) = console_owners();
+    if console_action(has_console, owners) == ConsoleAction::Keep {
+        return;
+    }
+    free_console();
+}
+
+/// Whether this process is attached to a console, and how many processes are
+/// attached to it. Off Windows there is no such thing: a Unix process has a
+/// controlling terminal it never allocated and must never disown.
 #[cfg(not(windows))]
-pub(crate) fn release_own_console() {}
+fn console_owners() -> (bool, u32) {
+    (false, 0)
+}
 
 #[cfg(windows)]
-pub(crate) fn release_own_console() {
-    use windows_sys::Win32::System::Console::{
-        FreeConsole, GetConsoleProcessList, GetConsoleWindow,
-    };
+fn console_owners() -> (bool, u32) {
+    use windows_sys::Win32::System::Console::{GetConsoleProcessList, GetConsoleWindow};
 
     // SAFETY: both queries are parameterless or take a buffer we own, and
     // neither keeps a pointer past the call.
-    let (has_console, owners) = unsafe {
+    unsafe {
         if GetConsoleWindow().is_null() {
             (false, 0)
         } else {
@@ -162,14 +185,20 @@ pub(crate) fn release_own_console() {
                 GetConsoleProcessList(list.as_mut_ptr(), list.len() as u32),
             )
         }
-    };
-
-    if console_action(has_console, owners) == ConsoleAction::Keep {
-        return;
     }
+}
+
+/// Unreachable off Windows: [`console_owners`] never reports one there.
+#[cfg(not(windows))]
+fn free_console() {}
+
+#[cfg(windows)]
+fn free_console() {
     // SAFETY: parameterless, and nothing has been written to this console yet —
     // `run()` calls this before the logger is initialised.
-    if unsafe { FreeConsole() } == windows_sys::Win32::Foundation::FALSE {
+    if unsafe { windows_sys::Win32::System::Console::FreeConsole() }
+        == windows_sys::Win32::Foundation::FALSE
+    {
         // Nothing is broken by failing: the window stays and the log still
         // works. Worth a line, and this runs before the logger exists.
         eprintln!("OneTerm: could not release the console window");
@@ -327,21 +356,11 @@ impl ElevationRequest {
     ///
     /// So: a thread of its own, its own COM apartment, and not one gpui type in
     /// scope.
-    #[cfg(not(windows))]
+    ///
+    /// The platform split is [`request_elevation`] and nothing else: the fields
+    /// are read here, and what a launch result *means* is [`outcome_of`], on
+    /// every OS.
     pub(crate) fn execute(self) -> LaunchOutcome {
-        LaunchOutcome::Failed("running as administrator is a Windows feature".to_string())
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn execute(self) -> LaunchOutcome {
-        use windows_sys::Win32::System::Com::{
-            COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize,
-        };
-        use windows_sys::Win32::UI::Shell::{
-            SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW,
-        };
-        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-
         debug_assert_ne!(
             Some(&std::thread::current().id()),
             UI_THREAD.get(),
@@ -349,45 +368,83 @@ impl ElevationRequest {
              the window proc while the App RefCell is borrowed (IN-0043)"
         );
 
-        let verb = wide("runas");
-        let file = wide(&self.executable.to_string_lossy());
-        let parameters = wide(&self.parameters);
-        let working_directory = wide(&self.directory.to_string_lossy());
-
-        // SAFETY: COM is initialized for this thread and uninitialized before it
-        // ends; the struct is zeroed and its `cbSize` set as documented; every
-        // pointer is a NUL-terminated wide string that outlives the call.
-        let (started, last_error) = unsafe {
-            // `ShellExecuteEx` delegates to COM shell extensions, so the thread
-            // must have an apartment. Ours, not gpui's: nothing else runs here.
-            let com = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
-
-            let mut info: SHELLEXECUTEINFOW = std::mem::zeroed();
-            info.cbSize = size_of::<SHELLEXECUTEINFOW>() as u32;
-            // `SEE_MASK_NOASYNC`: this thread has no message loop and exits as
-            // soon as the call returns, so the operation must complete before it
-            // does. `SEE_MASK_FLAG_NO_UI` suppresses the shell's own error
-            // dialog — not the consent prompt, which the AppInfo service owns —
-            // so every failure is reported once, by OneTerm, in OneTerm's style.
-            // `SEE_MASK_NOCLOSEPROCESS` is deliberately not set: nothing here
-            // consumes `hProcess`, and a handle never closed is a leak.
-            info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-            info.lpVerb = verb.as_ptr();
-            info.lpFile = file.as_ptr();
-            info.lpParameters = parameters.as_ptr();
-            info.lpDirectory = working_directory.as_ptr();
-            info.nShow = SW_SHOWNORMAL;
-            let started = ShellExecuteExW(&mut info);
-            let last_error = windows_sys::Win32::Foundation::GetLastError();
-
-            if com >= 0 {
-                CoUninitialize();
-            }
-            (started, last_error)
-        };
-
-        outcome_of(started != windows_sys::Win32::Foundation::FALSE, last_error)
+        let (started, last_error) =
+            request_elevation(&self.executable, &self.parameters, &self.directory);
+        outcome_of(started, last_error)
     }
+}
+
+/// Ask the AppInfo service to start `executable` elevated, and block until it
+/// answers: `(started, GetLastError())`, which [`outcome_of`] turns into a
+/// [`LaunchOutcome`].
+///
+/// Off Windows this is unreachable — the `Run as administrator` submenu is
+/// `cfg(windows)` (`crates/terminal-view/src/panel/terminal_panel.rs`) — and the
+/// seam is here, at the FFI call itself, rather than one level up so that the
+/// request, the outcome mapping and the notification are one code path compiled
+/// and tested on all three CI runners.
+#[cfg(not(windows))]
+fn request_elevation(
+    _executable: &std::path::Path,
+    _parameters: &str,
+    _directory: &std::path::Path,
+) -> (bool, u32) {
+    // `ERROR_NOT_SUPPORTED`: there is no `runas` verb to invoke.
+    (false, 50)
+}
+
+#[cfg(windows)]
+fn request_elevation(
+    executable: &std::path::Path,
+    parameters: &str,
+    directory: &std::path::Path,
+) -> (bool, u32) {
+    use windows_sys::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize,
+    };
+    use windows_sys::Win32::UI::Shell::{
+        SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let verb = wide("runas");
+    let file = wide(&executable.to_string_lossy());
+    let parameters = wide(parameters);
+    let working_directory = wide(&directory.to_string_lossy());
+
+    // SAFETY: COM is initialized for this thread and uninitialized before it
+    // ends; the struct is zeroed and its `cbSize` set as documented; every
+    // pointer is a NUL-terminated wide string that outlives the call.
+    let (started, last_error) = unsafe {
+        // `ShellExecuteEx` delegates to COM shell extensions, so the thread
+        // must have an apartment. Ours, not gpui's: nothing else runs here.
+        let com = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+
+        let mut info: SHELLEXECUTEINFOW = std::mem::zeroed();
+        info.cbSize = size_of::<SHELLEXECUTEINFOW>() as u32;
+        // `SEE_MASK_NOASYNC`: this thread has no message loop and exits as
+        // soon as the call returns, so the operation must complete before it
+        // does. `SEE_MASK_FLAG_NO_UI` suppresses the shell's own error
+        // dialog — not the consent prompt, which the AppInfo service owns —
+        // so every failure is reported once, by OneTerm, in OneTerm's style.
+        // `SEE_MASK_NOCLOSEPROCESS` is deliberately not set: nothing here
+        // consumes `hProcess`, and a handle never closed is a leak.
+        info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+        info.lpVerb = verb.as_ptr();
+        info.lpFile = file.as_ptr();
+        info.lpParameters = parameters.as_ptr();
+        info.lpDirectory = working_directory.as_ptr();
+        info.nShow = SW_SHOWNORMAL;
+        let started = ShellExecuteExW(&mut info);
+        let last_error = windows_sys::Win32::Foundation::GetLastError();
+
+        if com >= 0 {
+            CoUninitialize();
+        }
+        (started, last_error)
+    };
+
+    (started != windows_sys::Win32::Foundation::FALSE, last_error)
 }
 
 /// Launch a **new** elevated OneTerm on `kind` (`DEC-0019` rule 1).
@@ -552,6 +609,19 @@ mod tests {
         let message = notification_for(&denied).expect("a failure must be reported once");
         assert!(message.contains("1260"), "{message}");
         assert!(message.contains("administrator window"), "{message}");
+    }
+
+    /// The whole of what crosses into the elevated process: this executable and
+    /// one token from a closed three-value enum. No user text reaches the
+    /// command line, which is why there is no Windows quoting code here to get
+    /// wrong — asserted on every OS, because the shape is not Win32.
+    #[test]
+    fn the_request_carries_the_flag_and_one_token() {
+        let request = ElevationRequest::build(oneterm_core::elevation::ElevatedShell::Pwsh)
+            .expect("this process has a path and a working directory");
+        assert_eq!(request.parameters, "--elevated-shell pwsh");
+        assert!(request.executable.is_absolute(), "never a name, never PATH");
+        assert!(request.directory.is_absolute());
     }
 
     /// Only a console this process owns alone is disowned. The `runas` case is
