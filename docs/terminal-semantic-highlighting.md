@@ -149,9 +149,12 @@ wins per span (non-overlapping):
 
 ### 4.2 The OSC 133 fast path (the OneTerm advantage)
 
-OneTerm **already** parses OSC 133 in `crates/core/src/terminal/osc.rs` (`Osc133Kind`)
-and forwards `SessionEvent::ShellIntegration(kind)`:
-`PromptStart` / `PromptEnd` / `OutputStart` / `OutputEnd { exit_code }` (note: the code enum is `OutputStart`, i.e. OSC 133;C — the command-input region is `PromptEnd..OutputStart`; see §13 Q1).
+OneTerm **already** parses OSC 133 — in `crates/vt` (the engine), as
+`ShellMark { PromptStart, PromptEnd, OutputStart, OutputEnd { exit_code } }`, which reaches
+the backend's router as a `VtEvent`. (The `crates/core/src/terminal/osc.rs` this section
+used to cite was the pre-`IN-0029` parser and no longer exists.) Note that the code enum is
+`OutputStart`, i.e. OSC 133;C — the command-input region is `PromptEnd..OutputStart`; see
+§13 Q1.
 
 **Where the roles come from (`US-0133`).** This section, and §13 Q1 with it, originally
 said `RowRoles` would be rebuilt "in the pump ... alongside the grid snapshot" by tracking
@@ -177,11 +180,13 @@ pub struct RowRoles {
 pub enum RowRole { Output = 0, Prompt = 1, Command = 2 }
 ```
 
-The role is the region of the line's **first marked character**:
+The role is the region of the line's **first marked character**, plus one condition on the
+line above it:
 
 | First marked character of the logical line | Role |
 |---|---|
-| `Semantic::Prompt` | `Prompt`, plus the char index of the line's first `Input` character — the prompt/command boundary `OSC 133;B` drew |
+| `Semantic::Prompt`, and the previous logical line's region is known and is **not** `Prompt` | `Prompt`, plus the char index of the line's first `Input` character — the prompt/command boundary `OSC 133;B` drew |
+| `Semantic::Prompt` otherwise (no transition, or no previous line on screen) | **no mark** — see below |
 | `Semantic::Output` | `Output` |
 | `Semantic::Input` | **no mark** — see below |
 | nothing is marked | no mark |
@@ -200,14 +205,45 @@ The role is the region of the line's **first marked character**:
   **per row**, not per session: a session can start under a shell without integration, gain
   it later, or print unmarked output between two marked prompts.
 
-**Why an `Input`-headed line is not trusted.** `OSC 133;B` sets the template to `Input` and
-only `OSC 133;C` clears it. `cmd.exe`'s built-in `PROMPT` (see `CMD_OSC7_PROMPT` in
-`crates/core/src/config/shell.rs`) emits `A` and `B` and never `C`, so every line the
-command prints is still tagged `Input`. Treating that as `RowRole::Command` would scan a
-whole screen of output in command mode. A logical line that *starts* in `Input` — i.e. one
-with no prompt on it — is therefore reported unmarked and the regex decides, which is what
-happened before this packet. A typed command that wraps is unaffected: it continues the
-prompt's logical line, whose head is `Prompt`.
+**The region is sticky, so only a transition counts.** `OSC 133;A/B/C` set the region on the
+**cell template**, and nothing but another OSC 133 (or `RIS`) takes it off. Every line a
+shell prints after a mark it never closes therefore carries that mark. What each shipped
+integration actually emits:
+
+| Shell | What OneTerm injects | Marks |
+|---|---|---|
+| `cmd` | `CMD_OSC7_PROMPT`, `crates/core/src/config/shell.rs` | `A`, `B` |
+| `zsh` | `ZSH_OSC133_PS1`, same file | `A`, `B` |
+| `bash` | `PROMPT_COMMAND`, same file | `A` |
+| `powershell` / `pwsh` | `POWERSHELL_OSC7_PROMPT_INIT`, same file | none (OSC 7 only) |
+| SSH (every remote) | `SHELL_INTEGRATION_BOOTSTRAP`, `crates/ssh/src/session.rs` | `A` |
+
+Two consequences, and both are rules rather than omissions:
+
+- **A prompt line is a line the region transitions *into*.** Under `bash` and over SSH the
+  region never leaves `Prompt`, so reading the tag alone made a whole screen of output into
+  prompt lines — invented signs, command colouring and a background band on every row. The
+  role is therefore given only when the previous logical line's region is *known* and is not
+  `Prompt`. Where the shell closes the region this costs nothing: under `A`/`B` the prompt
+  follows an `Input` line, under `A`/`B`/`C`/`D` it follows an `Output` line, and the first
+  prompt of a session follows unmarked text. Where it does not, every line falls back to the
+  prompt regex, which is what happened before the fast path existed.
+- **An `Input`-headed line is not trusted.** `cmd.exe` emits `A` and `B` and never `C`, so
+  every line its command prints is still tagged `Input`; treating that as `RowRole::Command`
+  would scan a screen of output in command mode. A typed command is unaffected — it
+  continues its prompt's logical line, whose head is `Prompt` and which carries `input_at`.
+
+> **Stated limit.** "The previous logical line" means the previous line *on screen*. The
+> viewport's top line has no predecessor, so it is never a marked prompt and falls back to
+> the regex; a prompt scrolled to the top edge loses its band. That is deliberate and
+> deterministic — the same answer at the same scroll position, every frame — and it is the
+> same viewport-only contract §13 Q5 already states for the class and URL passes. Reading
+> the row above the viewport needs an engine read path the view does not have.
+
+Because a line's role depends on the line above it, the semantic rescan covers the dirty
+rows closed under wrap runs **plus the one logical line after each changed run**. The chain
+is exactly one line long: a line pulled in this way did not itself change, so its own region
+did not either. The URL pass keeps the narrower `US-0092` bound.
 
 **The exit-code tint, and how far it reaches.** `OSC 133;D` is an event with no row
 attached (`crates/vt/src/events/vt_event.rs`), and the engine exposes no way to ask *which*
@@ -227,13 +263,34 @@ stale code. That prompt's `Class::PromptSign` becomes `Class::Success` on `0` an
 > history needs a per-block record, which needs the engine to report the row a block ended
 > on — a public API change with a `scripts/vt-public-api.py` snapshot behind it, and out of
 > scope here.
+>
+> **It needs a shell that emits `OSC 133;D`, and none of the integrations above does.**
+> `last_exit_code` is written from `ShellMark::OutputEnd` and nothing else, so out of the
+> box the sign stays `Class::PromptSign` on every shipped shell and the tint is reachable
+> only for a user who writes their own prompt function. Completing the emitters is
+> `US-0136`, not this section.
 
-Because the role is derived from the frame, it is computed inside the plan cache's existing
-wrap-run-closed rescan, beside the URL masks and the classes (§13 Q5), and is authoritative
-for every row for the same reason they are: a row outside the rescan did not change, so
-neither did its role. The tint is applied later, over classes the scan already produced,
+Because the role is derived from the frame, it is computed inside the plan cache's rescan,
+beside the URL masks and the classes (§13 Q5), and is authoritative for every row for the
+same reason they are: a row outside the rescan did not change, so neither did its role. The tint is applied later, over classes the scan already produced,
 because *which* prompt owns the code is a fact about the whole viewport rather than about
 the line being scanned.
+
+**The Windows sign rule** (`BUG-0073`) — the one subtle part of that fallback, because on
+Windows the sign is `>`, a character that ordinary output reaches all the time:
+
+> The prompt sign is the **first `>` of the logical line whose head — everything before
+> it — is a plausible Windows prompt path**: rooted at a drive (`C:`) or a UNC share
+> (`\\`), optionally behind PowerShell's `PS `; containing none of `< > | " * ? :`, none
+> of which may appear in a path component; and ending in neither a space nor `-`.
+
+"First" is forced rather than chosen: `>` cannot occur in a Windows path, so the head of
+any *later* `>` contains one and is never plausible. That is what keeps the redirection in
+`C:\work>dir > out.txt` outside the prompt region, and it is why the rule is stated on the
+head alone — what follows the sign is deliberately not part of it (§13 Q7). The rule is
+applied to the **logical** line, the joined wrap run, exactly as every other class is
+(`BUG-0071`); applied per visual row it would read the `> C:\dst` half of a wrapped
+`C:\src -> C:\dst` as `cmd`'s continuation prompt.
 
 ---
 
@@ -431,6 +488,12 @@ Changes:
    mind between frames flashes the whole row, which is the defect `BUG-0071` was reported
    for. A wrong foreground on one word is not. The band's colour comes from the theme (§7).
 
+   **The contrast reference moves with it.** `resolve_style`'s `paint_bg` rule is unchanged,
+   but the background it measures a foreground against is now whatever is *behind* the
+   glyph: the band on a prompt row, the terminal background everywhere else. That is the
+   load-bearing half of the change — it is what keeps every foreground legible on the band
+   without extending `scripts/check-theme-contrast.py` to colours it cannot see (§7).
+
 The unit of a scan is the **logical line**, not the visual row. A soft wrap does not end
 a line: the scanner's state — inside a quoted string, after the prompt sign, mid-token —
 belongs to the whole line, so the wrap-connected run of rows is joined into one string,
@@ -503,18 +566,69 @@ instead of one per row. The bound is the wrap run, and it is tight — but a log
 longer than the viewport makes that run **the whole viewport**, so "never the viewport"
 is not the guarantee and this document does not claim it.
 
-Worst case, measured: a single logical line filling a 40×200 viewport (8 000 chars) is
-one scan of 8 000 chars, and one keystroke on it re-scans all of it. At `opt-level = 0`
-that measured **4.14 ms** — which is why `oneterm-highlight` is in
-`[profile.fast-dev.package]` alongside the other hot-path crates. `release` optimizes it.
-For the shapes users actually meet this is far below a frame.
+### 10.1 Measured (`US-0135`)
+
+`crates/tools/src/bin/highlight-bench.rs` measures `scan_line_into` over the four content
+shapes that exercise the four costs above, at four logical-line lengths and three wrap
+widths, on all three profiles. It is **recorded, never gated** — the rule `vt-bench`
+states for the same reasons. The committed table is
+`crates/tools/highlight-bench-baseline.json`; refresh it only in a commit that says why a
+number moved.
+
+The worst case §10 has always quoted — one logical line filling a 40×200 viewport
+(8 000 chars), re-scanned whole on every keystroke — on an i7-12700, median of 9 cycles,
+the profile named per column (the `opt-level = 0` figure of 4.14 ms this paragraph used to
+carry is gone; it measured a build nobody runs the terminal in):
+
+| Content shape | ns/char (`release`) | one 8 000-char scan, `release` | `fast-dev` before | `fast-dev` now |
+|---|---|---|---|---|
+| Windows prompt line | 1.1 | **9 µs** | 14 µs | 13 µs |
+| Plain output | 8.6-9.1 | **70 µs** | 0.43-0.45 ms | 73-79 µs |
+| Keyword-dense log | 10.7-11.6 | **86-93 µs** | 0.73-0.78 ms | 98 µs |
+| A line carrying CJK | 64-70 | **0.51-0.56 ms** | 7.0-7.5 ms | 0.53-0.54 ms |
+
+Per display row at 80 columns that is 0.09 µs (prompt) to 5.2 µs (CJK) in `release`: one
+frame that re-scanned a whole 40-row viewport of the *worst* shape would spend 0.21 ms, or
+1.2% of a 16.7 ms frame, and the same viewport of ordinary output 28 µs. CJK costs ~7×
+ASCII per char, in the byte→char map (`BUG-0071` F3), which is one `usize` per *byte*.
+
+The two `fast-dev` columns are the same profile before and after `US-0135`'s verification.
+Almost none of this time is spent in `oneterm-highlight`'s own code — it is spent in the
+matchers it calls, and `regex` is a thin layer over `regex-automata`, `regex-syntax` and
+`memchr` — so raising the scanner crate to `opt-level = 3` and leaving those at `dev`'s left
+`fast-dev` 6-13× slower than `release`, with the CJK worst case at 6-7 ms, worse than the
+4.14 ms that put `oneterm-highlight` in that profile in the first place. The whole regex
+stack is now in `[profile.fast-dev.package]`, which brings `fast-dev` to 1.0-1.4× of
+`release` for a one-time ~15 s compile of five pinned third-party crates.
+
+**Decided: the scan scope stays the wrap run, uncapped.** A cap on the joined line would
+buy at most 0.5 ms in the pathological case and would pay for it with a colour error at
+every cut — a string, a prompt region or a keyword sliced by an arbitrary boundary, which
+is the class of defect `BUG-0071` was. The numbers do not ask for it.
+
+**Decided: the scan starts at the first *visible* row, not at the run's true head.** A
+logical line whose head has scrolled above the viewport is classified from the top of the
+screen, so its first partial run can be coloured as if it began there — until one frame of
+scrolling brings the head back into view. Lifting the limit is not blocked by cost
+(scanning a capped extra viewport merely doubles the figures above) but by plumbing: the
+render path sees `SnapshotState::rows()`, which is the visible rows and nothing else
+(`crates/vt/src/snapshot/state.rs`), so it would take a wider snapshot or a terminal-lock
+read inside render, a cache dependency on rows the cache does not hold, and a second
+invalidation edge — for a defect that is bounded, cosmetic and self-correcting. It is also
+exactly the limit the URL pass has carried since `US-0092`; changing one and not the other
+would split one contract into two. See §13 Q5.
 
 No C dependency, no backtracking (ReDoS-safe), no per-line JSON interpretation, no
 string-scope hashing.
 
 `FrameStats` counts the class pass separately from the URL pass (`class_scans`,
 `class_rows_scanned`): the two share a row scope but the class pass does nothing while
-semantic highlighting is off.
+semantic highlighting is off. The scope above is **asserted** with those two counters
+rather than argued (`crates/terminal-view/src/render/plan_cache.rs`): an edit inside a
+wrapped line scans the wrap run and nothing else — `class_rows_scanned == 2` in a 12-row
+viewport, `class_scans == 1` — and a logical line longer than the viewport scans the
+viewport, `class_rows_scanned == rows_total`, still in one scan. Those are the two halves
+of the bound this section states.
 
 ---
 
@@ -574,9 +688,10 @@ implementer should follow; they are no longer open.
 
 ### Q1. OSC 133 granularity — row roles, not column boundaries
 
-**Question.** OneTerm already parses OSC 133 (`crates/core/src/terminal/osc.rs`) into
-`Osc133Kind { PromptStart, PromptEnd, OutputStart, OutputEnd { exit_code } }` and
-forwards it via `SessionEvent::ShellIntegration` (`crates/local/src/listener.rs`). These
+**Question.** OneTerm already parses OSC 133 (at the time of writing, in the pre-`IN-0029`
+`crates/core/src/terminal/osc.rs`; today in `crates/vt`) into
+`{ PromptStart, PromptEnd, OutputStart, OutputEnd { exit_code } }` and forwards it as an
+event. These
 are **row-level** events — they arrive *between* rendered grid rows, with no column
 index. Do we need column-level prompt/sign boundaries, or is row-level role + an in-row
 sign-glyph probe enough?
@@ -779,6 +894,19 @@ delta the URL masks already use (`US-0092`), so it adds no new invalidation surf
 it lowers the number of scanner invocations per frame, because one run of rows is now one
 scan instead of one scan each.
 
+**Confirmed by `US-0135`, with the measurement in hand.** "Viewport-only" has a second
+edge that `BUG-0071` left implied: a wrap run whose head is *above* the viewport is scanned
+from the first visible row, and takes its role from there. The scan is therefore of a
+suffix of the logical line, and the top partial run can be coloured as if the line began
+there. That stands, and the cache's dependencies do not change. The cost of lifting it is
+not the scan — §10 measures a capped look-back at roughly double the figures there, which
+is affordable — it is that the render path is handed `SnapshotState::rows()`, the visible
+rows and nothing else, so reading the row above the top means a wider snapshot or a
+terminal-lock read inside render, plus a cache dependency on rows the cache does not hold
+and a second invalidation edge (those rows change on every scroll). The `US-0092` URL pass
+has the identical limit; a cache that bounded one pass by the viewport and the other by the
+scrollback would be two contracts wearing one name.
+
 **Rationale.**
 - `RowLayoutCache` already maintains `prev_hash` per display line and a damage set
   (`TermDamageInfo::Partial`), re-computing `layout_row` only for dirty lines
@@ -837,6 +965,55 @@ Do **not** add `Custom(u8)` as a real variant yet — just reserve the numeric r
 `COUNT = 32` and leave the variants unconstructed. A future feature adds the variant and
 begins emitting it; themes that don't define it get `None` (no-op), same as any
 unstyled class.
+
+### Q7. What follows the Windows prompt sign — not part of the rule
+
+**Question.** A prompt reads as `path>` and then optionally ` command`, so the obvious
+tightening for `BUG-0073` is to require the sign to end the logical line or be followed by
+a space. Both false positives satisfy that reading — `C:\src -> C:\dst` has a space after
+its `>`, `c:\proj\x.cpp(5): error C2059: syntax error: '>'` has a `'` — so should the rule
+be "the first `>` whose head is a path **and** whose next character is a space or the end"?
+
+**Decision.** **No — the rule is stated on the head alone.** The "space or end" half cannot
+be required, and the counterexample is the commonest prompt on Windows: `cmd.exe` writes
+`C:\work>` and the typed command lands in the very next cell, so `C:\work>dir` has no space
+after its sign and must stay a prompt (`BUG-0071` F2, a committed test). Requiring it would
+trade two cosmetic false positives for a false *negative* on every `cmd` prompt with typing
+on it, including the one the user is looking at.
+
+**Rationale.** Both measured false positives are rejected by the head test alone, which is
+therefore the whole rule and the smaller mechanism (`BUG-0073` offered a head test or a
+token test after the sign, and stated the acceptance on behaviour, not mechanism):
+
+| Line | Head before the first `>` | Why it is not a path |
+|---|---|---|
+| `C:\src -> C:\dst` | `C:\src -` | ends in `-` |
+| `c:\proj\x.cpp(5): error C2059: syntax error: '` | as shown | a `:` past the drive |
+| `C:\log size > 3` | `C:\log size ` | ends in a space (`BUG-0071`) |
+| `see C:\x> not a prompt` | `see C:\x` | not rooted at a drive or UNC share |
+
+**Implementation.** `WIN_PATH_BODY`, `WIN_PATH_ROOT` and `PWSH_PATH_ROOT` in
+`crates/highlight/src/profile.rs`; the rule and this reconciliation are written on
+`WIN_PATH_BODY`.
+
+**The costs, complete.** Two are the other side of the same rule, and they hold on the
+`Cmd`, `PowerShell` and `Unix` profiles — `Dumb` is deliberately the permissive one and
+reads both as prompts through its own pattern:
+
+- a cwd that legally ends in a space (`C:\trailing >`, `BUG-0071` N3);
+- a cwd that legally ends in a hyphen (`C:\build->`).
+
+Both are one directory name away from ordinary, and the failure is a prompt that looks like
+output rather than output that looks like a prompt. A hyphen *elsewhere* in the cwd is fine
+(`C:\Users\a - b\dir>` is a prompt): the rule bites only the character immediately before
+the sign.
+
+A third cost was found in verification and closed rather than accepted: requiring a root
+after PowerShell's `PS ` dropped the **provider-qualified** prompt
+(`PS Microsoft.PowerShell.Core\FileSystem::\\server\share>`), which is what PowerShell
+prints once the location is not a plain drive. `PWSH_PATH_ROOT` now admits a
+`<module>\<provider>::` qualifier before the root, and the table test carries both the UNC
+and the drive form.
 
 ---
 

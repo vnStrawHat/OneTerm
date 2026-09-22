@@ -9,9 +9,9 @@ Created: 2026-09-22
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -59,24 +59,24 @@ viewport — are each decided with that number in hand and written down as rules
 
 ## Acceptance
 
-- [ ] `cargo run -p oneterm-tools --release --bin <name>` produces a table and a JSON file of
+- [x] `cargo run -p oneterm-tools --release --bin <name>` produces a table and a JSON file of
       `oneterm_highlight::scan_line_into` timings over: logical line length `N` in
       {80, 200, 2 000, 8 000}; wrap width in {80, 120, 200}; content shape in {prompt line,
       plain output, keyword-dense log, a line containing CJK}; profile in
       {`Unix`, `Cmd`, `PowerShell`}.
-- [ ] The run reports a spread across repetitions, as `vt-bench` does, so a number that is
+- [x] The run reports a spread across repetitions, as `vt-bench` does, so a number that is
       noise is visible as noise.
-- [ ] A baseline is committed with the machine, profile, rustc version and date recorded in
+- [x] A baseline is committed with the machine, profile, rustc version and date recorded in
       it, matching `crates/tools/bench-baseline.json`'s own `machine` and `note` fields.
-- [ ] The 8 000-character worst case §10 quotes at 4.14 ms is re-measured in `release` and in
+- [x] The 8 000-character worst case §10 quotes at 4.14 ms is re-measured in `release` and in
       `fast-dev`, and §10 carries the measured figures with their profile named. The existing
       debug-build figure is replaced, not left beside them.
-- [ ] **The wrap-run bound is decided.** Either §10 keeps the bound as it stands — the wrap
+- [x] **The wrap-run bound is decided.** Either §10 keeps the bound as it stands — the wrap
       run, which for a logical line longer than the viewport is the viewport — with the
       measurement that makes that acceptable, or a cap on the joined line length is
       implemented, and the colour error that a cap introduces at the cut is stated in §10 and
       covered by a test. Silence is not an outcome.
-- [ ] **The head-above-viewport rule is decided.** Either the viewport-only contract stands
+- [x] **The head-above-viewport rule is decided.** Either the viewport-only contract stands
       and §10 says so in a sentence beside the identical URL-pass limit `US-0092` has carried
       since it shipped, or scanning from the run's true head up to a cap is implemented. If
       the second, the cost is stated first: `SnapshotState::rows()`
@@ -84,10 +84,10 @@ viewport — are each decided with that number in hand and written down as rules
       public way to read the row above the top, so it means a new engine read path, a cache
       dependency on rows the cache does not hold, and a second invalidation edge. The
       decision cites the measurement either way.
-- [ ] The view-side scope claim is asserted, not argued: a test shows `class_scans` and
+- [x] The view-side scope claim is asserted, not argued: a test shows `class_scans` and
       `class_rows_scanned` stay at the wrap run for an edit inside a wrapped line, and reach
       the viewport only when one logical line fills it.
-- [ ] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
+- [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
 ## Documentation
 
@@ -120,7 +120,30 @@ Update required:
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+Docs changed:
+
+- `docs/terminal-semantic-highlighting.md` §10 — a new §10.1 "Measured": the benchmark and
+  its baseline, the `release` and `fast-dev` tables for the 8 000-char worst case (the
+  `opt-level = 0` 4.14 ms figure is gone, not left beside them), and the two bounds written
+  down as decided rules. The `FrameStats` paragraph now names what the two counters assert.
+- `docs/terminal-semantic-highlighting.md` §13 `Q5` — a `US-0135` confirmation paragraph:
+  the head-above-viewport edge stated rather than implied, with the reason it stands and
+  the note that the cache's dependencies are unchanged.
+- `crates/terminal-view/src/render/row_plan.rs` — `class_rows_into`'s doc comment now
+  states the head-of-run rule where the code implements it.
+
+- `Cargo.toml` — `[profile.fast-dev.package]` now carries the whole regex stack, and its
+  comment says where the time goes instead of quoting the retired 4.14 ms figure.
+- `docs/agents/crate-dependency-rules.md` — the tools crate's reach read "the L0 leaf `vt`",
+  singular. Corrected after verification `F4`: this packet added the second edge, and
+  listing the file as "reviewed and unchanged" was reading the rule the file ought to state
+  rather than the sentence it contained.
+- `docs/agents/structure.md` — the `tools` row's dependency list was missing
+  `oneterm-highlight` and its binary list was missing `highlight-bench` (`F4`).
+
+Docs reviewed and unchanged: `crates/tools/src/bin/vt-bench.rs` (the style and the
+never-gated rule this benchmark copies), `docs/agents/dependencies.md` (no new third-party
+dependency: no criterion — the new profile entries name crates already in `Cargo.lock`).
 
 ## Context
 
@@ -137,14 +160,14 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Plan
 
-- [ ] Write the benchmark binary and its fixtures; add `oneterm-highlight` to
+- [x] Write the benchmark binary and its fixtures; add `oneterm-highlight` to
       `crates/tools`.
-- [ ] Measure in `release` and in `fast-dev`; commit the baseline with its machine record.
-- [ ] Decide the wrap-run bound from the numbers; implement a cap only if they demand one.
-- [ ] Decide the head-above-viewport rule from the numbers and the cost stated in
+- [x] Measure in `release` and in `fast-dev`; commit the baseline with its machine record.
+- [x] Decide the wrap-run bound from the numbers; implement a cap only if they demand one.
+- [x] Decide the head-above-viewport rule from the numbers and the cost stated in
       Acceptance.
-- [ ] Assert the view-side scope with `FrameStats`.
-- [ ] Reconcile §10 (and §13 Q5 if needed).
+- [x] Assert the view-side scope with `FrameStats`.
+- [x] Reconcile §10 (and §13 Q5 if needed).
 
 ## Decisions
 
@@ -163,16 +186,129 @@ out to require an engine read path, that is a decision record of its own before 
   gate.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+**The benchmark.** `crates/tools/src/bin/highlight-bench.rs`, run as
+`cargo run -p oneterm-tools --release --bin highlight-bench [--runs N] [--machine TEXT]
+[--json PATH]`. 144 cells: 4 content shapes x 4 lengths {80, 200, 2 000, 8 000} x 3 wrap
+widths {80, 120, 200} x 3 profiles, median of `--runs` cycles with the fastest-minus-slowest
+spread beside every figure. Writing JSON needs an explicit `--json PATH`, so a casual run
+cannot overwrite the baseline. No criterion, no `[[bench]]`, no CI gate.
+
+The wrap width does not change what the scanner sees — the unit is the logical line — and
+the binary's header says so. It is still an axis, and it earns the place twice: the `rows`
+column is how many display rows one scan covers (how many rows one frame replans), and the
+three widths of one cell are three measurements of identical work, so the spread between
+them is the table's own noise floor, measured rather than asserted.
+
+**Baseline.** `crates/tools/highlight-bench-baseline.json`, `--runs 9`, machine recorded in
+the file as `crates/tools/bench-baseline.json` records its own: Intel Core i7-12700, Windows
+11 26200, rustc 1.96.0, release, 2026-09-22.
+
+**The 8 000-char worst case, re-measured** (median of 9; the `opt-level = 0` 4.14 ms figure
+§10 carried came from an ad-hoc probe on a build nobody runs the terminal in, and is now
+replaced):
+
+| Shape | ns/char (`release`) | one 8 000-char scan, `release` | `fast-dev` before | `fast-dev` now |
+|---|---|---|---|---|
+| Windows prompt line | 1.1 | 9 us | 14 us | 13 us |
+| Plain output | 8.6-9.1 | 70 us | 0.43-0.45 ms | 73-79 us |
+| Keyword-dense log | 10.7-11.6 | 86-93 us | 0.73-0.78 ms | 98 us |
+| A line carrying CJK | 64-70 | 0.51-0.56 ms | 7.0-7.5 ms | 0.53-0.54 ms |
+
+The two `fast-dev` columns are the same profile before and after the verification rework
+recorded under Gaps.
+
+**Decision 1 — the wrap-run bound stands, uncapped.** The pathological case costs 0.07 ms
+(ASCII) to 0.56 ms (CJK) per keystroke in `release`, and a whole 40-row viewport of the
+worst shape is 0.21 ms, 1.2% of a 16.7 ms frame. A cap would buy half a millisecond in the
+case nobody meets and pay for it with a colour error at every cut — a string, a prompt
+region or a keyword sliced at an arbitrary boundary, which is the class of defect
+`BUG-0071` was. No cap implemented; §10 states the rule and the number behind it.
+
+**Decision 2 — the scan starts at the first visible row.** The accepted limit stands.
+Cost of the alternative, stated before the decision as the packet required: the scan itself
+is affordable (a capped look-back of one extra viewport roughly doubles the table above,
+so 0.14-1.1 ms), but the render path is handed `SnapshotState::rows()`
+(`crates/vt/src/snapshot/state.rs:296`), which is the visible rows and nothing else. The
+engine does expose `Terminal::screen()` and `Screen::row(RowId)` publicly, so no *engine*
+API would have to change — but the view cannot reach them at plan time: the snapshot is
+copied once under the terminal lock in `oneterm-terminal`, so a look-back means either a
+wider snapshot or a lock taken inside render, plus a cache dependency on rows the cache
+does not hold and a second invalidation edge (those rows change on every scroll). Against
+that: the defect is bounded (the one partial run at the top), cosmetic, and self-correcting
+after one frame of scrolling — and the `US-0092` URL pass has the identical limit, so
+lifting one and not the other would make one cache contract into two. Recorded in §10 and
+§13 `Q5`, and in `class_rows_into`'s doc comment. No decision record: nothing was built
+that future work must inherit beyond the rule, which the contract now carries.
+
+**Decision 3 — the view-side scope is asserted, not argued,** and it already was: the two
+`plan_cache.rs` tests `class_delta_replans_the_continuation_row` (`class_rows_scanned` is
+2 in a 12-row viewport, `class_scans` is 1) and
+`a_line_longer_than_the_viewport_scans_the_viewport` (`class_rows_scanned` equals
+`rows_total`, `class_scans` is 1) are exactly the two halves this packet asks for — one
+scan per wrap run, rows scanned = the run length capped at the viewport. A third test would
+have restated them, so §10 now cites them instead.
+
+**Commands.**
+
+- `cargo test -p oneterm-tools --bin highlight-bench` — 2 passed (the fixture tests).
+- `cargo run -p oneterm-tools --release --bin highlight-bench -- --runs 9 --machine "..." --json crates/tools/highlight-bench-baseline.json` — the committed table.
+- `cargo run -p oneterm-tools --profile fast-dev --bin highlight-bench -- --runs 9` — the
+  `fast-dev` column.
+- `python scripts/vt-public-api.py --check --no-doc` — green (nothing in `oneterm-vt`
+  changed). Note for anyone copying that line out: it is not runnable on its own. It reads
+  `target/doc/oneterm_vt`, so it needs the preceding
+  `cargo doc -p oneterm-vt --no-deps --all-features` that `scripts/ci-local.ps1` runs before
+  it.
+- `pwsh scripts/ci-local.ps1` — `ci-local: all checks passed`.
+
+**Proof.**
+
+- Unit: `tests::every_fixture_is_exactly_the_length_it_claims` (every shape is exactly the
+  char count its row claims, or every ns/char figure in that row is wrong) and
+  `tests::each_shape_exercises_the_cost_it_names` (the prompt shape reaches the prompt
+  branch, the plain shape classifies nothing, the log shape reaches Error/Warn/DateTime/Ip/
+  Path, the CJK shape is multi-byte).
+- Integration: the two `FrameStats` scope tests named above.
+- E2E: not applicable, as the packet states — the measurement is the evidence.
+- Platform: `pwsh scripts/ci-local.ps1`.
+
+**Gaps and follow-ups.**
+
+- The benchmark ran on a machine that was also compiling another worktree, which is why the
+  baseline was taken at `--runs 9` rather than 5; some cells still show a 15-30% spread and
+  the spread column says so. Any comparison narrower than a cell's own spread is the
+  machine, not the scanner.
+- **`fast-dev` did not optimize where the time goes — fixed here, not deferred.** It raised
+  `oneterm-highlight` to `opt-level = 3` and left the matchers it calls at `dev`'s, so every
+  shape but the prompt was 6-13x slower than `release` and the CJK worst case was 6-7 ms,
+  worse than the 4.14 ms figure `fast-dev` was added to fix. The follow-up this packet first
+  recorded ("one line in `[profile.fast-dev.package]`") was **wrong as written**, and
+  verification measured why: `regex` is a thin layer over `regex-automata`, `regex-syntax`
+  and `memchr`, so an entry for `regex` and `aho-corasick` alone leaves the hot code
+  unoptimized. All five are now in `[profile.fast-dev.package]`, which brings `fast-dev` to
+  1.0-1.4x of `release` (the column above) for a one-time ~15 s compile of pinned
+  third-party crates that nobody steps through in a debugger — the rationale
+  `[profile.dev.package]` already carries for `gpui-pre`/`smol`. This is a build-profile
+  change, not the scanner optimization the packet put out of scope: no OneTerm code moved
+  and no `release` figure changed. `[profile.dev.package]` was **not** touched, so
+  `cargo test` still pays it; that is a wider blast radius and belongs to whoever wants it.
+- The stale 4.14 ms figure survived in `Cargo.toml`'s comment for
+  `oneterm-highlight = { opt-level = 3 }` (verification `F5`). That comment is rewritten in
+  the same edit and now states where the time actually goes.
+- CJK costs ~7x ASCII per char, in the byte-to-char map (`BUG-0071` F3), which holds one
+  `usize` per *byte*. Measured, not fixed: the same scope boundary.
+- No `--check` trip-wire like `vt-bench grid --check`. The baseline is compared by hand, as
+  the packet's "never gated" rule intends; a trip-wire can be added if the number ever
+  starts moving.
 
 ## Handoff
 

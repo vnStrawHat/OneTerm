@@ -13,7 +13,7 @@ Created: 2026-09-22
 - [x] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -239,7 +239,8 @@ background, `#dedede` band.
 
 ### Tests
 
-`crates/terminal-view/src/theme/tests.rs`: `the_band_never_crosses_its_theme`,
+`crates/terminal-view/src/theme/tests.rs`: `the_band_sits_between_the_background_and_the_text`
+(and `assert_band_between`, reused by the per-theme sweep),
 `the_shipped_asset_leaves_the_band_to_the_theme`,
 `every_prompt_row_foreground_clears_the_band` (every embedded theme variant, every
 prompt-row foreground: the terminal foreground plus `PromptSign`, `Command`, `Option`,
@@ -263,6 +264,31 @@ band), `prompt_line_bg_is_parsed_when_a_theme_sets_it`.
 - `evidence/us-0134-band-light-theme.png` — Zed One Light, the same screen. The band is
   light, not the dark stripe the old fixed `#1a1a1a` would have painted under dark text.
 
+### Acceptance rework after independent verification (2026-09-22)
+
+**ACCEPT WITH CHANGES.** The band itself was found correct and well tested; two defects:
+
+- **MAJ-3 — the central design choice was unasserted.** Inverting the band's direction
+  (`toward` flipped) left all 389 tests green. `the_band_never_crosses_its_theme` asserted
+  "nearer the background than the foreground", which an *inverted* band satisfies more
+  comfortably than the intended one. Replaced by
+  `the_band_sits_between_the_background_and_the_text`, which asserts three separate
+  properties — the band moved **toward** the text (`signum` of the move equals `signum` of
+  the gap), it did not reach or pass it, and it cleared a floor — over synthetic pairs and,
+  through `assert_band_between`, over every embedded theme variant. The inversion now fails
+  two tests.
+- **MED-2 — "never crosses its theme" was false on a low-contrast pair.** With `bg.l = 0.5`
+  and `fg.l = 0.55` the band landed at `0.555`, past the text. The move is now capped at
+  half the gap to the foreground, so the band is always strictly between the two; the
+  probes from the verification (`0.5/0.55`, `0.5/0.45`, `0.5/0.52`) are in the test.
+
+The band also inherited `US-0133`'s MAJ-1 — it was painted on every output row of an A-only
+session. That is fixed in `US-0133` by the transition rule and asserted here by
+`an_a_only_shell_paints_no_band`.
+
+`NIT-2` (the explicit `promptLineBg` override ignores `reverse_video`) is left as it is:
+nothing ships an override, so it is unreachable.
+
 ### Gaps
 
 - **`TerminalTheme::fg` right after a theme switch.** The walk showed the running theme's
@@ -275,8 +301,10 @@ band), `prompt_line_bg_is_parsed_when_a_theme_sets_it`.
 - **No per-theme `terminal.semantic` block.** §7 describes one and no theme has one; the
   override path is exercised by `parse_semantic_json` only. Out of scope, as stated.
 - **The band is not painted under the regex fallback**, by decision rather than by omission.
-  A shell with no OSC 133 therefore sees no change at all from this packet. Revisit only if
-  the owner asks.
+  A shell with no OSC 133 therefore sees no change at all from this packet — and after the
+  `US-0133` rework, neither does an `A`-only one (bash, SSH). Revisit only if the owner asks.
+- **A prompt at the viewport's top edge has no band**, because it is not a marked prompt
+  there (`US-0133`'s transition rule and its stated limit).
 - The contrast floor is proved in Rust, not by `scripts/check-theme-contrast.py`; extending
   `SURFACES` to terminal tokens remains the owner question recorded in `IN-0044`.
 

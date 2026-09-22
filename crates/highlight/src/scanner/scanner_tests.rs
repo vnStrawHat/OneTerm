@@ -639,6 +639,47 @@ fn windows_output_is_not_a_prompt() {
     }
 }
 
+/// `BUG-0073`: drive-anchored *output* that happens to reach a `>` is output on
+/// every profile — the prompt branch neither tags a sign nor fills the head
+/// with `Path`, and the output matchers keep doing their work.
+#[test]
+fn drive_anchored_output_with_an_unspaced_angle_bracket_is_output() {
+    for line in [
+        // What `mklink` and `dir /AL` print.
+        r"C:\src -> C:\dst",
+        // An MSVC diagnostic whose message quotes the character.
+        r"c:\proj\x.cpp(5): error C2059: syntax error: '>'",
+    ] {
+        for profile in [
+            ShellProfile::Cmd,
+            ShellProfile::PowerShell,
+            ShellProfile::Unix,
+            ShellProfile::Dumb,
+        ] {
+            let c = scan_with_profile(line, None, profile);
+            assert!(
+                !c.contains(&Class::PromptSign),
+                "{line:?} on {profile:?} must not be a prompt: {c:?}"
+            );
+        }
+    }
+
+    // The diagnostic keeps the colouring the prompt branch used to eat.
+    let line = r"c:\proj\x.cpp(5): error C2059: syntax error: '>'";
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
+    let error = line.find("error").unwrap();
+    assert_eq!(c[error], Class::Error, "{c:?}");
+
+    // ...and in the arrow line the two paths are found by the path probe, not
+    // by the prompt branch filling everything before the sign: the arrow
+    // between them stays unclassified.
+    let line = r"C:\src -> C:\dst";
+    let c = scan_with_profile(line, None, ShellProfile::Cmd);
+    let arrow = line.find("->").unwrap();
+    assert_ne!(c[arrow + 1], Class::Path, "the arrow is not a path: {c:?}");
+    assert_eq!(c[0], Class::Path, "{c:?}");
+}
+
 /// N1: a bare `>` starts `cmd`'s continuation prompt, but on a Unix or SSH tab
 /// it starts a mail quote, a markdown blockquote or diff context. Only the
 /// Windows profiles carry that branch.
@@ -779,9 +820,21 @@ fn marked_output_never_runs_the_prompt_regex() {
         !marked.contains(&Class::PromptSign),
         "a marked output row must not be read as a prompt: {marked:?}"
     );
-    // The unmarked fallback still decides for itself; `BUG-0073` owns that.
-    let unmarked = scan_with_profile(line, None, ShellProfile::Cmd);
-    assert_ne!(marked, unmarked, "the mark has to change the answer");
+    // The unmarked fallback reaches the same answer since `BUG-0073` tightened
+    // the prompt sign's rule — but it reaches it by *deciding* the line is not a
+    // prompt, where the marked path never asks. The line the regex still gets
+    // wrong is the one below.
+    let redirect = r"C:\work>dir > out.txt";
+    let marked = scan_marked(redirect, RowRole::Output, None, ShellProfile::Cmd);
+    assert!(
+        !marked.contains(&Class::PromptSign),
+        "a marked output row must not be read as a prompt: {marked:?}"
+    );
+    assert_ne!(
+        marked,
+        scan_with_profile(redirect, None, ShellProfile::Cmd),
+        "the mark has to change the answer for a line the regex does read as a prompt"
+    );
 }
 
 #[test]

@@ -181,34 +181,76 @@ mod tests {
         oneterm_highlight::Class::Error,
     ];
 
-    /// The band is derived, so it stays on its theme's own side of the pair: on
-    /// a light theme it is light, on a dark theme it is dark. One fixed hex in
-    /// the asset is what made it a dark stripe under dark text.
+    /// The band lies **strictly between** the background and the foreground, on
+    /// the foreground's side, by a distance nobody can miss.
+    ///
+    /// Stated as three separate properties on purpose. The earlier form of this
+    /// test — "nearer the background than the foreground", plus `band != bg` —
+    /// was satisfied *more* comfortably by a band moved the wrong way, so
+    /// inverting the direction left the whole suite green (verification MAJ-3).
+    /// The direction assertion is what pins it; the floor is what pins MED-2,
+    /// the low-contrast pair whose band used to land past the text.
+    fn assert_band_between(bg: Hsla, fg: Hsla, band: Hsla, label: &str) {
+        let gap = fg.l - bg.l;
+        if gap.abs() < f32::EPSILON {
+            // No pair to sit between: the text is invisible on its own
+            // background, and nothing this function asserts is meaningful.
+            return;
+        }
+        let moved = band.l - bg.l;
+        assert_eq!(
+            moved.signum(),
+            gap.signum(),
+            "{label}: the band moved away from the text (bg.l={:.4} fg.l={:.4} band.l={:.4})",
+            bg.l,
+            fg.l,
+            band.l
+        );
+        assert!(
+            moved.abs() < gap.abs(),
+            "{label}: the band reached or passed the text (bg.l={:.4} fg.l={:.4} band.l={:.4})",
+            bg.l,
+            fg.l,
+            band.l
+        );
+        let floor = (gap.abs() / 2.0).min(0.05);
+        assert!(
+            moved.abs() >= floor - f32::EPSILON,
+            "{label}: the band is {:.4} from the background, under the {floor:.4} floor",
+            moved.abs()
+        );
+        assert_eq!(band.h, bg.h, "{label}: the band gained a hue of its own");
+    }
+
+    /// Synthetic pairs, including the low-contrast probes the verification found
+    /// the band crossing (`bg .5 / fg .55` and its mirror).
     #[test]
-    fn the_band_never_crosses_its_theme() {
-        for (bg, fg) in [
-            (
-                gpui::hsla(0.0, 0.0, 0.08, 1.0),
-                gpui::hsla(0.0, 0.0, 0.9, 1.0),
-            ),
-            (
-                gpui::hsla(0.0, 0.0, 0.98, 1.0),
-                gpui::hsla(0.0, 0.0, 0.1, 1.0),
-            ),
+    fn the_band_sits_between_the_background_and_the_text() {
+        for (bg_l, fg_l) in [
+            (0.08, 0.90),
+            (0.98, 0.10),
+            (0.50, 0.55),
+            (0.50, 0.45),
+            (0.50, 0.52),
+            (0.00, 1.00),
+            (1.00, 0.00),
         ] {
             let mut t = build_terminal_theme(&gpui_component::Theme::default());
-            t.bg = bg;
-            t.fg = fg;
-            let band = t.prompt_line_bg(false);
-            assert_ne!(
-                band, bg,
-                "the band has to be visible against the background"
+            t.bg = gpui::hsla(0.0, 0.0, bg_l, 1.0);
+            t.fg = gpui::hsla(0.0, 0.0, fg_l, 1.0);
+            assert_band_between(
+                t.bg,
+                t.fg,
+                t.prompt_line_bg(false),
+                &format!("{bg_l}/{fg_l}"),
             );
-            assert!(
-                (band.l - bg.l).abs() < (band.l - fg.l).abs(),
-                "band {band:?} left the background's side of bg {bg:?} / fg {fg:?}"
+            // `DECSCNM` draws with the pair swapped, and the band follows it.
+            assert_band_between(
+                t.fg,
+                t.bg,
+                t.prompt_line_bg(true),
+                &format!("reversed {bg_l}/{fg_l}"),
             );
-            assert_eq!(band.h, bg.h, "the band introduces no hue of its own");
         }
     }
 
@@ -261,6 +303,7 @@ mod tests {
                 gpui_component::Theme::global_mut(cx).apply_config(&config);
                 let theme = build_terminal_theme(gpui_component::Theme::global(cx));
                 let band = theme.prompt_line_bg(false);
+                assert_band_between(theme.bg, theme.fg, band, &name);
                 let mut foregrounds = vec![("foreground", theme.fg)];
                 for class in PROMPT_ROW_CLASSES {
                     let style = theme.class_styles.style(*class as u8);

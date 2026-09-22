@@ -13,7 +13,7 @@ Created: 2026-09-22
 - [x] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -74,13 +74,23 @@ said nothing about.
       answer for each row.
 - [x] After a command exits `0` the sign of its prompt is `Class::Success`; after a non-zero
       exit it is `Class::Error`; with no exit code reported it stays `Class::PromptSign`.
+      **Qualified: when the shell emits `OSC 133;D`.** `last_exit_code` is written from
+      `ShellMark::OutputEnd` and nothing else, and no integration OneTerm ships emits `D`
+      (`cmd` and `zsh` emit `A`+`B`, `bash` and the SSH bootstrap `A`, PowerShell none), so
+      out of the box the sign stays `Class::PromptSign`. The mechanism is proved by unit
+      tests and by a hand-instrumented PowerShell tab; completing the emitters is `US-0136`
+      and is deliberately not in this packet.
 - [x] **Stated limit:** only the most recent completed command block is tinted. A prompt
       further back in scrollback keeps an untinted sign, and the reason (the engine reports
       no row for `OSC 133;D`) is recorded in `docs/terminal-semantic-highlighting.md` §4.2
       rather than left in this packet.
-- [x] The rescan scope does not grow: the rows a frame derives roles for are the same dirty
-      rows closed under wrap runs that the class and URL passes already scan, asserted by the
-      existing `FrameStats` counters.
+- [x] The rescan scope does not grow **for the URL pass**: `url_rows_scanned` is still the
+      dirty rows closed under wrap runs (`US-0092`), asserted by
+      `roles_ride_the_class_rescan`. **Changed by the rework:** the *semantic* pass now also
+      covers the one logical line after each changed run, because a line's role is read from
+      the region its predecessor started in. The chain is exactly one line long and the two
+      passes were split so only this one pays for it; `class_rows_scanned` is asserted at
+      `3` where it used to be `2`.
 - [x] `cargo test -p oneterm-highlight -p oneterm-terminal-view` passes.
 - [x] `pwsh scripts/ci-local.ps1` ends with "ci-local: all checks passed".
 
@@ -199,11 +209,13 @@ contract itself; neither binds future work to a rule it could not see there.
   `tint_prompt_sign()`.
 - `crates/terminal-view/src/render/frame.rs` — `Cell::semantic`, `append_text_into` also
   emits the per-char region, `FrameBuilder::mark()` for synthetic mark streams.
-- `crates/terminal-view/src/render/row_plan.rs` — `line_role()` (the reduction),
-  `class_rows_into` fills a per-row role for every row of each run, `classify()` applies the
-  tint.
-- `crates/terminal-view/src/render/plan_cache.rs` — `roles`/`roles_cur` beside
-  `class_prev`/`class_cur` (same delta-and-swap, same rotation on scroll), `update_tint()`.
+- `crates/terminal-view/src/render/row_plan.rs` — `line_head_region()` (the raw reading)
+  and `line_role()` (the transition rule), `class_rows_into` fills a per-row role **and**
+  head region for every row of each run, `classify()` applies the tint.
+- `crates/terminal-view/src/render/plan_cache.rs` — `roles`/`roles_cur` and `heads` beside
+  `class_prev`/`class_cur` (same delta-and-swap, same rotation on scroll), a `scan_class`
+  set that is `scan` plus one logical line forward, the URL and class passes split so only
+  the second pays for it, `update_tint()`, and the exit code in the `Unchanged` guard.
 - `crates/terminal/{model,session,backend/state,test_support}.rs` —
   `TerminalInfo::last_exit_code`, wired in `terminal_view/render.rs` and suppressed while
   the viewport is scrolled.
@@ -218,6 +230,17 @@ contract itself; neither binds future work to a rule it could not see there.
 - `pwsh scripts/ci-local.ps1` — see the final entry below.
 
 ### Tests
+
+`crates/terminal-view/src/render/row_plan.rs`, rework:
+`an_a_only_shell_does_not_turn_its_output_into_prompts`,
+`a_full_a_b_c_d_shell_is_classified_exactly`,
+`the_viewports_first_line_is_never_a_prompt`, and
+`output_left_tagged_input_by_a_shell_without_osc_133_c_is_unmarked` extended to assert that
+`cmd`'s prompt still works. `an_a_only_shell_paints_no_band` for `US-0134`.
+`crates/terminal-view/src/render/plan_cache.rs`, rework:
+`a_prompt_at_the_top_of_the_viewport_is_unmarked_and_stays_so` (a real `OSC 133` byte stream
+fed to the engine, scrolled back and forward twice),
+`an_exit_code_on_an_unchanged_frame_is_not_dropped`.
 
 `crates/highlight/src/role.rs`: `absence_is_per_row_not_per_viewport`,
 `last_completed_prompt_is_the_one_above_the_newest`,
@@ -266,8 +289,23 @@ Frames under `evidence/`, from one `target/fast-dev/oneterm.exe` run:
   prompt's sign has gone back to untinted: only the most recent completed block is tinted.
 
 The regex-fallback path is the unmarked one and is covered by the unit tests plus every
-pre-existing `BUG-0071` case, which still pass unchanged; no local shell OneTerm ships
-leaves a prompt unmarked, so it has no frame of its own.
+pre-existing `BUG-0071` case, which still pass unchanged.
+
+**Rework frame.** `us-0133-a-only-no-flood.png` re-takes the verification's `a-only-flood`
+scene on the reworked build: a script writes exactly what OneTerm's bash `PROMPT_COMMAND`
+and its SSH bootstrap put on the wire — `OSC 7`, then `OSC 133;A`, and nothing else — and
+then five ordinary output lines. None of them carries a band, and all five are classified as
+output: `ERROR` and `failed` red, `100%` a number, `-o` an option, the URL underlined, and
+`done in 12s` with no invented prompt sign. The `cmd` prompts above and below it — `A`+`B`,
+so the region does transition — still carry theirs. Compare
+`US-0133-US-0134-verify-a-only-flood.png`, the same scene before the fix, where every one of
+those rows was a banded prompt line.
+
+Two notes from re-running the walk, because they cost time: the stripe on the row the cursor
+sits on is **not** the band (it is in the pre-`US-0134` frames too), and OneTerm's `cmd` tab
+has an unmarked blank line above its first prompt, so that prompt does have a predecessor
+and is correctly marked. The viewport's genuine top line was checked against the library
+instead, where it is deterministic.
 
 ### Deviations from the plan, and why
 
@@ -287,6 +325,57 @@ leaves a prompt unmarked, so it has no frame of its own.
    been *worse* than the regex for the two most common Windows prompts. The boundary is
    already in the cells; using it is cheaper than the probe and exact.
 
+### Acceptance rework after independent verification (2026-09-22)
+
+Verified on `0dfd2070` by an independent agent; report in
+`evidence/US-0133-US-0134-verify.md`. **REJECT**, one blocker plus one dead acceptance item.
+What changed here:
+
+- **MAJ-1 (blocker) — the A-only flood.** The OSC 133 region is a sticky cell attribute, and
+  OneTerm's bash `PROMPT_COMMAND` (`crates/core/src/config/shell.rs`) and its SSH bootstrap
+  (`crates/ssh/src/session.rs`, on by default for **every** remote session) emit `OSC 133;A`
+  and nothing else. Every line printed afterwards was therefore `Prompt`-tagged, so the
+  first reading — "the role is the region of the line's first marked character" — turned a
+  whole screen of output into prompt lines, with invented signs, command colouring and a
+  US-0134 band on every row. The packet's own Gaps made this invisible by asserting that
+  `cmd.exe` was "the one local shell OneTerm gives OSC 133 to", which is wrong; that
+  sentence is replaced below and the real table is now in §4.2.
+
+  **Rule as implemented:** a logical line is a marked `Prompt` only when the region
+  **transitions into** `Prompt` — that is, when the previous logical line's own
+  first-marked-character region is *known* and is not `Prompt`. No previous line inside the
+  viewport is *unknown*, not "not a prompt", so the viewport's top line is never a marked
+  prompt. The first-marked-character rule and the `Input`-headed rule are unchanged; the
+  verification confirmed the alternative ("`Input`-headed and the previous line was a
+  prompt → `Command`") regresses every `cmd` command, so it was not taken.
+
+  Consequences, all asserted: `A`-only shells get no marked prompt and no band, and fall
+  back to the regex, which is what they did before the fast path existed; `A`/`B` (`cmd`,
+  `zsh`) still get the prompt, because it follows an `Input`-tagged line; `A`/`B`/`C`/`D`
+  is exact. A line's role now depends on the line above it, so the **semantic** rescan
+  covers one logical line more than the dirty runs. The URL pass was split out of the shared
+  loop so it keeps the narrower `US-0092` bound unchanged.
+
+- **MAJ-2 — the tint cannot fire out of the box.** No shipped integration emits `OSC 133;D`.
+  The acceptance item above is qualified rather than dropped: the mechanism is real, tested
+  and demonstrated, and completing the emitters is `US-0136`.
+
+- **MIN-1** — an exit code arriving on an `SnapshotUpdate::Unchanged` frame was dropped
+  until something else dirtied a row. The early return now also compares the exit code
+  (`an_exit_code_on_an_unchanged_frame_is_not_dropped`).
+- **MIN-2** — `last_completed_prompt` no longer builds a `Vec` of every prompt run per
+  frame; two locals give the same answer.
+- **MIN-3** — `marked_sign`'s last-resort rule skipped only ASCII spaces, so an unknown sign
+  glyph followed by a tab or a no-break space tagged an invisible cell. It uses
+  `char::is_whitespace`.
+- **MIN-4** — §4.2 cited `crates/core/src/terminal/osc.rs`, which has not existed since
+  `IN-0029`; §4.2 and §13 Q1 now say `crates/vt`, and §4.2 carries the per-shell mark table.
+
+Not changed, with reasons: the `Input`-headed rule (the verification confirmed it is right);
+`self.tint`'s row range is not rotated by `shift()` (over-invalidation only, never under);
+`prompt_line_bg`'s explicit override ignores `reverse_video` (unreachable — nothing ships an
+override).
+
 ### Gaps
 
 - **`RowRole::Command` is not produced by the derivation.** A logical line that starts in
@@ -305,9 +394,17 @@ leaves a prompt unmarked, so it has no frame of its own.
   `roles` is authoritative for every row (the same contract as `mask_prev`/`class_prev`), so
   this costs no extra scanning; `roles_ride_the_class_rescan` asserts the rescan scope did
   not grow.
-- The `cfg(unix)` half of shell integration (bash/zsh `PROMPT_COMMAND`/`PS1`) is not
-  exercisable on this machine; the marked paths are proved with synthetic mark streams and
-  with `cmd.exe`, which is the one local shell OneTerm gives OSC 133 to.
+- **The viewport's top line is never a marked prompt**, because its predecessor is off
+  screen and therefore unknown. A prompt scrolled to the top edge loses its band. The answer
+  is deterministic rather than flickering (asserted by
+  `a_prompt_at_the_top_of_the_viewport_is_unmarked_and_stays_so`), and reading the row above
+  the viewport needs an engine read path the view does not have — the same viewport-only
+  limit §13 Q5 already states for the class and URL passes.
+- **The exit-code tint is unreachable with every shipped integration** (MAJ-2). `US-0136`.
+- The `cfg(unix)` half of shell integration (bash `PROMPT_COMMAND`, zsh `PS1`) and a live
+  SSH remote are not exercisable on this machine. The mark streams they put on the wire are
+  reproduced exactly — as synthetic frames in the unit tests and as raw bytes in the GUI
+  walk — but no live bash and no real remote was driven.
 
 ## Handoff
 

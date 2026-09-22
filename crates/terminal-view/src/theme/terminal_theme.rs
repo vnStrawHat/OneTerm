@@ -31,6 +31,9 @@ pub(crate) const DEFAULT_MIN_CONTRAST: f32 = 4.5;
 /// the gap between the two. A theme whose foreground and background are close in
 /// lightness would otherwise get a band nobody can see, and the direction is the
 /// one bit of the foreground that is robust.
+///
+/// The move is capped at half the gap to the foreground, so the band always
+/// lands strictly between the two however close they are.
 const PROMPT_BAND_MIX: f32 = 0.11;
 
 /// Terminal theme with a prebuilt palette + bg/fg (Hsla) + contrast threshold.
@@ -102,9 +105,21 @@ impl TerminalTheme {
             (self.bg, self.fg)
         };
         // Which side of the background the text sits on; the band moves that way.
-        let toward = if fg.l >= bg.l { 1.0 } else { 0.0 };
+        let toward: f32 = if fg.l >= bg.l { 1.0 } else { 0.0 };
+        // ...by a fraction of the room in that direction, but never more than
+        // half the way to the foreground itself. On a theme whose two defaults
+        // are close in lightness the fraction alone would land the band *on* or
+        // *past* the text, which is exactly what "always on the background's
+        // side of the pair" is supposed to rule out.
+        let step = (toward - bg.l).abs() * PROMPT_BAND_MIX;
+        let step = step.min((fg.l - bg.l).abs() / 2.0);
+        let l = if toward > 0.5 {
+            bg.l + step
+        } else {
+            bg.l - step
+        };
         Hsla {
-            l: (bg.l + (toward - bg.l) * PROMPT_BAND_MIX).clamp(0.0, 1.0),
+            l: l.clamp(0.0, 1.0),
             a: 1.0,
             ..bg
         }

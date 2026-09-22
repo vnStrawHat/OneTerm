@@ -75,7 +75,10 @@ pub(super) fn marked_sign(
     let head = &chars[..end];
     head.iter()
         .rposition(|&c| profile.is_prompt_sign(c))
-        .or_else(|| head.iter().rposition(|&c| c != ' '))
+        // Any whitespace, not just an ASCII space: a tab or a no-break space
+        // after an unknown sign glyph would otherwise be tagged `PromptSign` on
+        // a cell with nothing in it.
+        .or_else(|| head.iter().rposition(|&c| !c.is_whitespace()))
 }
 
 /// Re-tag a prompt sign with the exit code of the command it launched

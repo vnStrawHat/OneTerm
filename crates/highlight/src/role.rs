@@ -90,7 +90,9 @@ impl RowRoles {
     /// tint lands on the wrong prompt.
     pub fn last_completed_prompt(&self, wraps: &[bool]) -> Option<Range<usize>> {
         let is_prompt = |row: usize| self.role_at(row) == Some(RowRole::Prompt);
-        let mut runs: Vec<Range<usize>> = Vec::new();
+        // Two locals rather than a `Vec` of every run: this walks once per frame
+        // in a pipeline that reuses every other buffer it touches.
+        let (mut before_last, mut last) = (None, None);
         let mut row = 0;
         while row < self.role.len() {
             if !is_prompt(row) {
@@ -103,9 +105,9 @@ impl RowRoles {
                 row += 1;
             }
             row += 1;
-            runs.push(start..row);
+            before_last = last.replace(start..row);
         }
-        (runs.len() >= 2).then(|| runs.swap_remove(runs.len() - 2))
+        before_last
     }
 }
 

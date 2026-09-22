@@ -5580,6 +5580,7 @@ version = "0.6.1"
 dependencies = [
  "anyhow",
  "libc",
+ "oneterm-highlight",
  "oneterm-vt",
  "polling",
  "rand 0.10.1",

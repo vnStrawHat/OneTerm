@@ -14,7 +14,7 @@
 //! layout.
 
 use oneterm_highlight::RowRoles;
-use oneterm_terminal::SnapshotUpdate;
+use oneterm_terminal::{Semantic, SnapshotUpdate};
 
 use super::diagnostics::FrameStats;
 use super::frame::{Frame, GridSize, RowKey};
@@ -68,17 +68,30 @@ pub(crate) struct PlanCache {
     /// neither did its role (`US-0133`).
     roles: RowRoles,
     roles_cur: RowRoles,
+    /// The OSC 133 region each display row's logical line *starts* in, before
+    /// the transition rule. Authoritative for every row like `roles`, because
+    /// a line asks its predecessor what region it was in and the predecessor is
+    /// often outside this frame's rescan (`US-0133` rework, MAJ-1).
+    heads: Vec<Semantic>,
     /// The prompt run the exit code tints, and the code, as of the last update.
     /// A change dirties both the run it leaves and the run it lands on.
     tint: Option<(std::ops::Range<usize>, i32)>,
+    /// The exit code the last update saw, so a frame that changes nothing else
+    /// is not taken as "nothing to do".
+    exit_code: Option<i32>,
     /// This frame's per-row `WRAPLINE` flags.
     wraps: Vec<bool>,
     /// The previous frame's, aligned with `mask_prev` (so `shift` rotates it
     /// too). A row whose wrap flag was *dropped* still has to pull its old
     /// continuation row into the rescan, so the run walk uses the union.
     wraps_prev: Vec<bool>,
-    /// The rows this frame rescans: the dirty rows closed under wrap runs.
+    /// The rows this frame rescans for URL masks: the dirty rows closed under
+    /// wrap runs (`US-0092`).
     scan: Vec<bool>,
+    /// The rows this frame rescans for semantic classes: `scan`, plus the one
+    /// logical line after each changed run, because a line's OSC 133 role is
+    /// read from the region its predecessor started in (`US-0133`).
+    scan_class: Vec<bool>,
     /// Cell geometry the plans were built with: the device cell size and the
     /// logical cell width (as bits). Shape quads are stored in device pixels
     /// and text runs are shaped with `force_width`, so a scale-factor change —
@@ -108,10 +121,13 @@ impl PlanCache {
             class_cur: Vec::new(),
             roles: RowRoles::default(),
             roles_cur: RowRoles::default(),
+            heads: Vec::new(),
             tint: None,
+            exit_code: None,
             wraps: Vec::new(),
             wraps_prev: Vec::new(),
             scan: Vec::new(),
+            scan_class: Vec::new(),
             cell: None,
         }
     }
@@ -167,13 +183,19 @@ impl PlanCache {
         let restyled =
             self.grid != Some(size) || self.style != Some(style_key) || self.cell != Some(cell);
 
+        // The exit code is the one input that is not in the frame, so an
+        // `Unchanged` frame can still carry a new one (`OSC 133;D` arriving with
+        // no redraw). Taking the early return on it would drop the tint until
+        // something else dirtied a row.
+        let exit_code = ctx.semantic.and_then(SemanticOverlay::exit_code);
         stats.rows_total = rows as u32;
-        if !restyled && frame.update() == SnapshotUpdate::Unchanged {
+        if !restyled && frame.update() == SnapshotUpdate::Unchanged && exit_code == self.exit_code {
             // Nothing moved and nothing was copied: the plans, the masks and
             // the keys all still describe this frame.
             stats.frames_unchanged += 1;
             return;
         }
+        self.exit_code = exit_code;
 
         if restyled {
             self.rows.resize_with(rows, RowPlan::default);
@@ -229,9 +251,12 @@ impl PlanCache {
             self.class_cur.resize_with(rows, Vec::new);
             self.roles.role.resize(rows, None);
             self.roles_cur.role.resize(rows, None);
+            self.heads.resize(rows, Semantic::None);
             self.mark_scan_runs(rows, scrolled_seam);
             stats.url_scans += 1;
 
+            // The URL masks, over the dirty rows closed under wrap runs — the
+            // `US-0092` bound, unchanged.
             let mut r = 0;
             while r < rows {
                 if !self.scan[r] {
@@ -244,12 +269,28 @@ impl PlanCache {
                 }
                 stats.url_rows_scanned += (r - start) as u32;
                 url_masks_rows_into(frame, &mut self.mask_cur, &self.wraps, start..r);
+            }
+
+            // The semantic classes, over the same runs plus one logical line
+            // forward, because a line's OSC 133 role is read from the region its
+            // predecessor started in (`US-0133`). Only this pass pays for that.
+            let mut r = 0;
+            while r < rows {
+                if !self.scan_class[r] {
+                    r += 1;
+                    continue;
+                }
+                let start = r;
+                while r < rows && self.scan_class[r] {
+                    r += 1;
+                }
                 match ctx.semantic {
                     Some(overlay) => class_rows_into(
                         frame,
                         overlay,
                         &mut self.class_cur,
                         &mut self.roles_cur.role,
+                        &mut self.heads,
                         &self.wraps,
                         start..r,
                         scratch,
@@ -258,18 +299,29 @@ impl PlanCache {
                     None => {
                         self.class_cur[start..r].iter_mut().for_each(Vec::clear);
                         self.roles_cur.role[start..r].fill(None);
+                        self.heads[start..r].fill(Semantic::None);
                     }
                 }
-                for row in start..r {
-                    if self.mask_cur[row] != self.mask_prev[row]
-                        || self.class_cur[row] != self.class_prev[row]
-                        || self.roles_cur.role[row] != self.roles.role[row]
-                    {
-                        self.dirty[row] = true;
-                    }
+            }
+
+            // One delta per row, over whichever of the two a row was in: a row
+            // the other pass skipped still holds last frame's answer there, and
+            // comparing that against a stale scratch buffer would corrupt it.
+            for row in 0..rows {
+                let (url, class) = (self.scan[row], self.scan_class[row]);
+                let mut changed = false;
+                if url {
+                    changed |= self.mask_cur[row] != self.mask_prev[row];
                     std::mem::swap(&mut self.mask_prev[row], &mut self.mask_cur[row]);
+                }
+                if class {
+                    changed |= self.class_cur[row] != self.class_prev[row]
+                        || self.roles_cur.role[row] != self.roles.role[row];
                     std::mem::swap(&mut self.class_prev[row], &mut self.class_cur[row]);
                     self.roles.role[row] = self.roles_cur.role[row];
+                }
+                if changed {
+                    self.dirty[row] = true;
                 }
             }
             self.wraps_prev.copy_from_slice(&self.wraps);
@@ -279,7 +331,7 @@ impl PlanCache {
         // whole viewport once the rescan is in, so the prompt the most recently
         // completed block belongs to is decided here rather than inside the
         // scan — where it would depend on rows the scan deliberately skipped.
-        self.update_tint(ctx.semantic.and_then(SemanticOverlay::exit_code), rows);
+        self.update_tint(exit_code, rows);
 
         // Phase 3: rebuild.
         for r in 0..rows {
@@ -354,21 +406,33 @@ impl PlanCache {
     /// row 0's mask also depends on whether its wrap-connected predecessor is
     /// still on screen, and a scroll changes that with no row key changing.
     /// There is no `connected(-1)` to walk, so the seam is seeded directly.
+    ///
+    /// One further dependency reaches **forward** by exactly one logical line:
+    /// a line's OSC 133 role is decided from the region its predecessor started
+    /// in (`US-0133`'s transition rule), so a run whose own content changed may
+    /// change the role of the line below it. That line is therefore pulled into
+    /// the rescan too — and only that one, because a line reached this way did
+    /// not change, so its own region did not either and the chain stops.
     fn mark_scan_runs(&mut self, rows: usize, scrolled_seam: bool) {
         let Self {
             dirty,
             wraps,
             wraps_prev,
             scan,
+            scan_class,
             ..
         } = self;
         scan.clear();
         scan.resize(rows, false);
+        scan_class.clear();
+        scan_class.resize(rows, false);
         let connected = |i: usize| wraps[i] || wraps_prev[i];
         let seed = |r: usize| dirty[r] || (scrolled_seam && r == 0);
         let mut r = 0;
+        let mut carry = false;
         while r < rows {
-            if !seed(r) {
+            let seeded = seed(r);
+            if !seeded && !carry {
                 r += 1;
                 continue;
             }
@@ -380,7 +444,14 @@ impl PlanCache {
             while end + 1 < rows && connected(end) {
                 end += 1;
             }
-            scan[start..=end].fill(true);
+            let changed = (start..=end).any(seed);
+            if changed {
+                scan[start..=end].fill(true);
+            }
+            scan_class[start..=end].fill(true);
+            // Only a run that actually changed can move the line below it, so
+            // the chain is one line long and never cascades.
+            carry = changed;
             r = end + 1;
         }
     }
@@ -427,6 +498,13 @@ impl PlanCache {
                 self.roles.role.rotate_left(distance);
             } else {
                 self.roles.role.rotate_right(distance);
+            }
+        }
+        if self.heads.len() == len {
+            if scrolled > 0 {
+                self.heads.rotate_left(distance);
+            } else {
+                self.heads.rotate_right(distance);
             }
         }
         if self.wraps_prev.len() == len {
@@ -1318,10 +1396,10 @@ mod tests {
         );
         assert_eq!(stats.rows_planned, 2, "{stats:?}");
         assert_eq!(
-            stats.class_rows_scanned, 2,
-            "exactly the wrap run, not the 12-row viewport: {stats:?}"
+            stats.class_rows_scanned, 3,
+            "the wrap run plus the one line below it whose role depends on the              region this one starts in (`US-0133`), not the 12-row viewport: {stats:?}"
         );
-        assert_eq!(stats.class_scans, 1, "one scan for one logical line");
+        assert_eq!(stats.class_scans, 2, "the run, and the line after it");
     }
 
     /// A logical line longer than the viewport: the bound is still the wrap
@@ -1398,16 +1476,21 @@ mod tests {
     /// marks them: prompt, the typed command after `OSC 133;B`, its output after
     /// `OSC 133;C`, then the next prompt.
     fn two_marked_blocks() -> FrameBuilder {
-        FrameBuilder::new(4, 24)
-            .text(0, 0, "user@host:~$ ls")
-            .mark(0, 0..13, Semantic::Prompt)
-            .mark(0, 13..15, Semantic::Input)
-            .text(1, 0, "a.txt")
-            .mark(1, 0..5, Semantic::Output)
-            .text(2, 0, "b.txt")
+        // Row 0 is the tail of an older block: a prompt is a line the OSC 133
+        // region *transitions into*, and the viewport's top line has no
+        // predecessor on screen (`US-0133` rework).
+        FrameBuilder::new(5, 24)
+            .text(0, 0, "older output")
+            .mark(0, 0..12, Semantic::Output)
+            .text(1, 0, "user@host:~$ ls")
+            .mark(1, 0..13, Semantic::Prompt)
+            .mark(1, 13..15, Semantic::Input)
+            .text(2, 0, "a.txt")
             .mark(2, 0..5, Semantic::Output)
-            .text(3, 0, "user@host:~$ ")
-            .mark(3, 0..13, Semantic::Prompt)
+            .text(3, 0, "b.txt")
+            .mark(3, 0..5, Semantic::Output)
+            .text(4, 0, "user@host:~$ ")
+            .mark(4, 0..13, Semantic::Prompt)
     }
 
     /// The roles a frame derives ride the class pass, so they cover exactly the
@@ -1426,8 +1509,12 @@ mod tests {
         rewrite_row(&mut frame, &mut fixture, 4, "echo  aaa");
         let stats = h.update(cx, &frame, key);
         assert_eq!(
-            stats.class_rows_scanned, 2,
-            "the role pass did not widen the rescan: {stats:?}"
+            stats.url_rows_scanned, 2,
+            "the URL bound is exactly the wrap run, as `US-0092` states: {stats:?}"
+        );
+        assert_eq!(
+            stats.class_rows_scanned, 3,
+            "the wrap run plus the one logical line whose role depends on it: {stats:?}"
         );
         for r in 0..12 {
             assert_eq!(h.cache.role(r), None, "row {r} carries no mark");
@@ -1442,10 +1529,11 @@ mod tests {
         let mut h = Harness::semantic();
         let frame = two_marked_blocks().build();
         h.update(cx, &frame, semantic_key());
-        assert_eq!(h.cache.role(0), Some(RowRole::Prompt));
-        assert_eq!(h.cache.role(1), Some(RowRole::Output));
+        assert_eq!(h.cache.role(0), Some(RowRole::Output));
+        assert_eq!(h.cache.role(1), Some(RowRole::Prompt));
         assert_eq!(h.cache.role(2), Some(RowRole::Output));
-        assert_eq!(h.cache.role(3), Some(RowRole::Prompt));
+        assert_eq!(h.cache.role(3), Some(RowRole::Output));
+        assert_eq!(h.cache.role(4), Some(RowRole::Prompt));
     }
 
     /// A row whose role changes is replanned even though its own classes might
@@ -1498,14 +1586,90 @@ mod tests {
         let stats = h.update(cx, &frame, key);
         assert_eq!(
             h.cache.tint(),
-            Some((0..1, 0)),
-            "the older prompt, not row 3"
+            Some((1..2, 0)),
+            "the older prompt, not the newest one"
         );
         assert_eq!(stats.rows_planned, 1, "only the row it moved on to");
         assert_eq!(
             stats.class_rows_scanned, 0,
             "the tint needs no rescan: {stats:?}"
         );
+    }
+
+    /// A real OSC 133 stream, fed to the engine rather than hand-marked: three
+    /// plain lines, a prompt with its command, and the command's output.
+    const MARKED_STREAM: &[u8] = b"one\r\ntwo\r\nthree\r\n\x1b]133;A\x1b\\user@host:~$ \x1b]133;B\x1b\\ls\r\n\x1b]133;C\x1b\\a.txt\r\nb.txt\r\n";
+
+    /// The viewport's top line has no predecessor on screen, so its region is
+    /// unknown and it is never a marked prompt — and that answer does not
+    /// flicker: scrolling the same prompt away from the top edge marks it,
+    /// scrolling it back unmarks it, every time.
+    #[gpui::test]
+    fn a_prompt_at_the_top_of_the_viewport_is_unmarked_and_stays_so(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let key = semantic_key();
+        let mut h = Harness::semantic();
+        let (mut frame, mut fixture) = FrameBuilder::new(4, 24).build_with_fixture();
+        fixture.feed(MARKED_STREAM);
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, key);
+        assert_eq!(
+            h.cache.role(0),
+            None,
+            "the prompt is the top line: no predecessor on screen"
+        );
+
+        for _ in 0..2 {
+            fixture.scroll_back(1);
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, key);
+            assert_eq!(
+                h.cache.role(1),
+                Some(RowRole::Prompt),
+                "one row down, the predecessor is visible and the region transitions"
+            );
+
+            fixture.scroll_forward(1);
+            resnapshot(&mut frame, &mut fixture);
+            h.update(cx, &frame, key);
+            assert_eq!(h.cache.role(0), None, "and back to unknown at the top");
+        }
+    }
+
+    /// An exit code that arrives with a frame that changed nothing must not be
+    /// dropped: it is the one tint input that is not in the frame.
+    #[gpui::test]
+    fn an_exit_code_on_an_unchanged_frame_is_not_dropped(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let key = semantic_key();
+        let mut h = Harness::semantic();
+        let (mut frame, mut fixture) = FrameBuilder::new(6, 24).build_with_fixture();
+        // Two marked blocks: a line, a prompt with its command, its output, and
+        // the next prompt.
+        fixture.feed(
+            b"one\r\n\x1b]133;A\x1b\\user@host:~$ \x1b]133;B\x1b\\ls\r\n\x1b]133;C\x1b\\a.txt\r\n\x1b]133;A\x1b\\user@host:~$ \x1b]133;B\x1b\\",
+        );
+        resnapshot(&mut frame, &mut fixture);
+        h.update(cx, &frame, key);
+        assert_eq!(h.cache.role(1), Some(RowRole::Prompt));
+        assert_eq!(h.cache.tint(), None, "no exit code reported yet");
+
+        // Nothing moved: the frame really is `Unchanged`.
+        resnapshot(&mut frame, &mut fixture);
+        let stats = h.update(cx, &frame, key);
+        assert_eq!(stats.frames_unchanged, 1, "{stats:?}");
+
+        // `OSC 133;D` arrives with no redraw behind it.
+        if let Some(overlay) = h.semantic.as_mut() {
+            overlay.set_exit_code(Some(3));
+        }
+        resnapshot(&mut frame, &mut fixture);
+        let stats = h.update(cx, &frame, key);
+        assert_eq!(
+            stats.frames_unchanged, 0,
+            "a new exit code is not 'nothing to do': {stats:?}"
+        );
+        assert_eq!(h.cache.tint(), Some((1..2, 3)));
     }
 
     /// A viewport with one prompt on it — a command still running — is not
