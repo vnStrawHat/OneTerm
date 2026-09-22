@@ -523,11 +523,15 @@ The gaps in that table are the route's, not oversights:
   carries zsh code; installing one needs a sourced file, which the env-only route excludes.
   Remote zsh does emit `C`, because the bootstrap is typed into a running shell.
 - **PowerShell's `C` needs PSReadLine, and an `Enter` OneTerm may chain to.** The handler is
-  installed only when `Set-PSReadLineKeyHandler` resolves, and only when the current `Enter`
-  binding is a *named* function it can call afterwards. A host without PSReadLine, or a user
-  who has bound `Enter` to a script block of their own (`CustomAction`, which
-  `Get-PSReadLineKeyHandler` reports by name only and cannot hand back), keeps its own
-  `Enter` and reports `A`/`B`/`D` only.
+  installed only when `Set-PSReadLineKeyHandler` resolves, and only when the name the
+  current `Enter` binding reports is a real public static of `PSConsoleReadLine` —
+  `[…PSConsoleReadLine].GetMethod($f)`, because the question is *can I still call this
+  afterwards?* A user who bound `Enter` to a script block of their own keeps it, and that
+  tab reports `A`/`B` only. Do not shorten this to a comparison against the string
+  `CustomAction`: `Get-PSReadLineKeyHandler` reports that name only for a block bound
+  **without** a `-BriefDescription`, and with one it reports the description, so the
+  comparison passes and every `Enter` then calls a method that does not exist and submits
+  nothing at all.
 - **`fish`, `csh` and `tcsh` get nothing at all.** The bootstrap is one POSIX line; those
   shells cannot parse it and answer with a burst of syntax errors instead of reaching the
   `sh`/`dash` row. The session stays usable and OneTerm does not notice — the write
@@ -550,11 +554,13 @@ the user" and "do not break the user" want different things:
 
 `B` is appended to `PS1` from inside `PROMPT_COMMAND` (local bash) or by the bootstrap
 (SSH) rather than injected as a `PS1` variable, because an rc file sets `PS1` after the
-environment is read and would drop the marker. In bash it goes in as **prompt escapes
-ending in BEL** — `\[\e]133;B\a\]` — never as raw bytes: `ESC \` ends in a backslash, and
-beside the `\` of the closing `\]` bash reads the escape `\\`, prints a stray `]` and
-never closes the non-printing region. zsh is unaffected, because it expands no backslashes
-in a prompt.
+environment is read and would drop the marker. In bash it goes in as **four raw bytes and
+no backslash at all** — `\001 ESC ]133;B BEL \002`, where `\001`/`\002` are what bash's
+`\[`/`\]` expand to. A mark written with backslashes merges with its neighbours at
+whichever end the backslash sits: `ESC \` beside the `\` of a closing `\]` becomes the
+escape `\\` and prints a stray `]` that never closes the region, and a leading `\[` is
+swallowed by a user `PS1` ending in a lone `\`. Raw bytes have no end to get wrong. zsh is
+unaffected, because it expands no backslashes in a prompt.
 
 **No integration emits `D` before the first command of the session**, except local zsh,
 whose `PS1`-only route has nowhere to hold the flag. bash and the SSH bootstrap skip the

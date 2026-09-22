@@ -45,11 +45,13 @@ No integration emitted `C` or `D` anywhere, so `SnapshotCell::semantic` never he
 `Semantic::Output` from a mark and `SharedState::last_exit_code` was never written by a
 local shell. The exit-code tint of `US-0133` had no input.
 
-## Rework (independent verification, 2026-09-22)
+## Rework (independent verification, 2026-09-22, two rounds)
 
-`evidence/US-0136-independent-verify.md` returned **FAIL**: one major and three medium
-findings, plus four minors. All are closed; `evidence/US-0136-verify.md` §0 is the
-finding-by-finding record and every section below is updated to match the fixed code.
+`evidence/US-0136-independent-verify.md` returned **FAIL** twice: first one major and three
+medium findings plus four minors, then — against the fix for those — a new major the MED-3
+fix had itself introduced, plus a new minor. All are closed;
+`evidence/US-0136-verify.md` §0 is the finding-by-finding record and every section below is
+updated to match the current code.
 
 | # | What was wrong | What it is now |
 |---|---|---|
@@ -58,8 +60,21 @@ finding-by-finding record and every section below is updated to match the fixed 
 | MED-2 | `PROMPT_COMMAND` was inserted unconditionally, so the documented opt-out no longer existed | A stated rule: a user `PROMPT_COMMAND` that already emits OSC 133 is left alone, `PS0` with it; any other value is still appended to |
 | MED-3 | The PowerShell init silently replaced a user's PSReadLine `Enter` handler | It chains to the current binding, and declines to install at all when that binding is a script block it cannot call by name |
 | MIN-1 / MIN-2 | A throwing `prompt` lost `B` forever; a multi-value prompt was collapsed with `-join ''` | The delegation is in a `try` with a fallback prompt; the join is `[Environment]::NewLine` |
-| MIN-3 | Bootstrap size, and `fish`/`csh` cannot parse it | Stated rather than worked around: §6.1.2 gains the row and the reason; size re-measured at 862 bytes, against `MAX_CANON` 4096 |
+| MIN-3 | Bootstrap size, and `fish`/`csh` cannot parse it | Stated rather than worked around: §6.1.2 gains the row and the reason; size re-measured at 880 bytes, against `MAX_CANON` 4096 |
 | MIN-4 | The evidence measured the `PS1` **variable**, never its expansion — exactly where MAJ-1 lived | Every prompt reading is now `${PS1@P}`, and a real-PTY bash test guards the expansion |
+
+**Round two.**
+
+| # | What was wrong | What it is now |
+|---|---|---|
+| NEW-MAJ-1 | The MED-3 fix declined on `$f -ne 'CustomAction'`, but `Get-PSReadLineKeyHandler` reports that name only for a script block bound **without** a `-BriefDescription`. With one — the idiomatic form — `Function` *is* the description, so the guard passed, OneTerm installed, and every `Enter` called `[PSConsoleReadLine]::<description>()`, which does not exist. The line was never submitted: that user could not run a command at all, where before the rework they merely lost `ValidateAndAcceptLine` | The guard asks what it meant to ask — `if([Microsoft.PowerShell.PSConsoleReadLine].GetMethod($f))`. A name it can call afterwards → chain to it; anything else → do not install, and report no `C` |
+| NEW-MIN-1 | The mark was safe at its end but still *began* with `\[`, so a user `PS1` ending in a lone `\` swallowed it and the region never opened | The mark is four **raw bytes** — `\001 ESC ]133;B BEL \002`, the values `\[` and `\]` expand to — so it carries no backslash at either end and nothing can merge with it |
+
+**Why no test caught NEW-MAJ-1.** The same reason as MAJ-1, one level up: the assertion read
+the *generated string* rather than what a shell does with it, and a string cannot tell
+`CustomAction` from `SmartEnter`. `powershell_enter_guard_decides_the_four_bindings` now
+runs the real init in both real hosts behind each of the four bindings and asserts the
+verdict; restoring the old comparison fails it on exactly the described-block row.
 
 **Why no test caught MAJ-1, and what now does.** The one assertion that touched the append
 asserted the defective literal was present. Two tests replace it:
@@ -76,9 +91,11 @@ verifier's exact symptom.
     `PS0` (bash), `PS1` (zsh) and the PowerShell/pwsh `-Command` init string.
   - `crates/ssh/src/session.rs` — `SHELL_INTEGRATION_BOOTSTRAP`, the line typed into the
     remote shell after `request_shell`.
-  - Unit tests over the generated strings, per shell, and — since the rework — one
-    behavioural test in `crates/local-shell/src/session_tests.rs` that expands a real bash
-    prompt through the real PTY, because a string assertion cannot see a prompt escape.
+  - Unit tests over the generated strings, per shell, and — since the rework — two
+    behavioural tests, because a string assertion can see neither a prompt escape nor a
+    PSReadLine binding: one in `crates/local-shell/src/session_tests.rs` that draws a real
+    bash prompt through the real PTY, and one in `crates/core` that runs the generated
+    PowerShell init in both real hosts across the four `Enter` bindings.
   - `crates/terminal/src/backend/osc_router.rs` — one `log::debug!` of each routed
     `ShellMark`. Not a behaviour change: it is the only way to observe a mark without a
     renderer, and it is what turned the Windows walk into evidence.
@@ -126,7 +143,12 @@ verifier's exact symptom.
       argument. What a string test cannot see — the **expanded** bash prompt — has a
       real-PTY test of its own.
 - [x] OneTerm does not silently take over a PSReadLine `Enter` binding the user already
-      has: it chains to it, or leaves it alone and reports no `C` (MED-3).
+      has: it chains to it, or leaves it alone and reports no `C` (MED-3) — decided by
+      whether the bound name is a real public static it can call, not by its spelling, so
+      a described script block is declined rather than turned into a broken `Enter`
+      (NEW-MAJ-1).
+- [x] The `B` mark appended to a bash `PS1` cannot merge with the user's prompt at
+      **either** end, whatever that prompt ends in (NEW-MIN-1).
 
 ## Documentation
 
@@ -254,8 +276,9 @@ choice here is one future work must inherit.
 ## Evidence and Gaps
 
 Full record: `evidence/US-0136-verify.md`, whose §0 is the finding-by-finding rework table.
-Frames: `evidence/US-0136-verify-pwsh-tab.png`, `evidence/US-0136-rework-bash-tab.png` and
-`evidence/US-0136-rework-bash-completion.png`.
+Frames: `evidence/US-0136-verify-pwsh-tab.png`, `evidence/US-0136-rework-bash-tab.png`,
+`evidence/US-0136-rework-bash-completion.png` and
+`evidence/US-0136-verify4-pwsh-described-enter.png`.
 
 The live Windows walk (OneTerm `fast-dev`, `RUST_LOG=debug`, one run per shell kind, two
 commands typed into the tab) is the load-bearing proof, and since the rework it covers a
@@ -297,9 +320,16 @@ Gaps:
 - **`cmd.exe` cannot emit `C` or `D`.** `PROMPT` is its only hook and has no error-level
   code. Unchanged by design.
 - **PowerShell's `C` needs PSReadLine, and an `Enter` binding OneTerm can chain to.**
-  Without PSReadLine, or when `Enter` is already a script block (`CustomAction`, which
-  `Get-PSReadLineKeyHandler` reports by name only), the handler is not installed and the tab
-  reports `A`/`B`/`D`. Leaving the user's editor alone is the deliberate choice there.
+  Without PSReadLine, or when `Enter` is bound to a script block of the user's own — with or
+  without a `-BriefDescription`; `Get-PSReadLineKeyHandler` hands out a name, never the
+  block — the handler is not installed and the tab reports `A`/`B` only (and so no `D`
+  either, since `D` is gated on the flag the `C` handler sets). Leaving the user's editor
+  alone is the deliberate choice there.
+- **`Type.GetMethod` throws on an overloaded name.** `PSConsoleReadLine` has seven
+  overloaded public statics (`Insert`, `ReadLine`, `SetKeyHandler`, …); none is a plausible
+  `Enter` binding, and if one ever were, the exception aborts the rest of the init after the
+  prompt wrapper is already installed — so the tab keeps the user's `Enter` and reports no
+  `C`. Safe by construction rather than by handling.
 - **PowerShell's `C` fires on `Enter` even when the line is incomplete** — PSReadLine gives
   the handler no way to ask whether `AcceptLine` accepted. One early `C`; the real one
   follows.

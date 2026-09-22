@@ -1,9 +1,11 @@
 # Evidence: US-0136 — the shell integrations emit the full OSC 133 set
 
-> **Rework, 2026-09-22.** An independent verification
+> **Rework, 2026-09-22.** Two rounds. An independent verification
 > (`US-0136-independent-verify.md`) returned FAIL on one major and three medium
-> findings. Everything below is re-measured against the fixed code; §0 records
-> what changed and how each finding was closed.
+> findings; the re-verification of that fix returned FAIL again on a new major
+> the MED-3 fix had introduced, plus one new minor. Everything below is
+> re-measured against the current code; §0 records every finding and how it was
+> closed.
 
 Date: 2026-09-22
 Intake: `IN-0044`
@@ -18,11 +20,13 @@ Windows), pwsh 7, Windows PowerShell 5.1. No Unix host, no WSL, no zsh, no SSH s
 | MAJ-1 | Every bash prompt, local **and** SSH, printed a stray `]`: `\[` + `ESC \` + `\]` merges the mark's trailing backslash with the wrapper's, so bash printed `]` and never closed the non-printing region | One constant, `BASH_OSC133_PS1_MARK` = `\[\e]133;B\a\]`, used by both call sites: bash **prompt escapes**, terminated by **BEL** so no backslash touches `\]`. The append is now a plain concatenation and the idempotence guard compares the same text | §3, §4 (`${PS1@P}`, `strays: 0`), §6 (the live bash tab and its completion popup), and two new tests — one of which reproduces the old defect when reverted |
 | MED-1 | The SSH bootstrap emitted `D;0` before the user's first command in both branches: the closing `__oneterm_precmd` consumed the seen-flag | The closing call clears the flag again (`__oneterm_precmd; __oneterm_seen=;`) | §4 — the first prompt now carries OSC 7 + `A` and no `D` |
 | MED-2 | `env.insert("PROMPT_COMMAND", …)` was unconditional, so the documented opt-out was gone | A precise rule: a user `PROMPT_COMMAND` that **already emits OSC 133** (contains `133;`) is left untouched, `PS0` with it — that is the opt-out; any other value is still appended to | `bash_yields_to_a_prompt_command_that_already_emits_osc133`, and §6.1.2 rewritten to state the three rules |
-| MED-3 | The PowerShell init silently replaced a user's PSReadLine `Enter` handler | The handler **chains**: it reads the current binding and calls it. A binding that is already a script block (`CustomAction`) cannot be called by name, so OneTerm does not install at all and the tab reports no `C` | §7 — `chained to : ValidateAndAcceptLine` in both hosts, and the `CustomAction` case leaves `Enter` untouched |
+| MED-3 | The PowerShell init silently replaced a user's PSReadLine `Enter` handler | The handler **chains**: it reads the current binding and calls it, and installs only when that name is one it can call — see NEW-MAJ-1 for how "can call" is decided | §6b, §6c |
 | MIN-1 | A user `prompt` that threw lost `B` forever | The delegation is in a `try`; the `catch` falls back to a default prompt so the region still closes | §7 |
 | MIN-2 | `-join ''` collapsed a multi-value prompt | Joined with `[Environment]::NewLine` | §7 |
 | MIN-3 | Bootstrap size, and fish/csh cannot parse it | Stated, not worked around: §6.1.2 gains a `fish`/`csh`/`tcsh` row and the paragraph explaining it. Size re-measured (862 bytes) | §4 |
 | MIN-4 | §3/§4 measured the `PS1` variable, never the expansion — where MAJ-1 lived | Every prompt reading in §3 and §4 is now `${PS1@P}` | §3, §4 |
+| **NEW-MAJ-1** | MED-3's decline half tested `$f -ne 'CustomAction'`. `Get-PSReadLineKeyHandler` reports that name only for a script block bound **without** a `-BriefDescription`; with one — the idiomatic form — `Function` *is* the description, the guard passed, and every `Enter` called a static method that does not exist, so the line was never submitted and the tab could not run anything | The guard asks the question it meant to ask: `if([Microsoft.PowerShell.PSConsoleReadLine].GetMethod($f))`. Named function → chain; anything else → do not install | §6c — the four bindings decided correctly in both hosts, as a **test**, plus a live tab whose `Enter` was a described block before the init |
+| **NEW-MIN-1** | The mark was safe at its end but still *began* with `\[`, so a user `PS1` ending in a lone `\` swallowed it and the region never opened | The mark is four **raw bytes**, `\001 ESC ]133;B BEL \002` — `\001`/`\002` are what `\[`/`\]` expand to, so there is no backslash at either end to merge with anything | §3 — `${PS1@P}` over five `PS1` shapes including `x\`, each with one start marker and one end marker |
 
 ## 1. What each shell emits, after the change
 
@@ -101,22 +105,33 @@ bash 5.3.15, so `__ot_seen` persists exactly as it does when bash expands
 
 The first version of this section printed the `PS1` **variable** and missed `MAJ-1`
 entirely — the defect lived in the difference between the variable and its expansion.
-Every prompt line below is now `${PS1@P}`, i.e. what bash actually puts on the wire.
+Every prompt reading below is `${PS1@P}`, byte for byte through `od -c`.
 
 ```
 wire     : ESC]7;file://…ESC\ ESC]133;AESC\                 <- first prompt: no D
            ESC]133;D;7ESC\ ESC]7;file://…ESC\ ESC]133;AESC\ <- after (exit 7)
            ESC]133;D;0ESC\ ESC]7;file://…ESC\ ESC]133;AESC\ <- after true
-PS1 var  : \u@\h:\w\$ \[\e]133;B\a\]
-PS1 EXP  : trunglt@TrungLT-PC:/…$ ESC]133;B BEL      <- ${PS1@P}: the mark, and
-                                                        nothing after it
-PS0 EXP  : ESC]133;CESC\                             <- ${PS0@P}
-markers  : 1        <- after five expansions: the guard still holds
-strays   : 0        <- `]` characters after the mark. The shipped bug gave 1.
+PS0 EXP  : 033 ] 1 3 3 ; C 033 \
 status   : 9        <- $? restored for whatever runs next
 user-sees=5         <- a user PROMPT_COMMAND appended after ours still sees its
                        own command's exit status
 ```
+
+**The mark concatenated onto five `PS1` shapes** (NEW-MIN-1). `001`/`002` are
+`RL_PROMPT_START_IGNORE` / `RL_PROMPT_END_IGNORE`; the count of each is the region
+balance, and the user's own bytes are unchanged in every row:
+
+```
+user PS1            ${PS1@P}                                          markers
+x                   x 001 033 ] 1 3 3 ; B \a 002                      1 / 1
+x\                  x \ 001 033 ] 1 3 3 ; B \a 002                    1 / 1   <- NEW-MIN-1
+x\\                 x \ 001 033 ] 1 3 3 ; B \a 002                    1 / 1
+\u@\h:\w\$          trunglt@TrungLT-PC:/…$ 001 033 ] 1 3 3 ; B \a 002   1 / 1
+\[\e[32m\]u\[\e[0m\]$  033 [ 3 2 m u 033 [ 0 m $ 001 033 ] 1 3 3 ; B \a 002   1 / 1
+```
+
+Five `PROMPT_COMMAND` expansions still leave exactly one copy: the `case` guard compares
+the same bytes it appends.
 
 ## 4. The SSH bootstrap — the typed line through a real bash and a real dash
 
@@ -132,8 +147,9 @@ bash  boot.sh + two commands ->
         ESC]133;D;0ESC\ ESC]7;…ESC\ ESC]133;AESC\
         PROMPT_COMMAND = __oneterm_precmd
         PS0 EXP        = ESC]133;CESC\
-        PS1 EXP        = trunglt@…$ ESC]133;B BEL    <- strays: 0
-line size = 862 bytes + CR, well under MAX_CANON (4096)
+        PS1 EXP        = x \ 001 033 ] 1 3 3 ; B \a 002
+                         (with a user PS1 of `x\`: the mark arrives whole)
+line size = 880 bytes + CR, well under MAX_CANON (4096)
 ```
 
 ## 5. Unit tests
@@ -218,6 +234,50 @@ chained to    :                 <- empty: OneTerm did not install, and that
                                    user's Enter is untouched
 ```
 
+## 6c. NEW-MAJ-1: the `Enter` guard, as a test and in a live tab
+
+**The four bindings, in both hosts.** `powershell_enter_guard_decides_the_four_bindings`
+(`crates/core`) writes the real init into a temp script behind each binding, runs it in
+`powershell.exe` and `pwsh.exe`, and reads back whether the guard installed and what it
+chained to. This is a `cargo test`, not a probe: the previous round's string assertion
+could not have seen this and locked the defect in instead.
+
+| `Enter` bound as | `.Function` reports | `GetMethod` | verdict |
+| --- | --- | :-: | --- |
+| nothing (default) | `AcceptLine` | yes | `INSTALLED:AcceptLine` |
+| `-Function ValidateAndAcceptLine` | `ValidateAndAcceptLine` | yes | `INSTALLED:ValidateAndAcceptLine` |
+| `-ScriptBlock { … }` | `CustomAction` | no | `DECLINED` |
+| `-ScriptBlock { … } -BriefDescription 'SmartEnter'` | `SmartEnter` | no | `DECLINED` |
+
+**The mutation.** Putting `if($f -ne 'CustomAction')` back makes that test fail on exactly
+the row the re-verification named, and only that row:
+
+```
+assertion `left == right` failed: powershell.exe with described: … -BriefDescription 'SmartEnter'
+  left: "INSTALLED:SmartEnter"
+ right: "DECLINED"
+```
+
+**Live, in a real tab.** A `custom` shell running the very text of
+`POWERSHELL_OSC133_PROMPT_INIT` behind
+`Set-PSReadLineKeyHandler -Key Enter -ScriptBlock {…} -BriefDescription 'SmartEnter'` — the
+binding has to precede the init, and OneTerm always puts its own args first, so the tab
+runs the same script from a file. `cmd /c exit 3` then `Write-Output oneterm-accepted`,
+typed in:
+
+```
+host/binding : pwsh-described / powershell-described
+marks        : PromptStart PromptEnd  x3        <- A and B only, no C, no D
+```
+
+and the frame `US-0136-verify4-pwsh-described-enter.png` shows both commands accepted and
+`oneterm-accepted` printed. With the old guard this tab could not have run either command.
+The undescribed block declines the same way (`pwsh-plain`: three prompts, no `C`).
+
+`D` is absent along with `C` by construction, not by accident: `D` is gated on the flag
+only the `C` handler sets, so a tab without `C` reports no completed command rather than a
+wrong one.
+
 ## 7. Gate
 
 `pwsh scripts/ci-local.ps1` — see the packet's Evidence section for the final line.
@@ -245,6 +305,12 @@ chained to    :                 <- empty: OneTerm did not install, and that
   OneTerm's scalar and the integration stops; a `.zshrc` that sets `PROMPT` replaces the
   generated `PS1` and takes the marks with it. Both are ceilings of the env-only route,
   now recorded in §6.1.2.
+- **A `GetMethod` that throws.** `Type.GetMethod(name)` raises `AmbiguousMatchException`
+  on an overloaded name, and `PSConsoleReadLine` has seven overloaded public statics
+  (`Insert`, `ReadLine`, `SetKeyHandler`, …). None is a plausible `Enter` binding, and the
+  failure is safe if it ever happened: the exception aborts the rest of the init, which has
+  already installed the prompt wrapper, so the tab keeps the user's `Enter` and reports no
+  `C`.
 - **PowerShell's `C` fires on `Enter` even when the line is incomplete** (a `{` left open
   continues on the next line, and the handler has already written `C`). PSReadLine gives
   the handler no way to ask whether `AcceptLine` accepted. The cost is one early `C`; the
