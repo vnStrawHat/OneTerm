@@ -469,3 +469,7 @@ clause fails **2** (`two_prompts_on_adjacent_rows_are_both_prompts`,
 ## Handoff
 
 Implemented; `US-0134` builds the prompt-line background on the roles this packet derives.
+
+### Coordinator note after the final verification (2026-09-22)
+
+The empty-Enter gap is slightly worse than "self-heals": the affected prompt row never recovers on its own (typing gives that row its own `Input` cell, which is about its own `closed_prompt`, not its predecessor's), and while it stands the exit-code tint lands one block early. A cheap session-scoped signal exists (`ShellMark::PromptEnd` already reaches `osc_router.rs`, so an `emits_prompt_end` flag would need no engine change) and is rejected on purpose: an A-only integration reached from inside a B-emitting session (an `ssh` typed into a marked tab) would be trusted and reopen the flood. The safe signal is a row for the `B` mark, which is the public-API change section 4.2 defers.
