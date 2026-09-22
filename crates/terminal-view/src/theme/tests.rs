@@ -166,4 +166,131 @@ mod tests {
         );
         assert_ne!(plain.colors.hash, t.colors.hash);
     }
+
+    // ── The prompt-line band (`US-0134`) ───────────────────────────────────
+
+    /// The classes a prompt row can carry, which is the set of foregrounds that
+    /// has to stay legible on the band.
+    const PROMPT_ROW_CLASSES: &[oneterm_highlight::Class] = &[
+        oneterm_highlight::Class::PromptSign,
+        oneterm_highlight::Class::Command,
+        oneterm_highlight::Class::Option,
+        oneterm_highlight::Class::Path,
+        // `US-0133`'s exit-code tint substitutes these two at the sign.
+        oneterm_highlight::Class::Success,
+        oneterm_highlight::Class::Error,
+    ];
+
+    /// The band is derived, so it stays on its theme's own side of the pair: on
+    /// a light theme it is light, on a dark theme it is dark. One fixed hex in
+    /// the asset is what made it a dark stripe under dark text.
+    #[test]
+    fn the_band_never_crosses_its_theme() {
+        for (bg, fg) in [
+            (
+                gpui::hsla(0.0, 0.0, 0.08, 1.0),
+                gpui::hsla(0.0, 0.0, 0.9, 1.0),
+            ),
+            (
+                gpui::hsla(0.0, 0.0, 0.98, 1.0),
+                gpui::hsla(0.0, 0.0, 0.1, 1.0),
+            ),
+        ] {
+            let mut t = build_terminal_theme(&gpui_component::Theme::default());
+            t.bg = bg;
+            t.fg = fg;
+            let band = t.prompt_line_bg(false);
+            assert_ne!(
+                band, bg,
+                "the band has to be visible against the background"
+            );
+            assert!(
+                (band.l - bg.l).abs() < (band.l - fg.l).abs(),
+                "band {band:?} left the background's side of bg {bg:?} / fg {fg:?}"
+            );
+            assert_eq!(band.h, bg.h, "the band introduces no hue of its own");
+        }
+    }
+
+    /// An explicit `promptLineBg` still wins, which is §7's rule for the whole
+    /// `terminal.semantic` block.
+    #[test]
+    fn the_shipped_asset_leaves_the_band_to_the_theme() {
+        let mut t = build_terminal_theme(&gpui_component::Theme::default());
+        assert!(
+            t.class_styles.prompt_line_bg.is_none(),
+            "one fixed hex for every theme is what `US-0134` removed"
+        );
+        t.bg = gpui::hsla(0.0, 0.0, 0.08, 1.0);
+        t.fg = gpui::hsla(0.0, 0.0, 0.9, 1.0);
+        // `DECSCNM` swaps the pair the screen is drawn with, so the band follows.
+        assert_ne!(t.prompt_line_bg(true), t.prompt_line_bg(false));
+    }
+
+    /// Every foreground a prompt row can carry clears 4.5:1 against the resolved
+    /// band, in every theme variant the user can select.
+    ///
+    /// The repository's contrast gate (`scripts/check-theme-contrast.py`)
+    /// measures **kit UI tokens** read out of `crates/theme/themes/*.json`.
+    /// Terminal grid text is none of those — it is an ANSI palette entry or a
+    /// semantic `Class` foreground, and the semantic palette is not in a theme
+    /// file at all (`crates/terminal-view/assets/highlight/default.json`), which
+    /// the script never opens. So the same WCAG floor is applied here, where the
+    /// colours actually are, over the whole pipeline the renderer runs:
+    /// `resolve_style` measures against what is behind the glyph, which on a
+    /// prompt row is the band. Extending `SURFACES` to terminal tokens is a
+    /// change to that gate's scope and is an owner question in `IN-0044`.
+    #[gpui::test]
+    fn every_prompt_row_foreground_clears_the_band(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let registry = gpui_component::ThemeRegistry::global_mut(cx);
+            for (name, content) in oneterm_theme::embedded_theme_files() {
+                registry
+                    .load_themes_from_str(content)
+                    .unwrap_or_else(|e| panic!("embedded theme {name}: {e}"));
+            }
+            let configs: Vec<_> = gpui_component::ThemeRegistry::global(cx)
+                .themes()
+                .values()
+                .cloned()
+                .collect();
+            assert!(configs.len() > 20, "expected every embedded theme variant");
+            for config in configs {
+                let name = config.name.clone();
+                gpui_component::Theme::global_mut(cx).apply_config(&config);
+                let theme = build_terminal_theme(gpui_component::Theme::global(cx));
+                let band = theme.prompt_line_bg(false);
+                let mut foregrounds = vec![("foreground", theme.fg)];
+                for class in PROMPT_ROW_CLASSES {
+                    let style = theme.class_styles.style(*class as u8);
+                    let fg = style.fg.expect("every prompt-row class has a colour");
+                    foregrounds.push((class_name(*class), crate::highlight::to_gpui_hsla(fg)));
+                }
+                for (label, fg) in foregrounds {
+                    // What the renderer actually paints: the contrast pass runs
+                    // against the band, because that is what is behind the glyph.
+                    let painted = theme.ensure_contrast(fg, band);
+                    let ratio = contrast_ratio(painted, band);
+                    assert!(
+                        ratio >= DEFAULT_MIN_CONTRAST,
+                        "{name}: {label} on the prompt band is {ratio:.2}:1"
+                    );
+                }
+            }
+        });
+    }
+
+    fn class_name(class: oneterm_highlight::Class) -> &'static str {
+        use oneterm_highlight::Class;
+        match class {
+            Class::PromptSign => "promptSign",
+            Class::Command => "command",
+            Class::Option => "option",
+            Class::Path => "path",
+            Class::Success => "success",
+            Class::Error => "error",
+            _ => "class",
+        }
+    }
 }

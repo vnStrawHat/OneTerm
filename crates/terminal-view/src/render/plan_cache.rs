@@ -296,6 +296,7 @@ impl PlanCache {
                 ctx,
                 &self.class_prev[r],
                 &self.mask_prev[r],
+                self.roles.role_at(r),
                 tint,
                 scratch,
                 glyphs,

@@ -344,6 +344,32 @@ A shipped **default `semantic` block** (in `crates/ui/assets/highlight/default.j
 merged under any per-theme overrides, so every theme gets sane colors automatically —
 only the ANSI palette + accents come from the gpui-component theme.
 
+**`promptLineBg` is the exception (`US-0134`).** It is not a foreground on top of a
+theme-independent background; it *is* a background, painted under text whose legibility
+depends on the theme. One fixed hex applied to every theme is a dark band under dark text
+on a light one, so the shipped asset no longer sets it and
+`TerminalTheme::prompt_line_bg()` derives it per theme instead: **the theme's own terminal
+background moved a small fixed fraction toward its terminal foreground**, lightness only.
+A band defined that way is always on the background's side of the pair and can never invert
+a theme, and it introduces no hue of its own. `DECSCNM` swaps the pair the screen is drawn
+with, so the band follows it.
+
+The asset key — and a future per-theme `terminal.semantic.promptLineBg` — remain an
+**explicit override**: a theme that names a colour gets exactly that colour, and a theme
+that says nothing still gets something sane, which is this section's rule for the whole
+block.
+
+Readability is enforced where the colours are. `scripts/check-theme-contrast.py` measures
+kit UI tokens read out of `crates/theme/themes/*.json`; terminal grid text is an ANSI
+palette entry or a semantic `Class` foreground, and the semantic palette is not in a theme
+file at all, so a `SURFACES` row naming the band would have no foreground to measure against
+it. Instead `resolve_style` uses the band as the contrast reference for any cell that paints
+no background of its own — what is behind the glyph on a prompt row *is* the band — and two
+Rust tests hold the floor: one resolves the band for every embedded theme variant and checks
+every prompt-row foreground against it, the other checks every colour a prompt row's plan
+actually paints. Extending `SURFACES` to terminal tokens is a change to that gate's scope
+and is an owner question in `IN-0044`.
+
 **Render-time cost**: `styles.style(class).fg` — one array index. No string scope, no
 selector matching, no hashmap. This is the headline Rust win over the TextMate model.
 
@@ -387,9 +413,23 @@ Changes:
 5. **A `SemanticOverlay` per view** holds `(ShellProfile, &'static RuleSet, RowRoles)`
    and produces `cell_class` for the visible viewport each frame.
 
-6. **Prompt-line background**: paint under the whole prompt+command row (a `LayoutRect`
-   with `prompt_line_bg`), inserted before per-cell backgrounds — orthogonal to per-cell
-   fg, emitted as one rect.
+6. **Prompt-line background** (shipped, `US-0134`): one `BgSpan` covering `0..cols`, pushed
+   into the row plan by `build_row_plan` **before** the per-cell loop. `RowPlan::bg` is
+   painted in push order, so the band goes down first and every explicit cell background — a
+   selection, an ANSI `bg`, an inverse cell — paints on top of it and looks exactly as it
+   does on any other row. Nothing in `resolve_style`'s `paint_bg` rule changes, so a
+   default-background cell still emits no span of its own and the band shows through.
+   Painting it as one row-wide rect rather than per cell is also what covers a
+   `LEADING_WIDE_CHAR_SPACER` at a wrap boundary, which carries no class and would otherwise
+   be a one-cell hole (§13 Q4).
+
+   **Which rows.** Every row whose OSC 133 role is `Prompt` or `Command` — for a wrapped
+   prompt that is every row of the run, because the role is the *logical line's* (§4.2).
+
+   **Not under the regex fallback.** A row with no mark gets no band, as a rule rather than
+   as an omission: the band is a line-level, full-width element, so a regex that changes its
+   mind between frames flashes the whole row, which is the defect `BUG-0071` was reported
+   for. A wrong foreground on one word is not. The band's colour comes from the theme (§7).
 
 The unit of a scan is the **logical line**, not the visual row. A soft wrap does not end
 a line: the scanner's state — inside a quoted string, after the prompt sign, mid-token —
