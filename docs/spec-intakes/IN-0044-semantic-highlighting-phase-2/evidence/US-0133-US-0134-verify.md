@@ -396,3 +396,289 @@ That screen is what every SSH tab and every local bash tab looks like after the 
   implementing packet stands, and MAJ-3 is proved by mutation rather than by pixels.
 - No benchmark was run for attack 7; the answer is from reading the added code paths, and
   `US-0135` owns the measured budget.
+
+---
+
+# Re-verification of `e0d85801` — 2026-09-22
+
+Second independent agent, adversarial pass over the acceptance rework.
+
+Under test: `feat/semantic-row-roles` @ `e0d85801` — the rework commit `106ece85` on the
+first verifier's `ddc28122`, then `main` @ `bf13cd21` (`BUG-0073`, `US-0135`) merged in.
+Worktree `.claude/worktrees/agent-a045c7f23df73bf81`, reset to `e0d85801`. Every probe and
+mutation below was reverted; `git status` was clean before the commit that carries this
+section.
+
+## Verdicts
+
+| Packet | Verdict |
+|---|---|
+| `US-0133` — row roles come from the shell's OSC 133 marks | **ACCEPT WITH CHANGES** — the blocker is genuinely fixed and pinned by a mutation, but the transition rule brings a new, untested and undocumented hole of its own (RV-MAJ-1: two prompts on adjacent rows), and the merge left `US-0135`'s own scan-bound record contradicting the shipped assertions (RV-MED-2). |
+| `US-0134` — the prompt line gets its background | **ACCEPT** — MAJ-3 and MED-2 are both closed and both now fail under mutation. It inherits RV-MAJ-1 from `US-0133` (one prompt row loses its band) but owns no defect of its own. |
+| Overall | **ACCEPT WITH CHANGES** — no blocker. RV-MAJ-1 needs an owner decision, a `BUG` packet and a record; RV-MED-1/2 are documentation the merge owes. |
+
+## Status of every finding from the first verification
+
+| ID | Status | Evidence |
+|---|---|---|
+| **MAJ-1** — A-only integrations flood every line as prompt | **FIXED** | `line_role` (`crates/terminal-view/src/render/row_plan.rs:575-591`) gives `Prompt` only on a transition. Asserted by `an_a_only_shell_does_not_turn_its_output_into_prompts`, `an_a_only_shell_paints_no_band`, `the_viewports_first_line_is_never_a_prompt`. Reproduced in the GUI on the exact wire bytes and **no row is banded** — `US-0133-US-0134-reverify-a-only-and-back-to-back.png`, top block, against the first verification's `US-0133-US-0134-verify-a-only-flood.png`, where one continuous band covered the whole flood and `%`, `#` and a trailing `s` were painted as prompt signs. Mutation M1 (ignore `prev`) fails 4 tests. |
+| **MAJ-2** — no shipped integration emits `133;D`, so the tint is dead out of the box | **NOT FIXED — deferred by decision** | Recorded honestly in §4.2 ("It needs a shell that emits `OSC 133;D`, and none of the integrations above does") and in both packets' Gaps, with the per-shell table; completing the emitters is `US-0136`. `US-0133`'s headline acceptance item therefore remains unreachable in every shipped configuration. Accepted as an owner call, not re-litigated here — but the packet is `Implemented`, and a reader of the acceptance list alone still cannot tell. |
+| **MAJ-3** — inverting the band's direction left the suite green | **FIXED** | `assert_band_between` (`crates/terminal-view/src/theme/tests.rs:193`) asserts `signum(band.l - bg.l) == signum(fg.l - bg.l)`, a strict "did not reach the text" bound and a floor. Mutation M3 (`toward` flipped) now fails `the_band_sits_between_the_background_and_the_text` **and** `every_prompt_row_foreground_clears_the_band`. |
+| **MED-1** — the implemented `Input`-headed rule is right | **CONFIRMED, unchanged** | `output_left_tagged_input_by_a_shell_without_osc_133_c_is_unmarked` still holds; the rejected alternative is recorded in §4.2 and in the packet's rework note. |
+| **MED-2** — the band crosses the text on a narrow fg/bg gap | **FIXED** | `prompt_line_bg` caps the move at half the gap (`terminal_theme.rs:115`). Probed at `0.5/0.55`, `0.5/0.45`, `0.5/0.52`, `0.98/0.239`, `0.159/0.937` and the degenerate `0.5/0.5` — all pass (the first three are now in the shipped test). |
+| **MIN-1** — an exit code on an `Unchanged` frame was dropped | **FIXED** | `plan_cache.rs:190-198` compares `exit_code` before the early return; `an_exit_code_on_an_unchanged_frame_is_not_dropped` asserts `frames_unchanged == 0` and the tint landing. |
+| **MIN-2** — `last_completed_prompt` allocated a `Vec` per frame | **FIXED** | `crates/highlight/src/role.rs:112-131`: two locals (`before_last`, `last`), no allocation. |
+| **MIN-3** — `marked_sign` skipped only ASCII spaces | **FIXED** | `crates/highlight/src/scanner/prompt.rs:81`: `!c.is_whitespace()`. |
+| **MIN-4** — doc citations | **PARTLY FIXED** | §4.2 and §13 Q1 now say `crates/vt` and name the old parser as gone; §4.2 carries the per-shell mark table; §8 item 6 records the `row_bg` contrast reference. **But** the merge duplicated a whole §4.2 block (RV-MED-1) and left §10.1 stating a scan bound this branch changed (RV-MED-2). |
+| **NIT-1** — `The whole frame'''s` typo | **NOT FIXED** | still at `crates/terminal-view/src/render/row_plan.rs:851`. |
+| **NIT-2** — the explicit `promptLineBg` override ignores `reverse_video` | **NOT FIXED, by decision** | recorded in the `US-0134` rework note; unreachable, nothing ships an override. |
+
+## New findings
+
+### RV-MAJ-1 — two prompts on adjacent rows: the second one is unmarked
+
+The transition rule reads the **previous logical line's own head region**, and a prompt
+line's head is `Prompt`. So when one prompt line is immediately followed by another — which
+is what a command that printed nothing leaves behind — the second prompt does not
+transition and is reported unmarked: no band, no marked-prompt scan, and no tint.
+
+Proved three ways:
+
+- **Unit, real OSC 133 stream through the engine** (probe, reverted). Feeding
+  `one\r\n` `133;A` `user@host:~$ ` `133;B` `true\r\n` `133;C` `133;D;0` `133;A`
+  `user@host:~$ ` `133;B` into a 6-row viewport gives
+  `roles = [None, Some(Prompt), None, None, None, None]` — row 2 is the new prompt and it
+  is unmarked — and `tint = None`, although `133;D;0` was delivered. A full `A`/`B`/`C`/`D`
+  shell is the configuration `US-0133` calls "exact".
+- **GUI, `A`/`B` wire bytes** —
+  `US-0133-US-0134-reverify-a-only-and-back-to-back.png`, bottom block: `C:\ws>cd ..`
+  carries the band (it follows an output line), `C:\ws>rem quiet` and the final `C:\ws>`
+  directly below it do not.
+- **GUI, a real `cmd` tab** — `US-0133-US-0134-reverify-cmd-real-tab.png`: here **every**
+  prompt row is banded, including `cd .` twice and `rem quiet` twice. `cmd`'s `$P$G` prompt
+  is preceded by a blank line, and a blank row's head is `Semantic::None`, which *is* a
+  transition. So Windows `cmd` — the only marked shell exercisable on this machine — is
+  accidentally immune, and the defect is invisible there.
+
+Reachability: any shell whose prompt does not begin with a blank line, after any command
+that printed nothing (`cd`, `export`, `set`, `rem`, a successful `mkdir`). `ZSH_OSC133_PS1`
+(`crates/core/src/config/shell.rs:160`) is exactly that shape —
+`%{…133;A…%}%n@%m:%~ %# %{…133;B…%}`, one line, no leading newline — and `zsh` is one of
+the two shells OneTerm gives `A`/`B` to. It was not exercisable here (`cfg(unix)`).
+
+Impact: the band appears and disappears on the live prompt row depending on whether the
+*previous* command printed anything — the flashing-row failure mode `US-0134`'s own
+"not under the regex fallback" rule exists to avoid, now reached by a different route. The
+exit-code tint is lost for the same blocks (`last_completed_prompt` needs two prompt runs),
+which matters the moment `US-0136` lands.
+
+`role.rs`'s `two_prompts_on_adjacent_rows_are_two_runs` builds `[P, P]` by hand and asserts
+the tint picks the older one. Its hard-newline half is now a shape the derivation cannot
+produce (its wrapped half still is), so that assertion pins nothing the pipeline reaches.
+Nothing in the packets, the Gaps or §4.2 mentions the case.
+
+Candidate fixes are the owner's call; the cheapest is to treat a `Prompt`-headed line whose
+predecessor is also `Prompt`-headed as a transition when the predecessor carried an `Input`
+region (i.e. the shell did close `Prompt` once on that line) — `input_at.is_some()` on the
+previous line, one extra byte of per-row state beside `heads`. A `BUG` packet is needed
+either way, together with the record §4.2 does not yet carry.
+
+### RV-MED-1 — the merge duplicated a §4.2 block
+
+`docs/terminal-semantic-highlighting.md` carries **The Windows sign rule (`BUG-0073`)**
+twice, verbatim: lines 279-293 and 295-309. Both merge parents carry it once
+(`git show bf13cd21:docs/…` and `git show 106ece85:docs/…` each match once); the copy was
+introduced by the merge `e0d85801` itself. No conflict markers anywhere else in the tree.
+
+### RV-MED-2 — the merge left `US-0135`'s scan bound stating the pre-rework number
+
+The rework widened the semantic rescan to the dirty runs **plus one logical line**, and
+changed `class_delta_replans_the_continuation_row` to assert `class_rows_scanned == 3` and
+`class_scans == 2`. Two records still state the old numbers as facts:
+
+- `docs/terminal-semantic-highlighting.md` §10.1: "an edit inside a wrapped line scans the
+  wrap run and nothing else — `class_rows_scanned == 2` in a 12-row viewport,
+  `class_scans == 1`".
+- `US-0135-highlighter-benchmark-and-scan-bounds.md`, Decision 3, same two numbers, plus
+  the checked acceptance box "`class_scans` and `class_rows_scanned` stay at the wrap run
+  for an edit inside a wrapped line", which the branch makes false.
+- §13 Q5: "the scan scope is the dirty rows **closed under wrap runs**… the same scope and
+  the same invalidation as the URL masks" — the two scopes are no longer the same, which is
+  the whole reason the rework split the loop in two.
+
+§4.2 states the new bound correctly and `US-0133`'s own acceptance list even records the
+`2 -> 3` move, so this is purely the other side of the merge: §10.1 and `US-0135` were not
+reconciled with the branch that changed the number they quote.
+
+### RV-NIT-1 — the committed bench baseline's `"measured"` label is now stale
+
+The branch moved every `scan_line_into` call site in
+`crates/tools/src/bin/highlight-bench.rs` from `RowRole::Output` to `(None, None)`, and
+changed the emitted JSON's label from `"scan_line_into, RowRole::Output"` to
+`"scan_line_into, unmarked (the prompt-regex fallback)"`. The committed
+`crates/tools/highlight-bench-baseline.json` is byte-identical to `main` and still carries
+the old label.
+
+This was checked for a workload change and there is **none**: on `main`,
+`RowRole::Output` *was* the fallback arm — it ran `prompt::prompt_sign` first and only then
+`output::scan_output` (`git show bf13cd21:crates/highlight/src/scanner/mod.rs`) — and that
+is exactly what `None` does now. The rename is what `US-0133` introduced: `Some(Output)` is
+the new "marked output, regex never runs" arm, which the bench does not use. So the
+baseline's numbers and §10.1's table stay comparable and the only defect is the label.
+Refresh it with the next deliberate baseline run.
+
+### RV-NIT-2 — a garbled assertion message
+
+`crates/terminal-view/src/render/plan_cache.rs:1400`: `"…whose role depends on the
+              region this one starts in…"` — a line break collapsed into a run of spaces
+inside the string literal.
+
+### RV-NIT-3 — `assert_band_between` is vacuous on the pair it most needs to judge
+
+`crates/terminal-view/src/theme/tests.rs:195` returns early when `|fg.l - bg.l| < EPSILON`.
+For that pair `prompt_line_bg` returns the background itself (the cap is `0`), i.e. an
+invisible band — the exact outcome the floor exists to rule out — and the helper asserts
+nothing. Harmless (no theme is in that state; the text would be invisible too) but the
+comment claims more than the code checks.
+
+## Adversarial checks, and what they answered
+
+**The transition rule (attack 1).**
+
+- `line_head_region` (`row_plan.rs:543`) is the first non-`None` region of the joined
+  logical line; `line_role` (`:575`) returns `Prompt` only for
+  `Semantic::Prompt` with `prev == Some(p), p != Prompt`; `Output` for `Semantic::Output`;
+  `None` for `Prompt`-without-transition, `Input` and unmarked. Matches the brief exactly.
+- **The chain is provably one line long.** `line_head_region` is a pure function of the
+  line's own cells, so a change at run *N* cannot move `heads[N+1]`; and `line_role(N+2)`
+  reads only `heads[N+1]` and *N+2*'s own cells. The carry in `mark_scan_runs`
+  (`plan_cache.rs:451-454`) therefore has to cover exactly one further line, and no
+  fixture can break it. Probed anyway: a frame where changing row 1's region flips row 2
+  from `Prompt` to unmarked with **two** consecutive prompts below gives
+  `after == truth` (a from-scratch cache on the same frame) at `class_rows_scanned == 2`.
+- **No drift under scroll.** A probe that feeds six marked blocks into a 6-row viewport and
+  scrolls three rows back and three forward after each, comparing all six roles against a
+  fresh cache every step — 42 comparisons — passes. `heads` rotates with `roles`,
+  `class_prev`, `mask_prev` and `wraps_prev` in `shift()` (`:503-508`); a reflow changes
+  `frame.size()`, which sets `restyled`, which clears every key and rescans the viewport.
+- `url_rows_scanned == 2` and `class_rows_scanned == 3` in `roles_ride_the_class_rescan`:
+  the URL bound is unchanged and only the class pass pays for the forward dependency.
+- A-only bash stream → no prompt, no band (GUI + unit). `cmd` `A`/`B` → prompt found (GUI +
+  `output_left_tagged_input_by_a_shell_without_osc_133_c_is_unmarked`). Full `A`/`B`/`C`/`D`
+  → exact (`a_full_a_b_c_d_shell_is_classified_exactly`). The top-of-viewport prompt stays
+  unmarked across scroll (`a_prompt_at_the_top_of_the_viewport_is_unmarked_and_stays_so`,
+  and it fails under mutation M2, so it pins behaviour and not only a counter).
+- The one case the rule gets wrong is RV-MAJ-1.
+
+**The band (attacks 2 and 3).** `PROMPT_BAND_MIX` direction from `fg`, distance
+`|toward - bg.l| * 0.11` capped at `|fg.l - bg.l| / 2`. Probes above. The floor in
+`assert_band_between` is `min(|gap|/2, 0.05)`, which the `0.5/0.55` pair meets exactly —
+tight, but correct by construction rather than by luck.
+
+**Minors (attack 3).** Exit code on `Unchanged`: fixed and tested. Per-frame `Vec`: gone.
+`is_whitespace`: in. Doc citations: fixed, then damaged by the merge (RV-MED-1/2).
+
+**Merge sanity with `BUG-0073`/`US-0135` (attack 4).** `scanner_tests.rs` and
+`highlight-bench.rs` call sites are all on the `(None, None)` fallback; the
+"mark changes the answer" assertion in `marked_output_never_runs_the_prompt_regex` uses
+`C:\work>dir > out.txt`, the line the tightened regex still reads as a prompt, and
+`a_marked_output_row_is_not_read_as_a_prompt` mirrors it in the view. The bench builds and
+runs (`cargo run -p oneterm-tools --bin highlight-bench --release -- --runs 3`). The
+baseline JSON is untouched and, after checking `main`'s `RowRole::Output` arm, correctly so
+— only its `"measured"` label is stale (RV-NIT-1).
+
+## Commands
+
+```
+git reset --hard e0d85801
+cargo test -p oneterm-highlight -p oneterm-terminal-view -p oneterm-theme \
+           -p oneterm-terminal -p oneterm-tools
+    -> 96 / 396 (3 ignored) / 218 / 5 / 14 passed, 0 failed
+```
+
+Probes (each reverted with `git checkout --`):
+
+| Probe | Result |
+|---|---|
+| A — `A`/`B`/`C`/`D`, a command that printed nothing | `roles = [None, Some(Prompt), None, …]`, `tint = None` — **RV-MAJ-1** |
+| B — the chain: a changed run flips the next line's role, two prompts below | incremental `== ` full rescan, `class_rows_scanned == 2` |
+| C — roles vs a full rescan over 6 appended blocks x 6 scroll steps | 42/42 equal, no drift |
+| band pairs `0.98/0.239`, `0.159/0.937`, `0.5/0.5` added to `the_band_sits_between…` | pass |
+
+Mutations (each applied alone, then reverted):
+
+| Mutation | Expected | Result |
+|---|---|---|
+| `line_role`: ignore `prev` (`\|\| true`) | must fail | **FAILED 4**: `an_a_only_shell_does_not_turn_its_output_into_prompts`, `an_a_only_shell_paints_no_band`, `the_viewports_first_line_is_never_a_prompt`, `a_prompt_at_the_top_of_the_viewport_is_unmarked_and_stays_so` |
+| `mark_scan_runs`: drop the carry (`carry = false`) | must fail | **FAILED 3**: `a_prompt_at_the_top_of_the_viewport_is_unmarked_and_stays_so`, `class_delta_replans_the_continuation_row`, `roles_ride_the_class_rescan` |
+| `prompt_line_bg`: invert the band's direction | must fail | **FAILED 2**: `the_band_sits_between_the_background_and_the_text`, `every_prompt_row_foreground_clears_the_band` — the MAJ-3 hole is closed |
+
+Bench:
+
+```
+cargo run -p oneterm-tools --bin highlight-bench --release -- --runs 3
+```
+
+It builds and runs. The CJK worst case reproduces §10.1's `release` figure
+(0.54-0.63 ms for an 8 000-char scan against the recorded 0.51-0.56 ms), which is the
+independent check that the `(None, None)` call sites did not change the workload. The
+`prompt` shape reads 1.7-2.9 ns/char here against the baseline's 1.15, at 9-67% spread on
+a loaded machine with `--runs 3` against the baseline's 9 — noise, and not this branch's
+code path in any case (`prompt::prompt_sign` is `BUG-0073`'s). The baseline was not
+refreshed; the comparison above is the reason it did not need to be.
+
+Gate:
+
+```
+pwsh scripts/ci-local.ps1
+```
+
+final line:
+
+```
+ci-local: all checks passed.
+```
+
+## GUI walk (Windows, `fast-dev`, own build, own pid)
+
+`cargo build -p oneterm-app --profile fast-dev`, launched with a scratch `USERPROFILE` and
+driven with posted `WM_CHAR`/`WM_KEYDOWN`; frames captured with `PrintWindow(hwnd, dc, 2)`
+against the pid this session started, which was killed by pid afterwards.
+`target/fast-dev` deleted.
+
+**`evidence/US-0133-US-0134-reverify-a-only-and-back-to-back.png`** — three scenes in one
+`cmd` tab, each fed as raw bytes so the wire stream is exactly what the integrations send.
+
+- *A-only* (`OSC 7` + `OSC 133;A`, then five output lines — OneTerm's bash
+  `PROMPT_COMMAND` and the SSH bootstrap): **no row carries a band**, `ERROR` and `failed`
+  keep their output classes, the URL keeps its underline, and no `%`, `#` or trailing `s`
+  is painted as a prompt sign. This is the first verification's MAJ-1 frame, fixed.
+- *`A`/`B` with output*: `C:\ws>dir` and `C:\ws>echo hi` are banded, `a.txt` and `hi` are
+  not.
+- *`A`/`B` with nothing printed*: `C:\ws>cd ..` is banded, and the two prompt rows directly
+  below it are not — **RV-MAJ-1**.
+
+**`evidence/US-0133-US-0134-reverify-cmd-real-tab.png`** — the same six commands typed into
+a real `cmd` tab with OneTerm's own `CMD_OSC7_PROMPT`. Every prompt row is banded, output
+rows are not, and `echo`/`cd`/`rem` are classed `Command` over the band. `cmd`'s blank line
+before `$P$G` is what hides RV-MAJ-1 on Windows.
+
+## Gaps in this re-verification
+
+- The `cfg(unix)` integrations (bash `PROMPT_COMMAND`, zsh `PS1`) and a live SSH remote
+  were again not exercised. MAJ-1's fix and RV-MAJ-1 are both proved from the exact byte
+  streams those integrations put on the wire, fed to the real engine in unit probes and to
+  the real app in the GUI walk — not from a live bash or a live remote. RV-MAJ-1's
+  *reachability* on `zsh` is therefore an inference from `ZSH_OSC133_PS1`'s shape, not an
+  observation.
+- MAJ-2 was not re-tested: nothing about it changed, and no shell here emits `133;D`
+  without hand instrumentation.
+- The theme-refresh suspicion from the first verification (`US-0134` Gaps) was not
+  investigated; it is untouched by the rework and the band no longer depends on
+  `TerminalTheme::fg`'s value.
+- No light-theme band frame was captured; the direction is pinned by mutation and by the
+  per-theme sweep in `theme::tests`, which covers every embedded variant.
+- The bench was run at `--runs 3` on a machine that had just finished the gate, so its
+  numbers settle the *workload* question (the CJK figure matches) but are too noisy to
+  judge the `prompt` shape against the recorded baseline. Whether `BUG-0073`'s new sign
+  rule moved that row is `US-0135`'s question, not this branch's.
