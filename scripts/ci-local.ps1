@@ -43,7 +43,10 @@ Invoke-Step @("cargo", "test", "-p", "oneterm-workspace", "--lib", "--", "--igno
 Invoke-Step @("cargo", "test", "-p", "oneterm-session-ui", "--lib", "--", "--ignored", "--test-threads=1")
 Invoke-Step @("cargo", "test", "-p", "oneterm-settings-ui", "--lib", "--", "--ignored", "--test-threads=1")
 # ...and every other ignored test in the workspace is accounted for, so a new
-# one cannot appear without somebody deciding what it is.
+# one cannot appear without somebody deciding what it is. The census is the
+# union across platforms: an entry `cfg`-gated to one OS is not collected on
+# the other, so the check is a subset test and `--write` merges, never
+# overwrites.
 Invoke-Step @("python", "scripts/check-ignored-tests.py")
 # IN-0029 R-28: the VT engine's integrity walk is bounded to the rows an
 # operation touched unless `vt-paranoid` is on. This is where the unbounded
@@ -153,6 +156,7 @@ if ($guideCitations) {
 Invoke-Step @("python", "scripts/verify-dependency-graph.py")
 Invoke-Step @("python", "scripts/check-doc-paths.py")
 Invoke-Step @("python", "-m", "unittest", "scripts/test_check_english.py")
+Invoke-Step @("python", "-m", "unittest", "scripts/test_check_ignored_tests.py")
 Invoke-Step @("python", "scripts/check-english.py")
 Invoke-Step @("python", "scripts/completion-catalog.py", "validate")
 # `US-0111` + `US-0127`: every checked text token -- secondary
