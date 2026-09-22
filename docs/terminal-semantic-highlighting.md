@@ -292,6 +292,22 @@ applied to the **logical** line, the joined wrap run, exactly as every other cla
 (`BUG-0071`); applied per visual row it would read the `> C:\dst` half of a wrapped
 `C:\src -> C:\dst` as `cmd`'s continuation prompt.
 
+**The Windows sign rule** (`BUG-0073`) — the one subtle part of that fallback, because on
+Windows the sign is `>`, a character that ordinary output reaches all the time:
+
+> The prompt sign is the **first `>` of the logical line whose head — everything before
+> it — is a plausible Windows prompt path**: rooted at a drive (`C:`) or a UNC share
+> (`\\`), optionally behind PowerShell's `PS `; containing none of `< > | " * ? :`, none
+> of which may appear in a path component; and ending in neither a space nor `-`.
+
+"First" is forced rather than chosen: `>` cannot occur in a Windows path, so the head of
+any *later* `>` contains one and is never plausible. That is what keeps the redirection in
+`C:\work>dir > out.txt` outside the prompt region, and it is why the rule is stated on the
+head alone — what follows the sign is deliberately not part of it (§13 Q7). The rule is
+applied to the **logical** line, the joined wrap run, exactly as every other class is
+(`BUG-0071`); applied per visual row it would read the `> C:\dst` half of a wrapped
+`C:\src -> C:\dst` as `cmd`'s continuation prompt.
+
 ---
 
 ## 5. Rule data (compiled once, not interpreted per line)
