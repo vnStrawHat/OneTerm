@@ -13,13 +13,13 @@ Created: 2026-09-22
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
 ## Classification
 
-- Change type: existing-contract change
+- Change type: existing-contract change (reopened once for acceptance rework — see Rework)
 - Risk lane: normal
 - Spec Intake, when required: `IN-0044` — `docs/spec-intakes/IN-0044-semantic-highlighting-phase-2/IN-0044.md`
 
@@ -45,6 +45,30 @@ No integration emitted `C` or `D` anywhere, so `SnapshotCell::semantic` never he
 `Semantic::Output` from a mark and `SharedState::last_exit_code` was never written by a
 local shell. The exit-code tint of `US-0133` had no input.
 
+## Rework (independent verification, 2026-09-22)
+
+`evidence/US-0136-independent-verify.md` returned **FAIL**: one major and three medium
+findings, plus four minors. All are closed; `evidence/US-0136-verify.md` §0 is the
+finding-by-finding record and every section below is updated to match the fixed code.
+
+| # | What was wrong | What it is now |
+|---|---|---|
+| MAJ-1 | Every bash prompt, local **and** SSH, printed a stray `]`. `\[` + `ESC \` + `\]` merges the mark's trailing backslash into the escape `\\`, so bash printed `]` and never closed the non-printing region — visible on screen and leaking into OneTerm's completion popup | One constant, `BASH_OSC133_PS1_MARK` = `\[\e]133;B\a\]`, used by both call sites: prompt escapes terminated by **BEL**, so no backslash touches `\]`. The append is a plain concatenation and the guard compares the same text |
+| MED-1 | The SSH bootstrap emitted `D;0` before the user's first command, in both branches | The closing `__oneterm_precmd` clears the seen-flag again |
+| MED-2 | `PROMPT_COMMAND` was inserted unconditionally, so the documented opt-out no longer existed | A stated rule: a user `PROMPT_COMMAND` that already emits OSC 133 is left alone, `PS0` with it; any other value is still appended to |
+| MED-3 | The PowerShell init silently replaced a user's PSReadLine `Enter` handler | It chains to the current binding, and declines to install at all when that binding is a script block it cannot call by name |
+| MIN-1 / MIN-2 | A throwing `prompt` lost `B` forever; a multi-value prompt was collapsed with `-join ''` | The delegation is in a `try` with a fallback prompt; the join is `[Environment]::NewLine` |
+| MIN-3 | Bootstrap size, and `fish`/`csh` cannot parse it | Stated rather than worked around: §6.1.2 gains the row and the reason; size re-measured at 862 bytes, against `MAX_CANON` 4096 |
+| MIN-4 | The evidence measured the `PS1` **variable**, never its expansion — exactly where MAJ-1 lived | Every prompt reading is now `${PS1@P}`, and a real-PTY bash test guards the expansion |
+
+**Why no test caught MAJ-1, and what now does.** The one assertion that touched the append
+asserted the defective literal was present. Two tests replace it:
+`bash_ps1_mark_survives_prompt_expansion` holds the invariant a string test *can* hold (the
+mark is escapes, its region balances, nothing ends in a backslash beside `\]`), and
+`bash_prompt_draws_no_stray_bracket` in `crates/local-shell` spawns a real bash through the
+real PTY and reads the drawn grid. Reverting the fix makes the second one fail with the
+verifier's exact symptom.
+
 ## Scope
 
 - [ ] In scope:
@@ -52,7 +76,9 @@ local shell. The exit-code tint of `US-0133` had no input.
     `PS0` (bash), `PS1` (zsh) and the PowerShell/pwsh `-Command` init string.
   - `crates/ssh/src/session.rs` — `SHELL_INTEGRATION_BOOTSTRAP`, the line typed into the
     remote shell after `request_shell`.
-  - Unit tests over the generated strings, per shell.
+  - Unit tests over the generated strings, per shell, and — since the rework — one
+    behavioural test in `crates/local-shell/src/session_tests.rs` that expands a real bash
+    prompt through the real PTY, because a string assertion cannot see a prompt escape.
   - `crates/terminal/src/backend/osc_router.rs` — one `log::debug!` of each routed
     `ShellMark`. Not a behaviour change: it is the only way to observe a mark without a
     renderer, and it is what turned the Windows walk into evidence.
@@ -76,9 +102,13 @@ local shell. The exit-code tint of `US-0133` had no input.
 - [x] bash emits `A`, `B`, `C` and `D;<code>`; the `<code>` is the exit status of the user's
       command, and `$?` is restored before any user-supplied `PROMPT_COMMAND` runs.
 - [x] A user-supplied `PROMPT_COMMAND` is preserved, not replaced: OneTerm's part runs
-      first and the user's follows it, separated by `;`.
+      first and the user's follows it, separated by `;` — unless that value already emits
+      OSC 133, which is the opt-out and leaves `PROMPT_COMMAND` and `PS0` untouched
+      (MED-2).
 - [x] A user-supplied `PS1` is preserved, not replaced: `B` is appended to whatever `PS1`
-      holds at prompt time (after every rc file has run), once and only once.
+      holds at prompt time (after every rc file has run), once and only once — **and the
+      prompt bash then draws is unchanged**, which is the half the first attempt failed
+      (MAJ-1).
 - [x] zsh emits `A`, `B` and `D;<code>` from the generated `PS1`; the code comes from zsh's
       own `%?`. `C` is recorded as a limit, not claimed.
 - [x] PowerShell and pwsh emit `A`, `B`, `C` and `D;<code>`; the original `prompt` function
@@ -88,10 +118,15 @@ local shell. The exit-code tint of `US-0133` had no input.
       reachable from `PROMPT`.
 - [x] The SSH bootstrap installs the bash set or the zsh set according to the remote shell
       it detects, and still exports `COLORTERM` first (`BUG-0038`).
-- [x] No `D` is emitted before the first command of a session.
+- [x] No `D` is emitted before the first command of a session — including over SSH,
+      where the bootstrap's own closing call used to consume the guard (MED-1). Local zsh
+      is the one stated exception: its `PS1`-only route has nowhere to hold a flag.
 - [x] Every generated string is unit-tested for its exact bytes: one backslash after ESC,
       the `133;D;<code>` form the engine parses, and no `"` in the PowerShell `-Command`
-      argument.
+      argument. What a string test cannot see — the **expanded** bash prompt — has a
+      real-PTY test of its own.
+- [x] OneTerm does not silently take over a PSReadLine `Enter` binding the user already
+      has: it chains to it, or leaves it alone and reports no `C` (MED-3).
 
 ## Documentation
 
@@ -218,14 +253,20 @@ choice here is one future work must inherit.
 
 ## Evidence and Gaps
 
-Full record: `evidence/US-0136-verify.md`, with the frame
-`evidence/US-0136-verify-pwsh-tab.png`.
+Full record: `evidence/US-0136-verify.md`, whose §0 is the finding-by-finding rework table.
+Frames: `evidence/US-0136-verify-pwsh-tab.png`, `evidence/US-0136-rework-bash-tab.png` and
+`evidence/US-0136-rework-bash-completion.png`.
 
 The live Windows walk (OneTerm `fast-dev`, `RUST_LOG=debug`, one run per shell kind, two
-commands typed into the tab) is the load-bearing proof:
+commands typed into the tab) is the load-bearing proof, and since the rework it covers a
+real bash tab too:
 
 ```
 cmd        : PromptStart PromptEnd  x3                     -- no C, no D
+bash       : PromptStart PromptEnd OutputStart OutputEnd
+             PromptStart PromptEnd OutputStart OutputEnd
+             PromptStart PromptEnd
+             OutputEnd { exit_code: Some(7) } | OutputEnd { exit_code: Some(0) }
 pwsh       : PromptStart PromptEnd OutputStart OutputEnd
              PromptStart PromptEnd OutputStart OutputEnd
              PromptStart PromptEnd
@@ -233,30 +274,47 @@ pwsh       : PromptStart PromptEnd OutputStart OutputEnd
 powershell : identical to pwsh
 ```
 
-`cargo test -p oneterm-core -p oneterm-ssh -p oneterm-terminal` green;
-`pwsh scripts/ci-local.ps1` ends with `ci-local: all checks passed`.
+`cargo test -p oneterm-core -p oneterm-ssh -p oneterm-local-shell -p oneterm-terminal`
+green; `pwsh scripts/ci-local.ps1` ends with `ci-local: all checks passed`.
 
 Gaps:
 
-- **bash and zsh are unit-tested only.** No Unix host is available in this session, so the
-  generated `PROMPT_COMMAND` / `PS0` / `PS1` are proven as strings, not as behaviour in a
-  running bash or zsh. Same for the SSH bootstrap, both branches: no remote host was
-  reachable, so the typed line is proven as a string only.
+- **zsh is unproven as behaviour**, local and remote. No zsh and no WSL on this host, so
+  `ZSH_OSC133_PS1` and the bootstrap's zsh branch are proven as strings only. Both use
+  zsh's own documented `%?` and `%{…%}`, and zsh expands no backslashes in a prompt, so the
+  `MAJ-1` class of defect cannot reach it — but it is untested.
+- **The SSH bootstrap is unproven over a real channel.** No SSH server was reachable. Both
+  branches parse under `bash -n` and `dash -n`, and the bash branch was driven in a real
+  bash; what is untested is the echo behaviour and the timing against `request_shell`.
+- **`fish`, `csh` and `tcsh` over SSH get a burst of parse errors** and no integration:
+  the bootstrap is one POSIX line and reaches no branch in them. OneTerm cannot detect it —
+  the channel write succeeded, which is all `send_shell_integration_bootstrap` observes.
+  Recorded in `docs/terminal-backend.md` §6.1.2; fixing it needs a round trip the connect
+  path does not have.
 - **Local zsh cannot emit `C`.** `preexec` is a function and no environment variable
-  carries zsh code; a sourced file is out of scope under `DEC-0001`. Remote zsh (the SSH
-  bootstrap) does emit `C`, because there OneTerm types a line and can define functions.
-- **`cmd.exe` cannot emit `C` or `D`.** `PROMPT` is the only hook and it has no error-level
+  carries zsh code; a sourced file is outside the env-only route. Remote zsh does emit `C`,
+  because there OneTerm types a line and can define functions.
+- **`cmd.exe` cannot emit `C` or `D`.** `PROMPT` is its only hook and has no error-level
   code. Unchanged by design.
-- **PowerShell `C` needs PSReadLine.** Without it the `Enter` handler is not installed and
-  the tab reports `A`/`B`/`D` only. Every shipping PowerShell 5.1 and 7 has it.
-- **PowerShell's exit code after a failing *cmdlet*** is whatever `$LASTEXITCODE` last
-  held, if that is non-zero — non-zero, so the failure reads as a failure, but the number
-  may belong to an older native command. Distinguishing them needs `Get-History` per
-  prompt; not worth a history lookup on every prompt for a number nothing reads beyond
-  zero / non-zero.
+- **PowerShell's `C` needs PSReadLine, and an `Enter` binding OneTerm can chain to.**
+  Without PSReadLine, or when `Enter` is already a script block (`CustomAction`, which
+  `Get-PSReadLineKeyHandler` reports by name only), the handler is not installed and the tab
+  reports `A`/`B`/`D`. Leaving the user's editor alone is the deliberate choice there.
+- **PowerShell's `C` fires on `Enter` even when the line is incomplete** — PSReadLine gives
+  the handler no way to ask whether `AcceptLine` accepted. One early `C`; the real one
+  follows.
+- **PowerShell's exit code after a failing *cmdlet*** is whatever `$LASTEXITCODE` last held,
+  if non-zero — the failure still reads as a failure, but the number may belong to an older
+  native command. A **negative** `$LASTEXITCODE` (a native crash) reports `D;1` for the same
+  reason. Distinguishing them needs a `Get-History` on every prompt, for a number nothing
+  reads beyond zero / non-zero.
 - **A prompt redrawn without a command** (Ctrl+C on an empty line) emits another `D`. Every
   OSC 133 implementation that hooks the prompt has this; harmless, since the consumer keeps
   only the last code.
+- **Two ceilings of the env-only route**, neither detectable from here: a `.bashrc` that
+  assigns an array `PROMPT_COMMAND=(…)` (bash >= 5.1) discards OneTerm's scalar and the
+  integration stops; a `.zshrc` that sets `PROMPT` replaces the generated `PS1` and takes
+  the marks with it. Both are now in §6.1.2.
 
 ## Handoff
 

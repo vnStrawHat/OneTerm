@@ -726,7 +726,20 @@ async fn request_remote_shell_env(
 /// `$?` so whatever runs after it still sees the user's exit status. Any other
 /// shell (`dash`, `ash`) reaches neither branch and gets what it got before:
 /// the one-shot OSC 7 + `A` from the final `__oneterm_precmd` call.
-const SHELL_INTEGRATION_BOOTSTRAP: &str = r#"export COLORTERM=truecolor; __oneterm_mark() { printf '\033]133;%s\033\\' "$1"; }; __oneterm_precmd() { __oneterm_status=$?; if [ -n "${__oneterm_seen-}" ]; then __oneterm_mark "D;$__oneterm_status"; fi; __oneterm_seen=1; printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-$(hostname)}" "$PWD"; __oneterm_mark A; return $__oneterm_status; }; __oneterm_preexec() { __oneterm_mark C; }; if [ -n "${ZSH_VERSION-}" ]; then eval 'precmd_functions=(__oneterm_precmd $precmd_functions); preexec_functions=($preexec_functions __oneterm_preexec)'; PS1="$PS1%{$(__oneterm_mark B)%}"; elif [ -n "${BASH_VERSION-}" ]; then case ";${PROMPT_COMMAND:-};" in *";__oneterm_precmd;"*) ;; *) PROMPT_COMMAND="__oneterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;; esac; PS0="$(__oneterm_mark C)"; PS1="$PS1\[$(__oneterm_mark B)\]"; fi; __oneterm_precmd; stty echo 2>/dev/null"#;
+///
+/// Two details are easy to get wrong and were (`US-0136` MAJ-1, MED-1):
+///
+/// * bash's `B` goes into `PS1` as **prompt escapes ending in BEL**
+///   (`\[\e]133;B\a\]`), never as the bytes `__oneterm_mark` writes. `ESC \`
+///   ends in a backslash; next to the `\]` that closes the non-printing region
+///   bash reads it as `\\`, prints a stray `]` and leaves the region open. zsh
+///   is unaffected — it does not expand backslashes in a prompt — so its `%{…%}`
+///   group still carries the bytes.
+/// * the closing `__oneterm_precmd` (the one that paints the first prompt's
+///   OSC 7 and `A`) **clears the seen flag again**. Without that it consumes
+///   the guard itself and the first prompt the user ever sees reports a `D` for
+///   a command they never ran.
+const SHELL_INTEGRATION_BOOTSTRAP: &str = r#"export COLORTERM=truecolor; __oneterm_mark() { printf '\033]133;%s\033\\' "$1"; }; __oneterm_precmd() { __oneterm_status=$?; if [ -n "${__oneterm_seen-}" ]; then __oneterm_mark "D;$__oneterm_status"; fi; __oneterm_seen=1; printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-$(hostname)}" "$PWD"; __oneterm_mark A; return $__oneterm_status; }; __oneterm_preexec() { __oneterm_mark C; }; if [ -n "${ZSH_VERSION-}" ]; then eval 'precmd_functions=(__oneterm_precmd $precmd_functions); preexec_functions=($preexec_functions __oneterm_preexec)'; PS1="$PS1%{$(__oneterm_mark B)%}"; elif [ -n "${BASH_VERSION-}" ]; then case ";${PROMPT_COMMAND:-};" in *";__oneterm_precmd;"*) ;; *) PROMPT_COMMAND="__oneterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;; esac; PS0="$(__oneterm_mark C)"; PS1="$PS1"'\[\e]133;B\a\]'; fi; __oneterm_precmd; __oneterm_seen=; stty echo 2>/dev/null"#;
 
 /// Send the shell-integration bootstrap after the shell is open.
 async fn send_shell_integration_bootstrap(
@@ -1163,9 +1176,17 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("$(__oneterm_mark B)"), "{s}");
-        // No `D` before the first command, and `$?` survives the hook.
+        // `$?` survives the hook.
         assert!(s.contains(r#"if [ -n "${__oneterm_seen-}" ]"#), "{s}");
         assert!(s.contains("return $__oneterm_status;"), "{s}");
+        // `US-0136` MED-1: the closing call paints the first prompt's OSC 7 and
+        // `A` — and must then put the guard back. Without the reset it consumes
+        // the guard itself and the first prompt the user sees reports a `D` for
+        // a command they never ran.
+        assert!(
+            s.ends_with("__oneterm_precmd; __oneterm_seen=; stty echo 2>/dev/null"),
+            "{s}"
+        );
         // One typed line: a newline would run half of it as its own command.
         assert!(!s.contains('\n'), "{s}");
     }
@@ -1192,7 +1213,16 @@ mod tests {
             "{s}"
         );
         assert!(s.contains(r#"PS0="$(__oneterm_mark C)""#), "{s}");
-        assert!(s.contains(r#"PS1="$PS1\[$(__oneterm_mark B)\]""#), "{s}");
+        // `US-0136` MAJ-1: bash's `B` goes in as prompt escapes ending in BEL,
+        // never as the bytes `__oneterm_mark` writes. `ESC \` ends in a
+        // backslash; beside the `\]` that closes the non-printing region bash
+        // reads `\\`, prints a stray `]` and never closes the region. The same
+        // literal as the local shell's `BASH_OSC133_PS1_MARK`.
+        assert!(s.contains(r#"PS1="$PS1"'\[\e]133;B\a\]'"#), "{s}");
+        assert!(!s.contains(r"\[$(__oneterm_mark B)\]"), "{s}");
+        // zsh is unaffected — it expands no backslashes in a prompt — so its
+        // group still carries the bytes.
+        assert!(s.contains(r#"PS1="$PS1%{$(__oneterm_mark B)%}""#), "{s}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

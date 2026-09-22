@@ -500,9 +500,8 @@ input start, `C` output start, `D;<code>` command done). The engine parses all o
 fast path, and `D`'s code is the only source of the exit-code tint.
 
 **The route decides the ceiling.** A local shell is reached through the *spawn environment*
-only — no file written, no profile edited, and every generated variable yields to a
-user-supplied one, which is the integration's opt-out. An SSH shell is reached by typing
-one line into the shell after it starts, so there OneTerm can define functions.
+only — no file written, no profile edited. An SSH shell is reached by typing one line into
+the shell after it starts, so there OneTerm can define functions.
 
 | Shell | A | B | C | D | Mechanism |
 | --- | :-: | :-: | :-: | :-: | --- |
@@ -513,6 +512,7 @@ one line into the shell after it starts, so there OneTerm can define functions.
 | bash (SSH) | ✓ | ✓ | ✓ | ✓ | typed bootstrap: `PROMPT_COMMAND` + `PS0` + `PS1` append |
 | zsh (SSH) | ✓ | ✓ | ✓ | ✓ | typed bootstrap: `precmd_functions` + `preexec_functions` + `PS1` append |
 | `sh` / `dash` (SSH) | ✓ | — | — | — | typed bootstrap: one OSC 7 + `A` at connect, nothing per prompt |
+| `fish` / `csh` / `tcsh` (SSH) | — | — | — | — | the bootstrap is POSIX and they cannot parse it; see below |
 | Custom shell, or a user prompt override | — | — | — | — | the shell must emit the sequences itself |
 
 The gaps in that table are the route's, not oversights:
@@ -522,18 +522,49 @@ The gaps in that table are the route's, not oversights:
 - **Local zsh cannot reach `C`.** `preexec` is a *function* and no environment variable
   carries zsh code; installing one needs a sourced file, which the env-only route excludes.
   Remote zsh does emit `C`, because the bootstrap is typed into a running shell.
-- **PowerShell's `C` needs PSReadLine.** The `Enter` handler is installed only when
-  `Set-PSReadLineKeyHandler` resolves, so a host without PSReadLine keeps its own `Enter`
-  and reports `A`/`B`/`D` only.
+- **PowerShell's `C` needs PSReadLine, and an `Enter` OneTerm may chain to.** The handler is
+  installed only when `Set-PSReadLineKeyHandler` resolves, and only when the current `Enter`
+  binding is a *named* function it can call afterwards. A host without PSReadLine, or a user
+  who has bound `Enter` to a script block of their own (`CustomAction`, which
+  `Get-PSReadLineKeyHandler` reports by name only and cannot hand back), keeps its own
+  `Enter` and reports `A`/`B`/`D` only.
+- **`fish`, `csh` and `tcsh` get nothing at all.** The bootstrap is one POSIX line; those
+  shells cannot parse it and answer with a burst of syntax errors instead of reaching the
+  `sh`/`dash` row. The session stays usable and OneTerm does not notice — the write
+  succeeded, which is all `send_shell_integration_bootstrap` can observe.
 
-**Nothing OneTerm generates replaces what the user has.** A user-supplied `PROMPT`, `PS1`
-or `PS0` wins outright; a user-supplied `PROMPT_COMMAND` is *appended to*, with OneTerm's
-part first and `$?` restored by a trailing subshell so the user's hook still sees the real
-exit status. `B` is appended to `PS1` from inside `PROMPT_COMMAND` (local bash) or by the
-bootstrap (SSH) rather than injected as a `PS1` variable, because an rc file sets `PS1`
-after the environment is read and would drop the marker. No integration emits `D` before
-the first command of the session, except local zsh, whose `PS1`-only route has nowhere to
-hold the flag.
+**What OneTerm does with a variable the user already set.** Three rules, because "yield to
+the user" and "do not break the user" want different things:
+
+- A user-supplied `PROMPT`, `PS1` or `PS0` **wins outright** — OneTerm sets its own only
+  when the variable is absent.
+- A user-supplied `PROMPT_COMMAND` that **already emits OSC 133** (its value contains
+  `133;`) is left exactly as it is, and `PS0` is then left alone too. That is the
+  integration's **opt-out** for a local bash: say "I run my own shell integration" by
+  emitting the marks, and OneTerm adds nothing. Two sets of marks per prompt is worse than
+  none of OneTerm's.
+- Any **other** user-supplied `PROMPT_COMMAND` is *appended to*, with OneTerm's part first
+  and `$?` restored by a trailing subshell so the user's hook still sees the real exit
+  status. There is no separate on/off switch for a local shell; `shell_integration` is a
+  field of `SshSessionConfig` and covers the SSH bootstrap only.
+
+`B` is appended to `PS1` from inside `PROMPT_COMMAND` (local bash) or by the bootstrap
+(SSH) rather than injected as a `PS1` variable, because an rc file sets `PS1` after the
+environment is read and would drop the marker. In bash it goes in as **prompt escapes
+ending in BEL** — `\[\e]133;B\a\]` — never as raw bytes: `ESC \` ends in a backslash, and
+beside the `\` of the closing `\]` bash reads the escape `\\`, prints a stray `]` and
+never closes the non-printing region. zsh is unaffected, because it expands no backslashes
+in a prompt.
+
+**No integration emits `D` before the first command of the session**, except local zsh,
+whose `PS1`-only route has nowhere to hold the flag. bash and the SSH bootstrap skip the
+first `D` behind a seen-flag, and the bootstrap clears that flag again after the one call
+that paints the first prompt.
+
+Two ceilings of the env-only route worth knowing: a `.bashrc` that assigns an **array**
+`PROMPT_COMMAND=(…)` (bash ≥ 5.1) discards OneTerm's scalar outright and the integration
+stops; and a `.zshrc` that sets `PROMPT` replaces the generated `PS1` and takes the marks
+with it. Neither is detectable from here.
 
 The engine parses OSC 7 itself and reports the host and the path unresolved; the router
 sanitises the path into `SessionEvent::Cwd` and updates `TerminalSession::cwd()`. The OSC
