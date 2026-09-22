@@ -442,20 +442,26 @@ The worst case §10 has always quoted — one logical line filling a 40×200 vie
 the profile named per column (the `opt-level = 0` figure of 4.14 ms this paragraph used to
 carry is gone; it measured a build nobody runs the terminal in):
 
-| Content shape | ns/char (`release`) | one 8 000-char scan, `release` | the same, `fast-dev` |
-|---|---|---|---|
-| Windows prompt line | 1.1 | **9 µs** | 14 µs |
-| Plain output | 8.6-9.1 | **70 µs** | 0.43-0.45 ms |
-| Keyword-dense log | 10.7-11.6 | **86-93 µs** | 0.73-0.78 ms |
-| A line carrying CJK | 64-70 | **0.51-0.56 ms** | 7.0-7.5 ms |
+| Content shape | ns/char (`release`) | one 8 000-char scan, `release` | `fast-dev` before | `fast-dev` now |
+|---|---|---|---|---|
+| Windows prompt line | 1.1 | **9 µs** | 14 µs | 13 µs |
+| Plain output | 8.6-9.1 | **70 µs** | 0.43-0.45 ms | 73-79 µs |
+| Keyword-dense log | 10.7-11.6 | **86-93 µs** | 0.73-0.78 ms | 98 µs |
+| A line carrying CJK | 64-70 | **0.51-0.56 ms** | 7.0-7.5 ms | 0.53-0.54 ms |
 
 Per display row at 80 columns that is 0.09 µs (prompt) to 5.2 µs (CJK) in `release`: one
 frame that re-scanned a whole 40-row viewport of the *worst* shape would spend 0.21 ms, or
-1.2% of a 16.7 ms frame, and the same viewport of ordinary output 28 µs. **`release` is the number that
-matters; `fast-dev` is 6-13× slower on every shape but the prompt**, because `fast-dev`
-raises `oneterm-highlight` to `opt-level = 3` but leaves `regex` and `aho-corasick` — where
-that time is actually spent — at `dev`'s. CJK costs ~7× ASCII per char, in the byte→char
-map (`BUG-0071` F3), which is one `usize` per *byte*.
+1.2% of a 16.7 ms frame, and the same viewport of ordinary output 28 µs. CJK costs ~7×
+ASCII per char, in the byte→char map (`BUG-0071` F3), which is one `usize` per *byte*.
+
+The two `fast-dev` columns are the same profile before and after `US-0135`'s verification.
+Almost none of this time is spent in `oneterm-highlight`'s own code — it is spent in the
+matchers it calls, and `regex` is a thin layer over `regex-automata`, `regex-syntax` and
+`memchr` — so raising the scanner crate to `opt-level = 3` and leaving those at `dev`'s left
+`fast-dev` 6-13× slower than `release`, with the CJK worst case at 6-7 ms, worse than the
+4.14 ms that put `oneterm-highlight` in that profile in the first place. The whole regex
+stack is now in `[profile.fast-dev.package]`, which brings `fast-dev` to 1.0-1.4× of
+`release` for a one-time ~15 s compile of five pinned third-party crates.
 
 **Decided: the scan scope stays the wrap run, uncapped.** A cap on the joined line would
 buy at most 0.5 ms in the pathological case and would pay for it with a colour error at
@@ -838,10 +844,26 @@ token test after the sign, and stated the acceptance on behaviour, not mechanism
 
 **Implementation.** `WIN_PATH_BODY`, `WIN_PATH_ROOT` and `PWSH_PATH_ROOT` in
 `crates/highlight/src/profile.rs`; the rule and this reconciliation are written on
-`WIN_PATH_BODY`. Two cosmetic costs remain, the other side of the same rule: a cwd that
-legally ends in a space (`C:\trailing >`, `BUG-0071` N3) or in a hyphen (`C:\build->`) is
-not read as a prompt. Both are one directory name away from ordinary, and the failure is a
-prompt that looks like output rather than output that looks like a prompt.
+`WIN_PATH_BODY`.
+
+**The costs, complete.** Two are the other side of the same rule, and they hold on the
+`Cmd`, `PowerShell` and `Unix` profiles — `Dumb` is deliberately the permissive one and
+reads both as prompts through its own pattern:
+
+- a cwd that legally ends in a space (`C:\trailing >`, `BUG-0071` N3);
+- a cwd that legally ends in a hyphen (`C:\build->`).
+
+Both are one directory name away from ordinary, and the failure is a prompt that looks like
+output rather than output that looks like a prompt. A hyphen *elsewhere* in the cwd is fine
+(`C:\Users\a - b\dir>` is a prompt): the rule bites only the character immediately before
+the sign.
+
+A third cost was found in verification and closed rather than accepted: requiring a root
+after PowerShell's `PS ` dropped the **provider-qualified** prompt
+(`PS Microsoft.PowerShell.Core\FileSystem::\\server\share>`), which is what PowerShell
+prints once the location is not a plain drive. `PWSH_PATH_ROOT` now admits a
+`<module>\<provider>::` qualifier before the root, and the table test carries both the UNC
+and the drive form.
 
 ---
 

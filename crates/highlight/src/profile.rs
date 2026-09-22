@@ -123,9 +123,11 @@ pub(crate) const UNIX_PROMPT_PATTERN: &str =
 ///   `C:\log size > 3` and `C:\src -> C:\dst`, the arrow `mklink` and `dir /AL`
 ///   print (`BUG-0073`).
 ///
-/// Two cosmetic costs remain, both the other side of the same rule
-/// (`BUG-0071` N3, `BUG-0073`): a cwd that legally ends in a space
-/// (`C:\trailing >`) or in a hyphen (`C:\build->`) is not read as a prompt.
+/// Two cosmetic costs remain on the `Cmd`, `PowerShell` and `Unix` profiles,
+/// both the other side of the same rule (`BUG-0071` N3, `BUG-0073`): a cwd that
+/// legally ends in a space (`C:\trailing >`) or in a hyphen (`C:\build->`) is
+/// not read as a prompt. `Dumb` is deliberately the permissive profile and
+/// still reads `C:\build->` as one, through its own pattern.
 const WIN_PATH_BODY: &str = r#"[^<>|"*?:\r\n]*[^\s<>|"*?:-]"#;
 
 /// Where a Windows prompt path is rooted: a drive (`C:`) or a UNC share (`\\`).
@@ -134,9 +136,17 @@ const WIN_PATH_BODY: &str = r#"[^<>|"*?:\r\n]*[^\s<>|"*?:-]"#;
 /// *start* at a path, not merely contain one.
 const WIN_PATH_ROOT: &str = r"(?:[A-Za-z]:|\\\\)";
 
-/// PowerShell roots at those two plus a PSDrive (`Env:`, `HKLM:`, `Cert:`) and,
-/// on pwsh for Unix, `/`.
-const PWSH_PATH_ROOT: &str = r"(?:[A-Za-z]+:|\\\\|/)";
+/// PowerShell roots at those two plus a PSDrive (`Env:`, `HKLM:`, `Cert:`), on
+/// pwsh for Unix `/`, and any of them behind a **provider qualifier**.
+///
+/// The qualifier is the form PowerShell prints once the location is not a plain
+/// drive — after `Set-Location \\server\share` the prompt is
+/// `PS Microsoft.PowerShell.Core\FileSystem::\\server\share>`, and the same
+/// `<module>\<provider>::` prefix can precede a drive root. It ends at `::`,
+/// which is why it belongs to the root: [`WIN_PATH_BODY`] excludes `:`, so the
+/// body only ever sees what follows the `::`.
+const PWSH_PATH_ROOT: &str =
+    r"(?:[A-Za-z][A-Za-z0-9.-]*(?:\\[A-Za-z][A-Za-z0-9.-]*)*::)?(?:[A-Za-z]+:|\\\\|/)";
 
 /// cmd.exe prompt: `C:\path>`, a UNC path `\\server\share>`, or a bare `>`. The
 /// trailing space is optional so the prompt is detected even when the user has
@@ -284,6 +294,19 @@ mod tests {
             (r"\\server\share>", Some(r"\\server\share>"), None),
             (r"PS C:\Users\me> ", None, Some(r"PS C:\Users\me> ")),
             (r"PS Env:\> dir", None, Some(r"PS Env:\> ")),
+            (r"PS HKLM:\Software>", None, Some(r"PS HKLM:\Software>")),
+            // The provider-qualified forms PowerShell prints once the location
+            // is not a plain drive (`BUG-0073` verification F1).
+            (
+                r"PS Microsoft.PowerShell.Core\FileSystem::\\server\share>",
+                None,
+                Some(r"PS Microsoft.PowerShell.Core\FileSystem::\\server\share>"),
+            ),
+            (
+                r"PS Microsoft.PowerShell.Core\FileSystem::C:\x> dir",
+                None,
+                Some(r"PS Microsoft.PowerShell.Core\FileSystem::C:\x> "),
+            ),
             (r"PS>", None, Some("PS>")),
             // `cmd`'s branch is a single `>`; PowerShell's is `>+`.
             (">> ", Some(">"), Some(">> ")),

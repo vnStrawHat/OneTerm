@@ -34,7 +34,7 @@ separate `oneterm-pty` crate. `crates/terminal` depends on `vt` since `US-0081` 
 for its engine: the vendored fork went at `US-0087`. `crates/tools` (`oneterm-tools`, developer
 diagnostics: DOOM-fire workload, raw PTY throughput probe, VT parity and bench harness) is a
 workspace member **outside** the layering: nothing depends on it, and it may only reach down to the
-L0 leaf `vt`.
+L0 leaves — today `vt` and, since `US-0135`'s `highlight-bench`, `highlight`.
 
 ## Invariants
 

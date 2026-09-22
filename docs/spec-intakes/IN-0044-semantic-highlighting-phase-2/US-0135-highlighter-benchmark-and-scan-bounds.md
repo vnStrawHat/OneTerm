@@ -132,10 +132,18 @@ Docs changed:
 - `crates/terminal-view/src/render/row_plan.rs` — `class_rows_into`'s doc comment now
   states the head-of-run rule where the code implements it.
 
+- `Cargo.toml` — `[profile.fast-dev.package]` now carries the whole regex stack, and its
+  comment says where the time goes instead of quoting the retired 4.14 ms figure.
+- `docs/agents/crate-dependency-rules.md` — the tools crate's reach read "the L0 leaf `vt`",
+  singular. Corrected after verification `F4`: this packet added the second edge, and
+  listing the file as "reviewed and unchanged" was reading the rule the file ought to state
+  rather than the sentence it contained.
+- `docs/agents/structure.md` — the `tools` row's dependency list was missing
+  `oneterm-highlight` and its binary list was missing `highlight-bench` (`F4`).
+
 Docs reviewed and unchanged: `crates/tools/src/bin/vt-bench.rs` (the style and the
-never-gated rule this benchmark copies), `docs/agents/crate-dependency-rules.md` (the tools
-crate may reach a leaf crate; `oneterm-highlight` is one, and the policy file now records
-the edge), `docs/agents/dependencies.md` (no new third-party dependency: no criterion).
+never-gated rule this benchmark copies), `docs/agents/dependencies.md` (no new third-party
+dependency: no criterion — the new profile entries name crates already in `Cargo.lock`).
 
 ## Context
 
@@ -208,12 +216,15 @@ the file as `crates/tools/bench-baseline.json` records its own: Intel Core i7-12
 §10 carried came from an ad-hoc probe on a build nobody runs the terminal in, and is now
 replaced):
 
-| Shape | ns/char (`release`) | one 8 000-char scan, `release` | the same, `fast-dev` |
-|---|---|---|---|
-| Windows prompt line | 1.1 | 9 us | 14 us |
-| Plain output | 8.6-9.1 | 70 us | 0.43-0.45 ms |
-| Keyword-dense log | 10.7-11.6 | 86-93 us | 0.73-0.78 ms |
-| A line carrying CJK | 64-70 | 0.51-0.56 ms | 7.0-7.5 ms |
+| Shape | ns/char (`release`) | one 8 000-char scan, `release` | `fast-dev` before | `fast-dev` now |
+|---|---|---|---|---|
+| Windows prompt line | 1.1 | 9 us | 14 us | 13 us |
+| Plain output | 8.6-9.1 | 70 us | 0.43-0.45 ms | 73-79 us |
+| Keyword-dense log | 10.7-11.6 | 86-93 us | 0.73-0.78 ms | 98 us |
+| A line carrying CJK | 64-70 | 0.51-0.56 ms | 7.0-7.5 ms | 0.53-0.54 ms |
+
+The two `fast-dev` columns are the same profile before and after the verification rework
+recorded under Gaps.
 
 **Decision 1 — the wrap-run bound stands, uncapped.** The pathological case costs 0.07 ms
 (ASCII) to 0.56 ms (CJK) per keystroke in `release`, and a whole 40-row viewport of the
@@ -253,7 +264,10 @@ have restated them, so §10 now cites them instead.
 - `cargo run -p oneterm-tools --profile fast-dev --bin highlight-bench -- --runs 9` — the
   `fast-dev` column.
 - `python scripts/vt-public-api.py --check --no-doc` — green (nothing in `oneterm-vt`
-  changed).
+  changed). Note for anyone copying that line out: it is not runnable on its own. It reads
+  `target/doc/oneterm_vt`, so it needs the preceding
+  `cargo doc -p oneterm-vt --no-deps --all-features` that `scripts/ci-local.ps1` runs before
+  it.
 - `pwsh scripts/ci-local.ps1` — `ci-local: all checks passed`.
 
 **Proof.**
@@ -273,13 +287,23 @@ have restated them, so §10 now cites them instead.
   baseline was taken at `--runs 9` rather than 5; some cells still show a 15-30% spread and
   the spread column says so. Any comparison narrower than a cell's own spread is the
   machine, not the scanner.
-- **`fast-dev` does not optimize where the time goes.** It raises `oneterm-highlight` to
-  `opt-level = 3` but leaves `regex` and `aho-corasick` at `dev`'s, so every shape but the
-  prompt is 6-13x slower there than in `release`, and the CJK worst case is 7 ms — worse
-  than the 4.14 ms figure `fast-dev` was added to fix. One line in
-  `[profile.fast-dev.package]` would close it, and it is out of this packet's scope
-  ("optimizing the scanner ... is a new packet with a target"). Recorded here as the next
-  packet's starting point.
+- **`fast-dev` did not optimize where the time goes — fixed here, not deferred.** It raised
+  `oneterm-highlight` to `opt-level = 3` and left the matchers it calls at `dev`'s, so every
+  shape but the prompt was 6-13x slower than `release` and the CJK worst case was 6-7 ms,
+  worse than the 4.14 ms figure `fast-dev` was added to fix. The follow-up this packet first
+  recorded ("one line in `[profile.fast-dev.package]`") was **wrong as written**, and
+  verification measured why: `regex` is a thin layer over `regex-automata`, `regex-syntax`
+  and `memchr`, so an entry for `regex` and `aho-corasick` alone leaves the hot code
+  unoptimized. All five are now in `[profile.fast-dev.package]`, which brings `fast-dev` to
+  1.0-1.4x of `release` (the column above) for a one-time ~15 s compile of pinned
+  third-party crates that nobody steps through in a debugger — the rationale
+  `[profile.dev.package]` already carries for `gpui-pre`/`smol`. This is a build-profile
+  change, not the scanner optimization the packet put out of scope: no OneTerm code moved
+  and no `release` figure changed. `[profile.dev.package]` was **not** touched, so
+  `cargo test` still pays it; that is a wider blast radius and belongs to whoever wants it.
+- The stale 4.14 ms figure survived in `Cargo.toml`'s comment for
+  `oneterm-highlight = { opt-level = 3 }` (verification `F5`). That comment is rewritten in
+  the same edit and now states where the time actually goes.
 - CJK costs ~7x ASCII per char, in the byte-to-char map (`BUG-0071` F3), which holds one
   `usize` per *byte*. Measured, not fixed: the same scope boundary.
 - No `--check` trip-wire like `vt-bench grid --check`. The baseline is compared by hand, as

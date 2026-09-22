@@ -142,7 +142,8 @@ Docs changed:
   is not part of the rule", with the head-test table and the two remaining cosmetic costs.
 - `crates/highlight/src/profile.rs` — the `WIN_PATH_BODY` doc comment now states the rule
   and no longer records this false positive as accepted; `BUG-0071` `N3` stays recorded
-  there, joined by the hyphen case this fix adds.
+  there, joined by the hyphen case this fix adds and by the profiles each cost applies to.
+  `PWSH_PATH_ROOT` carries why the provider qualifier belongs to the root.
 
 Docs reviewed and unchanged: §5 (it names no specific pattern), §4.1, and `BUG-0071`
 (its `N2` is this packet; `N1`/`N3` are respected and asserted).
@@ -186,7 +187,7 @@ None. The rule is a tightening of an existing pattern and binds no future work.
 <!-- HARNESS:PROOF:BEGIN -->
 - [x] Unit proof
 - [x] Integration proof
-- [ ] E2E proof
+- [x] E2E proof
 - [x] Platform proof
 - [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
@@ -241,16 +242,38 @@ end in `-`; the root moved out of the patterns into `WIN_PATH_ROOT` (`C:` / `\`)
   prompt if the rule were applied per visual row.
 - Platform: `pwsh scripts/ci-local.ps1`.
 
+**E2E — closed by independent verification** (`evidence/BUG-0073-US-0135-verify.md`,
+frame `evidence/BUG-0073-verify-cmd-tab.png`). A `fast-dev` `cmd` tab, own build and own
+pid, with `shell.kind = "cmd"` and `semantic_highlighting = "on"` so every row goes through
+the regex fallback this packet fixes. The frame shows `C:\src -> C:\dst` and
+`c:\proj\x.cpp(5): error C2059: syntax error: '>'` as output — no prompt sign, no `Path`
+region before the `>`, `C:\src`/`C:\dst` coloured by the ordinary path probe, the arrow
+not — with `error` red in both places, and the real prompts around them coloured normally.
+That is acceptance items 1 and 2 and the first half of item 3, in the real renderer. No
+"before" frame: it needs a second full `fast-dev` build at `main`, and the pre-fix
+behaviour is already a measured record (`BUG-0071` `N2`) that a live mutation reproduces on
+demand.
+
+**Rework after verification.** `F1`: requiring a root after PowerShell's `PS ` dropped the
+**provider-qualified** prompt `PS Microsoft.PowerShell.Core\FileSystem::\\server\share>`,
+the form PowerShell prints once the location is not a plain drive — it matched the *old*
+pattern, so this was a new, unrecorded cost rather than an accepted one. `PWSH_PATH_ROOT`
+now admits a `<module>\<provider>::` qualifier before the root (the qualifier ends at `::`,
+which is why it belongs to the root: the body excludes `:`), and the table test carries the
+UNC and the drive form plus `PS Env:\>` and `PS HKLM:\Software>`. `F3`: the remaining-cost
+sentence was profile-blind — `C:\build->` *is* a prompt on `Dumb`, which is deliberately
+the permissive profile — and now says so, on `WIN_PATH_BODY` and in §13 `Q7`.
+
 **Gaps.**
 
-- E2E not run. The verification plan asked for a `fast-dev` `cmd` tab printing both lines
-  with before/after frames under `evidence/`; the owner runs their own session inside
-  OneTerm, so no GUI walk was driven from here. The behaviour is proved at the two layers
-  the defect lives in — the pattern, and the joined logical line in the view — which is
-  where a frame capture would have read its verdict from.
-- Two cosmetic costs remain, recorded in §13 `Q7` and on `WIN_PATH_BODY`: a cwd ending in a
-  space (`BUG-0071` `N3`) or in a hyphen (`C:\build->`) is not read as a prompt. `N4` (the
-  first `>` of a `>>` continuation) is untouched, as scoped.
+- Two cosmetic costs remain on `Cmd`/`PowerShell`/`Unix`, recorded in §13 `Q7` and on
+  `WIN_PATH_BODY`: a cwd ending in a space (`BUG-0071` `N3`) or in a hyphen (`C:\build->`)
+  is not read as a prompt. A hyphen elsewhere in the cwd is fine — `C:\Users\a - b\dir>` is
+  a prompt. `N4` (the first `>` of a `>>` continuation) is untouched, as scoped.
+- The provider-qualified PowerShell prompt was fixed and tested against the pattern, not
+  against a live PowerShell on a real UNC share — none is reachable from this machine.
+- `PWSH_PATH_ROOT`'s `/` branch (pwsh on Unix) is verified by regex only; no Unix host
+  here.
 
 ## Handoff
 
