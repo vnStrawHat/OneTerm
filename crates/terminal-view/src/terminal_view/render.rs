@@ -266,6 +266,15 @@ impl Render for TerminalView {
             );
             inputs.semantic.set_enabled(frame.semantic_enabled);
             inputs.semantic.set_profile(frame.profile);
+            // The exit-code tint reaches the most recent completed block only,
+            // and only while the viewport is at the bottom: scrolled up, the
+            // prompt this code belongs to is off screen and the newest prompt
+            // *on* screen is somebody else's (`US-0133`).
+            inputs.semantic.set_exit_code(
+                (info.display_offset == 0)
+                    .then_some(info.last_exit_code)
+                    .flatten(),
+            );
             inputs.url_hovering = self.url_hover.is_hovering();
         }
 

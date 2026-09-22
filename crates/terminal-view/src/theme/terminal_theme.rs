@@ -12,11 +12,29 @@ use oneterm_terminal::{DynamicColors, TerminalPalette};
 
 use super::contrast::ensure_minimum_contrast;
 use super::palette::{self, ColorTable, hsla_from_rgb, rgb_from_rgba};
-use crate::highlight::load_default_styles;
+use crate::highlight::{load_default_styles, to_gpui_hsla};
 use crate::render::frame::Color;
 
 /// WCAG AA threshold used when settings do not choose one (deviation 6).
 pub(crate) const DEFAULT_MIN_CONTRAST: f32 = 4.5;
+
+/// How far the prompt-line band moves from the terminal background toward the
+/// side the terminal foreground is on (`US-0134`).
+///
+/// A band defined as "the background, slightly toward the text" is correct on a
+/// light theme and on a dark one by construction: it can never be a dark stripe
+/// under dark text, because it is always on the background's side of the pair.
+/// Only the lightness moves, so the band never introduces a hue of its own.
+///
+/// The **direction** comes from the foreground and the **distance** is this
+/// fixed fraction of the room left in that direction, rather than a fraction of
+/// the gap between the two. A theme whose foreground and background are close in
+/// lightness would otherwise get a band nobody can see, and the direction is the
+/// one bit of the foreground that is robust.
+///
+/// The move is capped at half the gap to the foreground, so the band always
+/// lands strictly between the two however close they are.
+const PROMPT_BAND_MIX: f32 = 0.11;
 
 /// Terminal theme with a prebuilt palette + bg/fg (Hsla) + contrast threshold.
 #[derive(Clone)]
@@ -62,6 +80,49 @@ impl TerminalTheme {
     /// Push `fg` away from `bg` until the theme's minimum contrast is met.
     pub(crate) fn ensure_contrast(&self, fg: Hsla, bg: Hsla) -> Hsla {
         ensure_minimum_contrast(fg, bg, self.min_contrast)
+    }
+
+    /// The prompt-line background band (§8 item 6): this theme's terminal
+    /// background nudged toward its foreground.
+    ///
+    /// Resolved per theme rather than taken from one fixed value in
+    /// `assets/highlight/default.json`, which is what made it a dark band under
+    /// dark text on a light theme. The asset (and any future per-theme
+    /// `terminal.semantic.promptLineBg`) stays an **explicit override**: a theme
+    /// that names a colour gets exactly that colour, and a theme that says
+    /// nothing still gets something sane, which is §7's rule for the whole
+    /// block.
+    ///
+    /// `reverse_video` is `DECSCNM`: the two defaults trade places, so the band
+    /// is derived from the pair the screen is actually drawn with.
+    pub(crate) fn prompt_line_bg(&self, reverse_video: bool) -> Hsla {
+        if let Some(override_color) = self.class_styles.prompt_line_bg {
+            return to_gpui_hsla(override_color);
+        }
+        let (bg, fg) = if reverse_video {
+            (self.fg, self.bg)
+        } else {
+            (self.bg, self.fg)
+        };
+        // Which side of the background the text sits on; the band moves that way.
+        let toward: f32 = if fg.l >= bg.l { 1.0 } else { 0.0 };
+        // ...by a fraction of the room in that direction, but never more than
+        // half the way to the foreground itself. On a theme whose two defaults
+        // are close in lightness the fraction alone would land the band *on* or
+        // *past* the text, which is exactly what "always on the background's
+        // side of the pair" is supposed to rule out.
+        let step = (toward - bg.l).abs() * PROMPT_BAND_MIX;
+        let step = step.min((fg.l - bg.l).abs() / 2.0);
+        let l = if toward > 0.5 {
+            bg.l + step
+        } else {
+            bg.l - step
+        };
+        Hsla {
+            l: l.clamp(0.0, 1.0),
+            a: 1.0,
+            ..bg
+        }
     }
 }
 

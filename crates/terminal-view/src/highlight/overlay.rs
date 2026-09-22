@@ -1,21 +1,24 @@
 //! Per-view semantic overlay — produces per-cell `Class` for the visible
 //! viewport.
 //!
-//! Holds the [`ShellProfile`], optional [`RowRoles`] (from OSC 133, Phase 2),
-//! and the enabled flag. The shared [`RuleSet`] is global (built once via
-//! `LazyLock`).
+//! Holds the [`ShellProfile`], the exit code of the most recently completed
+//! command block, and the enabled flag. The shared [`RuleSet`] is global (built
+//! once via `LazyLock`).
+//!
+//! The per-row roles are **not** here: they are derived from the frame's own
+//! cells once per rescan and owned by the plan cache, next to the URL masks and
+//! the classes that share their lifetime (`US-0133`).
 
-use oneterm_highlight::{Class, RowRole, RowRoles, RuleSet, ShellProfile, scan_line_into};
+use oneterm_highlight::{Class, RowRole, RuleSet, ShellProfile, scan_line_into};
 
-/// Per-view semantic overlay — produces `cell_class` for one display row.
-///
-/// Phase 0/1: `RowRoles` is absent → the scanner uses the `ShellProfile` prompt
-/// regex fallback to detect prompt lines. Phase 2 will populate `row_roles`
-/// from the OSC 133 stream for authoritative row roles.
+/// Per-view semantic overlay — produces `cell_class` for one logical line.
 #[derive(Clone)]
 pub struct SemanticOverlay {
     profile: ShellProfile,
-    row_roles: RowRoles,
+    /// `OSC 133;D` of the most recently completed command block, when the
+    /// viewport is at the bottom. The engine attaches no row to it, so which
+    /// prompt it belongs to is decided from the roles (`RowRoles`), not here.
+    exit_code: Option<i32>,
     /// Whether semantic highlighting is enabled (gated by the setting).
     enabled: bool,
 }
@@ -31,7 +34,7 @@ impl SemanticOverlay {
     pub fn new(profile: ShellProfile, enabled: bool) -> Self {
         Self {
             profile,
-            row_roles: RowRoles::default(),
+            exit_code: None,
             enabled,
         }
     }
@@ -56,27 +59,40 @@ impl SemanticOverlay {
         self.profile = profile;
     }
 
+    /// The exit code that tints the most recently completed block's prompt
+    /// sign, or `None` when there is none to show.
+    pub fn exit_code(&self) -> Option<i32> {
+        self.exit_code
+    }
+
+    /// Set the exit code of the most recently completed command block.
+    pub fn set_exit_code(&mut self, exit_code: Option<i32>) {
+        self.exit_code = exit_code;
+    }
+
     /// Scan one **logical** line of display text into a caller-owned buffer of
     /// `Class` bytes (one per char, cleared and refilled), so a per-frame scan
     /// reuses one allocation. When disabled the buffer is all `Default`.
     ///
     /// `line` is the whole logical line — a wrap-connected run of display rows
-    /// joined into one string — and `first_row` is the display row it starts
-    /// on, which is the row whose role applies (`BUG-0071`). The caller slices
-    /// the result back per visual row.
-    pub fn scan_into(&self, line: &str, first_row: usize, out: &mut Vec<u8>) {
+    /// joined into one string. `role` is what the shell's OSC 133 marks say
+    /// about it, and `None` means the shell said nothing, which is the only
+    /// case where the prompt regex runs. `input_at` is the char index where the
+    /// typed command starts (`OSC 133;B`).
+    pub fn scan_into(
+        &self,
+        line: &str,
+        role: Option<RowRole>,
+        input_at: Option<usize>,
+        out: &mut Vec<u8>,
+    ) {
         out.clear();
         if !self.enabled {
             out.resize(line.chars().count(), Class::Default as u8);
             return;
         }
         let rules = RuleSet::global();
-        let role = if !self.row_roles.role.is_empty() {
-            self.row_roles.role_at(first_row)
-        } else {
-            RowRole::Output
-        };
-        scan_line_into(line, rules, &self.profile, role, out);
+        scan_line_into(line, rules, &self.profile, role, input_at, out);
     }
 }
 
@@ -86,7 +102,7 @@ mod tests {
 
     fn scan(o: &SemanticOverlay, line: &str) -> Vec<u8> {
         let mut out = Vec::new();
-        o.scan_into(line, 0, &mut out);
+        o.scan_into(line, None, None, &mut out);
         out
     }
 
@@ -110,11 +126,11 @@ mod tests {
         let o = SemanticOverlay::new(ShellProfile::Unix, true);
         let mut buf = Vec::with_capacity(64);
         let ptr = buf.as_ptr();
-        o.scan_into("error: failed", 0, &mut buf);
+        o.scan_into("error: failed", None, None, &mut buf);
         assert_eq!(buf, scan(&o, "error: failed"));
         assert_eq!(buf.as_ptr(), ptr, "buffer must be reused");
         let off = SemanticOverlay::new(ShellProfile::Unix, false);
-        off.scan_into("error", 0, &mut buf);
+        off.scan_into("error", None, None, &mut buf);
         assert_eq!(buf, vec![Class::Default as u8; 5]);
     }
 
@@ -124,5 +140,35 @@ mod tests {
         assert!(o.is_enabled());
         let c = scan(&o, "$ ls");
         assert_eq!(c[0], Class::PromptSign as u8);
+    }
+
+    /// A marked row never reaches the prompt regex: the same text that the
+    /// fallback reads as a prompt is left to the output matchers.
+    #[test]
+    fn a_marked_output_row_skips_the_prompt_regex() {
+        let o = SemanticOverlay::new(ShellProfile::Unix, true);
+        let mut marked = Vec::new();
+        o.scan_into("$ ls", Some(RowRole::Output), None, &mut marked);
+        assert_ne!(marked[0], Class::PromptSign as u8, "{marked:?}");
+        assert_eq!(scan(&o, "$ ls")[0], Class::PromptSign as u8);
+    }
+
+    #[test]
+    fn a_marked_prompt_uses_the_input_boundary() {
+        let o = SemanticOverlay::new(ShellProfile::PowerShell, true);
+        let line = r"PS C:\Program Files> dir";
+        let sign = line.find('>').unwrap();
+        let mut out = Vec::new();
+        o.scan_into(line, Some(RowRole::Prompt), Some(sign + 2), &mut out);
+        assert_eq!(out[sign], Class::PromptSign as u8, "{out:?}");
+        assert_eq!(out[sign + 2], Class::Command as u8, "{out:?}");
+    }
+
+    #[test]
+    fn the_exit_code_round_trips() {
+        let mut o = SemanticOverlay::default();
+        assert_eq!(o.exit_code(), None);
+        o.set_exit_code(Some(3));
+        assert_eq!(o.exit_code(), Some(3));
     }
 }

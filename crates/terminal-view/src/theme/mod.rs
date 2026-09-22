@@ -11,6 +11,8 @@ mod terminal_theme;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use contrast::contrast_ratio;
 pub(crate) use input_channel::{channel_chip, channel_color};
 pub(crate) use terminal_theme::{
     TerminalTheme, apply_color_overrides, apply_dynamic_colors, build_terminal_theme,
