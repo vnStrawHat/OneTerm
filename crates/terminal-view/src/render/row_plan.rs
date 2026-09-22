@@ -477,6 +477,14 @@ impl RowBuilder<'_, '_> {
 /// every class in the range then depends only on rows inside it, which is what
 /// lets the caller rescan the changed runs rather than the viewport (§10 of
 /// `docs/terminal-semantic-highlighting.md`).
+///
+/// **A run whose head is above the viewport starts at the first visible row**,
+/// and takes its role from there. `frame` is the viewport and nothing else
+/// (`SnapshotState::rows`), so the rows above it cannot be read here. That is a
+/// decided rule, not an oversight: it is the same limit the URL pass has carried
+/// since `US-0092`, it costs at most the classes of the one partial run at the
+/// top of the screen until its head scrolls back into view, and §10 records why
+/// lifting it is not worth a second invalidation edge (`US-0135`).
 pub(crate) fn class_rows_into(
     frame: &Frame,
     overlay: &SemanticOverlay,
