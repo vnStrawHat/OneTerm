@@ -53,6 +53,13 @@ path = "src/bin/vt-corpus.rs"
 name = "vt-bench"
 path = "src/bin/vt-bench.rs"
 
+# --- IN-0044 / US-0135: the semantic highlighter benchmark ------------------
+# The same style as `vt-bench`: measure, print a table, write JSON, compare
+# against a committed baseline by hand, never gate CI.
+[[bin]]
+name = "highlight-bench"
+path = "src/bin/highlight-bench.rs"
+
 # --- IN-0039 / US-0106: the esctest bridge ---------------------------------
 # A pty-backed stdin/stdout bridge between the `esctest` conformance harness and
 # `oneterm_vt::Terminal`. Unix only in substance (the file carries a Windows
@@ -78,6 +85,10 @@ rand.workspace = true
 # measures the same engine across its five tiers.
 # `pty` for `pty-throughput`; the other binaries use the engine alone.
 oneterm-vt = { workspace = true, features = ["pty"] }
+# --- IN-0044 / US-0135: the scanner under measurement -----------------------
+# A leaf crate with no GPUI and no OneTerm dependency, so the tools crate may
+# reach it (`docs/agents/crate-dependency-rules.md`). `highlight-bench` only.
+oneterm-highlight.workspace = true
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 # Reads size.json / config.json, writes the bench JSON table, and parses

@@ -112,6 +112,7 @@
       "oneterm-settings"
     ],
     "oneterm-tools": [
+      "oneterm-highlight",
       "oneterm-vt"
     ],
     "oneterm-vt": [],

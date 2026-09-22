@@ -184,6 +184,22 @@ When `RowRoles` is absent (shell without integration — raw serial, router, bar
 fall back to the **`ShellProfile` prompt regex** to detect prompt lines. The scanner is
 the same; only the row-role source differs.
 
+**The Windows sign rule** (`BUG-0073`) — the one subtle part of that fallback, because on
+Windows the sign is `>`, a character that ordinary output reaches all the time:
+
+> The prompt sign is the **first `>` of the logical line whose head — everything before
+> it — is a plausible Windows prompt path**: rooted at a drive (`C:`) or a UNC share
+> (`\\`), optionally behind PowerShell's `PS `; containing none of `< > | " * ? :`, none
+> of which may appear in a path component; and ending in neither a space nor `-`.
+
+"First" is forced rather than chosen: `>` cannot occur in a Windows path, so the head of
+any *later* `>` contains one and is never plausible. That is what keeps the redirection in
+`C:\work>dir > out.txt` outside the prompt region, and it is why the rule is stated on the
+head alone — what follows the sign is deliberately not part of it (§13 Q7). The rule is
+applied to the **logical** line, the joined wrap run, exactly as every other class is
+(`BUG-0071`); applied per visual row it would read the `> C:\dst` half of a wrapped
+`C:\src -> C:\dst` as `cmd`'s continuation prompt.
+
 ---
 
 ## 5. Rule data (compiled once, not interpreted per line)
@@ -412,18 +428,69 @@ instead of one per row. The bound is the wrap run, and it is tight — but a log
 longer than the viewport makes that run **the whole viewport**, so "never the viewport"
 is not the guarantee and this document does not claim it.
 
-Worst case, measured: a single logical line filling a 40×200 viewport (8 000 chars) is
-one scan of 8 000 chars, and one keystroke on it re-scans all of it. At `opt-level = 0`
-that measured **4.14 ms** — which is why `oneterm-highlight` is in
-`[profile.fast-dev.package]` alongside the other hot-path crates. `release` optimizes it.
-For the shapes users actually meet this is far below a frame.
+### 10.1 Measured (`US-0135`)
+
+`crates/tools/src/bin/highlight-bench.rs` measures `scan_line_into` over the four content
+shapes that exercise the four costs above, at four logical-line lengths and three wrap
+widths, on all three profiles. It is **recorded, never gated** — the rule `vt-bench`
+states for the same reasons. The committed table is
+`crates/tools/highlight-bench-baseline.json`; refresh it only in a commit that says why a
+number moved.
+
+The worst case §10 has always quoted — one logical line filling a 40×200 viewport
+(8 000 chars), re-scanned whole on every keystroke — on an i7-12700, median of 9 cycles,
+the profile named per column (the `opt-level = 0` figure of 4.14 ms this paragraph used to
+carry is gone; it measured a build nobody runs the terminal in):
+
+| Content shape | ns/char (`release`) | one 8 000-char scan, `release` | `fast-dev` before | `fast-dev` now |
+|---|---|---|---|---|
+| Windows prompt line | 1.1 | **9 µs** | 14 µs | 13 µs |
+| Plain output | 8.6-9.1 | **70 µs** | 0.43-0.45 ms | 73-79 µs |
+| Keyword-dense log | 10.7-11.6 | **86-93 µs** | 0.73-0.78 ms | 98 µs |
+| A line carrying CJK | 64-70 | **0.51-0.56 ms** | 7.0-7.5 ms | 0.53-0.54 ms |
+
+Per display row at 80 columns that is 0.09 µs (prompt) to 5.2 µs (CJK) in `release`: one
+frame that re-scanned a whole 40-row viewport of the *worst* shape would spend 0.21 ms, or
+1.2% of a 16.7 ms frame, and the same viewport of ordinary output 28 µs. CJK costs ~7×
+ASCII per char, in the byte→char map (`BUG-0071` F3), which is one `usize` per *byte*.
+
+The two `fast-dev` columns are the same profile before and after `US-0135`'s verification.
+Almost none of this time is spent in `oneterm-highlight`'s own code — it is spent in the
+matchers it calls, and `regex` is a thin layer over `regex-automata`, `regex-syntax` and
+`memchr` — so raising the scanner crate to `opt-level = 3` and leaving those at `dev`'s left
+`fast-dev` 6-13× slower than `release`, with the CJK worst case at 6-7 ms, worse than the
+4.14 ms that put `oneterm-highlight` in that profile in the first place. The whole regex
+stack is now in `[profile.fast-dev.package]`, which brings `fast-dev` to 1.0-1.4× of
+`release` for a one-time ~15 s compile of five pinned third-party crates.
+
+**Decided: the scan scope stays the wrap run, uncapped.** A cap on the joined line would
+buy at most 0.5 ms in the pathological case and would pay for it with a colour error at
+every cut — a string, a prompt region or a keyword sliced by an arbitrary boundary, which
+is the class of defect `BUG-0071` was. The numbers do not ask for it.
+
+**Decided: the scan starts at the first *visible* row, not at the run's true head.** A
+logical line whose head has scrolled above the viewport is classified from the top of the
+screen, so its first partial run can be coloured as if it began there — until one frame of
+scrolling brings the head back into view. Lifting the limit is not blocked by cost
+(scanning a capped extra viewport merely doubles the figures above) but by plumbing: the
+render path sees `SnapshotState::rows()`, which is the visible rows and nothing else
+(`crates/vt/src/snapshot/state.rs`), so it would take a wider snapshot or a terminal-lock
+read inside render, a cache dependency on rows the cache does not hold, and a second
+invalidation edge — for a defect that is bounded, cosmetic and self-correcting. It is also
+exactly the limit the URL pass has carried since `US-0092`; changing one and not the other
+would split one contract into two. See §13 Q5.
 
 No C dependency, no backtracking (ReDoS-safe), no per-line JSON interpretation, no
 string-scope hashing.
 
 `FrameStats` counts the class pass separately from the URL pass (`class_scans`,
 `class_rows_scanned`): the two share a row scope but the class pass does nothing while
-semantic highlighting is off.
+semantic highlighting is off. The scope above is **asserted** with those two counters
+rather than argued (`crates/terminal-view/src/render/plan_cache.rs`): an edit inside a
+wrapped line scans the wrap run and nothing else — `class_rows_scanned == 2` in a 12-row
+viewport, `class_scans == 1` — and a logical line longer than the viewport scans the
+viewport, `class_rows_scanned == rows_total`, still in one scan. Those are the two halves
+of the bound this section states.
 
 ---
 
@@ -677,6 +744,19 @@ delta the URL masks already use (`US-0092`), so it adds no new invalidation surf
 it lowers the number of scanner invocations per frame, because one run of rows is now one
 scan instead of one scan each.
 
+**Confirmed by `US-0135`, with the measurement in hand.** "Viewport-only" has a second
+edge that `BUG-0071` left implied: a wrap run whose head is *above* the viewport is scanned
+from the first visible row, and takes its role from there. The scan is therefore of a
+suffix of the logical line, and the top partial run can be coloured as if the line began
+there. That stands, and the cache's dependencies do not change. The cost of lifting it is
+not the scan — §10 measures a capped look-back at roughly double the figures there, which
+is affordable — it is that the render path is handed `SnapshotState::rows()`, the visible
+rows and nothing else, so reading the row above the top means a wider snapshot or a
+terminal-lock read inside render, plus a cache dependency on rows the cache does not hold
+and a second invalidation edge (those rows change on every scroll). The `US-0092` URL pass
+has the identical limit; a cache that bounded one pass by the viewport and the other by the
+scrollback would be two contracts wearing one name.
+
 **Rationale.**
 - `RowLayoutCache` already maintains `prev_hash` per display line and a damage set
   (`TermDamageInfo::Partial`), re-computing `layout_row` only for dirty lines
@@ -735,6 +815,55 @@ Do **not** add `Custom(u8)` as a real variant yet — just reserve the numeric r
 `COUNT = 32` and leave the variants unconstructed. A future feature adds the variant and
 begins emitting it; themes that don't define it get `None` (no-op), same as any
 unstyled class.
+
+### Q7. What follows the Windows prompt sign — not part of the rule
+
+**Question.** A prompt reads as `path>` and then optionally ` command`, so the obvious
+tightening for `BUG-0073` is to require the sign to end the logical line or be followed by
+a space. Both false positives satisfy that reading — `C:\src -> C:\dst` has a space after
+its `>`, `c:\proj\x.cpp(5): error C2059: syntax error: '>'` has a `'` — so should the rule
+be "the first `>` whose head is a path **and** whose next character is a space or the end"?
+
+**Decision.** **No — the rule is stated on the head alone.** The "space or end" half cannot
+be required, and the counterexample is the commonest prompt on Windows: `cmd.exe` writes
+`C:\work>` and the typed command lands in the very next cell, so `C:\work>dir` has no space
+after its sign and must stay a prompt (`BUG-0071` F2, a committed test). Requiring it would
+trade two cosmetic false positives for a false *negative* on every `cmd` prompt with typing
+on it, including the one the user is looking at.
+
+**Rationale.** Both measured false positives are rejected by the head test alone, which is
+therefore the whole rule and the smaller mechanism (`BUG-0073` offered a head test or a
+token test after the sign, and stated the acceptance on behaviour, not mechanism):
+
+| Line | Head before the first `>` | Why it is not a path |
+|---|---|---|
+| `C:\src -> C:\dst` | `C:\src -` | ends in `-` |
+| `c:\proj\x.cpp(5): error C2059: syntax error: '` | as shown | a `:` past the drive |
+| `C:\log size > 3` | `C:\log size ` | ends in a space (`BUG-0071`) |
+| `see C:\x> not a prompt` | `see C:\x` | not rooted at a drive or UNC share |
+
+**Implementation.** `WIN_PATH_BODY`, `WIN_PATH_ROOT` and `PWSH_PATH_ROOT` in
+`crates/highlight/src/profile.rs`; the rule and this reconciliation are written on
+`WIN_PATH_BODY`.
+
+**The costs, complete.** Two are the other side of the same rule, and they hold on the
+`Cmd`, `PowerShell` and `Unix` profiles — `Dumb` is deliberately the permissive one and
+reads both as prompts through its own pattern:
+
+- a cwd that legally ends in a space (`C:\trailing >`, `BUG-0071` N3);
+- a cwd that legally ends in a hyphen (`C:\build->`).
+
+Both are one directory name away from ordinary, and the failure is a prompt that looks like
+output rather than output that looks like a prompt. A hyphen *elsewhere* in the cwd is fine
+(`C:\Users\a - b\dir>` is a prompt): the rule bites only the character immediately before
+the sign.
+
+A third cost was found in verification and closed rather than accepted: requiring a root
+after PowerShell's `PS ` dropped the **provider-qualified** prompt
+(`PS Microsoft.PowerShell.Core\FileSystem::\\server\share>`), which is what PowerShell
+prints once the location is not a plain drive. `PWSH_PATH_ROOT` now admits a
+`<module>\<provider>::` qualifier before the root, and the table test carries both the UNC
+and the drive form.
 
 ---
 

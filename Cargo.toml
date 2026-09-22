@@ -223,9 +223,24 @@ smol = { opt-level = 3 }
 oneterm-vt = { opt-level = 3 }
 oneterm-terminal-view = { opt-level = 3 }
 # The semantic scanner (`BUG-0071`): it runs once per logical line of the
-# viewport, and a logical line can be the whole viewport. Unoptimized, one scan
-# of an 8 000-char line measured 4.14 ms — a frame's worth on its own.
+# viewport, and a logical line can be the whole viewport.
+#
+# The crate alone is not enough, and `US-0135` measured why: almost none of that
+# time is spent in `oneterm-highlight`'s own code. It is spent in the matchers it
+# calls — the Aho-Corasick keyword automaton and the regex DFAs — and `regex` is a
+# thin API layer over `regex-automata`, `regex-syntax` and `memchr`. With the
+# scanner crate optimized and those five left at `dev`'s opt-level = 0, an
+# 8 000-char scan ran 6-13x slower than `release` (CJK: 6.2 ms, worse than the
+# 4.14 ms that first put this line here). Optimizing the whole regex stack brings
+# `fast-dev` to 1.1-1.9x of `release` for a one-time ~14 s compile; they are
+# third-party, pinned, and never stepped through in a debugger, which is the same
+# rationale `[profile.dev.package]` above already states.
 oneterm-highlight = { opt-level = 3 }
+aho-corasick = { opt-level = 3 }
+memchr = { opt-level = 3 }
+regex = { opt-level = 3 }
+regex-automata = { opt-level = 3 }
+regex-syntax = { opt-level = 3 }
 oneterm-core = { opt-level = 3 }
 oneterm-terminal = { opt-level = 3 }
 oneterm-settings = { opt-level = 3 }
