@@ -139,12 +139,32 @@ where
     }
 }
 
+/// Join Windows path components with `\`.
+///
+/// **Not [`PathBuf::join`]**, which separates with whatever the *host* uses: on
+/// the Linux and macOS CI runners that builds `X:\Windows/System32/cmd.exe`,
+/// which is not a Windows path and is what turned this module's tests red
+/// (`US-0130`, rework 2026-09-22). Every path below is a Windows path by
+/// definition — it is resolved on Windows and executed nowhere else — so it is
+/// built as a string with the separator spelled out, identically on every host.
+fn win_join(parts: &[&str]) -> String {
+    parts
+        .iter()
+        .map(|part| part.trim_end_matches('\\'))
+        .collect::<Vec<_>>()
+        .join("\\")
+}
+
 /// Resolve `shell` to the absolute path OneTerm trusts, or `Err` with the path
 /// it looked for so the message can name it.
 ///
 /// All three paths sit under a directory a standard user cannot write, which is
 /// the whole of the check: after resolution the path is tested for existence and
 /// nothing else. `PATH`, `COMSPEC` and `terminal.json` are never consulted.
+///
+/// Strings, not [`PathBuf`], all the way through — see [`win_join`]: these are
+/// Windows paths whatever the host is, and the lookup seams stay string-based so
+/// the resolution order reads the same on every CI runner.
 ///
 /// `versions` and `exists` are parameters for the same reason `resolve_unix_shell`
 /// (`config/shell.rs`) takes its lookup and existence checks that way: the
@@ -156,23 +176,25 @@ where
 /// > `BUILTIN\Administrators` / `NT SERVICE\TrustedInstaller`.
 pub fn trusted_program(
     shell: ElevatedShell,
-    system_root: &Path,
-    program_files: &Path,
-    versions: impl Fn(&Path) -> Vec<OsString>,
-    exists: impl Fn(&Path) -> bool,
-) -> Result<PathBuf, PathBuf> {
+    system_root: &str,
+    program_files: &str,
+    versions: impl Fn(&str) -> Vec<String>,
+    exists: impl Fn(&str) -> bool,
+) -> Result<String, String> {
     match shell {
         // Not `COMSPEC`: that is a plain environment variable any parent process
         // can set to anything.
-        ElevatedShell::Cmd => found(system_root.join("System32").join("cmd.exe"), exists),
+        ElevatedShell::Cmd => found(win_join(&[system_root, "System32", "cmd.exe"]), exists),
         // Windows PowerShell 5.1 ships in the OS at this fixed path; the `v1.0`
         // directory name is historical and has not changed since 2.0.
         ElevatedShell::PowerShell => found(
-            system_root
-                .join("System32")
-                .join("WindowsPowerShell")
-                .join("v1.0")
-                .join("powershell.exe"),
+            win_join(&[
+                system_root,
+                "System32",
+                "WindowsPowerShell",
+                "v1.0",
+                "powershell.exe",
+            ]),
             exists,
         ),
         ElevatedShell::Pwsh => {
@@ -180,22 +202,22 @@ pub fn trusted_program(
             // The registry's `InstallLocation` is deliberately not read: it is
             // admin-written but points wherever the installer was told to
             // install, which can be a directory a standard user may write.
-            let root = program_files.join("PowerShell");
+            let root = win_join(&[program_files, "PowerShell"]);
             let mut majors: Vec<u32> = versions(&root)
                 .iter()
-                .filter_map(|entry| entry.to_str()?.parse().ok())
+                .filter_map(|entry| entry.parse().ok())
                 .collect();
             majors.sort_unstable_by(|left, right| right.cmp(left));
             majors
                 .into_iter()
-                .map(|major| root.join(major.to_string()).join("pwsh.exe"))
+                .map(|major| win_join(&[&root, &major.to_string(), "pwsh.exe"]))
                 .find(|candidate| exists(candidate))
-                .ok_or_else(|| root.join("7").join("pwsh.exe"))
+                .ok_or_else(|| win_join(&[&root, "7", "pwsh.exe"]))
         }
     }
 }
 
-fn found(path: PathBuf, exists: impl Fn(&Path) -> bool) -> Result<PathBuf, PathBuf> {
+fn found(path: String, exists: impl Fn(&str) -> bool) -> Result<String, String> {
     if exists(&path) { Ok(path) } else { Err(path) }
 }
 
@@ -205,7 +227,7 @@ fn found(path: PathBuf, exists: impl Fn(&Path) -> bool) -> Result<PathBuf, PathB
 /// whose environment block was built by the AppInfo service from the elevated
 /// token's profile — `SHELLEXECUTEINFOW` carries no environment block at all, so
 /// the launching process cannot reach them.
-pub fn trusted_program_for(shell: ElevatedShell) -> Result<PathBuf, PathBuf> {
+pub fn trusted_program_for(shell: ElevatedShell) -> Result<String, String> {
     trusted_program(
         shell,
         &protected_root("SystemRoot", r"C:\Windows"),
@@ -214,17 +236,18 @@ pub fn trusted_program_for(shell: ElevatedShell) -> Result<PathBuf, PathBuf> {
             std::fs::read_dir(directory)
                 .into_iter()
                 .flatten()
-                .filter_map(|entry| Some(entry.ok()?.file_name()))
+                .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
                 .collect()
         },
-        |path| path.is_file(),
+        |path| Path::new(path).is_file(),
     )
 }
 
-fn protected_root(variable: &str, default: &str) -> PathBuf {
-    std::env::var_os(variable)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(default))
+/// A root that is not valid UTF-8 falls back to the default: `%SystemRoot%` and
+/// `%ProgramFiles%` are ASCII on every Windows this runs on, and a machine where
+/// they are not is one where the default is the better guess anyway.
+fn protected_root(variable: &str, default: &str) -> String {
+    std::env::var(variable).unwrap_or_else(|_| default.to_string())
 }
 
 /// The shell configuration an **elevated** process is allowed to spawn: the
@@ -240,7 +263,7 @@ fn protected_root(variable: &str, default: &str) -> PathBuf {
 /// tests, which must not depend on the host having Windows.
 pub fn trusted_shell_config(
     cfg: &LocalShellConfig,
-    resolve: impl Fn(ElevatedShell) -> Result<PathBuf, PathBuf>,
+    resolve: impl Fn(ElevatedShell) -> Result<String, String>,
 ) -> Result<LocalShellConfig, AppError> {
     let shell =
         ElevatedShell::from_shell_kind(cfg.kind).ok_or_else(|| AppError::ShellResolution {
@@ -251,7 +274,7 @@ pub fn trusted_shell_config(
         })?;
     let program = resolve(shell).map_err(|looked_for| AppError::ShellResolution {
         shell: cfg.kind.display_name().to_string(),
-        reason: format!("not installed at {}", looked_for.display()),
+        reason: format!("not installed at {looked_for}"),
     })?;
     // Built field by field, deliberately **not** with `..cfg.clone()`: struct
     // update syntax would silently carry any field added to `LocalShellConfig`
@@ -260,7 +283,7 @@ pub fn trusted_shell_config(
     // build until somebody decides which side of the boundary it belongs on.
     Ok(LocalShellConfig {
         kind: cfg.kind,
-        program: Some(program),
+        program: Some(PathBuf::from(program)),
         // The kind's own args only; `resolve_shell` appends `cfg.args` and finds
         // nothing to append.
         args: Vec::new(),
@@ -637,51 +660,48 @@ mod tests {
         }
     }
 
-    fn windows_roots() -> (PathBuf, PathBuf) {
-        (
-            PathBuf::from(r"X:\Windows"),
-            PathBuf::from(r"X:\Program Files"),
+    /// Every resolution runs against injected roots, so a test that passed by
+    /// reading the host `PATH` would fail here instead. Strings throughout: the
+    /// expected values below are Windows paths on the Windows, Linux and macOS
+    /// runners alike (`US-0130` rework 2026-09-22).
+    fn resolve(shell: ElevatedShell, listing: &[&str], present: &[&str]) -> Result<String, String> {
+        let listing: Vec<String> = listing.iter().map(|entry| entry.to_string()).collect();
+        trusted_program(
+            shell,
+            r"X:\Windows",
+            r"X:\Program Files",
+            |_| listing.clone(),
+            |path| present.contains(&path),
         )
     }
 
-    /// Every resolution runs against injected roots, so a test that passed by
-    /// reading the host `PATH` would fail here instead.
-    fn resolve(
-        shell: ElevatedShell,
-        listing: &[&str],
-        present: &[&str],
-    ) -> Result<PathBuf, PathBuf> {
-        let (system_root, program_files) = windows_roots();
-        let listing: Vec<OsString> = listing.iter().map(OsString::from).collect();
-        let present: Vec<PathBuf> = present.iter().map(PathBuf::from).collect();
-        trusted_program(
-            shell,
-            &system_root,
-            &program_files,
-            |_| listing.clone(),
-            |path| present.iter().any(|known| known == path),
-        )
+    /// The reason this module never touches [`PathBuf::join`]: the separator is
+    /// `\` whatever the host thinks, and a root that already ends in one does
+    /// not double it.
+    #[test]
+    fn windows_components_are_joined_with_a_backslash_on_every_os() {
+        assert_eq!(
+            win_join(&[r"X:\Windows", "System32", "cmd.exe"]),
+            r"X:\Windows\System32\cmd.exe"
+        );
+        assert_eq!(win_join(&[r"X:\", "Windows"]), r"X:\Windows");
     }
 
     #[test]
     fn cmd_resolves_under_system32_and_never_through_comspec() {
-        let expected = PathBuf::from(r"X:\Windows\System32\cmd.exe");
+        let expected = r"X:\Windows\System32\cmd.exe";
         assert_eq!(
-            resolve(ElevatedShell::Cmd, &[], &[expected.to_str().unwrap()]),
-            Ok(expected)
+            resolve(ElevatedShell::Cmd, &[], &[expected]),
+            Ok(expected.to_string())
         );
     }
 
     #[test]
     fn windows_powershell_resolves_under_the_v1_0_directory() {
-        let expected = PathBuf::from(r"X:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe");
+        let expected = r"X:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
         assert_eq!(
-            resolve(
-                ElevatedShell::PowerShell,
-                &[],
-                &[expected.to_str().unwrap()]
-            ),
-            Ok(expected)
+            resolve(ElevatedShell::PowerShell, &[], &[expected]),
+            Ok(expected.to_string())
         );
     }
 
@@ -689,7 +709,7 @@ mod tests {
     fn a_missing_system_shell_reports_the_path_it_looked_for() {
         assert_eq!(
             resolve(ElevatedShell::Cmd, &[], &[]),
-            Err(PathBuf::from(r"X:\Windows\System32\cmd.exe"))
+            Err(r"X:\Windows\System32\cmd.exe".to_string())
         );
     }
 
@@ -704,7 +724,7 @@ mod tests {
                     r"X:\Program Files\PowerShell\8\pwsh.exe",
                 ]
             ),
-            Ok(PathBuf::from(r"X:\Program Files\PowerShell\8\pwsh.exe"))
+            Ok(r"X:\Program Files\PowerShell\8\pwsh.exe".to_string())
         );
     }
 
@@ -716,7 +736,7 @@ mod tests {
                 &["7", "9"],
                 &[r"X:\Program Files\PowerShell\7\pwsh.exe"]
             ),
-            Ok(PathBuf::from(r"X:\Program Files\PowerShell\7\pwsh.exe"))
+            Ok(r"X:\Program Files\PowerShell\7\pwsh.exe".to_string())
         );
     }
 
@@ -724,7 +744,7 @@ mod tests {
     fn pwsh_with_no_install_reports_the_version_7_path() {
         assert_eq!(
             resolve(ElevatedShell::Pwsh, &["preview"], &[]),
-            Err(PathBuf::from(r"X:\Program Files\PowerShell\7\pwsh.exe"))
+            Err(r"X:\Program Files\PowerShell\7\pwsh.exe".to_string())
         );
     }
 
@@ -751,7 +771,7 @@ mod tests {
             utf8: true,
         };
         let trusted =
-            trusted_shell_config(&cfg, |_| Ok(PathBuf::from(r"X:\Windows\System32\cmd.exe")))
+            trusted_shell_config(&cfg, |_| Ok(r"X:\Windows\System32\cmd.exe".to_string()))
                 .expect("cmd is elevatable");
 
         assert_eq!(
@@ -795,7 +815,7 @@ mod tests {
             ..LocalShellConfig::default()
         };
         let error = trusted_shell_config(&cfg, |_| {
-            Err(PathBuf::from(r"X:\Program Files\PowerShell\7\pwsh.exe"))
+            Err(r"X:\Program Files\PowerShell\7\pwsh.exe".to_string())
         })
         .expect_err("a missing pwsh must not resolve");
         assert!(error.to_string().contains("pwsh.exe"));
