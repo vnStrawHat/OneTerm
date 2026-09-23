@@ -550,7 +550,9 @@ one step, `cargo test -p oneterm-vt --features vt-paranoid`, so the unbounded in
 every change. Release builds compile both tiers out exactly as before — the `cfg!(debug_assertions)`
 guards are untouched.
 
-**Measured** — `render::bench::integrity_walk_cost_per_feed_and_render_update`, a debug build,
+**Measured** — `snapshot::bench::integrity_walk_cost_per_feed_and_snapshot_update`
+(`crates/vt/src/snapshot/snapshot_bench.rs`; it was `render::bench::..._and_render_update` in
+`render/render_bench.rs` when this rework landed), a debug build,
 160x45, a full 100 000-row history, ten calls each:
 
 | | `feed` (one line) | `render_update` |
@@ -560,9 +562,15 @@ guards are untouched.
 | ratio | 1810x | 1683x |
 
 The residual ~150 us is the floor this bound describes — two 45-row screens, each cell visited by
-both walkers — and it is flat in the scrollback depth. The probe asserts a 1 ms ceiling when the
+both walkers — and it is flat in the scrollback depth. ~~The probe asserts a 1 ms ceiling when the
 feature is off: a regression detector with three orders of magnitude of margin, not a benchmark
-gate.
+gate.~~ **Superseded by `BUG-0075`**
+([`BUG-0075-integrity-walk-bench-measures-the-runner.md`](BUG-0075-integrity-walk-bench-measures-the-runner.md),
+2026-09-23). The margin was 7x, not three orders of magnitude — 1 ms against an honest 142.9 us —
+and a loaded CI runner failed it at 1382.4 us without the bound having moved. The probe now runs
+the same loop twice, over this full history and over a near-empty one, and asserts the ratio
+between them (the 1810x / 1683x column above is what a regression looks like; the bound is 20x),
+with 20 ms left as a loose absolute backstop.
 
 **Verification.**
 

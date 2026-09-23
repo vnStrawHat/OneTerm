@@ -71,9 +71,14 @@ fn render_state_build_cost_per_frame() {
 // What the debug integrity walk costs per `feed` and per `snapshot_update` over a
 // full 100 000-row history (R-28, the `US-0075` / `US-0079` rework).
 //
-// Recorded, not a benchmark gate - but the R-28 budget itself is asserted
-// without the feature, with a margin of two orders of magnitude, so a walk that
-// goes back to O(history) fails here instead of in a user's session.
+// The numbers are recorded, not a benchmark gate. What is asserted is R-28
+// itself - "bounded to what the operation touched, so the history depth must not
+// appear in the cost" - and that is a shape, not a duration: the same probe loop
+// runs twice in this process, over a full history and over almost none, and the
+// two must cost the same. A wall-clock ceiling on its own cannot tell an
+// O(history) walk from a descheduled thread, which is what it did on a loaded CI
+// runner (`BUG-0075`); a ratio between two loops on the same machine in the same
+// second can, because the machine cancels out of it.
 /// Run it both ways: `--features vt-paranoid` is the "before" number.
 #[test]
 #[cfg_attr(
@@ -82,9 +87,83 @@ fn render_state_build_cost_per_frame() {
 )]
 fn integrity_walk_cost_per_feed_and_snapshot_update() {
     const HISTORY: usize = 100_000;
-    // Ten is enough for a number whose two states differ by three orders of
-    // magnitude, and keeps the `vt-paranoid` CI run down to a few seconds.
+
+    let (full_feed, full_render) = integrity_walk_probe(HISTORY);
+    let (empty_feed, empty_render) = integrity_walk_probe(0);
+    let feed_ratio = full_feed / empty_feed.max(f64::MIN_POSITIVE);
+    let render_ratio = full_render / empty_render.max(f64::MIN_POSITIVE);
+
+    eprintln!(
+        "integrity walk over {HISTORY} history rows, 160x45, vt-paranoid = {}:",
+        cfg!(feature = "vt-paranoid")
+    );
+    eprintln!(
+        "  feed(one line)  : {full_feed:>9.1} us  ({empty_feed:>7.1} us near-empty, {feed_ratio:.2}x)"
+    );
+    eprintln!(
+        "  snapshot_update() : {full_render:>9.1} us  ({empty_render:>7.1} us near-empty, {render_ratio:.2}x)"
+    );
+
+    #[cfg(not(feature = "vt-paranoid"))]
+    {
+        // Both probes walk the same two 45-row screens; only the scrollback
+        // behind them differs. So the bounded walk puts the ratio at about 1,
+        // and an O(history) walk puts it at about 1700 (`US-0075`'s measured
+        // before/after). 20 sits between the two with more than an order of
+        // magnitude of margin on each side, and it is not a timing threshold -
+        // it does not move when the machine does.
+        const DEPTH_RATIO: f64 = 20.0;
+        // ...plus a backstop for a regression that slows both probes and so
+        // cannot show in their ratio. Loose enough that a debug build on a
+        // loaded 2-vCPU runner never reaches it - the honest cost is ~150 us -
+        // and tight enough that the 250 ms whole-history walk does.
+        const CEILING_US: f64 = 20_000.0;
+
+        assert!(
+            feed_ratio < DEPTH_RATIO,
+            "feed cost {full_feed:.1} us over {HISTORY} history rows \
+             against {empty_feed:.1} us over almost none, {feed_ratio:.1}x: O(history)"
+        );
+        assert!(
+            render_ratio < DEPTH_RATIO,
+            "snapshot_update cost {full_render:.1} us over {HISTORY} history rows \
+             against {empty_render:.1} us over almost none, {render_ratio:.1}x: O(history)"
+        );
+        assert!(
+            full_feed < CEILING_US,
+            "feed cost {full_feed:.1} us, over the {CEILING_US:.0} us ceiling"
+        );
+        assert!(
+            full_render < CEILING_US,
+            "snapshot_update cost {full_render:.1} us, over the {CEILING_US:.0} us ceiling"
+        );
+    }
+}
+
+// Fill `history` rows of scrollback under a full screen, then time `CALLS`
+// `feed` + `snapshot_update` pairs over it. Returns the *cheapest* call of
+// each, in microseconds.
+//
+// The cheapest, not the mean: the walk is what every call pays, a descheduling
+// is what one call pays, and it is only ever added. Over ten samples the
+// minimum is the estimator a loaded runner cannot inflate - and cannot deflate
+// an O(history) walk either, since that one costs a quarter of a second in
+// every sample (`BUG-0075`).
+//
+// The scrollback limit is the same in both calls, so the two probes differ in
+// the one variable R-28 is about: how many rows are live behind the screen.
+//
+// Plain `//`, not `///`: the crate's published rustdoc must read for an
+// embedder who does not have this repository, so `ci-local` and the CI
+// `vt-package` job forbid a work-packet citation in `///` text anywhere under
+// `crates/vt/src`. A private test helper owes no rustdoc, so the citation stays
+// and the doc comment goes.
+fn integrity_walk_probe(history: usize) -> (f64, f64) {
+    // Ten is enough for a minimum to find a clean sample, and keeps the
+    // `vt-paranoid` CI run - where one call is a quarter of a second - down to a
+    // few seconds.
     const CALLS: u32 = 10;
+    const SCROLLBACK: u32 = 100_000;
 
     let mut term = Terminal::new(
         Size {
@@ -92,7 +171,7 @@ fn integrity_walk_cost_per_feed_and_snapshot_update() {
             cols: 160,
         },
         Config {
-            scrollback_limit: HISTORY as u32,
+            scrollback_limit: SCROLLBACK,
             ..Config::default()
         },
     );
@@ -101,9 +180,10 @@ fn integrity_walk_cost_per_feed_and_snapshot_update() {
     let palette = Palette::new();
 
     // One feed, so filling the history costs one walk rather than 100 000.
-    // A screen's worth over the limit, so the history is full, not one short.
-    let mut fill = String::with_capacity(HISTORY * 3);
-    for row in 0..HISTORY + 64 {
+    // A screen's worth on top, so the history is full and not one short, and so
+    // both probes walk an equally populated screen.
+    let mut fill = String::with_capacity((history + 64) * 3);
+    for row in 0..history + 64 {
         fill.push_str("row ");
         fill.push_str(&row.to_string());
         fill.push_str("\r\n");
@@ -111,44 +191,28 @@ fn integrity_walk_cost_per_feed_and_snapshot_update() {
     term.feed(fill.as_bytes(), &mut batch, Instant::now());
     term.snapshot_update(&mut state, Instant::now());
     state.map_colors(&palette);
-    assert_eq!(term.grid().primary().history_len() as usize, HISTORY);
+    // Both ends, not just the lower one. The single shape that could silently
+    // disarm the caller's ratio is a control whose own history is deep - the
+    // quotient would sit at 1.0 for ever, whatever the walk did - so the depth
+    // is pinned to the fill in both probes, as it was before the rework.
+    let filled = term.grid().primary().history_len() as usize;
+    assert!(
+        (history..history + 64).contains(&filled),
+        "history filled to {filled} rows, not {history}"
+    );
 
-    let mut fed = Duration::ZERO;
-    let mut rendered = Duration::ZERO;
+    let mut fed = Duration::MAX;
+    let mut rendered = Duration::MAX;
     for call in 0..CALLS {
         let line = format!("probe {call}\r\n");
         let started = Instant::now();
         term.feed(line.as_bytes(), &mut batch, Instant::now());
-        fed += started.elapsed();
+        fed = fed.min(started.elapsed());
         let started = Instant::now();
         term.snapshot_update(&mut state, Instant::now());
-        rendered += started.elapsed();
+        rendered = rendered.min(started.elapsed());
     }
-    let per_feed = fed.as_secs_f64() * 1e6 / f64::from(CALLS);
-    let per_render = rendered.as_secs_f64() * 1e6 / f64::from(CALLS);
-
-    eprintln!(
-        "integrity walk over {HISTORY} history rows, 160x45, vt-paranoid = {}:",
-        cfg!(feature = "vt-paranoid")
-    );
-    eprintln!("  feed(one line)  : {per_feed:>9.1} us");
-    eprintln!("  snapshot_update() : {per_render:>9.1} us");
-
-    #[cfg(not(feature = "vt-paranoid"))]
-    {
-        // R-28: bounded to what the operation touched, so the history depth
-        // must not show up in either number. Both are a couple of hundred
-        // microseconds when the bound holds — the two 45-row screens and their
-        // cells, nothing more — and hundreds of milliseconds when it does not.
-        assert!(
-            per_feed < 1000.0,
-            "feed cost {per_feed:.1} us is O(history)"
-        );
-        assert!(
-            per_render < 1000.0,
-            "snapshot_update cost {per_render:.1} us is O(history)"
-        );
-    }
+    (fed.as_secs_f64() * 1e6, rendered.as_secs_f64() * 1e6)
 }
 
 /// Time `FRAMES` frames, each dirtying `rows` rows before the clock starts.

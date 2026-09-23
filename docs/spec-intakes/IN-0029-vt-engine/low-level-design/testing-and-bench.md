@@ -79,10 +79,21 @@ platform-conditional site and the engine's only such module, `src/pty/`, is alre
 and run per platform by `cargo test --workspace`.
 
 **The guarding test** is `snapshot::bench::integrity_walk_cost_per_feed_and_snapshot_update`
-(`crates/vt/src/snapshot/snapshot_bench.rs`): it fills a 100 000-row history in one `feed`, reports the
-per-`feed` and per-`snapshot_update` cost, and **asserts a 1 ms ceiling** when the feature is off.
-Debug only — the walk does not exist in a release build. It is a regression detector with three
-orders of magnitude of margin, not a benchmark gate, so it never fails on a slow machine.
+(`crates/vt/src/snapshot/snapshot_bench.rs`). It runs one probe loop **twice** in the same process
+— once over a full 100 000-row history and once over a near-empty one, same geometry, same
+scrollback limit, same screen content — reports the per-`feed` and per-`snapshot_update` cost of
+each, and when the feature is off **asserts the ratio between them, `< 20x`**, plus a loose
+absolute ceiling of 20 ms as a backstop. Each number is the *cheapest* of ten calls, not their
+mean. Debug only — the walk does not exist in a release build.
+
+The ratio, not a wall clock, is what carries R-28: the property is "flat in the scrollback depth",
+the two probes differ in nothing but that depth, and the runner's speed and load cancel out of
+their quotient. The bounded walk puts the ratio at about 1 and an O(history) walk puts it at about
+1700, so the bound sits more than an order of magnitude from either population. **`BUG-0075`**
+(`../BUG-0075-integrity-walk-bench-measures-the-runner.md`) replaced the earlier form — a 1 ms
+ceiling on the *mean* of ten calls — which failed on a loaded CI runner at 1382.4 us with the walk
+perfectly well bounded: a mean carries whatever the scheduler did to the thread, and 1 ms was 7x
+above the honest cost, not the three orders of magnitude the margin was described as.
 
 ### 2. The parity corpus
 
