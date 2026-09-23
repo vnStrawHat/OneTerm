@@ -408,8 +408,10 @@ what belongs to this packet is:
   still before the rebuild-or-copy decision. Only the row range the call covers changed, so the
   R-17 ordering and the `Unchanged` path are untouched.
 - **The probe lives here**, next to the tier-3 bench it belongs with:
-  `render::bench::integrity_walk_cost_per_feed_and_render_update` in
-  `crates/vt/src/render/render_bench.rs`. It fills a 100 000-row history in one `feed`, then
+  `snapshot::bench::integrity_walk_cost_per_feed_and_snapshot_update` in
+  `crates/vt/src/snapshot/snapshot_bench.rs` (the module and the test were still called
+  `render` / `render_update` when this rework landed; the names here are the current ones).
+  It fills a 100 000-row history in one `feed`, then
   reports the per-`feed` and per-`render_update` cost; run it with `--features vt-paranoid` for the
   "before" number. Debug only — the walk does not exist in a release build — and ~~it asserts a 1 ms
   ceiling when the feature is off~~, so a walk that goes back to O(history) fails here rather than in

@@ -140,18 +140,24 @@ fn integrity_walk_cost_per_feed_and_snapshot_update() {
     }
 }
 
-/// Fill `history` rows of scrollback under a full screen, then time `CALLS`
-/// `feed` + `snapshot_update` pairs over it. Returns the **cheapest** call of
-/// each, in microseconds.
-///
-/// The cheapest, not the mean: the walk is what every call pays, a descheduling
-/// is what one call pays, and it is only ever added. Over ten samples the
-/// minimum is the estimator a loaded runner cannot inflate - and cannot deflate
-/// an O(history) walk either, since that one costs a quarter of a second in
-/// every sample (`BUG-0075`).
-///
-/// The scrollback limit is the same in both calls, so the two probes differ in
-/// the one variable R-28 is about: how many rows are live behind the screen.
+// Fill `history` rows of scrollback under a full screen, then time `CALLS`
+// `feed` + `snapshot_update` pairs over it. Returns the *cheapest* call of
+// each, in microseconds.
+//
+// The cheapest, not the mean: the walk is what every call pays, a descheduling
+// is what one call pays, and it is only ever added. Over ten samples the
+// minimum is the estimator a loaded runner cannot inflate - and cannot deflate
+// an O(history) walk either, since that one costs a quarter of a second in
+// every sample (`BUG-0075`).
+//
+// The scrollback limit is the same in both calls, so the two probes differ in
+// the one variable R-28 is about: how many rows are live behind the screen.
+//
+// Plain `//`, not `///`: the crate's published rustdoc must read for an
+// embedder who does not have this repository, so `ci-local` and the CI
+// `vt-package` job forbid a work-packet citation in `///` text anywhere under
+// `crates/vt/src`. A private test helper owes no rustdoc, so the citation stays
+// and the doc comment goes.
 fn integrity_walk_probe(history: usize) -> (f64, f64) {
     // Ten is enough for a minimum to find a clean sample, and keeps the
     // `vt-paranoid` CI run - where one call is a quarter of a second - down to a
@@ -185,9 +191,14 @@ fn integrity_walk_probe(history: usize) -> (f64, f64) {
     term.feed(fill.as_bytes(), &mut batch, Instant::now());
     term.snapshot_update(&mut state, Instant::now());
     state.map_colors(&palette);
+    // Both ends, not just the lower one. The single shape that could silently
+    // disarm the caller's ratio is a control whose own history is deep - the
+    // quotient would sit at 1.0 for ever, whatever the walk did - so the depth
+    // is pinned to the fill in both probes, as it was before the rework.
+    let filled = term.grid().primary().history_len() as usize;
     assert!(
-        term.grid().primary().history_len() as usize >= history,
-        "the history did not fill"
+        (history..history + 64).contains(&filled),
+        "history filled to {filled} rows, not {history}"
     );
 
     let mut fed = Duration::MAX;

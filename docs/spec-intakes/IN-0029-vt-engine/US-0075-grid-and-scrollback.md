@@ -550,7 +550,9 @@ one step, `cargo test -p oneterm-vt --features vt-paranoid`, so the unbounded in
 every change. Release builds compile both tiers out exactly as before — the `cfg!(debug_assertions)`
 guards are untouched.
 
-**Measured** — `render::bench::integrity_walk_cost_per_feed_and_render_update`, a debug build,
+**Measured** — `snapshot::bench::integrity_walk_cost_per_feed_and_snapshot_update`
+(`crates/vt/src/snapshot/snapshot_bench.rs`; it was `render::bench::..._and_render_update` in
+`render/render_bench.rs` when this rework landed), a debug build,
 160x45, a full 100 000-row history, ten calls each:
 
 | | `feed` (one line) | `render_update` |
