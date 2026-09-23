@@ -560,9 +560,15 @@ guards are untouched.
 | ratio | 1810x | 1683x |
 
 The residual ~150 us is the floor this bound describes — two 45-row screens, each cell visited by
-both walkers — and it is flat in the scrollback depth. The probe asserts a 1 ms ceiling when the
+both walkers — and it is flat in the scrollback depth. ~~The probe asserts a 1 ms ceiling when the
 feature is off: a regression detector with three orders of magnitude of margin, not a benchmark
-gate.
+gate.~~ **Superseded by `BUG-0075`**
+([`BUG-0075-integrity-walk-bench-measures-the-runner.md`](BUG-0075-integrity-walk-bench-measures-the-runner.md),
+2026-09-23). The margin was 7x, not three orders of magnitude — 1 ms against an honest 142.9 us —
+and a loaded CI runner failed it at 1382.4 us without the bound having moved. The probe now runs
+the same loop twice, over this full history and over a near-empty one, and asserts the ratio
+between them (the 1810x / 1683x column above is what a regression looks like; the bound is 20x),
+with 20 ms left as a loose absolute backstop.
 
 **Verification.**
 

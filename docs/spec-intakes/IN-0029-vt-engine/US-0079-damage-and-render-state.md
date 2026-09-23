@@ -411,9 +411,15 @@ what belongs to this packet is:
   `render::bench::integrity_walk_cost_per_feed_and_render_update` in
   `crates/vt/src/render/render_bench.rs`. It fills a 100 000-row history in one `feed`, then
   reports the per-`feed` and per-`render_update` cost; run it with `--features vt-paranoid` for the
-  "before" number. Debug only — the walk does not exist in a release build — and it asserts a 1 ms
-  ceiling when the feature is off, so a walk that goes back to O(history) fails here rather than in
-  a user's session.
+  "before" number. Debug only — the walk does not exist in a release build — and ~~it asserts a 1 ms
+  ceiling when the feature is off~~, so a walk that goes back to O(history) fails here rather than in
+  a user's session. **The 1 ms ceiling was the defect `BUG-0075` fixed**
+  ([`BUG-0075-integrity-walk-bench-measures-the-runner.md`](BUG-0075-integrity-walk-bench-measures-the-runner.md),
+  2026-09-23): a wall-clock bound on the mean of ten calls cannot tell an O(history) walk from a
+  descheduled thread, and a loaded CI runner failed it at 1382.4 us with the bound intact. The probe
+  now runs twice in one process — a full history and a near-empty one — and asserts the **ratio**
+  between them, which is the R-28 property itself and does not move when the machine does. The
+  numbers below are unaffected; only what is asserted about them changed.
 
 | | `feed` (one line) | `render_update` |
 | --- | --- | --- |
