@@ -370,11 +370,9 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
 
             // Process readable events.
             for event in events.iter() {
-                if event.is_interrupt() {
-                    continue;
-                }
+                let action = classify_event(event.key, event.is_interrupt(), event.readable);
 
-                if event.key == PTY_CHILD_EVENT_TOKEN {
+                if action == PollAction::ChildEvent {
                     if let Some(ChildEvent::Exited(status)) = self.pty.next_child_event() {
                         // Nothing to tell the engine: liveness is
                         // `SharedSessionState::alive`, and the pump publishes
@@ -386,7 +384,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                     continue;
                 }
 
-                if event.readable {
+                if action == PollAction::ReadWrite {
                     #[cfg(feature = "terminal-diagnostics")]
                     let parse_start = diagnostics_enabled.then(std::time::Instant::now);
                     #[cfg(feature = "terminal-diagnostics")]
@@ -598,6 +596,48 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
             self.pty.deregister(&self.poll),
         );
     }
+}
+
+/// What one poll event asks the loop to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PollAction {
+    /// Ask the platform watcher whether the child has exited.
+    ChildEvent,
+    /// Drain the PTY.
+    ReadWrite,
+    /// Nothing — a hang-up on the PTY, or a bare wake-up.
+    Ignore,
+}
+
+/// Decide what a poll event means, **token first and hang-up second**.
+///
+/// That order is the whole of `BUG-0074`, and it is not cosmetic. On Unix the
+/// child's exit is announced over a `UnixStream` pair whose write half the
+/// reaper thread drops the instant after it posts its byte
+/// (`crates/vt/src/pty/unix.rs`, `reap_in_background`). A fully closed peer
+/// puts `EPOLLHUP` on the read half, so the notification and the hang-up reach
+/// the poller as one event — and the socket is registered level-triggered, so
+/// once that event is discarded *every* later poll discards the same one. The
+/// exit is then unreachable for the life of the tab: `alive()` stays true, the
+/// UI keeps a dead PTY open, and the loop spins on the hung-up master.
+///
+/// `is_interrupt` means "do not do I/O on a dead PTY". It is a statement about
+/// the PTY, never about the exit notification, which is precisely what a
+/// hang-up is announcing. So it is asked only once the token has been ruled a
+/// PTY token — where the upstream loop this one is a port of keeps it, and
+/// where `crates/vt/docs/guide/13-pty.md` shows embedders putting it.
+///
+/// Taken as three plain values rather than a `&PollEvent` because the hang-up
+/// flag cannot be constructed from outside the poller crate, and an ordering
+/// this easy to get backwards has to be testable without a live child.
+pub(crate) fn classify_event(key: usize, interrupt: bool, readable: bool) -> PollAction {
+    if key == PTY_CHILD_EVENT_TOKEN {
+        return PollAction::ChildEvent;
+    }
+    if interrupt || !readable {
+        return PollAction::Ignore;
+    }
+    PollAction::ReadWrite
 }
 
 /// Record the child's exit and tell the UI the session is over.
