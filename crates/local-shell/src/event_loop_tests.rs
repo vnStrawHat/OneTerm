@@ -32,6 +32,46 @@ fn notifier(
     (notifier, receiver, control)
 }
 
+/// `BUG-0074`: a hang-up must never hide the exit it is announcing.
+///
+/// The Unix reaper posts the exit byte and then drops its half of the socket
+/// pair, so the loop's half reports `EPOLLHUP` together with the byte. The
+/// loop asked `is_interrupt()` before it compared the token, discarded that
+/// event, and — the source being level-triggered — discarded every repeat of
+/// it too, so `alive()` never flipped. Restoring that order fails the first
+/// row here.
+///
+/// The three plain arguments are why this is testable at all: the hang-up flag
+/// belongs to the poller crate and cannot be set from outside it, and a live
+/// child cannot be made to exit with and without a hang-up on demand.
+#[test]
+fn a_hung_up_child_notification_is_still_a_child_notification() {
+    for readable in [true, false] {
+        assert_eq!(
+            classify_event(PTY_CHILD_EVENT_TOKEN, true, readable),
+            PollAction::ChildEvent,
+            "a hung-up child notification (readable={readable})"
+        );
+        assert_eq!(
+            classify_event(PTY_CHILD_EVENT_TOKEN, false, readable),
+            PollAction::ChildEvent
+        );
+    }
+    // The PTY keeps the guard: a hung-up PTY is not somewhere to do I/O.
+    assert_eq!(
+        classify_event(PTY_READ_WRITE_TOKEN, true, true),
+        PollAction::Ignore
+    );
+    assert_eq!(
+        classify_event(PTY_READ_WRITE_TOKEN, false, true),
+        PollAction::ReadWrite
+    );
+    assert_eq!(
+        classify_event(PTY_READ_WRITE_TOKEN, false, false),
+        PollAction::Ignore
+    );
+}
+
 #[test]
 fn input_queue_is_bounded_by_messages_and_bytes() {
     let (notifier, receiver, control) = notifier(1);
