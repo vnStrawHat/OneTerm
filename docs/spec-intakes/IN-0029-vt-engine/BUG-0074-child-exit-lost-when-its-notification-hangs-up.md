@@ -143,10 +143,50 @@ above stand.
    the loop spins on the hung-up master (which is also permanently `EPOLLHUP` once the
    slave is gone) for the life of the tab.
 
-The window is the few hundred nanoseconds between the reaper's `write_all` and its own
-return. Whoever polls inside it sees the byte without the hang-up and survives; whoever
-polls after it does not. That is why this is a race the owner's eight-core host wins and a
-two-vCPU runner loses, and why the same test passed on ubuntu at `main @3c77a6e1`.
+**How often this loses is not settled, and the packet does not claim it is** (verified,
+`evidence/BUG-0074-verify.md` F2-F4). `EPOLLHUP` is a *level* condition, not an edge: once
+the reaper's `close(2)` has landed, every later `epoll_wait` on `exit_signal` reports it.
+So the loop sees the byte without the hang-up only when its own
+`ep_send_events` → `ep_item_poll` → `unix_poll` computes the mask **before** that `close`.
+The two sides of that are the reaper returning from `unix_stream_sendmsg` to userspace,
+running one drop glue and taking `unix_state_lock` in `close(2)` — single-digit
+microseconds — against the loop being woken from inside the reaper's own `write`, being
+*scheduled* (on a two-vCPU VM, usually an IPI to a halted vCPU plus any host steal),
+returning from `ep_poll` and re-polling the item — microseconds to tens of microseconds.
+The reaper is heavily favoured, so the chain as written predicts near-deterministic loss
+whenever the loop thread is not already parked in `epoll_wait` at the instant of the write,
+and that does **not** by itself account for the green runs that preceded the failure.
+Either the framing is incomplete or the green history means something other than "the loop
+won the race"; see "Why it surfaced now". Nothing here weakens the fix, which is correct
+whichever it is — it only changes what the next ubuntu run proves.
+
+There is no host comparison to draw. This project has exactly one machine that runs the
+Unix notification path at all: the ubuntu runner. `crates/vt/src/pty/unix.rs` has never
+been compiled on the owner's Windows host (`5a0106f6` says so outright), so "it passes
+locally" is not evidence about this code and is not offered as any.
+
+### Why it surfaced now
+
+The green history is about **one week**, not weeks: the ubuntu job could not build the Unix
+PTY at all until `5a0106f6` (2026-09-16, `BUG-0063`, `SignalMask`'s `PartialEq` over
+`libc::sigset_t`). Before that, this path never ran in CI.
+
+The variable that decides the window above is not how many cores are busy. It is
+**whether the loop thread is parked in `epoll_wait` at the instant of the reaper's write.**
+Parked, the wake happens inline inside `unix_stream_sendmsg` and the loop has its only real
+chance to return before the `close`. Busy — parsing a batch, holding the `Term` lock,
+inside `finish_batch_blocking` — it reaches `poller.wait()` long after the `close` and sees
+`EPOLLIN|EPOLLHUP` with certainty.
+
+On that reading `IN-0044` contributes directly rather than as ambient load: `US-0136` added
+per-prompt output *to the exiting shell itself* — `PS0`, a forking `PROMPT_COMMAND`, the
+raw-byte `PS1` mark and the full OSC 133 set — so at the moment `exit` is typed and bash
+prints `logout` and dies, the loop is far more likely to be mid-batch than parked. It fits
+the failing snapshot, where `exit` and `logout` had both reached the grid, i.e. output was
+flowing when the child died. **This is the first thing to instrument if ubuntu fails
+again**, ahead of gap 4's strace: record not only whether the first reporting `epoll_wait`
+carries `EPOLLHUP`, but whether the loop thread was *inside* `epoll_wait` when the reaper's
+write landed.
 
 Three cross-checks that the diagnosis is the right one, not merely a plausible one:
 
@@ -193,9 +233,10 @@ The brief's leads were investigated in order and none of them is the cause.
 - **The new local-shell test.** `bash_prompt_draws_no_stray_bracket` is not `cfg(windows)`;
   it runs on Unix and it did run on the failing job. It takes `SPAWN_GUARD` for its spawn,
   uses its own PTY, and closes its session. It shares no TTY state. What it does add is one
-  more live `bash -l`, its event-loop thread and its reaper thread, on a two-vCPU runner —
-  which is load, and load is what decides the race in step 5 above. That is the whole of
-  `IN-0044`'s contribution: it did not create the defect, it tipped it.
+  more live `bash -l`, its event-loop thread and its reaper thread, on a two-vCPU runner.
+  That is ambient load, and ambient load is the *weaker* of the two ways `IN-0044` reaches
+  this defect — "Why it surfaced now" above gives the better-supported one. Either way it
+  did not create the defect.
 - **`BUG-0072`** changed `crates/vt/src/pty/windows/child.rs` only. Its **verifier**,
   however, is where the hoisted guard was written down (finding F2), and that finding is
   the strongest prior evidence for this packet.
@@ -310,6 +351,30 @@ test result: ok. 89 passed; 0 failed; 0 ignored   (oneterm-core)
 test result: ok. 35 passed; 0 failed; 2 ignored   (oneterm-local-shell)
 ```
 
+### `pwsh scripts/ci-local.ps1`
+
+Run in the worktree, Windows host, no `--full`. Every step passed; the script's own last
+line, which is all it prints as a summary:
+
+```text
+ci-local: all checks passed.
+```
+
+### Independent verification
+
+`docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0074-verify.md` — **PASS** on the code,
+with narrative findings. It re-read every link of the chain in the source rather than from
+this packet (F1), reproduced the negative control here down to the line and column (F9),
+confirmed the full dispatch truth table changes exactly the two `child + interrupt` rows
+and nothing else (F6), confirmed Windows is untouched (F8), confirmed the routing against
+`docs/HARNESS.md` and the live `harness.db` (F10), and confirmed the gate. F2, F3, F4, F12
+and F13 are applied above and below. Two of its observations are deliberately left as
+adjacent, pre-existing and out of scope: `next_child_event()` draining an empty `mpsc`
+would spin rather than end the session (prevented by the reaper's send-before-write
+ordering, which the fix does not disturb), and a master that hangs up with bytes still
+buffered has its tail dropped (identical on `main`; the mirror of this packet if a
+truncated final line is ever reported on Linux).
+
 ### Gaps
 
 1. **The failure itself is not reproduced on this host, and cannot be.** The trigger is
@@ -358,21 +423,26 @@ with sqlite3.connect("harness.db") as db:
         (
             "BUG-0074",
             "The local event loop throws the child exit away when its notification arrives hung up",
-            "2026-09-23",
+            "2026-09-23T00:00:00Z",
             "normal",
             "docs/spec-intakes/IN-0029-vt-engine/US-0083-local-shell-native.md",
             "docs/spec-intakes/IN-0029-vt-engine/BUG-0074-child-exit-lost-when-its-notification-hangs-up.md",
             "implemented",
             1, 1, 0, 0,
-            "ShellEventLoop asked event.is_interrupt() before it compared PTY_CHILD_EVENT_TOKEN. On Unix the reaper drops its half of the notification socket pair immediately after posting, so the peer reports EPOLLIN|EPOLLHUP and the exit arrived wearing a hang-up; the pair is level-triggered, so the loss was permanent and alive() never flipped. classify_event now asks the token first. Guard: a_hung_up_child_notification_is_still_a_child_notification, which fails on the shipped order. US-0136's bash environment was cleared by measurement through the real Windows PTY (login shell, injected env, Ubuntu-shaped .bash_logout: exit detected in 63-443 ms in five configurations).",
+            "docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0074-verify.md",
             "pwsh scripts/ci-local.ps1",
-            "2026-09-23",
+            "2026-09-23T00:00:00Z",
             "pass",
-            "Not reproduced on Linux: no Linux target, WSL or container on this host. The owner's next ubuntu job is the platform proof. The loopback PTY cannot carry a hung-up notification portably (TCP gives EPOLLRDHUP, and set_linger is unstable), so the guard pins the ordering rather than the end-to-end path.",
+            "ShellEventLoop asked event.is_interrupt() before it compared PTY_CHILD_EVENT_TOKEN. On Unix the reaper drops its half of the notification socket pair immediately after posting, so the peer reports EPOLLIN|EPOLLHUP and the exit arrived wearing a hang-up; the pair is level-triggered, so the loss was permanent and alive() never flipped. classify_event now asks the token first. Guard: a_hung_up_child_notification_is_still_a_child_notification, which fails on the shipped order. US-0136's bash environment was cleared by measurement through the real Windows PTY (login shell, injected env, Ubuntu-shaped .bash_logout: exit detected in 63-443 ms in five configurations). Not reproduced on Linux: no Linux target, WSL or container on this host, and pty/unix.rs has never been compiled here, so the owner's next ubuntu job is the platform proof. How often the race loses is not settled (verify F3): EPOLLHUP is a level condition, so the chain predicts near-deterministic loss whenever the loop thread is not parked in epoll_wait at the instant of the reaper's write. If ubuntu fails again, instrument that first (verify F4). The loopback PTY cannot carry a hung-up notification portably (TCP gives EPOLLRDHUP, and set_linger is unstable), so the guard pins the ordering rather than the end-to-end path.",
             34,
         ),
     )
 ```
+
+The `evidence` column carries the verification document's path, as every other story under
+this intake does; the prose is in `notes`. Verified against the live schema in
+`evidence/BUG-0074-verify.md` F12: 17 columns in order, every `CHECK` satisfied, and
+`intake_id=34` resolves to `IN-0029`.
 
 ## Handoff
 

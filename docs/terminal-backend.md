@@ -658,16 +658,17 @@ queries, drops the guard and finishes the batch there (§ 5.1) instead of holdin
 it until the pipe runs dry. The poller waits **without a timeout**, so an idle
 tab does not wake up: every `ShellNotifier::send` calls `poller.notify()`, and the
 child watcher posts a **keyed completion packet** on `PTY_CHILD_EVENT_TOKEN`.
-That difference is load-bearing and not an implementation detail — a `notify()`
-wake arrives keyless, and the loop reads a child exit only when the poller hands
-it that token, so the exit has to come in on the key or it is not read at all
-(§6.3, BUG-0072). The token is compared **before** the loop's hang-up guard
-(`classify_event`), because on Unix the exit and the hang-up of the socket that
-announced it arrive as one event: the reaper thread drops its half of the pair
-immediately after posting, and a closed peer puts `EPOLLHUP` on the loop's half.
-`is_interrupt()` means "do not do I/O on a dead PTY", so it is asked only of the
-PTY token — asking it first discarded the exit, permanently, because the source
-is level-triggered (BUG-0074). Being generic over the PTY, the loop is unit-tested with a
+That difference is load-bearing and not an implementation detail — a bare
+`notify()` uses the poller's reserved `NOTIFY_KEY`, which `Events::iter()`
+filters out, so it never reaches the loop's iteration at all: the exit has to
+come in on its own key or it is not read (§6.3, BUG-0072). The token is compared
+**before** the loop's hang-up guard (`classify_event`), because on Unix the exit
+and the hang-up of the socket that announced it arrive as one event: the reaper
+thread drops its half of the pair immediately after posting, and a closed peer
+puts `EPOLLHUP` on the loop's half. `is_interrupt()` means "do not do I/O on a
+dead PTY", so it is asked only of the PTY token — asking it first discarded the
+exit, permanently, because the source is level-triggered (BUG-0074).
+Being generic over the PTY, the loop is unit-tested with a
 loopback-socket PTY (`event_loop_tests.rs`) — no shell is spawned to cover
 output parsing, input FIFO, resize, colour replies, child exit, shutdown, and the
 hand-over itself (`a_flooding_loop_hands_the_engine_to_a_waiting_frame` floods the

@@ -58,10 +58,13 @@ fn a_hung_up_child_notification_is_still_a_child_notification() {
         );
     }
     // The PTY keeps the guard: a hung-up PTY is not somewhere to do I/O.
-    assert_eq!(
-        classify_event(PTY_READ_WRITE_TOKEN, true, true),
-        PollAction::Ignore
-    );
+    for readable in [true, false] {
+        assert_eq!(
+            classify_event(PTY_READ_WRITE_TOKEN, true, readable),
+            PollAction::Ignore,
+            "a hung-up PTY (readable={readable})"
+        );
+    }
     assert_eq!(
         classify_event(PTY_READ_WRITE_TOKEN, false, true),
         PollAction::ReadWrite
@@ -70,6 +73,13 @@ fn a_hung_up_child_notification_is_still_a_child_notification() {
         classify_event(PTY_READ_WRITE_TOKEN, false, false),
         PollAction::Ignore
     );
+    // No third key is ever registered, and the poller's own `NOTIFY_KEY` is
+    // filtered out of `Events::iter()` before the loop sees it — so this row is
+    // unreachable, and the table says what it would do rather than leaving it
+    // to be discovered.
+    let unknown = PTY_READ_WRITE_TOKEN + 1;
+    assert_eq!(classify_event(unknown, false, true), PollAction::ReadWrite);
+    assert_eq!(classify_event(unknown, true, true), PollAction::Ignore);
 }
 
 #[test]
