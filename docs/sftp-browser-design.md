@@ -1704,12 +1704,24 @@ closes itself once the backend confirms (`actions.rs::run_mutation`).
   wire (`US-0095` Change G). The measurement is kept as a test
   (`pipeline_budget_tests::seeking_per_chunk_still_throws_the_read_ahead_away`).
 - `copy_sequential` observes the `CancellationToken` between reads
-  (`tokio::select!`, `biased`), so a cancel lands within one chunk. Teardown is
-  just dropping the reader: russh-sftp de-registers each pending request on drop,
-  ignores a reply that arrives for a dropped one, and closes the handle without
-  awaiting. Up to the in-flight budget's worth of bytes still crosses the wire
-  after a cancel and is discarded — that is the price of the budget, and it
-  never reaches the local file.
+  (`tokio::select!`, `biased`), so a cancel lands within one chunk. russh-sftp
+  de-registers each pending read request when the reader goes away and ignores
+  a reply that arrives for a dropped one. Up to the in-flight budget's worth of
+  bytes still crosses the wire after a cancel and is discarded — that is the
+  price of the budget, and it never reaches the local file.
+- **Every remote `File` is closed with an awaited `File::close()`, never just
+  dropped** (`BUG-0076`). russh-sftp counts open handles itself and refuses
+  `open`/`opendir` once the count reaches the server's `limits@openssh.com`
+  `max_open_handles`; only an awaited close decrements it, while `Drop for File`
+  closes the handle on the server but not in the count. A dropped `File`
+  therefore leaks one unit for the life of the SFTP session, and a folder with
+  more files than the limit fails with "handle limit reached". The close is
+  awaited after a successful download (a failure is logged: the bytes are
+  already synced), in the background after a failed or cancelled one (its reply
+  queues behind the read-ahead, and a cancel must not wait for it), and always
+  after an upload, where a failed close fails the upload (it drains write acks
+  and can carry a deferred write error). The uid/gid lookup closes its two
+  files the same way.
 - Progress is a running byte count reported **once per `CHUNK_LEN` of bytes
   copied**, plus once at EOF. Thresholding on bytes rather than on reads keeps the
   cadence stable: russh-sftp serves 262 131 B per response against the 261 120 B

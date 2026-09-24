@@ -93,7 +93,22 @@ async fn upload_file_contents(
         Ok(())
     }
     .await;
-    drop(remote_file);
+    // Only an awaited close gives the handle back to russh-sftp's open-handle
+    // count (BUG-0076). The close also drains write acknowledgements and a
+    // server may report a deferred write error there, so it fails the upload.
+    // It is awaited on the failure path too: the remove below must reach the
+    // server after the CLOSE, as the dropped handle's CLOSE used to.
+    let closed = remote_file.close().await;
+    let transfer_result = match transfer_result {
+        Ok(()) => closed.map_err(|e| AppError::msg(format!("close remote: {e}"))),
+        Err(error) => {
+            report_best_effort(
+                "sftp upload: close remote temporary after failed copy",
+                closed,
+            );
+            Err(error)
+        }
+    };
 
     if let Err(error) = transfer_result {
         report_best_effort(

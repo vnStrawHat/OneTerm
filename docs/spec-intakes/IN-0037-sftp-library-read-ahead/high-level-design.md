@@ -133,6 +133,11 @@ nor blocks — verified against `russh-sftp-3.0.0/src/client/`:
   (`rawsession.rs:92-97`). The session task does not error out and does not stall.
 - `Drop for File` calls `close_nowait` (`fs/file.rs:272-280`): the `SSH_FXP_CLOSE` goes out and
   the reply is never awaited, so dropping is synchronous and cannot block the cancelling task.
+  **Superseded by `BUG-0076`:** that close never decrements russh-sftp's own open-handle count,
+  which `limits@openssh.com` caps, so every dropped `File` leaked a unit until `open` failed with
+  "handle limit reached". The download now awaits `File::close()` — inline on success, in a
+  spawned task after a failed or cancelled copy so the cancel still does not block on the
+  read-ahead draining ahead of the CLOSE reply.
 
 **One honest cost.** Cancellation stops the *copy* within one chunk either way, but the bytes
 already in flight still cross the wire before the server notices the closed handle: up to
@@ -213,7 +218,7 @@ budget test asserts one packet per chunk.
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | A later russh-sftp bump changes `max_concurrent_reads`' default or re-introduces a read cap, silently losing the pipeline | Medium | Throughput only | `pipeline_budget_tests` asserts the in-flight read budget is >= `16 x` one packet and that a 5 MiB download costs one READ per packet-length chunk; the D2 regression case is now `max_concurrent_reads: 1` |
-| Cancellation leaves queued READs leaking session state | Low | Memory / stuck session | Read the library: `Drop for Request` de-registers, late replies are ignored, `Drop for File` is `close_nowait`. Asserted by a cancel test that then completes a second transfer on the same session |
+| Cancellation leaves queued READs leaking session state | Low | Memory / stuck session | Read the library: `Drop for Request` de-registers, late replies are ignored, `Drop for File` is `close_nowait`. Asserted by a cancel test that then completes a second transfer on the same session. `BUG-0076` found the one leak this missed (the client-side handle count); `handle_limit_tests` guards it |
 | Up to 4.2 MB crosses the wire after a cancel | Certain | Bandwidth after cancel | Accepted and measured; it is the same budget that buys the throughput. Documented in `docs/sftp-browser-design.md` |
 | Progress cadence changes shape and the queue row jitters | Low | Cosmetic | Cadence is thresholded on bytes, not reads; asserted by an event-count test |
 | Losing the multi-handle path hurts a server that serves one handle slowly | Low | Throughput on exotic servers | Not observed; `limits@openssh.com` clamps per-request size, not per-handle rate. Reversible — the striped code is in git history |
