@@ -155,7 +155,7 @@ None. Close-error handling is local policy application, recorded above.
 - [x] Integration proof
 - [x] E2E proof
 - [x] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
@@ -245,9 +245,17 @@ Afterwards the app and server (own pids only) were stopped and the seeded
 
 ### Gaps
 
-- **The full `ci-local` gate is not green here** (see Commands): it must be rerun on a machine
-  with free memory before merge. Every step that ran passed; the failures are compiler/linker
-  out-of-memory crashes in third-party crates.
+- ~~The full `ci-local` gate is not green here~~ **Closed 2026-09-24 by the verifier**: the
+  gate was rerun on the same host once memory was free (`CARGO_BUILD_JOBS=4`) and ended with
+  `ci-local: all checks passed.` on `85c142c6` (see `evidence/BUG-0076-verify.md`). The
+  earlier failures were compiler/linker out-of-memory crashes in third-party crates, not checks.
+- **Detached close after a cancelled or failed download** (verify F4): the close runs in a
+  spawned task on the transfer runtime; at disconnect it fails fast ("session closed" /
+  "sender dropped") or is capped by the 10 s request timeout. Cost: one warning log per transfer
+  cancelled by a disconnect; the transfer shutdown loop does not wait for it.
+- **A file that grows after it was measured** (verify F6): the success-path close can wait
+  behind up to about 4.2 MB of read-ahead; if that exceeds the 10 s timeout the download still
+  succeeds but one handle stays counted for the session. Not observed; recorded, not fixed.
 - **No real OpenSSH run.** The limit is exercised through the same `limits@openssh.com`
   exchange OpenSSH uses, but against OneTerm's test/dev servers, not `sftp-server`.
 - **A failed upload write can still leak one unit.** `File::close` -> `poll_shutdown` first
