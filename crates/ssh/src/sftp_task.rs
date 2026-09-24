@@ -360,3 +360,7 @@ pub(crate) fn map_sftp_err(e: russh_sftp::client::error::Error) -> AppError {
 
 #[cfg(test)]
 mod sftp_task_tests;
+
+// `BUG-0076`: every remote file OneTerm opens gives its handle back.
+#[cfg(test)]
+mod handle_limit_tests;

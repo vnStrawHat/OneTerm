@@ -6,10 +6,12 @@
 //! be pointed at `127.0.0.1:<port>` without a real host.
 //!
 //! ```text
-//! cargo run -p oneterm-tools --bin sftp-dev-server -- [--port 2222] [--root DIR]
+//! cargo run -p oneterm-tools --bin sftp-dev-server -- [--port 2222] [--root DIR] [--max-open-handles N]
 //! ```
 //!
 //! Without `--root` a fresh temp directory with a few sample files is served.
+//! `--max-open-handles N` advertises `limits@openssh.com` like OpenSSH does, so
+//! the client's own open-handle limit is live (BUG-0076).
 //! The host key is random per run, so the client sees an unknown host each time.
 
 use std::collections::{HashMap, HashSet};
@@ -23,7 +25,8 @@ use std::time::Duration;
 use russh::server::{Auth, Msg, Server, Session};
 use russh::{Channel, ChannelId};
 use russh_sftp::protocol::{
-    Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Status, StatusCode, Version,
+    Attrs, Data, ExtendedReply, File, FileAttributes, Handle, Name, OpenFlags, Packet, Status,
+    StatusCode, Version,
 };
 use russh_sftp::server::StatusReply;
 
@@ -32,6 +35,7 @@ use russh_sftp::server::StatusReply;
 #[derive(Clone)]
 struct DevServer {
     root: PathBuf,
+    max_open_handles: Option<u64>,
 }
 
 impl Server for DevServer {
@@ -41,6 +45,7 @@ impl Server for DevServer {
         println!("client connected: {peer:?}");
         ClientHandler {
             root: self.root.clone(),
+            max_open_handles: self.max_open_handles,
             channels: HashMap::new(),
             sftp_channels: HashSet::new(),
         }
@@ -49,6 +54,7 @@ impl Server for DevServer {
 
 struct ClientHandler {
     root: PathBuf,
+    max_open_handles: Option<u64>,
     /// Session channels by id; the SFTP subsystem takes its channel out.
     channels: HashMap<ChannelId, Channel<Msg>>,
     /// Channels running the SFTP subsystem: their bytes belong to the SFTP
@@ -161,6 +167,7 @@ impl russh::server::Handler for ClientHandler {
             dirs: HashMap::new(),
             files: HashMap::new(),
             next_handle: 1,
+            max_open_handles: self.max_open_handles,
         };
         tokio::spawn(russh_sftp::server::run(channel.into_stream(), handler));
         Ok(())
@@ -175,6 +182,8 @@ struct SftpHandler {
     dirs: HashMap<String, (bool, Vec<File>)>,
     files: HashMap<String, std::fs::File>,
     next_handle: u64,
+    /// Advertised through `limits@openssh.com` when set.
+    max_open_handles: Option<u64>,
 }
 
 fn status_ok(id: u32) -> Status {
@@ -255,7 +264,41 @@ impl russh_sftp::server::Handler for SftpHandler {
         _version: u32,
         _extensions: HashMap<String, String>,
     ) -> Result<Version, Self::Error> {
-        Ok(Version::new())
+        let mut version = Version::new();
+        if self.max_open_handles.is_some() {
+            version
+                .extensions
+                .insert(russh_sftp::extensions::LIMITS.to_string(), "1".to_string());
+        }
+        Ok(version)
+    }
+
+    async fn extended(
+        &mut self,
+        id: u32,
+        request: String,
+        _data: Vec<u8>,
+    ) -> Result<Packet, Self::Error> {
+        let Some(max_open_handles) = self.max_open_handles else {
+            return Err(self.unimplemented());
+        };
+        if request != russh_sftp::extensions::LIMITS {
+            return Err(self.unimplemented());
+        }
+        eprintln!(
+            "sftp limits@openssh.com -> max_open_handles {max_open_handles} (open now: {})",
+            self.files.len() + self.dirs.len()
+        );
+        let limits = russh_sftp::extensions::LimitsExtension {
+            max_packet_len: 0,
+            max_read_len: 0,
+            max_write_len: 0,
+            max_open_handles,
+        };
+        let data = russh_sftp::ser::to_bytes(&limits)
+            .map_err(|error| StatusReply::new(StatusCode::Failure).with_message(error.to_string()))?
+            .to_vec();
+        Ok(Packet::ExtendedReply(ExtendedReply { id, data }))
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
@@ -477,7 +520,7 @@ fn seed_sample_root() -> io::Result<PathBuf> {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: sftp-dev-server [--port PORT] [--root DIR]");
+    eprintln!("usage: sftp-dev-server [--port PORT] [--root DIR] [--max-open-handles N]");
     std::process::exit(2)
 }
 
@@ -485,6 +528,7 @@ fn usage() -> ! {
 async fn main() -> io::Result<()> {
     let mut port: u16 = 2222;
     let mut root: Option<PathBuf> = None;
+    let mut max_open_handles: Option<u64> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -495,6 +539,13 @@ async fn main() -> io::Result<()> {
                     .unwrap_or_else(|| usage())
             }
             "--root" => root = Some(PathBuf::from(args.next().unwrap_or_else(|| usage()))),
+            "--max-open-handles" => {
+                max_open_handles = Some(
+                    args.next()
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or_else(|| usage()),
+                )
+            }
             _ => usage(),
         }
     }
@@ -520,6 +571,9 @@ async fn main() -> io::Result<()> {
         "serving {} on 127.0.0.1:{port} (any user / any password)",
         root.display()
     );
-    let mut server = DevServer { root };
+    let mut server = DevServer {
+        root,
+        max_open_handles,
+    };
     server.run_on_address(config, ("127.0.0.1", port)).await
 }

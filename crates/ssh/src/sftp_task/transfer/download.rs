@@ -95,18 +95,17 @@ async fn download_file_contents(
     }
 
     let announced = if total > 0 { total } else { u64::MAX };
+    let temporary = temporary_local_sibling(local, "part")?;
     let mut reader = sftp
         .open(remote_str)
         .await
         .map_err(map_sftp_err)?
         .take(announced);
 
-    let temporary = temporary_local_sibling(local, "part")?;
-    let mut local_file = tokio::fs::File::create(&temporary)
-        .await
-        .map_err(|e| AppError::msg(format!("create local temporary file: {e}")))?;
-
     let transfer_result: Result<()> = async {
+        let mut local_file = tokio::fs::File::create(&temporary)
+            .await
+            .map_err(|e| AppError::msg(format!("create local temporary file: {e}")))?;
         copy_sequential(&mut reader, &mut local_file, cancel, on_bytes).await?;
         local_file
             .flush()
@@ -119,7 +118,27 @@ async fn download_file_contents(
         Ok(())
     }
     .await;
-    drop(local_file);
+    // Only an awaited close gives the handle back to russh-sftp's open-handle
+    // count; dropping the `File` closes it on the server but leaks the count
+    // until `limits@openssh.com` refuses every later open (BUG-0076). Closing a
+    // read handle cannot change bytes already synced, so a failure is logged.
+    // After a failed or cancelled copy the CLOSE reply queues behind up to the
+    // whole read-ahead budget, so it is awaited off the caller's path: a cancel
+    // must not wait for ~4 MB to cross a slow link.
+    let remote_file = reader.into_inner();
+    if transfer_result.is_ok() {
+        report_best_effort(
+            "sftp download: close remote file",
+            remote_file.close().await,
+        );
+    } else {
+        tokio::spawn(async move {
+            report_best_effort(
+                "sftp download: close remote file after failed copy",
+                remote_file.close().await,
+            );
+        });
+    }
 
     if let Err(error) = transfer_result {
         report_best_effort(

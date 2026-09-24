@@ -7,7 +7,7 @@ use russh_sftp::client::SftpSession as SftpChannel;
 use russh_sftp::protocol::FileAttributes;
 use tokio::io::AsyncReadExt;
 
-use oneterm_core::{FileEntry, RemotePath, Result};
+use oneterm_core::{FileEntry, RemotePath, Result, report_best_effort};
 
 use super::map_sftp_err;
 
@@ -42,14 +42,19 @@ pub(super) const MAX_ID_DATABASE_BYTES: u64 = 4 * 1024 * 1024;
 /// Read at most [`MAX_ID_DATABASE_BYTES`] of a remote file. A longer file is
 /// truncated (its last, possibly partial, line is dropped by the parser).
 async fn read_bounded(sftp: &SftpChannel, path: &str) -> std::io::Result<Vec<u8>> {
-    let file = sftp
+    let mut file = sftp
         .open(path)
         .await
         .map_err(|error| std::io::Error::other(error.to_string()))?;
     let mut data = Vec::new();
-    file.take(MAX_ID_DATABASE_BYTES)
+    let read = (&mut file)
+        .take(MAX_ID_DATABASE_BYTES)
         .read_to_end(&mut data)
-        .await?;
+        .await;
+    // An awaited close gives the handle back to russh-sftp's open-handle count
+    // (BUG-0076); the lookup is best effort, so a failed close is only logged.
+    report_best_effort("sftp_task: close remote id database", file.close().await);
+    read?;
     if data.len() as u64 >= MAX_ID_DATABASE_BYTES {
         log::warn!("sftp_task: {path} exceeds {MAX_ID_DATABASE_BYTES} bytes — remainder ignored");
     }
