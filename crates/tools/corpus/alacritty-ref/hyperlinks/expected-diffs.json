@@ -1,0 +1,11 @@
+{
+  "diff": [
+    {
+      "deviation": "D17",
+      "rows": "29",
+      "cols": "0..3",
+      "fields": ["hyperlink"],
+      "reason": "An OSC 8 link without id= is keyed by its URI, so the second implicit link to https://example.com shares the first one's id (#0) where the reference issued a fresh one (#1). The OSC 8 spec leaves grouping of id-less links to the terminal; a per-occurrence id made every repaint of a link consume a hyperlink and an extras entry."
+    }
+  ]
+}

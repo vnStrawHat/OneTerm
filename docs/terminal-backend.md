@@ -1212,6 +1212,7 @@ crates/
 | Channel backpressure | 256 command messages plus a 4 MiB write budget; latest-value resize, priority close, coalescible repaint hints, and reliable stateful events (§6.5). |
 | IME differs on Windows/Linux | Use GPUI's `EntityInputHandler` (ready abstraction), test both platforms. |
 | SSH host key not verified | Require known_hosts + accept prompt, don't disable by default. |
+| Per-terminal `oneterm-vt` tables fill (hyperlinks, extras: 65,535 entries each) | An `OSC 8` link without `id=` is keyed by its URI, so a TUI repainting a link every frame holds one entry (`IN-0045` `BUG-0079`). A full hyperlink table drops further links (the text still renders); a full extras table also leaves new images unpainted and logs once. `RIS` empties both. |
 
 ---
 

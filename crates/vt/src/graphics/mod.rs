@@ -123,6 +123,8 @@ pub(crate) struct GraphicsState {
     pub(crate) released: Vec<GraphicId>,
     /// The `DCS q` sequence currently being received, if any.
     pub(crate) parser: Option<SixelParser>,
+    /// Whether an image placed against a full extras table has been logged.
+    pub(crate) unstamped_warned: bool,
 }
 
 impl Default for GraphicsState {
@@ -135,6 +137,7 @@ impl Default for GraphicsState {
             placements: Vec::new(),
             released: Vec::new(),
             parser: None,
+            unstamped_warned: false,
         }
     }
 }

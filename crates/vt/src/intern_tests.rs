@@ -210,8 +210,14 @@ fn hyperlink_ids_are_per_terminal_not_global() {
             table.intern(None, "https://example.com"),
             Some(HyperlinkId(0))
         );
+        // An implicit link is keyed by its URI: the same URI reuses its id,
+        // another URI gets its own.
         assert_eq!(
             table.intern(None, "https://example.com"),
+            Some(HyperlinkId(0))
+        );
+        assert_eq!(
+            table.intern(None, "https://second.example"),
             Some(HyperlinkId(1))
         );
         assert_eq!(
@@ -227,6 +233,11 @@ fn hyperlink_ids_are_per_terminal_not_global() {
         assert_eq!(
             table.intern(Some("a"), "https://other.example"),
             Some(HyperlinkId(3))
+        );
+        // Explicit `id=1` is not implicit link `1`, though both spell `1`.
+        assert_eq!(
+            table.intern(Some("1"), "https://example.com"),
+            Some(HyperlinkId(4))
         );
     }
 

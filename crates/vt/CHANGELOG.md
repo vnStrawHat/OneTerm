@@ -225,6 +225,25 @@ carry no API change at all. Such a release says so below rather than being omitt
   limit under `? 2027`, so a continuation arriving in a later `feed` starts a cluster of its own.
   Zero for every well-formed stream.
 
+### Fixed
+
+- **Behaviour, no signature: repainting an `OSC 8` link without `id=` no longer consumes a
+  hyperlink id per repaint.** An implicit link was a fresh `HyperlinkId` (and a fresh `ExtrasId`)
+  on every occurrence, so a program that redraws a line holding a link every frame filled both
+  65,535-entry tables in about half an hour at 30 frames a second, holding about 21 MB per
+  terminal; after that no link, no explicit-`id=` link and no Sixel image in that terminal got
+  its cells. An implicit link is now keyed by its URI: every occurrence of one URI without `id=`
+  shares one `HyperlinkId`, and ids are never renumbered. Two separate occurrences of one URI
+  therefore resolve to the same id; send `id=` to keep them apart. An explicit `id=1` no longer
+  resolves to the first implicit link when their URIs match (their ids are both spelled `1`).
+  An empty `id=` now counts as no id, as the OSC 8 specification says the two are
+  interchangeable.
+- **`RIS` empties the extras table** together with the hyperlink table, so the extras entries of
+  the links it cleared no longer outlive them. `RIS` has blanked every cell that could hold one of
+  those ids, so no live `ExtrasId` changes meaning.
+- A Sixel image placed while the extras table is full is still decoded and handed out but covers
+  no cell, as before; it now logs a warning saying so, once per terminal.
+
 ### Removed
 
 - **`pty::SignalMask` and `pty::Options` no longer implement `PartialEq` or `Eq`.** The derive on

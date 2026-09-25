@@ -63,6 +63,12 @@ pub(crate) fn place(state: &mut State, image: DecodedSixel) -> Vec<ScrollReport>
         hyperlink: None,
         graphic: Some(id),
     });
+    // A full extras table cannot name the image on any cell, so it is decoded
+    // and handed out but never painted, until `RIS` empties the table.
+    if graphic_only == ExtrasId::NONE && !state.graphics.unstamped_warned {
+        state.graphics.unstamped_warned = true;
+        log::warn!("extras table is full; images are decoded but not placed on any cell until RIS");
+    }
 
     evict_oldest(state);
     let anchor = state

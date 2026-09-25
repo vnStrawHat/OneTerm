@@ -1695,19 +1695,81 @@ fn osc_8_sets_and_clears_the_hyperlink() {
             .is_none()
     );
 
-    // An explicit `id=` groups occurrences, an implicit one does not.
+    // An explicit `id=` groups occurrences.
     let mut session = Session::new(20, 3);
     session.feed(b"\x1b]8;id=g;http://a\x07x\x1b]8;;\x07\x1b]8;id=g;http://a\x07y");
     let first = session.cell(0, 0).extras_id();
     let second = session.cell(0, 1).extras_id();
     assert_eq!(first, second);
 
+    // An implicit link is keyed by its URI, so reopening the same URI reuses
+    // the entry and a repaint consumes nothing.
     let mut session = Session::new(20, 3);
     session.feed(b"\x1b]8;;http://a\x07x\x1b]8;;\x07\x1b]8;;http://a\x07y");
-    assert_ne!(
+    assert_eq!(
         session.cell(0, 0).extras_id(),
         session.cell(0, 1).extras_id()
     );
+    // A different URI is a different link.
+    session.feed(b"\x1b]8;;http://b\x07z");
+    assert_ne!(
+        session.cell(0, 0).extras_id(),
+        session.cell(0, 2).extras_id()
+    );
+    // An explicit `id=1` never aliases implicit link `1`, whose id is also
+    // spelled `1`.
+    session.feed(b"\x1b]8;id=1;http://a\x07w");
+    assert_ne!(
+        session.cell(0, 0).extras_id(),
+        session.cell(0, 3).extras_id()
+    );
+    assert_eq!(session.term.interner().hyperlinks.len(), 3);
+    // An empty `id=` is no id at all, so it joins the implicit link.
+    session.feed(b"\x1b]8;id=;http://a\x07v");
+    assert_eq!(
+        session.cell(0, 0).extras_id(),
+        session.cell(0, 4).extras_id()
+    );
+}
+
+/// A TUI that redraws a line holding an implicit link every frame used to take
+/// one hyperlink entry and one extras entry per frame, until both tables were
+/// full and no link, explicit link or image worked any more.
+#[test]
+fn repainting_an_implicit_link_does_not_grow_the_tables() {
+    const REPAINTS: usize = 70_000;
+    let mut session = Session::new(20, 4);
+    let frame: &[u8] = b"\x1b[H\x1b[2Ksee \x1b]8;;http://a\x07docs\x1b]8;;\x07 here";
+    for _ in 0..REPAINTS / 10_000 {
+        session.feed(&frame.repeat(10_000));
+    }
+    assert_eq!(session.term.interner().hyperlinks.len(), 1);
+    // The default entry and the link's.
+    assert_eq!(session.term.interner().extras.entries(), 2);
+
+    let link_at = |session: &Session, row: u16, col: u16| {
+        let interner = session.term.interner();
+        interner
+            .resolve_extras(session.cell(row, col).extras_id())
+            .hyperlink
+            .and_then(|id| interner.hyperlinks.resolve(id))
+            .map(|link| link.uri.to_string())
+    };
+    for col in 4..8 {
+        assert_eq!(link_at(&session, 0, col).as_deref(), Some("http://a"));
+    }
+
+    // A later explicit link and a Sixel image still get their cells.
+    session.feed(b"\x1b[2;1H\x1b]8;id=x;http://b\x07ok\x1b]8;;\x07\x1b[3;1H");
+    assert_eq!(link_at(&session, 1, 0).as_deref(), Some("http://b"));
+    session.feed(b"\x1bPq#0;2;100;0;0#0~\x1b\\");
+    let graphic = session
+        .term
+        .interner()
+        .resolve_extras(session.cell(2, 0).extras_id())
+        .graphic;
+    assert!(graphic.is_some(), "the image names its cell");
+    assert_eq!(session.term.interner().extras.entries(), 4);
 }
 
 #[test]
@@ -1743,6 +1805,45 @@ fn hyperlink_table_exhaustion_drops_the_attribute_and_logs_once() {
     );
 }
 
+/// A full extras table leaves an image with no cell to name it; `RIS` empties
+/// the table, so images place again.
+#[test]
+fn ris_empties_a_full_extras_table_and_images_place_again() {
+    let mut session = Session::new(20, 4);
+    let mut index = 0u64;
+    while session.term.interner().extras.entries() < 65_535 {
+        index += 1;
+        session
+            .term
+            .state_for_tests()
+            .interner
+            .extras
+            .intern(&crate::intern::Extras {
+                graphic: Some(crate::intern::GraphicId(u64::MAX - index)),
+                ..crate::intern::Extras::NONE
+            });
+    }
+    let sixel: &[u8] = b"\x1bPq#0;2;100;0;0#0~\x1b\\";
+    let graphic_at = |session: &Session| {
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .graphic
+    };
+    session.feed(sixel);
+    assert_eq!(
+        graphic_at(&session),
+        None,
+        "no extras id left for the image"
+    );
+
+    session.feed(b"\x1bc");
+    assert_eq!(session.term.interner().extras.entries(), 1);
+    session.feed(sixel);
+    assert!(graphic_at(&session).is_some());
+}
+
 #[test]
 fn ris_clears_the_hyperlink_table() {
     let mut session = Session::new(20, 3);
@@ -1751,6 +1852,8 @@ fn ris_clears_the_hyperlink_table() {
 
     session.feed(b"\x1bc");
     assert!(session.term.interner().hyperlinks.is_empty());
+    // The link's extras entry goes with it: only the default is left.
+    assert_eq!(session.term.interner().extras.entries(), 1);
 
     // The implicit counter is recycled too, so a clear-and-restart cycle cannot
     // accumulate.

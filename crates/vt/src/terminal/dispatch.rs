@@ -612,8 +612,12 @@ impl Handler<'_> {
             self.state.palette_epoch = self.state.palette_epoch.wrapping_add(1);
         }
         // The hyperlink table's implicit ids are recycled by `RIS`, so a session
-        // that clears and restarts cannot accumulate across the cycle.
+        // that clears and restarts cannot accumulate across the cycle. The
+        // extras table goes with it, or its link entries would outlive their
+        // links: the grid reset above blanked every cell, pen and saved cursor,
+        // so no extras id but 0 is still held.
         self.state.interner.hyperlinks.clear();
+        self.state.interner.extras.clear();
         for id in self.state.marks.drain(..) {
             self.state.grid.anchors_mut().release(id);
         }
@@ -1913,6 +1917,8 @@ impl Handler<'_> {
                     .split(|&byte| byte == b':')
                     .find_map(|pair| pair.strip_prefix(b"id="))
                     .and_then(|value| str::from_utf8(value).ok())
+                    // The spec makes an empty id interchangeable with none.
+                    .filter(|id| !id.is_empty())
                     .map(str::to_owned);
                 self.set_hyperlink(id.as_deref(), Some(&uri));
             }
