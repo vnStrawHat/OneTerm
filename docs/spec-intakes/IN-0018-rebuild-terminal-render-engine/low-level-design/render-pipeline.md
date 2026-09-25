@@ -128,7 +128,7 @@ cell heights and row counts are unchanged. Underline (`baseline + 1 px`) and str
 pub(crate) struct RowPlan {
     pub hash: u64,                       // 0 = never built
     pub bg: Vec<BgSpan>,                 // { col: u16, cols: u16, color: Hsla }  non-default bg, merged
-    pub text: Vec<TextRunPlan>,          // { col, cols, bold, italic, line: ShapedLine, color_start, color_end }
+    pub text: Vec<TextRunPlan>,          // { col, cols, bold, italic, line: Arc<LineLayout>, color_start, color_end }
     pub colors: Vec<ColorSpan>,          // flattened per row; a run owns colors[color_start..color_end]
     pub shapes: Vec<ShapeQuad>,          // { rect: DeviceRect /* x from grid left, y from row top */, color: Hsla /* rect.alpha multiplied into a */ }
     pub decorations: Vec<DecorationSpan>,// { col, cols, kind: Underline { wavy } | Strikethrough, color }
@@ -181,7 +181,7 @@ empty):
      else `cs.deco == Underline` → plain underline; `STRIKEOUT` → strikethrough; adjacent spans
      of the same kind and color merge.
 3. **Shape.** Each run: `glyphs.shape(text, font_key, force_width: Some(cell_width) | None,
-   window)` → `ShapedLine`.
+   window)` → `Arc<LineLayout>`.
 4. `plan.hash = row.hash()`.
 
 **Shape coalescing.** Rects of a cell are compared with the rects of the previous cell that touch
@@ -259,12 +259,12 @@ pub(crate) struct FontKey { family: u32 /* FNV of the family name */, size_bits:
 pub(crate) struct FontSet { /* regular, bold, italic, bold-italic: (Font, FontKey) */ }
 impl FontSet { pub fn new(base: &Font, font_size: Pixels) -> Self; pub fn get(&self, bold, italic) -> (&Font, FontKey); pub fn regular(&self) -> (&Font, FontKey) }
 struct RunKey { text_hash: u64 /* FNV-1a over UTF-8 bytes */, len: u32, font: FontKey, forced: bool }
-pub(crate) struct GlyphCache { map: HashMap<RunKey, Entry { line: ShapedLine, used: u32 }>, generation: u32, capacity: usize /* 4096 */ }
+pub(crate) struct GlyphCache { map: HashMap<RunKey, Entry { line: Arc<LineLayout>, used: u32 }> /* HashMap::new(): no up-front table */, generation: u32, capacity: usize /* 4096 */ }
 impl GlyphCache {
     pub fn begin_frame(&mut self)                                  // generation += 1
     pub fn shape(&mut self, text: &str, font: &Font, key: FontKey, font_size: Pixels,
-                 force_width: Option<Pixels>, window: &Window, stats: &mut FrameStats) -> ShapedLine
-    // hit: mark used = generation, return clone (Arc). miss: window.text_system().shape_line_by_hash(
+                 force_width: Option<Pixels>, window: &Window, stats: &mut FrameStats) -> Arc<LineLayout>
+    // hit: mark used = generation, return clone (Arc). miss: window.text_system().layout_line_by_hash(
     //   text_hash, len, font_size, &[TextRun { len, font, color: black, .. }], force_width,
     //   || SharedString::from(text)) ; stats.shape_calls += 1 ; insert ; if len > capacity { retain used >= generation - 2 }
 }
@@ -275,6 +275,15 @@ color; colors are applied at paint from `ColorSpan`s. Gutter labels use the same
 `forced = false`. `FontKey` covers family, size, weight and slant but not `Font::features`
 or `Font::fallbacks`, both of which change shaping; `RenderState::ensure_fonts` therefore
 calls `GlyphCache::clear()` whenever the input `Font` value changes.
+
+The cache holds GPUI's `Arc<LineLayout>`, not a `ShapedLine` (BUG-0078 of IN-0045): the painter
+reads only `runs`, `width` and `len`, and a `ShapedLine` carries an inline 32-slot decoration
+`SmallVec` that made each bucket 3,024 bytes, and `with_capacity(4096)` made the table 24.8 MB
+per view from the first frame. A bucket is now 48 bytes and the map starts empty; full at the
+4096 cap it is 8192 buckets, about 0.4 MB, plus 64 bytes of `LineLayout` header per entry. The
+cap is soft: when an insert finds the map at the cap, entries unused for two generations go
+first, so the map exceeds 4096 only while more runs than that were shaped in the last three
+frames (bounded by the viewport, not by time).
 
 ### Element (`element.rs`)
 
@@ -335,7 +344,7 @@ pub(crate) struct CursorConfig { shape: Option<CursorShape> /* override */, colo
 pub(crate) struct ResolvedCursor { row: u16, col: u16, cols: u16 /* 2 over a wide char */, shape, hollow: bool, repaint_glyph: bool }
 pub(crate) fn resolve(frame: &Frame, config: &CursorConfig) -> Option<ResolvedCursor>      // pure, unit-tested
 pub(crate) struct CursorPaint { bounds: Bounds<Pixels>, color: Hsla, shape: CursorShape, hollow: bool,
-                                glyph: Option<(ShapedLine, Hsla /* cell bg */)>, .. }
+                                glyph: Option<(Arc<LineLayout>, Hsla /* cell bg */)>, .. }
 impl CursorPaint { fn build(resolved, frame, config, theme, geometry, fonts, font_size, glyphs, text_scratch, window, stats) -> Self;
                    fn paint(&self, font_size, window, stats) }
 resolve: row = frame.cursor().row in 0..rows (and col < cols) else None; snapshot Hidden → None;
@@ -391,8 +400,8 @@ char_wide: Vec<bool>, class_chars: Vec<u8>, class: Vec<u8>, run_text: String, re
 Vec<DeviceRect>, open_prev / open_cur: Vec<usize>, label: String (gutter
 labels and the cursor glyph text) }`, `overlays.selection`, `overlays.search`, `gutter.labels`,
 `RenderState.fonts: FontSet` (rebuilt only when font/size change) and the cached `CellMetrics`
-(re-measured only when font/size/factor/override/scale change). A `ShapedLine` clone is an
-`Arc` bump plus an inline `SmallVec` copy (no heap). Cache misses (new text) and grid growth
+(re-measured only when font/size/factor/override/scale change). A shaped-run clone is an
+`Arc` bump (no heap). Cache misses (new text) and grid growth
 allocate; that is not steady state. Rasterizing a curve allocates nothing (runs are merged
 straight into `scratch.rects`). `PrepaintState` holds only `Copy` data, the hitbox, the
 resolved cursor and the optional IME closure (allocated by the view once per frame only while

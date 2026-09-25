@@ -4,8 +4,9 @@
 //! the row has been planned once at this width.
 
 use std::ops::Range;
+use std::sync::Arc;
 
-use gpui::{Hsla, Pixels, ShapedLine, Window};
+use gpui::{Hsla, LineLayout, Pixels, Window};
 use oneterm_highlight::{Class, ClassStyle, Decoration, RowRole, tint_prompt_sign};
 use oneterm_terminal::{Semantic, is_decorative_character};
 
@@ -43,7 +44,7 @@ pub(crate) struct TextRunPlan {
     /// so this is a test seam for run extents (wide chars).
     #[cfg(test)]
     pub cols: u16,
-    pub line: ShapedLine,
+    pub line: Arc<LineLayout>,
     pub color_start: u32,
     pub color_end: u32,
     /// Range into `RowPlan::cell_starts`: the run-text byte offset where each
@@ -1164,7 +1165,7 @@ mod tests {
         let plan = Fixture::new(false).plan(cx, &frame, 0, &[]);
         assert_eq!(plan.text.len(), 1);
         assert_eq!(plan.text[0].cols, 3);
-        assert_eq!(plan.text[0].line.len(), "ab\u{301}c".len());
+        assert_eq!(plan.text[0].line.len, "ab\u{301}c".len());
         assert_eq!(
             plan.cells_of(&plan.text[0]),
             &[0, 1, 4],

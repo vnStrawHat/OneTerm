@@ -4,7 +4,9 @@
 //! whether the covered glyph must be re-painted) and unit-tested without a
 //! window; `CursorPaint::build` adds geometry and the optional shaped glyph.
 
-use gpui::{Bounds, Hsla, Pixels, Point, ShapedLine, Window, fill, point, size};
+use std::sync::Arc;
+
+use gpui::{Bounds, Hsla, LineLayout, Pixels, Point, Window, fill, point, size};
 
 use super::diagnostics::FrameStats;
 use super::frame::{CellFlags, Color, CursorShape, Frame};
@@ -73,7 +75,7 @@ pub(crate) struct CursorPaint {
     pub shape: CursorShape,
     pub hollow: bool,
     /// The covered glyph and the color (cell background) to re-paint it in.
-    pub glyph: Option<(ShapedLine, Hsla)>,
+    pub glyph: Option<(Arc<LineLayout>, Hsla)>,
     glyph_origin: Point<Pixels>,
     device_px: Pixels,
 }
