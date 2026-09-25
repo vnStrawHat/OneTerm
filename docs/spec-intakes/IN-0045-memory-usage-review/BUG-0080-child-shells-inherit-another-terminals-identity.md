@@ -48,8 +48,10 @@ own version.
   (`oneterm_vt::pty`: `environment_block` on Windows, the `Command` on Unix), and
   `TERM_PROGRAM_VERSION` in `oneterm_core`'s `base_env()`.
 - [x] Out of scope: SSH. The remote shell is started by sshd from a fresh login environment and
-  never sees OneTerm's own environment; `REMOTE_SHELL_ENV` only adds `COLORTERM` and
-  `TERM_PROGRAM`. Nothing to strip there.
+  never sees OneTerm's own environment; `REMOTE_SHELL_ENV` only adds `COLORTERM`,
+  `TERM_PROGRAM` and (verification F3) `TERM_PROGRAM_VERSION`. Nothing to strip there.
+- [x] In scope after verification (F3): `TERM_PROGRAM_VERSION` travels with `TERM_PROGRAM` in
+  the `WSLENV` hints and the SSH env requests.
 - [x] Out of scope: making `claude` emit links in OneTerm (its list is its own), and `BUG-0079`.
 
 ## Where the fix lives
@@ -134,6 +136,34 @@ Reason: none of them says the inherited environment is filtered.
 
 All five updated with this change.
 
+## Context
+
+- The child environment has two halves: OneTerm's override map (`base_env()` + `shell.env`,
+  built in `crates/core/src/config/env.rs` / `shell.rs`) and the inherited environment, which
+  only `oneterm_vt::pty` assembles (`conpty.rs` `environment_block`, `unix.rs` `apply_env`).
+  The drop list therefore lives in vt (`DROPPED_PARENT_ENV`, `crates/vt/src/pty/mod.rs`); see
+  "Where the fix lives".
+- The elevated instance (`IN-0043`) spawns with an empty `shell.env`; it goes through the same
+  `environment_block`, so it is covered with no change of its own.
+
+## Plan
+
+- [x] One drop list in vt, applied on both platforms; `TERM_PROGRAM_VERSION` in `base_env()`.
+- [x] Verification rework: F1 (empty block is a double NUL), F3 (`TERM_PROGRAM_VERSION` in the
+  `WSLENV` hints and the SSH env requests), F4/F6 (this Context/Plan/Decisions and the Handoff).
+
+## Decisions
+
+No `DEC`: the choice binds only this code path. Recorded here:
+
+- **Placement in `oneterm_vt::pty`, not `env.rs`.** The override map cannot express a removal;
+  the inherited half is built only in vt, which already dropped two Unix startup tokens for the
+  same reason. One list there covers every spawn and every embedder.
+- **Not a new `Options::env_remove` field.** `Options` is not `#[non_exhaustive]`, so a new
+  public field is a minor (breaking) bump under the vt CHANGELOG promise, for a rule every
+  embedder wants anyway. Only the inherited value is dropped, so an embedder that wants one of
+  these names sets it through `Options::env`.
+
 ## Verification Plan
 
 - `cargo test -p oneterm-vt --lib pty` (the Windows `environment_block` test; the Unix test is
@@ -182,6 +212,20 @@ All five updated with this change.
   dropped names (searched `crates/` for all eleven).
 - Full gate: `pwsh scripts/ci-local.ps1` on Windows 11, 2026-09-25, ended with
   `ci-local: all checks passed.` (`vt-public-api.py --check` unchanged: no public item moved).
+- Verification ([`evidence/BUG-0080-verify.md`](evidence/BUG-0080-verify.md)): PASS with
+  findings F1-F6. Rework, 2026-09-25:
+  - F1: a block with no entries (empty `Options::env`, empty parent) was a single `u16` 0;
+    `CreateProcessW` needs two. `environment_block` now pushes the extra NUL when the block is
+    empty; test `a_block_with_no_entries_is_a_double_nul` asserts exactly `[0, 0]`.
+  - F3: `TERM_PROGRAM_VERSION` added to `WSLENV_HINTS` (`env.rs`, tests updated) and to
+    `REMOTE_SHELL_ENV` (`crates/ssh/src/session.rs`; the `BUG-0038` env-request test now
+    expects three requests).
+  - F4, F6: Context, Plan, Decisions and Handoff sections added. F2 (unsorted block) is
+    pre-existing and out of scope; F5 (harness row) is the coordinator's.
+  - Re-run: `cargo test -p oneterm-vt --lib conpty`, `cargo test -p oneterm-core -p oneterm-ssh`,
+    `cargo fmt --all -- --check`, `cargo clippy -p oneterm-vt -p oneterm-core -p oneterm-ssh
+    --all-targets -- -D warnings`, `check-doc-paths`, `check-english`, and the vt rustdoc
+    citation grep: all pass.
 
 Gaps:
 
@@ -195,3 +239,17 @@ Gaps:
   now be off in OneTerm.
 - `KITTY_WINDOW_ID`, `WEZTERM_*`, `ALACRITTY_*` are deliberately not in the list (see "The
   list").
+
+## Handoff
+
+- State: implemented and verified (PASS); F1 and F3 fixed, F4/F6 recorded here.
+- **Known consequence: `claude` emits no OSC 8 links inside OneTerm after this fix.** The
+  `claude` CLI decides hyperlink support from `WT_SESSION` and a `TERM_PROGRAM` allow-list that
+  does not contain `OneTerm` (phase 3 § 7). The inherited `WT_SESSION` was the only reason it
+  sent links here; it is gone, so its URLs now arrive as plain text.
+- Next actions, not done here:
+  - (a) Coordinator/owner: ask upstream (`claude` CLI) to honour `TERM_PROGRAM=OneTerm`, or to
+    probe the capability instead of keying on terminal names. **Not filed.**
+  - (b) Owner: accept losing `claude`'s OSC 8 links in OneTerm. That acceptance is owed. If links
+    come back (upstream change, or a user setting `WT_SESSION` in `shell.env`), `BUG-0079`
+    removes the memory harm of repainted implicit links.

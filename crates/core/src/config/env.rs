@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 #[cfg(any(windows, test))]
-const WSLENV_HINTS: [&str; 2] = ["COLORTERM", "TERM_PROGRAM"];
+const WSLENV_HINTS: [&str; 3] = ["COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"];
 
 #[cfg(any(windows, test))]
 fn wslenv_with_terminal_hints(existing: Option<&str>) -> String {
@@ -16,7 +16,7 @@ fn wslenv_with_terminal_hints(existing: Option<&str>) -> String {
             .join(":");
     }
 
-    let mut seen = [false; 2];
+    let mut seen = [false; WSLENV_HINTS.len()];
     let entries = existing
         .split(':')
         .filter(|entry| !entry.is_empty())
@@ -96,19 +96,21 @@ mod tests {
     fn wslenv_with_terminal_hints_preserves_existing_entries() {
         assert_eq!(
             wslenv_with_terminal_hints(None),
-            "COLORTERM/u:TERM_PROGRAM/u"
+            "COLORTERM/u:TERM_PROGRAM/u:TERM_PROGRAM_VERSION/u"
         );
         assert_eq!(
             wslenv_with_terminal_hints(Some("PATH/l:USERPROFILE/p")),
-            "PATH/l:USERPROFILE/p:COLORTERM/u:TERM_PROGRAM/u"
+            "PATH/l:USERPROFILE/p:COLORTERM/u:TERM_PROGRAM/u:TERM_PROGRAM_VERSION/u"
         );
         assert_eq!(
             wslenv_with_terminal_hints(Some("PATH/l:COLORTERM/w:TERM_PROGRAM/w")),
-            "PATH/l:COLORTERM/wu:TERM_PROGRAM/wu"
+            "PATH/l:COLORTERM/wu:TERM_PROGRAM/wu:TERM_PROGRAM_VERSION/u"
         );
         assert_eq!(
-            wslenv_with_terminal_hints(Some("PATH/l:COLORTERM/u:TERM_PROGRAM/u")),
-            "PATH/l:COLORTERM/u:TERM_PROGRAM/u"
+            wslenv_with_terminal_hints(Some(
+                "PATH/l:COLORTERM/u:TERM_PROGRAM/u:TERM_PROGRAM_VERSION/u"
+            )),
+            "PATH/l:COLORTERM/u:TERM_PROGRAM/u:TERM_PROGRAM_VERSION/u"
         );
     }
 }

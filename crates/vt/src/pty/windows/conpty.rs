@@ -453,6 +453,11 @@ fn environment_block(
         }
     }
 
+    // A block with no entries is still two NULs: `CreateProcessW` reads a
+    // single one as the start of an unterminated block.
+    if block.is_empty() {
+        block.push(0);
+    }
     block.push(0);
     block
 }
@@ -538,6 +543,12 @@ mod tests {
             .filter(|entry| !entry.is_empty())
             .map(str::to_owned)
             .collect()
+    }
+
+    #[test]
+    fn a_block_with_no_entries_is_a_double_nul() {
+        let block = environment_block(&HashMap::new(), parent(&[]));
+        assert_eq!(block, [0, 0]);
     }
 
     #[test]

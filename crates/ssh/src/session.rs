@@ -686,8 +686,12 @@ pub(crate) fn authentication_failure_message(
 
 /// Env variables pushed to the remote shell before `request_shell` (RFC 4254
 /// §6.4). Mirrors the local-shell contract in `oneterm_core`'s `base_env()`.
-const REMOTE_SHELL_ENV: [(&str, &str); 2] =
-    [("COLORTERM", "truecolor"), ("TERM_PROGRAM", "OneTerm")];
+const REMOTE_SHELL_ENV: [(&str, &str); 3] = [
+    ("COLORTERM", "truecolor"),
+    ("TERM_PROGRAM", "OneTerm"),
+    // Every crate shares the workspace version, so this is OneTerm's.
+    ("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION")),
+];
 
 /// Send [`REMOTE_SHELL_ENV`] on the shell channel. Failures surface as
 /// `PtyRequest` connect errors — with `want_reply = false` this only happens
@@ -1145,6 +1149,10 @@ mod tests {
             vec![
                 ("COLORTERM".to_owned(), "truecolor".to_owned()),
                 ("TERM_PROGRAM".to_owned(), "OneTerm".to_owned()),
+                (
+                    "TERM_PROGRAM_VERSION".to_owned(),
+                    env!("CARGO_PKG_VERSION").to_owned()
+                ),
             ]
         );
 
