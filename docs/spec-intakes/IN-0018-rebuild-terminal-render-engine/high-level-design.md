@@ -144,7 +144,7 @@ no renderer structure, and their tests are the acceptance spec).
 | `src/render/shapes.rs` + `shapes_tests.rs` | `shape_quads`, `Stroke`/`DeviceRect` (with coverage alpha), mirror/rotate, symmetric snap, coverage rasterizer for arcs/diagonals/powerline | 0046 | 650 + 450 |
 | `src/render/frame.rs` | `Frame`, `FrameRow`, `Cell`, `Color`, `CellFlags`, `CursorShape`, `Selection`, `RowKey`; the only engine-typed file (`Damage` deleted at IN-0029's `US-0085`, which put the frame on `SnapshotState`) | 0047 | 320 |
 | `src/render/metrics.rs` | `CellMetrics` (device-snapped cell), `GridGeometry` (origin, padding, gutter, rows/cols, hit-test), `grid_size_for` | 0047 | 220 |
-| `src/render/glyphs.rs` | `GlyphCache`: run text → `ShapedLine` via `shape_line_by_hash`/`force_width`, generation eviction | 0047 | 160 |
+| `src/render/glyphs.rs` | `GlyphCache`: run text → `Arc<LineLayout>` via `layout_line_by_hash`/`force_width`, generation eviction (BUG-0078: was `ShapedLine`) | 0047 | 160 |
 | `src/render/row_plan.rs` | `RowPlan` + `build_row_plan` (bg spans, text runs, shape quads coalesced, decorations, class merge, contrast) | 0047 | 480 |
 | `src/render/plan_cache.rs` | `PlanCache`: `(RowId, SeqNo)` keys, scroll shift, URL mask delta, style-key invalidation (IN-0029 `US-0085`; was damage ∪ cursor row plus a hash verify) | 0047 | 260 |
 | `src/render/state.rs` | `RenderState` (frame, plans, glyphs, geometry, inputs, overlays, scratch, stats) shared by view/element/input | 0047 | 150 |
@@ -221,13 +221,13 @@ input handlers):
 | --- | --- |
 | `frame: Frame` | wraps the reused `TerminalContent`, which owns this view's `SnapshotState` and its damage watermark; `snapshot_into` reuses the copied rows |
 | `plans: PlanCache` | one `RowPlan` per display row (color spans flattened per row); vectors cleared, not reallocated, on rebuild; shifted on scroll; a `RowKey` per row, a `dirty` bitset, the URL mask double buffer and `wraps` scratch |
-| `glyphs: GlyphCache` | `HashMap<RunKey, (ShapedLine, generation)>`, cap 4096; entries unused for 2 generations are evicted when the cap is hit |
+| `glyphs: GlyphCache` | `HashMap<RunKey, (Arc<LineLayout>, generation)>`, starts empty, soft cap 4096; entries unused for 2 generations are evicted when the cap is hit (BUG-0078: 48-byte buckets, no up-front table) |
 | `geometry: Option<GridGeometry>` | written in prepaint, read by input handlers (hit-test contract) |
 | `inputs: RenderInputs` | written by `TerminalView::render` before the element is built |
 | `overlays` | `selection: Vec<RowSpan>`, `search: Vec<SearchRect>`, reused (the URL mask double buffer lives in `PlanCache`) |
 | `scratch` | run text `String`, class `Vec<u8>`, line text `String`, `char_cols: Vec<u16>`, `char_wide`, rect scratch, two `Vec<usize>` of open rects, label `String` |
 | `fonts: FontSet` + cached `CellMetrics` | four font variants with keys, rebuilt on font/size change; metrics re-measured on font/size/factor/override/scale change |
-| `gutter: GutterLabels` | one shaped label per row (`ShapedLine` clones from the glyph cache) + gutter width |
+| `gutter: GutterLabels` | one shaped label per row (`Arc<LineLayout>` clones from the glyph cache) + gutter width |
 | `graphics: GraphicStore` | Sixel images by id as `Arc<RenderImage>` (BGRA), insertion order; oldest evicted past 64 images or 64 MB with `drop_image`; painted scaled by real cell / virtual 10 x 20 cell (IN-0028) |
 | `stats: FrameStats` | always compiled (plain counters) |
 | `latency: LatencySamples`, `log` | cfg(any(test, feature = "terminal-diagnostics")) / cfg(feature) |

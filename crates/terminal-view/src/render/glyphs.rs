@@ -1,14 +1,20 @@
-//! Shaped-run cache: run text → `ShapedLine`, shared across rows and frames.
+//! Shaped-run cache: run text → `Arc<LineLayout>`, shared across rows and frames.
 //!
 //! GPUI's own line-layout cache lives for two frames; this cache keeps a run
 //! alive for as long as it is painted (plus two generations of grace when the
 //! cap is hit), so an idle terminal never re-shapes. `TextRun.color` does not
 //! take part in shaping, so one entry serves every color; colors are applied
 //! at paint time from the plan's `ColorSpan`s.
+//!
+//! The cache holds GPUI's `Arc<LineLayout>` (the value GPUI's own cache holds),
+//! not a `ShapedLine`: the painter reads only the layout, and a `ShapedLine`
+//! carries an inline 32-slot decoration `SmallVec` that made every bucket
+//! 3 KB (IN-0045, BUG-0078).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use gpui::{Font, FontStyle, FontWeight, Pixels, ShapedLine, SharedString, TextRun, Window};
+use gpui::{Font, FontStyle, FontWeight, LineLayout, Pixels, SharedString, TextRun, Window};
 
 use super::diagnostics::FrameStats;
 use super::frame::Fnv1a;
@@ -85,7 +91,7 @@ struct RunKey {
 }
 
 struct Entry {
-    line: ShapedLine,
+    line: Arc<LineLayout>,
     used: u32,
 }
 
@@ -108,7 +114,8 @@ impl GlyphCache {
 
     pub(crate) fn new() -> Self {
         Self {
-            map: HashMap::with_capacity(Self::CAPACITY),
+            // Grows on demand: an up-front table is paid by every view (BUG-0078).
+            map: HashMap::new(),
             generation: 0,
             capacity: Self::CAPACITY,
         }
@@ -150,7 +157,7 @@ impl GlyphCache {
         force_width: Option<Pixels>,
         window: &Window,
         stats: &mut FrameStats,
-    ) -> ShapedLine {
+    ) -> Arc<LineLayout> {
         let text_hash = Self::text_hash(text);
         let run_key = RunKey {
             text_hash,
@@ -161,7 +168,7 @@ impl GlyphCache {
         if let Some(entry) = self.map.get_mut(&run_key) {
             entry.used = self.generation;
             stats.glyph_hits += 1;
-            return entry.line.clone();
+            return Arc::clone(&entry.line);
         }
         let runs = [TextRun {
             len: text.len(),
@@ -171,7 +178,7 @@ impl GlyphCache {
             underline: None,
             strikethrough: None,
         }];
-        let line = window.text_system().shape_line_by_hash(
+        let line = window.text_system().layout_line_by_hash(
             text_hash,
             text.len(),
             font_size,
@@ -188,7 +195,7 @@ impl GlyphCache {
         self.map.insert(
             run_key,
             Entry {
-                line: line.clone(),
+                line: Arc::clone(&line),
                 used: self.generation,
             },
         );
@@ -261,6 +268,53 @@ mod tests {
             assert_eq!(stats.shape_calls, 4, "'a' had to be shaped again");
             cache.shape("b", f, key, size, None, window, &mut stats);
             assert_eq!(stats.glyph_hits, 2, "'b' survived: used this generation");
+        });
+    }
+
+    /// BUG-0078: a new cache allocates nothing, a hit returns the very layout
+    /// the miss stored, and a cache filled to its cap stays under 1 MiB
+    /// (table plus the per-entry `LineLayout` headers; the glyph vectors are
+    /// GPUI's shaped data and are not counted). Before the fix one bucket was
+    /// 3,024 bytes and the table 24.8 MB from the first frame.
+    #[gpui::test]
+    fn glyph_cache_full_table_stays_small_and_hits_share_the_layout(cx: &mut gpui::TestAppContext) {
+        use std::fmt::Write as _;
+        use std::mem::size_of;
+
+        let bucket = size_of::<(RunKey, Entry)>();
+        assert!(bucket <= 64, "bucket is {bucket} bytes");
+        let cx = cx.add_empty_window();
+        cx.update(|window, _| {
+            let mut cache = GlyphCache::new();
+            assert_eq!(cache.map.capacity(), 0, "nothing is allocated up front");
+            let mut stats = FrameStats::default();
+            let set = FontSet::new(&font(), gpui::px(13.0));
+            let (f, key) = set.regular();
+            let size = gpui::px(13.0);
+            cache.begin_frame();
+            let first = cache.shape("same", f, key, size, None, window, &mut stats);
+            let again = cache.shape("same", f, key, size, None, window, &mut stats);
+            assert!(Arc::ptr_eq(&first, &again), "a hit returns the stored layout");
+            assert_eq!((stats.shape_calls, stats.glyph_hits), (1, 1));
+
+            let mut text = String::new();
+            for i in 1..GlyphCache::CAPACITY {
+                text.clear();
+                write!(text, "w{i}").unwrap();
+                cache.shape(&text, f, key, size, None, window, &mut stats);
+            }
+            assert_eq!(cache.len(), GlyphCache::CAPACITY);
+            // hashbrown fills at most 7/8 of a power-of-two bucket count and
+            // keeps one control byte per bucket.
+            let buckets = (cache.map.capacity() * 8 / 7).next_power_of_two();
+            let table = buckets * (bucket + 1);
+            // `ArcInner` = two counters + the value.
+            let headers = cache.len() * (size_of::<LineLayout>() + 2 * size_of::<usize>());
+            eprintln!("full glyph cache: {bucket} B/bucket, {buckets} buckets, {table} B table + {headers} B layouts");
+            assert!(
+                table + headers < 1 << 20,
+                "full cache is {table} B table + {headers} B layouts ({buckets} buckets)"
+            );
         });
     }
 

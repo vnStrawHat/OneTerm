@@ -9,8 +9,9 @@
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::rc::Rc;
+use std::sync::Arc;
 
-use gpui::{App, Edges, Font, Pixels, ShapedLine, Window, px};
+use gpui::{App, Edges, Font, LineLayout, Pixels, Window, px};
 
 use super::cursor::{self, CursorConfig, CursorPaint};
 use super::diagnostics::FrameStats;
@@ -128,7 +129,7 @@ pub(crate) struct Overlays {
 
 /// One shaped gutter label.
 pub(crate) struct GutterLabel {
-    pub line: ShapedLine,
+    pub line: Arc<LineLayout>,
     /// Bytes painted in `clock_fg`; the rest in `line_number_fg`.
     pub clock_len: usize,
 }
@@ -343,7 +344,7 @@ impl RenderState {
             scratch.label.push('0');
         }
         let line = glyphs.shape(&scratch.label, font, key, font_size, None, window, stats);
-        self.gutter.width = line.width() + px(GUTTER_PAD);
+        self.gutter.width = line.width + px(GUTTER_PAD);
         self.gutter.width
     }
 

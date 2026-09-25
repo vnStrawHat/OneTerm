@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use gpui::{
     App, Bounds, Corners, CursorStyle, Element, ElementId, Entity, GlobalElementId, Hitbox,
-    HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, ShapedLine, Size,
+    HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, LineLayout, Pixels, Size,
     StrikethroughStyle, Style, UnderlineStyle, Window, fill, point, px,
 };
 use oneterm_terminal::TerminalSession;
@@ -482,7 +482,7 @@ impl GridPainter<'_> {
 /// Failures (a glyph the font cannot rasterize) are counted, never propagated.
 #[allow(clippy::too_many_arguments)]
 fn paint_shaped_line(
-    line: &ShapedLine,
+    line: &LineLayout,
     origin: gpui::Point<Pixels>,
     colors: &[ColorSpan],
     cells: &[u32],
