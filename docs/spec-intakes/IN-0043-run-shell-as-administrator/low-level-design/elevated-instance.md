@@ -100,7 +100,7 @@ process is elevated (M7):
 | 7 | `app.run(...)` -> `init::init(cx)` -> `window::open_window(...)` | unchanged shape; the gates of section 7 apply inside |
 
 Step 2 runs before the ballast on purpose: a malformed command line must produce a message
-and an exit, not a 64 MiB allocation first. The parse allocates a handful of small strings
+and an exit, not a 16 MiB allocation first (`US-0141`; it was 64 MiB when this was written). The parse allocates a handful of small strings
 and cannot itself be the thing that exhausts memory.
 
 The shell requested on the command line reaches the first terminal tab through the
