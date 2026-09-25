@@ -127,6 +127,27 @@ impl Shell {
     }
 }
 
+/// Inherited variables the child never sees; see [`Options::env`].
+///
+/// Names, not values: matched exactly on Unix and case-insensitively on
+/// Windows, where environment names are case-insensitive.
+pub(crate) const DROPPED_PARENT_ENV: [&str; 11] = [
+    // Another terminal's identity: programs switch behaviour on these.
+    "WT_SESSION",
+    "WT_PROFILE_ID",
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "TERMINAL_EMULATOR",
+    "ITERM_SESSION_ID",
+    "ITERM_PROFILE",
+    "ConEmuPID",
+    "ConEmuANSI",
+    // Startup-notification tokens are single-use and belong to the process
+    // that was launched, not to a shell it opens.
+    "XDG_ACTIVATION_TOKEN",
+    "DESKTOP_STARTUP_ID",
+];
+
 /// Everything [`PseudoConsole::spawn`] needs.
 ///
 /// `drain_on_exit` is deliberately absent: it only ever configured the read loop
@@ -147,6 +168,14 @@ pub struct Options {
     ///
     /// This crate never touches the *calling* process's environment: `TERM` and
     /// `COLORTERM` belong here, not in a process-global `set_var`.
+    ///
+    /// The parent environment reaches the child minus the variables through
+    /// which the terminal that launched the parent names itself (`WT_SESSION`,
+    /// `WT_PROFILE_ID`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`,
+    /// `TERMINAL_EMULATOR`, `ITERM_SESSION_ID`, `ITERM_PROFILE`, `ConEmuPID`,
+    /// `ConEmuANSI`) and the single-use startup tokens `XDG_ACTIVATION_TOKEN`
+    /// and `DESKTOP_STARTUP_ID`: inside a new pseudo-console each of them is a
+    /// false claim. An entry here with one of those names is still applied.
     pub env: HashMap<String, String>,
     /// Width mode requested from the console host.
     pub glyph_width: GlyphWidth,

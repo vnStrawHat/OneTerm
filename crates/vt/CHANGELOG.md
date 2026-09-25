@@ -258,6 +258,16 @@ carry no API change at all. Such a release says so below rather than being omitt
 
 ### Changed
 
+- **Behaviour, no signature: a spawned child no longer inherits another terminal's identity.**
+  `PseudoConsole::spawn` drops `WT_SESSION`, `WT_PROFILE_ID`, `TERM_PROGRAM`,
+  `TERM_PROGRAM_VERSION`, `TERMINAL_EMULATOR`, `ITERM_SESSION_ID`, `ITERM_PROFILE`, `ConEmuPID`
+  and `ConEmuANSI` from the inherited environment, on both platforms, next to the two startup
+  tokens Unix already dropped (now dropped on Windows too). Before, an embedder started from a
+  Windows Terminal tab told its shells they ran in Windows Terminal, and programs such as
+  `claude` switched behaviour on it. An `Options::env` entry with one of these names is still
+  applied, so set `TERM_PROGRAM` there if you have one; on Unix that is also new for the two
+  startup tokens, which used to be removed even when you set them. On Windows the child now
+  always gets an explicit environment block, including when `Options::env` is empty.
 - **Behaviour, no signature: a Sixel's footprint in cells comes from your cell size, not from
   `VIRTUAL_CELL`.** An image now covers `ceil(width / cell_width)` x `ceil(height / cell_height)`
   cells against the size you passed to `Terminal::set_cell_pixels`, and the cursor walks down

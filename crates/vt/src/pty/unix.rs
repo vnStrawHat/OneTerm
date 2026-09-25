@@ -22,8 +22,8 @@ use std::sync::{Arc, mpsc};
 use polling::{Event, PollMode, Poller};
 
 use crate::pty::{
-    ChildEvent, EventedPty, EventedReadWrite, OnResize, Options, PTY_CHILD_EVENT_TOKEN,
-    PTY_READ_WRITE_TOKEN, WindowSize,
+    ChildEvent, DROPPED_PARENT_ENV, EventedPty, EventedReadWrite, OnResize, Options,
+    PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN, WindowSize,
 };
 
 /// The signal mask a spawned child should start with.
@@ -110,13 +110,7 @@ impl PseudoConsole {
         command.stderr(Stdio::from(slave.try_clone()?));
         command.stdout(Stdio::from(slave.try_clone()?));
 
-        for (key, value) in &options.env {
-            command.env(key, value);
-        }
-        // Startup-notification tokens are single-use and belong to the process
-        // that was launched, not to a shell it opens.
-        command.env_remove("XDG_ACTIVATION_TOKEN");
-        command.env_remove("DESKTOP_STARTUP_ID");
+        apply_env(&mut command, &options.env);
 
         let working_directory = options
             .working_directory
@@ -396,6 +390,17 @@ unsafe fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
+/// The child inherits this process's environment minus [`DROPPED_PARENT_ENV`],
+/// then `custom` on top, so a custom entry with a dropped name still applies.
+fn apply_env(command: &mut Command, custom: &std::collections::HashMap<String, String>) {
+    for key in DROPPED_PARENT_ENV {
+        command.env_remove(key);
+    }
+    for (key, value) in custom {
+        command.env(key, value);
+    }
+}
+
 /// The shell to run when the caller did not name one.
 fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
@@ -408,6 +413,29 @@ mod tests {
 
     use super::*;
     use crate::pty::Shell;
+
+    #[test]
+    fn another_terminals_identity_is_not_inherited() {
+        let mut custom = std::collections::HashMap::new();
+        custom.insert("TERM_PROGRAM".to_owned(), "Embedder".to_owned());
+        let mut command = Command::new("sh");
+        apply_env(&mut command, &custom);
+
+        let envs: std::collections::HashMap<_, _> = command.get_envs().collect();
+        let get = |name: &str| envs.get(std::ffi::OsStr::new(name)).copied();
+        assert_eq!(get("WT_SESSION"), Some(None), "removed, not inherited");
+        assert_eq!(get("WT_PROFILE_ID"), Some(None));
+        assert_eq!(
+            get("TERM_PROGRAM"),
+            Some(Some(std::ffi::OsStr::new("Embedder"))),
+            "the embedder's own entry wins over the drop"
+        );
+        assert_eq!(
+            get("PATH"),
+            None,
+            "an unrelated variable is inherited as is"
+        );
+    }
 
     fn size(rows: u16, cols: u16) -> WindowSize {
         WindowSize {
