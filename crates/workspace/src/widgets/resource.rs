@@ -25,9 +25,11 @@
 //!
 //! `MEM` is the number Task Manager's "Memory" column shows: the **private
 //! working set** (`PROCESS_MEMORY_COUNTERS_EX2::PrivateWorkingSetSize`, Windows
-//! 10 21H1+), read with `GetProcessMemoryInfo` because `sysinfo` does not expose
+//! 10 22H2 or Windows 11 22H2 with the September 2023 cumulative update, and
+//! later), read with `GetProcessMemoryInfo` because `sysinfo` does not expose
 //! it. Where it is unavailable the full working set (`sysinfo` `memory()`,
-//! shared pages included) stands in. On Linux and macOS `memory()` is the
+//! shared pages included) stands in, so an older Windows reads higher: about
+//! 136 MB idle instead of 51. On Linux and macOS `memory()` is the
 //! resident set size. Commit (`virtual_memory()`, `PrivateUsage`) is not shown:
 //! it counts pages that were never touched (`US-0137`).
 //!
@@ -118,8 +120,11 @@ fn private_working_set() -> Option<u64> {
         counters.cb = size;
         // SAFETY: `GetCurrentProcess` returns a pseudo-handle that needs no close;
         // the pointer is to a live, writable struct of exactly `size` bytes. A
-        // Windows older than 10 21H1 leaves `PrivateWorkingSetSize` at 0, which
-        // `displayed_memory` treats as unavailable.
+        // Windows without the EX2 struct (before 10 22H2 / 11 22H2 with the
+        // September 2023 update) either rejects the larger `cb` (`ok == 0`, so
+        // `None`) or fills only the older prefix and leaves
+        // `PrivateWorkingSetSize` at 0; `displayed_memory` treats both as
+        // unavailable and shows the working set.
         let ok = unsafe {
             GetProcessMemoryInfo(
                 GetCurrentProcess(),
@@ -168,7 +173,8 @@ mod tests {
     fn displayed_memory_falls_back_to_resident_when_unavailable() {
         // Not Windows, or the call failed.
         assert_eq!(displayed_memory(None, 94 << 20), 94 << 20);
-        // Windows before 10 21H1 leaves the EX2 field at 0.
+        // A Windows without the EX2 struct (before 10 22H2 / 11 22H2 with the
+        // September 2023 update) may leave the field at 0.
         assert_eq!(displayed_memory(Some(0), 94 << 20), 94 << 20);
     }
 

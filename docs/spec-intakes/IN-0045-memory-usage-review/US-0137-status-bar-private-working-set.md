@@ -35,8 +35,10 @@ Owner ruling, 2026-09-25: the status bar `MEM` value is the number Task Manager'
 - [x] In scope:
   - `crates/workspace/src/widgets/resource.rs`: on Windows, read
     `PROCESS_MEMORY_COUNTERS_EX2::PrivateWorkingSetSize` through `GetProcessMemoryInfo`.
-    If the call fails or the field is 0 (Windows before 10 21H1 does not fill it), use
-    the working set (`sysinfo` `Process::memory()` = `WorkingSetSize`).
+    If the call fails (an older Windows may reject the larger `cb`) or the field is 0
+    (it is not filled before Windows 10 22H2 or Windows 11 22H2 with the September 2023 cumulative update), use the working set (`sysinfo`
+    `Process::memory()` = `WorkingSetSize`). Consequence: such a Windows shows the full
+    working set, about 136 MB idle instead of 51.
   - On Linux and macOS, show `sysinfo` `Process::memory()`, the resident set size (RSS).
     That is the closest "resident" figure the OS gives. It includes shared pages, so it
     reads higher than a private figure would.
@@ -93,7 +95,8 @@ the owner question are closed).
   `WorkingSetSize`, `virtual_memory()` = `PrivateUsage`. It does not expose
   `PrivateWorkingSetSize`, so a small FFI call is needed.
 - `windows-sys` 0.59 is already a workspace dependency; this adds its
-  `Win32_System_ProcessStatus` feature (no new crate, `Cargo.lock` unchanged).
+  `Win32_System_ProcessStatus` feature (no new crate; `Cargo.lock` gains one line: `oneterm-workspace` depends on
+  `windows-sys` 0.59.0).
 
 ## Plan
 
@@ -149,8 +152,9 @@ the owner question are closed).
 
   The status bar agrees with the private working set within 0.5 MB (it samples every
   2 s). Before this change it showed commit, the last column.
-- The Windows fallback (a Windows before 10 21H1 that leaves the EX2 field at 0) is
-  proven by the unit test only; no such Windows was available.
+- The Windows fallback (before Windows 10 22H2 or Windows 11 22H2 with the September 2023 cumulative update: the call fails on the larger `cb`, or the EX2
+  field is left at 0; the item then shows the full working set, about 136 MB idle instead
+  of 51) is proven by the unit test only; no such Windows was available.
 - Linux and macOS: not run. They show `sysinfo` `memory()` (RSS), which is what the
   widget's resident fallback is; the selection test covers that path on every CI runner.
 - Integration proof: not applicable (one widget, no cross-crate flow).
