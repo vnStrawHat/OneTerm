@@ -210,7 +210,8 @@ their new slots, is O(live rows), and is explicitly not on the resize path. `Ter
 computes it once.
 
 - **`Option<Row>`, `None` until first written.** Reading a `None` slot yields blanks; writing one
-  allocates the row's `Vec<Cell>`. **The slot itself is not a pointer (N-10):** `Row` is
+  materialises the row's `Vec<Cell>` (since `US-0143`, in the spare kept from the last trim when
+  there is one, so a full history scrolls without allocating). **The slot itself is not a pointer (N-10):** `Row` is
   `RowHeader` plus an inline `Vec<Cell>`, so a slot is about 48 B, and the whole `Box<[Option<Row>]>`
   is allocated in `Terminal::new`. At the default 10 000-row scrollback that is 16 384 slots, under
   1 MB; at `SCROLLBACK_MAX = 1_000_000` it is about 50 MB of empty slots, which is the price of a
@@ -498,7 +499,7 @@ primitives produce: a partial region scroll may **split** a selection (parity wi
 | --- | --- | --- | --- |
 | G1 | `WRAPPED` is a row flag, not a flag on the last cell | `US-0075` | none — a representation change |
 | G2 | `RowId` replaces signed `Line`; no negative indices | `US-0075` | none |
-| G6 | The ring index is the row id; no `zero` rotation and no free list | `US-0075` | none — removes trap 45 |
+| G6 | The ring index is the row id; no `zero` rotation and no free list (since `US-0143`, one spare `Row` per screen is kept from the last trim and recycled, which is not a free list: it is never addressable as content) | `US-0075`, `US-0143` | none — removes trap 45 |
 | G7 | One row representation; dual-form rows deferred (R-51) | `US-0075` | none |
 
 **Corrections — spec-correct from the start, with declared expected differences.** Each row below

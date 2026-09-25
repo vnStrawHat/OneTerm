@@ -1765,7 +1765,8 @@ impl Screen {
     // ── Memory ──────────────────────────────────────────────────────────────
 
     /// Live heap this screen owns: the ring's slots, the rows that were actually
-    /// written, and the tab bitmap.
+    /// written, the one spare row kept back from the last trim, and the tab
+    /// bitmap.
     ///
     /// This is the physical half of the design's memory claim, read off the
     /// structure's own capacities rather than off a counting allocator — a
