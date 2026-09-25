@@ -315,7 +315,7 @@ attacker-reachable from any SSH session, so it cannot be left to a later packet:
 
 | Step | Condition | Action |
 | --- | --- | --- |
-| 1 | the link is already interned (same `id` and URI) | reuse |
+| 1 | the link is already interned: same `id` and URI for an explicit link, same URI for an implicit one (`IN-0045` `BUG-0079`) | reuse |
 | 2 | `entries.len() < HYPERLINK_TABLE_LIMIT` (65 535, matching the other tables) | insert |
 | 3 | full | drop the hyperlink attribute for that cell — the text still renders, the link is simply not clickable — count it in `FeedStats::hyperlink_table_exhausted` and `log::warn!` once per session |
 
@@ -323,6 +323,13 @@ Additionally, implicit ids are **recycled by `RIS` and by a full reset**, which 
 owns: both clear the table, so a long session that never repeats a URI cannot accumulate across a
 `clear`-and-restart cycle. An explicit `id=` still interns by value, so a program that groups its
 links pays one entry per group, which is the case the protocol was designed for.
+
+**Amended by `IN-0045` `BUG-0079`** ([`osc8-interning.md`](../../IN-0045-memory-usage-review/low-level-design/osc8-interning.md)):
+the per-occurrence implicit id above made every repaint of a line holding a link take one
+hyperlink entry **and** one extras entry, so a TUI that redraws a link each frame filled both
+tables in about 36 minutes, after which links, explicit links and images all stopped working.
+An implicit link is now keyed by its URI, so repainting it is idempotent; the table grows only
+with distinct URIs. `RIS` clears the extras table together with this one.
 
 The US-0074 verification recorded this as the most substantive open risk that packet left behind;
 it is written here so it cannot be dropped.

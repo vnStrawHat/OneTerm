@@ -97,7 +97,8 @@ impl Extras {
 ///
 /// Step 1 reuses an interned value, step 2 inserts, and step 3 — the table is
 /// full — returns id 0 and warns once. An id, once issued, is valid for the
-/// life of the terminal.
+/// life of the terminal; the extras table alone is emptied by `RIS`, which
+/// first blanks every cell that could hold one of its ids.
 #[derive(Debug)]
 pub struct InternTable<T> {
     entries: Vec<T>,
@@ -157,6 +158,17 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
             // on a stream we do not control.
             None => &self.entries[0],
         }
+    }
+
+    /// Back to the default value alone, for `RIS`, which blanks every cell and
+    /// pen that could hold an id. The exhaustion count and the warn-once flag
+    /// are session telemetry and survive.
+    pub(crate) fn clear(&mut self) {
+        let default = T::default();
+        self.entries.clear();
+        self.entries.push(default);
+        self.index.clear();
+        self.index.insert(default, 0);
     }
 
     /// Interned values, including the default at id 0.
@@ -369,9 +381,9 @@ impl GraphemeRemap {
 
 /// Links kept per terminal, matching the other interned tables' bound.
 ///
-/// A link **without** an explicit `id=` gets a fresh implicit id on every
-/// occurrence, so a stream of un-`id=`-ed `OSC 8` links would otherwise grow the
-/// table and its index map without limit, which any hostile stream can reach.
+/// A link without an explicit `id=` is keyed by its URI, so repainting the same
+/// link reuses its entry; the table still grows with every distinct URI and
+/// every distinct explicit id, which any hostile stream can reach.
 pub(crate) const HYPERLINK_TABLE_LIMIT: usize = 65_535;
 
 /// One OSC 8 hyperlink.
@@ -397,6 +409,9 @@ pub struct Hyperlink {
 pub struct HyperlinkTable {
     entries: Vec<Hyperlink>,
     index: FxHashMap<(Box<str>, Box<str>), u32>,
+    /// Implicit links by URI. Kept apart from `index` because the two id
+    /// spaces overlap: explicit `id=1` must not alias implicit link `1`.
+    implicit: FxHashMap<Box<str>, u32>,
     next_implicit: u32,
     exhausted: u32,
 }
@@ -406,32 +421,39 @@ impl HyperlinkTable {
     /// when the table is full — return `None` so the caller drops the hyperlink
     /// attribute for that cell. The text still renders; the link is simply not
     /// clickable.
+    ///
+    /// Identity: an explicit link is its `(id, uri)` pair; an implicit link
+    /// (no `id=`) is its URI alone, so every occurrence of one URI without an
+    /// `id=` shares one id. That makes repainting a link idempotent — a TUI
+    /// that redraws the same link every frame holds one entry, not one per
+    /// frame. Ids are never renumbered.
     pub fn intern(&mut self, id: Option<&str>, uri: &str) -> Option<HyperlinkId> {
-        let (id, implicit): (Box<str>, bool) = match id {
-            // Explicit ids identify a link run across cells and rows, so they
-            // deduplicate; an implicit link is one occurrence and gets a fresh
-            // identity.
-            Some(id) => {
-                let key = (Box::from(id), Box::from(uri));
-                if let Some(&existing) = self.index.get(&key) {
-                    return Some(HyperlinkId(existing));
-                }
-                (key.0, false)
-            }
-            None => {
-                self.next_implicit = self.next_implicit.saturating_add(1);
-                (self.next_implicit.to_string().into_boxed_str(), true)
-            }
+        let existing = match id {
+            Some(id) => self.index.get(&(Box::from(id), Box::from(uri))),
+            None => self.implicit.get(uri),
         };
+        if let Some(&existing) = existing {
+            return Some(HyperlinkId(existing));
+        }
         if self.entries.len() >= HYPERLINK_TABLE_LIMIT {
             self.exhausted = self.exhausted.saturating_add(1);
             return None;
         }
-        let uri: Box<str> = Box::from(uri);
-        let key = (id.clone(), uri.clone());
         let new_id = self.entries.len() as u32;
+        let implicit = id.is_none();
+        let uri: Box<str> = Box::from(uri);
+        let id: Box<str> = match id {
+            Some(id) => {
+                self.index.insert((Box::from(id), uri.clone()), new_id);
+                Box::from(id)
+            }
+            None => {
+                self.next_implicit = self.next_implicit.saturating_add(1);
+                self.implicit.insert(uri.clone(), new_id);
+                self.next_implicit.to_string().into_boxed_str()
+            }
+        };
         self.entries.push(Hyperlink { id, uri, implicit });
-        self.index.insert(key, new_id);
         Some(HyperlinkId(new_id))
     }
 
@@ -461,6 +483,7 @@ impl HyperlinkTable {
     pub fn clear(&mut self) {
         self.entries.clear();
         self.index.clear();
+        self.implicit.clear();
         self.next_implicit = 0;
     }
 }

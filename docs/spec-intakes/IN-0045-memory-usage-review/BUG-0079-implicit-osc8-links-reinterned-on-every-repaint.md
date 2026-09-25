@@ -9,9 +9,9 @@ Created: 2026-09-25
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -57,24 +57,30 @@ the link still resolves, and a later explicit link or image in the same terminal
 
 ## Scope
 
-- [ ] In scope: `oneterm-vt` `HyperlinkTable` / `ExtrasTable` behaviour for links without
+- [x] In scope: `oneterm-vt` `HyperlinkTable` / `ExtrasTable` behaviour for links without
   `id=`; its rustdoc; the IN-0029 LLD rows that describe the ladder; `docs/terminal-backend.md`
-  if it gains a hyperlink section.
-- [ ] Out of scope: terminal-view hover and Ctrl+click behaviour; the style table; the
+  if it gains a hyperlink section. Added by the coordinator: `RIS` releases the extras table,
+  and a full extras table does not silently break Sixel placement.
+- [x] Out of scope: terminal-view hover and Ctrl+click behaviour; the style table; the
   grapheme arena (already swept).
 
 ## Acceptance
 
-- [ ] A failing `oneterm-vt` test first: repaint one implicit link 70,000 times; assert
+- [x] A failing `oneterm-vt` test first: repaint one implicit link 70,000 times; assert
   `hyperlinks.len()` and `extras.entries()` stay below a small constant, the last repaint's
   cells resolve to the link, and a following explicit `id=` link and a Sixel image still get
-  their cells.
-- [ ] Two different implicit links with the same URI in separate runs that are adjacent on
+  their cells. `terminal::tests::repainting_an_implicit_link_does_not_grow_the_tables`; with
+  the implicit lookup disabled it fails at `hyperlinks.len()`: `left: 65535, right: 1`.
+- [x] Two different implicit links with the same URI in separate runs that are adjacent on
   screen stay distinguishable where the spec needs it (hover underlines one run, not both), or
-  the LLD note records why merging them is acceptable.
-- [ ] `vt-public-api.py --check` is unchanged, or the change is recorded in
-  `crates/vt/CHANGELOG.md` with its semver level.
-- [ ] Headless re-measure: live-byte growth for 70,000 repaints is under 1 MB.
+  the LLD note records why merging them is acceptable. Recorded in
+  [`low-level-design/osc8-interning.md`](low-level-design/osc8-interning.md): hover groups a
+  contiguous same-id run within one row, so only touching occurrences merge, and they open the
+  same URI; `id=` keeps them apart.
+- [x] `vt-public-api.py --check` is unchanged, or the change is recorded in
+  `crates/vt/CHANGELOG.md` with its semver level. Surface unchanged; the behaviour change is a
+  "Fixed" entry (no signature, patch level).
+- [x] Headless re-measure: live-byte growth for 70,000 repaints is under 1 MB (0.00 MB).
 
 ## Documentation
 
@@ -94,7 +100,7 @@ the link still resolves, and a later explicit link or image in the same terminal
 Update required: the `intern.rs` rustdoc (the identity rule for implicit links and what bounds
 the tables), the IN-0029 LLD ladder rows, and a short hyperlink paragraph in
 `docs/terminal-backend.md` (the bound, what a full table does, how it recovers). Write
-`low-level-design/implicit-hyperlinks.md` under `IN-0045` first, choosing between:
+`low-level-design/osc8-interning.md` under `IN-0045` first, choosing between:
 
 1. **Reuse by URI while open.** An implicit link reopened with the same URI while the
    previous implicit entry for that URI is the most recent one reuses it. Cheapest; merges two
@@ -108,7 +114,20 @@ repainting exhausts both tables, or that a full extras table also disables image
 
 ### Reconciliation
 
-Not started.
+Done:
+
+- [`low-level-design/osc8-interning.md`](low-level-design/osc8-interning.md) (new): identity
+  key, rejected option B, `RIS`, full extras table and images.
+- `crates/vt/src/intern.rs` rustdoc: `HYPERLINK_TABLE_LIMIT`, `HyperlinkTable::intern` (the
+  identity rule), `InternTable` (the extras table is emptied by `RIS`).
+- IN-0029 `dispatch-and-modes.md` § "The hyperlink table needs a ladder": step 1 row and an
+  amendment paragraph.
+- `docs/terminal-backend.md` § 13 Risks: one row on the per-terminal table bounds.
+- `crates/vt/docs/guide/10-limits.md`: the identity rule and `RIS`.
+- `crates/vt/CHANGELOG.md` `[Unreleased]` "Fixed": three entries.
+- Reviewed, no change: IN-0029 `high-level-design.md` line "one entry per image plus one per
+  hyperlink" stays true (one per distinct link); `cell-and-style.md` § "Extras" (R-21 is
+  unchanged); `crates/vt/README.md` (does not describe the tables).
 
 ## Context
 
@@ -119,13 +138,16 @@ Not started.
 
 ## Plan
 
-- [ ] LLD note with the choice above; owner review, because `HyperlinkId` identity is
-  embedder-visible.
-- [ ] Failing test, then the fix, then the headless and live re-measure.
+- [x] LLD note with the choice above; owner review, because `HyperlinkId` identity is
+  embedder-visible. The coordinator ruled option A.
+- [x] Failing test, then the fix, then the headless re-measure. The live re-measure was not
+  run (see Evidence and Gaps).
 
 ## Decisions
 
-None yet; the LLD choice may warrant one if it changes `HyperlinkId` stability.
+Option A (coordinator ruling, 2026-09-25): an implicit link is keyed by its URI; ids are never
+renumbered, so `HyperlinkId` stability is unchanged and no DEC record is needed. Option B
+(sweep) is rejected in the LLD note.
 
 ## Verification Plan
 

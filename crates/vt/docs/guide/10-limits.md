@@ -55,9 +55,11 @@ ceilings are the odd ones out -- they bound a *table*, not a sequence.
 A stream that prints a million distinct emoji sequences fills the grapheme
 arena; a sweep reclaims every entry no live cell references, and an over-long
 cluster is truncated rather than allowed to grow one. A stream that emits a
-`OSC 8` link per cell fills the hyperlink table; further links are dropped,
-counted in `FeedStats::hyperlink_table_exhausted`, and the text still renders
-without them.
+`OSC 8` link to a new URI per cell fills the hyperlink table; further links are
+dropped, counted in `FeedStats::hyperlink_table_exhausted`, and the text still
+renders without them. A link without `id=` is keyed by its URI, so a program
+that repaints the same link every frame holds one entry, not one per frame.
+`RIS` empties the hyperlink table and the extras table behind it.
 
 You normally never name any of it. The snapshot resolves a cell's hyperlink for
 you under the lock -- `SnapshotState::hyperlink` -- and a row's clusters are
