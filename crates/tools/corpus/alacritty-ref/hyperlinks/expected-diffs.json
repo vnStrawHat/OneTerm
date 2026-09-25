@@ -1,0 +1,11 @@
+{
+  "diff": [
+    {
+      "deviation": "C16",
+      "rows": "29",
+      "cols": "0..3",
+      "fields": ["hyperlink"],
+      "reason": "An OSC 8 link without id= is keyed by its URI, so the second implicit link to https://example.com shares the first one's id (#0) where the reference issued a fresh one (#1). A per-occurrence id made every repaint of a link consume a hyperlink and an extras entry."
+    }
+  ]
+}

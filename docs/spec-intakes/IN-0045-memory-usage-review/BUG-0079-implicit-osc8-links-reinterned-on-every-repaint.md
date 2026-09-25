@@ -125,6 +125,10 @@ Done:
 - `docs/terminal-backend.md` § 13 Risks: one row on the per-terminal table bounds.
 - `crates/vt/docs/guide/10-limits.md`: the identity rule and `RIS`.
 - `crates/vt/CHANGELOG.md` `[Unreleased]` "Fixed": three entries.
+- Parity gate: new correction `C16` (IN-0029 `dispatch-and-modes.md` corrections table,
+  `corpus::KNOWN_DEVIATIONS`) and `crates/tools/corpus/alacritty-ref/hyperlinks/expected-diffs.json`
+  declaring the one measured difference: the second implicit link to `https://example.com`
+  (row 29, cols 0-2) now shares the first one's id (`#0`, reference `#1`).
 - Reviewed, no change: IN-0029 `high-level-design.md` line "one entry per image plus one per
   hyperlink" stays true (one per distinct link); `cell-and-style.md` § "Extras" (R-21 is
   unchanged); `crates/vt/README.md` (does not describe the tables).
