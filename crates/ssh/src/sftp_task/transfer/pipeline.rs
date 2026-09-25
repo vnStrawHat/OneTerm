@@ -60,6 +60,7 @@ pub(super) const CHUNK_LEN: usize = 255 * 1024;
 /// length — wrap the reader in [`tokio::io::AsyncReadExt::take`]. A file that
 /// turned out *shorter* then ends early at EOF without error, with `on_bytes`
 /// having reported the real byte count.
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 pub(super) async fn copy_sequential<R, W>(
     reader: &mut R,
     writer: &mut W,

@@ -26,6 +26,10 @@ use assets::CustomAssets;
 
 /// Survive system-OOM spikes (see `oom.rs`): retry failed allocations after
 /// releasing a ballast instead of aborting on the first NULL.
+///
+/// Under `hotpath-profiling-alloc` (`IN-0046`) `#[hotpath::main]` on [`run`] declares
+/// the global allocator instead: hotpath's counting allocator wrapping this one.
+#[cfg(not(feature = "hotpath-profiling-alloc"))]
 #[global_allocator]
 static GLOBAL_ALLOC: oom::OomResilientAlloc = oom::OomResilientAlloc;
 
@@ -77,6 +81,13 @@ fn read_process_identity() {
 }
 
 /// Launch OneTerm: initialize logging, the app, the UI, then open the main window.
+///
+/// Under `hotpath-profiling` (`IN-0046`) this is also the profiler's scope: the report is
+/// written when `run` returns, or after `HOTPATH_SHUTDOWN_MS`.
+#[cfg_attr(
+    feature = "hotpath-profiling",
+    hotpath::main(allocator = oom::OomResilientAlloc, percentiles = [50, 95, 99], limit = 40)
+)]
 pub fn run() {
     // What this process is, and what it was asked to open, before anything else
     // (`IN-0043`). The token comes first because `crashes_dir()` needs it; the

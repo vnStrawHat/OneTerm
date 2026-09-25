@@ -42,6 +42,12 @@ carry no API change at all. Such a release says so below rather than being omitt
 
 ### Added
 
+- A default-off `hotpath-profiling` feature. It adds the optional `hotpath` dependency and puts
+  a `hotpath::measure` attribute on `Terminal::feed`, `Parser::advance`,
+  `Terminal::snapshot_update` and the grid's scroll primitives. On its own it measures nothing
+  (it compiles `hotpath`'s no-op macros); a site measures only when the final binary also turns
+  on `hotpath`'s own `hotpath` feature and starts a guard. No public item changed, and
+  `--no-default-features` still adds nothing.
 - `ResizeOutcome`, `CursorStyle`, `SyncState` and `Placement` are re-exported from the crate root.
   All four were already **returned** by a public `Terminal` method -- `resize`, `cursor_style`,
   `sync` and `placements` -- but were defined in a `pub(crate)` module, so no embedder could write

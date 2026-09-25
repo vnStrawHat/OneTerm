@@ -397,7 +397,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                         let read_end = unprocessed
                             .saturating_add(MAX_LOCKED_READ)
                             .min(READ_BUFFER_SIZE);
-                        match self.pty.reader().read(&mut buf[unprocessed..read_end]) {
+                        match pty_read(self.pty.reader(), &mut buf[unprocessed..read_end]) {
                             Ok(0) if unprocessed == 0 => break,
                             Ok(got) => unprocessed += got,
                             Err(err) => match err.kind() {
@@ -638,6 +638,13 @@ pub(crate) fn classify_event(key: usize, interrupt: bool, readable: bool) -> Pol
         return PollAction::Ignore;
     }
     PollAction::ReadWrite
+}
+
+/// One read from the PTY. A function of its own only so the `hotpath-profiling`
+/// build (`IN-0046`) has somewhere to measure the read apart from the parse.
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
+fn pty_read(reader: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
+    reader.read(buf)
 }
 
 /// Record the child's exit and tell the UI the session is over.

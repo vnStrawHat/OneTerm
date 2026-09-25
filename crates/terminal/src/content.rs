@@ -221,6 +221,10 @@ impl TerminalContent {
     ///
     /// Advances **this buffer's** watermark: the next call reports only what
     /// changed after this one.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TerminalContent")
+    )]
     pub fn refill(&mut self, term: &mut Terminal) {
         self.update = term.snapshot_update(&mut self.state, Instant::now());
         self.cursor_shape = term.cursor_style().shape;

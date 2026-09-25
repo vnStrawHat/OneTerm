@@ -108,6 +108,7 @@ impl<T: PtyTransport> TerminalPump<T> {
     }
 
     /// Feed one chunk into the engine. The caller holds the lock.
+    #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "Pump"))]
     pub fn advance(&mut self, term: &mut Terminal, bytes: &[u8]) {
         self.router.logging().process(bytes);
         term.feed(bytes, &mut self.batch, Instant::now());

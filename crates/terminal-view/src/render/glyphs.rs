@@ -148,6 +148,10 @@ impl GlyphCache {
     /// The shaped line for `text` in `font`; a hit costs one hash lookup and
     /// an `Arc` bump.
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "GlyphCache")
+    )]
     pub(crate) fn shape(
         &mut self,
         text: &str,

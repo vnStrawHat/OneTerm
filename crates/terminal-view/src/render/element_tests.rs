@@ -238,6 +238,11 @@ impl<'a> Harness<'a> {
 #[gpui::test]
 #[ignore = "measurement, run explicitly"]
 fn frame_time_under_output(cx: &mut TestAppContext) {
+    // With `--features hotpath-profiling,hotpath/hotpath` the sites measure and the
+    // report prints when the guard drops (`IN-0046`: the profiler's overhead is this
+    // test's numbers with and without the features).
+    #[cfg(feature = "hotpath-profiling")]
+    let _hotpath = hotpath::HotpathGuardBuilder::new("frame_time_under_output").build();
     let mut h = Harness::open(cx, 30, 120, "", inputs());
     h.first_frame();
 

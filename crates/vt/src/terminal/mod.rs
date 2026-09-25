@@ -287,6 +287,10 @@ impl Terminal {
     ///
     /// Clears `batch` first: a caller who has not drained the previous batch
     /// loses it, which is a programming error rather than a recoverable one.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "Terminal")
+    )]
     pub fn feed(&mut self, bytes: &[u8], batch: &mut EventBatch, now: Instant) -> FeedStats {
         batch.clear();
         self.state.stats = FeedStats {
@@ -350,6 +354,10 @@ impl Terminal {
     /// Phase 1 of the hand-off, cheap enough to run under the caller's lock;
     /// the returned [`SnapshotUpdate`] borrows the engine, so drawing happens
     /// after it is dropped.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "Terminal")
+    )]
     pub fn snapshot_update(
         &mut self,
         snapshot: &mut SnapshotState,

@@ -88,6 +88,10 @@ impl Element for TerminalElement {
         (window.request_layout(style, None, cx), ())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TerminalElement")
+    )]
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -157,6 +161,10 @@ impl Element for TerminalElement {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TerminalElement")
+    )]
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -260,6 +268,10 @@ impl GridPainter<'_> {
         self.stats.quads += 1;
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "GridPainter")
+    )]
     fn paint(&mut self, plans: &[RowPlan], rows: Range<usize>, window: &mut Window) {
         // Element background, then the gutter column.
         self.quad(self.bounds, self.theme.bg, window);

@@ -12,6 +12,14 @@ publish.workspace = true
 # UI-side diagnostics overlay (frame timing). Backend diagnostics are enabled
 # from the app crate.
 terminal-diagnostics = []
+# Function-level profiling sites (IN-0046). Off by default: without it every
+# `#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]` vanishes and
+# `hotpath` is not in the graph. Only `oneterm-app` turns measuring on.
+hotpath-profiling = [
+    "dep:hotpath",
+    "oneterm-terminal/hotpath-profiling",
+    "oneterm-highlight/hotpath-profiling",
+]
 
 [lints]
 workspace = true
@@ -34,6 +42,7 @@ log.workspace = true
 chrono.workspace = true
 serde_json.workspace = true
 image.workspace = true
+hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

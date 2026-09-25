@@ -494,6 +494,7 @@ impl RowBuilder<'_, '_> {
 /// limit is why the viewport's first line has no known predecessor and is never
 /// a marked prompt (`US-0133`).
 #[allow(clippy::too_many_arguments)] // one output buffer per pass, plus the bounds
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 pub(crate) fn class_rows_into(
     frame: &Frame,
     overlay: &SemanticOverlay,
@@ -707,6 +708,7 @@ fn classify(
 /// of the command this row's prompt launched, when it is the most recently
 /// completed one (`US-0133`).
 #[allow(clippy::too_many_arguments)] // the frame-constant half is already in `ctx`
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 pub(crate) fn build_row_plan(
     row: FrameRow<'_>,
     ctx: &PlanContext<'_>,

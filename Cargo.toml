@@ -163,6 +163,9 @@ proptest = "1"
 # The adapter's lock (IN-0029 US-0081, HLD decision 7). Declared by `crates/terminal`,
 # never by the engine: `oneterm-vt` holds no lock and the embedder picks the strategy.
 parking_lot = "0.12"
+# Function-level time and allocation profiler (IN-0046). Optional everywhere and reached
+# only through each crate's `hotpath-profiling` feature, which `oneterm-app` fans out.
+hotpath = "0.26"
 
 [workspace.lints.clippy]
 # Preserve compatibility with upstream gpui-component (see reference/Cargo.toml)
