@@ -56,3 +56,19 @@ date,label,run,scenario,ws,privws,commit,peakws,threads,handles,children,tree_ws
 2026-09-25 11:11,main,1,S3,159.8,82.1,191.3,162.6,15,489,2,18.3,3.5,5.8,Bisect mode (one tab)
 2026-09-25 11:12,main,2,S1,127.2,49.5,182.3,127.8,18,486,2,18.2,3.5,5.9,Bisect mode (one tab)
 2026-09-25 11:12,main,2,S3,159.6,81.9,191,162.2,15,489,2,18.3,3.5,5.9,Bisect mode (one tab)
+2026-09-25 12:09,s6-default,1,S1,92.6,49.1,182,100.4,17,462,2,18.2,3.5,5.9,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:13,s6-default,1,S6,139,94.4,239.2,139.7,19,481,4,36.7,7.2,11.9,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:14,s6-50k,1,S1,94.8,51.3,184.1,101.8,17,463,2,18.2,3.5,5.8,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:18,s6-50k,1,S6,200.6,155.9,298.3,201.8,18,481,4,36.7,7.2,11.8,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:20,s6-100k,1,S1,97.8,54.3,187.1,104.6,17,461,2,18.2,3.5,5.9,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:24,s6-100k,1,S6,262.6,218,361.6,263.6,18,477,4,36.7,7.2,11.8,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:25,s6-default,2,S1,93,49.4,182.1,100,17,461,2,18.2,3.5,5.8,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:29,s6-default,2,S6,138.7,93.9,236.3,140.3,17,475,6,36.7,7.2,11.8,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:30,s6-50k,2,S1,95,51.5,184.2,101.8,17,465,2,18.2,3.5,5.8,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:34,s6-50k,2,S6,197.9,153.2,297.8,198.8,18,479,4,36.7,7.2,11.8,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:35,s6-100k,2,S1,98,54.5,187.3,104.9,17,461,2,18.2,3.5,5.9,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:39,s6-100k,2,S6,258.9,214.3,359.6,260.5,18,479,4,36.7,7.2,11.9,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s"
+2026-09-25 12:41,s6-default-1920,1,S1,92.6,49.1,181.9,100.4,17,463,2,18.2,3.5,5.8,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s, window 1920x1040 during load"
+2026-09-25 12:45,s6-default-1920,1,S6,154.7,110.1,275.4,156.5,19,481,4,36.8,7.3,11.9,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s, window 1920x1040 during load"
+2026-09-25 12:46,s6-default-1920,2,S1,93,49.5,182.2,99.9,17,461,2,18.2,3.5,5.9,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s, window 1920x1040 during load"
+2026-09-25 12:50,s6-default-1920,2,S6,155.1,110.4,276,156.3,19,481,4,36.8,7.3,11.9,"S6 mode, probe build (main 898148e5 + counting allocator, thin LTO); 2 tabs of tui-mimic.py 180 s, window 1920x1040 during load"

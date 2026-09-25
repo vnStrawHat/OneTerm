@@ -29,8 +29,8 @@ oneterm.exe (one process)
 |   idle: view + render caches + adapter + pump                     |
 |        budget <= 2.5 privws / <= 3 commit                         |
 |        today     2.0 privws / 26.6 commit  <-- glyph table 23.6   |
-|   history: <= 0.75 KB x rows (today), target <= 0.2 KB x rows     |
-|        for short lines (US-0138); ring grows with use (US-0139)   |
+|   history: ring share + 8 B x cols per row (0.79 KB at 89 cols);  |
+|        US-0138 deferred with a trigger, US-0139 not fixed         |
 |   render caches: bounded by entries, never by history, and no     |
 |        up-front table larger than 1 MB                            |
 |   images: per-terminal byte budget (US-0140)                      |
@@ -73,10 +73,10 @@ Budget table (MB; the "today" figures are measured on main `19237c8d`, 2026-09-2
 | --- | --- | --- | --- | --- |
 | gpui + gpui-component | process | privws / commit | 41.7 / 84.1 | not ours; tracked only |
 | OneTerm globals | process | privws / commit | about 7.7 / about 10 | 8 / 12 |
-| OOM ballast | process | commit | 64 | per `DEC-0020` |
+| OOM ballast | process | commit | 64 | 16 after BUG-0078 (`DEC-0020`, proposed) |
 | Idle tab or pane (view, adapter, pump, 1 MiB read buffer) | per tab | privws / commit | 2.0 / 26.6 | 2.5 / 3 |
 | Glyph cache | per view | commit (idle), privws (busy) | 23.6 / up to 23.6 | table ≤ 1 MB up front; entries ≤ 4096 |
-| History | per tab | privws | 0.75 KB/row + ring | row ≤ occupied cells (US-0138); ring ∝ rows used (US-0139) |
+| History | per tab | privws | 0.75 KB/row + ring | ring share + 8 B × columns per row; trimming deferred (US-0138), ring stays preallocated (US-0139), see research/history-storage-assessment.md |
 | Sixel | per terminal | privws | unbounded (64 MiB/image) | byte budget (US-0140) |
 
 ## Detail Design

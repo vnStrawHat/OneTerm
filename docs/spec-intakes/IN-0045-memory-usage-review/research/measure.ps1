@@ -8,6 +8,7 @@
 #
 #   pwsh -File measure.ps1 -Exe <path\oneterm.exe> -Label main -Mode Full   # S1..S5
 #   pwsh -File measure.ps1 -Exe <path\oneterm.exe> -Label v0.6.0 -Mode Bisect # S1, S3
+#   pwsh -File measure.ps1 -Exe <path\oneterm.exe> -Label s6-10k -Mode S6 -Seed <dir>
 #
 # Counters (GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX2, values in MB = 2^20 B):
 #   WS      = WorkingSetSize         resident pages, private + shared (DLL images, fonts)
@@ -26,6 +27,11 @@
 #       wait for that cmd to exit, idle 20 s
 #   S4  close the two extra tabs (their close buttons), idle 20 s    (Full only)
 #   S5  idle 120 s more                                             (Full only)
+#   S6  (Mode S6, after S1) a second tab, then tui-mimic.py (a claude-like TUI load) in
+#       both tabs for -LoadSeconds, switching the visible tab every 10 s so both views
+#       render; wait for both loads to exit, idle 20 s. Commit and private WS of the
+#       app pid are also sampled every 250 ms during the load into <Label>-<Run>-trace.csv.
+#       -LoadWidth/-LoadHeight resize the window once both tabs exist (a larger grid).
 #
 # Options: -Seed <dir> copies prepared config files (e.g. a terminal.json with a toggle
 # off) into the private .OneTerm; -UpdateCheck leaves the daily update check on (it is
@@ -34,14 +40,17 @@
 param(
   [Parameter(Mandatory)] [string] $Exe,
   [Parameter(Mandatory)] [string] $Label,
-  [ValidateSet('Full', 'Bisect', 'S1', 'S2')] [string] $Mode = 'Full',
+  [ValidateSet('Full', 'Bisect', 'S1', 'S2', 'S6')] [string] $Mode = 'Full',
   [string] $Csv = (Join-Path $PSScriptRoot 'measurements.csv'),
   [string] $Scratch = (Join-Path ([IO.Path]::GetTempPath()) 'oneterm-in0045'),
   [int] $Run = 1,
   [string] $Note = '',
   [string] $Seed = '',
   [switch] $UpdateCheck,
-  [int] $Hold = 0
+  [int] $Hold = 0,
+  [int] $LoadSeconds = 180,
+  [int] $LoadWidth = 0,
+  [int] $LoadHeight = 0
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -173,6 +182,32 @@ try {
   Start-Sleep -Seconds 30
   Snap 'S1'; Cap 'S1'
   if ($Mode -eq 'S1') { return }
+
+  if ($Mode -eq 'S6') {
+    Copy-Item (Join-Path $PSScriptRoot 'tui-mimic.py') "$home_\m.py"
+    $load = "python `"$home_\m.py`" $LoadSeconds"
+    Click 740 49; Click 615 81; Start-Sleep -Seconds 3     # tab 2 (now visible)
+    if ($LoadWidth -gt 0) { [void][MemProbe]::SetWindowPos($script:Hwnd, [IntPtr]::Zero, 0, 0, $LoadWidth, $LoadHeight, 0x0014); Start-Sleep -Seconds 2 }
+    Type-Text "$load 2"; Enter
+    Click 80 50; Start-Sleep -Seconds 1                     # back to tab 1
+    Type-Text "$load 1"; Enter
+    $trace = @(); $sw = [Diagnostics.Stopwatch]::StartNew(); $next = 10; $tab = 1
+    while ($sw.Elapsed.TotalSeconds -lt $LoadSeconds + 600) {
+      $m = [MemProbe]::Read([uint32]$script:AppPid)
+      $trace += [pscustomobject]@{ t = [math]::Round($sw.Elapsed.TotalSeconds, 2); privws = [math]::Round($m[1], 1); commit = [math]::Round($m[2], 1) }
+      if ($sw.Elapsed.TotalSeconds -ge $next) {
+        $next += 10
+        if ($sw.Elapsed.TotalSeconds -gt $LoadSeconds -and -not (Get-Descendants $script:AppPid | Where-Object { $_.CommandLine -like '*m.py*' })) { break }
+        if ($tab -eq 1) { Click 220 50; $tab = 2 } else { Click 80 50; $tab = 1 }
+      }
+      Start-Sleep -Milliseconds 250
+    }
+    $trace | Export-Csv -Path (Join-Path $work "$Label-$Run-trace.csv") -NoTypeInformation
+    Write-Host ("load took {0:n0} s; trace in $work" -f $sw.Elapsed.TotalSeconds)
+    Start-Sleep -Seconds 20
+    Snap 'S6'; Cap 'S6'
+    return
+  }
 
   if ($Mode -in 'Full', 'S2') {
     # Tab-bar "+" (x=740,y=49 at 1280x800), then its "Command Prompt" row, twice.
