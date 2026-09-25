@@ -291,6 +291,7 @@ mod tests {
             direction: TransferDirection::Upload,
             filename: format!("{id}.txt"),
             progress: 0.0,
+            discovered: None,
             status,
             error: None,
         }

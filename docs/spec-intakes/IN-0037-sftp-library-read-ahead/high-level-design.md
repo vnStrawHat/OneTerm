@@ -85,12 +85,21 @@ AFTER — one handle, library pipelines (max_concurrent_reads: 16)
 
 `N/A — no UI surface.` The transfer queue row, its progress bar and its Cancel button are
 untouched; `crates/sftp-ui` gains no code change. What reaches the UI is the same
-`TransferEvent::Progress(f64)` / `TransferEvent::Cancelled` stream it consumes today.
+`TransferEvent::Progress(f64)` / `TransferEvent::Cancelled` stream it consumed then. `BUG-0077`
+later added `TransferEvent::Discovering(files_found)` for a folder download's listing pass; the
+row shows it as `<name> (scanning, N files found)` until the first `Progress`:
+
+```text
+|  v  tree (scanning, 373 files found)          [----------]   0%   x |
+|  v  tree                                      [###-------]  31%   x |
+```
 
 ## Data Flow
 
 1. `sftp_download` stats the remote path. A symlink is refused; a directory goes to
-   `sftp_download_dir`, which calls `download_file_contents` per discovered file. Unchanged.
+   `sftp_download_dir`, which calls `download_file_contents` per discovered file. Unchanged here;
+   `BUG-0077` later split it into a listing pass and a download pass so folder progress has a
+   true denominator.
 2. `download_file_contents` opens **one** handle (`sftp.open`), where it previously opened
    `read_handles_for(total)` of them — up to four `SSH_FXP_OPEN` round trips saved on every file.
 3. It creates the `.part` temporary sibling. Unchanged.

@@ -326,6 +326,9 @@ pub(crate) struct TransferItem {
     pub direction: TransferDirection,
     pub filename: String,
     pub progress: f64, // 0.0 – 1.0
+    /// Files found so far while a folder download lists the remote tree;
+    /// `None` once bytes move.
+    pub discovered: Option<usize>,
     pub status: TransferStatus,
     pub error: Option<String>,
 }

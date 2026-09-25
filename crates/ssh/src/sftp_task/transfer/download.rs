@@ -1,6 +1,6 @@
-//! Incremental remote-to-local SFTP downloads.
+//! Remote-to-local SFTP downloads: one file, or a folder listed in full first.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use async_channel::Sender;
 use russh_sftp::client::SftpSession as SftpChannel;
@@ -26,8 +26,8 @@ use super::{
 /// - File: one sequential pass over a single remote handle, pipelined by
 ///   russh-sftp (see [`super::pipeline`]), into a temporary sibling that
 ///   replaces the target only once complete; progress 0.0–1.0.
-/// - Directory: walk the remote tree recursively → create local dirs → download
-///   each file, progress = cumulative bytes / bytes discovered so far.
+/// - Directory: list the whole remote tree (creating local dirs), then download
+///   each file; progress = cumulative bytes / bytes of the whole tree.
 ///
 /// Cancellation is observed between chunks; a cancelled transfer emits
 /// `TransferEvent::Cancelled` and returns `Err(AppError::Cancelled)`.
@@ -158,10 +158,14 @@ async fn download_file_contents(
     Ok(())
 }
 
-/// Download a directory — traverse the remote tree incrementally and download files as discovered.
+/// Download a directory: list the whole remote tree first, then download its
+/// files in discovery order.
 ///
-/// Discovery uses a bounded depth-first work stack instead of materializing the complete
-/// file tree. Progress is monotonic and remains indeterminate-ish until discovery completes.
+/// Listing first gives progress a true denominator (`BUG-0077`): dividing by the
+/// bytes discovered so far read ~0.99 after the first file. While listing, one
+/// `TransferEvent::Discovering(files_found)` goes out per directory read. The
+/// file list is bounded by the entry and depth caps, which also bound hostile
+/// remote trees.
 async fn sftp_download_dir(
     sftp: &SftpChannel,
     remote_str: &str,
@@ -177,14 +181,12 @@ async fn sftp_download_dir(
         .await
         .map_err(|e| AppError::msg(format!("canonicalize local dir: {e}")))?;
 
-    // A depth-first stack keeps discovery memory proportional to pending directories,
-    // while the entry and depth caps continue to bound hostile remote trees.
+    // Pass 1: discovery. Depth-first; local directories (empty ones included)
+    // are created as they are found.
     let mut pending = vec![(remote_str.to_string(), local_root.clone(), 0usize)];
     let mut visited = 0usize;
-    let mut discovered_files = 0usize;
-    let mut discovered_bytes = 0u64;
-    let mut bytes_done = 0u64;
-    let mut reported_progress = 0.0f64;
+    let mut files: Vec<(String, PathBuf, FileAttributes)> = Vec::new();
+    let mut total_bytes = 0u64;
 
     while let Some((remote, local_dir, depth)) = pending.pop() {
         if cancel.is_cancelled() {
@@ -221,57 +223,58 @@ async fn sftp_download_dir(
             let remote_child = format!("{}/{}", remote.trim_end_matches('/'), name);
             let local_child = safe_local_child(&local_dir, &name)?;
             if metadata.is_dir() {
-                // Create empty directories as they are discovered, preserving the
-                // original tree without retaining a directory plan.
                 create_safe_parent_dirs(
                     &local_root,
                     &local_child.join(".oneterm-directory-placeholder"),
                 )
                 .await?;
                 pending.push((remote_child, local_child, depth + 1));
-                continue;
+            } else {
+                total_bytes = total_bytes.saturating_add(metadata.size.unwrap_or(0));
+                files.push((remote_child, local_child, metadata.clone()));
             }
-
-            let file_size = metadata.size.unwrap_or(0);
-            let source: FileAttributes = metadata.clone();
-            discovered_files += 1;
-            discovered_bytes = discovered_bytes.saturating_add(file_size);
-            log::debug!(
-                "sftp_download_dir: downloading discovered file \"{remote_child}\" → \"{}\"",
-                local_child.display()
-            );
-            create_safe_parent_dirs(&local_root, &local_child).await?;
-
-            let file_start = bytes_done;
-            let mut on_bytes = |done: u64| {
-                bytes_done = file_start + done;
-                let denominator = discovered_bytes.max(bytes_done);
-                let candidate = if denominator > 0 {
-                    (bytes_done as f64 / denominator as f64).min(0.99)
-                } else {
-                    0.0
-                };
-                if candidate > reported_progress {
-                    reported_progress = candidate;
-                    send_progress(progress, TransferEvent::Progress(reported_progress));
-                }
-            };
-            download_file_contents(
-                sftp,
-                &remote_child,
-                &source,
-                &local_child,
-                cancel,
-                &mut on_bytes,
-            )
-            .await
-            .map_err(|error| report_cancellation(progress, error))?;
         }
+        send_progress(progress, TransferEvent::Discovering(files.len()));
+    }
+
+    // Pass 2: download; progress = bytes done / bytes of the whole tree.
+    let mut bytes_done = 0u64;
+    let mut reported_progress = 0.0f64;
+    for (remote_child, local_child, source) in &files {
+        log::debug!(
+            "sftp_download_dir: downloading \"{remote_child}\" → \"{}\"",
+            local_child.display()
+        );
+        create_safe_parent_dirs(&local_root, local_child).await?;
+
+        let file_start = bytes_done;
+        let mut on_bytes = |done: u64| {
+            bytes_done = file_start + done;
+            if total_bytes > 0 {
+                // `min`: a file that grew since it was listed.
+                let fraction = (bytes_done as f64 / total_bytes as f64).min(1.0);
+                if fraction > reported_progress {
+                    reported_progress = fraction;
+                    send_progress(progress, TransferEvent::Progress(fraction));
+                }
+            }
+        };
+        download_file_contents(
+            sftp,
+            remote_child,
+            source,
+            local_child,
+            cancel,
+            &mut on_bytes,
+        )
+        .await
+        .map_err(|error| report_cancellation(progress, error))?;
     }
 
     log::info!(
-        "sftp_download_dir: \"{remote_str}\" → \"{}\" — {discovered_files} files, {discovered_bytes} bytes",
-        local_root.display()
+        "sftp_download_dir: \"{remote_str}\" → \"{}\" — {} files, {total_bytes} bytes",
+        local_root.display(),
+        files.len()
     );
     send_progress(progress, TransferEvent::Progress(1.0));
     Ok(())

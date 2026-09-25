@@ -364,3 +364,7 @@ mod sftp_task_tests;
 // `BUG-0076`: every remote file OneTerm opens gives its handle back.
 #[cfg(test)]
 mod handle_limit_tests;
+
+// `BUG-0077`: a folder transfer's progress is bytes over the whole tree.
+#[cfg(test)]
+mod folder_progress_tests;

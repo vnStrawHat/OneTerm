@@ -116,7 +116,15 @@ impl SftpPanel {
                             .text_xs()
                             .truncate()
                             .text_color(theme.foreground)
-                            .child(item.filename.clone()),
+                            .child(match item.discovered {
+                                // BUG-0077: a folder download lists the whole
+                                // tree before any byte moves.
+                                Some(files) if item.status == TransferStatus::InProgress => {
+                                    let noun = if files == 1 { "file" } else { "files" };
+                                    format!("{} (scanning, {files} {noun} found)", item.filename)
+                                }
+                                _ => item.filename.clone(),
+                            }),
                     )
                     // Progress bar
                     .child(

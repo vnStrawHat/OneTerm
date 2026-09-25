@@ -305,6 +305,7 @@ pub(crate) fn begin_transfer(
                     direction,
                     filename: filename.to_string(),
                     progress: 0.0,
+                    discovered: None,
                     status: TransferStatus::InProgress,
                     error: None,
                 },
@@ -344,7 +345,13 @@ pub(crate) async fn run_transfer(
                     "SftpPanel: transfer #{transfer_id} progress {:.0}%",
                     progress * 100.0
                 );
-                apply(cx, &|item| item.progress = progress);
+                apply(cx, &|item| {
+                    item.progress = progress;
+                    item.discovered = None;
+                });
+            }
+            TransferEvent::Discovering(files) => {
+                apply(cx, &|item| item.discovered = Some(files));
             }
             TransferEvent::Cancelled => {
                 log::info!("SftpPanel: transfer #{transfer_id} cancelled");
@@ -994,15 +1001,29 @@ mod tests {
         assert_eq!(harness.statuses(cx), vec![TransferStatus::InProgress]);
         assert_eq!(harness.notification_count(cx), 0);
 
+        // BUG-0077: a folder download reports its discovery count first; the
+        // first `Progress` replaces it.
+        transfer
+            .events
+            .try_send(TransferEvent::Discovering(3))
+            .unwrap();
+        cx.run_until_parked();
+        let discovered = harness
+            .panel
+            .read_with(cx, |panel, _| panel.transfers().items()[0].discovered);
+        assert_eq!(discovered, Some(3));
+
         transfer
             .events
             .try_send(TransferEvent::Progress(0.25))
             .unwrap();
         cx.run_until_parked();
-        let progress = harness
-            .panel
-            .read_with(cx, |panel, _| panel.transfers().items()[0].progress);
+        let (progress, discovered) = harness.panel.read_with(cx, |panel, _| {
+            let item = &panel.transfers().items()[0];
+            (item.progress, item.discovered)
+        });
         assert!((progress - 0.25).abs() < f64::EPSILON);
+        assert_eq!(discovered, None);
 
         drop(transfer.events);
         transfer.result.try_send(Ok(())).unwrap();

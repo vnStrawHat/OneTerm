@@ -222,6 +222,10 @@ impl SftpSessionId {
 /// Progress notification for one running upload/download.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TransferEvent {
+    /// A folder download is still listing the remote tree; the count is the
+    /// files found so far. No byte has moved yet, and `Progress` follows once
+    /// the whole tree is known.
+    Discovering(usize),
     /// Fraction of the transfer completed, in `0.0..=1.0`.
     Progress(f64),
     /// The transfer stopped because it was cancelled. The result channel then
