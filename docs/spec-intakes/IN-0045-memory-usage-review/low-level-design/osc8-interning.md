@@ -18,7 +18,8 @@ until both were full at 65,535 (`BUG-0079`, measured in
 
 **Identity key for an implicit link: the URI, exactly as the stream spelled it** (after the
 `;` rejoin the dispatcher already does). The engine parses no `OSC 8` parameter other than
-`id=` and stores none, so parameters cannot be part of the key. The table keeps a second map,
+`id=` and stores none, so parameters cannot be part of the key. An empty `id=` counts as no
+id, as the specification says the two are interchangeable. The table keeps a second map,
 `implicit: FxHashMap<Box<str>, u32>`, from URI to the id first issued for it. An implicit
 open looks the URI up there first; only a URI never seen before takes a new entry and a new
 implicit counter value. Explicit links keep their `(id, uri)` key in the existing `index` map.
@@ -61,8 +62,8 @@ screen, so it clears neither table.
 table (one entry per image, `R-21`); making the graphic independent of that table would need
 a cell bit or a second id space, which is not a small change. With the link growth gone the
 table fills only from 65,534 distinct link and image combinations. When it does fill,
-placement logs a dedicated warning once per terminal instead of relying on the generic extras
-warning, and the behaviour stays as before: the image is decoded and handed to the embedder,
+placement logs a dedicated warning once per terminal, in addition to the generic extras
+table warning (which also fires once), and the behaviour stays as before: the image is decoded and handed to the embedder,
 but no cell carries it, so it is not painted. Until the next `RIS`.
 
 ## Interfaces

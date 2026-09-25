@@ -125,8 +125,9 @@ Done:
 - `docs/terminal-backend.md` § 13 Risks: one row on the per-terminal table bounds.
 - `crates/vt/docs/guide/10-limits.md`: the identity rule and `RIS`.
 - `crates/vt/CHANGELOG.md` `[Unreleased]` "Fixed": three entries.
-- Parity gate: new correction `C16` (IN-0029 `dispatch-and-modes.md` corrections table,
-  `corpus::KNOWN_DEVIATIONS`) and `crates/tools/corpus/alacritty-ref/hyperlinks/expected-diffs.json`
+- Parity gate: new deviation `D17` (IN-0029 `dispatch-and-modes.md` deviations table,
+  `corpus::KNOWN_DEVIATIONS`; first declared as `C16`, renumbered after verification F4
+  because the reference is not wrong and `C16` was already the grapheme cap) and `crates/tools/corpus/alacritty-ref/hyperlinks/expected-diffs.json`
   declaring the one measured difference: the second implicit link to `https://example.com`
   (row 29, cols 0-2) now shares the first one's id (`#0`, reference `#1`).
 - Reviewed, no change: IN-0029 `high-level-design.md` line "one entry per image plus one per
@@ -162,19 +163,53 @@ renumbered, so `HyperlinkId` stability is unchanged and no DEC record is needed.
 - Public API: `python scripts/vt-public-api.py --check --no-doc`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Only the measurement that confirms the bug (phase 4 § 5). No code change yet. Not measured:
-whether the real `claude` CLI under an inherited `WT_SESSION` repaints its links 30 times a
-second or less often.
+Independent verification: **PASS**, findings F1-F9, in
+[`evidence/BUG-0079-verify.md`](evidence/BUG-0079-verify.md). F3 (empty `id=` counts as no
+id), F4 (the corpus difference renumbered `C16` to deviation `D17`), F8 (LLD wording) and F9
+(this section) are addressed in the follow-up commit.
+
+Headless, release profile, counting allocator, one 158 x 40 terminal fed the
+`tui-mimic.py --link-repaint` frame (from the verify doc; the implementer's own run matched):
+
+| Repaints | Before: hyperlink / extras entries | Before: live MB | After: hyperlink / extras entries | After: live MB |
+| --- | --- | --- | --- | --- |
+| 5,000 | 5,000 / 5,001 | 1.63 | 1 / 2 | 0.01 |
+| 30,000 | 30,000 / 30,001 | 9.99 | 1 / 2 | 0.01 |
+| 65,534 | 65,534 / 65,535 | 20.56 | 1 / 2 | 0.01 |
+| 70,000 | 65,535 / 65,535 | 20.56 | 1 / 2 | 0.01 |
+
+After the 70,000 repaints:
+
+| Check | Before | After |
+| --- | --- | --- |
+| Linked cells on the repainted row | 0 | 4 |
+| An explicit `id=x` link printed next | 0 cells | 2 cells |
+| A Sixel image placed next | 0 cells | 1 cell |
+
+Gate: `pwsh scripts/ci-local.ps1` at `d993d89d`, final line `ci-local: all checks passed.`
+(run by both the implementer and the verifier).
+
+Gaps:
+
+- F7: every Sixel image still takes a permanent extras entry until `RIS`, so a program that
+  re-sends an image on every redraw fills the extras table after 65,534 images, and new links
+  and images then lose their cells. Follow-up `BUG-0081`, to be opened by the coordinator.
+- No live 5-minute two-tab `measure.ps1 -AllocLog` re-measure on the app, and no run of the
+  real `claude` CLI; the headless figure covers the mechanism.
+- A hostile stream can still fill the hyperlink table with distinct URIs or distinct
+  explicit ids; the unchanged ladder drops further links.
+- Hover merges two touching same-URI runs on one row (F1), which the OSC 8 specification
+  allows and which differs from alacritty and VTE.
 
 ## Handoff
 
-Next: whoever takes the `oneterm-vt` fix writes the LLD note first. No blockers.
+Implemented and verified. Next: merge, and the coordinator opens `BUG-0081` for F7.

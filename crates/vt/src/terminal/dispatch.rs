@@ -1917,6 +1917,8 @@ impl Handler<'_> {
                     .split(|&byte| byte == b':')
                     .find_map(|pair| pair.strip_prefix(b"id="))
                     .and_then(|value| str::from_utf8(value).ok())
+                    // The spec makes an empty id interchangeable with none.
+                    .filter(|id| !id.is_empty())
                     .map(str::to_owned);
                 self.set_hyperlink(id.as_deref(), Some(&uri));
             }

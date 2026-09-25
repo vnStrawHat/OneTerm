@@ -47,10 +47,10 @@ pub const KNOWN_DEVIATIONS: [&str; 32] = [
     // free against the 45 recordings (`US-0076`); the ids exist so a later
     // packet can declare a window without reopening this array.
     "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14",
-    // C16 is `BUG-0079`'s implicit-link identity: one id per URI, not per
-    // occurrence.
-    "C15", "C16", //
-    "D1", "D2", "D4", "D7", "D8", "D9", "D10", "D12", "D13", "D14", "D15", //
+    "C15", //
+    // D17 is `BUG-0079`'s implicit-link identity: one id per URI, not per
+    // occurrence. D16 is skipped (a draft id in the IN-0029 design review).
+    "D1", "D2", "D4", "D7", "D8", "D9", "D10", "D12", "D13", "D14", "D15", "D17", //
     "G1", "G2", "G3", "G6", "G7",
 ];
 

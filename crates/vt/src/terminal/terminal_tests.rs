@@ -1724,6 +1724,12 @@ fn osc_8_sets_and_clears_the_hyperlink() {
         session.cell(0, 3).extras_id()
     );
     assert_eq!(session.term.interner().hyperlinks.len(), 3);
+    // An empty `id=` is no id at all, so it joins the implicit link.
+    session.feed(b"\x1b]8;id=;http://a\x07v");
+    assert_eq!(
+        session.cell(0, 0).extras_id(),
+        session.cell(0, 4).extras_id()
+    );
 }
 
 /// A TUI that redraws a line holding an implicit link every frame used to take

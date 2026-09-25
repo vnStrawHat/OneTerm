@@ -236,6 +236,8 @@ carry no API change at all. Such a release says so below rather than being omitt
   shares one `HyperlinkId`, and ids are never renumbered. Two separate occurrences of one URI
   therefore resolve to the same id; send `id=` to keep them apart. An explicit `id=1` no longer
   resolves to the first implicit link when their URIs match (their ids are both spelled `1`).
+  An empty `id=` now counts as no id, as the OSC 8 specification says the two are
+  interchangeable.
 - **`RIS` empties the extras table** together with the hyperlink table, so the extras entries of
   the links it cleared no longer outlive them. `RIS` has blanked every cell that could hold one of
   those ids, so no live `ExtrasId` changes meaning.
