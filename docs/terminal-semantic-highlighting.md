@@ -470,7 +470,10 @@ Changes:
    wrap-run-closed rescan the URL masks use — the dirty rows closed under the frame's
    `WRAPLINE` flags — and a row is replanned when *either* its mask or its classes
    differ from the previous frame's (`BUG-0071`). The scanner writes into a reused
-   `Vec<u8>` scratch.
+   `Vec<u8>`, and its own working buffers (the line's chars and the byte-to-char map)
+   live in a caller-owned `ScanScratch` held by the render scratch, so a steady-state
+   scan allocates nothing. An ASCII line builds no byte-to-char map: its byte offset is
+   its char index (`US-0144`).
 
 4. **`TerminalTheme` gains `class_styles: ClassStyles`**, populated in
    `build_terminal_theme()` from the theme JSON's `terminal.semantic` block.

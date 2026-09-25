@@ -40,12 +40,33 @@ pub fn scan_line(
     input_at: Option<usize>,
 ) -> Vec<u8> {
     let mut classes = Vec::new();
-    scan_line_into(line, rules, profile, role, input_at, &mut classes);
+    let mut scratch = ScanScratch::default();
+    scan_line_into(
+        line,
+        rules,
+        profile,
+        role,
+        input_at,
+        &mut scratch,
+        &mut classes,
+    );
     classes
 }
 
-/// [`scan_line`] into a caller-owned buffer: `out` is cleared and refilled, so
-/// a per-frame scan reuses one allocation per row (PERF-23).
+/// The scanner's per-line working buffers, owned by the caller and reused
+/// across lines so a steady-state scan allocates nothing (`US-0144`).
+#[derive(Default)]
+pub struct ScanScratch {
+    /// The line's chars: the matchers index the class buffer per char.
+    chars: Vec<char>,
+    /// Byte offset → char index, for the byte-based matchers. Left empty for
+    /// an ASCII line, where the two are equal.
+    byte_to_char: Vec<usize>,
+}
+
+/// [`scan_line`] into caller-owned buffers: `out` is cleared and refilled, and
+/// `scratch` holds the working buffers, so a per-frame scan reuses its
+/// allocations (PERF-23, `US-0144`).
 ///
 /// `input_at` is the char index where the typed command begins (`OSC 133;B`) and
 /// is honoured only for [`RowRole::Prompt`]: it bounds the prompt region, so the
@@ -58,9 +79,12 @@ pub fn scan_line_into(
     profile: &ShellProfile,
     role: Option<RowRole>,
     input_at: Option<usize>,
+    scratch: &mut ScanScratch,
     out: &mut Vec<u8>,
 ) {
-    let chars: Vec<char> = line.chars().collect();
+    scratch.chars.clear();
+    scratch.chars.extend(line.chars());
+    let chars = scratch.chars.as_slice();
     let n = chars.len();
     out.clear();
     out.resize(n, Class::Default as u8);
@@ -68,50 +92,57 @@ pub fn scan_line_into(
 
     match role {
         Some(RowRole::Prompt) => {
-            let sign = prompt::marked_sign(&chars, profile, input_at);
-            prompt::scan_prompt_line(&chars, classes, profile, sign);
+            let sign = prompt::marked_sign(chars, profile, input_at);
+            prompt::scan_prompt_line(chars, classes, profile, sign);
         }
-        Some(RowRole::Command) => command::scan_command_mode(&chars, classes, profile),
+        Some(RowRole::Command) => command::scan_command_mode(chars, classes, profile),
         // Marked as output: the shell was explicit, so the prompt regex — the
         // only reason a marked row could still be misread — never runs.
-        Some(RowRole::Output) => scan_output_mode(line, &chars, classes, rules, profile),
+        Some(RowRole::Output) => {
+            let text = LineText::new(line, &mut scratch.byte_to_char);
+            output::scan_output(&text, chars, classes, rules, profile);
+        }
         None => {
             // No mark: if the line looks like a prompt, treat it as one.
             if let Some(sign) = prompt::prompt_sign(line, profile) {
-                prompt::scan_prompt_line(&chars, classes, profile, Some(sign));
+                prompt::scan_prompt_line(chars, classes, profile, Some(sign));
             } else {
-                scan_output_mode(line, &chars, classes, rules, profile);
+                let text = LineText::new(line, &mut scratch.byte_to_char);
+                output::scan_output(&text, chars, classes, rules, profile);
             }
         }
     }
 }
 
-/// The byte-based matchers (keyword automaton, structural regexes) share one
-/// text + byte→char map, built here once per line.
-fn scan_output_mode(
-    line: &str,
-    chars: &[char],
-    classes: &mut [u8],
-    rules: &RuleSet,
-    profile: &ShellProfile,
-) {
-    let text = LineText {
-        text: line,
-        byte_to_char: byte_to_char_map(line),
-    };
-    output::scan_output(&text, chars, classes, rules, profile);
-}
-
-/// One line as the byte-based matchers see it: the original `&str` plus its
-/// byte offset → char index map (built once per line, shared by every matcher).
+/// One line as the byte-based matchers (keyword automaton, structural regexes)
+/// see it: the original `&str` plus its byte offset → char index map, built
+/// once per line and shared by every matcher.
 pub(super) struct LineText<'a> {
     pub(super) text: &'a str,
-    byte_to_char: Vec<usize>,
+    /// Empty for an ASCII line: byte offset == char index.
+    byte_to_char: &'a [usize],
 }
 
-impl LineText<'_> {
+impl<'a> LineText<'a> {
+    /// Build the map for `text` into `map` (cleared first), unless `text` is
+    /// ASCII, where the map would be the identity.
+    fn new(text: &'a str, map: &'a mut Vec<usize>) -> Self {
+        map.clear();
+        if !text.is_ascii() {
+            fill_byte_to_char_map(text, map);
+        }
+        Self {
+            text,
+            byte_to_char: map,
+        }
+    }
+
     /// Char index for byte offset `byte` (`byte == len` → char count).
     pub(super) fn char_index(&self, byte: usize) -> usize {
+        if self.byte_to_char.is_empty() {
+            // ASCII: past the end clamps to the char count, as the sentinel does.
+            return byte.min(self.text.len());
+        }
         self.byte_to_char
             .get(byte)
             .copied()
@@ -126,8 +157,8 @@ pub(super) fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// Map each byte offset of `s` back to its char index, with a trailing
-/// sentinel equal to the char count.
+/// Fill `map` with each byte offset of `s` mapped back to its char index, plus
+/// a trailing sentinel equal to the char count.
 ///
 /// The keyword automaton and structural regexes match on bytes, but the class
 /// buffer is indexed per char. This lets a byte match range be converted to a
@@ -138,11 +169,11 @@ pub(super) fn is_word_char(c: char) -> bool {
 /// the map the identity, so every keyword and structural class on a line with
 /// any non-ASCII char was written shifted right by the extra UTF-8 bytes before
 /// it — `日本語 error here` painted `here` as `Error` (`BUG-0071` F3).
-fn byte_to_char_map(s: &str) -> Vec<usize> {
-    let mut map: Vec<usize> = Vec::with_capacity(s.len() + 1);
+fn fill_byte_to_char_map(s: &str, map: &mut Vec<usize>) {
+    let mut count = 0;
     for (char_index, c) in s.chars().enumerate() {
         map.resize(map.len() + c.len_utf8(), char_index);
+        count = char_index + 1;
     }
-    map.push(s.chars().count()); // sentinel for end
-    map
+    map.push(count); // sentinel for end
 }

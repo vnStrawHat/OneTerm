@@ -9,7 +9,7 @@
 //! cells once per rescan and owned by the plan cache, next to the URL masks and
 //! the classes that share their lifetime (`US-0133`).
 
-use oneterm_highlight::{Class, RowRole, RuleSet, ShellProfile, scan_line_into};
+use oneterm_highlight::{Class, RowRole, RuleSet, ScanScratch, ShellProfile, scan_line_into};
 
 /// Per-view semantic overlay — produces `cell_class` for one logical line.
 #[derive(Clone)]
@@ -78,12 +78,14 @@ impl SemanticOverlay {
     /// joined into one string. `role` is what the shell's OSC 133 marks say
     /// about it, and `None` means the shell said nothing, which is the only
     /// case where the prompt regex runs. `input_at` is the char index where the
-    /// typed command starts (`OSC 133;B`).
+    /// typed command starts (`OSC 133;B`). `scratch` is the scanner's reused
+    /// working memory.
     pub fn scan_into(
         &self,
         line: &str,
         role: Option<RowRole>,
         input_at: Option<usize>,
+        scratch: &mut ScanScratch,
         out: &mut Vec<u8>,
     ) {
         out.clear();
@@ -92,7 +94,7 @@ impl SemanticOverlay {
             return;
         }
         let rules = RuleSet::global();
-        scan_line_into(line, rules, &self.profile, role, input_at, out);
+        scan_line_into(line, rules, &self.profile, role, input_at, scratch, out);
     }
 }
 
@@ -102,7 +104,7 @@ mod tests {
 
     fn scan(o: &SemanticOverlay, line: &str) -> Vec<u8> {
         let mut out = Vec::new();
-        o.scan_into(line, None, None, &mut out);
+        o.scan_into(line, None, None, &mut ScanScratch::default(), &mut out);
         out
     }
 
@@ -126,11 +128,17 @@ mod tests {
         let o = SemanticOverlay::new(ShellProfile::Unix, true);
         let mut buf = Vec::with_capacity(64);
         let ptr = buf.as_ptr();
-        o.scan_into("error: failed", None, None, &mut buf);
+        o.scan_into(
+            "error: failed",
+            None,
+            None,
+            &mut ScanScratch::default(),
+            &mut buf,
+        );
         assert_eq!(buf, scan(&o, "error: failed"));
         assert_eq!(buf.as_ptr(), ptr, "buffer must be reused");
         let off = SemanticOverlay::new(ShellProfile::Unix, false);
-        off.scan_into("error", None, None, &mut buf);
+        off.scan_into("error", None, None, &mut ScanScratch::default(), &mut buf);
         assert_eq!(buf, vec![Class::Default as u8; 5]);
     }
 
@@ -148,7 +156,13 @@ mod tests {
     fn a_marked_output_row_skips_the_prompt_regex() {
         let o = SemanticOverlay::new(ShellProfile::Unix, true);
         let mut marked = Vec::new();
-        o.scan_into("$ ls", Some(RowRole::Output), None, &mut marked);
+        o.scan_into(
+            "$ ls",
+            Some(RowRole::Output),
+            None,
+            &mut ScanScratch::default(),
+            &mut marked,
+        );
         assert_ne!(marked[0], Class::PromptSign as u8, "{marked:?}");
         assert_eq!(scan(&o, "$ ls")[0], Class::PromptSign as u8);
     }
@@ -159,7 +173,13 @@ mod tests {
         let line = r"PS C:\Program Files> dir";
         let sign = line.find('>').unwrap();
         let mut out = Vec::new();
-        o.scan_into(line, Some(RowRole::Prompt), Some(sign + 2), &mut out);
+        o.scan_into(
+            line,
+            Some(RowRole::Prompt),
+            Some(sign + 2),
+            &mut ScanScratch::default(),
+            &mut out,
+        );
         assert_eq!(out[sign], Class::PromptSign as u8, "{out:?}");
         assert_eq!(out[sign + 2], Class::Command as u8, "{out:?}");
     }

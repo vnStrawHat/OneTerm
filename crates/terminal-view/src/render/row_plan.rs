@@ -7,7 +7,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use gpui::{Hsla, LineLayout, Pixels, Window};
-use oneterm_highlight::{Class, ClassStyle, Decoration, RowRole, tint_prompt_sign};
+use oneterm_highlight::{Class, ClassStyle, Decoration, RowRole, ScanScratch, tint_prompt_sign};
 use oneterm_terminal::{Semantic, is_decorative_character};
 
 use super::diagnostics::FrameStats;
@@ -122,6 +122,8 @@ pub(crate) struct Scratch {
     /// The OSC 133 region every char of `line_text` was written in.
     pub char_semantic: Vec<Semantic>,
     pub class_chars: Vec<u8>,
+    /// The scanner's own working buffers (`US-0144`).
+    pub scan: ScanScratch,
     pub class: Vec<u8>,
     pub run_text: String,
     pub rects: Vec<DeviceRect>,
@@ -141,6 +143,7 @@ impl Scratch {
             char_wide: Vec::with_capacity(256),
             char_semantic: Vec::with_capacity(256),
             class_chars: Vec::with_capacity(256),
+            scan: ScanScratch::default(),
             class: Vec::with_capacity(256),
             run_text: String::with_capacity(256),
             rects: Vec::with_capacity(32),
@@ -650,7 +653,13 @@ fn scan_logical_line(
     if scratch.line_text.trim().is_empty() {
         return;
     }
-    overlay.scan_into(&scratch.line_text, role, input_at, &mut scratch.class_chars);
+    overlay.scan_into(
+        &scratch.line_text,
+        role,
+        input_at,
+        &mut scratch.scan,
+        &mut scratch.class_chars,
+    );
     for (i, &class) in scratch.class_chars.iter().enumerate() {
         let (Some(&row), Some(&col)) = (scratch.char_rows.get(i), scratch.char_cols.get(i)) else {
             break;
