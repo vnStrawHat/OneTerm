@@ -1,0 +1,19 @@
+  flood (prepaint+paint): n=257 total=426 ms avg=1657 us p50=1635 us p95=1815 us max=3398 us
+  idle  (prepaint+paint): n=60 total=15 ms avg=252 us p50=248 us p95=284 us max=356 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows
+  flood (prepaint+paint): n=257 total=485 ms avg=1887 us p50=1761 us p95=2957 us max=4870 us
+  idle  (prepaint+paint): n=60 total=15 ms avg=259 us p50=248 us p95=327 us max=433 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows
+  flood (prepaint+paint): n=257 total=427 ms avg=1664 us p50=1634 us p95=1909 us max=2409 us
+  idle  (prepaint+paint): n=60 total=15 ms avg=256 us p50=249 us p95=334 us max=358 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows
+---after---
+  flood (prepaint+paint): n=257 total=432 ms avg=1684 us p50=1649 us p95=1797 us max=4604 us
+  idle  (prepaint+paint): n=60 total=15 ms avg=257 us p50=250 us p95=364 us max=393 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows
+  flood (prepaint+paint): n=257 total=428 ms avg=1665 us p50=1637 us p95=1834 us max=2656 us
+  idle  (prepaint+paint): n=60 total=14 ms avg=246 us p50=246 us p95=253 us max=267 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows
+  flood (prepaint+paint): n=257 total=429 ms avg=1670 us p50=1624 us p95=1865 us max=3090 us
+  idle  (prepaint+paint): n=60 total=15 ms avg=251 us p50=245 us p95=308 us max=389 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows

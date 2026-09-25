@@ -247,15 +247,23 @@ fn output_with_prompt_glyph_is_not_a_prompt_line() {
     assert_eq!(c[dollar + 2], Class::Command);
 }
 
-/// PERF-23: the buffer-reusing entry point yields the same classes as
-/// `scan_line` and clears stale contents.
+/// PERF-23, `US-0144`: the buffer-reusing entry point yields the same classes
+/// as `scan_line` and clears stale contents — of the output and of the scratch,
+/// whose byte-to-char map an ASCII line after a CJK one must not read.
 #[test]
 fn scan_line_into_matches_scan_line_and_reuses_buffer() {
     let rules = RuleSet::global();
     let profile = ShellProfile::Unix;
     let mut out = vec![7u8; 100];
-    for line in ["error: x", "$ ls -la", "ping 192.168.1.1", ""] {
-        crate::scanner::scan_line_into(line, rules, &profile, None, None, &mut out);
+    let mut scratch = crate::scanner::ScanScratch::default();
+    for line in [
+        "error: x",
+        "\u{65e5}\u{672c}\u{8a9e} error at /etc/hosts 42",
+        "$ ls -la",
+        "ping 192.168.1.1 error",
+        "",
+    ] {
+        crate::scanner::scan_line_into(line, rules, &profile, None, None, &mut scratch, &mut out);
         assert_eq!(out, scan_line(line, rules, &profile, None, None));
     }
 }
