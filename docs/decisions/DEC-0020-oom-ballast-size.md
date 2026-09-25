@@ -4,8 +4,8 @@ Date: 2026-09-25
 
 ## Status
 
-Proposed. Recommended option: **16 MiB, landing with or after `BUG-0078`**. Awaiting the
-owner's ruling.
+Accepted by the owner on 2026-09-25: **16 MiB, landing with or after `BUG-0078`**.
+Implementation packet: `US-0141` under `IN-0045`.
 
 ## Context
 
