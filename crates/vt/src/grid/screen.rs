@@ -286,6 +286,10 @@ pub struct Screen {
     /// above it, which is what lets the integrity walk start here instead of at
     /// `oldest` (see [`Screen::integrity_lo`]).
     batch_lo: RowId,
+    /// The last row a history trim dropped, kept for its cell allocation: the
+    /// next row materialised takes it, so a line scrolled through a full history
+    /// frees nothing and allocates nothing. Never read as content.
+    spare: Option<Row>,
 }
 
 fn ring_len_for(scrollback_limit: u32) -> usize {
@@ -335,6 +339,7 @@ impl Screen {
             ),
             dropped_wide: 0,
             batch_lo: origin,
+            spare: None,
         };
         screen.debug_assert_integrity();
         screen
@@ -480,7 +485,8 @@ impl Screen {
         if entry.as_ref().map(Row::id) != Some(id) {
             *entry = None;
         }
-        let row = entry.get_or_insert_with(|| Row::new(id, cols, seq, Cell::EMPTY));
+        let row =
+            entry.get_or_insert_with(|| Row::new_in(self.spare.take(), id, cols, seq, Cell::EMPTY));
         RowMut::new(row, seq)
     }
 
@@ -527,7 +533,7 @@ impl Screen {
             Some(row) if row.id() == id && row.cells().len() == cols as usize => {
                 row.reset(template, seq);
             }
-            entry => *entry = Some(Row::new(id, cols, seq, template)),
+            entry => *entry = Some(Row::new_in(self.spare.take(), id, cols, seq, template)),
         }
     }
 
@@ -563,7 +569,9 @@ impl Screen {
             self.newest = self.newest + 1;
             while self.history_len() > self.scrollback_limit {
                 let slot = self.slot_of(self.oldest);
-                self.slots[slot] = None;
+                if let Some(row) = self.slots[slot].take() {
+                    self.spare = Some(row);
+                }
                 self.oldest = self.oldest + 1;
                 trimmed = Some(self.oldest);
             }
@@ -1765,6 +1773,7 @@ impl Screen {
     pub fn heap_bytes(&self) -> usize {
         self.slots.len() * size_of::<Option<Row>>()
             + self.slots.iter().flatten().map(Row::bytes).sum::<usize>()
+            + self.spare.as_ref().map_or(0, Row::bytes)
             + self.tabs.heap_bytes()
     }
 

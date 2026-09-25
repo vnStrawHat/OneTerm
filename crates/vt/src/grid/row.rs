@@ -98,6 +98,31 @@ impl Row {
         }
     }
 
+    /// [`Row::new`] in `spare`'s cell allocation when there is one, so the row a
+    /// history trim dropped becomes the next row written without an allocation.
+    /// Nothing of the old row survives: every cell and the whole header are
+    /// rewritten.
+    pub(crate) fn new_in(
+        spare: Option<Row>,
+        id: RowId,
+        cols: u16,
+        seq: SeqNo,
+        template: Cell,
+    ) -> Row {
+        let Some(mut row) = spare else {
+            return Row::new(id, cols, seq, template);
+        };
+        row.cells.clear();
+        row.cells.resize(cols as usize, template);
+        row.header = RowHeader {
+            seq,
+            id,
+            flags: RowFlags::DIRTY | flags_for(template),
+            occ: 0,
+        };
+        row
+    }
+
     /// Build a row the reflow has just laid out.
     ///
     /// `hints` is the **complete** content-hint set: the reflow visits every

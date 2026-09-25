@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::cell::{Attrs, Cell, CellContent, CellWidth, Color, Style};
-use crate::intern::{Extras, GraphicId, Interner};
+use crate::intern::{Extras, GraphicId, HyperlinkId, Interner};
 use crate::reflow::ResizePolicy;
 
 struct Fixture {
@@ -1139,6 +1139,64 @@ fn trimmed_slot_is_cleared_before_reuse() {
         assert_eq!(trimmed(&f.row_text(id)), "", "and none of the old content");
         id = id + 1;
     }
+    f.integrity();
+}
+
+#[test]
+fn a_row_recycled_from_a_trim_carries_nothing_of_the_row_it_was() {
+    // A 2-row history: the third line fed below the screen trims row 0.
+    let mut f = fixture_with(3, 10, 2);
+    let link = f.interner.extras(&Extras {
+        hyperlink: Some(HyperlinkId(3)),
+        graphic: Some(GraphicId(7)),
+    });
+    let style = f.interner.style(&blue_underlined());
+    let dirty = Cell::EMPTY.with_style(style).with_extras(link);
+    let first = f.screen().row_of_index(0);
+    {
+        let mut row = f.grid.screen_mut().row_mut(first);
+        for col in 0..10 {
+            row.set(col, dirty.with_content(CellContent::Scalar('z')));
+        }
+        row.set_wrapped(true);
+        row.mark_graphic();
+    }
+    let old_cells = f.screen().row(first).cells().as_ptr();
+
+    // Scroll row 0 through the whole history and out of it.
+    f.goto(2, 0);
+    for _ in 0..3 {
+        f.newline();
+    }
+    assert!(f.screen().oldest() > first, "row 0 was trimmed");
+    let bottom = f.screen().newest();
+    assert!(
+        !f.screen().row(bottom).is_allocated(),
+        "a new bottom row stays unwritten until something is written to it"
+    );
+
+    f.print("x");
+    let row = f.screen().row(bottom);
+    assert_eq!(
+        row.cells().as_ptr(),
+        old_cells,
+        "the new row did not take the trimmed row's cells"
+    );
+    assert_eq!(
+        row.cell(0),
+        Cell::EMPTY.with_content(CellContent::Scalar('x'))
+    );
+    assert!(
+        row.cells()[1..].iter().all(|cell| *cell == Cell::EMPTY),
+        "stale cells survived: {:?}",
+        row.cells()
+    );
+    assert_eq!(row.cells().len(), 10);
+    assert_eq!(
+        row.flags(),
+        RowFlags::DIRTY,
+        "no wrap flag and no content hint of the old row"
+    );
     f.integrity();
 }
 
