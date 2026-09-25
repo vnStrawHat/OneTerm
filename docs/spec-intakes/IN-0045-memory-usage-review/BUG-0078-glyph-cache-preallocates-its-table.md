@@ -158,7 +158,7 @@ None.
 - [x] Unit proof
 - [x] Integration proof
 - [ ] E2E proof
-- [x] Platform proof
+- [ ] Platform proof
 - [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
@@ -275,3 +275,14 @@ Rows planned are identical (13,868 of 17,733).
 - Known and unchanged: when the map is at the cap and every entry is recent, each further miss
   runs `retain` over the whole map (O(n) per miss). That is a CPU cost only, and it predates
   this packet.
+
+## Handoff
+
+- Merged into `main` on 2026-09-25 after the independent verification
+  (`evidence/BUG-0078-verify.md`, PASS, terminal area pixel-identical to `main`).
+- Platform proof is the owner's next CI push (Linux and macOS jobs); the box above stays
+  unticked until then.
+- Pre-existing, not fixed here, candidates for a later packet under `IN-0018`:
+  the cache key records only whether a run was forced to the cell width, not the width
+  itself (benign: painting re-anchors each glyph), and the O(n) `retain` on every miss once
+  the map sits at its cap.
