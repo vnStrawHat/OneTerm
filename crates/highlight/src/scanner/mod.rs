@@ -51,6 +51,7 @@ pub fn scan_line(
 /// is honoured only for [`RowRole::Prompt`]: it bounds the prompt region, so the
 /// sign is found exactly instead of guessed by a glyph hunt that a prompt
 /// containing a space (`PS C:\src>`, `[user@host ~]$`) defeats.
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 pub fn scan_line_into(
     line: &str,
     rules: &RuleSet,

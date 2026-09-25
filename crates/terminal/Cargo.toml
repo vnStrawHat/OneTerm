@@ -10,6 +10,10 @@ publish.workspace = true
 
 [features]
 test-support = []
+# Function-level profiling sites (IN-0046). Off by default: without it every
+# `#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]` vanishes and
+# `hotpath` is not in the graph. Only `oneterm-app` turns measuring on.
+hotpath-profiling = ["dep:hotpath", "oneterm-vt/hotpath-profiling"]
 
 [lints]
 workspace = true
@@ -27,3 +31,4 @@ chrono.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+hotpath = { workspace = true, optional = true }

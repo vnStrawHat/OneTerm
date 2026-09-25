@@ -37,6 +37,12 @@ vt-paranoid = []
 # behaviour the literal scanner already had.
 regex = ["dep:regex"]
 
+# Function-level profiling sites (`hotpath::measure`) on `feed`, the parser, the
+# scroll primitives and `snapshot_update`. Off by
+# default and changes no public item. Alone it compiles `hotpath`'s no-op half: a
+# site measures only when the final binary also enables `hotpath/hotpath`.
+hotpath-profiling = ["dep:hotpath"]
+
 [dependencies]
 bitflags.workspace = true
 log.workspace = true
@@ -45,6 +51,8 @@ memchr.workspace = true
 # Optional, default-off: the `regex` feature's matcher. Nothing in the default
 # build reaches it.
 regex = { workspace = true, optional = true }
+# Optional, default-off: the `hotpath-profiling` feature's attribute macros.
+hotpath = { workspace = true, optional = true }
 rustc-hash.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true

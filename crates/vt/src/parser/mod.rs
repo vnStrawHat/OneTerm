@@ -149,6 +149,7 @@ impl Parser {
     /// Feed bytes, calling `dispatch` for every action they produce.
     ///
     /// Never blocks, never allocates without a bound and never panics on input.
+    #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "Parser"))]
     pub fn advance<D: Dispatch>(&mut self, dispatch: &mut D, bytes: &[u8]) {
         let mut index = 0;
 

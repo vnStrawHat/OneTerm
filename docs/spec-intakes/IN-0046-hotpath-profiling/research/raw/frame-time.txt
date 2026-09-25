@@ -1,0 +1,94 @@
+frame_time_under_output, fast-dev profile, 2026-09-25T16:16:02
+=== run 1, hotpath off ===
+frame time, 1 MiB of scrolling output in 4 KiB chunks, debug_assertions=true
+  flood (prepaint+paint): n=257 total=405 ms avg=1576 us p50=1537 us p95=1734 us max=4510 us
+  idle  (prepaint+paint): n=60 total=14 ms avg=236 us p50=233 us p95=258 us max=301 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows
+=== run 1, hotpath on ===
+frame time, 1 MiB of scrolling output in 4 KiB chunks, debug_assertions=true
+  flood (prepaint+paint): n=257 total=449 ms avg=1747 us p50=1673 us p95=2172 us max=3203 us
+  idle  (prepaint+paint): n=60 total=14 ms avg=240 us p50=237 us p95=259 us max=354 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows
+[hotpath] 515.06ms | timing, threads
+timing - Execution duration of functions.
+| Function                  | Calls  | Avg       | P95       | Total     | % Total |
+| frame_time_under_output   | 1      | 514.90 ms | 515.11 ms | 514.90 ms | 100.00% |
+| TerminalElement::prepaint | 318    | 1.26 ms   | 1.83 ms   | 400.01 ms | 77.69%  |
+| PlanCache::update         | 318    | 1.16 ms   | 1.71 ms   | 369.79 ms | 71.82%  |
+| row_plan::build_row_plan  | 13937  | 18.92 µs  | 22.70 µs  | 263.76 ms | 51.22%  |
+| TerminalElement::paint    | 318    | 209.27 µs | 244.61 µs | 66.55 ms  | 12.92%  |
+| GridPainter::paint        | 318    | 208.32 µs | 242.94 µs | 66.25 ms  | 12.87%  |
+| Terminal::feed            | 258    | 159.44 µs | 205.82 µs | 41.13 ms  | 7.99%   |
+| TerminalContent::refill   | 318    | 93.61 µs  | 122.43 µs | 29.77 ms  | 5.78%   |
+| Terminal::snapshot_update | 318    | 93.28 µs  | 121.73 µs | 29.66 ms  | 5.76%   |
+| Parser::advance           | 258    | 88.16 µs  | 125.76 µs | 22.74 ms  | 4.42%   |
+| GlyphCache::shape         | 165188 | 82 ns     | 100 ns    | 13.70 ms  | 2.66%   |
+| Screen::scroll_up         | 13550  | 59 ns     | 100 ns    | 800.20 µs | 0.16%   |
+| Thread                                                  | Max%  | Avg%  |
+| render::element::element_tests::frame_time_under_output | 95.8% | 95.8% |
+| hp-functions                                            | 5.6%  | 5.6%  |
+| hp-threads                                              | 5.6%  | 5.6%  |
+| main                                                    | 0.0%  | 0.0%  |
+| thread_23060                                            | 0.0%  | 0.0%  |
+=== run 2, hotpath off ===
+frame time, 1 MiB of scrolling output in 4 KiB chunks, debug_assertions=true
+  flood (prepaint+paint): n=257 total=402 ms avg=1565 us p50=1536 us p95=1709 us max=2981 us
+  idle  (prepaint+paint): n=60 total=15 ms avg=257 us p50=243 us p95=358 us max=566 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows
+=== run 2, hotpath on ===
+frame time, 1 MiB of scrolling output in 4 KiB chunks, debug_assertions=true
+  flood (prepaint+paint): n=257 total=443 ms avg=1724 us p50=1661 us p95=2092 us max=3713 us
+  idle  (prepaint+paint): n=60 total=14 ms avg=235 us p50=233 us p95=244 us max=268 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows
+[hotpath] 507.70ms | timing, threads
+timing - Execution duration of functions.
+| Function                  | Calls  | Avg       | P95       | Total     | % Total |
+| frame_time_under_output   | 1      | 507.60 ms | 507.77 ms | 507.60 ms | 100.00% |
+| TerminalElement::prepaint | 318    | 1.24 ms   | 1.83 ms   | 393.95 ms | 77.61%  |
+| PlanCache::update         | 318    | 1.14 ms   | 1.70 ms   | 363.23 ms | 71.56%  |
+| row_plan::build_row_plan  | 13937  | 18.45 µs  | 22.02 µs  | 257.15 ms | 50.66%  |
+| TerminalElement::paint    | 318    | 207.35 µs | 244.48 µs | 65.94 ms  | 12.99%  |
+| GridPainter::paint        | 318    | 206.48 µs | 242.94 µs | 65.66 ms  | 12.94%  |
+| Terminal::feed            | 258    | 161.21 µs | 207.62 µs | 41.59 ms  | 8.19%   |
+| TerminalContent::refill   | 318    | 95.36 µs  | 118.53 µs | 30.32 ms  | 5.97%   |
+| Terminal::snapshot_update | 318    | 95.05 µs  | 117.95 µs | 30.22 ms  | 5.95%   |
+| Parser::advance           | 258    | 88.45 µs  | 116.22 µs | 22.82 ms  | 4.50%   |
+| GlyphCache::shape         | 165188 | 81 ns     | 100 ns    | 13.46 ms  | 2.65%   |
+| Screen::scroll_up         | 13550  | 54 ns     | 100 ns    | 744.70 µs | 0.15%   |
+| Thread                                                  | Max%  | Avg%  |
+| render::element::element_tests::frame_time_under_output | 89.5% | 89.5% |
+| hp-functions                                            | 5.6%  | 5.6%  |
+| hp-threads                                              | 5.6%  | 5.6%  |
+| main                                                    | 0.0%  | 0.0%  |
+| thread_23692                                            | 0.0%  | 0.0%  |
+=== run 3, hotpath off ===
+frame time, 1 MiB of scrolling output in 4 KiB chunks, debug_assertions=true
+  flood (prepaint+paint): n=257 total=402 ms avg=1565 us p50=1531 us p95=1782 us max=3039 us
+  idle  (prepaint+paint): n=60 total=14 ms avg=237 us p50=234 us p95=249 us max=295 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows
+=== run 3, hotpath on ===
+frame time, 1 MiB of scrolling output in 4 KiB chunks, debug_assertions=true
+  flood (prepaint+paint): n=257 total=456 ms avg=1775 us p50=1685 us p95=2166 us max=3493 us
+  idle  (prepaint+paint): n=60 total=14 ms avg=242 us p50=242 us p95=247 us max=280 us
+  rows planned over 257 flood frames: 13868 of 17733 viewport rows
+[hotpath] 521.57ms | timing, threads
+timing - Execution duration of functions.
+| Function                  | Calls  | Avg       | P95       | Total     | % Total |
+| frame_time_under_output   | 1      | 521.45 ms | 521.67 ms | 521.45 ms | 100.00% |
+| TerminalElement::prepaint | 318    | 1.28 ms   | 1.91 ms   | 406.36 ms | 77.93%  |
+| PlanCache::update         | 318    | 1.18 ms   | 1.78 ms   | 376.23 ms | 72.15%  |
+| row_plan::build_row_plan  | 13937  | 19.23 µs  | 23.90 µs  | 267.97 ms | 51.39%  |
+| TerminalElement::paint    | 318    | 211.78 µs | 253.82 µs | 67.35 ms  | 12.92%  |
+| GridPainter::paint        | 318    | 210.80 µs | 252.80 µs | 67.03 ms  | 12.86%  |
+| Terminal::feed            | 258    | 160.58 µs | 207.62 µs | 41.43 ms  | 7.94%   |
+| TerminalContent::refill   | 318    | 93.29 µs  | 122.11 µs | 29.67 ms  | 5.69%   |
+| Terminal::snapshot_update | 318    | 92.91 µs  | 121.86 µs | 29.55 ms  | 5.67%   |
+| Parser::advance           | 258    | 89.37 µs  | 123.14 µs | 23.06 ms  | 4.42%   |
+| GlyphCache::shape         | 165188 | 84 ns     | 100 ns    | 13.88 ms  | 2.66%   |
+| Screen::scroll_up         | 13550  | 56 ns     | 100 ns    | 765.80 µs | 0.15%   |
+| Thread                                                  | Max%  | Avg%  |
+| render::element::element_tests::frame_time_under_output | 96.8% | 96.7% |
+| hp-functions                                            | 16.1% | 16.1% |
+| hp-threads                                              | 10.8% | 10.7% |
+| main                                                    | 0.0%  | 0.0%  |
+| thread_11180                                            | 0.0%  | 0.0%  |

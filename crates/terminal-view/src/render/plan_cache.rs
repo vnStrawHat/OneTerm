@@ -169,6 +169,10 @@ impl PlanCache {
     }
 
     /// Bring the plans up to date with `frame`.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "PlanCache")
+    )]
     pub(crate) fn update(
         &mut self,
         frame: &Frame,

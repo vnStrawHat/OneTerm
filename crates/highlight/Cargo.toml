@@ -8,9 +8,16 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# Function-level profiling sites (IN-0046). Off by default: without it every
+# `#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]` vanishes and
+# `hotpath` is not in the graph. Only `oneterm-app` turns measuring on.
+hotpath-profiling = ["dep:hotpath"]
+
 [lints]
 workspace = true
 
 [dependencies]
 aho-corasick.workspace = true
 regex.workspace = true
+hotpath = { workspace = true, optional = true }

@@ -782,6 +782,7 @@ impl Screen {
     /// The count clamps to the region height, so the short-region case (C3)
     /// reaches the same path as every other count: the region rotates by its own
     /// height and is then blank.
+    #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "Screen"))]
     pub(crate) fn scroll_up(
         &mut self,
         region: ScrollRegion,
@@ -900,6 +901,7 @@ impl Screen {
 
     /// `SD`, `RI` at the region top, `IL`. Trap 18: never pulls rows back out of
     /// scrollback; it always blanks the top `n` rows of the region.
+    #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "Screen"))]
     pub(crate) fn scroll_down(
         &mut self,
         region: ScrollRegion,
