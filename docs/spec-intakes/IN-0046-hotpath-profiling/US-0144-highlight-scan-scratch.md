@@ -27,7 +27,7 @@ Created: 2026-09-25
 
 ## Outcome
 
-`scan_line_into` allocates nothing per line in steady state. Its per-line working buffers
+`scan_line_into` allocates no per-line buffer of its own in steady state. Its per-line working buffers
 (`chars`, the byte-to-char map) live in one caller-owned scratch type that is cleared, not
 reallocated; a pure-ASCII line builds no byte-to-char map at all (byte index == char
 index). Every class it produces is unchanged.
@@ -47,12 +47,13 @@ index). Every class it produces is unchanged.
 ## Acceptance
 
 - [x] Classes identical to the pre-change scanner for every case of the recorded corpus
-  (ASCII, CJK, Vietnamese, emoji, mixed; every role; three profiles).
-- [x] Zero allocations per `scan_line_into` call in steady state (counting-allocator test)
-  for ASCII lines; a non-ASCII line in output mode keeps one 16-byte allocation that
-  belongs to `regex`, not the scanner (see Evidence).
-- [x] hotpath TUI load: `scan_line_into` allocations per call 0 (from 4), bytes per call 0
-  (from 1.3 KB); avg time not worse.
+  (ASCII, CJK, Vietnamese, emoji, mixed; every role; four profiles).
+- [x] Zero allocations per `scan_line_into` call in steady state for ASCII lines
+  (counting-allocator test). A non-ASCII line keeps `regex`'s own 16-byte allocations, one
+  per search that falls back from the lazy DFA; the test bounds them by size so that no
+  scanner buffer can hide among them (see Evidence).
+- [x] hotpath TUI load: `scan_line_into` allocations per call 0 (from 4), bytes per call
+  14 B average and 0 B p95 (from 1.3 KB); avg time not worse.
 - [x] Gates below green, full `ci-local` included.
 
 ## Documentation
@@ -146,13 +147,25 @@ Read from the code (hotpath reports the count, not the call sites); the new coun
    the way to its length. The map was `with_capacity(len + 1)` and did not grow. Gone with
    the Vecs.
 
-Remaining, justified: one 16-byte allocation per **non-ASCII line in output mode**, inside
-`regex::Regex::find_iter` for the date/time pattern. Its lazy DFA cannot evaluate a Unicode
-`` next to a non-ASCII byte, returns a boxed `MatchError` (16 B), and `regex` retries on
-another engine. Removing it would mean an ASCII-only ``, which changes classes
-(`日本語2026-09-22`); out of scope for a no-behaviour-change packet. The zero-allocation test
-pins exactly this: 0 for ASCII lines, one per non-ASCII output-mode scan. `out` growth is
-the caller's and happens once per longest line.
+Remaining, justified: `regex`'s own allocations, one 16-byte boxed `MatchError` per
+search whose lazy DFA quits on a Unicode `\b` next to a non-ASCII byte, after which
+`regex` retries on another engine. Both the date/time and the MAC patterns do this. The
+count depends on the line, not on the scanner: 0 for a line that is only `é`, 2 for a
+non-ASCII line with a MAC or ending in CJK, 114 (1.8 KB) for a 5,000-char CJK line (the
+verifier's figures, [`evidence/US-0144-verify.md`](evidence/US-0144-verify.md) § 4); main's
+map alone for that line was about 120 KB. Removing them would mean an ASCII-only
+`(?-u:\b)`, which was **rejected**: it changes classes (`日本語2026-09-22` gains a date,
+`caféMon` a month, `é00:1a:2b:3c:4d:5e` a MAC). The golden corpus pins this with the base
+line `日本語2026-09-22 caféMon é00:1a:2b:3c:4d:5e`, recorded on main's scanner; swapping both
+`\b` to `(?-u:\b)` fails it. The allocation test asserts 0 for ASCII lines and, for
+non-ASCII lines, that no allocation exceeds 32 B (every test line is at least 20 chars, so
+any per-line scanner buffer would be at least 80 B), which does not tie the gate to
+`regex`'s internal count. `out` growth is the caller's and happens once per longest line.
+
+Capacity: the scratch keeps the capacity of the longest line it has scanned (4 B per char
+for `chars`, 8 B per UTF-8 byte for the map), the same policy as the neighbouring render
+`Scratch` buffers. The logical line is bounded by the viewport, so the worst case is about
+420 KB per view (a 250x60 all-CJK screen, about 15k chars: 60 KB + 360 KB).
 
 ### Measurements
 
@@ -171,8 +184,14 @@ tabs of `tui-mimic.py`, 180 s, 1280x800), one run per metric per side. Raw repor
 | allocations, whole run | 319,913 | 1,607 | -99.5 % |
 | bytes per call (bytes build) | 1.3 KB | 14 B avg, 0 B p95 | -1.3 KB |
 | bytes, whole run | 106.7 MB | 1.1 MB | -99 % |
-| `class_rows_into` avg (timing build) | 141.3 us | 92.7 us | -34 % |
-| `PlanCache::update` avg (timing build) | 598.0 us | 518.3 us | -13 % |
+| `class_rows_into` avg (timing build) | 141.3 us | 92.7 us | within noise |
+| `PlanCache::update` avg (timing build) | 598.0 us | 518.3 us | within noise |
+
+Only the `scan_line_into` rows are robust: its avg improves in all three builds (before
+2.10 / 2.69 / 2.92 us, after 1.80 / 1.91 / 1.88 us). The `class_rows_into` and
+`PlanCache::update` gains come from the single timing pair; the count and bytes builds of
+the same runs give `class_rows_into` 117.5 / 92.2 -> 93.9 / 88.4 us and `update`
+532 / 435 -> 514 / 487 us, which is run-to-run noise (verifier finding F4).
 
 `highlight-bench` (release, 5 runs per cell; median ns/char over three profiles and three
 wrap widths per cell; the committed baseline is **not** refreshed, see Gaps):
@@ -188,6 +207,10 @@ wrap widths per cell; the committed baseline is **not** refreshed, see Gaps):
 | cjk | 80 | 60.95 | 52.09 | -15 % |
 | cjk | 2000 | 76.93 | 73.19 | -5 % |
 
+The ASCII shapes reproduce under the verifier's paired runs (-7 % to -42 %); the CJK gain
+does not (-4 % to +7 %, noise), and `keyword-log` at 2000 chars is noisy (verifier finding
+F5).
+
 `frame_time_under_output` (`fast-dev`, 3 runs each, flood avg / p50 / p95): before
 1657/1635/1815, 1887/1761/2957, 1664/1634/1909 us; after 1684/1649/1797, 1665/1637/1834,
 1670/1624/1865 us. No measurable change: its output is `cmd`-style numbered lines where the
@@ -196,10 +219,12 @@ scan is a small share of a debug-assertion frame; the second before-run is an ou
 ### Commands
 
 - `cargo test -p oneterm-highlight -p oneterm-terminal-view`: pass (includes
-  `tests/scan_line_output.rs`, 138 recorded hashes over 23 base lines x 6 ASCII / CJK /
+  `tests/scan_line_output.rs`, 144 recorded hashes over 24 base lines x 6 ASCII / CJK /
   Vietnamese / emoji / mixed / non-ASCII-path variants x 4 profiles x 5 role cases, and
   `tests/scan_allocations.rs`). The recorded-output test was recorded on main's scanner
-  before any change, and fails when `char_index` is shifted by one (mutation check).
+  before any change (the 24th base line, from verifier finding F3, was recorded afterwards
+  with main's `scanner/mod.rs` and `lib.rs` restored), and fails when `char_index` is
+  shifted by one or when both `\b` become `(?-u:\b)` (mutation checks).
 - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `python scripts/check-doc-paths.py`, `python scripts/check-english.py`: pass.
 - Full `pwsh scripts/ci-local.ps1`: `ci-local: all checks passed.`
@@ -209,7 +234,7 @@ scan is a small share of a debug-assertion frame; the second before-run is an ou
 - `crates/tools/highlight-bench-baseline.json` not refreshed: the before/after pair above
   was taken on a loaded machine; refresh it on a quiet one as its own act.
 - One run per metric per side; no repeat runs of the TUI load.
-- The non-ASCII date/time-regex allocation stays (above).
+- `regex`'s fallback allocations on non-ASCII lines stay (above).
 
 ## Handoff
 

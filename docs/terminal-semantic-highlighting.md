@@ -472,8 +472,11 @@ Changes:
    differ from the previous frame's (`BUG-0071`). The scanner writes into a reused
    `Vec<u8>`, and its own working buffers (the line's chars and the byte-to-char map)
    live in a caller-owned `ScanScratch` held by the render scratch, so a steady-state
-   scan allocates nothing. An ASCII line builds no byte-to-char map: its byte offset is
-   its char index (`US-0144`).
+   scan allocates no buffer of its own. An ASCII line builds no byte-to-char map: its
+   byte offset is its char index, and its scan allocates nothing at all. A non-ASCII line
+   can still cost `regex` a 16-byte allocation per date/time or MAC search whose lazy DFA
+   gives up on the Unicode `\b`; the Unicode `\b` is kept because an ASCII one changes
+   classes (`US-0144`).
 
 4. **`TerminalTheme` gains `class_styles: ClassStyles`**, populated in
    `build_terminal_theme()` from the theme JSON's `terminal.semantic` block.

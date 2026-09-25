@@ -39,6 +39,9 @@ const BASES: &[&str] = &[
     "the quick brown fox jumps over the lazy dog and keeps on running",
     "2026-09-22 10:00:00 error connect 192.168.1.10 failed warn retry /var/log/app.log 42 info ok 10.0.0.1 debug 7 /usr/bin/thing",
     "\u{65e5}\u{672c}\u{8a9e} error at /etc/hosts \u{4e2d}\u{6587}\u{6d4b}\u{8bd5} 2026-09-22 \u{4e2d}\u{6587} error 192.168.0.1",
+    // A word char glued to a date, a month and a MAC: Unicode `\b` sees no boundary
+    // there, an ASCII `(?-u:\b)` would (US-0144 kept the Unicode one).
+    "\u{65e5}\u{672c}\u{8a9e}2026-09-22 caf\u{e9}Mon \u{e9}00:1a:2b:3c:4d:5e",
 ];
 
 /// Each base line as written, and with non-ASCII text before, around and
