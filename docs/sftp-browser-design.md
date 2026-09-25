@@ -1579,9 +1579,12 @@ its `cwd` as a `RemotePath` and converts the terminal's OSC 7 cwd at the boundar
 
 **Transfers return a `TransferHandle`.** `upload`/`download` return
 `TransferHandle { events: Receiver<TransferEvent>, result: Receiver<Result<()>> }`
-with `enum TransferEvent { Progress(f64), Cancelled }`. Progress is always in
+with `enum TransferEvent { Discovering(usize), Progress(f64), Cancelled }`. Progress is always in
 `0.0..=1.0`; cancellation is an explicit event (and the result is
-`Err(AppError::Cancelled)`), never a negative sentinel. The UI drives one shared
+`Err(AppError::Cancelled)`), never a negative sentinel. `Discovering(files_found)`
+is sent once per directory while a folder download lists the remote tree, before
+any byte moves; the queue row shows `<name> (scanning, N files found)` until the
+first `Progress` (`BUG-0077`). The UI drives one shared
 `run_transfer` loop for both directions: an item always ends `Completed`,
 `Cancelled`, or `Error`, and a cancelled/failed file does not abort the rest of an
 upload batch.
@@ -1727,7 +1730,21 @@ closes itself once the backend confirms (`actions.rs::run_mutation`).
   cadence stable: russh-sftp serves 262 131 B per response against the 261 120 B
   chunk, so per-read reporting would emit twice the samples, half of them 0.4 %
   apart. The callers map the count onto `TransferEvent::Progress` unchanged (file:
-  bytes/total; directory: monotonic bytes/discovered).
+  bytes/total; directory: monotonic bytes done / bytes of the whole tree).
+- **A folder transfer lists its whole tree before any byte moves** (`BUG-0077`).
+  Download reads every remote directory first (depth-first, creating the local
+  directories, empty ones included), collecting each file with its attributes,
+  then downloads them in that order; upload walks the local tree on the blocking
+  pool into a list, then creates each remote directory and uploads each file.
+  Every walk check stays in the listing pass: symlink refusal, remote name
+  validation, `safe_local_child`, `MAX_TRAVERSAL_DEPTH` (64),
+  `MAX_TRAVERSAL_ENTRIES` (100 000, which also bounds the list) and cancellation.
+  Dividing by the bytes discovered so far, as the streaming walk did, read ~99 %
+  after the first file and stayed there. There is no 99 % cap: the fraction
+  reaches 1.0 only with the last file's last chunk (clamped if a file grew since
+  it was listed), and `Completed` comes from the result channel, not from the
+  fraction. An empty folder or one of zero-byte files sends only the final
+  `Progress(1.0)`.
   `TransferEvent::Cancelled` and `Err(AppError::Cancelled)` semantics are
   unchanged.
 - **There is no resume.** A download writes into a `.part` local sibling that

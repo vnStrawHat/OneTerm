@@ -225,7 +225,7 @@ impl russh_sftp::server::Handler for LimitedServer {
 }
 
 /// A scratch directory removed when the test ends.
-struct Scratch(PathBuf);
+pub(super) struct Scratch(pub(super) PathBuf);
 
 impl Drop for Scratch {
     fn drop(&mut self) {
@@ -235,7 +235,7 @@ impl Drop for Scratch {
     }
 }
 
-fn scratch(tag: &str) -> Scratch {
+pub(super) fn scratch(tag: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!(
         "oneterm-bug0076-{}-{tag}-{}",
         std::process::id(),
@@ -249,7 +249,7 @@ fn scratch(tag: &str) -> Scratch {
 
 /// An SFTP session over `LimitedServer` serving `root`, through OneTerm's own
 /// `sftp_config()`.
-async fn limited_session(root: &Path) -> russh_sftp::client::SftpSession {
+pub(super) async fn limited_session(root: &Path) -> russh_sftp::client::SftpSession {
     let (client_side, server_side) = tokio::io::duplex(1024 * 1024);
     russh_sftp::server::run(
         server_side,

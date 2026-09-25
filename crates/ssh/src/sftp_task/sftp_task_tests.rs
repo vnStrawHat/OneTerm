@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use oneterm_core::RemotePath;
 
 use super::transfer::staging::{finalize_local_file, temporary_local_sibling};
-use super::transfer::upload::{LocalUploadEntry, stream_local_upload_entries};
+use super::transfer::upload::{LocalUploadEntry, collect_local_upload_entries};
 use super::*;
 
 fn temporary_dir() -> PathBuf {
@@ -144,66 +144,28 @@ fn active_transfer_guard_removes_token_on_drop() {
 fn local_traversal_stops_before_filesystem_access_when_cancelled() {
     let cancel = CancellationToken::new();
     cancel.cancel();
-    let (entries, _receiver) = async_channel::bounded(1);
-    let error = stream_local_upload_entries(
+    let error = collect_local_upload_entries(
         PathBuf::from("missing"),
         RemotePath::new("/remote"),
-        cancel,
-        &entries,
+        &cancel,
     )
     .unwrap_err();
     assert!(matches!(error, AppError::Cancelled));
 }
 
-/// CORR-18: the walker parks in `send_blocking` while the channel is full;
-/// cancelling and dropping the consumer (what `stop_traversal` does) wakes it
-/// up with `Cancelled` instead of leaving it spinning or stuck.
 #[test]
-fn local_upload_discovery_cancels_while_channel_is_full() {
-    let cancel = CancellationToken::new();
-    let (entries, receiver) = async_channel::bounded(1);
-    entries
-        .try_send(LocalUploadEntry::Directory(RemotePath::new("/occupied")))
-        .unwrap();
-    let traversal_cancel = cancel.clone();
-    let traversal = std::thread::spawn(move || {
-        stream_local_upload_entries(
-            PathBuf::from("missing"),
-            RemotePath::new("/remote"),
-            traversal_cancel,
-            &entries,
-        )
-    });
-
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    cancel.cancel();
-    drop(receiver);
-    assert!(matches!(
-        traversal.join().unwrap().unwrap_err(),
-        AppError::Cancelled
-    ));
-}
-
-#[test]
-fn local_upload_discovery_streams_directories_and_files() {
+fn local_upload_discovery_lists_directories_and_files() {
     let root = temporary_dir();
     std::fs::create_dir_all(root.join("nested")).unwrap();
     std::fs::write(root.join("first.txt"), b"first").unwrap();
     std::fs::write(root.join("nested").join("second.txt"), b"second").unwrap();
-    let (entries, receiver) = async_channel::bounded(8);
 
-    stream_local_upload_entries(
+    let discovered = collect_local_upload_entries(
         root.clone(),
         RemotePath::new("/remote"),
-        CancellationToken::new(),
-        &entries,
+        &CancellationToken::new(),
     )
     .unwrap();
-    drop(entries);
-    let mut discovered = Vec::new();
-    while let Ok(entry) = receiver.try_recv() {
-        discovered.push(entry);
-    }
 
     // Remote targets are built with `/` on every host OS (ARCH-12).
     for entry in &discovered {
