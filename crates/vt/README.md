@@ -200,11 +200,13 @@ assert!(config.product_name.is_some());
 | `pty` | **on** | `oneterm_vt::pty`: a child process behind a ConPTY (Windows) or an `openpty` (Unix), as a passive pollable object. Adds `polling`, plus `windows-sys` or `libc`. `--no-default-features` removes the module, the three transport traits and all three dependencies. |
 | `vt-paranoid` | off | A whole-history integrity walk after every `feed` and `resize`. Milliseconds per call at a large scrollback: for tests and fuzzing, never for a release build. |
 | `regex` | off | `search::SearchPattern::Regex`, so scrollback search takes a compiled regular expression as well as a literal. |
+| `hotpath-profiling` | off | Function-level timing sites (parser feed, scroll, snapshot update) for the `hotpath` 0.26 profiler; the sites vanish without it. Developer builds only. Adds `hotpath` and `hotpath-macros`. |
 
-No feature changes behaviour -- only availability. Two add dependencies: `pty` (on by default) adds
+No feature changes behaviour -- only availability. Three add dependencies: `pty` (on by default) adds
 `polling`, plus `windows-sys` on Windows or `libc` on Unix; `regex` pulls in the `regex` crate, and
-with it `aho-corasick`, `regex-automata` and `regex-syntax`. Turn both off -- `regex` already is --
-and you are back to the six the Dependencies section lists.
+with it `aho-corasick`, `regex-automata` and `regex-syntax`; `hotpath-profiling` pulls in `hotpath`
+and `hotpath-macros`. Turn all three off -- the last two already are -- and you are back to the six
+the Dependencies section lists.
 
 **On Windows the `pty` feature ships no console host.** The transport prefers a `conpty.dll` found
 next to the *running executable* and falls back to the inbox `conhost.exe`, which swallows Sixel DCS

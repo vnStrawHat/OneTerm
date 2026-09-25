@@ -27,8 +27,8 @@ cargo registry (the README on crates.io is three lines).
 
 ## 2. Wiring and zero-cost check
 
-As in [`../high-level-design.md`](../high-level-design.md). Sixteen sites in six crates plus the
-`run()` guard.
+As in [`../high-level-design.md`](../high-level-design.md). Seventeen sites in six crates (5 in `vt`, 2 in `terminal`, 7 in `terminal-view`, 1 each in
+`highlight`, `local-shell` and `ssh`) plus the `run()` guard.
 
 | Build (release, fat LTO) | `oneterm.exe` bytes |
 | --- | ---: |

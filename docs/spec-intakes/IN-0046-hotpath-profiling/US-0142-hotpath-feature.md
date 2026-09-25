@@ -41,7 +41,8 @@ no `hotpath` in the graph, the same release binary.
   - `#[hotpath::main]` on `oneterm_app::run` wrapping `OomResilientAlloc`.
   - `cfg_attr` sites listed in the HLD; one extracted `pty_read` helper in
     `oneterm-local-shell` so the read has a function to carry the attribute.
-  - `docs/agents/dependencies.md` row; `THIRD-PARTY-NOTICES.md` regenerated.
+  - `docs/agents/dependencies.md` row; `THIRD-PARTY-NOTICES.md` checked, no change (it lists
+    the default feature graph, and the feature is off by default).
   - Measurements and findings in `research/hotpath-evaluation.md`.
 - [x] Out of scope: every optimization the findings propose (US-0143 and later).
 
@@ -72,8 +73,9 @@ no `hotpath` in the graph, the same release binary.
 
 ### Documentation Action
 
-- Update required: `docs/agents/dependencies.md` § 3 (new row), `THIRD-PARTY-NOTICES.md`
-  (generated), `crates/vt/CHANGELOG.md` (new default-off feature).
+- Update required: `docs/agents/dependencies.md` § 3 (new row), `crates/vt/CHANGELOG.md` and
+  `crates/vt/README.md` Features table (new default-off feature). `THIRD-PARTY-NOTICES.md`:
+  no change, it lists the default feature graph.
 
 Reason: a new third-party dependency and a new `oneterm-vt` feature.
 
