@@ -27,5 +27,9 @@ log.workspace = true
 chrono.workspace = true
 sysinfo.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# `GetProcessMemoryInfo` for the status bar's private working set (`US-0137`).
+windows-sys.workspace = true
+
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

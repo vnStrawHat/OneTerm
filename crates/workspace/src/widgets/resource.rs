@@ -23,12 +23,13 @@
 //!
 //! ## Memory
 //!
-//! `sysinfo`'s `Process::memory()` returns the **full Working Set**
-//! (`WorkingSetSize` = private + shared pages like DLLs). Task Manager's
-//! default "Memory" column shows the **private working set** (shared excluded).
-//! We use `virtual_memory()` (= `PrivateUsage` = private committed bytes) which
-//! is closer to what Task Manager shows, though not identical (includes paged-out
-//! memory that private working set excludes).
+//! `MEM` is the number Task Manager's "Memory" column shows: the **private
+//! working set** (`PROCESS_MEMORY_COUNTERS_EX2::PrivateWorkingSetSize`, Windows
+//! 10 21H1+), read with `GetProcessMemoryInfo` because `sysinfo` does not expose
+//! it. Where it is unavailable the full working set (`sysinfo` `memory()`,
+//! shared pages included) stands in. On Linux and macOS `memory()` is the
+//! resident set size. Commit (`virtual_memory()`, `PrivateUsage`) is not shown:
+//! it counts pages that were never touched (`US-0137`).
 //!
 //! Format: `CPU 12.3%  MEM 45.2 MB`
 
@@ -82,18 +83,56 @@ pub fn resource(window: &mut Window, cx: &mut App) -> Entity<StatusText> {
             // sysinfo returns per-core CPU (100% = 1 core). Divide by nb_cpus
             // to get the total-system percentage that Task Manager shows.
             let nb_cpus = sys.cpus().len().max(1) as f32;
-            // Use virtual_memory (PrivateUsage on Windows = private committed
-            // bytes) instead of memory() (full working set including shared
-            // DLLs) — closer to Task Manager's default "Memory" column.
             Some(Label::from(format!(
                 "CPU {:.1}%  MEM {}",
                 process.cpu_usage() / nb_cpus,
-                format_memory(process.virtual_memory())
+                format_memory(displayed_memory(private_working_set(), process.memory()))
             )))
         }),
         window,
         cx,
     )
+}
+
+/// The figure `MEM` shows: the private working set when the OS gave one,
+/// otherwise the resident figure (`sysinfo` `memory()`). A live process never
+/// has a private working set of 0, so 0 means the field was not filled.
+fn displayed_memory(private_working_set: Option<u64>, resident: u64) -> u64 {
+    private_working_set
+        .filter(|&bytes| bytes > 0)
+        .unwrap_or(resident)
+}
+
+/// This process's private working set, or `None` where the OS does not give it.
+fn private_working_set() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::ProcessStatus::{
+            GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX2,
+        };
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX2>() as u32;
+        // SAFETY: all-zero is a valid value of this plain-integer struct.
+        let mut counters: PROCESS_MEMORY_COUNTERS_EX2 = unsafe { std::mem::zeroed() };
+        counters.cb = size;
+        // SAFETY: `GetCurrentProcess` returns a pseudo-handle that needs no close;
+        // the pointer is to a live, writable struct of exactly `size` bytes. A
+        // Windows older than 10 21H1 leaves `PrivateWorkingSetSize` at 0, which
+        // `displayed_memory` treats as unavailable.
+        let ok = unsafe {
+            GetProcessMemoryInfo(
+                GetCurrentProcess(),
+                (&raw mut counters).cast::<PROCESS_MEMORY_COUNTERS>(),
+                size,
+            )
+        };
+        (ok != 0).then_some(counters.PrivateWorkingSetSize as u64)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
 }
 
 /// Auto-scale bytes to a human-readable string.
@@ -118,7 +157,20 @@ fn format_memory(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::format_memory;
+    use super::{displayed_memory, format_memory};
+
+    #[test]
+    fn displayed_memory_prefers_the_private_working_set() {
+        assert_eq!(displayed_memory(Some(49 << 20), 94 << 20), 49 << 20);
+    }
+
+    #[test]
+    fn displayed_memory_falls_back_to_resident_when_unavailable() {
+        // Not Windows, or the call failed.
+        assert_eq!(displayed_memory(None, 94 << 20), 94 << 20);
+        // Windows before 10 21H1 leaves the EX2 field at 0.
+        assert_eq!(displayed_memory(Some(0), 94 << 20), 94 << 20);
+    }
 
     #[test]
     fn format_memory_scales_units_at_binary_thresholds() {

@@ -132,6 +132,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_IO",
     "Win32_System_LibraryLoader",
     "Win32_System_Pipes",
+    # `GetProcessMemoryInfo`: the status bar's private working set (`US-0137`).
+    "Win32_System_ProcessStatus",
     "Win32_System_Threading",
     # `SHELLEXECUTEINFOW` carries an `HKEY` field, so windows-sys gates the whole
     # struct behind this feature. Nothing in OneTerm reads the registry
