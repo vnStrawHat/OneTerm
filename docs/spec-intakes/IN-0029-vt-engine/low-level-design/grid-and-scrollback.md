@@ -217,8 +217,12 @@ computes it once.
   session-constant mask and is stated in the HLD memory table. The win over the reference is that
   the *cells* are not materialised: 100 000 unwritten rows cost 4.8 MB of slots instead of
   100 000 x cols x 8 B of cells.
-- Trimming emits `VtEvent::RowsTrimmed { oldest }` and calls `Anchors::trim`.
-- There is no `zero` rotation, no free list and no storage-layout equality, so the reference's
+- Trimming emits `VtEvent::RowsTrimmed { oldest }` and calls `Anchors::trim`. The row a
+  scroll trims is kept as the screen's one **spare**, and the next row materialised takes its
+  cell vector instead of allocating, so a line scrolled through a full history costs no
+  allocation (`US-0143`). The spare is never read as content: every cell and the header of the
+  new row are rewritten, and an unwritten bottom slot stays `None` until written.
+- There is no `zero` rotation, no free list beyond that one spare and no storage-layout equality, so the reference's
   "comparing two grids without `rezero()` panics" hazard (trap 45) cannot exist here.
 
 ### Row
