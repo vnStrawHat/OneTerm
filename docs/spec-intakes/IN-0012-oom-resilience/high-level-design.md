@@ -25,7 +25,7 @@ Two independent layers:
 
 `#[global_allocator]` wrapper around `std::alloc::System`:
 
-1. At startup, commit a 64 MiB **ballast** block.
+1. At startup, commit a 16 MiB **ballast** block (64 MiB until `DEC-0020`).
 2. On the first failed allocation, free the ballast (instant commit headroom)
    and retry the allocation on a 20 ms sleep loop, up to ~3 s total.
 3. Only when memory is still exhausted after that, return NULL and let Rust

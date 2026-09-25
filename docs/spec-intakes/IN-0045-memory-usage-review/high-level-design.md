@@ -23,7 +23,7 @@ oneterm.exe (one process)
 |   gpui + gpui-component floor ..... 42 privws /  84 commit        |
 |   OneTerm globals ................. <= 8 privws / <= 12 commit    |
 |     (themes, highlight rules, settings, sysinfo, logging)         |
-|   OOM ballast ..................... 0 privws / 64 commit (DEC-0020)|
+|   OOM ballast ..................... 0 privws / 16 commit (DEC-0020)|
 +-------------------------------------------------------------------+
 | per tab or split pane (x N)                                       |
 |   idle: view + render caches + adapter + pump                     |
@@ -73,7 +73,7 @@ Budget table (MB; the "today" figures are measured on main `19237c8d`, 2026-09-2
 | --- | --- | --- | --- | --- |
 | gpui + gpui-component | process | privws / commit | 41.7 / 84.1 | not ours; tracked only |
 | OneTerm globals | process | privws / commit | about 7.7 / about 10 | 8 / 12 |
-| OOM ballast | process | commit | 64 | 16 after BUG-0078 (`DEC-0020`, proposed) |
+| OOM ballast | process | commit | 64 (16 since US-0141) | 16 (`DEC-0020`, accepted) |
 | Idle tab or pane (view, adapter, pump, 1 MiB read buffer) | per tab | privws / commit | 2.0 / 26.6 | 2.5 / 3 |
 | Glyph cache | per view | commit (idle), privws (busy) | 23.6 / up to 23.6 | table ≤ 1 MB up front; entries ≤ 4096 |
 | History | per tab | privws | 0.75 KB/row + ring | ring share + 8 B × columns per row; trimming deferred (US-0138), ring stays preallocated (US-0139), see research/history-storage-assessment.md |

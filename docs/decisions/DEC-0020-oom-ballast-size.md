@@ -118,9 +118,11 @@ The change is Windows-motivated, and harmless elsewhere.
 
 ## Consequences
 
-- [ ] The status bar `MEM` drops by 48 MB at every tab count. Confirm with `measure.ps1` S1:
-  the expected value is 182 − 48 = 134 MB before `BUG-0078`.
-- [ ] `oom.rs` header and `DEC-0005`'s "64 MiB" wording are updated in the implementing
+- [x] Commit drops by 48 MB at every tab count. Confirm with `measure.ps1` S1: the
+  expected value is 182 − 48 = 134 MB before `BUG-0078`. Measured by `US-0141`: 133.9 MB.
+  Since `US-0137` the status bar `MEM` shows the private working set, which this does not
+  change.
+- [x] `oom.rs` header and `DEC-0005`'s "64 MiB" wording are updated in the implementing
   change. `IN-0012`'s `low-level-design/oom-allocator.md` table row says 64 MiB and must
   change with it.
 - [ ] Trade-off: the margin is the measured load on this machine. A new routine allocation
