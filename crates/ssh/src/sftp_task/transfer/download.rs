@@ -1,4 +1,4 @@
-//! Incremental remote-to-local SFTP downloads.
+//! Remote-to-local SFTP downloads: one file, or a folder listed in full first.
 
 use std::path::{Path, PathBuf};
 

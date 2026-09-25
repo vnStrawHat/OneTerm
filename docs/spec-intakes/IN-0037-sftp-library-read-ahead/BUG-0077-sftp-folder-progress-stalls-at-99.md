@@ -111,14 +111,19 @@ any byte moves:
   `BUG-0076-sftp-handle-limit-leak.md` — per-file copy and close contract; **no change**, this
   packet does not touch the per-file copy.
 - `docs/agents/error-policy.md` — no new error path; discovery errors propagate as before.
-- `docs/review-refresh-2026-08/02-correctness-concurrency.md` CORR-18 — the upload walker's
-  channel hand-off (`send_local_upload_entry`, spin then `send_blocking`). **No change**: the
-  finding is closed, and this packet deletes the channel, the hand-off and `stop_traversal`
-  altogether (the walker returns a list), so the CORR-18 test that parked the walker on a full
-  channel is deleted with them. The streaming walk itself came from `7789731e` (review
-  remediation, bounded memory); its `docs/review/` notes are no longer in the tree. The trade
-  is recorded here: the file list is now materialized, bounded by `MAX_TRAVERSAL_ENTRIES`
-  (100 000) as before.
+- `docs/review-refresh-2026-08/02-correctness-concurrency.md` CORR-18 — "polling instead of
+  notification": `send_local_upload_entry` spun on a 1 ms sleep; the fix was `send_blocking`,
+  and its test proved a walker parked on a full channel wakes on cancel. **No change**: the
+  invariant still holds. This packet deletes the channel, so the walker can no longer block at
+  all; it checks the token per directory and per entry (the verifier measured 96 us from cancel
+  to return on a 20 201-entry tree, `evidence/BUG-0077-verify.md` F6). The test for the blocked
+  walker is deleted with the channel.
+- SCALE-04 (`7789731e`, review remediation; its `docs/review/` notes are no longer in the tree)
+  — "stream recursive upload discovery through a bounded producer/consumer channel and process
+  recursive downloads incrementally without retaining a complete file plan". **Knowingly
+  relaxed**: memory goes from O(pending directories) to O(files), bounded by
+  `MAX_TRAVERSAL_ENTRIES` (100 000; an estimated 25-35 MB at the cap), in exchange for a true
+  progress denominator. Recorded in `docs/sftp-browser-design.md`.
 
 ### Documentation Action
 
@@ -132,7 +137,8 @@ and how the row shows it; the progress bullet says "bytes of the whole tree"; a 
 describes the listing pass, the kept walk checks, the dropped 99% cap and the empty-folder
 case), `high-level-design.md` (UI section and data-flow step 1 point here, with the row as an
 ASCII sketch), `IN-0037.md` (candidate list). The no-change reasons for `US-0096`, `BUG-0076`,
-`docs/agents/error-policy.md` and CORR-18 still hold.
+`docs/agents/error-policy.md` and CORR-18 still hold. After verification the design doc also
+states the memory trade (SCALE-04 relaxed) and that the bar can read 100% before Done.
 
 ## Plan
 
@@ -160,7 +166,7 @@ O(files), still bounded by the existing entry cap; recorded here, not a project-
 - [x] Unit proof
 - [x] Integration proof
 - [x] E2E proof
-- [x] Platform proof
+- [ ] Platform proof
 - [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
@@ -244,16 +250,38 @@ which is why the `many/` folder was added.
 
 - **No real-server run.** The owner's report came from a real server; the walk used the
   loopback dev server. The arithmetic does not depend on the server.
-- **Upload was not walked in the GUI**; it is proved by the unit test over the in-process server.
+- **Upload was not walked in the GUI by the implementer.** The unit test covers it, and the
+  verifier walked it: [`evidence/BUG-0077-verify-upload-queue-row-burst.png`](evidence/BUG-0077-verify-upload-queue-row-burst.png)
+  (`evidence/BUG-0077-verify.md` F17).
+- **Errors deep in the tree now fail before any byte moves.** A symlink, bad name, depth or
+  entry cap overflow or unreadable directory anywhere in the tree used to fail after a partial
+  transfer; the listing pass now finds it first and nothing is copied. Intended, and not a
+  data-loss change.
+- **The bar can read 100% before Done**: the last chunk reports 1.0 before the final rename,
+  metadata and close run; Done comes from the result channel (single files already did this).
 - **Listing a large remote tree now happens up front**: total time is unchanged (the same
   `readdir` round trips, still sequential), but on a high-latency link a tree of many
   directories shows "scanning" for the whole listing before the first byte moves, where the
   old walk interleaved. The row says so instead of freezing at 0%.
-- **Memory**: the file list is held for the whole transfer, up to `MAX_TRAVERSAL_ENTRIES`
-  (100 000) entries of path + attributes (order of tens of MB at the cap), where the streaming
-  walk held only pending directories.
 - **Tree changes between listing and copy**: a file that grew is clamped at 1.0; a file deleted
   after listing fails that transfer (as a vanished file did before); new files are not picked up.
+  The window between listing and copying is now the whole transfer (it was one `readdir` batch,
+  or at most 128 buffered upload entries): an entry swapped for a symlink in that window is
+  followed by the remote `open` (download) or local `File::open` (upload). Local containment is
+  intact (the local link and escape checks still run at copy time); the worst case is reading a
+  file the same account could already read into the chosen destination (verify F5).
+- **Memory**: see SCALE-04 above; `docs/sftp-browser-design.md` states the trade.
 - The first `Discovering` is sent only after the root directory is read, so a root with
   thousands of entries shows 0% without the scanning text for that first read (~1 s for 3000
   entries on loopback, most of it creating the local directories).
+- **Platform proof is open**: only the Windows `ci-local` gate ran; CI's Linux and macOS jobs
+  supply the rest.
+
+## Handoff
+
+- State: implemented on `fix/sftp-folder-progress`; independent verification PASS with no
+  blocker (`evidence/BUG-0077-verify.md`, F1-F17). Its Low/nit items (F5-F7, F11-F15) are
+  addressed in this packet, the design doc, the module docs and the queue-row label.
+- Next owner/action: coordinator merges to `main`; CI supplies the Linux/macOS platform proof;
+  the owner re-tries a folder download on the real server that showed the 99% stall.
+- Blockers: none.

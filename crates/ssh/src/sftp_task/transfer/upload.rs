@@ -1,4 +1,4 @@
-//! Incremental local-to-remote SFTP uploads.
+//! Local-to-remote SFTP uploads: one file, or a folder listed in full first.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};

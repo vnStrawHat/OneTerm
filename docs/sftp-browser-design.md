@@ -1743,8 +1743,15 @@ closes itself once the backend confirms (`actions.rs::run_mutation`).
   after the first file and stayed there. There is no 99 % cap: the fraction
   reaches 1.0 only with the last file's last chunk (clamped if a file grew since
   it was listed), and `Completed` comes from the result channel, not from the
-  fraction. An empty folder or one of zero-byte files sends only the final
-  `Progress(1.0)`.
+  fraction. The bar can therefore read 100 % while the last file's rename,
+  metadata and remote close still run; the row turns Done only when the result
+  arrives, as a single-file transfer always has. An empty folder or one of
+  zero-byte files sends only the final `Progress(1.0)`.
+- **Memory trade.** The streaming walk this replaced (SCALE-04) held memory per
+  pending directory; the listing pass holds one entry per file (path pair plus
+  attributes) for the whole transfer, bounded by `MAX_TRAVERSAL_ENTRIES`: an
+  estimated 25-35 MB at the 100 000-entry cap with ~100-byte paths. Accepted
+  for a true progress denominator.
   `TransferEvent::Cancelled` and `Err(AppError::Cancelled)` semantics are
   unchanged.
 - **There is no resume.** A download writes into a `.part` local sibling that

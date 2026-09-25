@@ -120,7 +120,8 @@ impl SftpPanel {
                                 // BUG-0077: a folder download lists the whole
                                 // tree before any byte moves.
                                 Some(files) if item.status == TransferStatus::InProgress => {
-                                    format!("{} (scanning, {files} files found)", item.filename)
+                                    let noun = if files == 1 { "file" } else { "files" };
+                                    format!("{} (scanning, {files} {noun} found)", item.filename)
                                 }
                                 _ => item.filename.clone(),
                             }),
