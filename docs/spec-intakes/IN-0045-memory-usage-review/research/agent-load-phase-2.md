@@ -210,5 +210,8 @@ first cycle. Once history is full, net growth is close to zero.
 - The owner's window size, DPI, pane count and session length are unknown. They are the
   likely remainder of the gap at 10,000 lines.
 - The 32.3 MB and 15.7 MB frame-sized blocks are attributed only by their size and by
-  being invisible to the Rust allocator.
+  being invisible to the Rust allocator. Phase 3 corrected this
+  ([`agent-load-phase-3.md`](agent-load-phase-3.md) § 5): the 32.3 MB block is gpui's 4×
+  multisampled path texture at 1920x1040 and 1920x1032, and the 15.7 MB block is present at every window
+  size, so it is not frame-sized.
 - Two runs per configuration. The runs differ by at most 3 MB.

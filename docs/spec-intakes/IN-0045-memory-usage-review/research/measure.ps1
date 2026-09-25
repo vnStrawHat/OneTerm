@@ -32,6 +32,13 @@
 #       render; wait for both loads to exit, idle 20 s. Commit and private WS of the
 #       app pid are also sampled every 250 ms during the load into <Label>-<Run>-trace.csv.
 #       -LoadWidth/-LoadHeight resize the window once both tabs exist (a larger grid).
+#   S7  (Mode S7, after S1) a second tab, then MAXIMIZE the window (posted
+#       WM_SYSCOMMAND/SC_MAXIMIZE, the path a title-bar double-click takes), then
+#       `tui-mimic.py --minutes <LoadMinutes>` (with --rich if -Rich) in both tabs,
+#       switching the visible tab every 10 s. Every 60 s a row S7-t<min> goes to the
+#       CSV; at each minute in -VmAt, vmregions.ps1 writes every private allocation to
+#       <work>/vm-t<min>.csv. After both loads exit and 20 s idle, row S7-end. The
+#       maximized client size (physical pixels) is appended to the note column.
 #
 # Options: -Seed <dir> copies prepared config files (e.g. a terminal.json with a toggle
 # off) into the private .OneTerm; -UpdateCheck leaves the daily update check on (it is
@@ -40,7 +47,7 @@
 param(
   [Parameter(Mandatory)] [string] $Exe,
   [Parameter(Mandatory)] [string] $Label,
-  [ValidateSet('Full', 'Bisect', 'S1', 'S2', 'S6')] [string] $Mode = 'Full',
+  [ValidateSet('Full', 'Bisect', 'S1', 'S2', 'S6', 'S7')] [string] $Mode = 'Full',
   [string] $Csv = (Join-Path $PSScriptRoot 'measurements.csv'),
   [string] $Scratch = (Join-Path ([IO.Path]::GetTempPath()) 'oneterm-in0045'),
   [int] $Run = 1,
@@ -50,7 +57,11 @@ param(
   [int] $Hold = 0,
   [int] $LoadSeconds = 180,
   [int] $LoadWidth = 0,
-  [int] $LoadHeight = 0
+  [int] $LoadHeight = 0,
+  [double] $LoadMinutes = 20,
+  [switch] $Rich,
+  [int[]] $VmAt = @(1, 10, 20),
+  [int] $WinX = 40   # screen x of the window; a negative value puts it on a left-hand monitor
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -91,6 +102,9 @@ public class MemProbe {
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
+  // Physical pixels for GetClientRect and Cap on a scaled display (S7 notes the client size).
+  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
   // Top-level visible windows owned by exactly this pid (the pid we launched).
   public static IntPtr MainWindowOf(uint want) {
     IntPtr found = IntPtr.Zero;
@@ -121,6 +135,7 @@ function Get-Descendants([int] $root) {
 }
 
 $script:Rows = @()
+$script:Note = $Note
 function Snap([string] $scenario) {
   $m = [MemProbe]::Read([uint32]$script:AppPid)
   $kids = Get-Descendants $script:AppPid
@@ -132,7 +147,7 @@ function Snap([string] $scenario) {
     ws = [math]::Round($m[0], 1); privws = [math]::Round($m[1], 1); commit = [math]::Round($m[2], 1); peakws = [math]::Round($m[3], 1)
     threads = $proc.Threads.Count; handles = $proc.HandleCount
     children = $kids.Count; tree_ws = [math]::Round($t[0], 1); tree_privws = [math]::Round($t[1], 1); tree_commit = [math]::Round($t[2], 1)
-    note = $Note
+    note = $script:Note
   }
   $script:Rows += $row
   $row | Export-Csv -Path $Csv -Append -NoTypeInformation
@@ -146,8 +161,8 @@ function Post($m, $w, $l) { [void][MemProbe]::PostMessage($script:Hwnd, $m, [Int
 function Click($x, $y) {
   Post 0x200 0 (LP $x $y); Post 0x201 1 (LP $x $y); Post 0x202 0 (LP $x $y); Start-Sleep -Milliseconds 900
 }
-function Cap([string] $name) {
-  $bmp = New-Object System.Drawing.Bitmap(1280, 800)
+function Cap([string] $name, [int] $w = 1280, [int] $h = 800) {
+  $bmp = New-Object System.Drawing.Bitmap($w, $h)
   $g = [System.Drawing.Graphics]::FromImage($bmp); $dc = $g.GetHdc()
   [void][MemProbe]::PrintWindow($script:Hwnd, $dc, 2); $g.ReleaseHdc($dc); $g.Dispose()
   $bmp.Save((Join-Path $work "$name.png")); $bmp.Dispose()
@@ -176,7 +191,7 @@ $script:Hwnd = [IntPtr]::Zero
 for ($i = 0; $i -lt 60 -and $script:Hwnd -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 500; $script:Hwnd = [MemProbe]::MainWindowOf([uint32]$p.Id) }
 if ($script:Hwnd -eq [IntPtr]::Zero) { Stop-Process -Id $p.Id -Force; throw "no window for pid $($p.Id)" }
 Write-Host "label=$Label pid=$($p.Id) hwnd=$($script:Hwnd) home=$home_"
-[void][MemProbe]::SetWindowPos($script:Hwnd, [IntPtr]::Zero, 40, 40, 1280, 800, 0x0014)
+[void][MemProbe]::SetWindowPos($script:Hwnd, [IntPtr]::Zero, $WinX, 40, 1280, 800, 0x0014)
 
 try {
   Start-Sleep -Seconds 30
@@ -206,6 +221,42 @@ try {
     Write-Host ("load took {0:n0} s; trace in $work" -f $sw.Elapsed.TotalSeconds)
     Start-Sleep -Seconds 20
     Snap 'S6'; Cap 'S6'
+    return
+  }
+
+  if ($Mode -eq 'S7') {
+    Copy-Item (Join-Path $PSScriptRoot 'tui-mimic.py') "$home_\m.py"
+    $load = "python `"$home_\m.py`" --minutes $LoadMinutes" + $(if ($Rich) { ' --rich' } else { '' })
+    Click 740 49; Click 615 81; Start-Sleep -Seconds 3     # tab 2 (now visible)
+    Post 0x112 0xF030 0; Start-Sleep -Seconds 3             # WM_SYSCOMMAND, SC_MAXIMIZE
+    [void][MemProbe]::SetThreadDpiAwarenessContext([IntPtr]-4)
+    $rc = New-Object MemProbe+RECT; [void][MemProbe]::GetClientRect($script:Hwnd, [ref]$rc)
+    $cw = $rc.Right - $rc.Left; $ch = $rc.Bottom - $rc.Top
+    $script:Note = "$Note client ${cw}x${ch}".Trim(); Write-Host "maximized client ${cw}x${ch}"
+    Cap 'S7-max' $cw $ch
+    Type-Text "$load 2"; Enter
+    Click 80 50; Start-Sleep -Seconds 1                     # back to tab 1
+    Type-Text "$load 1"; Enter
+    $sw = [Diagnostics.Stopwatch]::StartNew(); $next = 10; $tab = 1; $min = 1
+    while ($sw.Elapsed.TotalSeconds -lt $LoadMinutes * 60 + 600) {
+      $s = $sw.Elapsed.TotalSeconds
+      if ($min -le $LoadMinutes -and $s -ge $min * 60) {
+        Snap "S7-t$min"
+        if ($VmAt -contains $min) {
+          & (Join-Path $PSScriptRoot 'vmregions.ps1') -ProcessId $script:AppPid -Top 40 -Csv (Join-Path $work "vm-t$min.csv") |
+            Out-File (Join-Path $work "vm-t$min.txt")
+        }
+        $min++
+      }
+      if ($s -ge $next) {
+        $next += 10
+        if ($s -gt $LoadMinutes * 60 -and -not (Get-Descendants $script:AppPid | Where-Object { $_.CommandLine -like '*m.py*' })) { break }
+        if ($tab -eq 1) { Click 220 50; $tab = 2 } else { Click 80 50; $tab = 1 }
+      }
+      Start-Sleep -Milliseconds 500
+    }
+    Start-Sleep -Seconds 20
+    Snap 'S7-end'; Cap 'S7-end' $cw $ch
     return
   }
 
