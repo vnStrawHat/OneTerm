@@ -2,6 +2,11 @@
 #
 #   python tui-mimic.py <seconds> [seed]                   # S6 (phase 2), unchanged
 #   python tui-mimic.py --rich --minutes <N> [seed]         # S7 (phase 3)
+#   python tui-mimic.py --link-repaint --minutes <N>        # phase 4 OSC 8 run
+#
+# --link-repaint does only this: an Ink-style repaint, 30 times a second, of a 3-line
+# block whose middle line holds one OSC 8 link WITHOUT `id=` (the same URI every time),
+# the way `claude` redraws a hint line when it believes the terminal supports links.
 #
 # It loops three phases until the time is up:
 #   A  alternate screen, 30 full-screen frames/s for 10 s: cursor moves, 256-colour
@@ -40,6 +45,7 @@ ap.add_argument("seconds", nargs="?", type=float, default=60)
 ap.add_argument("seed", nargs="?", type=int, default=1)
 ap.add_argument("--minutes", type=float, help="duration in minutes (overrides seconds)")
 ap.add_argument("--rich", action="store_true", help="phase-3 glyph, style and mode mix")
+ap.add_argument("--link-repaint", action="store_true", help="phase-4 implicit OSC 8 repaint")
 args = ap.parse_args()
 dur = args.minutes * 60 if args.minutes is not None else args.seconds
 rich = args.rich
@@ -130,6 +136,17 @@ def modes(n, t):
 
 t0 = time.time()
 cols = 0
+if args.link_repaint:
+    out.write("\n\n\n")
+    n = 0
+    while time.time() - t0 < dur:
+        out.write(f"\x1b[3A\r\x1b[2K  Thinking... frame {n}\n"
+                  "\r\x1b[2K  see \x1b]8;;https://docs.anthropic.com/en/docs/claude-code\x1b\\docs"
+                  "\x1b]8;;\x1b\\ for help\n\r\x1b[2K> \n")
+        out.flush()
+        n += 1; time.sleep(1 / 30)
+    out.write(f"\nmimic done: {n} link repaints\n")
+    sys.exit(0)
 if rich:
     out.write("\x1b[?2004h\x1b[?1004h")
 while time.time() - t0 < dur:
