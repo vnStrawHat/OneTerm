@@ -72,6 +72,7 @@ Budget table (MB; the "today" figures are measured on main `19237c8d`, 2026-09-2
 | Part | Scope | Counter | Today | Budget |
 | --- | --- | --- | --- | --- |
 | gpui + gpui-component | process | privws / commit | 41.7 / 84.1 | not ours; tracked only |
+| gpui path textures (W×H×20 bytes, GPU) | window | commit | 28.9 at 1280x800, 40.1 at 1920x1032; 0 privws | not ours; tracked only (research/agent-load-phase-3.md § 5) |
 | OneTerm globals | process | privws / commit | about 7.7 / about 10 | 8 / 12 |
 | OOM ballast | process | commit | 64 (16 since US-0141) | 16 (`DEC-0020`, accepted) |
 | Idle tab or pane (view, adapter, pump, 1 MiB read buffer) | per tab | privws / commit | 2.0 / 26.6 | 2.5 / 3 |

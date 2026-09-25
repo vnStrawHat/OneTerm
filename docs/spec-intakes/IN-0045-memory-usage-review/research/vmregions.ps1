@@ -2,8 +2,9 @@
 # VirtualQueryEx and QueryWorkingSetEx, and print committed vs resident MB grouped by
 # allocation (AllocationBase). Large untouched commits (ballast, preallocated
 # buffers) show up as rows with a big Commit and a small Resident.
-#   pwsh -File vmregions.ps1 -ProcessId <pid> [-Top 25]
-param([Parameter(Mandatory)] [int] $ProcessId, [int] $Top = 25)
+#   pwsh -File vmregions.ps1 -ProcessId <pid> [-Top 25] [-Csv <path>]
+# -Csv also writes every allocation (base, commit, resident, regions) for diffing two walks.
+param([Parameter(Mandatory)] [int] $ProcessId, [int] $Top = 25, [string] $Csv = '')
 if (-not ('VmWalk' -as [type])) {
 Add-Type @"
 using System;
@@ -49,6 +50,10 @@ public class VmWalk {
 }
 $all = [VmWalk]::Walk([uint32]$ProcessId)
 $mb = 1MB
+if ($Csv) {
+  $all | Select-Object @{ n = 'base'; e = { '0x{0:x12}' -f $_.Base } }, Commit, Resident, Regions |
+    Export-Csv -Path $Csv -NoTypeInformation
+}
 "pid $ProcessId private committed: {0:n1} MB, resident {1:n1} MB, allocations {2}" -f (($all | Measure-Object Commit -Sum).Sum / $mb), (($all | Measure-Object Resident -Sum).Sum / $mb), $all.Count
 "by allocation size bucket (commit MB / resident MB / count):"
 $all | Group-Object { if ($_.Commit -ge 32MB) { 'a >=32M' } elseif ($_.Commit -ge 8MB) { 'b 8-32M' } elseif ($_.Commit -ge 1MB) { 'c 1-8M' } else { 'd <1M' } } | Sort-Object Name | ForEach-Object {
