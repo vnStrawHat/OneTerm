@@ -18,6 +18,23 @@
 //! 3. Only if memory is still exhausted after that does the allocator give up
 //!    and let Rust abort as before.
 //!
+//! Ballast size (`DEC-0020`, `US-0141`). The rule, so the number is re-derived rather than
+//! copied: **the ballast is at least the largest routine single allocation, plus about 1 s
+//! of OneTerm's heaviest measured net commit growth.** Measured in `IN-0045` (research
+//! `agent-load-phase-2.md` § 4, Windows release build, two tabs of a claude-like TUI):
+//!
+//! - Largest routine single allocation: the history ring, 6.3 MB at 100,000 lines (0.8 MB at
+//!   the default 10,000). This assumes `BUG-0078` removed the 24.8 MB per-view glyph table;
+//!   without it the decision says 32 MiB.
+//! - Heaviest net commit growth over 3 s: 10.2 MB at 1280x800, 15.9 MB at 1920x1040, so about
+//!   5 MB per second. Gross churn (150 to 240 MiB per 3 s) is served from freed heap blocks
+//!   and is not new commit.
+//!
+//! 6.3 MB + 5 MB, rounded up to a power of two, is 16 MiB. More buys little: once freed, the
+//! headroom returns to the system-wide pool and the process causing the spike can take it
+//! as easily as OneTerm. A new routine allocation larger than about 8 MB (a larger ring, a
+//! new per-view table, a frame buffer copied in Rust) must revisit this number.
+//!
 //! Best effort by design — known, deliberate trade-offs:
 //!
 //! - **Trade freeze for crash.** The retry loop sleeps *inside* the allocator,
@@ -44,9 +61,10 @@ use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::time::Duration;
 
-/// Ballast size (64 MiB). Committed at startup, freed on the first failed
-/// allocation to give the retry loop immediate headroom.
-const BALLAST_SIZE: usize = 64 * 1024 * 1024;
+/// Ballast size (16 MiB; see the module header for the sizing rule). Committed at
+/// startup, freed on the first failed allocation to give the retry loop immediate
+/// headroom.
+const BALLAST_SIZE: usize = 16 * 1024 * 1024;
 const BALLAST_ALIGN: usize = 8;
 
 /// Retry cadence: 150 × 20 ms ≈ 3 s total. An OOM spike caused by a dying

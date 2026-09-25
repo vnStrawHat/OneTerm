@@ -17,7 +17,8 @@ child shells, and `#[cfg(windows)]`-gating any of the above.
 ## Decision
 
 1. OneTerm wraps the system allocator (`crates/app/src/oom.rs`): on failure,
-   release a 64 MiB startup ballast and retry for ~3 s before aborting.
+   release a 16 MiB startup ballast (64 MiB until `DEC-0020`) and retry for
+   ~3 s before aborting.
    Future code must not assume a failed allocation aborts instantly, and must
    never allocate on the allocator's failure path.
 2. The wrapper is **not** platform-gated. macOS also lacks an OOM killer

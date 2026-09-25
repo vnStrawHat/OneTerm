@@ -6,7 +6,7 @@ Intake: IN-0012 · Concern: `crates/app/src/oom.rs`
 
 | Name | Value | Rationale |
 | --- | --- | --- |
-| `BALLAST_SIZE` | 64 MiB | Enough headroom to finish in-flight allocations and paint; small enough to be invisible on a machine that can run OneTerm. |
+| `BALLAST_SIZE` | 16 MiB | At least the largest routine single allocation plus about 1 s of the heaviest measured net commit growth (`DEC-0020`; 64 MiB before it). The rule and its inputs are in the `oom.rs` module header. |
 | `RETRY_DELAY` / `MAX_RETRIES` | 20 ms × 150 ≈ 3 s | A dying sibling process (rustc OOM-abort) frees its memory well within this window. |
 
 ## Invariants

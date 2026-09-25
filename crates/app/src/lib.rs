@@ -81,7 +81,7 @@ pub fn run() {
     // What this process is, and what it was asked to open, before anything else
     // (`IN-0043`). The token comes first because `crashes_dir()` needs it; the
     // parse comes before the ballast because a malformed command line must
-    // produce a message and an exit, not a 64 MiB allocation first.
+    // produce a message and an exit, not a 16 MiB allocation first.
     read_process_identity();
     // For one debug assertion: the `runas` launch must never run on this thread
     // (`IN-0043`, `crate::elevation::ElevationRequest::execute`).
