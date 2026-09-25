@@ -85,7 +85,9 @@ use polling::{Event, Events, PollMode, Poller};
 fn run() -> std::io::Result<()> {
     let mut options = Options::default();
     // TERM and COLORTERM belong here. This crate never touches the calling
-    // process's own environment.
+    // process's own environment. The child inherits it minus the launching
+    // terminal's identity (WT_SESSION, TERM_PROGRAM, ...; see `Options::env`),
+    // so set TERM_PROGRAM here if you have a name.
     options.env.insert("TERM".into(), "xterm-256color".into());
 
     let size = WindowSize { rows: 24, cols: 80, cell_width: 8, cell_height: 17 };

@@ -1273,6 +1273,10 @@ The remote shell must see `COLORTERM=truecolor` (and `TERM_PROGRAM=OneTerm`) so 
 1. **SSH `env` requests (RFC 4254 §6.4)** — after `request_pty` and before `request_shell`, `request_remote_shell_env` sends `COLORTERM=truecolor` and `TERM_PROGRAM=OneTerm` with `want_reply = false`. sshd only honors these when its `AcceptEnv` allows the variables; default OpenSSH accepts only `LANG LC_*` and silently drops the rest, which is harmless.
 2. **Shell-integration bootstrap fallback** — when shell integration is enabled, the injected bootstrap starts with an unconditional `export COLORTERM=truecolor;`, guaranteeing truecolor even on servers that ignore env requests.
 
+The remote shell never inherits OneTerm's own environment, so the local rule that drops the
+launching terminal's identity (`WT_SESSION` and the rest, [`terminal-backend.md`](terminal-backend.md)
+§ 6.3, `BUG-0080`) has nothing to act on here.
+
 ### 9.8. Connection route — jump hosts (IN-0023 / US-0058)
 
 `SshConfig::jump_hops: Vec<SshHop>` lists the jump hosts from the client outwards (at most `MAX_JUMP_HOPS` = 4); each `SshHop` carries its own host, port, username, `SshAuthMethod`, and `HostKeyPolicy`. `crates/ssh/src/route.rs` walks the route in `connect`:

@@ -57,6 +57,14 @@ pub(super) fn base_env() -> HashMap<String, String> {
     env.insert("TERM".into(), "xterm-256color".into());
     env.insert("COLORTERM".into(), "truecolor".into());
     env.insert("TERM_PROGRAM".into(), "OneTerm".into());
+    // Every crate shares the workspace version, so this is OneTerm's. It also
+    // replaces the launching terminal's version, which `oneterm_vt::pty` drops
+    // from the inherited environment together with that terminal's other
+    // identity variables (`WT_SESSION`, ...).
+    env.insert(
+        "TERM_PROGRAM_VERSION".into(),
+        env!("CARGO_PKG_VERSION").into(),
+    );
     #[cfg(windows)]
     {
         let wslenv = wslenv_with_terminal_hints(std::env::var("WSLENV").ok().as_deref());
@@ -78,6 +86,10 @@ mod tests {
         assert_eq!(env.get("TERM").map(String::as_str), Some("xterm-256color"));
         assert_eq!(env.get("COLORTERM").map(String::as_str), Some("truecolor"));
         assert_eq!(env.get("TERM_PROGRAM").map(String::as_str), Some("OneTerm"));
+        assert_eq!(
+            env.get("TERM_PROGRAM_VERSION").map(String::as_str),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! modified for this crate.
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr, c_void};
+use std::ffi::{OsStr, OsString, c_void};
 use std::io;
 use std::mem;
 use std::os::windows::ffi::OsStrExt;
@@ -33,7 +33,7 @@ use windows_sys::s;
 
 use crate::pty::windows::child::ChildExitWatcher;
 use crate::pty::windows::{PIPE_CAPACITY, PseudoConsole, cmdline, win32_string};
-use crate::pty::{GlyphWidth, Options, WindowSize};
+use crate::pty::{DROPPED_PARENT_ENV, GlyphWidth, Options, WindowSize};
 
 use super::pipe::{PipeReader, PipeWriter};
 
@@ -266,15 +266,9 @@ pub(super) fn spawn(options: &Options, size: WindowSize) -> io::Result<PseudoCon
 
     let command_line = win32_string(&cmdline(options));
     let working_directory = options.working_directory.as_deref().map(win32_string);
-    let environment = environment_block(&options.env);
-    let mut creation_flags = EXTENDED_STARTUPINFO_PRESENT;
-    let environment_pointer = match &environment {
-        Some(block) => {
-            creation_flags |= CREATE_UNICODE_ENVIRONMENT;
-            block.as_ptr() as *mut c_void
-        }
-        None => ptr::null_mut(),
-    };
+    let environment = environment_block(&options.env, std::env::vars_os());
+    let creation_flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
+    let environment_pointer = environment.as_ptr() as *mut c_void;
 
     let mut process: PROCESS_INFORMATION = unsafe { mem::zeroed() };
     // SAFETY: every pointer is either null or valid for the duration of the
@@ -422,16 +416,17 @@ impl Drop for ProcThreadAttributeList {
 }
 
 /// Deduplicate `custom` **case-insensitively** with the user's entries winning,
-/// then append the parent environment, as one `name=value\0…\0\0` UTF-16 block.
+/// then append `parent` minus [`DROPPED_PARENT_ENV`], as one
+/// `name=value\0…\0\0` UTF-16 block.
 ///
-/// `None` keeps the parent environment: that is what `CreateProcessW` does when
-/// no block is supplied, and Windows will not eliminate duplicate variables for
-/// us.
-fn environment_block(custom: &HashMap<String, String>) -> Option<Vec<u16>> {
-    if custom.is_empty() {
-        return None;
-    }
-
+/// Always a block, never the null pointer that makes `CreateProcessW` copy the
+/// parent environment whole: the dropped variables must not reach the child
+/// even when there is no custom entry. Windows will not eliminate duplicate
+/// variables for us, hence the dedup.
+fn environment_block(
+    custom: &HashMap<String, String>,
+    parent: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Vec<u16> {
     let mut block = Vec::new();
     let mut seen = HashSet::new();
     for (key, value) in custom {
@@ -445,14 +440,21 @@ fn environment_block(custom: &HashMap<String, String>) -> Option<Vec<u16>> {
             );
         }
     }
-    for (key, value) in std::env::vars_os() {
+    // After the custom entries, so an embedder's own value for one of these
+    // names is kept while the parent's is not.
+    seen.extend(
+        DROPPED_PARENT_ENV
+            .iter()
+            .map(|name| OsStr::new(name).to_ascii_uppercase()),
+    );
+    for (key, value) in parent {
         if seen.insert(key.to_ascii_uppercase()) {
             push_entry(&mut block, &key, &value);
         }
     }
 
     block.push(0);
-    Some(block)
+    block
 }
 
 fn push_entry(block: &mut Vec<u16>, key: &OsStr, value: &OsStr) {
@@ -519,47 +521,73 @@ mod tests {
         assert_eq!(glyph_width_flag(GlyphWidth::default()), 0x10);
     }
 
+    fn parent(entries: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        entries
+            .iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .collect()
+    }
+
+    fn entries(block: &[u16]) -> Vec<String> {
+        let text = String::from_utf16_lossy(block);
+        assert!(
+            text.ends_with("\0\0"),
+            "the block must be double-terminated"
+        );
+        text.split('\0')
+            .filter(|entry| !entry.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
     #[test]
-    fn an_empty_environment_inherits_the_parent_block() {
-        assert!(environment_block(&HashMap::new()).is_none());
+    fn an_empty_environment_still_copies_the_parent() {
+        let block = environment_block(&HashMap::new(), parent(&[("PATH", "C:\\bin")]));
+        assert_eq!(entries(&block), ["PATH=C:\\bin"]);
     }
 
     #[test]
     fn custom_environment_deduplicates_case_insensitively() {
         let mut custom = HashMap::new();
         custom.insert("ONETERM_PTY_TEST".to_owned(), "1".to_owned());
-        let block = environment_block(&custom).expect("a custom block");
-
-        let text = String::from_utf16_lossy(&block);
-        let entries: Vec<&str> = text.split('\0').filter(|entry| !entry.is_empty()).collect();
-        let ours: Vec<&&str> = entries
-            .iter()
-            .filter(|entry| entry.to_ascii_uppercase().starts_with("ONETERM_PTY_TEST="))
-            .collect();
-
-        assert_eq!(ours, [&"ONETERM_PTY_TEST=1"]);
-        assert!(
-            text.ends_with("\0\0"),
-            "the block must be double-terminated"
+        let block = environment_block(
+            &custom,
+            parent(&[("Path", "C:\\bin"), ("oneterm_pty_test", "parent")]),
         );
-        assert!(
-            entries.len() > 1,
-            "the parent environment must be appended after the custom entries"
-        );
+
+        assert_eq!(entries(&block), ["ONETERM_PTY_TEST=1", "Path=C:\\bin"]);
     }
 
     /// The parent's own value must lose to the caller's, whatever its case.
     #[test]
     fn custom_entries_win_over_the_inherited_ones() {
-        // SAFETY: single-threaded setup for this test process only.
-        unsafe { std::env::set_var("ONETERM_VT_PTY_OVERRIDE", "parent") };
-
         let mut custom = HashMap::new();
         custom.insert("oneterm_vt_pty_override".to_owned(), "child".to_owned());
-        let block = environment_block(&custom).expect("a custom block");
+        let block = environment_block(&custom, parent(&[("ONETERM_VT_PTY_OVERRIDE", "parent")]));
 
-        let text = String::from_utf16_lossy(&block).to_ascii_uppercase();
-        assert!(text.contains("ONETERM_VT_PTY_OVERRIDE=CHILD"));
-        assert!(!text.contains("ONETERM_VT_PTY_OVERRIDE=PARENT"));
+        assert_eq!(entries(&block), ["oneterm_vt_pty_override=child"]);
+    }
+
+    /// OneTerm launched from a Windows Terminal tab must not tell its shells
+    /// they run in Windows Terminal.
+    #[test]
+    fn another_terminals_identity_is_not_inherited() {
+        let mut custom = HashMap::new();
+        custom.insert("TERM_PROGRAM".to_owned(), "Embedder".to_owned());
+        let block = environment_block(
+            &custom,
+            parent(&[
+                ("WT_SESSION", "0b5f6f2e"),
+                ("wt_profile_id", "{61c54bbd}"),
+                ("TERM_PROGRAM", "vscode"),
+                ("ConEmuPID", "4242"),
+                ("USERPROFILE", "C:\\Users\\me"),
+            ]),
+        );
+
+        assert_eq!(
+            entries(&block),
+            ["TERM_PROGRAM=Embedder", "USERPROFILE=C:\\Users\\me"]
+        );
     }
 }

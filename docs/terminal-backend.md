@@ -699,6 +699,16 @@ reproduces the full table on demand.
 - **UTF-8**: `Cmd` → `chcp 65001` (via `/K` args). `pwsh`/`powershell` → set env
   `LANG`/`LC_ALL` + (optionally) an init arg `[Console]::OutputEncoding`.
 - **TERM**: always `xterm-256color`, `COLORTERM=truecolor`.
+- **Child environment** (both platforms): OneTerm's own environment, minus the variables
+  through which the terminal that launched OneTerm names itself, plus `base_env()`
+  (`crates/core/src/config/env.rs`: `TERM`, `COLORTERM`, `TERM_PROGRAM=OneTerm`,
+  `TERM_PROGRAM_VERSION`, `LANG`, the `WSLENV` hints) and the user's `shell.env`. The dropped
+  list is `DROPPED_PARENT_ENV` in `crates/vt/src/pty/mod.rs`: `WT_SESSION`, `WT_PROFILE_ID`,
+  `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `TERMINAL_EMULATOR`, `ITERM_SESSION_ID`,
+  `ITERM_PROFILE`, `ConEmuPID`, `ConEmuANSI`, and the startup tokens `XDG_ACTIVATION_TOKEN` /
+  `DESKTOP_STARTUP_ID`. Only the *inherited* value is dropped; an explicit entry of the same
+  name is applied. Without this, OneTerm started from a Windows Terminal tab told its shells
+  they ran in Windows Terminal (`BUG-0080`).
 - **Resize**: `Notifier::notify_resize` → ConPTY handles it (no SIGWINCH on Windows).
   The grid is realigned to conhost after every resize (`ResizePolicy::KeepViewportTop`,
   §5.3, DEC-0008): conhost keeps its viewport top, re-wraps the viewport rows in place
