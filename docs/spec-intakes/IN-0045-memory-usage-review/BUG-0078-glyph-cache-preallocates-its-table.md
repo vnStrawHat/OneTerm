@@ -67,8 +67,9 @@ The terminal painter never reads a `ShapedLine`'s decoration runs or text. It pa
 
 - [x] In scope: `render/glyphs.rs` and the three holders of its result (`TextRunPlan.line`,
   `GutterLabel.line`, `CursorPaint.glyph`), plus the painter's parameter type.
-- [x] In scope: a `Tui` mode in `research/measure.ps1` (plus `research/tui_mimic.py`) so that
-  the owner's TUI hypothesis can be re-measured.
+- [x] In scope: re-measuring the owner's TUI hypothesis. This packet ran its own TUI
+  scenario from a scratch copy of `measure.ps1` (not committed). Phase 2 of IN-0045 landed
+  `-Mode S6` on `main` meanwhile, so S6 is the canonical protocol and was also run on the fix.
 - [x] Out of scope: one cache per window instead of per view; the rest of `IN-0045`
   (`US-0137..0140`, `DEC-0020`); the window-size-dependent 32 MB region (Gaps).
 
@@ -115,8 +116,6 @@ Changed:
 - `IN-0018/high-level-design.md`: three rows.
 - `IN-0018/low-level-design/render-pipeline.md`: the row plan, shape step, glyph cache block,
   a new paragraph on the value and the bound, the cursor struct and the allocation plan.
-- `IN-0045/research/measure.ps1`: the `Tui` mode, `-W`/`-H` and the `T1`/`T2` header lines.
-- `IN-0045/research/tui_mimic.py`: new file.
 - `IN-0045/research/measurements.csv`: this packet's rows, `note = BUG-0078`.
 
 The IN-0045 HLD budget row needs no change.
@@ -135,8 +134,8 @@ The IN-0045 HLD budget row needs no change.
 - [x] Change `GlyphCache` to `HashMap::new()` and `Arc<LineLayout>`; adapt the holders.
 - [x] Add the size/identity test.
 - [x] Rebuild, measure (after), and run the frame-time measurement before and after.
-- [x] Measure the owner's TUI hypothesis (the `Tui` mode) before and after, with a temporary
-  entry-count and hit-rate log (not committed).
+- [x] Measure the owner's TUI hypothesis before and after (a scratch TUI scenario, then
+  `main`'s S6), with a temporary entry-count and hit-rate log (not committed).
 - [x] Update the IN-0018 docs and run the gates.
 
 ## Decisions
@@ -150,8 +149,8 @@ None.
   `element_tests::idle_frame_allocates_nothing`.
 - Frame time: `element_tests::frame_time_under_output` (an ignored measurement), before and
   after.
-- Integration: `research/measure.ps1 -Mode Full` and `-Mode Tui` on release builds, 2 runs each
-  before and after.
+- Integration: `research/measure.ps1 -Mode Full` on release builds, 2 runs each before and
+  after; the TUI scenario before and after; `-Mode S6` after (phase 2 has the `main` rows).
 - Gates: fmt, clippy, `cargo test -p oneterm-terminal-view`, `check-doc-paths.py`,
   `check-english.py`, and the full `scripts/ci-local.ps1` with `CARGO_BUILD_JOBS=4`.
 
@@ -196,9 +195,11 @@ privws / commit, MB. Before runs 1-2 are the quiet re-runs (`bug0078-before-q`).
 - An earlier `before` batch ran while a release build was linking. Its run 2 S4 lost the 64 MB
   ballast (commit 118.9, presumably the OOM retry path under commit pressure), so it was not used.
 
-### TUI load (`-Mode Tui`, owner hypothesis)
+### TUI load (owner hypothesis)
 
-`tui_mimic.py 150` runs in tab 1, then in a second tab, each while visible. The load is 2 s of
+This scenario comes from a scratch copy of `measure.ps1` at 898148e5 plus a mimic script. Both
+are superseded by `main`'s `-Mode S6` (next section) and were not committed. A mimic runs for
+150 s in tab 1, then in a second tab, each while visible. The load is 2 s of
 alternate-screen colour redraws at about 60 fps, a third of the rows new text every frame, and
 then a 300-line scrolling burst, repeated. That gives about 8,400 frames and 22,500 lines per
 tab. T2 has two tabs, both loaded. privws / commit in MB:
@@ -221,6 +222,19 @@ every 600 frames; built once and not committed) gave the following under the sam
   23.6 MB table: privws / commit 98.5 / 231.6 before, 71.4 / 201.6 after.
 - The table never doubled, so the soft cap holds. No bound was added and the eviction is the
   same code, so the hit rate is unchanged by construction.
+
+### S6 agent load (`main`'s protocol, phase 2)
+
+`measure.ps1 -Mode S6` runs two tabs of `tui-mimic.py` for 180 s with the visible tab switched
+every 10 s, at 1280x800 with the default 10,000 lines. The before figures are phase 2's
+`s6-default` rows. They come from a probe build of `main` (thin LTO), whose S1 matched `main`
+within 0.2 MB. privws / commit, MB:
+
+| | run 1 | run 2 | mean |
+| --- | --- | --- | --- |
+| before (`s6-default`) | 94.4 / 239.2 | 93.9 / 236.3 | 94.2 / 237.8 |
+| after (`bug0078-after-s6-10k`) | 75.2 / 186.6 | 75.1 / 186.0 | 75.2 / 186.3 |
+| Δ | | | **−19.0 / −51.5** |
 
 ### Frame time
 
