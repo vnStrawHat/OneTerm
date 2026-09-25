@@ -39,6 +39,14 @@
 #       CSV; at each minute in -VmAt, vmregions.ps1 writes every private allocation to
 #       <work>/vm-t<min>.csv. After both loads exit and 20 s idle, row S7-end. The
 #       maximized client size (physical pixels) is appended to the note column.
+#   S9  (phase 4) S7 on an allocator PROBE build (never committed; see
+#       agent-load-phase-4.md): pass -AllocLog, and the probe writes the allocator's live
+#       bytes and live allocation count per size class to <work>/alloc.csv every 30 s;
+#       every row then carries live_mb / live_count from its last line, and goes to
+#       measurements-phase4.csv unless -Csv says otherwise. -AllocBt <class 0..4> also
+#       turns on the probe's sampled backtrace table for that size class (alloc.bt.txt;
+#       set ONETERM_ALLOC_BT_RATE=1 in the calling shell to sample every block).
+#       -MimicArgs adds other tui-mimic.py flags (e.g. --link-repaint, without -Rich).
 #
 # Options: -Seed <dir> copies prepared config files (e.g. a terminal.json with a toggle
 # off) into the private .OneTerm; -UpdateCheck leaves the daily update check on (it is
@@ -60,8 +68,12 @@ param(
   [int] $LoadHeight = 0,
   [double] $LoadMinutes = 20,
   [switch] $Rich,
-  [int[]] $VmAt = @(1, 10, 20),
-  [int] $WinX = 40   # screen x of the window; a negative value puts it on a left-hand monitor
+  # A string, split on commas: `pwsh -File` hands "1,30,60" to an [int[]] as the one number 13060.
+  [string[]] $VmAt = @('1', '10', '20'),
+  [int] $WinX = 40,  # screen x of the window; a negative value puts it on a left-hand monitor
+  [switch] $AllocLog,
+  [int] $AllocBt = -1,
+  [string] $MimicArgs = ''
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -149,6 +161,12 @@ function Snap([string] $scenario) {
     children = $kids.Count; tree_ws = [math]::Round($t[0], 1); tree_privws = [math]::Round($t[1], 1); tree_commit = [math]::Round($t[2], 1)
     note = $script:Note
   }
+  $alog = Join-Path $work 'alloc.csv'
+  if ($AllocLog -and (Test-Path $alog)) {
+    $last = (Get-Content $alog -Tail 1).Split(',')
+    $row | Add-Member live_mb ([math]::Round([double]$last[1] / 1MB, 1))
+    $row | Add-Member live_count ([long]$last[2])
+  }
   $script:Rows += $row
   $row | Export-Csv -Path $Csv -Append -NoTypeInformation
   $row | Format-Table -AutoSize | Out-String | Write-Host
@@ -180,6 +198,11 @@ New-Item -ItemType Directory -Force $home_, $work, "$home_\.OneTerm" | Out-Null
 if (-not $UpdateCheck) { '{"auto_check": false, "schema_version": 1}' | Set-Content "$home_\.OneTerm\update_config.json" }
 # -Seed <dir>: copy prepared config files (e.g. a terminal.json with a toggle off).
 if ($Seed) { Copy-Item "$Seed\*" "$home_\.OneTerm\" -Force }
+if ($AllocLog) {
+  $env:ONETERM_ALLOC_LOG = Join-Path $work 'alloc.csv'
+  if ($AllocBt -ge 0) { $env:ONETERM_ALLOC_BT = "$AllocBt" }
+  if (-not $PSBoundParameters.ContainsKey('Csv')) { $Csv = Join-Path $PSScriptRoot 'measurements-phase4.csv' }
+}
 $savedUP = $env:USERPROFILE; $savedHOME = $env:HOME
 $env:USERPROFILE = $home_; $env:HOME = $home_   # release config_dir() = %USERPROFILE%\.OneTerm
 try {
@@ -226,7 +249,7 @@ try {
 
   if ($Mode -eq 'S7') {
     Copy-Item (Join-Path $PSScriptRoot 'tui-mimic.py') "$home_\m.py"
-    $load = "python `"$home_\m.py`" --minutes $LoadMinutes" + $(if ($Rich) { ' --rich' } else { '' })
+    $load = "python `"$home_\m.py`" --minutes $LoadMinutes" + $(if ($Rich) { ' --rich' } else { '' }) + $(if ($MimicArgs) { " $MimicArgs" } else { '' })
     Click 740 49; Click 615 81; Start-Sleep -Seconds 3     # tab 2 (now visible)
     Post 0x112 0xF030 0; Start-Sleep -Seconds 3             # WM_SYSCOMMAND, SC_MAXIMIZE
     [void][MemProbe]::SetThreadDpiAwarenessContext([IntPtr]-4)
@@ -242,7 +265,7 @@ try {
       $s = $sw.Elapsed.TotalSeconds
       if ($min -le $LoadMinutes -and $s -ge $min * 60) {
         Snap "S7-t$min"
-        if ($VmAt -contains $min) {
+        if (@($VmAt -split ',' | ForEach-Object { [int]$_ }) -contains $min) {
           & (Join-Path $PSScriptRoot 'vmregions.ps1') -ProcessId $script:AppPid -Top 40 -Csv (Join-Path $work "vm-t$min.csv") |
             Out-File (Join-Path $work "vm-t$min.txt")
         }
