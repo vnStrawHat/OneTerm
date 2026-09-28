@@ -5,9 +5,10 @@ HLD: [high-level-design.md](../high-level-design.md)
 Topic: `oneterm-vt` extras table growth from a resent Sixel image, and how the table proves an
 entry is safe to free
 Date: 2026-09-28. Reworked 2026-09-28 after adversarial verification failed the first design
-(`evidence/BUG-0081-verify.md`), then reworked again the same day after a second adversarial pass
+(`evidence/BUG-0081-verify.md`), reworked again the same day after a second adversarial pass
 failed the mark-and-sweep design's own orchestration and trigger (`evidence/BUG-0081-verify.md`,
-"Second pass").
+"Second pass"), and reworked a third time the same day after a third pass found the second
+rework's own sweep-and-retry had no rate limit (`evidence/BUG-0081-verify.md`, "Third pass", T1).
 
 ## Concern
 
@@ -102,6 +103,51 @@ everything on every sweep does not break their specific single-cell check) and f
 (with no sweep at all, the table fills and the last resend stops placing) -- they are what actually
 proves S2 fixed, not R1-R4.
 
+## Third design flaw (T1, third adversarial pass)
+
+S1, S2 and S3 from the second pass held: sweeping before interning is correct on every path,
+including `stamp`'s merged path, and counting reuses keeps the table at 4,098 entries at both
+70,000 and 1,500,000 resends. A third pass found one more High finding, this time in the
+sweep-and-retry itself, added as S2's own fix: **it had no rate limit.**
+
+`State::intern_extras`, on the miss where `try_intern` returns `None`, swept and retried
+unconditionally. When the table is full of entries a real cell still references — 65,534 distinct
+live hyperlinks or images, hostile-reachable in one burst, or plausible from a long session that
+prints many distinct `OSC 8` URLs — a sweep frees nothing, the retry fails the same way, and the
+*next* miss does the exact same unconditional sweep again. `try_intern`'s own failure path did not
+touch `since_sweep` before this fix, so nothing amortised it: every single failing intern became a
+full `O(history)` scan. Measured (third pass, `evidence/BUG-0081-verify.md`): 5.7 ms per image at
+the default 10,000-row scrollback, 47.7 ms at 100,000 rows -- 10,000 resends took 57 s where `main`
+took `O(1)` per resend, and a hostile 64 KB read of minimal Sixels (about 3,200 images) held the
+terminal lock for roughly 18 s at the default scrollback, or about 150 s at 100,000 rows. The
+unconditional retry was this rework's own previous suggestion ("sweep once and retry"); the "once"
+was never rate-limited against repetition.
+
+**Fixed: `try_intern` counts its own failure toward `since_sweep`, and the retry runs only when
+`needs_sweep` says another sweep is due.** Both changes together, not either alone: counting the
+failure is what lets a later attempt's `needs_sweep` check ever become true again after a run of
+nothing but failures (without it, gating the retry on `needs_sweep` would let the very first failure
+after a sweep permanently skip every future retry, since `since_sweep` would sit at a small number
+forever); gating the retry on that count is what turns "an unrated retry on every failing call" into
+"one extra scan at most per `TABLE_SWEEP_INTERVAL` failed attempts." Measured after the fix, same
+shape: 3 sweeps for 10,000 resends at the default scrollback, 25.3 ms total (was 60.6 s measured on
+this rework's own re-run, matching the third pass's 57 s); `exhausted()` reads exactly one count per
+resend, not two, because the retry now happens through the same `try_intern` the first attempt used,
+with `InternTable::record_exhausted` called exactly once regardless of how many `try_intern` calls a
+single `intern_extras` invocation makes. The "never permanently stranded" property from the second
+rework still holds: it is now "not stranded for more than `TABLE_SWEEP_INTERVAL` attempts at a time"
+rather than "immediately," which is the correct reading of what `needs_sweep` was already promising
+everywhere else in this design.
+
+**The per-`intern_extras` cost when the table is genuinely live-full is therefore `O(1)` amortised,
+not `O(1)` worst-case.** A single failing call can still cost a full scan — whichever one crosses the
+interval — but that cost is paid once per `TABLE_SWEEP_INTERVAL` (4,096) attempts, giving roughly
+1.4 µs amortised per intern at the default 10,000-row scrollback and about 12 µs at 100,000 rows (the
+measured per-scan cost divided by the interval). This is worse than `main`'s true `O(1)` fallback, and
+that is an accepted trade: `main` could never recover once its own hyperlink and extras tables filled
+with dead content, and this design's whole point is that it can, at the cost of an occasional scan
+instead of none, ever.
+
 ## Design (rework)
 
 **Free an id only once a scan of the whole grid proves nothing references it.** Nothing short of that
@@ -179,11 +225,13 @@ pos.col + placement.cols` now.
 
 ## Interfaces
 
-No public signature changes. `InternTable::free`, `is_free`, `needs_sweep`, `sweep_unreferenced` are
-`pub(crate)`. `Screen::collect_live_extras_ids` and `TerminalGrid::live_extras_ids` are `pub(crate)`.
-`State::intern_extras` is `pub(crate)`. `GraphicsState::extras_by_graphic` / `track_extras` from the
-first design are removed; `graphics/mod.rs` and `graphics/placement.rs` are otherwise unchanged from
-`main`.
+No public signature changes. `InternTable::free`, `is_free`, `needs_sweep`, `sweep_unreferenced`,
+`try_intern`, `record_exhausted`, `swept` are `pub(crate)`. `Screen::collect_live_extras_ids` and
+`TerminalGrid::live_extras_ids` are `pub(crate)`. `State::intern_extras` is `pub(crate)`.
+`GraphicsState::extras_by_graphic` / `track_extras` from the first design are removed;
+`graphics/mod.rs` and `graphics/placement.rs` are otherwise unchanged from `main`. `InternTable::intern`
+keeps its existing public signature and behaviour, now implemented as `try_intern` plus
+`record_exhausted` rather than one method that did both inline.
 
 ## Edge Cases and Failure Modes
 
@@ -209,17 +257,32 @@ first design are removed; `graphics/mod.rs` and `graphics/placement.rs` are othe
   70,000 and 1,500,000 resends, and never falls back to id 0.
 - [x] S4: a placement's surviving rows after an anchor trim, and a screen's cells and saved-cursor
   pen while the *other* screen is active, both survive sweeps triggered entirely elsewhere.
+- [x] T1: a table full of entries a real cell still references costs at most one scan per
+  `TABLE_SWEEP_INTERVAL` failed `intern_extras` calls, not one scan per call.
+- [x] T5: that same table leaves a new image genuinely unplaced (the ladder's fallback, warned
+  once), and `RIS`, not the sweep-and-retry, is what recovers it.
+- [x] `exhausted()` counts exactly once per failed `intern_extras` call, including the ones that
+  went through a sweep-and-retry.
 
 ## Measurements
 
-Headless, release profile, throwaway counting allocator (removed before commit), one 20x4 terminal,
-`Config::default()`, one 1x6 Sixel resent with `CSI H` + the same `DCS q`:
+Headless, release profile, throwaway counting allocator (removed before commit) for the entries/live
+bytes rows, throwaway `#[ignore]`d timing tests (removed before commit) for the live-full rows, one
+20x4 terminal unless noted, one 1x6 Sixel resent with `CSI H` + the same `DCS q`:
 
 | | Extras entries at 70,000 resends | Extras entries at 1,500,000 resends |
 | --- | --- | --- |
 | `eed33058` (main, unfixed) | 65,535 (full) | see `evidence/BUG-0081-verify.md` |
 | `3796cef0` (first design, rejected: frees on release) | 258 | 65,535 (full, stalled) |
-| This rework (S1/S2 fixed) | recorded in the packet's Evidence and Gaps | recorded in the packet's Evidence and Gaps |
+| This rework (S1/S2/T1 fixed) | recorded in the packet's Evidence and Gaps | recorded in the packet's Evidence and Gaps |
+
+**Live-full case, 200 columns, default (10,000-row) scrollback, the table filled with 65,535 entries
+each written onto a real cell, 10,000 further image resends:**
+
+| | Total time | Sweeps |
+| --- | --- | --- |
+| Before this rework (unrated retry, T1) | 60.6 s | 10,001 |
+| After this rework | 25.3 ms | 3 |
 
 Live bytes and the scan cost (`Screen::collect_live_extras_ids` for one screen, release profile, at
 the coordinator's requested worst-case shape of 100,000 rows x 200 columns and at the test
@@ -237,8 +300,15 @@ terminal's own small shape) are recorded in the packet's Evidence and Gaps.
   call sites); `r4` (the other screen's cells and saved-cursor pen survive sweeps on the active
   screen); 70,000 and 1,500,000 resends of one Sixel image at a fixed cursor position keep the extras
   table near the sweep interval, the last resend still places, and a following explicit link and a
-  distinct image both still get their cells; a table stuffed with entries nothing references any
-  more recovers via the sweep-and-retry at the exhausted step, without waiting for `RIS`.
+  distinct image both still get their cells; a table stuffed with **dead** entries recovers via the
+  sweep-and-retry at the exhausted step, without waiting for `RIS`
+  (`a_table_full_of_dead_entries_recovers_via_sweep_and_retry`); a table stuffed with **live**
+  entries leaves a new image unplaced and only `RIS` recovers it
+  (`a_table_full_of_live_entries_leaves_an_image_unplaced_until_ris`, T5); that same live-full table
+  bounds its sweep count to `ceil(attempts / TABLE_SWEEP_INTERVAL) + 1` over 1,000 further failing
+  attempts, not one sweep per attempt (`intern_extras_bounds_its_scan_rate_when_the_table_is_live_full`,
+  T1) -- confirmed to fail (1,001 sweeps instead of at most 2) when the `needs_sweep` gate on the
+  retry is removed, and to pass with it.
 - [x] Each of `r1`-`r4` was confirmed to fail when the live-set collector is stubbed to return an
   empty set (mutation A) and to pass when the sweep is disabled (mutation B); the 70,000- and
   1,500,000-resend tests were confirmed to pass under mutation A and fail under mutation B. See the

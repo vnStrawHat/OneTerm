@@ -177,7 +177,11 @@ graphics-specific: the sweep does not know what a "placement" is, only that an i
 by a cell. See the `IN-0045` LLD note for why release-time freeing was rejected, and for why the
 first version of the mark-and-sweep design itself needed a second rework (it swept after interning,
 which could free the value just interned before its caller could write it anywhere, and its trigger
-counted only growth, which let the table fill once and then never sweep again).
+counted only growth, which let the table fill once and then never sweep again), and a third (the
+retry that follows a failed intern ran an unconditional full scan on every failing call once the
+table was live-full — a hostile resend loop could hold the terminal lock for seconds per image —
+fixed by counting that failure toward the same trigger too, so the retry itself is rate-limited to
+about once per threshold's worth of failed attempts rather than once per attempt).
 
 **Bound: `MAX_PLACEMENTS = 256`, oldest released first.** An unbounded placement table plus a linear
 sweep is a denial-of-service surface, so the table is a ring: the 257th image releases the first and

@@ -252,16 +252,22 @@ carry no API change at all. Such a release says so below rather than being omitt
   both cursors, can still resolve, and frees every id that scan did not find; the next value
   interned reuses a freed slot before the table grows further. No other id is renumbered. A
   placement's release (an eviction, a history trim, an `IL`/`SD` that splits an image outside its
-  own tracked extent) does **not** by itself free anything -- two earlier attempts got this wrong:
-  the first freed on release and recycled a still-referenced id into whatever was interned next,
-  turning a released image's surviving cells into an unrelated link; the second swept *after*
-  interning and could free the very id it had just handed back before the caller wrote it anywhere,
-  and counted only new-table-growth toward its own trigger, so the table filled and then stopped
-  sweeping at all, for good, about eight times later than the original bug. Both were found by
-  adversarial verification before release. A headless measure of one image resent 70,000 and
-  1,500,000 times: extras entries settle near the sweep interval (about 4,100) in both cases and
-  the last resend always still places, instead of filling the 65,535-entry ceiling either quickly
-  (the original bug) or eventually (the two earlier attempts).
+  own tracked extent) does **not** by itself free anything -- three earlier attempts got this wrong,
+  each found by adversarial verification before release: the first freed on release and recycled a
+  still-referenced id into whatever was interned next, turning a released image's surviving cells
+  into an unrelated link; the second swept *after* interning and could free the very id it had just
+  handed back before the caller wrote it anywhere, and counted only new-table-growth toward its own
+  trigger, so the table filled and then stopped sweeping at all, for good, about eight times later
+  than the original bug; the third's fix for that -- sweep once and retry when the table looks full
+  -- had no rate limit, so a table genuinely full of still-referenced entries turned every single
+  later intern into a full scan of the terminal's whole history, an `O(1)` fallback under `main`
+  becoming tens of milliseconds per resend, and tens of seconds for ten thousand of them, under the
+  terminal lock the UI also needs. A headless measure of one image resent 70,000 and 1,500,000
+  times: extras entries settle near the sweep interval (about 4,100) in both cases and the last
+  resend always still places, instead of filling the 65,535-entry ceiling either quickly (the
+  original bug) or eventually (the first two attempts); the same measure against a table filled
+  with 65,535 entries each still referenced by a real cell, over 10,000 further resends, drops from
+  10,001 scans and about a minute to 3 scans and about 25 ms.
 
 ### Removed
 

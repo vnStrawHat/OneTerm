@@ -225,9 +225,7 @@ pub(crate) struct State {
 
 impl State {
     /// Intern `value` into the extras table, sweeping first if enough new
-    /// entries have piled up since the last sweep -- and, on the rare miss
-    /// where the table is still full afterward, sweeping once more before
-    /// accepting the fallback to id 0.
+    /// entries have piled up since the last sweep.
     ///
     /// Sweeping **before** interning, not after, is load-bearing: `value` is
     /// not yet held by any cell or pen at the point this function is called
@@ -238,6 +236,21 @@ impl State {
     /// means every id already handed out is provably in a cell or on a pen
     /// by the time the live-set scan reads the grid, and the value about to
     /// be interned does not exist yet to be mis-swept.
+    ///
+    /// On the miss where the table is still full after that -- every id
+    /// live, none of them this table's own soon-to-exist one -- a **second**
+    /// rework's own bug lived here: sweeping and retrying unconditionally on
+    /// every such miss turned each one into a full grid scan, because a
+    /// table full of live entries has nothing to free and the next miss
+    /// does the same again -- an O(1) fallback under `main` became O(history)
+    /// per resend under a hostile stream that keeps the table live-full.
+    /// `try_intern`'s own failure still advances `since_sweep`, so the fix is
+    /// to trust the same interval here too: retry only when `needs_sweep`
+    /// says another sweep is due, which bounds the extra scan to once per
+    /// `TABLE_SWEEP_INTERVAL` failed attempts, not once per attempt, while a
+    /// table that does have something to reclaim still recovers within one
+    /// interval's worth of misses -- it can never be stranded at id 0 for
+    /// good, only for a bounded number of attempts at a time.
     ///
     /// The path every hot `interner.extras(..)` call site (`place`'s
     /// graphic-only entry, `set_hyperlink`) should go through instead of
@@ -257,22 +270,25 @@ impl State {
     /// `since_sweep` from going unswept indefinitely.
     pub(crate) fn intern_extras(&mut self, value: &Extras) -> ExtrasId {
         self.sweep_extras_if_due();
-        let id = self.interner.extras(value);
-        // The table looked genuinely full, not merely due for a sweep it
-        // hasn't been told to run yet (`needs_sweep` gates *how often* we
-        // bother, not whether it is ever worth trying when already
-        // desperate): try one more sweep and retry, so a counter that
-        // happened to fall short of the interval right as the table filled
-        // can never strand it at the id-0 fallback for the rest of the
-        // session.
-        if id == ExtrasId::NONE && *value != Extras::NONE {
+        if let Some(id) = self.interner.extras.try_intern(value) {
+            return ExtrasId(id);
+        }
+        // The table looked genuinely full. `try_intern`'s own miss already
+        // counted toward `since_sweep`, so retrying only when another sweep
+        // is due -- not on every failed call -- still cannot go uncounted
+        // forever, and it is the difference between an O(1) fallback and an
+        // O(history) one on a table a hostile stream keeps live-full.
+        if self.interner.extras.needs_sweep() {
             self.sweep_extras();
-            let retried = self.interner.extras(value);
-            if retried != ExtrasId::NONE {
-                return retried;
+            if let Some(id) = self.interner.extras.try_intern(value) {
+                return ExtrasId(id);
             }
         }
-        id
+        // Exactly one exhaustion recorded for this call, whether or not a
+        // retry above was attempted -- `try_intern` itself never counts it,
+        // so there is nothing to double-count.
+        self.interner.extras.record_exhausted();
+        ExtrasId::NONE
     }
 
     /// Sweep the extras table if its own interval says it is due.

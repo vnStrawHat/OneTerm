@@ -3,10 +3,11 @@
 ID: BUG-0081
 Intake: IN-0045
 Created: 2026-09-28
-Reworked: 2026-09-28, same day, twice. First after adversarial verification failed the first
+Reworked: 2026-09-28, same day, three times. First after adversarial verification failed the first
 design (release-time freeing, High). Second after a further adversarial pass failed the
-mark-and-sweep design's own orchestration and trigger (High, twice: S1, S2). See
-[`evidence/BUG-0081-verify.md`](evidence/BUG-0081-verify.md) (both passes, one file) and the
+mark-and-sweep design's own orchestration and trigger (High, twice: S1, S2). Third after a further
+pass found the second rework's own sweep-and-retry had no rate limit (High: T1). See
+[`evidence/BUG-0081-verify.md`](evidence/BUG-0081-verify.md) (all three passes, one file) and the
 Decisions and Evidence and Gaps sections below.
 
 > Pre-code gate: complete Outcome, Scope, Acceptance, Documentation, and Verification Plan before editing implementation files. Harness synchronizes only the marked status/proof blocks; keep authored checklists current.
@@ -22,10 +23,11 @@ Decisions and Evidence and Gaps sections below.
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
-Implemented three times: `3796cef0` (first design, release-time freeing, adversarially verified FAIL,
+Implemented four times: `3796cef0` (first design, release-time freeing, adversarially verified FAIL,
 High), `5b45add0` (second design, mark-and-sweep, adversarially verified FAIL, High, twice: S1/S2),
-and the rework this packet now describes. This box tracks the packet's current state; the Decisions
-and Evidence and Gaps sections carry the history the box cannot.
+`19a29175` (sweep-before-intern plus counted reuses, adversarially verified FAIL, High: T1, an
+unrated retry), and the rework this packet now describes. This box tracks the packet's current
+state; the Decisions and Evidence and Gaps sections carry the history the box cannot.
 
 ## Classification
 
@@ -106,6 +108,15 @@ triggered by, before that value's own caller has had a chance to write it anywhe
 - [x] A table stuffed with entries nothing references any more recovers via `intern_extras`'s
   sweep-and-retry at the exhausted step, without waiting for `RIS`.
   `terminal::tests::a_table_full_of_dead_entries_recovers_via_sweep_and_retry`.
+- [x] A table stuffed with entries a real cell still references costs at most one scan per
+  `TABLE_SWEEP_INTERVAL` failed `intern_extras` calls over 1,000 further failing image placements,
+  not one scan per call, and `exhausted()` counts each failing call exactly once.
+  `terminal::tests::intern_extras_bounds_its_scan_rate_when_the_table_is_live_full`, confirmed to
+  fail when the `needs_sweep` gate on the retry is removed.
+- [x] That same live-full table leaves a new image genuinely unplaced, with the one-time warning,
+  and only `RIS` recovers it -- restoring the terminal-level coverage the table full of *dead*
+  entries above replaced.
+  `terminal::tests::a_table_full_of_live_entries_leaves_an_image_unplaced_until_ris`.
 - [x] Freeing the same id twice never hands it out twice, in every build, not only under
   `debug_assert!`. `intern::tests::freeing_the_same_id_twice_does_not_alias_it`.
 - [x] `vt-public-api.py --check` is unchanged (the new methods are all `pub(crate)`); recorded in
@@ -301,13 +312,49 @@ prevent — but it is no longer needed to fix the bug this packet is about, only
 safe margin. No DEC record: the interval (4,096) is a tuning knob within an accepted design, not a
 choice future work must inherit, and the LLD note carries the reasoning if it needs revisiting.
 
+**The sweep-and-retry that same rework added is also rejected as written (`19a29175`)**, by a third
+adversarial verification pass, on one High finding: it swept and retried unconditionally on every
+failing `intern_extras` call, with no rate limit. When the table is genuinely full of entries a real
+cell still references -- hostile-reachable in one burst, or plausible from a long session that
+prints many distinct `OSC 8` URLs -- a sweep frees nothing, the retry fails the same way, and the
+next failing call does the identical unconditional sweep again: every failure became a full
+`O(history)` scan, where `main` fell back to id 0 in `O(1)`. Measured: 5.7 ms per image at the
+default 10,000-row scrollback, 47.7 ms at 100,000 rows; 10,000 resends against a live-full table
+took 57-60 s (measured independently by the verifier and by this rework's own re-run) where `main`
+took a constant amount of time regardless of table size; a hostile 64 KB read of minimal Sixels held
+the terminal lock for roughly 18 s at the default scrollback, or about 150 s at 100,000 rows. This
+rework's own earlier suggestion ("sweep once and retry") was the right shape without a rate limit,
+which was the part actually missing.
+
+**Chosen: count the exhausted branch's own failure toward `since_sweep` too, and gate the retry on
+`needs_sweep`.** `InternTable::intern` is split into `try_intern` (the ladder alone, `Option<u16>`,
+counting every miss including a final failure) and `record_exhausted` (the counting and the
+warning, called exactly once per logical failed attempt); `intern` itself calls both in sequence, so
+its existing behaviour and signature are unchanged. `State::intern_extras` calls `try_intern`
+directly for both the first attempt and the post-sweep retry, so `record_exhausted` runs once per
+`intern_extras` call regardless of how many `try_intern` calls happened inside it -- fixing the
+double count the verifier also found (`exhausted()` read 20,002 for 10,000 failed resends before
+this fix, not 10,000). Gating the retry on `needs_sweep` bounds the extra scan to once per
+`TABLE_SWEEP_INTERVAL` (4,096) failed attempts: measured after the fix, the same 10,000-resend
+live-full run took 25.3 ms across 3 sweeps, not 60.6 s across 10,001. **The per-`intern_extras` cost
+when the table is genuinely live-full is therefore `O(1)` amortised** -- roughly 1.4 µs per intern at
+the default scrollback and 12 µs at 100,000 rows (the measured per-scan cost divided by the
+interval) -- **not the `O(1)` worst-case `main` had**, and that remains an accepted trade: `main`
+could never recover once its tables filled with content that later went dead; this design can,
+at the cost of an occasional bounded scan instead of none, ever. No DEC record, for the same reason
+as the interval choice above: this is a correctness fix to an already-accepted design, not a new
+choice future work must inherit.
+
 ## Verification Plan
 
 - Focused: the new `oneterm-vt` tests above (V1/V4/V8/V9/V2, R1/R2/R3/R4, the double-free test, the
-  paranoid-check regression, the 70,000- and 1,500,000-resend bounds, the dead-table recovery test).
+  paranoid-check regression, the 70,000- and 1,500,000-resend bounds, the dead-table recovery test,
+  the live-full scan-rate bound, the live-full unplaced-until-`RIS` test).
 - Mutation: each of R1-R4 confirmed to fail with the live-set collector returning an empty set, and
   to pass with the sweep disabled; the two bound tests confirmed to pass under the first mutation
-  and fail under the second. Both mutations applied and reverted locally, never committed.
+  and fail under the second; the live-full scan-rate test confirmed to fail (1,001 sweeps instead of
+  at most 2) when the `needs_sweep` gate on the retry is removed. All mutations applied and reverted
+  locally, never committed.
 - Unit: `cargo test -p oneterm-vt --lib`, `--features vt-paranoid`, `--features regex`,
   `--no-default-features`.
 - Package/API: `cargo build -p oneterm-vt --no-default-features --examples`,
@@ -318,7 +365,10 @@ choice future work must inherit, and the LLD note carries the reasoning if it ne
   --package-list -`.
 - Integration: a headless measure of 70,000 **and** 1,500,000 resends of one Sixel image, extras
   table entries and live allocator bytes (drained and undrained) before and after each design; the
-  live-set scan cost at two shapes; a throwaway counting allocator, both removed before commit.
+  live-set scan cost at two shapes; a release-profile re-measure of the live-full case (65,535
+  entries each on a real cell, 10,000 further resends at the default 10,000-row scrollback), before
+  (the unrated retry, reproduced locally) and after; throwaway counting allocators and throwaway
+  `#[ignore]`d timing tests, all removed before commit.
 - Full local gate: `pwsh scripts/ci-local.ps1`.
 
 <!-- HARNESS:PROOF:BEGIN -->
@@ -340,7 +390,15 @@ panics with `extras id ExtrasId(4096) is on the free list but a cell or pen stil
 4,096th distinct value; a release build silently resolves that cell or pen to whatever is interned
 next. S2 (High): the table fills to 65,535 at about 558,000 resends of one image and then never
 sweeps again — the original bug's exact symptom, delayed by roughly a factor of eight (about 5.2
-hours at 30 resends a second). Full findings, reproductions and both passes' measurements in
+hours at 30 resends a second).
+
+**Third design (`19a29175`, sweep-before-intern plus counted reuses), adversarially FAILED once
+more.** S1, S2 and S3 closed cleanly (the live set is complete; the merged path is safe; the two
+bound tests hold at 70,000 and 1,500,000 resends). T1 (High): the sweep-and-retry this rework's own
+previous Decisions text proposed as S2's fix had no rate limit, so a table full of *live* entries
+turned every failing intern into a full history scan -- 5.7 ms per image at the default scrollback,
+57-60 s for 10,000 resends, where `main` took `O(1)` regardless. Full findings, reproductions and
+all three passes' measurements in
 [`evidence/BUG-0081-verify.md`](evidence/BUG-0081-verify.md).
 
 **This rework, headless, release profile, one 20x4 terminal, a throwaway counting global allocator
@@ -352,7 +410,8 @@ hours at 30 resends a second). Full findings, reproductions and both passes' mea
 | Before (main, `eed33058`) | 65,535 (full) | not run (already full well before this point) |
 | First design (`3796cef0`, rejected: frees on release) | 258 | not run |
 | Second design (`5b45add0`, rejected: sweeps after interning, counts growth only) | 20,481 | 65,535 (full, stalled at `since_sweep = 4,094`) |
-| This rework (S1/S2 fixed) | 4,098 | 4,098 |
+| Third design (`19a29175`, rejected: unrated retry, T1) | 4,098 | 4,098 |
+| This rework (S1/S2/T1 fixed) | 4,098 | 4,098 |
 
 | | Live bytes, undrained | Live bytes, drained |
 | --- | --- | --- |
@@ -367,21 +426,43 @@ embedder that never drains accumulates, a pre-existing characteristic unrelated 
 same queue, at the same rate, existed before any of these three designs). The last resend still
 places at both resend counts, in every run (`exhausted()` stays `0`).
 
-**Scan cost** (`TerminalGrid::live_extras_ids`, release profile, measured with a throwaway
-`#[ignore]`d test removed before commit):
+**Live-full case (T1), headless, release profile, one 200-column terminal, default (10,000-row)
+scrollback, the extras table filled to 65,535 entries each written onto a real cell (never trimmed:
+placed in the oldest rows still in history), then 10,000 further Sixel resends at a fixed `CSI H`:**
+
+| | Total time | Sweeps | `exhausted()` |
+| --- | --- | --- | --- |
+| Verifier's own measure of `19a29175` as committed (unrated retry **and** double-counted exhaustion) | 57.0 s | 10,000 | 20,002 |
+| This rework's re-run, unrated retry only (this rework's `try_intern`/`record_exhausted` split -- which alone fixes the double count -- left in place, only the `needs_sweep` gate on the retry reverted) | 60.6 s | 10,001 | 10,000 |
+| This rework, as committed | 25.3 ms | 3 | 10,000 |
+
+The two "before" rows isolate T1's two defects separately: the verifier's own number on the commit as
+it stood shows both (the count is double, matching their 20,002); this rework's own re-run of the
+scan-rate defect alone, with the counting fix already in place, confirms `exhausted()` reads
+correctly (10,000, not double) with or without the rate limit -- the counting fix and the rate-limit
+fix are independent, and both are needed, but neither depends on the other having been re-broken to
+demonstrate.
+
+**Scan cost** (`TerminalGrid::live_extras_ids`, release profile; the 100,000 x 200 and 20x4 rows
+measured with a throwaway `#[ignore]`d test removed before commit; the 10,000 x 200 row is the
+second adversarial pass's own measurement, not independently re-run this pass, and agrees with the
+live-full-case total above: 3 sweeps in 25.3 ms is 8.4 ms/sweep, the same order as 5.7-7.6 ms
+measured elsewhere at this shape):
 
 | Shape | Scan | Scan + `sweep_unreferenced` |
 | --- | --- | --- |
-| 10,000 x 200 (the default scrollback) | not separately measured | not separately measured |
+| 10,000 x 200 (the default scrollback) | 3.0 ms (second pass) | 3.2 ms (second pass) |
 | 100,000 x 200 columns (the coordinator's requested worst case) | 32.4 ms | not separately measured |
 | 20x4 (this packet's own test terminal) | 700 ns | not separately measured |
 
 The 1,500,000-resend test itself ran in about 1.3 s in release, comfortably under the coordinator's
 ~10 s threshold for using the full size rather than falling back to 300,000. At
-`TABLE_SWEEP_INTERVAL = 4,096`, the 100,000 x 200 cost is paid at most once per 4,096 new values
-handed out (a push or a reuse) — rare for an ordinary session, and the worst realistic cost (a
-full-scrollback terminal under a sustained distinct-hyperlink-or-image stream) rather than the common
-one.
+`TABLE_SWEEP_INTERVAL = 4,096`, this cost is paid at most once per 4,096 new values handed out (a
+push, a reuse, **or a failed attempt against a live-full table** — the last is what T1 fixed) —
+rare for an ordinary session, and the worst realistic cost (a full-scrollback terminal under a
+sustained distinct-hyperlink-or-image stream) rather than the common one. Amortised per
+`intern_extras` call when the table is genuinely live-full: about 1.4 µs at the default scrollback,
+about 12 µs at 100,000 rows (scan cost divided by the interval).
 
 **Mutation testing (S3): which test kills which mutation.** Mutation A stubs
 `TerminalGrid::live_extras_ids` to return an empty set (the sweep frees every live id too); mutation
@@ -401,6 +482,14 @@ locally to this rework's own source, one at a time, then reverted; neither is co
 R1-R4 are what proves S1 fixed; the two bound tests are what proves S2 fixed. Neither pair would
 catch the other's defect, which is why both were required rather than either alone.
 
+**A third mutation, this pass: the `needs_sweep` gate removed from `intern_extras`'s retry** (`if
+self.interner.extras.needs_sweep() { ... }` replaced with an unconditional `if true`, reproducing
+`19a29175` as it was committed). `intern_extras_bounds_its_scan_rate_when_the_table_is_live_full`
+**fails** (1,001 sweeps over 1,000 attempts against a live-full table, instead of at most 2) and
+passes with the gate restored; `a_table_full_of_live_entries_leaves_an_image_unplaced_until_ris`
+passes either way, because it checks only one resend's correctness, not the sweep rate — it is T5's
+regression, not T1's, and the two are deliberately different tests for that reason.
+
 `v1`/`v4`/`v8`/`v9`/`v2`, the double-free test, and the paranoid-check regression all still pass
 (`crates/vt/src/graphics/graphics_tests.rs`, `crates/vt/src/intern_tests.rs`), unaffected by this
 rework's changes.
@@ -417,26 +506,25 @@ Gaps:
   carried.
 - A hostile stream can still fill the extras table with distinct simultaneous placements up to
   `MAX_PLACEMENTS` combined with distinct hyperlinks and distinct `OSC 8` URIs; the unchanged ladder
-  drops further values past 65,535. Not new: the ladder's fallback was always there, and
-  `intern_extras`'s sweep-and-retry now makes even that case recover if any of that content has
-  since gone dead, rather than staying stuck once first exhausted.
+  drops further values past 65,535. Not new: the ladder's fallback was always there.
+  `intern_extras`'s sweep-and-retry makes that case recover once any of that content has gone dead,
+  and now (T1) does so at a bounded, amortised cost rather than a full scan per failing call: about
+  1.4 microseconds per call at the default 10,000-row scrollback, about 12 microseconds at 100,000
+  rows, whether the table is genuinely live-full or merely dead-full — see Decisions.
 - The total-pixel-bytes budget across live placements (`IN-0029` `graphics.md` already notes 256
   placements have no such budget) is unchanged and out of this packet's scope.
-- The scan-cost table above is missing the "scan + `sweep_unreferenced`" column and the 10,000-row
-  default-scrollback row the second adversarial pass measured (3.0 ms scan, 3.2 ms with the sweep,
-  31.6 ms / 33.4 ms at 100,000 rows) — not re-measured in this rework; the scan-only figures above
-  agree with that pass's within about 3%, and `sweep_unreferenced` itself is `O(entries)` over a
-  table that stays near 4,098, so the delta is expected to stay small.
 - `evidence/BUG-0081-verify.md`'s first-pass gap (the history-trim path reasoned, not run) is now
   closed by `r3`, which runs it directly and passes.
 
 ## Handoff
 
-Implemented, reworked twice — once after the first design's release-time freeing failed adversarial
-verification (High), once after the second design's own mark-and-sweep orchestration and trigger
-failed a further adversarial pass (High, twice: S1/S2) — and self-verified against both passes'
-reproductions plus mutation testing confirming the new regressions actually exercise the sweep. A
-third independent verification pass is the natural next step before this is treated as
-accepted/shipped; none is recorded yet in this packet. Two prior passes each found a real, serious
-defect the previous implementer's own testing had missed; a third pass earns no presumption of safety
-from that history alone.
+Implemented, reworked three times — once after the first design's release-time freeing failed
+adversarial verification (High), once after the second design's own mark-and-sweep orchestration and
+trigger failed a further adversarial pass (High, twice: S1/S2), and once after that rework's own
+sweep-and-retry ran an unrated `O(history)` scan on every failing intern against a live-full table
+(High: T1) — and self-verified against all three passes' reproductions plus mutation testing
+confirming the new regressions actually exercise the sweep and the retry's rate limit. A fourth
+independent verification pass is the natural next step before this is treated as accepted/shipped;
+none is recorded yet in this packet. Three prior passes each found a real, serious defect the
+previous implementer's own testing had missed; a fourth pass earns no presumption of safety from that
+history alone.

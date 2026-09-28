@@ -1911,6 +1911,114 @@ fn a_table_full_of_dead_entries_recovers_via_sweep_and_retry() {
     assert!(graphic_at(&session).is_some());
 }
 
+/// Fill the extras table to `entries() == 65_535` with values written onto
+/// real cells, one per cell, starting at row **1** and leaving row 0
+/// entirely untouched (the default cursor's home row, so a caller can still
+/// place something there without `stamp` seeing a pre-existing extras id and
+/// taking its merge path instead of the plain one). Every filled entry is
+/// genuinely live, so a sweep cannot reclaim any of it. The terminal must
+/// have at least 65,534 cells outside row 0 (`cols * (rows - 1)`).
+fn fill_extras_table_with_live_entries(session: &mut Session) {
+    let state = session.term.state_for_tests();
+    let cols = state.grid.screen().cols();
+    let mut index = 0u64;
+    while state.interner.extras.entries() < 65_535 {
+        let id = state.interner.extras.intern(&crate::intern::Extras {
+            graphic: Some(crate::intern::GraphicId(u64::MAX - index)),
+            ..crate::intern::Extras::NONE
+        });
+        let row_index = (index / cols as u64) as u16 + 1;
+        let col = (index % cols as u64) as u16;
+        let row_id = state.grid.screen().row_of_index(row_index);
+        let mut row = state.grid.screen_mut().row_mut(row_id);
+        let cell = row.cells()[col as usize].with_extras(crate::intern::ExtrasId(id));
+        row.repair(col, cell);
+        index += 1;
+    }
+}
+
+/// T1 (third adversarial pass): `intern_extras`'s sweep-and-retry, when the
+/// table is full of entries a real cell still references, must not become a
+/// full grid scan on **every** failing call. Nothing can ever be reclaimed
+/// from a table that is genuinely live-full, so an unrated retry turned an
+/// O(1) fallback (what `main` did) into an O(history) one, once per attempt,
+/// under a hostile stream that keeps resending distinct images against a
+/// live-full table.
+#[test]
+fn intern_extras_bounds_its_scan_rate_when_the_table_is_live_full() {
+    let mut session = Session::new(300, 220); // 66,000 cells, more than 65,535
+    fill_extras_table_with_live_entries(&mut session);
+
+    const ATTEMPTS: u32 = 1_000;
+    let swept_before = session.term.interner().extras.swept();
+    let start = std::time::Instant::now();
+    for _ in 0..ATTEMPTS {
+        session.feed(b"\x1bPq#0;2;100;0;0#0~\x1b\\"); // a fresh GraphicId, so a genuinely new value every time
+    }
+    let elapsed = start.elapsed();
+    let swept = session.term.interner().extras.swept() - swept_before;
+
+    assert_eq!(
+        session.term.interner().extras.exhausted(),
+        ATTEMPTS,
+        "each failing intern must count exactly once, not once for the first attempt and once for the retry"
+    );
+    let max_sweeps = ATTEMPTS.div_ceil(4_096) + 1;
+    assert!(
+        swept <= max_sweeps,
+        "swept {swept} times over {ATTEMPTS} failed attempts against a live-full table, expected at most {max_sweeps}"
+    );
+    // The sweep count above is the robust assertion; this is a generous
+    // backstop, loose enough to hold in an unoptimised debug build (where
+    // `cargo test` runs it) while still being far short of what the bug
+    // this regression targets would take: 1,000 full O(history) scans of a
+    // 66,000-cell grid, one per failing attempt, instead of at most two.
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "took {elapsed:?} for {ATTEMPTS} attempts; a full grid scan on every one would take far longer"
+    );
+}
+
+/// T5 (third adversarial pass): a table full of entries a real cell still
+/// references leaves a new image **unplaced**, with the one-time warning --
+/// the sweep-and-retry cannot reclaim what is genuinely still live -- and
+/// only `RIS` recovers it. Restores the terminal-level coverage the old
+/// `ris_empties_a_full_extras_table_and_images_place_again` had before its
+/// replacement (`a_table_full_of_dead_entries_recovers_via_sweep_and_retry`)
+/// started filling the table with *dead* synthetic entries instead, which a
+/// sweep reclaims without needing `RIS` at all.
+#[test]
+fn a_table_full_of_live_entries_leaves_an_image_unplaced_until_ris() {
+    let mut session = Session::new(300, 220);
+    fill_extras_table_with_live_entries(&mut session);
+
+    let sixel: &[u8] = b"\x1bPq#0;2;100;0;0#0~\x1b\\";
+    session.feed(sixel);
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .graphic
+            .is_none(),
+        "a table full of live entries leaves the image unplaced"
+    );
+    assert_eq!(session.term.interner().extras.exhausted(), 1);
+
+    session.feed(b"\x1bc"); // RIS
+    assert_eq!(session.term.interner().extras.entries(), 1);
+    session.feed(sixel);
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .graphic
+            .is_some(),
+        "RIS recovers it"
+    );
+}
+
 /// R1 (second adversarial pass, S1): the extras value whose own creation
 /// crosses the sweep threshold must keep its own cell. Sweeping *after*
 /// interning found the fresh value unreferenced (nothing had written it

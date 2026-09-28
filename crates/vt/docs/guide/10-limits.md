@@ -74,7 +74,12 @@ longer counting -- it reads every cell that can carry an extras id -- both
 screens' whole history, and the pen and erase cell of both cursors -- and
 frees exactly the ids that scan did not find. The table settles near that
 threshold plus however many values are genuinely live at once, rather than
-growing by one entry per resend.
+growing by one entry per resend. If the table is ever genuinely full of
+values still in use -- nothing left for a sweep to reclaim -- retrying costs
+one more scan, but only once per that same threshold's worth of failed
+attempts, not once per attempt: a program can still make each new link or
+image fall back to plain text or an unpainted image, but it cannot turn
+every failing one into a full scan of your history.
 
 You normally never name any of it. The snapshot resolves a cell's hyperlink for
 you under the lock -- `SnapshotState::hyperlink` -- and a row's clusters are

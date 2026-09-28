@@ -136,9 +136,16 @@ pub struct InternTable<T> {
     /// [`intern`](Self::intern) to hand them back out. Empty for a table
     /// nothing ever frees from (styles, today).
     free: FxHashSet<u16>,
-    /// New entries pushed since the last [`sweep_unreferenced`](Self::sweep_unreferenced).
+    /// Values handed to [`try_intern`](Self::try_intern) that missed the
+    /// cache since the last [`sweep_unreferenced`](Self::sweep_unreferenced)
+    /// — a free-list reuse, a push, or an exhausted-table failure, every one
+    /// of them, so a sustained run of failures still makes the next sweep
+    /// due instead of going uncounted forever.
     since_sweep: u32,
     exhausted: u32,
+    /// How many times [`sweep_unreferenced`](Self::sweep_unreferenced) has
+    /// run, for a caller (or a test) to bound the scan frequency against.
+    swept: u32,
     warned: bool,
     name: &'static str,
 }
@@ -157,34 +164,34 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
             free: FxHashSet::default(),
             since_sweep: 0,
             exhausted: 0,
+            swept: 0,
             warned: false,
             name,
         }
     }
 
-    /// Never fails: a full table falls back to id 0.
-    pub fn intern(&mut self, value: &T) -> u16 {
+    /// The ladder without the exhaustion bookkeeping: `Some(id)` on a cache
+    /// hit, a free-list reuse or growth; `None` once the table is full and
+    /// `value` is not already in it. Counts *every* miss toward
+    /// `since_sweep` -- the free-list branch, the growth branch, and this
+    /// failure too -- not only growth: a sweep frees `F` ids, and the next
+    /// `F` calls all land on the free-list branch; if only growth counted,
+    /// those `F` calls would count for nothing, so the table would have to
+    /// grow by a full `TABLE_SWEEP_INTERVAL` every cycle before the next
+    /// sweep could run at all, and a run of nothing but failures (the table
+    /// full of values still live) would never make another sweep due either
+    /// — exactly the hazard counting every miss here closes off.
+    pub(crate) fn try_intern(&mut self, value: &T) -> Option<u16> {
         if let Some(&id) = self.index.get(value) {
-            return id;
+            return Some(id);
         }
-        // `since_sweep` counts every index miss below -- a free-list reuse
-        // as much as a push -- not only growth. A sweep frees `F` ids, and
-        // the next `F` calls all land here on the free-list branch; if only
-        // pushes counted, those `F` calls would count for nothing, so the
-        // table would have to grow by a full `TABLE_SWEEP_INTERVAL` every
-        // cycle before the next sweep could ever run, without bound, until
-        // it filled `TABLE_LIMIT` and then, past the last push, could never
-        // trigger another sweep at all. Counting every miss instead bounds a
-        // sweep to one per `TABLE_SWEEP_INTERVAL` *new values*, whichever
-        // slot they land in, which is the cost the table's owner already
-        // accepted, and it never lets the table both fill and go silent.
         if let Some(&id) = self.free.iter().next() {
             self.free.remove(&id);
             self.entries[id as usize] = *value;
             self.index.insert(*value, id);
             self.since_sweep = self.since_sweep.saturating_add(1);
             self.debug_assert_integrity();
-            return id;
+            return Some(id);
         }
         if self.entries.len() < TABLE_LIMIT {
             let id = self.entries.len() as u16;
@@ -192,8 +199,31 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
             self.index.insert(*value, id);
             self.since_sweep = self.since_sweep.saturating_add(1);
             self.debug_assert_integrity();
-            return id;
+            return Some(id);
         }
+        self.since_sweep = self.since_sweep.saturating_add(1);
+        None
+    }
+
+    /// Never fails: a full table falls back to id 0, counted once per call
+    /// (a failure still advances the sweep trigger, the same as a
+    /// successful intern does).
+    pub fn intern(&mut self, value: &T) -> u16 {
+        match self.try_intern(value) {
+            Some(id) => id,
+            None => {
+                self.record_exhausted();
+                0
+            }
+        }
+    }
+
+    /// Count one failed [`try_intern`](Self::try_intern) and log the
+    /// one-time warning. Exactly one call per logical attempt that ends up
+    /// falling back to id 0 -- `intern` calls it on its own failure, and
+    /// `State::intern_extras` calls it once after a sweep-and-retry that
+    /// still fails, not once per `try_intern` inside that retry.
+    pub(crate) fn record_exhausted(&mut self) {
         self.exhausted = self.exhausted.saturating_add(1);
         if !self.warned {
             self.warned = true;
@@ -204,7 +234,6 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
                 TABLE_LIMIT
             );
         }
-        0
     }
 
     /// Id 0 always resolves, and so does every id this table ever issued.
@@ -314,6 +343,17 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
             }
         }
         self.since_sweep = 0;
+        self.swept = self.swept.saturating_add(1);
+    }
+
+    /// How many times [`sweep_unreferenced`](Self::sweep_unreferenced) has
+    /// run, for a test to bound the scan frequency against. Session
+    /// telemetry: survives [`clear`](Self::clear), like `exhausted`. No
+    /// production caller needs this today, so it is `#[cfg(test)]` rather
+    /// than carried as unused in every build.
+    #[cfg(test)]
+    pub(crate) fn swept(&self) -> u32 {
+        self.swept
     }
 
     fn debug_assert_integrity(&self) {
