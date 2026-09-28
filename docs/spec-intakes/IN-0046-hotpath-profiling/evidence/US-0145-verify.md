@@ -201,3 +201,170 @@ last_verified_result: pass
 notes: Impl d6cd1afb on perf/idle-render. Hidden tabs skip cx.notify (TerminalView::handle_event), blink + status timers on until_next_tick. Verify PASS: hidden-tab title/agent/bell/flood/show walked in GUI, 4 throwaway gpui tests (split, two groups, switch, title), mutation kills the test; idle 3.47->2.04 fps. F1: TUI CPU -51% is conditional (capped window here: +39% cycles, shown-tab renders 2x) - fix records before merge. F3 Agent panel timer off-grid. platform_proof pending CI.
 intake_id: 51
 ```
+
+---
+
+## Second pass — targeted re-verification of the rework delta
+
+- Date: 2026-09-28
+- Commit under test: `106345cd` (branch `perf/idle-render`), delta from this
+  file's first-pass commit `046f7e19` (which itself verified `d6cd1afb`,
+  confirmed identical in tree to the reworded `8a03361a`:
+  `git diff d6cd1afb 8a03361a --stat` is empty).
+- Scope: only the follow-up commit `git diff 046f7e19 106345cd` — the F1/F3/F4/F5/F7
+  fixes this file's first pass asked for. F2 and F6 needed no code change
+  (informational range note / documented one-tick window) and are not
+  re-checked here.
+- Host: Windows 11 Enterprise 10.0.26200, the worktree's own `target/`,
+  `CARGO_BUILD_JOBS=2`, two other agents building in parallel. No release
+  build and no full `ci-local` (the coordinator runs the gate on `main` after
+  merge); only debug/test targets for the touched crates.
+
+### Verdict: PASS
+
+All five findings are addressed correctly and the fix introduces no
+regression. F3's new restart mechanism is the only genuinely new runtime
+logic in the delta and it holds up under adversarial (back-to-back,
+mutation-tested) exercise, not just code reading.
+
+### F1 — TUI CPU claim reworded to conditional
+
+Checked, present and numerically accurate to this file's own § 3 table, in
+all four places plus the commit message:
+
+- Packet `US-0145-idle-render.md` § Cut and § Evidence: "Under load the
+  frames this frees are either saved ... or spent on the shown terminal
+  (a window at its frame-rate cap: more frequent refreshes, not less CPU)";
+  Evidence bullet gives 289.6 -> 403.4 Mcycles/s (+39 %), 32.0 -> 32.3
+  frames/s, terminal renders 50.4 % -> 99.8 % — exact matches to this file's
+  § 3 table.
+- `research/hotpath-evaluation.md` § 8.4: rebuilt table with a
+  "Verification" column (34.95 -> 33.73 Mcycles/s / 3.47 -> 2.04 frames/s
+  idle-focused; 29.85 -> 18.51 / 1.76 -> 1.23 idle-unfocused; the capped
+  289.6 -> 403.4 / 32.0 -> 32.3 TUI row) and prose stating the direction
+  depends on whether the frame rate is capped.
+- `IN-0046.md`: "an uncapped window drew 30 % fewer frames at half the UI
+  cycles; a window at its frame-rate cap instead spent the freed frames on
+  the shown terminal (twice the refreshes, +39 % cycles)" — matches
+  44.4->31.3/413->202 (implementer, uncapped) and 16->32 renders/s, +39 %
+  (verifier, capped).
+- `docs/gui-layout.md`: "-51 % UI cycles uncapped, +39 % with twice the
+  shown-tab refreshes when capped" — same two figures.
+- Commit message `8a03361a` (`git show -s --format=%B 8a03361a` vs
+  `d6cd1afb`): the only prose difference is exactly this — "TUI 413 -> 202
+  with the same terminal renders" replaced by the capped/uncapped
+  paragraph citing the verification. Confirmed by direct diff of the two
+  messages.
+
+No place still states the -51 % TUI figure as an unconditional result.
+
+### F3 — Agent panel timer on the grid, restart mechanics
+
+Read `crates/agent-ui/src/view.rs` (`spawn_refresh`, `update_working`,
+`next_stale_check`) and `crates/state/src/lib.rs` (`until_next_tick`)
+before/after. Four throwaway `#[gpui::test]`s were added to
+`crates/agent-ui/src/view.rs`'s existing `mod tests` (temporarily adding
+`gpui = { workspace = true, features = ["test-support"] }` under
+`[dev-dependencies]` in `crates/agent-ui/Cargo.toml`, mirroring the
+`oneterm-sftp-ui` poll-timer test pattern) — run, mutation-checked, then
+both files reverted (`git checkout --`) and not committed, same convention
+this file's first pass used for its own throwaway tests:
+
+- `v_idle_panel_no_cards_never_notifies`: an entity-level `cx.observe` counts
+  notifications; over 5 x 1.3 s of virtual clock (`cx.executor()
+  .advance_clock` + `run_until_parked`) an empty panel notifies 0 times and
+  `has_working_cards` stays false. Mutation: dropping the
+  `!this.cards.is_empty()` guard makes it notify 5 times — test catches it.
+- `v_card_starting_restarts_tick_within_one_interval`: let the empty-panel
+  task settle onto its long idle wait (400 ms in), then apply a `Working`
+  state event through the registry; the notify count increases within one
+  further `ACTIVE_CARD_TICK` (120 ms) of virtual time, not the remainder of
+  the old wait (up to 1.25 s). Mutation: gating the restart in
+  `update_working` with `if false && ...` makes the spinner miss that
+  window — test catches it (`spinner did not advance within one
+  ACTIVE_CARD_TICK of the restart`).
+- `v_restarts_do_not_postpone_the_stale_deadline`: after one card starts
+  working, 50 back-to-back forced restarts (`has_working_cards = false;
+  update_working(cx);` in a tight loop, synchronously — strictly worse than
+  "every 100 ms") leave `next_stale_check` byte-for-byte unchanged.
+  Mutation: making `update_working` also reset `next_stale_check` on
+  restart makes the test fail with a ~1 ms-apart `Instant` mismatch — test
+  catches it. This is the claim the task most needed independent proof of
+  (the deadline field lives on `AgentListView`, not inside `spawn_refresh`'s
+  async closure, so nothing a restart replaces can touch it); confirmed at
+  the runtime level, not just by reading the field's owner.
+- `v_card_completing_stops_the_fast_cadence`: a card finishing (`Working`
+  -> `Done`) drops `has_working_cards` to false; three further
+  `ACTIVE_CARD_TICK` periods produce at most one notify (the in-flight task
+  reads the live field at its own next check and moves itself onto the slow
+  grid — no new task is spawned on the stop edge, only on the start edge).
+
+No timer leak on drop: not gpui-`Task`-drop-semantics-dependent. The loop's
+own liveness check (`let Ok(working) = working else { break; };`, mirroring
+`oneterm-sftp-ui`'s `poll_timer_running` pattern) makes the task
+self-terminate on its own next tick once the entity is gone, independent of
+whatever `Task<()>`'s drop does — read from the code, no test needed.
+
+One wording nit, not a functional defect: `docs/gui-layout.md` says "an
+Agent panel with no cards does not tick" — the background timer still wakes
+every ~1 s (it just does not `cx.notify()`); "tick" is used throughout this
+section to mean a repaint tick (matching `US-0145-idle-render.md`'s "draws
+none"), so this reads correctly in context, but a literal reading could
+mislead. Not worth its own finding; noted here only.
+
+### F4 / F5 — records
+
+`docs/gui-layout.md`: "about 2 ... about 1.25 (measured 2.04-2.11 and
+1.23-1.25)" is present and matches this file's § 3 numbers. Packet has a
+`## Handoff` section; `- [ ] Platform proof` (unticked, matching the other
+IN-0046 stories pending CI); `high-level-design.md`'s "Adding a site" line
+is wrapped. All three F5 items done.
+
+### F7 — zero-interval guard, and its callers
+
+`crates/state/src/lib.rs`: `until_next_tick(Duration::ZERO)` returns
+`Duration::ZERO` exactly (not 1 ns as before the fix), proven by the
+committed `tick_tests::a_zero_interval_wakes_now`. Grepped every call site
+in the worktree (`crates/agent-ui/src/view.rs`,
+`crates/workspace/src/widgets/status_text.rs`,
+`crates/terminal-view/src/terminal_view/view.rs`): all three pass a fixed
+non-zero constant (`RELATIVE_TIME_TICK` = 1 s; `datetime_clock.rs`/
+`net_speed.rs` = 1 s, `breadcrumb.rs`/`git_status.rs` = 500 ms,
+`resource.rs` = 2 s; `CURSOR_BLINK_INTERVAL_MS` = 500, a `const`, not
+user-configurable). No caller passes zero today; the guard is currently
+defensive/dead code for a hot-loop that cannot yet happen, as the finding
+already said.
+
+### Gate subset (per this task's instructions — no release build, no full `ci-local`)
+
+- `CARGO_BUILD_JOBS=2 cargo test -p oneterm-state -p oneterm-agent-ui -p oneterm-workspace -p oneterm-terminal-view`: 481 passed, 7 ignored (8 suites).
+- `cargo fmt --all -- --check`: clean.
+- `CARGO_BUILD_JOBS=2 cargo clippy -p oneterm-agent-ui -p oneterm-state --all-targets -- -D warnings`: no issues.
+- `python scripts/check-doc-paths.py`: 210 current paths in 11 documents, pass.
+- `python scripts/check-english.py`: 1057 files, pass.
+
+### Proposed harness row (`story`, 17 columns; not written — `harness.db` not touched)
+
+Supersedes this file's first proposed row (same `id`, updated for the
+rework). `intake` rowid 51 confirmed read-only (`document_number` 46,
+`doc_path docs/spec-intakes/IN-0046-hotpath-profiling/IN-0046.md`).
+
+```text
+id: US-0145
+title: Attribute and cut the UI thread's work outside the terminal element
+created_at: 2026-09-28T00:00:00Z
+risk_lane: normal
+contract_doc: docs/gui-layout.md
+packet_doc: docs/spec-intakes/IN-0046-hotpath-profiling/US-0145-idle-render.md
+status: implemented
+unit_proof: 1
+integration_proof: 1
+e2e_proof: 0
+platform_proof: 0
+evidence: docs/spec-intakes/IN-0046-hotpath-profiling/evidence/US-0145-verify.md
+verify_command: cargo test -p oneterm-state -p oneterm-agent-ui -p oneterm-workspace -p oneterm-terminal-view; cargo fmt --all -- --check; cargo clippy -p oneterm-agent-ui -p oneterm-state --all-targets -- -D warnings; python scripts/check-doc-paths.py; python scripts/check-english.py; pwsh scripts/ci-local.ps1 (full, before merge)
+last_verified_at: 2026-09-28T12:20:52Z
+last_verified_result: pass
+notes: Rework at 106345cd on perf/idle-render closes F1/F3/F4/F5/F7 from the first pass (046f7e19, itself PASS on d6cd1afb). F1: TUI -51% reworded to conditional (capped/uncapped) in packet, research S8.4, IN-0046.md, gui-layout.md and the 8a03361a commit message, numbers checked against S3's table. F3: Agent panel tick moved onto until_next_tick; card-start restarts the tick (spinner within 1 ACTIVE_CARD_TICK); the 15s next_stale_check lives on the view, untouched by restarts (50 back-to-back forced restarts left it unchanged); empty panel never notifies; card completion stops the fast cadence. 4 throwaway gpui tests, each mutation-killed, not committed. fps effect still unmeasured (release build crash carried over, unchanged). F4/F5: wording + Handoff section + unticked Platform proof + wrapped line, confirmed present. F7: until_next_tick(ZERO)==ZERO with a test; grepped all 3 callers, none pass zero. Gate subset green (test/fmt/clippy/doc-paths/english); full ci-local left for the coordinator's pre-merge run per this task's instructions.
+intake_id: 51
+```
