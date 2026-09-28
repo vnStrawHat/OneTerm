@@ -756,6 +756,12 @@ reproduces the full table on demand.
   `finish_batch` sends a **single** coalescible `SessionEvent::Output` (§5.3/§6.5).
 - The View `cx.notify()` only when `display_offset`/`mode`/`cursor`/cells actually change
   (compare old vs new snapshot). Avoids continuous redraw under `yes`.
+- A View whose tab its group is not showing does not `cx.notify()` on a session event
+  (`TerminalView::handle_event`, `US-0145`): it draws nothing, and the notify would cost a
+  whole-window frame. Showing the tab re-renders it (`set_active(true)` notifies the panel).
+  The cursor-blink timer wakes on the shared 500 ms grid (`oneterm_state::until_next_tick`)
+  so it shares frames with the status bar ([`gui-layout.md`](gui-layout.md) § Frames and
+  re-rendering).
 - Log `layout took {:?}` for tuning (copy Zed's `log::debug!`).
 
 ### 6.5. Transport backpressure contract

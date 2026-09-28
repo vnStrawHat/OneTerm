@@ -52,6 +52,10 @@ impl SpaceTree {
     /// Render the whole tree for `panel`. `channels` is the panel's registry
     /// handle - passed in because the panel is being rendered and cannot be
     /// read back to reach its own dependencies.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "SpaceTree")
+    )]
     pub(crate) fn render(
         &self,
         panel: WeakEntity<TerminalPanel>,

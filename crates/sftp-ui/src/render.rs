@@ -33,6 +33,10 @@ use super::table_delegate_menu::{MenuEntry, MenuTarget, build_menu, menu_entries
 use super::types::SortColumn;
 
 impl Render for SftpPanel {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "SftpPanel")
+    )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.sftp().is_none() {
             return self.render_no_connection(cx).into_any_element();

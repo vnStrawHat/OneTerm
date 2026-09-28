@@ -595,6 +595,10 @@ fn restore_zoom_in_dock(
 }
 
 impl Render for OneTermWorkspace {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "OneTermWorkspace")
+    )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("oneterm-workspace")

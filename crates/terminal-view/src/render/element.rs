@@ -74,6 +74,10 @@ impl Element for TerminalElement {
         None
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TerminalElement")
+    )]
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
