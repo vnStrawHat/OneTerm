@@ -58,6 +58,10 @@ impl AppTitleBar {
 }
 
 impl Render for AppTitleBar {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "AppTitleBar")
+    )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         TitleBar::new()
             // Sync the bottom border color with the Dock border.

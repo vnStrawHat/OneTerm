@@ -26,6 +26,9 @@ hotpath-profiling = [
     "oneterm-terminal-view/hotpath-profiling",
     "oneterm-local-shell/hotpath-profiling",
     "oneterm-ssh/hotpath-profiling",
+    "oneterm-workspace/hotpath-profiling",
+    "oneterm-sftp-ui/hotpath-profiling",
+    "oneterm-session-ui/hotpath-profiling",
 ]
 # The same sites, reporting bytes and allocation count instead of time. hotpath's
 # counting allocator wraps `OomResilientAlloc` (crates/app/src/oom.rs).

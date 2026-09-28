@@ -195,6 +195,37 @@ secondary values land near 5:1 so that secondary text still reads as secondary, 
 sit about half a ratio point or more above them, and a few themes carry untouched tokens far
 above both (`Molokai Light`'s `foreground` is 19:1).
 
+## Frames and re-rendering
+
+gpui draws a frame only after something calls `cx.notify()` (or `window.refresh()`), and
+every frame is built from the window root down: `Root`, `OneTermWorkspace`, the title bar,
+the dock area with every tab group and tab strip, and the status bar all run their `render`
+and are laid out, prepainted and painted again. `cx.notify()` marks the notified view and
+each of its ancestors dirty; a child view is skipped only when it is embedded with
+`.cached(style)` and is not dirty. GPUI Kit caches each tab group's active panel, so a
+terminal frame reuses the right dock's contents. Measured cost (`IN-0046`, `US-0145`): about
+4 ms of UI-thread time per idle frame, about 2,100 heap allocations outside every OneTerm
+render, with taffy layout, heap traffic and the title bar's toggle group and window
+controls the largest parts; OneTerm's own render functions are about 5 % of it.
+
+The rules that follow from it:
+
+- **Fewer frames is the lever.** A notify costs a whole-window frame, so a view notifies
+  only when what it draws changed. A terminal in a tab its group is not showing does not
+  notify on output (the tab strip reads that view, so the window tracks it); showing the
+  tab re-renders it, because `set_active(true)` notifies the panel.
+- **Repainting timers share one grid.** The cursor blink and every status-bar indicator
+  sleep with `oneterm_state::until_next_tick`, which wakes on a multiple of the interval
+  on the wall clock, so the blink (500 ms), the clock (1 s) and the resource indicator
+  (2 s) land in one frame: an idle, focused window draws 2 frames a second, an unfocused
+  one 1.
+- **Do not cache the title bar or the dock area.** gpui does not replay a cached view's
+  window-control hitboxes, so a cached title bar stops moving the window and its
+  caption buttons stop working after its first reused frame. Re-rendering a cached view
+  sets gpui's `refreshing` flag for its whole subtree, so a cached dock area that a
+  terminal frame dirties re-renders every panel in it, including the right dock the kit
+  had cached: measured worse than not caching it.
+
 ## Source map
 
 - Workspace state and zoom: `crates/workspace/src/layout/workspace/mod.rs`

@@ -8,6 +8,12 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# Profiling sites (IN-0046): with this feature off every
+# `#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]` vanishes and
+# `hotpath` is not in the graph. Only `oneterm-app` turns measuring on.
+hotpath-profiling = ["dep:hotpath"]
+
 [lints]
 workspace = true
 
@@ -26,6 +32,7 @@ serde_json.workspace = true
 log.workspace = true
 chrono.workspace = true
 sysinfo.workspace = true
+hotpath = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # `GetProcessMemoryInfo` for the status bar's private working set (`US-0137`).

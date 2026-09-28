@@ -12,7 +12,8 @@
 #   ... -AllocMetric bytes|count for a `hotpath-profiling-alloc` build.
 #
 # Modes (window forced to 1280x800, default single cmd.exe tab):
-#   Idle   launch, idle 60 s.
+#   Idle   launch, idle -IdleSeconds (60). Two lengths difference out the startup
+#          (US-0145: steady-state CPU and allocations per frame).
 #   Flood  cmd /c "for /l %i in (1,1,300000) do @echo line %i" in the tab, wait for that
 #          cmd to exit, idle 5 s.
 #   Tui    a second tab, then tui-mimic.py (IN-0045) in both tabs for -LoadSeconds,
@@ -25,6 +26,13 @@ param(
   [string] $Out = $PSScriptRoot,
   [string] $AllocMetric = '',
   [int] $LoadSeconds = 180,
+  [int] $IdleSeconds = 60,
+  # Post WM_ACTIVATE so gpui treats the window as active (the terminal is focused and
+  # its cursor blinks) without taking the real foreground from the user (US-0145).
+  [switch] $Activate,
+  # The opposite: post WA_INACTIVE, so an idle run measures an unfocused window (no blink)
+  # whether or not Windows handed the new window the foreground.
+  [switch] $Inactive,
   [string] $Scratch = (Join-Path ([IO.Path]::GetTempPath()) 'oneterm-in0046')
 )
 $ErrorActionPreference = 'Stop'
@@ -43,6 +51,14 @@ public class HpProbe {
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("kernel32.dll")] public static extern IntPtr OpenThread(uint access, bool inherit, uint tid);
+  [DllImport("kernel32.dll")] public static extern bool QueryThreadCycleTime(IntPtr h, out ulong cycles);
+  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+  public static ulong Cycles(uint tid) {
+    IntPtr h = OpenThread(0x0800, false, tid); ulong c = 0;
+    if (h != IntPtr.Zero) { QueryThreadCycleTime(h, out c); CloseHandle(h); }
+    return c;
+  }
   public static IntPtr MainWindowOf(uint want) {
     IntPtr found = IntPtr.Zero;
     EnumWindows((h, l) => {
@@ -106,10 +122,24 @@ for ($i = 0; $i -lt 60 -and $script:Hwnd -eq [IntPtr]::Zero; $i++) { Start-Sleep
 if ($script:Hwnd -eq [IntPtr]::Zero) { Stop-Process -Id $p.Id -Force; throw "no window for pid $($p.Id)" }
 Write-Host "label=$Label pid=$($p.Id) mode=$Mode"
 [void][HpProbe]::SetWindowPos($script:Hwnd, [IntPtr]::Zero, 40, 40, 1280, 800, 0x0014)
+# Re-posted every 20 s and after every tab click: a real activation change elsewhere can
+# deactivate the window again. Each post costs one refresh frame, in every build alike.
+function Keep-Active { if ($Activate) { Post 0x0006 1 0 } elseif ($Inactive) { Post 0x0006 0 0 } }
+Start-Sleep -Seconds 2; Keep-Active
+# The UI thread's CPU time without the startup (US-0145): the process's first thread,
+# read after the window settled and again before it closes. hotpath's own thread table
+# averages over the whole run, startup included, at 0.1 % resolution.
+# CPU time is charged per 15.6 ms clock tick on Windows, too coarse for a thread at 1 %,
+# so the cycle counter (QueryThreadCycleTime) is read as well.
+function Ui-Thread { (Get-Process -Id $script:AppPid).Threads | Sort-Object StartTime | Select-Object -First 1 }
+function Ui-CpuMs { (Ui-Thread).TotalProcessorTime.TotalMilliseconds }
+Start-Sleep -Seconds 3
+$uiTid = [uint32](Ui-Thread).Id
+$uiCpu0 = Ui-CpuMs; $uiCyc0 = [HpProbe]::Cycles($uiTid); $uiClock = [Diagnostics.Stopwatch]::StartNew()
 
 try {
   switch ($Mode) {
-    'Idle' { Start-Sleep -Seconds 60 }
+    'Idle' { for ($t = 0; $t -lt $IdleSeconds; $t += 20) { Start-Sleep -Seconds ([Math]::Min(20, $IdleSeconds - $t)); Keep-Active } }
     'Flood' {
       Start-Sleep -Seconds 5
       Type-Text 'cmd /c "for /l %i in (1,1,300000) do @echo line %i"'; Enter
@@ -131,11 +161,14 @@ try {
         Start-Sleep -Seconds 10
         if ($sw.Elapsed.TotalSeconds -gt $LoadSeconds -and -not (Get-Descendants $script:AppPid | Where-Object { $_.CommandLine -like '*m.py*' })) { break }
         if ($tab -eq 1) { Click 220 50; $tab = 2 } else { Click 80 50; $tab = 1 }
+        Keep-Active
       }
       Write-Host ("load took {0:n0} s" -f $sw.Elapsed.TotalSeconds)
       Start-Sleep -Seconds 5
     }
   }
+  $uiCpu = (Ui-CpuMs) - $uiCpu0; $uiCyc = [HpProbe]::Cycles($uiTid) - $uiCyc0; $uiSec = $uiClock.Elapsed.TotalSeconds
+  Write-Host ("ui-thread steady: {0:n0} ms CPU in {1:n1} s = {2:n3} % of a core; {3:n1} Mcycles = {4:n2} Mcycles/s" -f $uiCpu, $uiSec, (100 * $uiCpu / 1000 / $uiSec), ($uiCyc / 1e6), ($uiCyc / 1e6 / $uiSec))
   # Close the window we own: `run()` returns and the hotpath guard writes the report.
   Post 0x0010 0 0
   if (-not $p.WaitForExit(60000)) { Write-Host 'did not exit after WM_CLOSE' }
