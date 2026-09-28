@@ -11,7 +11,7 @@ Created: 2026-09-28
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [x] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -42,17 +42,17 @@ what the OneTerm process uses, from the same 2 s sample as the item
 
 ## Acceptance
 
-- [ ] Hovering the item shows, in this order: Memory: Private working set, Working set,
+- [x] Hovering the item shows, in this order: Memory: Private working set, Working set,
   Commit (private bytes), Peak working set (Windows) or Resident (RSS), Virtual size
   (Linux, macOS); CPU: Usage (with the logical core count), CPU time (user + kernel),
   Threads, Uptime.
-- [ ] No new timer; nothing is read per frame or on hover; the extra figures come from the
+- [x] No new timer; nothing is read per frame or on hover; the extra figures come from the
   existing 2 s sample.
-- [ ] Colours from the theme only; `python scripts/check-theme-contrast.py` passes.
-- [ ] The item's text is unchanged (`CPU 1.2%  MEM 49.3 MB`).
-- [ ] Unit tests with injected values: formatting, and the table lists every field in a
+- [x] Colours from the theme only; `python scripts/check-theme-contrast.py` passes.
+- [x] The item's text is unchanged (`CPU 1.2%  MEM 49.3 MB`).
+- [x] Unit tests with injected values: formatting, and the table lists every field in a
   fixed order.
-- [ ] Windows run: screenshot of the hovered tooltip; private WS, WS and commit agree with
+- [x] Windows run: screenshot of the hovered tooltip; private WS, WS and commit agree with
   the OS counters for the same pid within a few MB; thread count exact.
 
 ## Documentation
@@ -78,7 +78,9 @@ Reason: new visible behaviour of the item.
 
 ### Reconciliation
 
-To fill at completion.
+Changed: `docs/gui-layout.md` § Status bar (describes the hover table, its field order and
+colours); the module docs of `crates/workspace/src/widgets/resource.rs` (the "Hover table"
+section). No other owning doc needed a change.
 
 ## Context
 
@@ -92,9 +94,9 @@ To fill at completion.
 ## Plan
 
 - [x] Records (intake, HLD, this packet).
-- [ ] `StatusText`: detail sections on `Label`, tooltip table.
-- [ ] `resource.rs`: sample struct, rows, Windows peak WS and thread count.
-- [ ] Tests, docs, manual run, gates, commit.
+- [x] `StatusText`: detail sections on `Label`, tooltip table.
+- [x] `resource.rs`: sample struct, rows, Windows peak WS and thread count.
+- [x] Tests, docs, manual run, gates, commit.
 
 ## Decisions
 
@@ -111,13 +113,51 @@ To fill at completion.
   `python scripts/check-english.py`, then the full `pwsh scripts/ci-local.ps1`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
+- [x] Unit proof
 - [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-To fill at completion.
+- Unit: `cargo test -p oneterm-workspace --lib`: 41 passed, 0 failed, 3 ignored (the
+  unrelated elevation tests). New/changed: `widgets::resource::tests::the_table_lists_
+  every_field_in_a_fixed_order`, `..._figures_the_os_does_not_give_are_left_out_or_marked`,
+  `..._durations_scale_to_their_size`, plus the pre-existing `displayed_memory_*` and
+  `format_memory_*` tests, all passing.
+- Platform (Windows 11 Enterprise 10.0.26200, `fast-dev` build of this branch, private
+  `USERPROFILE`/`HOME`, 1280x800, one `Command Prompt` tab, own pid 9860 only). Walk and
+  screenshots: [`evidence/US-0148-gui-walk.md`](evidence/US-0148-gui-walk.md),
+  [`evidence/US-0148-no-hover-dark.png`](evidence/US-0148-no-hover-dark.png) (baseline, no
+  tooltip), [`evidence/US-0148-tooltip-dark.png`](evidence/US-0148-tooltip-dark.png) (hovered).
+  Comparison with `GetProcessMemoryInfo` (the same `PROCESS_MEMORY_COUNTERS_EX2` struct the
+  widget itself reads) and `Get-Process -Id 9860`, read moments after the screenshot:
+
+  | Figure | Tooltip | OS counter | Agreement |
+  | --- | --- | --- | --- |
+  | Private working set | 53.3 MB | 53.4 MB | within 0.1 MB |
+  | Working set | 167.7 MB | 167.9 MB | within 0.2 MB |
+  | Commit (private bytes) | 112.9 MB | 113.1 MB | within 0.2 MB |
+  | Peak working set | 171.6 MB | 171.6 MB | exact |
+  | Threads | 14 | 14 (`Get-Process`) | exact |
+  | CPU time (user + kernel) | 7.8 s | 7.97 s (`TotalProcessorTime`) | within the 2 s sample lag |
+  | Uptime | 2m 53s | 176 s (`Now - StartTime`) | within the 2 s sample lag |
+
+  Also confirmed: a baseline screenshot with the cursor moved away from the window shows no
+  tooltip, and the tooltip's figures stayed frozen across 27 s of continued hovering while
+  the item's own `MEM` text ticked — the documented "shows the latest sample, does not
+  update while open" behaviour.
+- Linux and macOS: not run. The `RESIDENT_NAME`/`VIRTUAL_NAME` labelling and the "figures
+  the OS does not give are left out or marked" path are covered by the unit test only (as
+  planned in the intake's Validation Shape).
+- Integration proof: not applicable (one widget, no cross-crate flow).
+- Gates: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `python scripts/check-theme-contrast.py`, `python scripts/check-doc-paths.py`,
+  `python scripts/check-english.py` all passed individually before the full gate. Full
+  `pwsh scripts/ci-local.ps1` with `CARGO_BUILD_JOBS=6` in this worktree's own `target/`:
+  `ci-local: all checks passed.`
+- No gaps against this packet's acceptance criteria. Follow-up candidates (shells line,
+  user/kernel CPU split, a tooltip that refreshes while open) are recorded in `IN-0047.md`
+  and left out, as scoped.
