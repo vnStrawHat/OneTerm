@@ -270,3 +270,236 @@ the tracking and the measurement. Replace "free on release" with a proof that no
 (F1 options). Add V1/V4/V8/V9 as regression tests and a paranoid check that can fail on F1 (F3).
 Guard `free` in release builds (F5). Correct the five docs and the guide's `GraphicReleased`
 sentence (F6). Optionally scope `assert_integrity` to the placement's columns (F4).
+
+---
+
+# Second pass: the rework `5b45add0` (2026-09-28)
+
+- Subject: `5b45add0` `fix(vt): rework BUG-0081 -- free extras ids by a proven whole-grid sweep`,
+  on `50eba848` (the first pass above, committed verbatim) on `3796cef0`.
+- Host and method as above: Windows 11, MSVC, `CARGO_BUILD_JOBS=3`, worktree-local target dir,
+  `target/release` deleted before the gate. Every probe (a counting-allocator example, throwaway
+  tests appended to `graphics_tests.rs`, two local source mutations) was removed before the gate.
+
+## Verdict: FAIL
+
+The design direction is right, and the live set is complete. Every holder the first pass named
+survives a sweep, including the anchor-trim and saved-cursor-screen cases that were not run
+before. Two defects remain, each on its own a FAIL:
+
+1. **The sweep frees the id it was triggered by (S1, High).** `State::intern_extras` interns first
+   and sweeps second. The value that pushes `since_sweep` to 4,096 is not yet held by any cell or
+   pen, so the sweep frees it, and the caller writes the freed id into the pen or the image's cells
+   anyway. This happens on every 4,096th new extras value, deterministically. The rework's own
+   paranoid check fires on it in a plain debug build.
+2. **The trigger counts only table growth, so the table still fills, and then never sweeps again
+   (S2, High).** `since_sweep` counts pushes, not free-list reuses. Each cycle drains the previous
+   sweep's free list and then grows the table by exactly 4,096. At about 558,000 resends of one image
+   the table reaches 65,535. It stops at `since_sweep = 4,094`, below the interval, so no sweep ever
+   runs again. From then on every new link and image gets no cells until `RIS`. That is the exact
+   symptom `BUG-0081` exists to remove, 8x later. At 30 frames a second that is about 5.2 hours.
+
+The committed regressions cannot see either defect (S3): none of them reaches a sweep.
+
+## Findings
+
+### S1 (High, blocking): `intern_extras` sweeps after interning, freeing the fresh id before it is used
+
+`terminal/mod.rs`:
+
+```rust
+pub(crate) fn intern_extras(&mut self, value: &Extras) -> ExtrasId {
+    let id = self.interner.extras(value);            // push #4,096: since_sweep hits the interval
+    if self.interner.extras.needs_sweep() {
+        let live = self.grid.live_extras_ids();      // `id` is in no cell and no pen yet
+        self.interner.extras.sweep_unreferenced(&live); // ...so it is freed here
+    }
+    id                                               // and returned to be written anyway
+}
+```
+
+The sweep trigger is always a push, because only a push increments `since_sweep`. The value that
+triggers the sweep is therefore always brand new, and nothing can hold it yet. Both callers write it
+right after:
+
+- `set_hyperlink` puts it on the pen.
+- `place` stamps it on the image's cells.
+
+The slot now reads as the default until some later `intern` pops it from the free set, which is
+hash order, not LIFO. At that point the cells resolve to that unrelated value.
+
+Throwaway probes, each step in its own `feed` so the per-feed integrity walk sees it:
+
+| Probe | Debug build | Release build |
+| --- | --- | --- |
+| R1: 4,200 distinct explicit links, one cell each | panics: `extras id ExtrasId(4096) is on the free list but a cell or pen still names it` | cell #4,095 (link `x/4095`) resolves to `http://x/4096`, the next link's URI; every other cell is right |
+| R2: 4,095 distinct links written into one dead cell, then one image | same panic | the image's cell resolves to `{hyperlink: None, graphic: None}` right after `place` and stays that way: the image is never painted |
+
+The 70,000-resend test crosses the trigger five times without noticing. Each feed carries 10,000
+frames, so the freed id is overwritten by the next resend and reused from the free set before the
+end-of-feed walk. The fix is one line: sweep **before** interning. At that point no fresh value
+exists yet, and every id already handed out is in a cell or on a pen. Alternatively, insert `id`
+into `live`.
+
+### S2 (High, blocking): the growth law and the stall
+
+`needs_sweep()` is `since_sweep >= 4,096`, and `since_sweep` increments only on the push branch of
+`intern`. After a sweep frees `F` ids, the next `F` new values reuse them without counting. Only
+then do 4,096 pushes grow the table to the next trigger. So each cycle raises `entries()` by exactly
+4,096 and lasts `F + 4,096` interns. `F` grows with the table, so after `k` cycles
+`entries = 1 + 4,096 k`, and the resends needed are about `4,096 k (k + 1) / 2`. The table grows
+as `sqrt(2 * 4,096 * N)`. It is not a ratchet that slows toward a plateau.
+
+Measured (release, 20x4, one 1x6 image resent at `CSI H`, feeds of 1,000, drained):
+
+| Resends | Entries |
+| --- | --- |
+| 25,000 | 12,289 |
+| 41,000 | 16,385 |
+| 62,000 | 20,481 (the packet's figure; 5 sweeps so far) |
+| 320,000 | 49,153 |
+| 431,000 | 57,345 |
+| 492,000 | 61,441 (15th and last sweep) |
+| 558,000 | 65,535 (full) |
+| 1,500,000 | 65,535, `exhausted` = 942,977, last resend **not placed** |
+
+At 61,441 the 15th sweep fires, and the table can grow only 4,094 more before the cap. `since_sweep`
+stops at 4,094, so `needs_sweep()` is never true again and the free set stays empty. Every later
+new value falls to id 0: no link, no image, until `RIS`. The packet calls the bound "a high-water
+mark that ratchets up ... indefinitely" and says "a true constant bound would need a compacting
+sweep that renumbers live ids". The first half understates the problem, because the table does not
+creep, it fills and freezes. The second half is wrong.
+
+**The fix keeps the same scan cost.** Count every index miss (a free-list reuse or a push) in
+`since_sweep`, not only pushes. A sweep then runs once per 4,096 **new values**, whatever slot they
+land in. After a sweep the table is at most `live + 4,096 + 1`. It grows only while the live set
+itself exceeds what the free list covers, so the bound is `O(interval + live)`. Measured with that
+one-line change applied locally (then reverted): **4,098 entries at 70,000 and at 1,500,000
+resends, 1.40 MB drained, last resend placed.** The scan frequency is the one the packet already
+accepted, one scan per 4,096 new values. The shipped rule reaches the same frequency and then stops
+scanning forever. "Sweep when the free list is empty and the interval has elapsed" is equivalent
+once the interval counts reuses. With pushes only, it is the shipped rule. It is also worth making
+step 3 (table full) sweep once and retry through `State` before it falls back to id 0, so that no
+counter state can strand the table.
+
+Verdict on the shipped rule: **FAIL.** The packet's Outcome is that the table does not fill without
+bound under resends, and it does fill. The fix is a one-line counter change that costs no extra
+scans.
+
+### S3 (Medium): the committed regressions are not discriminating for the sweep
+
+None of `v1`/`v2`/`v4`/`v8`/`v9`, `integrity_rejects_an_extras_id_freed_while_a_cell_still_names_it`
+or the intern unit tests creates 4,096 new values, so none of them ever runs `sweep_unreferenced`
+through the terminal. Two local mutations, each reverted:
+
+| Mutation | Committed `oneterm-vt` suite | Round-2 throwaways |
+| --- | --- | --- |
+| A: `live_extras_ids` returns an empty set (the sweep frees **every** live id) | **all 579 pass** (`v1`/`v8` included) | R1-R4 fail |
+| B: `needs_sweep()` always false (no sweep) | 583 pass; only `repainting_a_sixel_image_does_not_grow_the_extras_table` fails (65,535 > 30,000) | R1/R2 pass (no sweep, no premature free) |
+
+So `v1`/`v8` fail neither when the sweep is disabled nor when it frees everything. They pin that
+release does not free, which is correct, but they are not evidence that the sweep is safe. A
+discriminating regression has to force a sweep while a released image's cells survive. R3 and R4
+below do that and fail under mutation A. It also has to run each step in its own `feed`, so the
+integrity walk sees the id before a reuse hides it. R1 and R2 do that.
+
+### S4 (Info, PASS): live-set completeness
+
+`TerminalGrid::live_extras_ids` walks, for **both** screens, `oldest..=newest`, which is the whole
+ring including history, plus `cursor` and `saved_cursor`, each with `template()` (the pen) and
+`erase()`. I found no other holder of a raw `ExtrasId` that survives the sweep:
+
+- `State` holds no other `Cell`.
+- The `DECSC`/`1049` saved cursor is `Screen::saved_cursor`. It is walked.
+- The erase cell carries no extras.
+- `Screen::spare` is reset before it is reused.
+- The BUG-0079 hyperlink maps hold `HyperlinkId`.
+- `snapshot/row.rs`, `oneterm-terminal`'s `model.rs`/`content.rs` and `corpus_replay` all resolve
+  while they borrow the `Terminal`.
+- `terminal-view` receives resolved `SnapshotCell`s.
+- `stamp` interns without sweeping, and `feed`'s end-of-batch sweep runs after every write of the
+  batch. The only in-flight id a sweep can meet is S1's.
+
+Probes, release build (they fail in debug only through S1, when their own link spam crosses the
+trigger):
+
+| Probe | Result |
+| --- | --- |
+| R3: 3-row image, scrollback 3, newlines until the anchor row is trimmed and the placement is released while 2 lower rows survive in history; then 4,200 distinct links (sweeps run) | both survivors still resolve to `{graphic: G1}`, no link |
+| R4: link `keep` open on the primary pen and cells, `1049h`, 9,000 distinct links on the alternate screen (two sweeps), `1049l`, write `C` | primary cols 0-2 all resolve to `http://keep.example` |
+| First-pass V1/V2/V4/V8/V9 (now committed as `v1`...`v9`) | pass |
+
+### S5 (Info): numbers
+
+| | Extras entries at 70k | Undrained | Drained | Last placed |
+| --- | --- | --- | --- | --- |
+| `eed33058` (first pass) | 65,535 | 13.45 MB | 6.81 MB | No |
+| `5b45add0` | 20,481 | 9.52 MB | 2.87 MB | Yes |
+| `5b45add0` + counting reuses (local, reverted) | 4,098 | -- | 1.40 MB | Yes |
+
+The packet reports 9.080 MB and 2.740 MB, within 5% of these figures. Sweep frequency under the
+70,000 test is 5 sweeps, at pushes 4,096 / 8,192 / 12,288 / 16,384 / 20,480. Under 1.5M it is 15
+sweeps, then none.
+
+`live_extras_ids` scan cost, release profile, median of 7, history filled with 200-column text:
+
+| Shape | Scan | Scan + `sweep_unreferenced` |
+| --- | --- | --- |
+| 10,000 x 200 (the default scrollback) | 3.0 ms | 3.2 ms |
+| 100,000 x 200 | 31.6 ms | 33.4 ms |
+
+This agrees with the packet's 32.4 ms. At one scan per 4,096 new values the cost is acceptable
+either way.
+
+### S6 (Low, records)
+
+- The CHANGELOG, `10-limits.md`, the IN-0029 `graphics.md` and `cell-and-style.md` rows, the
+  `terminal-backend.md` risk row, and the packet's Decisions all describe the bound as a slow
+  ratchet. They must say, or better stop being true, that the table fills after about 558k resends
+  and then never sweeps again (S2). The packet's "reaches the 65,535 ceiling eventually ...
+  (quadratically, in the number of resends)" has the relationship backwards: the resends needed grow
+  quadratically in the cycle count, and the table grows as the square root of resends. Its "true
+  constant bound would need a compacting sweep" is disproved by S2's measurement.
+- The `04-events.md` `GraphicReleased` rewrite is accurate now (F6 closed). The `10-limits.md`
+  "resolve an `ExtrasId` only while you hold the borrow, never cache it" note is right and
+  sufficient for embedders. `GraphicId` is still never reused.
+- The LLD's "First design (rejected by adversarial verification)" section is accurate. Its
+  orchestration paragraph states `intern_extras` "check[s] after every hot intern" without seeing
+  that sweeping after the intern frees that intern's own id (S1).
+- The packet's Handoff asks for exactly this pass. Its gap "history-trim path reasoned, not run" is
+  now closed by R3, which passes.
+
+## Checks
+
+- Committed tests at `5b45add0` (inside the gate): `cargo test -p oneterm-vt`, `--features
+  vt-paranoid`, `--features regex` and `--no-default-features` all green. The green result means
+  little (S3).
+- `vt-public-api.py --check --no-doc` and `--diff-platforms`: unchanged. Every new item is
+  `pub(crate)`.
+
+Gate: `pwsh scripts/ci-local.ps1`, `CARGO_BUILD_JOBS=3`, at `5b45add0` with every throwaway
+removed. Final line:
+
+```
+ci-local: all checks passed.
+```
+
+## Gaps
+
+- No GUI run and no real Sixel program, as in the first pass.
+- S2's corrected rule was measured with only its counter change. The step-3 sweep-and-retry
+  suggestion and the S1 reorder were not built or measured together.
+
+## Handoff
+
+FAIL. Rework `BUG-0081` again, as acceptance rework of the owning packet:
+
+1. In `State::intern_extras`, sweep before interning (S1).
+2. Count free-list reuses in `since_sweep`, and consider a sweep-and-retry at step 3 (S2). Re-measure
+   at 70,000 and at 1,000,000+ resends.
+3. Add discriminating regressions: R1/R2 (the trigger intern keeps its cells, one feed per step), and
+   R3/R4 or `v1`/`v8` variants that force a sweep. Confirm each fails under mutation A.
+4. Correct the bound wording everywhere S6 lists.
+
+The live-set collector, the idempotent `free`, the paranoid `is_free` check and the F4 scoping can
+stay as they are.
