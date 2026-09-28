@@ -243,10 +243,7 @@ fn frame_time_under_output(cx: &mut TestAppContext) {
     // test's numbers with and without the features).
     #[cfg(feature = "hotpath-profiling")]
     let _hotpath = hotpath::HotpathGuardBuilder::new("frame_time_under_output").build();
-    // Ligatures off, so ASCII runs take the glyph cache's fast path (`US-0146`).
-    let mut inputs = inputs();
-    inputs.font.features = FontFeatures::disable_ligatures();
-    let mut h = Harness::open(cx, 30, 120, "", inputs);
+    let mut h = Harness::open(cx, 30, 120, "", inputs());
     h.first_frame();
 
     let line =

@@ -298,17 +298,32 @@ the platform shaper, whose miss also pays GPUI's linear scan of its frame caches
 all required: `FontKey::plain` (ligatures off: `calt = 0` in the features list and no feature
 turned on; `FontConfig::ligatures` defaults to on, so the default setting never takes this
 path); every byte of the run in 0x20..=0x7E (no control char, no combining mark, no non-ASCII
-char); and the font's `AsciiGlyphs` table exists. The table is read once per `FontKey` by
-shaping one reference line (the 95 printable chars in order, then ligature probes such as
-`fi ffl -> => != www`) with `layout_line`, and is kept only if the hand-built layout of that
-same line equals GPUI's field by field: one `ShapedRun` (no fallback face), one glyph per byte
-with `index` = byte, `x` = the accumulated constant advance, `y` = 0, no emoji, same width,
-ascent and descent. A fallback face, a ligature, kerning or a proportional font fails the
-check and the font keeps shaping. The force-width pass is GPUI's private
-`apply_force_width_to_layout`, copied line for line. `plain` is part of `FontKey`, so a
-ligature switch changes every run and table key even before `ensure_fonts` clears the cache.
-Proof: `ascii_fast_path_matches_directwrite` (Windows, real DirectWrite: Lilex, Consolas,
-Courier New, forced and unforced) and `ascii_fast_path_falls_through_to_the_shaper`.
+char); and the font's `AsciiGlyphs` table exists. With `calt = 0`, DirectWrite still applies
+`liga`, `clig` (GPUI turns them on), `kern` and the required `ccmp`, `locl`, `rlig` and
+`rclt`, any of which can rewrite an ASCII context (Fira Code's `ccmp` turns a backtick after
+`A-Z` or a backtick into `grave.case`). So the table is read once per `FontKey` by shaping one
+reference line with `layout_line`: every ordered pair of the 95 printable chars (an order-2
+de Bruijn walk, 9,026 chars), then longer ligature probes (`ffi ffl === !== <=> ==> <!-- -->
+::= ... www`); about 2-3 ms per font variant, once. It is kept only if the hand-built layout of
+that same line equals GPUI's field by field: one `ShapedRun` (no fallback face), one glyph per
+byte with `index` = byte, the same glyph id for a char in every context, `x` = the accumulated
+constant advance, `y` = 0, no emoji, same width, ascent and descent. A fallback face, a
+contextual substitution, kerning or a proportional advance fails the check **when the
+reference exhibits it**; then the font keeps shaping (Fira Code, Segoe UI, Lucida Console's
+simulated bold). What stays unproven: contexts longer than two chars other than the probes
+(an independent probe of 35,937 punctuation triples and long random lines found none, which is
+evidence, not proof), and `locl` rules of a locale other than the one the check ran under (the
+check shapes with the current user locale, so such rules are covered only for pairs, only
+under that locale). The force-width pass is GPUI's private `apply_force_width_to_layout`,
+copied line for line and re-diffed on every `gpui-pre` bump (`docs/agents/dependencies.md`
+§ 4; `force_width_copy_matches_gpui` compares both on the stub shaper). `plain` is part of
+`FontKey`, so a ligature switch changes every run and table key even before `ensure_fonts`
+clears the cache. DirectWrite returns trailing whitespace as a second `ShapedRun` where the
+fast path returns one run with the same glyphs and width; the painter walks every run, so no
+consumer may assume run parity. Proof: `ascii_fast_path_matches_directwrite` (Windows, real
+DirectWrite: Lilex, Consolas, Courier New, forced and unforced; Fira Code rejected where
+installed), `ascii_check_rejects_a_contextual_rule`, `reference_walks_every_ordered_printable_pair`
+and `ascii_fast_path_falls_through_to_the_shaper`.
 
 ### Element (`element.rs`)
 

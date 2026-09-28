@@ -16,14 +16,16 @@
 //! the shaper: its layout is one glyph per byte from a per-font table
 //! ([`AsciiGlyphs`]), at the font's constant advance, with GPUI's force-width
 //! pass applied. The table is read once per [`FontKey`] from one shaped
-//! reference line and kept only if rebuilding that line by hand reproduces
-//! GPUI's layout exactly (one run of one face, one glyph per char, no offsets,
-//! no ligature among the probes); otherwise that font always shapes. Any other
-//! run (a non-ASCII or control char, ligatures on, another feature on) shapes
-//! as before.
+//! reference line holding every ordered pair of printable chars plus longer
+//! ligature probes, and kept only if rebuilding that line by hand reproduces
+//! GPUI's layout exactly (one run of one face, one glyph per char, the same
+//! glyph in every two-char context, no offsets); otherwise that font always
+//! shapes. Contexts longer than two chars are covered only by the probes. Any
+//! other run (a non-ASCII or control char, ligatures on, another feature on)
+//! shapes as before.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use gpui::{
     Font, FontId, FontStyle, FontWeight, GlyphId, LineLayout, Pixels, ShapedGlyph, ShapedRun,
@@ -273,13 +275,33 @@ fn text_run(len: usize, font: &Font) -> TextRun {
     }
 }
 
-/// Printable ASCII in order (the table), then pairs a font may ligate even
-/// with `calt` off (`liga`, `dlig`): a ligature among them fails the check.
-const REFERENCE: &str = concat!(
-    " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`",
-    "abcdefghijklmnopqrstuvwxyz{|}~",
-    " fi fl ff ffi ffl -> => != == <= >= www",
-);
+/// Longer contexts a font may rewrite with `calt` off (`liga`, `clig`, and
+/// the required `ccmp` / `rlig` / `rclt`, which cannot be turned off).
+const PROBES: &str = " fi fl ff ffi ffl -> => != == <= >= === !== <=> ==> <!-- --> ::= ... www";
+
+/// Chars of the pair walk: every ordered pair of printable ASCII once.
+const WALK_LEN: usize = AsciiGlyphs::LEN * AsciiGlyphs::LEN + 1;
+
+/// The check's reference line: a walk through every ordered pair of printable
+/// ASCII (an order-2 de Bruijn sequence, 9,026 chars), then [`PROBES`]. Any
+/// substitution, kerning or offset a font applies in a two-char context shows
+/// up here and fails the check.
+static REFERENCE: LazyLock<String> = LazyLock::new(|| {
+    let char_at = |i: usize| char::from(AsciiGlyphs::FIRST + i as u8);
+    let mut text = String::with_capacity(WALK_LEN + PROBES.len());
+    // Lyndon words of length 1 and 2 in order: `i`, then `i j` for every
+    // `j > i`; their concatenation is cyclic, so the first char closes it.
+    for i in 0..AsciiGlyphs::LEN {
+        text.push(char_at(i));
+        for j in i + 1..AsciiGlyphs::LEN {
+            text.push(char_at(i));
+            text.push(char_at(j));
+        }
+    }
+    text.push(char_at(0));
+    text.push_str(PROBES);
+    text
+});
 
 /// Glyph ids of printable ASCII in one font variant, and the one advance
 /// they share (US-0146).
@@ -299,23 +321,31 @@ impl AsciiGlyphs {
         byte.wrapping_sub(Self::FIRST) < Self::LEN as u8
     }
 
-    /// Shape [`REFERENCE`] once and keep the table only if [`Self::layout`]
-    /// rebuilds it exactly: one run, one glyph per byte at one advance, no
-    /// offsets, no emoji. Anything else (a fallback face, a ligature, kerning,
-    /// a proportional font) keeps the font on the shaper.
+    /// Shape [`REFERENCE`] once (1.5-3 ms) and keep the table only if it
+    /// reproduces that layout; see [`Self::check`].
     fn read(font: &Font, font_size: Pixels, window: &Window) -> Option<Self> {
         let shaped = window.text_system().layout_line(
-            REFERENCE,
+            &REFERENCE,
             font_size,
             &[text_run(REFERENCE.len(), font)],
             None,
         );
+        Self::check(&REFERENCE, &shaped)
+    }
+
+    /// The table read from `shaped` (the shaper's layout of `reference`), if
+    /// [`Self::layout`] rebuilds that layout exactly: one run, one glyph per
+    /// byte at one advance, no offsets, no emoji, and every char's glyph the
+    /// same in every context. Anything else keeps the font on the shaper: a
+    /// fallback face, a contextual substitution, kerning or a proportional
+    /// advance **that the reference exhibits**.
+    fn check(reference: &str, shaped: &LineLayout) -> Option<Self> {
         let [run] = shaped.runs.as_slice() else {
             return None;
         };
         let mut ids = [GlyphId(0); Self::LEN];
-        for (id, glyph) in ids.iter_mut().zip(&run.glyphs) {
-            *id = glyph.id;
+        for (byte, glyph) in reference.bytes().zip(&run.glyphs) {
+            ids[usize::from(byte - Self::FIRST)] = glyph.id;
         }
         let table = Self {
             font_id: run.font_id,
@@ -326,7 +356,7 @@ impl AsciiGlyphs {
             ascent: shaped.ascent,
             descent: shaped.descent,
         };
-        same_layout(&table.layout(REFERENCE, font_size, None), &shaped).then_some(table)
+        same_layout(&table.layout(reference, shaped.font_size, None), shaped).then_some(table)
     }
 
     /// What the platform shaper returns for `text` (every byte covered): the
@@ -547,13 +577,102 @@ mod tests {
         );
     }
 
+    /// US-0146 F1: the walk holds every ordered printable pair (the Fira Code
+    /// `ccmp` rule fires on `` X` `` and ```` `` ````, which one fixed context
+    /// per char missed), and the line does not end in a space (DirectWrite
+    /// splits trailing whitespace into a run of its own).
     #[test]
-    fn reference_starts_with_printable_ascii_in_order() {
-        let head: Vec<u8> = REFERENCE.bytes().take(AsciiGlyphs::LEN).collect();
-        assert_eq!(head, (0x20..=0x7e).collect::<Vec<u8>>());
+    fn reference_walks_every_ordered_printable_pair() {
+        let walk = &REFERENCE.as_bytes()[..WALK_LEN];
+        let pairs: std::collections::HashSet<[u8; 2]> =
+            walk.windows(2).map(|w| [w[0], w[1]]).collect();
+        assert_eq!(pairs.len(), AsciiGlyphs::LEN * AsciiGlyphs::LEN);
+        assert!(REFERENCE.ends_with(PROBES) && !REFERENCE.ends_with(' '));
         assert!(REFERENCE.bytes().all(AsciiGlyphs::covers));
         assert!(!AsciiGlyphs::covers(0x1f) && !AsciiGlyphs::covers(0x7f));
         assert!(!AsciiGlyphs::covers(0xc3), "a UTF-8 lead byte");
+    }
+
+    fn copy(layout: &LineLayout) -> LineLayout {
+        LineLayout {
+            runs: layout.runs.clone(),
+            ..*layout
+        }
+    }
+
+    /// US-0146 F4: the check rejects a font whose layout of the reference
+    /// differs anywhere a contextual rule would show: one glyph swapped in a
+    /// single pair (`` A` ``, the Fira Code case) or a probe ligated into one
+    /// glyph. Synthetic: the stub text system is the "font", and the shaped
+    /// layout is edited the way such a font would shape it.
+    #[gpui::test]
+    fn ascii_check_rejects_a_contextual_rule(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|window, _| {
+            let f = with_features(&[("calt", 0)]);
+            let shaped = window.text_system().layout_line(
+                &REFERENCE,
+                gpui::px(13.0),
+                &[text_run(REFERENCE.len(), &f)],
+                None,
+            );
+            assert!(
+                AsciiGlyphs::check(&REFERENCE, &shaped).is_some(),
+                "a plain font passes"
+            );
+
+            let at = REFERENCE[..WALK_LEN].find("A`").unwrap() + 1;
+            let mut swapped = copy(&shaped);
+            swapped.runs[0].glyphs[at].id = GlyphId(999);
+            assert!(
+                AsciiGlyphs::check(&REFERENCE, &swapped).is_none(),
+                "`A`` pair"
+            );
+
+            // Contexts longer than a pair: only the probes hold them.
+            for probe in [
+                "ffi", "ffl", "===", "!==", "<=>", "==>", "<!--", "-->", "::=", "www",
+            ] {
+                let at = WALK_LEN + REFERENCE[WALK_LEN..].find(probe).unwrap();
+                let mut ligated = copy(&shaped);
+                ligated.runs[0].glyphs.drain(at + 1..at + probe.len());
+                assert!(
+                    AsciiGlyphs::check(&REFERENCE, &ligated).is_none(),
+                    "{probe}"
+                );
+            }
+        });
+    }
+
+    /// US-0146 F6: `apply_force_width` is a copy of GPUI's private pass; run
+    /// both on the stub shaper's layout and compare, so a `gpui-pre` bump that
+    /// changes GPUI's pass fails here. Widths at and above twice the stub's
+    /// 7.8 px advance make every other glyph a non-base (the combining-mark
+    /// branch); a non-BMP char has a double advance.
+    #[gpui::test]
+    fn force_width_copy_matches_gpui(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|window, _| {
+            let f = font();
+            let size = gpui::px(13.0);
+            for text in ["abc", "a\u{1f600}b", "abcdefghij", "x"] {
+                let runs = [text_run(text.len(), &f)];
+                let unforced = window.text_system().layout_line(text, size, &runs, None);
+                for width in [4.0, 7.8, 8.0, 9.5, 15.6, 16.0, 20.0] {
+                    let width = gpui::px(width);
+                    let gpui_forced =
+                        window
+                            .text_system()
+                            .layout_line(text, size, &runs, Some(width));
+                    let mut ours = copy(&unforced);
+                    apply_force_width(&mut ours, width);
+                    assert!(
+                        same_layout(&ours, &gpui_forced),
+                        "{text:?} {width:?}\n{ours:?}\n{gpui_forced:?}"
+                    );
+                }
+            }
+        });
     }
 
     /// US-0146: every run the fast path must not take reaches the shaper
@@ -626,8 +745,11 @@ mod tests {
         });
         let cx = cx.add_empty_window();
         cx.update(|window, _| {
+            let printable: String = (0x21u8..=0x7e).map(char::from).collect();
             let lines = [
-                &REFERENCE[1..AsciiGlyphs::LEN],
+                printable.as_str(),
+                "```md``` A`B`",
+                "'node_modules'",
                 "hello",
                 "a",
                 "fn(x)->y;",
@@ -654,6 +776,15 @@ mod tests {
                     let (size, force) = (gpui::px(size), force.map(gpui::px));
                     let set = FontSet::new(&base, size);
                     let (f, key) = set.get(bold, italic);
+                    if force.is_none() {
+                        let started = std::time::Instant::now();
+                        let table = AsciiGlyphs::read(f, size, window);
+                        eprintln!(
+                            "{family} {bold} {italic} {size:?}: check {:?}, pass {}",
+                            started.elapsed(),
+                            table.is_some()
+                        );
+                    }
                     // One cache per forced width: `RunKey` keys `forced`, not the width.
                     let mut cache = GlyphCache::new();
                     let mut stats = FrameStats::default();
@@ -698,6 +829,36 @@ mod tests {
             cache.shape("Wil", f, key, gpui::px(13.0), None, window, &mut stats);
             assert_eq!((stats.ascii_layouts, stats.shape_calls), (0, 1));
             assert!(cache.ascii[&key].is_none(), "Segoe UI fails the check");
+
+            // US-0146 F1: Fira Code's `ccmp` turns a backtick after A-Z or a
+            // backtick into `grave.case`, with ligatures off; the pair walk sees
+            // it, so every variant keeps shaping. Only where it is installed.
+            if window
+                .text_system()
+                .all_font_names()
+                .iter()
+                .any(|n| n == "Fira Code")
+            {
+                let fira = FontSet::new(
+                    &Font {
+                        family: "Fira Code".into(),
+                        ..with_features(&[("calt", 0)])
+                    },
+                    gpui::px(13.0),
+                );
+                for (bold, italic) in [(false, false), (true, false), (false, true)] {
+                    let (f, key) = fira.get(bold, italic);
+                    let mut cache = GlyphCache::new();
+                    let mut stats = FrameStats::default();
+                    let started = std::time::Instant::now();
+                    cache.shape("A`B`", f, key, gpui::px(13.0), None, window, &mut stats);
+                    eprintln!("Fira Code check: {:?}", started.elapsed());
+                    assert_eq!((stats.ascii_layouts, stats.shape_calls), (0, 1));
+                    assert!(cache.ascii[&key].is_none(), "Fira Code {bold} {italic}");
+                }
+            } else {
+                eprintln!("Fira Code not installed: its rejection is not exercised");
+            }
         });
     }
 
