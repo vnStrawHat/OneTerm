@@ -157,7 +157,6 @@ package in the Cargo registry / git checkout.
 | `base64` | 0.22.1 | MIT OR Apache-2.0 | crates.io |
 | `base64ct` | 1.8.3 | Apache-2.0 OR MIT | crates.io |
 | `bcrypt-pbkdf` | 0.11.0 | MIT OR Apache-2.0 | crates.io |
-| `bincode` | 1.3.3 | MIT | crates.io |
 | `bindgen` | 0.72.1 | BSD-3-Clause | crates.io |
 | `bit-set` | 0.8.0 | Apache-2.0 OR MIT | crates.io |
 | `bit-set` | 0.9.1 | Apache-2.0 OR MIT | crates.io |
@@ -305,7 +304,6 @@ package in the Cargo registry / git checkout.
 | `event-listener` | 5.4.1 | Apache-2.0 OR MIT | crates.io |
 | `event-listener-strategy` | 0.5.4 | Apache-2.0 OR MIT | crates.io |
 | `exr` | 1.74.0 | BSD-3-Clause | crates.io |
-| `fancy-regex` | 0.16.2 | MIT | crates.io |
 | `fastrand` | 2.4.1 | Apache-2.0 OR MIT | crates.io |
 | `fax` | 0.2.7 | MIT | crates.io |
 | `fdeflate` | 0.3.7 | MIT OR Apache-2.0 | crates.io |
@@ -333,17 +331,17 @@ package in the Cargo registry / git checkout.
 | `freetype-sys` | 0.20.1 | MIT | crates.io |
 | `fsevent-sys` | 4.1.0 | MIT | crates.io |
 | `futf` | 0.1.5 | MIT / Apache-2.0 | crates.io |
-| `futures` | 0.3.32 | MIT OR Apache-2.0 | crates.io |
-| `futures-channel` | 0.3.32 | MIT OR Apache-2.0 | crates.io |
+| `futures` | 0.3.34 | MIT OR Apache-2.0 | crates.io |
+| `futures-channel` | 0.3.34 | MIT OR Apache-2.0 | crates.io |
 | `futures-concurrency` | 7.7.1 | MIT OR Apache-2.0 | crates.io |
-| `futures-core` | 0.3.32 | MIT OR Apache-2.0 | crates.io |
-| `futures-executor` | 0.3.32 | MIT OR Apache-2.0 | crates.io |
-| `futures-io` | 0.3.32 | MIT OR Apache-2.0 | crates.io |
+| `futures-core` | 0.3.34 | MIT OR Apache-2.0 | crates.io |
+| `futures-executor` | 0.3.34 | MIT OR Apache-2.0 | crates.io |
+| `futures-io` | 0.3.34 | MIT OR Apache-2.0 | crates.io |
 | `futures-lite` | 2.6.1 | Apache-2.0 OR MIT | crates.io |
-| `futures-macro` | 0.3.32 | MIT OR Apache-2.0 | crates.io |
-| `futures-sink` | 0.3.32 | MIT OR Apache-2.0 | crates.io |
-| `futures-task` | 0.3.32 | MIT OR Apache-2.0 | crates.io |
-| `futures-util` | 0.3.32 | MIT OR Apache-2.0 | crates.io |
+| `futures-macro` | 0.3.34 | MIT OR Apache-2.0 | crates.io |
+| `futures-sink` | 0.3.34 | MIT OR Apache-2.0 | crates.io |
+| `futures-task` | 0.3.34 | MIT OR Apache-2.0 | crates.io |
+| `futures-util` | 0.3.34 | MIT OR Apache-2.0 | crates.io |
 | `generic-array` | 0.14.7 | MIT | crates.io |
 | `generic-array` | 1.4.3 | MIT | crates.io |
 | `gethostname` | 1.1.0 | Apache-2.0 | crates.io |
@@ -363,32 +361,31 @@ package in the Cargo registry / git checkout.
 | `gpu-allocator` | 0.28.0 | MIT OR Apache-2.0 | crates.io |
 | `gpu-descriptor` | 0.3.2 | MIT OR Apache-2.0 | crates.io |
 | `gpu-descriptor-types` | 0.2.0 | MIT OR Apache-2.0 | crates.io |
-| `gpui-base` | 0.6.0 | Apache-2.0 | crates.io |
-| `gpui-component` | 0.6.0 | Apache-2.0 | crates.io |
-| `gpui-component-macros` | 0.6.0 | Apache-2.0 | crates.io |
-| `gpui-kit-assets` | 0.6.0 | Apache-2.0 | crates.io |
-| `gpui-pre` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-apple` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-collections` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-derive-refineable` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-http-client` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-linux` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-macos` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-macros` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-media` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-perf` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-platform` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-refineable` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-scheduler` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-shared-string` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-sum-tree` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-util` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-util-macros` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-wgpu` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-windows` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-zlog` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-ztracing` | 0.3.3 | Apache-2.0 | crates.io |
-| `gpui-pre-ztracing-macro` | 0.3.3 | Apache-2.0 | crates.io |
+| `gpui-base` | 0.7.0 | Apache-2.0 | crates.io |
+| `gpui-component` | 0.7.0 | Apache-2.0 | crates.io |
+| `gpui-component-macros` | 0.7.0 | Apache-2.0 | crates.io |
+| `gpui-kit-assets` | 0.7.0 | Apache-2.0 | crates.io |
+| `gpui-pre` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-apple` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-collections` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-derive-refineable` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-http-client` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-linux` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-macos` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-macros` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-perf` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-platform` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-refineable` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-scheduler` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-shared-string` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-sum-tree` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-util` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-util-macros` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-wgpu` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-windows` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-zlog` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-ztracing` | 0.3.7 | Apache-2.0 | crates.io |
+| `gpui-pre-ztracing-macro` | 0.3.7 | Apache-2.0 | crates.io |
 | `granit-parser` | 0.0.7 | MIT OR Apache-2.0 | crates.io |
 | `group` | 0.14.0 | MIT/Apache-2.0 | crates.io |
 | `h2` | 0.4.15 | MIT | crates.io |
@@ -537,6 +534,8 @@ package in the Cargo registry / git checkout.
 | `objc2-app-kit` | 0.2.2 | MIT | crates.io |
 | `objc2-app-kit` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | `objc2-cloud-kit` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
+| `objc2-core-audio` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
+| `objc2-core-audio-types` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | `objc2-core-data` | 0.2.2 | MIT | crates.io |
 | `objc2-core-data` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | `objc2-core-foundation` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
@@ -544,6 +543,7 @@ package in the Cargo registry / git checkout.
 | `objc2-core-image` | 0.2.2 | MIT | crates.io |
 | `objc2-core-image` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | `objc2-core-location` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
+| `objc2-core-media` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | `objc2-core-text` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | `objc2-core-video` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | `objc2-encode` | 4.1.0 | MIT | crates.io |
@@ -555,6 +555,7 @@ package in the Cargo registry / git checkout.
 | `objc2-metal` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | `objc2-quartz-core` | 0.2.2 | MIT | crates.io |
 | `objc2-quartz-core` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
+| `objc2-screen-capture-kit` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | `objc2-user-notifications` | 0.3.2 | Zlib OR Apache-2.0 OR MIT | crates.io |
 | `objc_exception` | 0.1.2 | MIT | crates.io |
 | `objc_id` | 0.1.1 | MIT | crates.io |
@@ -781,7 +782,6 @@ package in the Cargo registry / git checkout.
 | `syn` | 3.0.5 | MIT OR Apache-2.0 | crates.io |
 | `sync_wrapper` | 1.0.2 | Apache-2.0 | crates.io |
 | `synstructure` | 0.13.2 | MIT | crates.io |
-| `syntect` | 5.3.0 | MIT | crates.io |
 | `sys-locale` | 0.3.2 | MIT OR Apache-2.0 | crates.io |
 | `sysinfo` | 0.31.4 | MIT | crates.io |
 | `sysinfo` | 0.37.2 | MIT | crates.io |

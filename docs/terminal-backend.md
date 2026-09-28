@@ -1231,6 +1231,6 @@ crates/
 | Need | Read |
 |---|---|
 | Render engine + input (current design) | [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md) |
-| `Element`/`paint_quad`/`shape_line` | `reference/gpui-kit` (tag `v0.6.0`) |
+| `Element`/`paint_quad`/`shape_line` | `reference/gpui-kit` (tag `v0.7.0`) |
 | `EntityInputHandler` | `gpui::EntityInputHandler` trait (docs.rs matching rev) |
 | VT engine API | `crates/vt/src/` (`terminal/`, `grid/`, `render/`) + the IN-0029 low-level designs |

@@ -7,7 +7,6 @@ use gpui::{
     App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, ParentElement, Render,
     Styled, Task, Window, div,
 };
-use gpui_component::Root;
 use gpui_component::dock::{DockArea, DockSkin, PanelStyle};
 
 use oneterm_state::AppState;
@@ -597,10 +596,6 @@ fn restore_zoom_in_dock(
 
 impl Render for OneTermWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let sheet_layer = Root::render_sheet_layer(window, cx);
-        let dialog_layer = Root::render_dialog_layer(window, cx);
-        let notification_layer = Root::render_notification_layer(window, cx);
-
         div()
             .id("oneterm-workspace")
             .on_action(cx.listener(Self::on_action_add_panel))
@@ -618,8 +613,5 @@ impl Render for OneTermWorkspace {
             .child(self.title_bar.clone())
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
             .child(statusbar::build_status_bar(self, window, cx))
-            .children(sheet_layer)
-            .children(dialog_layer)
-            .children(notification_layer)
     }
 }

@@ -5,11 +5,9 @@
 
 use std::{collections::VecDeque, io, path::PathBuf};
 
-use gpui::{
-    App, AppContext as _, ClipboardItem, Context, ParentElement as _, Styled as _, Window, px,
-};
+use gpui::{App, AppContext as _, ClipboardItem, ParentElement as _, Styled as _, Window, px};
 use gpui_component::{
-    Root, WindowExt as _,
+    WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::{Dialog, DialogFooter},
     h_flex,
@@ -24,19 +22,18 @@ const ISSUE_TITLE: &str = "Crash report";
 type CleanupReport = fn(PathBuf) -> io::Result<()>;
 
 /// Show retained crash reports newest-first after the main window opens.
+///
+/// Deferred because the caller holds the window's `Root` mid-update, and the
+/// dialog host is a `Root` plugin that reading a leased `Root` would panic on.
 pub(crate) fn show_crash_reports(
     reports: Vec<CrashReport>,
     cleanup: CleanupReport,
-    root: &mut Root,
     window: &mut Window,
-    cx: &mut Context<Root>,
+    cx: &mut App,
 ) {
-    let mut reports = VecDeque::from(reports);
-    let Some(report) = reports.pop_front() else {
-        return;
-    };
-    let input = report_input(&report.contents, window, cx);
-    root.open_dialog(crash_dialog(report, reports, cleanup, input), window, cx);
+    window.defer(cx, move |window, cx| {
+        open_next_report(VecDeque::from(reports), cleanup, window, cx)
+    });
 }
 
 fn open_next_report(

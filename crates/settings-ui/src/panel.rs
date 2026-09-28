@@ -23,11 +23,9 @@
 //! it is not a dock panel and is deliberately not registered with the
 //! `PanelRegistry` (ARCH-39).
 //!
-//! **This window has no notification layer, on purpose.** `Root::render` draws
-//! none of its own, so a `push_notification` from a settings control goes into a
-//! layer nobody renders and is never seen. Rendering one here — exactly as
-//! `OneTermWorkspace::render` does — makes the toast appear but *under* the page:
-//! the kit's `SettingPage` paints its chips, switches and buttons into a scene
+//! **No settings control pushes a notification, on purpose.** Since GPUI Kit
+//! 0.7 `Root` mounts the notification layer itself, but on 0.6 a toast landed
+//! *under* the page (not re-probed on 0.7): the kit's `SettingPage` paints its chips, switches and buttons into a scene
 //! layer, and `Scene::insert_primitive` orders every primitive by the enclosing
 //! layer before anything else (`reference/zed/crates/gpui/src/scene.rs:74-101`),
 //! so a card drawn later still loses. Two probes settled that it is not a

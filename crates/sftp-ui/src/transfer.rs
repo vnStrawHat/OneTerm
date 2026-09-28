@@ -874,7 +874,6 @@ mod tests {
     use crate::types::TransferStatus;
 
     struct Harness {
-        root: gpui::Entity<gpui_component::Root>,
         panel: gpui::Entity<SftpPanel>,
     }
 
@@ -890,7 +889,7 @@ mod tests {
         let panel = root.read_with(cx, |root, _| {
             root.view().clone().downcast::<SftpPanel>().unwrap()
         });
-        (Harness { root, panel }, cx)
+        (Harness { panel }, cx)
     }
 
     impl Harness {
@@ -930,9 +929,7 @@ mod tests {
         }
 
         fn notification_count(&self, cx: &mut VisualTestContext) -> usize {
-            self.root.read_with(cx, |root, cx| {
-                root.notification.read(cx).notifications().len()
-            })
+            cx.update(|window, cx| window.notifications(cx).len())
         }
     }
 
