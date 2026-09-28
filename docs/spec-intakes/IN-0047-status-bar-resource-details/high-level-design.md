@@ -8,8 +8,10 @@ Date: 2026-09-28
 
 The CPU/MEM item already samples its own process every 2 s. That sample now keeps a few
 more figures it reads anyway (or reads with one cheap call), and the item shows them in a
-two-column table in the kit's tooltip on hover. Nothing is read when the tooltip opens or
-renders: the table shows the latest sample.
+two-column table in the kit's tooltip on hover. Nothing is read when the tooltip opens; the
+table tracks the item's own 2 s cadence for as long as it stays open (2026-09-28 acceptance
+rework — see [`US-0148`](US-0148-resource-tooltip.md) — the owner rejected the first cut,
+which froze at the sample the tooltip opened with).
 
 ## Diagram
 
@@ -27,8 +29,22 @@ renders: the table shows the latest sample.
  Label "CPU 1.2%  MEM 49.3 MB"   details: Memory section, CPU section
       \______________ StatusText stores both; re-renders only on change
                                  |
-                           hover -> kit Tooltip::element (grid: name | value)
+                           hover -> kit Tooltip::element mounts a DetailsTooltip
+                                    entity, which observes StatusText and
+                                    re-renders the table on every tick while open
 ```
+
+The kit calls a tooltip's builder closure once, when it is first shown (`gpui-base`
+`tooltip.rs`: `TooltipOverlay::request_show`), not on every repaint — a `Vec<Section>`
+captured in that closure would freeze there. The fix nests a small entity
+(`DetailsTooltip`) as the tooltip's content instead of a snapshot: it holds an
+`Entity<StatusText>` and calls `cx.observe(&source, |_, _, cx| cx.notify())` in its
+constructor, so it re-renders (reading `StatusText::details()` fresh) on every tick the
+source entity notifies on — the same `cx.notify()` `StatusText::tick` already calls,
+whether or not the tooltip is open. No new timer, no per-frame read: the tooltip only ever
+reacts to the existing 2 s sample. This mirrors the codebase's existing pattern for a small
+live view nested in static content (`crates/settings-ui/src/about.rs`
+`AboutUpdateControls`, `cx.observe` + `.detach()`).
 
 ## UI Wireframe
 
@@ -61,7 +77,9 @@ the contrast gate's `SURFACES` table, so no surface is added.
    whose length is the thread count; macOS has none (`n/a`).
 3. Pure functions turn the figures into the label and the table rows; `StatusText` stores
    both and re-renders only when either changed.
-4. On hover `StatusText` builds the kit tooltip from the stored rows.
+4. On hover `StatusText` builds the kit tooltip, mounting a `DetailsTooltip` entity that
+   observes `StatusText` and re-reads its stored rows on every tick while the tooltip stays
+   open (2026-09-28 acceptance rework).
 
 Platform matrix:
 

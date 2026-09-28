@@ -98,6 +98,35 @@ impl From<String> for Label {
     }
 }
 
+/// A live view of an indicator's hover table (`US-0148` acceptance rework,
+/// 2026-09-28): observes the indicator entity and re-renders on each of its
+/// ticks, so an open tooltip tracks the same 2 s cadence as the item's own
+/// text instead of freezing at the sample it was built from.
+///
+/// The kit's `TooltipOverlay` calls the tooltip's builder closure once, when
+/// the tooltip is first shown (`gpui-base` `tooltip.rs`: `request_show`/the
+/// one-shot `show_task`), not on every repaint — so a `Vec<Section>` baked
+/// into that closure never changes again. A nested entity is the fix: once
+/// mounted as a child of the (otherwise static) tooltip content, it re-renders
+/// on its own whenever something notifies it, independently of its ancestors.
+struct DetailsTooltip {
+    source: Entity<StatusText>,
+}
+
+impl DetailsTooltip {
+    fn new(source: Entity<StatusText>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&source, |_, _, cx| cx.notify()).detach();
+        Self { source }
+    }
+}
+
+impl Render for DetailsTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let details = self.source.read(cx).details();
+        details_table(details, cx.theme().muted_foreground)
+    }
+}
+
 /// The hover table of [`Label::details`]: section titles and values in the
 /// tooltip's own text colour, row names muted, on the kit tooltip's popover fill.
 ///
@@ -325,6 +354,15 @@ impl StatusText {
         self.label.as_ref().map(Label::plain_text)
     }
 
+    /// The indicator's current hover table, or empty when its label carries
+    /// none. Read live by [`DetailsTooltip`] on every tick, not sampled once.
+    fn details(&self) -> Vec<Section> {
+        self.label
+            .as_ref()
+            .map(|label| label.details.clone())
+            .unwrap_or_default()
+    }
+
     /// Tell this indicator how much width the bar has left for it. No-op for an
     /// indicator that never shortens.
     pub(crate) fn set_budget(&self, width: Pixels) {
@@ -378,6 +416,7 @@ impl Render for StatusText {
         let copyable = self.presentation.copyable;
         let shorten = self.presentation.shorten.clone();
         let icon = self.presentation.icon.clone();
+        let source = cx.entity();
         let base_tone = self
             .label
             .as_ref()
@@ -415,13 +454,14 @@ impl Render for StatusText {
                     )
                     .map(|this| {
                         if !details.is_empty() {
-                            // Built from the stored sample: hovering reads nothing.
+                            // A live entity, not the sample baked in here: the
+                            // kit builds this closure once, when the tooltip
+                            // first shows, so a snapshot would freeze
+                            // (`US-0148` acceptance rework).
+                            let source = source.clone();
                             this.tooltip(move |window, cx| {
-                                let details = details.clone();
-                                Tooltip::element(move |_, cx| {
-                                    details_table(details.clone(), cx.theme().muted_foreground)
-                                })
-                                .build(window, cx)
+                                let content = cx.new(|cx| DetailsTooltip::new(source.clone(), cx));
+                                Tooltip::element(move |_, _| content.clone()).build(window, cx)
                             })
                         } else if let Some(tooltip) = tooltip {
                             this.tooltip(move |window, cx| {

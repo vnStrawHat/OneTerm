@@ -4,6 +4,16 @@
 //! for `cpu_usage()` to produce a meaningful delta. The `System` is seeded with
 //! an initial refresh so the first tick gets a real delta instead of 0%.
 //!
+//! The refresh itself (the `sysinfo` walk plus, on Windows, the
+//! `CreateToolhelp32Snapshot` thread count) runs on `cx.background_executor()`,
+//! not the tick that starts it: on a machine with a few hundred processes it
+//! measured 10-14 ms (verifier finding F1, 2026-09-28), most of a 60 Hz frame,
+//! and that cost scales with the system's process count, not this one
+//! process's. The sampler `StatusText` calls every 2 s only checks an
+//! `AtomicBool` and reads a `Mutex` slot — sub-millisecond — the same
+//! stale-while-revalidate shape `git_status.rs` uses for its own background
+//! `git` calls.
+//!
 //! ## CPU normalisation
 //!
 //! `sysinfo`'s `Process::cpu_usage()` returns a **per-core** percentage
@@ -39,9 +49,16 @@
 //!
 //! The same sample also fills a table the item shows on hover (`US-0148`): every
 //! memory figure the OS gives (see [`details`] for the per-platform names), the
-//! CPU figure with its core count, CPU time, thread count and uptime. Nothing is
-//! read when the tooltip opens; it shows the latest sample.
+//! CPU figure with its core count, CPU time, thread count and uptime. Nothing extra
+//! is read for it: the table tracks this same 2 s sampler for as long as the
+//! tooltip stays open, via a nested entity in `status_text.rs`
+//! (`DetailsTooltip`) that observes this indicator and re-renders on every
+//! tick (2026-09-28 acceptance rework: the first cut baked the table into the
+//! tooltip's builder closure, which the kit only calls once per hover, so it
+//! froze at the sample open with it).
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{App, Entity, Window};
@@ -52,8 +69,25 @@ use super::status_text::{Label, Presentation, Section, Shorten, StatusText};
 
 /// Only the two fields the indicator shows — the default kind also walks
 /// disk usage, the exe path, and (on Windows) every process thread (PERF-28).
+///
+/// `tasks` is not requested here and stays on anyway: `ProcessRefreshKind`
+/// defaults it to `true` even from `nothing()` (sysinfo treats a Linux task
+/// as a process in its own right, so it fetches the list regardless — see the
+/// `refresh_kind_keeps_tasks_on_for_the_linux_thread_count` test below), which
+/// is what lets `details()` read the Linux thread count off `process.tasks()`
+/// with no extra call.
 fn refresh_kind() -> ProcessRefreshKind {
     ProcessRefreshKind::nothing().with_cpu().with_memory()
+}
+
+/// The latest finished sample, or `None` before the first background refresh
+/// completes.
+type Slot = Arc<Mutex<Option<Label>>>;
+
+/// A poisoned slot only means a refresh thread panicked; the value is still a
+/// plain `Option`, so keep reading it (same shape as `git_status.rs`).
+fn lock(slot: &Slot) -> std::sync::MutexGuard<'_, Option<Label>> {
+    slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Indicator showing the CPU and memory usage of the OneTerm process.
@@ -68,13 +102,18 @@ pub fn resource(window: &mut Window, cx: &mut App) -> Entity<StatusText> {
         }
     };
 
-    // Seed the System with an initial refresh so the first timer tick gets a
-    // real CPU delta instead of 0%. This also lazily initialises the CPU list
-    // (needed for nb_cpus normalisation).
+    // Seed the System with an initial refresh so the first background refresh
+    // gets a real CPU delta instead of 0%. This also lazily initialises the
+    // CPU list (needed for nb_cpus normalisation). One-time startup cost, not
+    // the recurring one F1 was about.
     let mut sys = System::new();
     if let Some(pid) = pid {
         sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh_kind());
     }
+    let sys = Arc::new(Mutex::new(sys));
+
+    let slot: Slot = Arc::default();
+    let in_flight = Arc::new(AtomicBool::new(false));
 
     StatusText::new_entity(
         "resource-indicator",
@@ -85,42 +124,66 @@ pub fn resource(window: &mut Window, cx: &mut App) -> Entity<StatusText> {
             copyable: false,
             shorten: Shorten::Never,
         },
-        Box::new(move |_| {
+        // The tick itself only checks a flag and reads a mutex slot — the
+        // `sysinfo` refresh and the Windows thread snapshot run on the
+        // background executor, not here (F1, 2026-09-28).
+        Box::new(move |cx| {
             let pid = pid?;
-            sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh_kind());
-            let process = sys.process(pid)?;
-            // sysinfo returns per-core CPU (100% = 1 core). Divide by nb_cpus
-            // to get the total-system percentage that Task Manager shows.
-            let cores = sys.cpus().len().max(1);
-            let os = os_memory_counters();
-            let sample = Sample {
-                cpu_percent: process.cpu_usage() / cores as f32,
-                cores,
-                cpu_time: Duration::from_millis(process.accumulated_cpu_time()),
-                uptime: Duration::from_secs(process.run_time()),
-                threads: process
-                    .tasks()
-                    .map(|tasks| tasks.len())
-                    .or_else(thread_count),
-                private_working_set: os.map(|c| c.private_working_set).filter(|&b| b > 0),
-                resident: process.memory(),
-                virtual_or_commit: process.virtual_memory(),
-                peak_working_set: os.map(|c| c.peak_working_set).filter(|&b| b > 0),
-            };
-            let mut label = Label::from(format!(
-                "CPU {:.1}%  MEM {}",
-                sample.cpu_percent,
-                format_memory(displayed_memory(
-                    sample.private_working_set,
-                    sample.resident
-                ))
-            ));
-            label.details = details(&sample);
-            Some(label)
+            if !in_flight.swap(true, Ordering::AcqRel) {
+                let sys = sys.clone();
+                let slot = slot.clone();
+                let in_flight = in_flight.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        let label = sample_label(pid, &sys);
+                        *lock(&slot) = label;
+                        in_flight.store(false, Ordering::Release);
+                    })
+                    .detach();
+            }
+            lock(&slot).clone()
         }),
         window,
         cx,
     )
+}
+
+/// One full sample of `pid`: refreshes `sys` in place (kept across calls for
+/// the CPU-usage delta), reads the Windows-only memory and thread-count
+/// extras, and builds the label and its hover table. Blocking work, meant to
+/// run on the background executor, not the UI thread.
+fn sample_label(pid: Pid, sys: &Mutex<System>) -> Option<Label> {
+    let mut sys = sys.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh_kind());
+    let process = sys.process(pid)?;
+    // sysinfo returns per-core CPU (100% = 1 core). Divide by nb_cpus
+    // to get the total-system percentage that Task Manager shows.
+    let cores = sys.cpus().len().max(1);
+    let os = os_memory_counters();
+    let sample = Sample {
+        cpu_percent: process.cpu_usage() / cores as f32,
+        cores,
+        cpu_time: Duration::from_millis(process.accumulated_cpu_time()),
+        uptime: Duration::from_secs(process.run_time()),
+        threads: process
+            .tasks()
+            .map(|tasks| tasks.len())
+            .or_else(thread_count),
+        private_working_set: os.map(|c| c.private_working_set).filter(|&b| b > 0),
+        resident: process.memory(),
+        virtual_or_commit: process.virtual_memory(),
+        peak_working_set: os.map(|c| c.peak_working_set).filter(|&b| b > 0),
+    };
+    let mut label = Label::from(format!(
+        "CPU {:.1}%  MEM {}",
+        sample.cpu_percent,
+        format_memory(displayed_memory(
+            sample.private_working_set,
+            sample.resident
+        ))
+    ));
+    label.details = details(&sample);
+    Some(label)
 }
 
 /// The figure `MEM` shows: the private working set when the OS gave one,
@@ -267,7 +330,11 @@ fn os_memory_counters() -> Option<OsMemoryCounters> {
 /// only): the own entry of a process snapshot on Windows, `None` elsewhere.
 ///
 /// ponytail: walks every process like `sysinfo`'s own refresh does, once per
-/// 2 s sample; `NtQueryInformationProcess` if that ever shows up in a profile.
+/// 2 s sample, now on the background executor alongside that refresh (F1,
+/// 2026-09-28) rather than the UI thread; revisit with a per-process (not
+/// whole-system) thread-count query if the background cost ever shows up in
+/// a profile — `NtQueryInformationProcess` does not give one, so it is not
+/// that call.
 fn thread_count() -> Option<usize> {
     #[cfg(windows)]
     {
@@ -335,8 +402,19 @@ mod tests {
 
     use super::{
         RESIDENT_NAME, Sample, VIRTUAL_NAME, details, displayed_memory, format_duration,
-        format_memory,
+        format_memory, refresh_kind,
     };
+
+    // F2 (US-0148 acceptance rework, 2026-09-28): `refresh_kind()` never asks
+    // for `tasks` explicitly, relying on `ProcessRefreshKind::nothing()`
+    // defaulting it to `true` (sysinfo counts a Linux task as its own
+    // process, so it fetches the list regardless of what else is requested).
+    // Pin that default so an upstream sysinfo change that stops doing this is
+    // caught here instead of as a silently empty Linux thread count.
+    #[test]
+    fn refresh_kind_keeps_tasks_on_for_the_linux_thread_count() {
+        assert!(refresh_kind().tasks());
+    }
 
     fn sample() -> Sample {
         Sample {

@@ -1,5 +1,13 @@
 # US-0148 GUI walk — CPU/MEM hover table
 
+> **2026-09-28 acceptance rework**: the owner rejected the first cut below ("the
+> information inside the tooltip does not update with the interval"). The section
+> [Acceptance rework: the tooltip stays live while open](#acceptance-rework-the-tooltip-stays-live-while-open)
+> at the end of this file supersedes the "freezes at the sample taken when the pointer
+> entered" note in the first walk — the table now tracks the item's own 2 s cadence for as
+> long as the tooltip stays open. The first walk is kept for its OS-counter comparison,
+> which is still valid.
+
 Windows 11 Enterprise 10.0.26200, `fast-dev` profile build of this branch
 (`target/fast-dev/oneterm.exe`), private `USERPROFILE`/`HOME` scratch directory, window
 forced to 1280x800 at screen (40,40), one `Command Prompt` local-shell tab (the default),
@@ -65,3 +73,55 @@ Before this controlled pass, the very first screenshot taken after positioning t
 its status bar under a cursor that happened to already be resting there, which GPUI's hover
 tracking picked up as a real enter. The baseline screenshot in step 3 (cursor moved away)
 confirms the tooltip is hover-driven, not a stuck or permanent overlay.
+
+## Acceptance rework: the tooltip stays live while open
+
+Owner ruling, 2026-09-28: "the information inside the tooltip does not update with the
+interval" — rejected the first cut above. Fix: `DetailsTooltip`, a small entity nested in
+the tooltip's content that observes the `StatusText` indicator entity
+(`cx.observe(&source, |_, _, cx| cx.notify())`) and re-renders on every tick, instead of a
+`Vec<Section>` baked into the tooltip's builder closure (which the kit only calls once per
+hover). See `crates/workspace/src/widgets/status_text.rs` and
+[`high-level-design.md`](../high-level-design.md).
+
+Same setup as the walk above (`fast-dev` build of this branch after the fix, private
+`USERPROFILE`/`HOME`, 1280x800 at (40,40), pid this walk started only — 22316). The cursor
+was moved onto the CPU/MEM item **once** (client (1170,778)) and held there, motionless,
+for the whole sequence; `PrintWindow` captures were taken at the pointer-enter moment
+(t=0) and again 3 s and 6 s later, with no further input in between.
+
+| Capture | Wall clock | CPU time (user + kernel) | Uptime | Threads |
+| --- | --- | --- | --- | --- |
+| [t=0](US-0148-live-t0-dark.png) | 11:19:47 | 1.8 s | 29.0 s | 18 |
+| [t=3s](US-0148-live-t3-dark.png) | 11:19:50 | 1.9 s | 33.0 s | 18 |
+| [t=6s](US-0148-live-t6-dark.png) | 11:19:53 | 2.0 s | 35.0 s | 18 |
+
+CPU time and Uptime both advance between every capture (the memory figures move too: private
+working set 52.4 -> 53.3 -> 53.2 MB, commit 111.8 -> 112.9 -> 112.7 MB) while the cursor never
+left the item — the table is now live, matching the item's own 2 s cadence, not frozen at the
+sample the tooltip opened with.
+
+### F1: the sample moved off the UI thread
+
+Verifier finding F1 (Major, 2026-09-28): the 2 s sampler ran synchronously inside
+`StatusText::tick`, on gpui's foreground executor (the UI thread) — the `sysinfo` refresh
+plus the Windows `CreateToolhelp32Snapshot` thread-count walk together cost 10-16 ms on a
+machine with the verifier's process count, most of a 60 Hz frame, every 2 s. Fix: the whole
+sample (`sample_label`, in `resource.rs`) now runs on `cx.background_executor()`; the tick
+closure only swaps an `AtomicBool` and reads a `Mutex<Option<Label>>` slot — the same
+stale-while-revalidate shape `git_status.rs` already uses for its own background `git`
+calls — and posts nothing back onto the foreground beyond what `StatusText::tick` already
+does with the returned `Label`.
+
+Measured on this machine (`cargo test -p oneterm-workspace --lib -- --ignored --nocapture`,
+a throwaway probe removed before this commit; own process, 8 samples each):
+
+| | Before (synchronous, on the UI thread) | After (foreground part of the tick only) |
+| --- | --- | --- |
+| Samples | 10.0, 10.5, 10.7, 11.0, 11.4, 11.5, 11.9, 14.1 ms | 0.2, 0.2, 0.2, 0.3, 0.6, 1, 1, 41.6 µs |
+| Median | ~11.2 ms | ~0.3 µs (all 8 sub-millisecond) |
+
+The "before" numbers reproduce the verifier's finding (~10-16 ms) on this machine; the
+"after" numbers are the foreground tick's own cost once the refresh and the thread-count
+walk moved to the background executor — every sample sub-millisecond, most sub-microsecond
+(the one 41.6 µs sample is the first call's cache/branch warm-up).
