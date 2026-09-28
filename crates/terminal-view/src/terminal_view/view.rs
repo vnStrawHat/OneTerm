@@ -389,12 +389,13 @@ impl TerminalView {
                 // (an inactive tab), which would otherwise never hear from its
                 // pump again. It repaints only for new stamps: a frame already
                 // drew the output itself, and a repaint per hint would double the
-                // frames of a TUI that the UI keeps up with.
+                // frames of a TUI that the UI keeps up with. Never in a hidden tab:
+                // there a notify costs a whole-window frame (US-0145, below).
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(OUTPUT_CATCH_UP).await;
                     let _ = this.update(cx, |view, cx| {
                         view.session.read(cx).release_repaint_hint();
-                        if view.catch_up_with_output(cx) {
+                        if view.catch_up_with_output(cx) && !view.in_hidden_tab(cx) {
                             cx.notify();
                         }
                     });

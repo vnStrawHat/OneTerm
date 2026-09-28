@@ -52,8 +52,9 @@ Created: 2026-09-28
 
 - [x] Per-chunk attribution table from a release hotpath build under the 300k flood, raw
   JSON committed.
-- [x] PTY owner CPU per chunk down (median 10.2 -> 4.1 µs), conout down slightly (6.7 -> 5.7
-  µs); feed count reported (unchanged, see "Why not coalescing").
+- [x] PTY owner CPU per chunk down (-37 % in the verifier's pair, -60 % in the medians
+  here); conout thread CPU unchanged (its per-chunk allocation is gone); feed count reported
+  (unchanged, see "Why not coalescing").
 - [x] BUG-0070's `a_pump_yields_to_the_demand_within_a_bounded_number_of_chunks` 20/20
   standalone; `a_flooding_loop_hands_the_engine_to_a_waiting_frame` 5/5; `classify_event`
   and the child-exit loop tests pass; the real-shell `session_tests.rs` (conout re-arm) pass.
@@ -231,17 +232,23 @@ one. The PTY-side code is the same in all three.
 | after-3 | 31.3 | 1047 | 299,299 | 2,051 | 11.1% | 4.8% | 5.02 | 6.0% | 6.27 | 2.20 µs | 16.64 µs | 2.24 µs |
 
 Medians, before -> after: **PTY owner 9.6 % -> 4.2 % of a core, 10.2 -> 4.1 µs per chunk
-(-60 %)**; `drain_pty` 7.0 -> 2.0 µs; hints posted 298k -> 2k (about two per frame); conout
-6.7 -> 5.7 µs per chunk; UI thread 19.2 % -> 11.1 % (the event task no longer wakes per
-line). Frames drawn and feeds unchanged. Allocation count (`raw/us0147-count-*.json`):
+(-60 %)** (the PTY side is the same code in all three after runs; the independent
+verification measured 7.36 -> 4.66 µs, -37 %, in one pair); `drain_pty` 7.0 -> 2.0 µs;
+hints posted 298k -> 2k (about two per frame). Conout thread CPU: **unchanged** (6.7 -> 5.7
+µs per chunk here, 5.49 -> 5.54 µs in the verification pair: within noise). UI thread
+19.2 % (median of the four before runs) -> 11.1 % (`after-3` only; `after-1`/`-2` ran the
+superseded view variant and are left out of this figure); the verification pair gave 16.2
+-> 10.4 %. The event task no longer wakes per line. Frames drawn and feeds unchanged. Allocation count (`raw/us0147-count-*.json`):
 `Ring::wake` 298,215 -> **0** allocations; no other loop, pump or conout site allocates per
 chunk before or after.
 
 ### Latency and pacing
 
 - Keystroke echo (`keystroke_echo_latency`, 400 keys each, `raw/us0147-echo-latency.txt`):
-  10 interleaved pairs of the two saved test binaries. p50 median of the 10 runs: before
-  481 µs, after 383 µs; p95 median: before 2.20 ms, after 2.27 ms. Paired p95 differences
+  10 interleaved pairs of the two saved test binaries: **unchanged**. p50 median of the 10
+  runs: before 481 µs, after 383 µs, but the verification's two pairs gave 257 / 263 µs
+  before and 250 / 265 µs after, so the p50 difference is noise, not a gain; p95 median:
+  before 2.20 ms, after 2.27 ms (verification: 2.22 / 2.19 vs 2.29 / 2.17 ms). Paired p95 differences
   (after - before) run from -0.20 to +1.01 ms with a median of +0.03 ms; the two large ones
   are pairs whose *before* p95 was unusually low (1.31 and 1.77 ms against 2.2 ms
   everywhere else). The sequential runs before the pairs gave p95 2.25-2.33 ms before and
@@ -266,7 +273,9 @@ chunk before or after.
   `each_chunk_posts_exactly_one_output_after_its_reliable_events` (now releases between
   chunks, as a snapshot would); `session::tests::a_snapshot_releases_the_repaint_hint`;
   `view_tests::output_that_came_without_a_hint_is_caught_up_a_frame_later`;
-  `pipe_tests::wake_ups_posted_before_a_poll_all_arrive`.
+  `pipe_tests::wake_ups_posted_before_a_poll_all_arrive`;
+  `panel::tests::the_catch_up_in_a_hidden_tab_releases_without_notifying` (after the merge
+  with US-0145, below).
 - BUG-0070 test 20/20 standalone; the local hand-over test 5/5; `cargo test -p
   oneterm-terminal` 221, `-p oneterm-terminal-view` 389 + 1, `-p oneterm-local-shell` 35.
 
@@ -278,6 +287,28 @@ clean without a feature, with `oneterm-app/hotpath-profiling` and with
 -p oneterm-vt` green; `check-doc-paths` and `check-english` pass; the ignored-test census
 re-recorded for `keystroke_echo_latency` (a measurement). Full `pwsh scripts/ci-local.ps1`
 after deleting `target/release`: exit 0, final line `ci-local: all checks passed.`
+
+### Verification and the merge with main
+
+Independent verification: [`evidence/US-0147-verify.md`](evidence/US-0147-verify.md), PASS
+with one fix owed at merge. Main (BUG-0081, US-0145) merged in without conflicts, then:
+
+- **F1** (fixed): US-0145 skips `cx.notify()` for a view in a hidden tab, because the tab
+  strip reads that view and every notify costs a whole-window frame. The catch-up task
+  notified whenever it stamped a line, without that guard, so a hidden tab with streaming
+  output cost a frame per hint again. It now notifies only outside a hidden tab. The
+  verifier's throwaway test is committed as
+  `panel::tests::the_catch_up_in_a_hidden_tab_releases_without_notifying`: five hints to a
+  hidden tab give 5 releases and 0 notifies; with the guard removed it fails with 5
+  notifies. `output_in_a_hidden_tab_does_not_notify_its_view` and
+  `output_that_came_without_a_hint_is_caught_up_a_frame_later` still pass.
+- **F2/F3** (records): the echo p50 and conout CPU differences did not reproduce and are
+  stated as unchanged above; the UI-thread median no longer mixes in the superseded runs.
+  The original commit message (`6a69384a`) quotes both as gains; it sits under the
+  verification commit and the merge, so it was left as is and corrected here and in the
+  fix commit's message.
+- **F4** (docs): `docs/terminal-backend.md` § 5.3's `SessionEventSink` row says
+  `post_repaint()` returns whether it queued.
 
 ### Gaps
 
@@ -299,5 +330,4 @@ after deleting `target/release`: exit 0, final line `ci-local: all checks passed
 
 ## Handoff
 
-Done. Remaining IN-0046 candidates: US-0145 (UI thread outside the terminal element; the
-per-line event-task wake it partly included is gone now) and US-0146.
+Done, verified, merged with main (F1 fixed on top). Remaining IN-0046 candidate: US-0146.
