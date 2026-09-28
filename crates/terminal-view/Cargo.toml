@@ -47,3 +47,7 @@ hotpath = { workspace = true, optional = true }
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 oneterm-terminal = { workspace = true, features = ["test-support"] }
+
+# The real DirectWrite text system for the glyph cache's ASCII fast-path test (US-0146).
+[target.'cfg(windows)'.dev-dependencies]
+gpui_platform.workspace = true

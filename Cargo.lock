@@ -5656,6 +5656,7 @@ dependencies = [
  "gpui-base",
  "gpui-component",
  "gpui-pre",
+ "gpui-pre-platform",
  "hotpath",
  "image",
  "log",

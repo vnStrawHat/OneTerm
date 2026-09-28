@@ -11,7 +11,7 @@ The workspace consumes the published GPUI Kit 0.7 release family from crates.io.
 | Workspace name | Package | Requirement | Resolved version | Policy |
 |---|---|---:|---:|---|
 | `gpui` | `gpui-pre` | `0.3` | `0.3.7` | Move with `gpui_platform`. GPUI Kit 0.7.0 pins `gpui-pre =0.3.7`. |
-| `gpui_platform` | `gpui-pre-platform` | `0.3` | `0.3.7` | Move with `gpui`; app crate only. |
+| `gpui_platform` | `gpui-pre-platform` | `0.3` | `0.3.7` | Move with `gpui`; app crate only, plus the test-only exception in § 2. |
 | `gpui-base` | `gpui-base` | `0.7` | `0.7.0` | Move with all GPUI Kit 0.7 layers. |
 | `gpui-component` | `gpui-component` | `0.7` | `0.7.0` | Move with all GPUI Kit 0.7 layers. |
 | `gpui-kit-assets` | `gpui-kit-assets` | `0.7` | `0.7.0` | Move with all GPUI Kit 0.7 layers; app crate only. |
@@ -55,6 +55,15 @@ gpui-component.workspace = true
 ```
 
 Dock-owning crates additionally use `gpui-base`. Only `oneterm-app` directly uses `gpui_platform` and `gpui-kit-assets`: the platform crate owns window/event-loop integration, while the asset crate supplies GPUI Kit icons and fonts merged into `CustomAssets`.
+
+**Test-only exception (`US-0146`).** A crate may take `gpui_platform` as a
+`[target.'cfg(windows)'.dev-dependencies]` entry when a unit test must compare its code
+against the **real** platform text system, which GPUI's test platform replaces with a no-op
+(and whose headless Windows platform does too). Today that is `oneterm-terminal-view`, whose
+glyph-cache ASCII fast path must equal DirectWrite's shaping and is tested against crate-private
+items that an app-crate integration test cannot reach. The entry never reaches a normal build,
+Linux or macOS, or `THIRD-PARTY-NOTICES.md` (dev edges are skipped), and `gpui-pre-platform` is
+already in the graph through the app.
 
 ## 3. Allowed auxiliary crates
 
@@ -108,7 +117,10 @@ Treat a GPUI upgrade as one reviewed dependency change:
 1. Read the target release notes and source in `reference/gpui-kit`.
 2. Update both `gpui-pre` requirements together and all three GPUI Kit layer requirements together as applicable.
 3. Refresh `Cargo.lock`; confirm a single intended version of each family with `cargo tree`.
-4. Adapt OneTerm code without a local UI `[patch]`.
+4. Adapt OneTerm code without a local UI `[patch]`. Re-diff the copies of private GPUI code:
+   `apply_force_width` in `crates/terminal-view/src/render/glyphs.rs` against `gpui-pre`'s
+   `apply_force_width_to_layout` (`text_system/line_layout.rs`); the test
+   `force_width_copy_matches_gpui` fails if GPUI's behaviour moved.
 5. Update this version table, `deny.toml`, and generated `THIRD-PARTY-NOTICES.md` when the graph changes.
 6. Replace `reference/gpui-kit` with a clean checkout at the exact released tag used for research.
 7. Run `scripts/ci-local.sh --full` (or the PowerShell twin).

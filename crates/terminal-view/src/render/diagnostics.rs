@@ -19,7 +19,11 @@ pub(crate) struct FrameStats {
     pub rows_total: u32,
     pub rows_candidate: u32,
     pub rows_planned: u32,
+    /// Glyph-cache misses: layouts built this frame.
     pub shape_calls: u32,
+    /// Of those, the ones built by the ASCII fast path without calling the
+    /// shaper (`US-0146`).
+    pub ascii_layouts: u32,
     pub glyph_hits: u32,
     /// URL rescan *events*: one per frame that had any dirty row.
     pub url_scans: u32,
@@ -123,7 +127,7 @@ impl DiagnosticsLog {
         let p95 = latency.percentile(0.95);
         let p99 = latency.percentile(0.99);
         log::debug!(
-            "terminal render: rows {}/{} candidate, {} planned, {} shaped, {} glyph hits, \
+            "terminal render: rows {}/{} candidate, {} planned, {} shaped ({} ascii), {} glyph hits, \
              {} url scans over {} rows, {} class scans over {} rows, \
              {} quads, {} glyphs, {} layers, \
              prepaint {} us, paint {} us, \
@@ -132,6 +136,7 @@ impl DiagnosticsLog {
             stats.rows_total,
             stats.rows_planned,
             stats.shape_calls,
+            stats.ascii_layouts,
             stats.glyph_hits,
             stats.url_scans,
             stats.url_rows_scanned,

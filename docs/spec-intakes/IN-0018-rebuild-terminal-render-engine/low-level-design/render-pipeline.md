@@ -255,18 +255,26 @@ phase-1 candidates and `rows_planned` phase-4 rebuilds.
 ### Glyph cache (`glyphs.rs`)
 
 ```rust
-pub(crate) struct FontKey { family: u32 /* FNV of the family name */, size_bits: u32, weight_bits: u32, italic: bool }
+pub(crate) struct FontKey { family: u32 /* FNV of the family name */, size_bits: u32, weight_bits: u32, italic: bool,
+                            plain: bool /* features list has calt = 0 and no feature on (US-0146) */ }
 pub(crate) struct FontSet { /* regular, bold, italic, bold-italic: (Font, FontKey) */ }
 impl FontSet { pub fn new(base: &Font, font_size: Pixels) -> Self; pub fn get(&self, bold, italic) -> (&Font, FontKey); pub fn regular(&self) -> (&Font, FontKey) }
 struct RunKey { text_hash: u64 /* FNV-1a over UTF-8 bytes */, len: u32, font: FontKey, forced: bool }
-pub(crate) struct GlyphCache { map: HashMap<RunKey, Entry { line: Arc<LineLayout>, used: u32 }> /* HashMap::new(): no up-front table */, generation: u32, capacity: usize /* 4096 */ }
+pub(crate) struct GlyphCache { map: HashMap<RunKey, Entry { line: Arc<LineLayout>, used: u32 }> /* HashMap::new(): no up-front table */,
+                               ascii: HashMap<FontKey, Option<AsciiGlyphs>> /* US-0146; None = font failed the check */,
+                               generation: u32, capacity: usize /* 4096 */ }
+struct AsciiGlyphs { font_id: FontId, ids: [GlyphId; 95] /* 0x20..=0x7E */, advance: f32, ascent: Pixels, descent: Pixels }
 impl GlyphCache {
     pub fn begin_frame(&mut self)                                  // generation += 1
     pub fn shape(&mut self, text: &str, font: &Font, key: FontKey, font_size: Pixels,
                  force_width: Option<Pixels>, window: &Window, stats: &mut FrameStats) -> Arc<LineLayout>
-    // hit: mark used = generation, return clone (Arc). miss: window.text_system().layout_line_by_hash(
-    //   text_hash, len, font_size, &[TextRun { len, font, color: black, .. }], force_width,
-    //   || SharedString::from(text)) ; stats.shape_calls += 1 ; insert ; if len > capacity { retain used >= generation - 2 }
+    // hit: mark used = generation, return clone (Arc).
+    // miss: if key.plain && text is non-empty printable ASCII && ascii[key] (read on first use) is Some:
+    //         layout by hand (ids[byte - 0x20], pen += advance, then GPUI's force-width pass) ; stats.ascii_layouts += 1
+    //       else window.text_system().layout_line_by_hash(text_hash, len, font_size,
+    //         &[TextRun { len, font, color: black, .. }], force_width, || SharedString::from(text))
+    //       stats.shape_calls += 1 ; insert ; if len > capacity { retain used >= generation - 2 }
+    pub fn clear(&mut self)                                        // map and ascii tables
 }
 ```
 
@@ -284,6 +292,38 @@ per view from the first frame. A bucket is now 48 bytes and the map starts empty
 cap is soft: when an insert finds the map at the cap, entries unused for two generations go
 first, so the map exceeds 4096 only while more runs than that were shaped in the last three
 frames (bounded by the viewport, not by time).
+
+**ASCII fast path (US-0146 of IN-0046).** A miss for a run that cannot need shaping skips
+the platform shaper, whose miss also pays GPUI's linear scan of its frame caches. Conditions,
+all required: `FontKey::plain` (ligatures off: `calt = 0` in the features list and no feature
+turned on; `FontConfig::ligatures` defaults to on, so the default setting never takes this
+path); every byte of the run in 0x20..=0x7E (no control char, no combining mark, no non-ASCII
+char); and the font's `AsciiGlyphs` table exists. With `calt = 0`, DirectWrite still applies
+`liga`, `clig` (GPUI turns them on), `kern` and the required `ccmp`, `locl`, `rlig` and
+`rclt`, any of which can rewrite an ASCII context (Fira Code's `ccmp` turns a backtick after
+`A-Z` or a backtick into `grave.case`). So the table is read once per `FontKey` by shaping one
+reference line with `layout_line`: every ordered pair of the 95 printable chars (an order-2
+de Bruijn walk, 9,026 chars), then longer ligature probes (`ffi ffl === !== <=> ==> <!-- -->
+::= ... www`); about 2-3 ms per font variant, once. It is kept only if the hand-built layout of
+that same line equals GPUI's field by field: one `ShapedRun` (no fallback face), one glyph per
+byte with `index` = byte, the same glyph id for a char in every context, `x` = the accumulated
+constant advance, `y` = 0, no emoji, same width, ascent and descent. A fallback face, a
+contextual substitution, kerning or a proportional advance fails the check **when the
+reference exhibits it**; then the font keeps shaping (Fira Code, Segoe UI, Lucida Console's
+simulated bold). What stays unproven: contexts longer than two chars other than the probes
+(an independent probe of 35,937 punctuation triples and long random lines found none, which is
+evidence, not proof), and `locl` rules of a locale other than the one the check ran under (the
+check shapes with the current user locale, so such rules are covered only for pairs, only
+under that locale). The force-width pass is GPUI's private `apply_force_width_to_layout`,
+copied line for line and re-diffed on every `gpui-pre` bump (`docs/agents/dependencies.md`
+§ 4; `force_width_copy_matches_gpui` compares both on the stub shaper). `plain` is part of
+`FontKey`, so a ligature switch changes every run and table key even before `ensure_fonts`
+clears the cache. DirectWrite returns trailing whitespace as a second `ShapedRun` where the
+fast path returns one run with the same glyphs and width; the painter walks every run, so no
+consumer may assume run parity. Proof: `ascii_fast_path_matches_directwrite` (Windows, real
+DirectWrite: Lilex, Consolas, Courier New, forced and unforced; Fira Code rejected where
+installed), `ascii_check_rejects_a_contextual_rule`, `reference_walks_every_ordered_printable_pair`
+and `ascii_fast_path_falls_through_to_the_shaper`.
 
 ### Element (`element.rs`)
 

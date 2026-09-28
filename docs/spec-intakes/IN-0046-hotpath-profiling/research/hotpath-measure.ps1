@@ -18,6 +18,7 @@
 #          cmd to exit, idle 5 s.
 #   Tui    a second tab, then tui-mimic.py (IN-0045) in both tabs for -LoadSeconds,
 #          switching the visible tab every 10 s; wait for both to exit, idle 5 s.
+# -NoLigatures writes a terminal.json with `font.ligatures: false` (US-0146's fast path).
 # The report (hotpath JSON) goes to <Out>\<Label>.json.
 param(
   [Parameter(Mandatory)] [string] $Exe,
@@ -26,6 +27,7 @@ param(
   [string] $Out = $PSScriptRoot,
   [string] $AllocMetric = '',
   [int] $LoadSeconds = 180,
+  [switch] $NoLigatures,
   [int] $IdleSeconds = 60,
   # Post WM_ACTIVATE so gpui treats the window as active (the terminal is focused and
   # its cursor blinks) without taking the real foreground from the user (US-0145).
@@ -106,6 +108,7 @@ $work = Join-Path $Scratch "cwd-$Label"
 Remove-Item -Recurse -Force $home_, $work -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $home_, $work, "$home_\.OneTerm", $Out | Out-Null
 '{"auto_check": false, "schema_version": 1}' | Set-Content "$home_\.OneTerm\update_config.json"
+if ($NoLigatures) { '{"schema_version": 1, "font": {"ligatures": false}}' | Set-Content "$home_\.OneTerm\terminal.json" }
 if ($AgentPanel) { '{"right_dock_mode": "agent"}' | Set-Content "$home_\.OneTerm\ui_config.json" }
 $Out = (Resolve-Path $Out).Path   # the app runs in $work, so a relative path would land there
 $report = Join-Path $Out "$Label.json"
