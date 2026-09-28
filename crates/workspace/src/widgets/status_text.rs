@@ -328,7 +328,10 @@ impl StatusText {
         cx.new(|cx| {
             let timer = cx.spawn_in(window, async move |this, window| {
                 loop {
-                    window.background_executor().timer(interval).await;
+                    // On the shared grid, so the blink and every indicator
+                    // repaint in one frame (`US-0145`).
+                    let wait = oneterm_state::until_next_tick(interval);
+                    window.background_executor().timer(wait).await;
                     // The window or the indicator is gone: stop ticking.
                     if this
                         .update_in(window, |this: &mut Self, _, cx| this.tick(cx))
@@ -412,6 +415,10 @@ impl Shorten {
 }
 
 impl Render for StatusText {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "StatusText")
+    )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let copyable = self.presentation.copyable;
         let shorten = self.presentation.shorten.clone();

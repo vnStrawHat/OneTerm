@@ -1,0 +1,66 @@
+busy samples: 17133
+ 81.6%  Window::draw (build the frame)
+ 70.5%    draw_roots
+ 21.6%      taffy layout (compute_layout)
+ 12.2%      Render::render of views (view render fns)
+  9.0%      paint phase
+  4.5%    arena clear / element drop
+  3.2%  present (DirectX)
+  0.3%  WM_GETOBJECT (UI Automation)
+  1.1%  IME / text services (Ctf/TF_)
+ 15.0%  heap alloc/free (RtlAllocateHeap/RtlFreeHeap anywhere)
+  0.1%  PTY/terminal (oneterm_terminal_view element)
+
+View subtrees (inclusive, any phase):
+ 67.7%  gpui::view::AnyView
+ 45.9%  gpui_component::window_border::WindowBorder
+ 18.0%  gpui::app::entity_map::Entity<gpui_base::dock::dock_area::DockArea
+ 16.2%  gpui::app::entity_map::Entity<gpui_base::dock::tab_group::TabGroup
+ 15.0%  gpui_base::resizable::panel::ResizablePanelGroup
+ 14.9%  gpui::app::entity_map::Entity<oneterm_workspace::layout::title_bar::AppTitleBar
+ 14.6%  gpui_base::resizable::panel::ResizablePanel
+ 14.2%  gpui_component::title_bar::TitleBar
+ 11.3%  gpui_component::tab::tab_bar::TabBar
+ 11.2%  gpui_base::tabs::Tabs
+  7.6%  gpui_component::button::toggle::ToggleGroup
+  7.5%  gpui_component::button::button::Button
+  6.9%  gpui_base::toggle_group::ToggleGroup
+  6.1%  gpui_base::button::Button
+  5.4%  gpui_component::button::toggle::Toggle
+  5.2%  gpui_component::menu::dropdown_menu::DropdownMenuPopover<gpui_component::button::button::Button
+  5.0%  gpui_base::toggle::Toggle
+  4.2%  gpui_component::popover::Popover
+  3.6%  gpui_base::popover::Popover
+  3.1%  gpui_component::title_bar::WindowControls
+  2.8%  gpui_base::popup::Popup
+  2.5%  enum2$<gpui_component::title_bar::ControlIcon
+  2.4%  gpui::app::entity_map::Entity<gpui_component::menu::app_menu_bar::AppMenuBar
+  2.0%  gpui::app::entity_map::Entity<gpui_component::menu::app_menu_bar::AppMenu
+  2.0%  gpui_component::status_bar::StatusBar
+
+Top exclusive:
+  9.8%  RtlAllocateHeap
+  7.0%  taffy::compute::flexbox::compute_preliminary<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout
+  4.0%  smol_str::impl$16::hash<rustc_hash::FxHasher>
+  3.1%  gpui::window::impl$210::hash<rustc_hash::FxHasher>
+  3.0%  _NLG_Return2
+  2.4%  GetProcessHeap
+  2.3%  core::iter::adapters::map::impl$2::next<taffy::compute::flexbox::FlexItem,core::iter::adapters::filter::Filter<core::iter::adapters::filter:
+  2.1%  taffy::tree::taffy_tree::impl$10::compute_child_layout::closure$0<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$
+  1.4%  NtSetInformationVirtualMemory
+  1.4%  hashbrown::map::HashMap::insert<tuple$<gpui::element::GlobalElementId,core::any::TypeId>,gpui::window::ElementStateBox,rustc_hash::FxBuildHa
+  1.4%  memcpy
+  1.3%  RtlConvertHostPerfCounterToPerfCounter
+  1.2%  ZwAllocateVirtualMemoryEx
+  1.2%  RtlEnterCriticalSection
+  1.0%  RtlFreeHeap
+  0.9%  NtUserDispatchMessage
+  0.9%  gpui::window::impl$12::drop
+  0.9%  core::ptr::drop_in_place<gpui::style::TextStyleRefinement>
+  0.9%  taffy::tree::taffy_tree::impl$14::cache_get<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1>
+  0.9%  core::ptr::drop_in_place<enum2$<gpui::element::ElementDrawPhase<enum2$<core::option::Option<gpui::element::AnyElement> >,enum2$<core::option
+  0.8%  FreeOtlResources
+  0.7%  0x7fff73306070
+  0.7%  gpui::window::Window::draw
+  0.6%  taffy::compute::block::compute_inner<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closur
+  0.6%  core::slice::sort::stable::quicksort::quicksort<gpui::scene::MonochromeSprite,alloc::slice::impl$0::sort_by_key::closure_env$0<gpui::scene::

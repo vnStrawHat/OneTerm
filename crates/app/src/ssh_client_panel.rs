@@ -277,6 +277,10 @@ impl Panel for SshClientPanel {
 }
 
 impl Render for SshClientPanel {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "SshClientPanel")
+    )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = cx.theme().background;
 

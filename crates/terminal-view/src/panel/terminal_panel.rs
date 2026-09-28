@@ -458,6 +458,12 @@ impl TerminalPanel {
             .flatten()
     }
 
+    /// Whether this tab sits in a tab group that shows another tab
+    /// (`Panel::set_active`). A panel outside any group counts as shown.
+    pub(crate) fn is_hidden_tab(&self) -> bool {
+        self.tab_panel.is_some() && !self.is_active
+    }
+
     /// Number of Spaces in this tab.
     pub(crate) fn leaf_count(&self) -> usize {
         self.tree.leaf_count()
@@ -598,6 +604,10 @@ impl Focusable for TerminalPanel {
 }
 
 impl Render for TerminalPanel {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TerminalPanel")
+    )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = self.tree.render(
             cx.entity().downgrade(),
@@ -704,6 +714,10 @@ impl Panel for TerminalPanel {
         false
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TerminalPanel")
+    )]
     fn title(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         super::tab_title::render_tab_strip(self, window, cx)
     }

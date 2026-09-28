@@ -1,4 +1,5 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, FontWeight,
@@ -114,6 +115,10 @@ pub struct AgentListView {
     groups: Vec<AgentDisplayGroup>,
     counts: AgentStateCounts,
     has_working_cards: bool,
+    /// When the refresh tick next asks the registry to mark idle cards stale.
+    /// Kept here, not in the tick, because a card that starts working restarts
+    /// the tick.
+    next_stale_check: Instant,
     _subs: Vec<gpui::Subscription>,
     _refresh_task: Task<()>,
 }
@@ -150,7 +155,7 @@ impl AgentListView {
                 (reg.cards().to_vec(), reg.summary())
             };
             this.cards = cards;
-            this.has_working_cards = this.any_visible_working();
+            this.update_working(cx);
             this.groups = build_display_groups(&this.cards);
             this.counts = counts;
             cx.notify();
@@ -160,40 +165,6 @@ impl AgentListView {
             AgentRegistry::global(cx).update(cx, |reg, cx| reg.set_stale_threshold_ms(ms, cx));
         }));
 
-        let refresh_task = cx.spawn(async move |this, cx| {
-            let mut stale_elapsed = Duration::ZERO;
-            let mut relative_elapsed = Duration::ZERO;
-            loop {
-                cx.background_executor().timer(ACTIVE_CARD_TICK).await;
-                stale_elapsed += ACTIVE_CARD_TICK;
-                relative_elapsed += ACTIVE_CARD_TICK;
-
-                let alive = this
-                    .update(cx, |this, cx| {
-                        if stale_elapsed >= STALE_TICK {
-                            stale_elapsed = Duration::ZERO;
-                            if let Some(reg) = AgentRegistry::try_global(cx) {
-                                reg.update(cx, |reg, cx| reg.refresh_stale(cx));
-                            }
-                        }
-
-                        // Working cards need the animation cadence. Inactive cards
-                        // need only the coarser relative-time refresh cadence.
-                        let refresh_relative = relative_elapsed >= RELATIVE_TIME_TICK;
-                        if refresh_relative {
-                            relative_elapsed = Duration::ZERO;
-                        }
-                        if this.has_working_cards || refresh_relative {
-                            cx.notify();
-                        }
-                    })
-                    .is_ok();
-                if !alive {
-                    break;
-                }
-            }
-        });
-
         Self {
             focus_handle,
             dock_focus_handle,
@@ -202,8 +173,64 @@ impl AgentListView {
             groups,
             counts,
             has_working_cards,
+            next_stale_check: Instant::now() + STALE_TICK,
             _subs: subs,
-            _refresh_task: refresh_task,
+            _refresh_task: Self::spawn_refresh(cx),
+        }
+    }
+
+    /// The periodic tick: spinner frames while a visible card works, otherwise
+    /// the relative-time labels once a second on the shared grid, so they
+    /// repaint in the frame the cursor blink and the clock already draw
+    /// (`US-0145`, `oneterm_state::until_next_tick`). An empty panel has no
+    /// relative time to show and draws no frame.
+    fn spawn_refresh(cx: &mut Context<Self>) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            let mut relative_elapsed = Duration::ZERO;
+            let mut wait = ACTIVE_CARD_TICK;
+            loop {
+                cx.background_executor().timer(wait).await;
+                relative_elapsed += wait;
+
+                let working = this.update(cx, |this, cx| {
+                    let now = Instant::now();
+                    if now >= this.next_stale_check {
+                        this.next_stale_check = now + STALE_TICK;
+                        if let Some(reg) = AgentRegistry::try_global(cx) {
+                            reg.update(cx, |reg, cx| reg.refresh_stale(cx));
+                        }
+                    }
+
+                    // Working cards need the animation cadence. Inactive cards
+                    // need only the coarser relative-time refresh cadence.
+                    let refresh_relative = relative_elapsed >= RELATIVE_TIME_TICK;
+                    if refresh_relative {
+                        relative_elapsed = Duration::ZERO;
+                    }
+                    if this.has_working_cards || (refresh_relative && !this.cards.is_empty()) {
+                        cx.notify();
+                    }
+                    this.has_working_cards
+                });
+                let Ok(working) = working else {
+                    break;
+                };
+                wait = if working {
+                    ACTIVE_CARD_TICK
+                } else {
+                    oneterm_state::until_next_tick(RELATIVE_TIME_TICK)
+                };
+            }
+        })
+    }
+
+    /// Re-read whether a visible card works. A card that starts working
+    /// restarts the tick, so its spinner does not wait out an idle 1 s sleep.
+    fn update_working(&mut self, cx: &mut Context<Self>) {
+        let was_working = self.has_working_cards;
+        self.has_working_cards = self.any_visible_working();
+        if self.has_working_cards && !was_working {
+            self._refresh_task = Self::spawn_refresh(cx);
         }
     }
 
@@ -460,7 +487,7 @@ impl AgentListView {
             .hover(|this| this.bg(chip.color.opacity(0.12)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.filter = chip.filter;
-                this.has_working_cards = this.any_visible_working();
+                this.update_working(cx);
                 cx.notify();
             }))
             .child(

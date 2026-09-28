@@ -247,9 +247,11 @@ impl TerminalView {
 
         let blink_task = cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(CURSOR_BLINK_INTERVAL_MS))
-                    .await;
+                // On the shared grid, so a status-bar tick lands in the same
+                // frame as a blink instead of a frame of its own (`US-0145`).
+                let interval = Duration::from_millis(CURSOR_BLINK_INTERVAL_MS);
+                let wait = oneterm_state::until_next_tick(interval);
+                cx.background_executor().timer(wait).await;
                 let continue_blinking = this.update(cx, |view, cx| {
                     if !view.alive || view.ssh_closed {
                         return false;
@@ -314,6 +316,10 @@ impl TerminalView {
     /// visible — the view is focused and blinking is enabled. An unfocused
     /// view or `cursor_blink = Off` always draws a steady cursor, so a tick
     /// there would only cost a frame.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TerminalView")
+    )]
     pub(super) fn blink_tick(&mut self, cx: &mut Context<Self>) {
         let blink_on = self.deps.settings.read(cx).cursor_blink == TerminalBlink::On;
         if !self.focused || !blink_on {
@@ -415,7 +421,21 @@ impl TerminalView {
             // row roles are not consumed by the UI yet.
             SessionEvent::Cwd(_) | SessionEvent::ShellIntegration(_) => {}
         }
-        cx.notify();
+        // A view in a tab that is not on screen draws nothing, but the tab strip
+        // reads it (the tab label), so the window tracks it and a notify here
+        // would cost a whole-window frame that changes no pixel (US-0145).
+        // Showing the tab re-renders it: `set_active(true)` notifies the panel.
+        if !self.in_hidden_tab(cx) {
+            cx.notify();
+        }
+    }
+
+    /// Whether this view's tab is in a tab group that shows another tab.
+    fn in_hidden_tab(&self, cx: &App) -> bool {
+        self.split_ctx
+            .as_ref()
+            .and_then(|split| split.panel.upgrade())
+            .is_some_and(|panel| panel.read(cx).is_hidden_tab())
     }
 
     pub(super) fn handle_session_closed(&mut self, kind: SessionKind) {
