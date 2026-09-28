@@ -503,3 +503,194 @@ FAIL. Rework `BUG-0081` again, as acceptance rework of the owning packet:
 
 The live-set collector, the idempotent `free`, the paranoid `is_free` check and the F4 scoping can
 stay as they are.
+
+---
+
+# Third pass: rework #2 `19a29175` (2026-09-28)
+
+- Subject: `19a29175` `fix(vt): rework BUG-0081 again -- sweep before interning, count reuses`, on
+  `77022619` (the second pass above).
+- Host and method as above: `CARGO_BUILD_JOBS=3`, worktree-local target dir, `target/release`
+  deleted before the gate. Every probe was a throwaway and was removed before the gate:
+  - a counting-allocator example;
+  - throwaway tests in `graphics_tests.rs`;
+  - a throwaway sweep counter and timer in `State::sweep_extras`, which the end-of-feed sweep was
+    routed through for the count;
+  - four local source mutations.
+
+## Verdict: FAIL
+
+S1, S2 and S3 from the second pass are closed. Sweeping before interning is correct on every path,
+including `stamp`'s merged path. Counting reuses holds the table at 4,098 entries at 1.5M resends,
+and the new regressions discriminate. One new High finding blocks acceptance:
+
+- **T1:** the sweep-and-retry added at the exhausted step runs a full O(history) scan on **every**
+  intern that misses while the table is full of **live** entries.
+- With 65,534 distinct live links in scrollback, each further image resend costs 5.7 ms at the
+  default 10,000-row scrollback and 47.7 ms at 100,000 rows.
+- 10,000 image resends then take 57 seconds. On `main`, the same full table made each image fall
+  back to id 0 in O(1).
+- A hostile 64 KB read of minimal Sixels (about 3,200 images) holds the terminal for about 18 s, or
+  about 150 s at 100,000 rows.
+
+The unconditional retry was my own second-pass suggestion ("sweep once and retry"), made without a
+rate limit. That half of S2's advice was wrong as written.
+
+## Findings
+
+### T1 (High, blocking): sweep-and-retry scans on every failing intern when the table is full of live entries
+
+`State::intern_extras`, when `interner.extras(value)` returns `NONE` for a non-`NONE` value, calls
+`sweep_extras()` unconditionally and interns again. When every allocated id is live, the sweep frees
+nothing, the retry fails, and the next miss does the same again. The exhausted branch does not
+touch `since_sweep`, so nothing amortises it.
+
+Probe Q5, release, 200x50:
+
+1. Fill history with 200-column text.
+2. Write 65,600 distinct implicit links, one per cell. They stay live in scrollback. This leaves
+   65,535 extras entries and 65,535 hyperlinks.
+3. Resend one 1x6 Sixel at `CSI H`, in feeds of 100.
+
+| Scrollback | Resends | Wall time | Sweeps | Per resend | `extras.exhausted()` |
+| --- | --- | --- | --- | --- | --- |
+| 10,000 x 200 (default) | 10,000 | 57.0 s | 10,000 (56.9 s) | 5.7 ms | 20,002 |
+| 100,000 x 200 | 300 | 14.3 s | 300 (14.3 s) | 47.7 ms | 602 |
+
+Each call happens inside `Terminal::feed`, under the terminal lock the UI also needs.
+
+A table full of **live** entries needs 65,534 distinct link or image values still on screen or in
+scrollback. That is hostile-reachable in one burst. It is also plausible in a long session that
+prints many distinct `OSC 8` URLs (for example `ls --hyperlink` over large trees). Once the table is
+full:
+
+- **Links:** the hyperlink table fills too, at 65,535, so new links become `{None}` and retry only
+  once.
+- **Images:** every image placement retries, because each is a fresh value.
+- **`stamp`'s merged path:** it interns directly and never retries.
+
+`exhausted()` also counts twice per failed call: 20,002 for 10,000 resends. The retry's own miss is
+counted too (Low; it is a public stat).
+
+Fix: count the exhausted branch's misses in `since_sweep`, and retry only when `needs_sweep()` says a
+sweep is due. That gives at most one scan per 4,096 attempts, about 1.4 µs amortised per intern at
+10,000 rows and 12 µs at 100,000. The "never stranded" property still holds, because failures keep
+advancing the counter. A test should fill the table with **live** entries and bound the time, or
+count the sweeps, over a few thousand further image placements.
+
+### T2 (Info, PASS): S1 closed on every path
+
+- `place`: `intern_extras` sweeps first, then interns the graphic-only entry. No other
+  `intern_extras` call happens before `stamp` writes it. `evict_oldest`, anchor registration and
+  line feeds do not intern.
+- `set_hyperlink`: the pen's current entry is resolved first and is still on the pen during the
+  pre-sweep. The new id is written by `set_template` immediately after.
+- `stamp`'s merged path calls `interner.extras` directly and writes the id to the cell in the same
+  loop iteration. No sweep can run between them, because a sweep runs only inside `intern_extras`,
+  in `feed`'s epilogue, or on the retry, and none of those can run inside `stamp`'s loop. Its
+  increments to `since_sweep` only make a **later** pre-sweep due, and by then every id `stamp`
+  interned is in a cell.
+- The end-of-feed sweep runs after every write of the batch.
+- Probe Q1 drove the merged path: 5,000 iterations of a 3-cell link `id=m{k}`, then a 2-column
+  image over cols 0-1, one feed per step, three new values per iteration. That crossed the interval
+  3 times with different phase alignments (4,096 mod 3 = 1). Every iteration's cells resolved to
+  `{m_k, G_k}`, `{m_k, G_k}`, `{m_k}` in release and under `--features vt-paranoid` (debug). No
+  paranoid panic occurred, and the table held 10,905 entries: about 10,000 live values plus the
+  interval.
+
+### T3 (Info, PASS apart from T1): S2 closed, bound measured
+
+| Stream (release) | Extras entries | Sweeps / total sweep time | Other |
+| --- | --- | --- | --- |
+| One image, 70,000 resends, 20x4 | 4,098 | -- | 1.40 MB drained, 8.05 MB undrained, last placed |
+| One image, 1,500,000 resends | 4,098 | -- | 1.40 MB drained, `exhausted` 0, last placed, 0.72 s |
+| Mixed: a distinct link plus an image resend per frame, 300,000 frames | 4,099 | 89 / 6.4 ms | total 0.29 s; last image placed |
+| 70,000 distinct implicit URIs, each kept live in its own cell, 200x50 | 65,535 | 16 / 7.6 ms | total 43 ms; `extras.exhausted` 2, `hyperlinks.exhausted` 4,465 |
+
+- The packet claims 1.334 MB drained. I measured 1.40 MB, which is within 5%.
+- In the mixed stream the **hyperlink** table fills at 65,535 distinct URIs, and the last frame's
+  link then renders as plain text. That is the pre-existing `BUG-0079` ladder for distinct URIs
+  (the hyperlink table never frees), not this packet.
+- The distinct-URI stream does not thrash. The table grows to live plus the interval, and the
+  hyperlink ladder caps past 65,535 live links with its warning, not a hang. Only a later **image**
+  on that full table hits T1.
+
+### T4 (Info, PASS): mutation testing on the committed suite
+
+I ran each mutation myself, one at a time, then reverted it. Figures are for `cargo test -p
+oneterm-vt --lib`, 584 tests:
+
+| Mutation | Failing committed tests |
+| --- | --- |
+| A: `live_extras_ids` returns an empty set | `r1`, `r2`, `r3`, `r4` (580 pass) |
+| B: `sweep_extras` does nothing | `repainting_a_sixel_image...`, `resending_1_5_million_times...`, `a_table_full_of_dead_entries_recovers_via_sweep_and_retry` (581 pass) |
+| C: sweep **after** interning (the S1 regression) | `r1`, `r2`, `r3`, `r4` |
+| D: free-list reuse not counted (the S2 regression) | `repainting_a_sixel_image...`, `resending_1_5_million_times...` |
+
+The two regressions from the second pass (C and D) are each caught. My B stubs `sweep_extras`, which
+also disables the retry, so `a_table_full_of_dead_entries...` fails too. The packet's B stubs
+`needs_sweep`, which leaves the retry working, so its table is consistent with its own mutation.
+
+### T5 (Low): the RIS coverage question
+
+The old `ris_empties_a_full_extras_table_and_images_place_again` asserted two things:
+
+- a table full of entries leaves an image **unplaced**, the ladder's fallback;
+- `RIS` then empties the table.
+
+The replacement `a_table_full_of_dead_entries_recovers_via_sweep_and_retry` fills it with **dead**
+synthetic entries, so it now asserts recovery by sweep. It still asserts that `RIS` brings
+`entries()` to 1 and that an image then places. `ris_clears_the_hyperlink_table` also asserts
+`extras.entries() == 1` after `RIS`. So "`RIS` empties the extras table" is still tested.
+
+Two things are no longer tested at terminal level:
+
+- a table full of **live** entries leaving an image unplaced and warning once;
+- `RIS` recovering from that state.
+
+The unit-level `extras_table_exhaustion_falls_back_to_no_extras` still covers the table ladder. The
+T1 test above would restore the terminal-level coverage.
+
+### T6 (Low, records)
+
+- The CHANGELOG, `10-limits.md`, IN-0029 `graphics.md` and the `terminal-backend.md` row now state
+  the `O(interval + live)` bound correctly and describe both rejected designs accurately.
+- The packet's Gaps entry "`intern_extras`'s sweep-and-retry now makes even that case recover" is
+  true for dead content. It is silent on the per-intern scan cost when the content is live (T1).
+  That belongs in Decisions once T1 is fixed.
+- Its scan-cost table still lacks the 10,000-row row. The Gaps entry acknowledges this and cites the
+  second pass's 3.0 ms / 3.2 ms, which is accurate.
+
+## Checks
+
+- Committed suite green inside the gate below: `cargo test -p oneterm-vt`, `--features
+  vt-paranoid`, `--features regex` and `--no-default-features`.
+- `vt-public-api.py --check --no-doc` and `--diff-platforms`: unchanged.
+- Rustdoc citation grep: clean (gate).
+
+Gate: `pwsh scripts/ci-local.ps1`, `CARGO_BUILD_JOBS=3`, at `19a29175` with every throwaway removed.
+Final line:
+
+```
+ci-local: all checks passed.
+```
+
+## Gaps
+
+- T1 was measured on the image path only. A link that reuses a known `HyperlinkId` whose `{H}` entry
+  had been swept would retry the same way, but it was not run.
+- No GUI run and no real Sixel program, as in both earlier passes.
+
+## Handoff
+
+FAIL on T1 alone. Rework `BUG-0081` once more, keeping everything else:
+
+1. Make the exhausted branch count toward `since_sweep`.
+2. Gate the retry on `needs_sweep()`, or an equivalent rate limit.
+3. Count `exhausted` once per failed `intern_extras` call.
+4. Add a regression that fills the table with **live** entries and bounds the sweep count over at
+   least 1,000 further image placements.
+5. Record the retry's amortised cost in the packet and the LLD.
+
+Everything else from this rework can stay: sweep-before-intern, counting reuses, R1-R4, the bound
+tests and the doc corrections.
