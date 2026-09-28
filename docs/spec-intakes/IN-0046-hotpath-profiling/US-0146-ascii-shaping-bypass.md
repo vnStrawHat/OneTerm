@@ -352,16 +352,17 @@ no per-run cost: it is paid once per font variant.
   random lines found none on the installed fonts; that is evidence, not proof. Such fonts
   exist in principle: Fira Code is a real monospace font whose `ccmp` rule the first
   (one-context-per-char) check missed.
-- **Locale.** DirectWrite shapes with the user locale, and the check runs under the locale
-  of the running process; `locl` rules of that locale are covered for pairs only (Fira
-  Code's Afrikaans `'n` ligature is a pair, so it would be caught under an `af-*` locale), and
-  rules of other locales are not exercised. A locale change while OneTerm runs is not
-  picked up (the tables live until the font changes).
+- **Locale.** DirectWrite shapes with the user locale, which GPUI reads once per process,
+  so the check and the shaper always run under the same locale: `locl` rules of that locale
+  are covered for pairs (Fira Code's Afrikaans `'n` ligature is a pair, so it would be
+  caught under an `af-*` locale) and, beyond pairs, only by the probes. A locale change
+  takes a restart, which rebuilds the tables under the new locale, so it is benign.
 - **Copied GPUI code.** `apply_force_width` is a copy of `gpui-pre` 0.3.7's private
   `apply_force_width_to_layout`; a `gpui-pre` bump can move GPUI's pass. Guarded by
   `force_width_copy_matches_gpui` and the re-diff step in `dependencies.md` § 4.
-- Fonts not installed here (JetBrains Mono, Iosevka, Hack, Source Code Pro, Monaspace,
-  Victor Mono, Nerd Font patches) were not probed.
+- JetBrains Mono was probed in the second verification and is rejected (the same `ccmp`
+  backtick rule as Fira Code), so it shapes. Fonts not installed here (Iosevka, Hack,
+  Source Code Pro, Monaspace, Victor Mono, Nerd Font patches) were not probed.
 - Linux and macOS: the real-shaper test is Windows-only (DirectWrite); elsewhere the
   self-check decides per font at run time, unmeasured (Platform proof left open for CI).
 - `RunKey.forced` keys the flag, not the forced width (BUG-0078 F3, unchanged).

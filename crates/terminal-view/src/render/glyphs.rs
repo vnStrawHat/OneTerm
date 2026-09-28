@@ -629,10 +629,11 @@ mod tests {
                 "`A`` pair"
             );
 
-            // Contexts longer than a pair: only the probes hold them.
-            for probe in [
-                "ffi", "ffl", "===", "!==", "<=>", "==>", "<!--", "-->", "::=", "www",
-            ] {
+            // Contexts longer than a pair: only the probes hold them. Derived from
+            // `PROBES`, so a new probe is tested; the count pins against deletion.
+            let long: Vec<&str> = PROBES.split(' ').filter(|p| p.len() >= 3).collect();
+            assert_eq!(long.len(), 11, "{long:?}");
+            for probe in long {
                 let at = WALK_LEN + REFERENCE[WALK_LEN..].find(probe).unwrap();
                 let mut ligated = copy(&shaped);
                 ligated.runs[0].glyphs.drain(at + 1..at + probe.len());
