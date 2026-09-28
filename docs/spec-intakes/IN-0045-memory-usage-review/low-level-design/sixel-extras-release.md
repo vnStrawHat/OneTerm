@@ -226,7 +226,10 @@ pos.col + placement.cols` now.
 ## Interfaces
 
 No public signature changes. `InternTable::free`, `is_free`, `needs_sweep`, `sweep_unreferenced`,
-`try_intern`, `record_exhausted`, `swept` are `pub(crate)`. `Screen::collect_live_extras_ids` and
+`try_intern`, `record_exhausted` are `pub(crate)`; `swept` is `pub(crate)` and additionally
+`#[cfg(test)]` — no production caller needs the sweep count today, only
+`crates/vt/src/terminal/terminal_tests.rs`, so it does not carry as an unused method in a normal
+build. `Screen::collect_live_extras_ids` and
 `TerminalGrid::live_extras_ids` are `pub(crate)`. `State::intern_extras` is `pub(crate)`.
 `GraphicsState::extras_by_graphic` / `track_extras` from the first design are removed;
 `graphics/mod.rs` and `graphics/placement.rs` are otherwise unchanged from `main`. `InternTable::intern`

@@ -2019,6 +2019,79 @@ fn a_table_full_of_live_entries_leaves_an_image_unplaced_until_ris() {
     );
 }
 
+/// U1 (fourth adversarial pass): a live-full table that later goes mostly
+/// dead must still recover on its own within one sweep interval, not stay
+/// stranded until `RIS`. This is the "never stranded" property S2 fixed and
+/// T1 preserved: `try_intern`'s exhausted branch counts its own miss toward
+/// `since_sweep`, same as a push or a reuse, so a run of failing calls
+/// against a live-full table still makes the next sweep due. Drop that one
+/// line and every failing call after the due sweep is consumed goes
+/// uncounted forever -- `needs_sweep()` never fires again, and a later
+/// die-off is never noticed until `RIS`.
+#[test]
+fn a_live_full_table_that_goes_mostly_dead_still_recovers_without_ris() {
+    let mut session = Session::new(300, 220);
+    fill_extras_table_with_live_entries(&mut session);
+
+    let sixel: &[u8] = b"\x1bPq#0;2;100;0;0#0~\x1b\\";
+    let placed = |session: &Session| {
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .graphic
+            .is_some()
+    };
+
+    // Filling never sweeps (it interns straight through the backdoor, not
+    // through `State::intern_extras`), so a sweep is already due the moment
+    // the fill loop stops. Consume it with a handful of failing images --
+    // the table is still entirely live, so this sweep reclaims nothing and
+    // every one of these still fails.
+    for _ in 0..10 {
+        session.feed(sixel);
+    }
+    assert!(!placed(&session), "still live-full after the warm-up");
+
+    // Kill nearly every filled entry by resetting the rows the filler wrote
+    // (row 0 is left alone -- the probe below places its image there).
+    // Deliberately not `CSI 2 J`: on the primary screen that scrolls the
+    // occupied rows into scrollback instead of discarding them, which the
+    // mark-and-sweep walk still finds live -- it would not kill anything.
+    session
+        .term
+        .state_for_tests()
+        .grid
+        .screen_mut()
+        .reset_rows(1..220);
+
+    // `TABLE_SWEEP_INTERVAL` (`crates/vt/src/intern.rs`) is private; 4,096 is
+    // its value, kept in sync by `intern_extras_bounds_its_scan_rate_when_the_table_is_live_full`
+    // above, which asserts against the same number from the other direction.
+    const TABLE_SWEEP_INTERVAL: u32 = 4_096;
+    let swept_before = session.term.interner().extras.swept();
+    let mut placed_at = None;
+    for attempt in 1..=(TABLE_SWEEP_INTERVAL + 1) {
+        session.feed(sixel);
+        if placed(&session) {
+            placed_at = Some(attempt);
+            break;
+        }
+    }
+    let swept = session.term.interner().extras.swept() - swept_before;
+
+    assert!(
+        placed_at.is_some_and(|attempt| attempt <= TABLE_SWEEP_INTERVAL + 1),
+        "the image never placed within {} attempts after the die-off -- the table is stuck \
+         until RIS",
+        TABLE_SWEEP_INTERVAL + 1
+    );
+    assert_eq!(
+        swept, 1,
+        "exactly one sweep should have run to notice the die-off and reclaim it"
+    );
+}
+
 /// R1 (second adversarial pass, S1): the extras value whose own creation
 /// crosses the sweep threshold must keep its own cell. Sweeping *after*
 /// interning found the fresh value unreferenced (nothing had written it

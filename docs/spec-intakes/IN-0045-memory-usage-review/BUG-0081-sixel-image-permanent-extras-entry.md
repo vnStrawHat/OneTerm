@@ -6,8 +6,10 @@ Created: 2026-09-28
 Reworked: 2026-09-28, same day, three times. First after adversarial verification failed the first
 design (release-time freeing, High). Second after a further adversarial pass failed the
 mark-and-sweep design's own orchestration and trigger (High, twice: S1, S2). Third after a further
-pass found the second rework's own sweep-and-retry had no rate limit (High: T1). See
-[`evidence/BUG-0081-verify.md`](evidence/BUG-0081-verify.md) (all three passes, one file) and the
+pass found the second rework's own sweep-and-retry had no rate limit (High: T1). A fourth pass
+returned PASS, with one Medium test gap (U1: nothing guarded a live-full table that later goes mostly
+dead still recovering without `RIS`) closed by one follow-up commit rather than a further rework. See
+[`evidence/BUG-0081-verify.md`](evidence/BUG-0081-verify.md) (all four passes, one file) and the
 Decisions and Evidence and Gaps sections below.
 
 > Pre-code gate: complete Outcome, Scope, Acceptance, Documentation, and Verification Plan before editing implementation files. Harness synchronizes only the marked status/proof blocks; keep authored checklists current.
@@ -23,11 +25,14 @@ Decisions and Evidence and Gaps sections below.
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
-Implemented four times: `3796cef0` (first design, release-time freeing, adversarially verified FAIL,
+Implemented five times: `3796cef0` (first design, release-time freeing, adversarially verified FAIL,
 High), `5b45add0` (second design, mark-and-sweep, adversarially verified FAIL, High, twice: S1/S2),
 `19a29175` (sweep-before-intern plus counted reuses, adversarially verified FAIL, High: T1, an
-unrated retry), and the rework this packet now describes. This box tracks the packet's current
-state; the Decisions and Evidence and Gaps sections carry the history the box cannot.
+unrated retry), `24353fc2` (rate-limited the retry and counted `exhausted` once, adversarially
+verified PASS with one Medium test gap: U1), and the follow-up commit this packet now describes
+(closes U1: a regression proving a live-full table that later goes mostly dead still recovers without
+`RIS`). This box tracks the packet's current state; the Decisions and Evidence and Gaps sections carry
+the history the box cannot.
 
 ## Classification
 
@@ -490,6 +495,22 @@ passes with the gate restored; `a_table_full_of_live_entries_leaves_an_image_unp
 passes either way, because it checks only one resend's correctness, not the sweep rate — it is T5's
 regression, not T1's, and the two are deliberately different tests for that reason.
 
+**A fourth mutation, found by the fourth adversarial pass (mutation F): the exhausted branch's own
+`since_sweep = self.since_sweep.saturating_add(1)` line removed from `try_intern`.** The whole
+committed suite as of `24353fc2` passed under it — nothing proved a live-full table that later goes
+mostly dead still recovers without `RIS`, because every existing test either fills the table directly
+through the backdoor (already far past the interval before the first real call) or checks the sweep
+count only from above. `a_live_full_table_that_goes_mostly_dead_still_recovers_without_ris` closes
+that gap: it fills the table live-full, spends the sweep already due on a run of failing images (the
+table is still entirely live, so that sweep reclaims nothing), kills nearly every entry by resetting
+the rows the filler wrote (not `CSI 2 J`, which on the primary screen scrolls occupied rows into
+scrollback rather than discarding them — the mark-and-sweep walk would still find them live), then
+resends until an image places. As committed, it places at attempt 4,085 with exactly one sweep,
+matching the fourth pass's own measurement. Under mutation F it **fails**: no image places in 4,097
+attempts, `since_sweep` never climbs past what the warm-up sweep left it at, and `needs_sweep()` never
+fires again — the exact class of permanent stall S2 fixed, reopened one line at a time. Reverted after
+confirming.
+
 `v1`/`v4`/`v8`/`v9`/`v2`, the double-free test, and the paranoid-check regression all still pass
 (`crates/vt/src/graphics/graphics_tests.rs`, `crates/vt/src/intern_tests.rs`), unaffected by this
 rework's changes.
@@ -510,7 +531,13 @@ Gaps:
   `intern_extras`'s sweep-and-retry makes that case recover once any of that content has gone dead,
   and now (T1) does so at a bounded, amortised cost rather than a full scan per failing call: about
   1.4 microseconds per call at the default 10,000-row scrollback, about 12 microseconds at 100,000
-  rows, whether the table is genuinely live-full or merely dead-full — see Decisions.
+  rows, whether the table is genuinely live-full or merely dead-full — see Decisions. That recovery
+  is not immediate: a table that goes from live-full to mostly-dead can take up to
+  `TABLE_SWEEP_INTERVAL` (4,096) further failed attempts before the next due sweep notices and
+  reclaims it, because `since_sweep` only advances on a miss and a sweep only runs once that count
+  is past the interval — measured at attempt 4,085 for the fourth adversarial pass's own
+  reproduction. A program that needs its image back sooner than that has no faster path short of
+  `RIS`.
 - The total-pixel-bytes budget across live placements (`IN-0029` `graphics.md` already notes 256
   placements have no such budget) is unchanged and out of this packet's scope.
 - `evidence/BUG-0081-verify.md`'s first-pass gap (the history-trim path reasoned, not run) is now
@@ -523,8 +550,16 @@ adversarial verification (High), once after the second design's own mark-and-swe
 trigger failed a further adversarial pass (High, twice: S1/S2), and once after that rework's own
 sweep-and-retry ran an unrated `O(history)` scan on every failing intern against a live-full table
 (High: T1) — and self-verified against all three passes' reproductions plus mutation testing
-confirming the new regressions actually exercise the sweep and the retry's rate limit. A fourth
-independent verification pass is the natural next step before this is treated as accepted/shipped;
-none is recorded yet in this packet. Three prior passes each found a real, serious defect the
-previous implementer's own testing had missed; a fourth pass earns no presumption of safety from that
-history alone.
+confirming the new regressions actually exercise the sweep and the retry's rate limit.
+
+A fourth independent verification pass (`evidence/BUG-0081-verify.md`'s fourth section) returned
+**PASS**, with one Medium test gap (U1): nothing in the committed suite guarded the property that a
+live-full table which later goes mostly dead still recovers on its own, short of `RIS` — removing
+`try_intern`'s exhausted-branch `since_sweep` count (mutation F) reopened exactly that stall and no
+test noticed. `a_live_full_table_that_goes_mostly_dead_still_recovers_without_ris` closes it, confirmed
+against mutation F. Nothing else in that pass changed shipped behaviour (U2-U6 are informational
+confirmations that T1's fix is correct and measured as documented; U7 is the two cosmetic doc notes
+this rework also folds in). Three prior passes each found a real, serious defect the previous
+implementer's own testing had missed; this one found only a test gap in an otherwise-correct
+implementation, which is the first time that has happened in this packet's history — still not a
+reason to skip a further pass on any future rework of this mechanism.
