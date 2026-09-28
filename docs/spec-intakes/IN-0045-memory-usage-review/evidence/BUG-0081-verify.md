@@ -694,3 +694,172 @@ FAIL on T1 alone. Rework `BUG-0081` once more, keeping everything else:
 
 Everything else from this rework can stay: sweep-before-intern, counting reuses, R1-R4, the bound
 tests and the doc corrections.
+
+---
+
+# Fourth pass: rework #3 `24353fc2` (2026-09-28)
+
+- Subject: `24353fc2` `fix(vt): rate-limit BUG-0081's sweep-and-retry, count exhausted once (T1)`,
+  on `895cb2fd` (the third pass above).
+- Host and method as above: `CARGO_BUILD_JOBS=3`, worktree-local target dir, `target/release`
+  deleted before the gate. Every probe was a throwaway and was removed before the gate:
+  - throwaway tests appended to `graphics_tests.rs`, read through the new `#[cfg(test)]
+    swept()` counter;
+  - six environment-gated source mutations, built once and switched per run.
+
+## Verdict: PASS
+
+The recommended follow-up is U1, one Medium test gap. T1 is closed:
+
+- A table full of live entries now costs 3 sweeps per 10,000 further resends, not 10,000.
+- A hostile 64 KB read holds the terminal for 5.6 ms at the default scrollback and 32 ms at 100,000
+  rows. The third pass measured about 18 s and about 150 s for the same read.
+- `exhausted()` counts once per failed call.
+- S1, S2 and S3 still hold. All five mutations the passes have used so far are caught by the
+  committed suite, including the unconditional-retry mutation (E).
+
+A sixth mutation is not caught (U1): no longer counting failed attempts toward `since_sweep`. It
+reopens a permanent stall, and no committed test notices. The code is correct as committed. The gap
+is a missing guard for the property that is this bug's whole point. I recommend folding U1's
+regression in before merge, but it is not a defect in the shipped behaviour.
+
+## Findings
+
+### U1 (Medium, test gap): nothing guards "a live-full table that later partly dies still recovers"
+
+The "never stranded" property rests on one line: `try_intern`'s exhausted branch counts toward
+`since_sweep`. Mutation F removes that line.
+
+- **Under F**, the whole committed suite passes: 586 tests, plus 2 ignored.
+- **Throwaway probe P3**:
+  1. Fill the table with 65,534 live links in scrollback and on screen.
+  2. Send 10 images, which fail and consume the sweep that is already due.
+  3. Erase the visible screen, killing about 10,000 link entries.
+  4. Resend an image until it places.
+- **P3 without F:** the first image places after **4,085 attempts**, with 1 sweep.
+- **P3 under F:** no image places in 10,000 attempts. `since_sweep` stays at the value the last
+  sweep left, `needs_sweep()` is never true again, and the table stays stuck until `RIS`. That is
+  the exact class of stall the second pass found (S2).
+
+Neither committed test covers this:
+
+- `a_table_full_of_dead_entries_recovers_via_sweep_and_retry` fills the table directly through
+  `intern`, so `since_sweep` is already far past the interval when the first image arrives.
+- `intern_extras_bounds_its_scan_rate_when_the_table_is_live_full` bounds sweeps **from above**.
+  Under F it passes with fewer sweeps.
+
+Suggested regression, about 20 lines. Build on `fill_extras_table_with_live_entries`:
+
+1. Consume the due sweep with a few failing images.
+2. Clear the cells the filler wrote (`ED 2`, or rows 1.. reset).
+3. Assert that an image places within `TABLE_SWEEP_INTERVAL + 1` attempts.
+
+It fails under F and passes as committed.
+
+### U2 (Info, PASS): T1 closed, measured
+
+Probe P1 and P2, release build, 200x50:
+
+1. Fill history with 200-column text.
+2. Write 65,600 distinct live links. The extras table is then at 65,535.
+3. **P1:** send 10,000 image resends at `CSI H`, in feeds of 100.
+4. **P2:** send one 64 KB read made of 3,276 minimal Sixels, all in a single `feed` call, which is
+   one hold of the terminal lock.
+
+| Scrollback | P1: 10,000 resends | Sweeps (bound `ceil(N/4096)+1` = 4) | P2: one 64 KB read | P2 sweeps (bound 2) |
+| --- | --- | --- | --- | --- |
+| 10,000 x 200 | **14.8 ms** (third pass: 57.0 s) | 3 | **5.6 ms** | 1 |
+| 100,000 x 200 | **98.8 ms** (third pass: 14.3 s for only 300) | 3 | **32.1 ms** | 1 |
+
+The worst single call is the one that crosses the interval: one scan, 3 to 32 ms depending on
+scrollback. Amortised, that is the 1.4 µs and 12 µs the packet states.
+
+P1's `exhausted()` rose by 10,001 for 10,000 resends. That is one per failed call. The extra count
+is correct: the first resend's image landed on a cell that already carried a link, so `stamp`'s
+merged path made its own failed attempt, a distinct value. On that path the cell's link is also
+dropped, because it is written with id 0. That behaviour is the same on `main` (the full-table
+ladder), so it is not a regression from this packet.
+
+### U3 (Info, PASS): the counting change cannot starve legitimate sweeps or reopen S2
+
+- **Live-full with no dead entries:** a sweep runs once per 4,096 attempts, frees nothing, and costs
+  one scan (P1's 3 sweeps).
+- **Live-full that later partly dies:** the next gated retry reclaims the dead entries within one
+  interval. P3 placed after 4,085 attempts.
+- That recovery latency of up to `TABLE_SWEEP_INTERVAL` failed attempts is the documented trade.
+  The LLD says "not stranded for more than `TABLE_SWEEP_INTERVAL` attempts at a time". The packet's
+  Gaps entry describes recovery without the latency. Adding one clause there would be enough (Low).
+- **S2 re-check under mutation D** (reuse not counted): both bound tests still fail. The counting
+  change did not weaken them.
+
+### U4 (Info, PASS): `record_exhausted` and the `exhausted()` stat
+
+- `intern` calls `record_exhausted` once, on its own failure.
+- `intern_extras` calls it exactly once after the first `try_intern` and, if due, the gated
+  retry's `try_intern` have both failed.
+- Neither `try_intern` counts it.
+- P1 and the committed T1 test (`exhausted == 1_000` for 1,000 attempts) confirm one count per
+  failed call.
+- The public `InternTable::exhausted()` doc, "How many values were dropped because the table was
+  full", matches that. It has the same per-call semantics `main` had before the retry existed. No
+  public signature changed.
+
+### U5 (Info, PASS): mutation matrix on the committed suite
+
+`cargo test -p oneterm-vt --lib`, debug build, 586 tests. Each mutation was selected by an
+environment variable in one throwaway build, then reverted.
+
+| Mutation | Committed tests that fail |
+| --- | --- |
+| none | 0 (586 pass) |
+| A: `live_extras_ids` returns an empty set | `r1`, `r2`, `r3`, `r4`, `a_table_full_of_live_entries...`, `intern_extras_bounds_its_scan_rate...` |
+| B: `sweep_extras` and the end-of-feed sweep do nothing | `a_table_full_of_dead_entries...`, `repainting_a_sixel_image...`, `resending_1_5_million_times...` |
+| C: sweep **after** interning (S1) | `r1`, `r2`, `r3`, `r4` |
+| D: free-list reuse not counted (S2) | `repainting_a_sixel_image...`, `resending_1_5_million_times...` |
+| E: unconditional retry (T1) | `intern_extras_bounds_its_scan_rate_when_the_table_is_live_full` |
+| F: exhausted-branch miss not counted | **none** (U1) |
+
+### U6 (Info, PASS): `#[cfg(test)] swept()`
+
+It is used only by `crates/vt/src/terminal/terminal_tests.rs`, which is a lib unit-test module, so
+`cfg(test)` applies. It is `pub(crate)`, so no integration test under `crates/vt/tests/` or other
+crate could name it anyway. The `swept` field is still incremented in non-test builds. Clippy with
+`-D warnings` over `--all-targets`, which includes the non-test lib build, is green in the gate, so
+no dead-field warning fires.
+
+### U7 (Low, records)
+
+- The CHANGELOG, `10-limits.md`, IN-0029 `graphics.md` and the LLD's "Third design flaw" section
+  describe T1 and its fix accurately.
+- The LLD states the amortised cost, and that a failing call can still cost one full scan. It
+  states the `TABLE_SWEEP_INTERVAL` recovery latency.
+- The packet's Status block reads Implemented. Its Handoff asks for this pass.
+- Its Gaps entry on dead-full recovery omits the recovery latency (U3).
+- The LLD's Interfaces paragraph lists `swept` among the `pub(crate)` items without noting that it
+  is `#[cfg(test)]`. That is cosmetic.
+
+## Checks
+
+- Inside the gate below: `cargo test -p oneterm-vt`, `--features vt-paranoid`, `--features regex`,
+  `--no-default-features`, `vt-public-api.py --check --no-doc` ("public API surface unchanged") and
+  `--diff-platforms`, and the rustdoc citation grep.
+
+Gate: `pwsh scripts/ci-local.ps1`, `CARGO_BUILD_JOBS=3`, at `24353fc2` with every throwaway and
+mutation removed. Final line:
+
+```
+ci-local: all checks passed.
+```
+
+## Gaps
+
+- No GUI run and no real Sixel program, as in every pass.
+- P1/P2 used the image path. The link path against a live-full table stops interning once the
+  hyperlink table also fills, at 65,535, which the third pass measured.
+
+## Handoff
+
+PASS. `BUG-0081` can move to implemented and verified. Before merge, add U1's regression, which
+fails under mutation F, and the one-clause latency note in the packet's Gaps. Neither changes
+shipped behaviour. After merge: the live `measure.ps1` re-measure and a real Sixel program, as
+every pass has recorded.
