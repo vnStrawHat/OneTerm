@@ -376,6 +376,11 @@ impl FakeSessionProbe {
         self.state.snapshot_calls.load(Ordering::SeqCst)
     }
 
+    /// How many times the view released the repaint hint without a snapshot.
+    pub fn release_calls(&self) -> usize {
+        self.state.release_calls.load(Ordering::SeqCst)
+    }
+
     /// Return the number of close requests received by the fake.
     pub fn close_calls(&self) -> usize {
         self.state.close_calls.load(Ordering::SeqCst)
@@ -440,6 +445,7 @@ struct FakeSessionState {
     fail_writes: AtomicBool,
     alive: AtomicBool,
     snapshot_calls: AtomicUsize,
+    release_calls: AtomicUsize,
     close_calls: AtomicUsize,
 }
 
@@ -467,6 +473,7 @@ impl FakeTerminalSession {
             fail_writes: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             snapshot_calls: AtomicUsize::new(0),
+            release_calls: AtomicUsize::new(0),
             close_calls: AtomicUsize::new(0),
         });
         let probe = FakeSessionProbe {
@@ -524,6 +531,10 @@ impl TerminalRender for FakeTerminalSession {
     fn snapshot_into(&self, out: &mut TerminalContent) {
         self.state.snapshot_calls.fetch_add(1, Ordering::SeqCst);
         self.state.engine.lock().unwrap().refill(out);
+    }
+
+    fn release_repaint_hint(&self) {
+        self.state.release_calls.fetch_add(1, Ordering::SeqCst);
     }
 
     fn query_state(&self) -> TerminalQueryState {

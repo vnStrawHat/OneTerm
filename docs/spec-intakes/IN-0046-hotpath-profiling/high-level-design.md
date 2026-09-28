@@ -34,12 +34,16 @@ oneterm-app  features:
      |       TerminalElement::prepaint / paint, GridPainter::paint
      |       +--> oneterm-highlight/hotpath-profiling: scan_line_into
      |       +--> oneterm-terminal/hotpath-profiling
-     +--> oneterm-local-shell/hotpath-profiling: the PTY read (pty_read)
+     +--> oneterm-local-shell/hotpath-profiling: the PTY read (pty_read); US-0147's
+     |       loop blocks (site! -> measure_block!): loop::poll_wait, loop::commands,
+     |       loop::drain_pty, loop::lock, loop::unlock
      |       +--> oneterm-terminal/hotpath-profiling
-     |               Pump::advance, TerminalContent::refill
+     |               Pump::advance, Pump::finish_batch_blocking,
+     |               SessionEventSink::post_repaint, TerminalContent::refill
      |               +--> oneterm-vt/hotpath-profiling
      |                       Terminal::feed, Parser::advance,
-     |                       Screen::scroll_up / scroll_down, Terminal::snapshot_update
+     |                       Screen::scroll_up / scroll_down, Terminal::snapshot_update;
+     |                       Windows conout thread: read_pipe, push, Ring::wake
      +--> oneterm-ssh/hotpath-profiling: copy_sequential (SFTP transfer body)
 ```
 

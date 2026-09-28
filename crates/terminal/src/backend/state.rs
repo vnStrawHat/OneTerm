@@ -76,6 +76,9 @@ pub struct SharedSessionState {
     agent_osc_unknown_subcodes: AtomicU64,
     legacy_agent_osc_events: AtomicU64,
     truncated_agent_osc: AtomicU64,
+    /// A repaint hint (`SessionEvent::Output`) is out and the UI has not caught
+    /// up with it yet (`US-0147`). See [`SharedSessionState::claim_repaint_hint`].
+    repaint_hint_out: AtomicBool,
 }
 
 /// Handle to a [`SharedSessionState`].
@@ -231,5 +234,30 @@ impl SharedSessionState {
     /// Record one screen clear.
     pub(crate) fn bump_clear_epoch(&self) {
         self.clear_epoch.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// May the pump post a repaint hint? `true` once per [`release_repaint_hint`],
+    /// so at most one hint is ever out.
+    ///
+    /// A hint only asks the UI for a frame, and a frame reads everything fed up to
+    /// its snapshot; a second hint before that snapshot asks for the same frame. Under
+    /// line-at-a-time output (ConPTY hands over one line per chunk) posting one per
+    /// chunk woke the UI thread once per line and cost the PTY owner two thirds of
+    /// its per-chunk time (`US-0147`).
+    ///
+    /// Call it after the batch was fed and the engine lock released.
+    ///
+    /// [`release_repaint_hint`]: SharedSessionState::release_repaint_hint
+    pub(crate) fn claim_repaint_hint(&self) -> bool {
+        !self.repaint_hint_out.swap(true, Ordering::AcqRel)
+    }
+
+    /// The UI has caught up with the output so far, so the next batch posts a hint
+    /// again. Called **before** a render snapshot takes the engine lock (so a batch
+    /// fed after it posts, and one fed before it is in the snapshot), by the view
+    /// when a hint's frame did not come (a hidden tab), and by the pump when the
+    /// hint could not be queued.
+    pub fn release_repaint_hint(&self) {
+        self.repaint_hint_out.store(false, Ordering::Release);
     }
 }

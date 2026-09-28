@@ -48,6 +48,11 @@ impl GutterTimestamps {
         self.base
     }
 
+    /// One past the absolute index of the newest stamped line.
+    pub(super) fn covered(&self) -> usize {
+        self.base + self.times.len()
+    }
+
     /// Stamp newly appeared lines with the current local time.
     pub(super) fn update(&mut self, info: &TerminalInfo) {
         self.update_with(info, now_seconds_of_day());
