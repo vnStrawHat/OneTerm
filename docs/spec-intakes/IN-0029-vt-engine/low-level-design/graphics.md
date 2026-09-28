@@ -166,14 +166,18 @@ unrelated URI, and a stale cell naming a *different*, still-live image could mak
 painting it.
 
 **What actually bounds it: the extras table's own periodic mark-and-sweep**, in `oneterm_vt::intern`
-(`InternTable::sweep_unreferenced`, orchestrated from `Terminal::feed` and from `State::intern_extras`
-so it also catches a huge batch inside one `feed` call). Past a threshold of new entries since the
-last sweep, it reads every extras id both screens' whole history, and the pen and erase cell of both
-cursors, can resolve — not `sweep`'s row-flag approximation — and frees exactly the ids that scan did
-not find. Nothing here is graphics-specific: the sweep does not know what a "placement" is, only that
-an id is or is not named by a cell. See the `IN-0045` LLD note for why release-time freeing was
-rejected and the sweep's own bound (it ratchets up in bursts, not a small constant, under sustained
-adversarial resends — see that note's numbers).
+(`InternTable::sweep_unreferenced`, orchestrated from `State::intern_extras`, which sweeps *before*
+interning so it can never free the value it is about to hand back, and checks on every hot call
+rather than once per `feed` so a huge batch inside one `feed` call cannot outrun it). Past a
+threshold of new entries handed out since the last sweep — counting a free-list reuse the same as a
+table-growing push, so the table cannot quietly stop counting once it fills — it reads every extras
+id both screens' whole history, and the pen and erase cell of both cursors, can resolve — not
+`sweep`'s row-flag approximation — and frees exactly the ids that scan did not find. Nothing here is
+graphics-specific: the sweep does not know what a "placement" is, only that an id is or is not named
+by a cell. See the `IN-0045` LLD note for why release-time freeing was rejected, and for why the
+first version of the mark-and-sweep design itself needed a second rework (it swept after interning,
+which could free the value just interned before its caller could write it anywhere, and its trigger
+counted only growth, which let the table fill once and then never sweep again).
 
 **Bound: `MAX_PLACEMENTS = 256`, oldest released first.** An unbounded placement table plus a linear
 sweep is a denial-of-service surface, so the table is a ring: the 257th image releases the first and

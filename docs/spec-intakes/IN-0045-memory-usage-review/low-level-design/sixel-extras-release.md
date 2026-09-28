@@ -5,7 +5,9 @@ HLD: [high-level-design.md](../high-level-design.md)
 Topic: `oneterm-vt` extras table growth from a resent Sixel image, and how the table proves an
 entry is safe to free
 Date: 2026-09-28. Reworked 2026-09-28 after adversarial verification failed the first design
-(`evidence/BUG-0081-verify.md`).
+(`evidence/BUG-0081-verify.md`), then reworked again the same day after a second adversarial pass
+failed the mark-and-sweep design's own orchestration and trigger (`evidence/BUG-0081-verify.md`,
+"Second pass").
 
 ## Concern
 
@@ -51,6 +53,55 @@ simplification); graphics do not tolerate two simultaneous placements merging in
 painter would draw the wrong rectangle. This stays rejected in the rework: `GraphicId` keeps its
 fresh-per-placement identity unchanged.
 
+## Second design flaw (S1/S2, second adversarial pass)
+
+The mark-and-sweep direction survived the second pass (`evidence/BUG-0081-verify.md`, "Second
+pass", S4: the live set is complete -- every holder the first pass named, including the
+anchor-trim and saved-cursor-screen cases the first pass only reasoned about, survives a sweep).
+Two defects in this design's own orchestration and trigger did not, each on its own a FAIL:
+
+**S1: `State::intern_extras` swept *after* interning, freeing the very id it had just handed back.**
+The value that pushes `since_sweep` to the interval is not yet held by any cell or pen at the point
+`intern_extras` is called -- both callers write the id it returns right after, never before. Sweeping
+after interning built the live set before that write happened, found the brand-new id unreferenced,
+and freed it: the caller then wrote a freed id into a cell or a pen, which the paranoid `is_free`
+check this same rework added catches immediately in debug, and which resolves silently to whatever
+is interned next in release. This happened deterministically on every 4,096th new value, and none of
+the committed regressions (`v1`-`v9`, the double-free test, the paranoid regression) reached it,
+because none of them creates enough distinct values to cross the trigger (S3, below). Fixed by
+sweeping *before* interning: at that point no fresh value exists yet to be mis-swept, and every id
+already handed out is provably in a cell or on a pen.
+
+**S2: `since_sweep` counted only pushes, so the table filled and then stopped sweeping forever.**
+A sweep frees `F` ids; the next `F` new values all reuse them via the free-list branch of `intern`,
+which did not touch `since_sweep`. Only once that reuse is exhausted do pushes resume, and only 4,096
+of *those* trigger the next sweep. Each cycle therefore raised `entries()` by exactly the interval and
+lasted `F + interval` interns, with `F` growing every cycle -- not a ratchet that slows toward a
+plateau, but one where the table grows as the square root of the resend count and the resends needed
+grow quadratically in the cycle count (the reverse of what the first version of this note claimed).
+Measured: the table reached 65,535 (full) at about 558,000 resends of one image, with `since_sweep`
+stalled at 4,094 -- below the interval, so `needs_sweep` could never become true again, and every
+later new link or image fell back to id 0 until `RIS`. That is the exact symptom `BUG-0081` exists to
+remove, just delayed by a factor of about eight. Fixed by counting every index miss in `since_sweep`
+-- a free-list reuse exactly like a push -- so a sweep runs once per `TABLE_SWEEP_INTERVAL` *new
+values*, whatever slot they land in, and the table settles to roughly `interval + live` instead of
+climbing forever. `State::intern_extras` also sweeps once and retries before accepting the table-full
+fallback, so a counter that happens to fall a little short of the interval right as the table
+genuinely fills can never strand it there for the rest of the session.
+
+**S3: the committed regressions never actually reached a sweep.** None of `v1`/`v2`/`v4`/`v8`/`v9`,
+the double-free test or the intern unit tests creates 4,096 distinct values, so `sweep_unreferenced`
+never ran through any of them -- a mutation that made the live-set collector return nothing still
+passed the whole suite. `R1`-`R4` (Verification, below) are the discriminating regressions this pass
+added: each was confirmed to fail when the live-set collector is stubbed to return an empty set
+(mutation A), and to pass when `needs_sweep` is stubbed to always return `false` (mutation B, which
+disables the sweep and therefore cannot free anything prematurely) -- proof that they exercise the
+sweep itself, not merely that release does nothing (which `v1`/`v8` already covered). The two bound
+tests (70,000 and 1,500,000 resends) are the mirror image: they pass under mutation A (freeing
+everything on every sweep does not break their specific single-cell check) and fail under mutation B
+(with no sweep at all, the table fills and the last resend stops placing) -- they are what actually
+proves S2 fixed, not R1-R4.
+
 ## Design (rework)
 
 **Free an id only once a scan of the whole grid proves nothing references it.** Nothing short of that
@@ -61,8 +112,9 @@ approximation, not any one call site's own bookkeeping about what it touched.
 
 - `free: FxHashSet<u16>` — ids freed, waiting for `intern` to hand them back out. `intern` checks it
   before growing the table.
-- `since_sweep: u32` — new entries pushed since the last sweep, incremented only on the growth branch
-  of `intern` (a genuinely new value, not a cache hit and not a free-list reuse).
+- `since_sweep: u32` — new entries handed out since the last sweep, incremented on **every** index
+  miss of `intern` — the free-list-reuse branch as much as the growth branch, and not a cache hit
+  (S2: counting growth alone let the table fill and then never sweep again).
 - `needs_sweep(&self) -> bool` — `since_sweep >= TABLE_SWEEP_INTERVAL` (4,096, an absolute count for
   the same reason `GRAPHEME_SWEEP_ENTRIES` is one: keeps a sweep rare for an ordinary session while
   still bounding a hostile one). Generic on `InternTable<T>`, but nothing calls the sweep for styles
@@ -85,30 +137,38 @@ complete as the first design's failure demanded: every holder `evidence/BUG-0081
 is `Screen::spare` (the one row kept only for its cell allocation after a history trim, "never read as
 content" — outside the ring `Screen::row` walks, so nothing observable can resolve through it).
 
-**Orchestration: checked after every hot intern, not once per `feed`.** `state.interner.extras(..)`
-has three call sites. Checking `needs_sweep()` once at the end of `Terminal::feed` was the first
-instinct, and it is wrong on its own: a single `feed` can carry a whole screen's worth of resends (a
-full repaint arriving in one read), so `since_sweep` could run into the tens of thousands before the
-end-of-batch check ever looked. `State::intern_extras` wraps `place`'s graphic-only entry and
-`set_hyperlink`'s call with an immediate `needs_sweep`/sweep check, so growth is bounded within a
-`feed`, not only across them. `stamp`'s rare merged hyperlink-and-graphic entry keeps calling
-`interner.extras` directly: it runs inside a loop already borrowing `state.grid` for the row it is
-writing, and a live-set scan needs `state.grid` on its own, so the two cannot interleave without
-restructuring that loop for a path that needs many pre-existing distinct hyperlinks under one
-about-to-be-placed image to matter. `Terminal::feed`'s own end-of-batch check stays as that path's
+**Orchestration: swept before interning, checked after every hot intern, not once per `feed`.**
+`state.interner.extras(..)` has three call sites. Checking `needs_sweep()` once at the end of
+`Terminal::feed` was the first instinct, and it is wrong on its own: a single `feed` can carry a
+whole screen's worth of resends (a full repaint arriving in one read), so `since_sweep` could run
+into the tens of thousands before the end-of-batch check ever looked. `State::intern_extras` wraps
+`place`'s graphic-only entry and `set_hyperlink`'s call with an immediate `needs_sweep`/sweep check
+**before** calling `interner.extras`, not after (S1) — the value about to be interned does not exist
+yet at that point, so a sweep run there can never mis-free it, and every id already handed out by an
+earlier call is provably written to a cell or a pen by the time this one's live-set scan reads the
+grid, because each caller writes its id back synchronously before anything else can call through
+`intern_extras` again. On the rare miss where the table is still full even after that pre-sweep,
+`intern_extras` sweeps once more and retries before accepting the id-0 fallback, so a counter that
+happens to fall short of the interval right as the table fills cannot strand it. `stamp`'s rare
+merged hyperlink-and-graphic entry keeps calling `interner.extras` directly: it runs inside a loop
+already borrowing `state.grid` for the row it is writing, and a live-set scan needs `state.grid` on
+its own, so the two cannot interleave without restructuring that loop for a path that needs many
+pre-existing distinct hyperlinks under one about-to-be-placed image to matter, and it always writes
+its id to the cell it just read from in the same loop iteration, before anything else can call
+`intern_extras` and possibly sweep. `Terminal::feed`'s own end-of-batch check stays as that path's
 backstop.
 
-**The bound is not a small constant.** Freeing never shrinks `entries()` (a kept id must never move,
-so there is no lower slot to move a survivor to), so `entries()` is a high-water mark, not a live
-count. Under a sustained stream that always creates a genuinely new value — which every Sixel resend
-does; nothing here dedupes by content the way a repainted implicit hyperlink does — each "cycle"
-(reuse the previous sweep's free list, then grow `TABLE_SWEEP_INTERVAL` more before the next sweep
-triggers) adds exactly `TABLE_SWEEP_INTERVAL` to the high-water mark and never gives any of it back.
-Measured (see Measurements below): 70,000 resends of one image reach roughly 20,000 entries, not the
-258 the first design measured and not 65,535. This is the correct trade the packet's brief allowed
-for ("make the threshold keep it rare"): a provably safe bound that grows slowly under sustained
-adversarial load, chosen over an unsafe one that stayed small under the one shape of load anyone had
-tested.
+**The bound is `O(interval + live)`, not a high-water mark that climbs forever.** Freeing never
+shrinks `entries()` (a kept id must never move, so there is no lower slot to move a survivor to), so
+`entries()` itself never decreases — but with `since_sweep` counting every reuse as well as every
+push (S2), a sweep runs once per `TABLE_SWEEP_INTERVAL` *new values handed out*, whichever slot they
+land in, so the table's high-water mark settles once the live set stops changing rather than growing
+every cycle. Measured (see Measurements below): 70,000 resends and 1,500,000 resends of one image
+both hold 4,098 entries, not the 258 the first design measured unsafely, and nowhere near 65,535. The
+first version of this note claimed the opposite — a bound that "ratchets up... indefinitely" under
+sustained load, needing "a compacting sweep that renumbers ids" for anything better — which had the
+relationship backwards (S2's own measurement disproves it) and was true only of the un-reworked S2
+defect, not of a design that counts reuses.
 
 **`F4`, scoped while here.** `graphics::assert_integrity`'s debug check walked every cell of a live
 placement's **row**, not its own columns. Two placements sharing a row (one narrower than the screen
@@ -141,23 +201,29 @@ first design are removed; `graphics/mod.rs` and `graphics/placement.rs` are othe
 - [x] `F3`: the paranoid whole-history walk (`Screen::assert_interned_ids_resolve`) now checks
   `!interner.extras.is_free(id)` for every cell's extras id **and** for the pen/erase cell of both
   cursors, not only `id < entries()` — a freed id always passed the old check, because freeing never
-  shrinks the table.
+  shrinks the table. This is what caught S1 immediately once written: it panics in a plain debug
+  build the first time the sweep-after-intern ordering mis-freed a fresh id.
+- [x] S1: the value whose own creation crosses the sweep threshold keeps its own cell, on both hot
+  call sites (`place`'s graphic-only entry, `set_hyperlink`'s pen write).
+- [x] S2: the table settles near `interval + live` under sustained resends of one image, at both
+  70,000 and 1,500,000 resends, and never falls back to id 0.
+- [x] S4: a placement's surviving rows after an anchor trim, and a screen's cells and saved-cursor
+  pen while the *other* screen is active, both survive sweeps triggered entirely elsewhere.
 
 ## Measurements
 
 Headless, release profile, throwaway counting allocator (removed before commit), one 20x4 terminal,
-`Config::default()`, one 1x6 Sixel resent with `CSI H` + the same `DCS q` 70,000 times:
+`Config::default()`, one 1x6 Sixel resent with `CSI H` + the same `DCS q`:
 
-| | Extras entries | Live bytes |
+| | Extras entries at 70,000 resends | Extras entries at 1,500,000 resends |
 | --- | --- | --- |
 | `eed33058` (main, unfixed) | 65,535 (full) | see `evidence/BUG-0081-verify.md` |
-| `3796cef0` (first design, rejected) | 258 | see `evidence/BUG-0081-verify.md` |
-| This rework | recorded in the packet's Evidence and Gaps | recorded in the packet's Evidence and Gaps |
+| `3796cef0` (first design, rejected: frees on release) | 258 | 65,535 (full, stalled) |
+| This rework (S1/S2 fixed) | recorded in the packet's Evidence and Gaps | recorded in the packet's Evidence and Gaps |
 
-Scan cost (`Screen::collect_live_extras_ids` for one screen, release profile): recorded in the
-packet's Evidence and Gaps, for the coordinator's requested worst-case shape (100,000 rows x 200
-columns) and for the test terminal's own small shape, so the threshold choice (4,096) can be judged
-against both.
+Live bytes and the scan cost (`Screen::collect_live_extras_ids` for one screen, release profile, at
+the coordinator's requested worst-case shape of 100,000 rows x 200 columns and at the test
+terminal's own small shape) are recorded in the packet's Evidence and Gaps.
 
 ## Verification
 
@@ -165,7 +231,15 @@ against both.
   the same id twice does not alias it; `sweep_unreferenced` frees exactly the ids missing from `live`.
 - [x] `graphics::tests`: `v1`/`v8`/`v9`/`v4` (released-but-still-live cells are never recycled);
   `v2` (every live placement is reachable through its own cells); `two_different_images_stay_distinct`;
-  a paranoid-check regression (`integrity_rejects_an_extras_id_freed_while_a_cell_still_names_it`).
-- [x] `terminal::tests`: 70,000 resends of one Sixel image at a fixed cursor position keep the extras
-  table well below the 65,535 ceiling, the last resend still places, and a later explicit link and a
-  later distinct image both still get their cells.
+  `r3` (an anchor-trimmed placement's surviving lower rows are not recycled by a later sweep); a
+  paranoid-check regression (`integrity_rejects_an_extras_id_freed_while_a_cell_still_names_it`).
+- [x] `terminal::tests`: `r1`/`r2` (the value that triggers a sweep keeps its own cell, on both hot
+  call sites); `r4` (the other screen's cells and saved-cursor pen survive sweeps on the active
+  screen); 70,000 and 1,500,000 resends of one Sixel image at a fixed cursor position keep the extras
+  table near the sweep interval, the last resend still places, and a following explicit link and a
+  distinct image both still get their cells; a table stuffed with entries nothing references any
+  more recovers via the sweep-and-retry at the exhausted step, without waiting for `RIS`.
+- [x] Each of `r1`-`r4` was confirmed to fail when the live-set collector is stubbed to return an
+  empty set (mutation A) and to pass when the sweep is disabled (mutation B); the 70,000- and
+  1,500,000-resend tests were confirmed to pass under mutation A and fail under mutation B. See the
+  packet's Evidence and Gaps for the full table.

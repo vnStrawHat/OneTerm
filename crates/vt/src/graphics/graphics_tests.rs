@@ -629,6 +629,50 @@ fn integrity_rejects_an_extras_id_freed_while_a_cell_still_names_it() {
     state.grid.assert_integrity(Some(&state.interner));
 }
 
+/// R3 (second adversarial pass, S4): a placement released by a history trim
+/// leaves its lower rows behind in history when only the anchor (top) row
+/// is old enough to be trimmed. Those survivors must resolve to the
+/// released image through any number of later sweeps, never to a link.
+#[test]
+fn r3_a_trimmed_anchors_surviving_lower_rows_are_not_recycled_by_a_sweep() {
+    let mut s = Session::with_scrollback(10, 3, 1);
+    let top = s.row_id(0);
+    s.feed(b"\x1b[1;1H");
+    // Raster declares a 10x60 image (1 col x 3 rows at the 10x20 fallback);
+    // the declared size wins over the one-band body actually sent, and the
+    // one real band means the cursor does not walk down at all, so the
+    // image's three rows are `top`, `top + 1`, `top + 2`.
+    s.feed(&sixel("\"1;1;10;60#0~"));
+    let image = s.one_image();
+    assert_eq!(s.term.placements()[0].rows, 3);
+
+    // Two newlines from the bottom row scroll twice; with a 1-row
+    // scrollback budget the second scroll trims the anchor (`top`) out of
+    // history, while `top + 1` (now the sole history row) and `top + 2`
+    // (now the visible screen's top row) survive.
+    s.feed(b"\x1b[3;1H\r\n\r\n");
+    assert_eq!(s.released(), vec![image.id]);
+    let survivor_a = s.graphic_at(top + 1, 0);
+    let survivor_b = s.graphic_at(top + 2, 0);
+    assert_eq!(survivor_a, Some(image.id));
+    assert_eq!(survivor_b, Some(image.id));
+
+    // Force many sweeps: the survivors must still resolve to the released
+    // image, never recycled into a link.
+    for i in 0..4_200u32 {
+        s.feed(format!("\x1b[3;1H\x1b]8;;http://z/{i}\x07x\x1b]8;;\x07").as_bytes());
+    }
+    assert_eq!(s.graphic_at(top + 1, 0), Some(image.id));
+    assert_eq!(s.graphic_at(top + 2, 0), Some(image.id));
+    assert_eq!(
+        s.term
+            .interner()
+            .resolve_extras(s.cell(top + 1, 0).extras_id())
+            .hyperlink,
+        None
+    );
+}
+
 /// R-02: an in-region scroll moves content between row ids, so the placement
 /// follows its **anchor** — not a `RowId` it once recorded.
 #[test]

@@ -224,8 +224,20 @@ pub(crate) struct State {
 }
 
 impl State {
-    /// Intern `value` into the extras table, and run its bounded sweep right
-    /// after if enough new entries have piled up since the last one.
+    /// Intern `value` into the extras table, sweeping first if enough new
+    /// entries have piled up since the last sweep -- and, on the rare miss
+    /// where the table is still full afterward, sweeping once more before
+    /// accepting the fallback to id 0.
+    ///
+    /// Sweeping **before** interning, not after, is load-bearing: `value` is
+    /// not yet held by any cell or pen at the point this function is called
+    /// (both callers write the id it returns right after), so a sweep run
+    /// after interning would find that brand-new id unreferenced and free
+    /// it out from under the caller about to use it -- silently in release,
+    /// or caught by the paranoid `is_free` check in debug. Sweeping first
+    /// means every id already handed out is provably in a cell or on a pen
+    /// by the time the live-set scan reads the grid, and the value about to
+    /// be interned does not exist yet to be mis-swept.
     ///
     /// The path every hot `interner.extras(..)` call site (`place`'s
     /// graphic-only entry, `set_hyperlink`) should go through instead of
@@ -234,19 +246,45 @@ impl State {
     /// resends (a full-screen repaint arriving in one read) from creating
     /// far more entries than the sweep interval before anything looks at
     /// whether they are still referenced. `stamp`'s rare merged hyperlink-
-    /// and-graphic entry calls
-    /// `interner.extras` directly instead: it is inside a loop already
-    /// borrowing `self.grid` for the row it is writing, and a live-set scan
-    /// needs `self.grid` on its own, so the two calls cannot interleave
-    /// without restructuring that loop. `feed`'s own end-of-batch check is
-    /// the backstop for that path.
+    /// and-graphic entry calls `interner.extras` directly instead: it is
+    /// inside a loop already borrowing `self.grid` for the row it is
+    /// writing, and a live-set scan needs `self.grid` on its own, so the two
+    /// calls cannot interleave without restructuring that loop. That call
+    /// always writes its id to the cell it just read from in the same loop
+    /// iteration, before anything else can intern through this function and
+    /// possibly sweep, so it needs no sweep of its own; `feed`'s own
+    /// end-of-batch check is the backstop that keeps its share of
+    /// `since_sweep` from going unswept indefinitely.
     pub(crate) fn intern_extras(&mut self, value: &Extras) -> ExtrasId {
+        self.sweep_extras_if_due();
         let id = self.interner.extras(value);
-        if self.interner.extras.needs_sweep() {
-            let live = self.grid.live_extras_ids();
-            self.interner.extras.sweep_unreferenced(&live);
+        // The table looked genuinely full, not merely due for a sweep it
+        // hasn't been told to run yet (`needs_sweep` gates *how often* we
+        // bother, not whether it is ever worth trying when already
+        // desperate): try one more sweep and retry, so a counter that
+        // happened to fall short of the interval right as the table filled
+        // can never strand it at the id-0 fallback for the rest of the
+        // session.
+        if id == ExtrasId::NONE && *value != Extras::NONE {
+            self.sweep_extras();
+            let retried = self.interner.extras(value);
+            if retried != ExtrasId::NONE {
+                return retried;
+            }
         }
         id
+    }
+
+    /// Sweep the extras table if its own interval says it is due.
+    fn sweep_extras_if_due(&mut self) {
+        if self.interner.extras.needs_sweep() {
+            self.sweep_extras();
+        }
+    }
+
+    fn sweep_extras(&mut self) {
+        let live = self.grid.live_extras_ids();
+        self.interner.extras.sweep_unreferenced(&live);
     }
 }
 

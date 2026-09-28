@@ -68,13 +68,13 @@ free its entry either -- a released placement's cells can still be on screen
 or in scrollback (an image evicted while 256 others are live, or an `IL`/`SD`
 that pushed part of one outside its own tracked extent, both leave real cells
 behind). What keeps the extras table bounded is its own periodic sweep: past
-a threshold of new entries since the last one, it reads every cell that can
-carry an extras id -- both screens' whole history, and the pen and erase cell
-of both cursors -- and frees exactly the ids that scan did not find. That
-bound is not a small constant: freeing never shrinks the table (a live id
-never moves), so a sustained resend stream ratchets the table's high-water
-mark up a little further each time the previous sweep's free list runs out,
-just far more slowly than one entry per resend.
+a threshold of new entries handed out since the last one -- counting a reused
+slot the same as a new one, so the table cannot fill up while quietly no
+longer counting -- it reads every cell that can carry an extras id -- both
+screens' whole history, and the pen and erase cell of both cursors -- and
+frees exactly the ids that scan did not find. The table settles near that
+threshold plus however many values are genuinely live at once, rather than
+growing by one entry per resend.
 
 You normally never name any of it. The snapshot resolves a cell's hyperlink for
 you under the lock -- `SnapshotState::hyperlink` -- and a row's clusters are

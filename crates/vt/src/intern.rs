@@ -167,10 +167,22 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
         if let Some(&id) = self.index.get(value) {
             return id;
         }
+        // `since_sweep` counts every index miss below -- a free-list reuse
+        // as much as a push -- not only growth. A sweep frees `F` ids, and
+        // the next `F` calls all land here on the free-list branch; if only
+        // pushes counted, those `F` calls would count for nothing, so the
+        // table would have to grow by a full `TABLE_SWEEP_INTERVAL` every
+        // cycle before the next sweep could ever run, without bound, until
+        // it filled `TABLE_LIMIT` and then, past the last push, could never
+        // trigger another sweep at all. Counting every miss instead bounds a
+        // sweep to one per `TABLE_SWEEP_INTERVAL` *new values*, whichever
+        // slot they land in, which is the cost the table's owner already
+        // accepted, and it never lets the table both fill and go silent.
         if let Some(&id) = self.free.iter().next() {
             self.free.remove(&id);
             self.entries[id as usize] = *value;
             self.index.insert(*value, id);
+            self.since_sweep = self.since_sweep.saturating_add(1);
             self.debug_assert_integrity();
             return id;
         }
@@ -267,11 +279,15 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
         self.exhausted
     }
 
-    /// Whether [`TABLE_SWEEP_INTERVAL`] new entries have been interned since
-    /// the last sweep. The owner is expected to check this once per
-    /// operation it is cheap to check from (a `feed`, here), and, when true,
-    /// build the live set by reading every cell that can carry this table's
-    /// ids and call [`sweep_unreferenced`](Self::sweep_unreferenced).
+    /// Whether [`TABLE_SWEEP_INTERVAL`] new entries have been handed out
+    /// since the last sweep — a free-list reuse counts exactly like table
+    /// growth, or a sweep that only ever counted growth could fill the table
+    /// once and then never trigger again. The owner is expected to check
+    /// this **before** interning a value it is about to hand out — sweeping
+    /// after would find that fresh value unreferenced and free it before its
+    /// caller can write it anywhere — and, when true, build the live set by
+    /// reading every cell that can carry this table's ids and call
+    /// [`sweep_unreferenced`](Self::sweep_unreferenced).
     pub(crate) fn needs_sweep(&self) -> bool {
         self.since_sweep as usize >= TABLE_SWEEP_INTERVAL
     }

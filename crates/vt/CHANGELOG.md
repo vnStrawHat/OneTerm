@@ -252,15 +252,16 @@ carry no API change at all. Such a release says so below rather than being omitt
   both cursors, can still resolve, and frees every id that scan did not find; the next value
   interned reuses a freed slot before the table grows further. No other id is renumbered. A
   placement's release (an eviction, a history trim, an `IL`/`SD` that splits an image outside its
-  own tracked extent) does **not** by itself free anything -- an earlier attempt at this fix made
-  it do exactly that, and an adversarial verification pass found it recycled a still-referenced id
-  into whatever was interned next, turning a released image's surviving cells into an unrelated
-  link. A headless measure of 70,000 resends of one image: extras entries bounded well below the
-  65,535 ceiling instead of filling it, and the last resend, a later explicit `id=` link, and a
-  later distinct image all still get their cells. The bound is not a small constant -- freeing
-  never shrinks the table, so a sustained resend stream ratchets the high-water mark up a little
-  further each time the previous sweep's free list runs out -- but 70,000 resends, the size this
-  bug was measured at, lands nowhere near the ceiling.
+  own tracked extent) does **not** by itself free anything -- two earlier attempts got this wrong:
+  the first freed on release and recycled a still-referenced id into whatever was interned next,
+  turning a released image's surviving cells into an unrelated link; the second swept *after*
+  interning and could free the very id it had just handed back before the caller wrote it anywhere,
+  and counted only new-table-growth toward its own trigger, so the table filled and then stopped
+  sweeping at all, for good, about eight times later than the original bug. Both were found by
+  adversarial verification before release. A headless measure of one image resent 70,000 and
+  1,500,000 times: extras entries settle near the sweep interval (about 4,100) in both cases and
+  the last resend always still places, instead of filling the 65,535-entry ceiling either quickly
+  (the original bug) or eventually (the two earlier attempts).
 
 ### Removed
 
