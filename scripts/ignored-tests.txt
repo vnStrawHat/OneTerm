@@ -31,6 +31,7 @@ render::element::element_tests::frame_time_under_output
 render::shapes::shapes_tests::shape_bitmaps_for_visual_review
 render::shapes::shapes_tests::thickness_table_for_docs
 session::session_orphan_tests::orphan_liveness_table
+session::session_tests::keystroke_echo_latency
 session_state::tests::an_elevated_window_writes_no_saved_sessions
 snapshot::bench::render_state_build_cost_per_frame
 updates::config::tests::an_elevated_window_queues_no_update_config_write

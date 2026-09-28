@@ -136,6 +136,10 @@ impl Focusable for TerminalView {
 }
 
 impl Render for TerminalView {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TerminalView")
+    )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.drain_notifications(window, cx);
         // Auto-completion: sync settings, feed gating + the live input line, and

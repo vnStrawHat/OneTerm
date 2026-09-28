@@ -14,6 +14,10 @@ use super::panel::SessionPanel;
 use super::tree_builder::session_matches;
 
 impl Render for SessionPanel {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "SessionPanel")
+    )]
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let focus = self.focus_handle.clone();

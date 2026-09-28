@@ -1120,6 +1120,10 @@ impl LocalPane {
 }
 
 impl Render for LocalPane {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "LocalPane")
+    )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Mirror cwd into the path box unless the user is typing in it.
         let cwd_display = self.cwd.display().to_string();

@@ -395,10 +395,13 @@ Stale detection uses `UiConfig::agent_stale_threshold_ms()` with a default of
 300,000 ms. A heartbeat with `interval_ms` raises the effective threshold to at
 least `interval_ms * 3`.
 
-`AgentListView` runs one 120 ms tick (`ACTIVE_CARD_TICK`, only notifies while a
-visible card is working, for the spinner), refreshes relative-time labels every
-1 s (`RELATIVE_TIME_TICK`) and runs stale refresh every 15 s (`STALE_TICK`) —
-`crates/agent-ui/src/view.rs`.
+`AgentListView` runs one refresh tick (`crates/agent-ui/src/view.rs`): every
+120 ms (`ACTIVE_CARD_TICK`) while a visible card is working, for the spinner;
+otherwise once a second (`RELATIVE_TIME_TICK`) on the shared wall-clock grid
+(`oneterm_state::until_next_tick`), so the relative-time labels repaint in the
+frame the cursor blink and the status bar already draw, and not at all while the
+panel has no cards (`US-0145`). A card that starts working restarts the tick so
+its spinner moves at once. Stale refresh runs every 15 s (`STALE_TICK`).
 
 ---
 

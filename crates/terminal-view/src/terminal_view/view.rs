@@ -40,6 +40,10 @@ use crate::space::SplitContext;
 use crate::url::UrlHover;
 
 const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
+/// How long after a repaint hint the view catches up with output that arrived
+/// without one (`US-0147`): one 60 Hz frame. Bounds how late an inactive tab
+/// stamps a line; the gutter shows seconds.
+pub(super) const OUTPUT_CATCH_UP: Duration = Duration::from_millis(16);
 
 /// The process-level services a terminal view needs, resolved once by the
 /// panel that creates the view and handed down (ARCH-20) instead of being
@@ -243,9 +247,11 @@ impl TerminalView {
 
         let blink_task = cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(CURSOR_BLINK_INTERVAL_MS))
-                    .await;
+                // On the shared grid, so a status-bar tick lands in the same
+                // frame as a blink instead of a frame of its own (`US-0145`).
+                let interval = Duration::from_millis(CURSOR_BLINK_INTERVAL_MS);
+                let wait = oneterm_state::until_next_tick(interval);
+                cx.background_executor().timer(wait).await;
                 let continue_blinking = this.update(cx, |view, cx| {
                     if !view.alive || view.ssh_closed {
                         return false;
@@ -310,6 +316,10 @@ impl TerminalView {
     /// visible — the view is focused and blinking is enabled. An unfocused
     /// view or `cursor_blink = Off` always draws a steady cursor, so a tick
     /// there would only cost a frame.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TerminalView")
+    )]
     pub(super) fn blink_tick(&mut self, cx: &mut Context<Self>) {
         let blink_on = self.deps.settings.read(cx).cursor_blink == TerminalBlink::On;
         if !self.focused || !blink_on {
@@ -345,6 +355,25 @@ impl TerminalView {
         }
     }
 
+    /// Stamp and invalidate for the output fed so far. `true` when it stamped a
+    /// line that had no stamp yet, which is what the gutter has to redraw for.
+    fn catch_up_with_output(&mut self, cx: &App) -> bool {
+        // The viewport is intentionally left where the user scrolled it;
+        // keyboard input re-snaps to the bottom.
+        //
+        // Stamp at the OUTPUT moment — the single stamper: the events task
+        // runs independently of render, so an inactive tab (not rendering)
+        // still stamps lines with the time they appeared.
+        let info = self.session.read(cx).terminal_info();
+        let stamped = self.gutter_times.covered();
+        self.gutter_times.update(&info);
+        // New output shifts the grid coordinate system, so stored search
+        // matches would point at the wrong rows. Mark them stale; `render`
+        // refreshes once per frame instead of once per PTY read.
+        self.search.mark_dirty();
+        self.gutter_times.covered() != stamped
+    }
+
     /// Apply one session event to the view. The single event handler used by
     /// both the events pump and the coalescing drain.
     pub(crate) fn handle_event(&mut self, ev: SessionEvent, cx: &mut Context<Self>) {
@@ -353,19 +382,25 @@ impl TerminalView {
                 cx.write_to_clipboard(ClipboardItem::new_string(text.unwrap_or_default()));
             }
             SessionEvent::Output => {
-                // The viewport is intentionally left where the user scrolled
-                // it; keyboard input re-snaps to the bottom.
-                //
-                // Stamp at the OUTPUT moment — the single stamper: the events
-                // task runs independently of render, so an inactive tab (not
-                // rendering) still stamps lines with the time they appeared.
-                let info = self.session.read(cx).terminal_info();
-                self.gutter_times.update(&info);
-                // New output shifts the grid coordinate system, so stored
-                // search matches would point at the wrong rows. Mark them
-                // stale; `render` refreshes once per frame instead of once
-                // per PTY read.
-                self.search.mark_dirty();
+                let _ = self.catch_up_with_output(cx);
+                // At most one hint is out (`US-0147`): output fed after this one
+                // posts none until a snapshot releases it. So catch up once more
+                // a frame later, and release it for a view that draws no frame
+                // (an inactive tab), which would otherwise never hear from its
+                // pump again. It repaints only for new stamps: a frame already
+                // drew the output itself, and a repaint per hint would double the
+                // frames of a TUI that the UI keeps up with. Never in a hidden tab:
+                // there a notify costs a whole-window frame (US-0145, below).
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(OUTPUT_CATCH_UP).await;
+                    let _ = this.update(cx, |view, cx| {
+                        view.session.read(cx).release_repaint_hint();
+                        if view.catch_up_with_output(cx) && !view.in_hidden_tab(cx) {
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
             }
             SessionEvent::Bell => self.has_bell = true,
             SessionEvent::Notification(msg) => self.queue_notification(msg),
@@ -387,7 +422,21 @@ impl TerminalView {
             // row roles are not consumed by the UI yet.
             SessionEvent::Cwd(_) | SessionEvent::ShellIntegration(_) => {}
         }
-        cx.notify();
+        // A view in a tab that is not on screen draws nothing, but the tab strip
+        // reads it (the tab label), so the window tracks it and a notify here
+        // would cost a whole-window frame that changes no pixel (US-0145).
+        // Showing the tab re-renders it: `set_active(true)` notifies the panel.
+        if !self.in_hidden_tab(cx) {
+            cx.notify();
+        }
+    }
+
+    /// Whether this view's tab is in a tab group that shows another tab.
+    fn in_hidden_tab(&self, cx: &App) -> bool {
+        self.split_ctx
+            .as_ref()
+            .and_then(|split| split.panel.upgrade())
+            .is_some_and(|panel| panel.read(cx).is_hidden_tab())
     }
 
     pub(super) fn handle_session_closed(&mut self, kind: SessionKind) {

@@ -280,9 +280,9 @@ provide a transport and a read loop.
 |---|---|
 | `PtyTransport` (trait) | The backend half: `pty_write` / `pty_resize` / `pty_close`. Non-blocking, `Clone` (Arc handles). `LocalTransport` wraps the owner-thread notifier queue; `SshTransport` wraps the bounded `Cmd` channel (byte budget, coalesced resize, closing flag). |
 | `SharedState` (`Arc<SharedSessionState>`) | Title / cwd / clipboard / exit code / OSC 133 counters / theme default colours / agent-status seq watermarks (OSC 20308) behind one mutex; `alive`, rx/tx bytes, absolute line count and clear epoch as atomics so a parse batch never takes the mutex. Handed to the SFTP browser as `TerminalCapabilities::cwd_source` so it can read the live cwd. |
-| `SessionEventSink` | Delivery policy: `post_repaint()` is coalescible (the hint is dropped and counted when the 4096-slot queue is full), `send_blocking()` / `send()` are reliable and apply backpressure. Counters (`EventQueueDiagnostics`) for tests/diagnostics. The deferred FIFO, `flush_reliable[_blocking]` and `forward_lifecycle*` were deleted at `US-0082`: events are values now, so the drain no longer runs inside a callback and the sink may simply block. |
+| `SessionEventSink` | Delivery policy: `post_repaint()` is coalescible (the hint is dropped and counted when the 4096-slot queue is full) and returns whether it queued, which the pump needs to release its one-hint-out flag (below), `send_blocking()` / `send()` are reliable and apply backpressure. Counters (`EventQueueDiagnostics`) for tests/diagnostics. The deferred FIFO, `flush_reliable[_blocking]` and `forward_lifecycle*` were deleted at `US-0082`: events are values now, so the drain no longer runs inside a callback and the sink may simply block. |
 | `OscRouter<T: PtyTransport>` | The drain over the `EventBatch` `Terminal::feed` fills — **not** a callback installed in the engine, so nothing runs inside it while the caller holds the lock. `drain(&batch, &mut out)` does only what must happen under the lock and cannot wait, in **one pass in byte order**: a `VtEvent::Reply` goes to the transport in the position the input asked for, whichever side produced it, so a reply never overtakes another reply (conhost blocks up to a second for the DA1 answer at session start, which is a latency requirement, not an ordering one) — `Repaint` dropped (the pump owns the hint); `Title`/`TitleReset` → state cache; OSC 52 store/load gated by `TerminalSecurityPolicy` + `ClipboardOrigin` (remote default off — the same code for both backends, so the policy cannot drift; the policy is the user's, derived from `TerminalSettings` by `terminal-view` and passed through `SessionFactory::{spawn_local, connect_ssh}` into `OscRouter::with_security`); `Cwd`/`Notification`/`Progress`/`ShellMark` (the engine's typed OSC 7, 9, `9;4` and 133 events — parsed once, in the engine, and met here by **policy** only: `sanitize_cwd`, the 8 KiB notification cap and its ten-per-second limiter, the prompt counter and the last exit code) → state; `Osc` (only what `Config::osc_routes` routes out of the engine: OSC 20308, the agent channel, and — for one release — the deprecated `9;7` alias, which arrives as a `BuiltinAndForward` wrap of OSC 9 because routing is per number and sub-codes are payload; `OscRoutes::large` on both spellings so an 8 KiB payload is not cut at the parser's 2 KiB inline bound) → seq dedup + the support reply; `ScreenCleared` → clear epoch; `ColorQuery { key, .. }` → the pending colour-query queue keyed by `ColorKey`, answered by `TerminalPump::color_replies` after the batch from the live engine colours with the theme defaults as fallback. The matching `SessionEvent`s are **appended to `out`**, the pump's pending vector, and sent once the lock is released. `RowsScrolled` / `RowsTrimmed` / `GraphicReleased` are dropped until a `RowId`-keyed consumer exists (`US-0085`), and so are `IconName`, `Pointer` and `CursorStyleChanged`, which nothing above the seam speaks yet. |
-| `TerminalPump<T>` | Owns one reusable `EventBatch`, the pending `SessionEvent` vector, the gutter's line count and a router clone. Per chunk: `advance(term, bytes)` under the engine lock — `Terminal::feed` into the batch, then `OscRouter::drain` — (or `process_chunk(&handle, bytes)` which also answers colour queries and writes the replies), then `finish_batch[_blocking](repaint)` once the lock is released: publish the line count → send the batch's events (backpressure) → `Output`. Lifecycle: `publish_exit*` / `publish_closed*`, each sending everything queued before it first. The gutter's absolute line number is `Terminal::lines_produced()` — output lines, never implicit wraps, never reset by a clear — floored at the rows the grid holds, because the gutter labels display row `i` with `absolute - offset - rows + i`. `LineAccounting` and its heuristic over `total_lines` were deleted at `US-0082`. |
+| `TerminalPump<T>` | Owns one reusable `EventBatch`, the pending `SessionEvent` vector, the gutter's line count and a router clone. Per chunk: `advance(term, bytes)` under the engine lock — `Terminal::feed` into the batch, then `OscRouter::drain` — (or `process_chunk(&handle, bytes)` which also answers colour queries and writes the replies), then `finish_batch[_blocking](repaint)` once the lock is released: publish the line count → send the batch's events (backpressure) → `Output`, **unless a hint is already out** (below). Lifecycle: `publish_exit*` / `publish_closed*`, each sending everything queued before it first. The gutter's absolute line number is `Terminal::lines_produced()` — output lines, never implicit wraps, never reset by a clear — floored at the rows the grid holds, because the gutter labels display row `i` with `absolute - offset - rows + i`. `LineAccounting` and its heuristic over `total_lines` were deleted at `US-0082`. |
 
 Local (`ShellEventLoop<P>`) uses the blocking variants on the PTY owner thread;
 SSH (`ssh_main_task`) uses the async ones on the tokio runtime. Neither backend
@@ -376,8 +376,24 @@ lock held while the UI thread needed that same lock to drain the event queue (CO
 There is no callback any more: `OscRouter::drain` collects `SessionEvent`s into the
 pump's vector, and `finish_batch[_blocking]` sends them **after** the guard is dropped
 (event loop: blocking send; tokio task: `send().await`). Ordering seen by the UI is
-unchanged — the events a batch produced, then that batch's single `Output` hint — and
-lifecycle events (`Exited`/`Closed`) send everything queued before them first.
+unchanged — the events a batch produced, then that batch's `Output` hint when it posts
+one — and lifecycle events (`Exited`/`Closed`) send everything queued before them first.
+
+**At most one `Output` hint is out** (`US-0147`). A hint only asks the UI for a frame,
+and the frame reads everything fed up to its snapshot, so a second hint before that
+snapshot asks for the same frame. The pump claims `SharedSessionState::claim_repaint_hint`
+before posting and posts nothing while a hint is out; a batch's reliable events still
+leave every time. Three places release it: `PtySession::snapshot[_into]` **before** it
+takes the engine lock (a batch fed after that posts again; one fed before it is in the
+snapshot), the view one frame (`OUTPUT_CATCH_UP`, 16 ms) after it handled a hint, where it
+also re-stamps the gutter for the lines that came without one, and the pump itself when
+the queue had no room for the hint. The view's release is what keeps an inactive tab,
+which takes no snapshot, hearing from its pump; its lines are stamped at most a frame
+late. Nothing waits on the output path: a batch with no hint out posts at once, so an
+echo after a quiet spell is as fast as before. Why: ConPTY hands `cmd`'s output over one
+line per chunk, and a hint per chunk woke the UI thread once per line — 4.8 µs of the PTY
+owner's 7.2 µs loop body per chunk in the 300k-line flood
+(`docs/spec-intakes/IN-0046-hotpath-profiling/US-0147-pty-chunk-cost.md`).
 
 The layer is testable without a PTY or a network: `test_support::FakePtyTransport`
 records writes, and `crates/terminal/src/backend/backend_tests.rs` drives the pump
@@ -753,9 +769,16 @@ reproduces the full table on demand.
 ### 6.4. Re-render perf (per Zed)
 
 - The pump doesn't `notify` per byte — a read chunk is parsed as one batch and
-  `finish_batch` sends a **single** coalescible `SessionEvent::Output` (§5.3/§6.5).
+  `finish_batch` sends at most a **single** coalescible `SessionEvent::Output`, and none
+  while an earlier one is still out (§5.3/§6.5).
 - The View `cx.notify()` only when `display_offset`/`mode`/`cursor`/cells actually change
   (compare old vs new snapshot). Avoids continuous redraw under `yes`.
+- A View whose tab its group is not showing does not `cx.notify()` on a session event
+  (`TerminalView::handle_event`, `US-0145`): it draws nothing, and the notify would cost a
+  whole-window frame. Showing the tab re-renders it (`set_active(true)` notifies the panel).
+  The cursor-blink timer wakes on the shared 500 ms grid (`oneterm_state::until_next_tick`)
+  so it shares frames with the status bar ([`gui-layout.md`](gui-layout.md) § Frames and
+  re-rendering).
 - Log `layout took {:?}` for tuning (copy Zed's `log::debug!`).
 
 ### 6.5. Transport backpressure contract

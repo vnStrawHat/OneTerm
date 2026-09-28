@@ -179,11 +179,12 @@ impl<T: PtyTransport> TerminalPump<T> {
     /// End a parse batch (lock released): publish the line count, deliver the
     /// events collected during the batch (blocking on UI backpressure), then
     /// post the repaint hint when `repaint` is set.
+    #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "Pump"))]
     pub fn finish_batch_blocking(&self, repaint: bool) {
         self.publish_line_count();
         self.flush_blocking();
         if repaint {
-            self.router.events().post_repaint();
+            self.post_repaint_hint();
         }
     }
 
@@ -192,7 +193,16 @@ impl<T: PtyTransport> TerminalPump<T> {
         self.publish_line_count();
         self.flush().await;
         if repaint {
-            self.router.events().post_repaint();
+            self.post_repaint_hint();
+        }
+    }
+
+    /// Post the batch's repaint hint unless one is still out
+    /// ([`SharedSessionState::claim_repaint_hint`](super::SharedSessionState::claim_repaint_hint)).
+    fn post_repaint_hint(&self) {
+        if self.state().claim_repaint_hint() && !self.router.events().post_repaint() {
+            // Not queued: nothing will release it, so the next batch must try again.
+            self.state().release_repaint_hint();
         }
     }
 

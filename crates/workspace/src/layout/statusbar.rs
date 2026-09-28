@@ -78,6 +78,7 @@ fn divide_centre(window_width: Pixels, icons: usize, fixed: Pixels, git: Pixels)
 /// so their timers fire reliably — not recreated each render. This is also where
 /// the two shortening indicators are told how much width they have, because the
 /// bar is the only place that sees every label at once.
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 pub fn build_status_bar(
     workspace: &OneTermWorkspace,
     window: &mut Window,

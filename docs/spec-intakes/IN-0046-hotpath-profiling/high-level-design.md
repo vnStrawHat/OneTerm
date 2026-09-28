@@ -34,13 +34,23 @@ oneterm-app  features:
      |       TerminalElement::prepaint / paint, GridPainter::paint
      |       +--> oneterm-highlight/hotpath-profiling: scan_line_into
      |       +--> oneterm-terminal/hotpath-profiling
-     +--> oneterm-local-shell/hotpath-profiling: the PTY read (pty_read)
+     +--> oneterm-local-shell/hotpath-profiling: the PTY read (pty_read); US-0147's
+     |       loop blocks (site! -> measure_block!): loop::poll_wait, loop::commands,
+     |       loop::drain_pty, loop::lock, loop::unlock
      |       +--> oneterm-terminal/hotpath-profiling
-     |               Pump::advance, TerminalContent::refill
+     |               Pump::advance, Pump::finish_batch_blocking,
+     |               SessionEventSink::post_repaint, TerminalContent::refill
      |               +--> oneterm-vt/hotpath-profiling
      |                       Terminal::feed, Parser::advance,
-     |                       Screen::scroll_up / scroll_down, Terminal::snapshot_update
+     |                       Screen::scroll_up / scroll_down, Terminal::snapshot_update;
+     |                       Windows conout thread: read_pipe, push, Ring::wake
      +--> oneterm-ssh/hotpath-profiling: copy_sequential (SFTP transfer body)
+     +--> oneterm-workspace/hotpath-profiling (US-0145): OneTermWorkspace::render,
+     |       build_status_bar, AppTitleBar::render, StatusText::render
+     +--> oneterm-session-ui/hotpath-profiling (US-0145): SessionPanel::render
+     +--> oneterm-sftp-ui/hotpath-profiling (US-0145): SftpPanel::render, LocalPane::render
+     (US-0145 also: TerminalView::render / blink_tick, TerminalPanel::render / title,
+      SpaceTree::render, TerminalElement::request_layout, SshClientPanel::render in the app)
 ```
 
 A leaf crate's feature only adds the optional `hotpath` dependency (`dep:hotpath`). Only
@@ -76,8 +86,9 @@ N/A — no UI surface. The report is text on stdout, or in the file named by
    `--features hotpath-profiling,hotpath/hotpath` on `oneterm-terminal-view`, which is how
    the per-site overhead was measured.
 
-Adding a site: put the `cfg_attr` line on a function in one of the six crates above. Keep
-sites at batch granularity (per chunk, per frame, per row, per shaped run); a site in a
+Adding a site: put the `cfg_attr` line on a function in one of the crates above (a crate
+without the feature gets `hotpath-profiling = ["dep:hotpath"]`, the optional dependency,
+and a line in `oneterm-app`'s fan-out). Keep sites at batch granularity (per chunk, per frame, per row, per shaped run); a site in a
 per-byte or per-cell function costs more than the work it measures.
 
 ## Detail Design

@@ -64,6 +64,19 @@ pub(crate) const LOCAL_COMMAND_QUEUE_CAPACITY: usize = 256;
 /// Maximum aggregate input bytes queued or waiting for PTY delivery.
 pub(crate) const LOCAL_COMMAND_BYTE_BUDGET: usize = 4 * 1024 * 1024;
 
+/// A `hotpath` site around one expression under the `hotpath-profiling` feature
+/// (`IN-0046`), the bare expression without it. For the loop's steps that have no
+/// function of their own to carry `hotpath::measure`.
+macro_rules! site {
+    ($label:literal, $body:expr) => {{
+        #[cfg(feature = "hotpath-profiling")]
+        let value = hotpath::measure_block!($label, $body);
+        #[cfg(not(feature = "hotpath-profiling"))]
+        let value = $body;
+        value
+    }};
+}
+
 /// Maximum parser lock samples retained in one two-second diagnostics window.
 #[cfg(feature = "terminal-diagnostics")]
 const LOCK_SAMPLE_CAPACITY: usize = 16_384;
@@ -308,7 +321,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
             // happens (CORR-18 / PERF-22).
             #[cfg(feature = "terminal-diagnostics")]
             let wait_start = std::time::Instant::now();
-            if let Err(err) = self.poll.wait(&mut events, None) {
+            if let Err(err) = site!("loop::poll_wait", self.poll.wait(&mut events, None)) {
                 if err.kind() == io::ErrorKind::Interrupted {
                     continue;
                 }
@@ -324,49 +337,51 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                 self.deregister_pty();
                 return;
             }
-            let pending_resize = self
-                .control
-                .pending_resize
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(size) = pending_resize
-                && let Err(error) = self.pty.on_resize(size)
-            {
-                // The session is still usable at the old size, so keep it alive
-                // (docs/agents/error-policy.md, transport row).
-                log::warn!("ShellEventLoop: PTY resize failed: {error}");
-            }
+            site!("loop::commands", {
+                let pending_resize = self
+                    .control
+                    .pending_resize
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(size) = pending_resize
+                    && let Err(error) = self.pty.on_resize(size)
+                {
+                    // The session is still usable at the old size, so keep it alive
+                    // (docs/agents/error-policy.md, transport row).
+                    log::warn!("ShellEventLoop: PTY resize failed: {error}");
+                }
 
-            // Drain queued input (non-blocking). Resize and shutdown never
-            // travel through the queue — see `ShellMsg`.
-            while let Ok(bytes) = self.input_rx.try_recv() {
-                write_queue.push_back(bytes);
-            }
+                // Drain queued input (non-blocking). Resize and shutdown never
+                // travel through the queue — see `ShellMsg`.
+                while let Ok(bytes) = self.input_rx.try_recv() {
+                    write_queue.push_back(bytes);
+                }
 
-            // Write pending data to PTY.
-            while let Some(bytes) = write_queue.front() {
-                match self.pty.writer().write(bytes) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        self.control.queued_input_bytes.release(n);
-                        if n >= bytes.len() {
-                            write_queue.pop_front();
-                        } else {
-                            // Partial write — trim remaining.
-                            let remaining = bytes[n..].to_vec();
-                            write_queue.pop_front();
-                            write_queue.push_front(Cow::Owned(remaining));
+                // Write pending data to PTY.
+                while let Some(bytes) = write_queue.front() {
+                    match self.pty.writer().write(bytes) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            self.control.queued_input_bytes.release(n);
+                            if n >= bytes.len() {
+                                write_queue.pop_front();
+                            } else {
+                                // Partial write — trim remaining.
+                                let remaining = bytes[n..].to_vec();
+                                write_queue.pop_front();
+                                write_queue.push_front(Cow::Owned(remaining));
+                                break;
+                            }
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                        Err(err) => {
+                            error!("ShellEventLoop: write error: {err}");
                             break;
                         }
                     }
-                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(err) => {
-                        error!("ShellEventLoop: write error: {err}");
-                        break;
-                    }
                 }
-            }
+            });
 
             // Process readable events.
             for event in events.iter() {
@@ -385,154 +400,159 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                 }
 
                 if action == PollAction::ReadWrite {
-                    #[cfg(feature = "terminal-diagnostics")]
-                    let parse_start = diagnostics_enabled.then(std::time::Instant::now);
-                    #[cfg(feature = "terminal-diagnostics")]
-                    let mut lock_started = None;
-                    let mut unprocessed: usize = 0;
-                    let mut processed = 0;
-                    let mut terminal = None;
+                    site!("loop::drain_pty", {
+                        #[cfg(feature = "terminal-diagnostics")]
+                        let parse_start = diagnostics_enabled.then(std::time::Instant::now);
+                        #[cfg(feature = "terminal-diagnostics")]
+                        let mut lock_started = None;
+                        let mut unprocessed: usize = 0;
+                        let mut processed = 0;
+                        let mut terminal = None;
 
-                    loop {
-                        let read_end = unprocessed
-                            .saturating_add(MAX_LOCKED_READ)
-                            .min(READ_BUFFER_SIZE);
-                        match pty_read(self.pty.reader(), &mut buf[unprocessed..read_end]) {
-                            Ok(0) if unprocessed == 0 => break,
-                            Ok(got) => unprocessed += got,
-                            Err(err) => match err.kind() {
-                                io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock => {
-                                    if unprocessed == 0 {
+                        loop {
+                            let read_end = unprocessed
+                                .saturating_add(MAX_LOCKED_READ)
+                                .min(READ_BUFFER_SIZE);
+                            match pty_read(self.pty.reader(), &mut buf[unprocessed..read_end]) {
+                                Ok(0) if unprocessed == 0 => break,
+                                Ok(got) => unprocessed += got,
+                                Err(err) => match err.kind() {
+                                    io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock => {
+                                        if unprocessed == 0 {
+                                            break;
+                                        }
+                                    }
+                                    _ => {
+                                        error!("ShellEventLoop: read error: {err}");
                                         break;
                                     }
-                                }
-                                _ => {
-                                    error!("ShellEventLoop: read error: {err}");
-                                    break;
-                                }
-                            },
-                        }
-
-                        {
-                            // Lock terminal.
-                            let engine = match &mut terminal {
-                                Some(engine) => engine,
-                                None => {
-                                    let guard = match self.term.try_lock() {
-                                        None if unprocessed >= READ_BUFFER_SIZE => self.term.lock(),
-                                        None => continue,
-                                        Some(guard) => guard,
-                                    };
-                                    #[cfg(feature = "terminal-diagnostics")]
-                                    if diagnostics_enabled {
-                                        lock_started = Some(std::time::Instant::now());
-                                    }
-                                    terminal.insert(guard)
-                                }
-                            };
-
-                            // Feed the chunk to the engine: parse, drain the
-                            // batch, collect this batch's events.
-                            self.pump.advance(engine, &buf[..unprocessed]);
-                        }
-
-                        processed += unprocessed;
-                        unprocessed = 0;
-
-                        // Chunk boundary: hand the engine to a waiting frame
-                        // rather than at the end of the burst. A fair mutex
-                        // cannot help a waiter that never sees an unlock, and
-                        // this loop holds its guard until the pipe runs dry —
-                        // the `US-0082` verifier measured a frame waiting
-                        // 3 800 batches / 354 ms that way, against one batch /
-                        // 157 µs when the loop yields.
-                        //
-                        // Two rules shape it. This batch's colour replies leave
-                        // first (R-37): conhost blocks for up to a second on a
-                        // query answer, and that must not queue behind a frame.
-                        // And the yield must not leave the read loop: the conout
-                        // ring re-arms its wake-up only when a read finds it
-                        // empty (`crates/vt/src/pty/windows/pipe.rs`), so a loop
-                        // that stops reading with bytes still buffered parks in
-                        // `poll.wait` and the session freezes. The next pass
-                        // keeps draining the pipe into `buf` and re-locks once
-                        // the frame is done.
-                        if self.term.render_demand_raised()
-                            && let Some(guard) = terminal.take()
-                        {
-                            let queries = self.pump.take_color_queries();
-                            let replies = if queries.is_empty() {
-                                Vec::new()
-                            } else {
-                                self.pump.color_replies(&guard, queries)
-                            };
-                            #[cfg(feature = "terminal-diagnostics")]
-                            if diagnostics_enabled && let Some(start) = lock_started.take() {
-                                record_lock_sample(&mut stat_lock_hold_us, start);
+                                },
                             }
-                            // Fair unlock: the engine goes to the frame.
+
+                            {
+                                // Lock terminal.
+                                let engine = match &mut terminal {
+                                    Some(engine) => engine,
+                                    None => {
+                                        let guard = match site!("loop::lock", self.term.try_lock())
+                                        {
+                                            None if unprocessed >= READ_BUFFER_SIZE => {
+                                                self.term.lock()
+                                            }
+                                            None => continue,
+                                            Some(guard) => guard,
+                                        };
+                                        #[cfg(feature = "terminal-diagnostics")]
+                                        if diagnostics_enabled {
+                                            lock_started = Some(std::time::Instant::now());
+                                        }
+                                        terminal.insert(guard)
+                                    }
+                                };
+
+                                // Feed the chunk to the engine: parse, drain the
+                                // batch, collect this batch's events.
+                                self.pump.advance(engine, &buf[..unprocessed]);
+                            }
+
+                            processed += unprocessed;
+                            unprocessed = 0;
+
+                            // Chunk boundary: hand the engine to a waiting frame
+                            // rather than at the end of the burst. A fair mutex
+                            // cannot help a waiter that never sees an unlock, and
+                            // this loop holds its guard until the pipe runs dry —
+                            // the `US-0082` verifier measured a frame waiting
+                            // 3 800 batches / 354 ms that way, against one batch /
+                            // 157 µs when the loop yields.
+                            //
+                            // Two rules shape it. This batch's colour replies leave
+                            // first (R-37): conhost blocks for up to a second on a
+                            // query answer, and that must not queue behind a frame.
+                            // And the yield must not leave the read loop: the conout
+                            // ring re-arms its wake-up only when a read finds it
+                            // empty (`crates/vt/src/pty/windows/pipe.rs`), so a loop
+                            // that stops reading with bytes still buffered parks in
+                            // `poll.wait` and the session freezes. The next pass
+                            // keeps draining the pipe into `buf` and re-locks once
+                            // the frame is done.
+                            if self.term.render_demand_raised()
+                                && let Some(guard) = terminal.take()
+                            {
+                                let queries = self.pump.take_color_queries();
+                                let replies = if queries.is_empty() {
+                                    Vec::new()
+                                } else {
+                                    self.pump.color_replies(&guard, queries)
+                                };
+                                #[cfg(feature = "terminal-diagnostics")]
+                                if diagnostics_enabled && let Some(start) = lock_started.take() {
+                                    record_lock_sample(&mut stat_lock_hold_us, start);
+                                }
+                                // Fair unlock: the engine goes to the frame.
+                                drop(guard);
+                                self.pump.write_color_replies(replies);
+                                // A yield is a batch boundary, so it ends a batch:
+                                // publish the line count, deliver the events this
+                                // batch collected and post its repaint hint. Without
+                                // this the loop only ever finishes a batch when the
+                                // transport runs dry — which ConPTY does tens of
+                                // thousands of times a second, but a socket under a
+                                // flood does not, leaving the UI with no hints and
+                                // no title/cwd/OSC events for the length of the
+                                // flood. Safe to block here: the guard is gone
+                                // (CORR-01).
+                                self.pump.finish_batch_blocking(true);
+                                // Counted here because the batch ends here; the
+                                // post-loop tally only sees what came after.
+                                #[cfg(feature = "terminal-diagnostics")]
+                                if diagnostics_enabled {
+                                    stat_bytes += processed as u64;
+                                }
+                                processed = 0;
+                            }
+
+                            // Otherwise read on: when the pipe is empty `read` arms
+                            // the wake-up, the pipe thread posts on the next bytes,
+                            // and the loop parks in `poll.wait`.
+                        }
+
+                        // Answer OSC 10/11/12 color queries collected during parsing.
+                        // Read the current color from `Term` (reusing the lock guard
+                        // if still held), fall back to the theme default, then reply.
+                        let queries = self.pump.take_color_queries();
+                        if !queries.is_empty() {
+                            let guard = terminal.take().unwrap_or_else(|| self.term.lock());
+                            let replies = self.pump.color_replies(&guard, queries);
                             drop(guard);
-                            self.pump.write_color_replies(replies);
-                            // A yield is a batch boundary, so it ends a batch:
-                            // publish the line count, deliver the events this
-                            // batch collected and post its repaint hint. Without
-                            // this the loop only ever finishes a batch when the
-                            // transport runs dry — which ConPTY does tens of
-                            // thousands of times a second, but a socket under a
-                            // flood does not, leaving the UI with no hints and
-                            // no title/cwd/OSC events for the length of the
-                            // flood. Safe to block here: the guard is gone
-                            // (CORR-01).
-                            self.pump.finish_batch_blocking(true);
-                            // Counted here because the batch ends here; the
-                            // post-loop tally only sees what came after.
                             #[cfg(feature = "terminal-diagnostics")]
                             if diagnostics_enabled {
-                                stat_bytes += processed as u64;
+                                if let Some(start) = lock_started.take() {
+                                    record_lock_sample(&mut stat_lock_hold_us, start);
+                                }
                             }
-                            processed = 0;
+                            self.pump.write_color_replies(replies);
                         }
 
-                        // Otherwise read on: when the pipe is empty `read` arms
-                        // the wake-up, the pipe thread posts on the next bytes,
-                        // and the loop parks in `poll.wait`.
-                    }
-
-                    // Answer OSC 10/11/12 color queries collected during parsing.
-                    // Read the current color from `Term` (reusing the lock guard
-                    // if still held), fall back to the theme default, then reply.
-                    let queries = self.pump.take_color_queries();
-                    if !queries.is_empty() {
-                        let guard = terminal.take().unwrap_or_else(|| self.term.lock());
-                        let replies = self.pump.color_replies(&guard, queries);
-                        drop(guard);
+                        site!("loop::unlock", drop(terminal));
                         #[cfg(feature = "terminal-diagnostics")]
                         if diagnostics_enabled {
                             if let Some(start) = lock_started.take() {
                                 record_lock_sample(&mut stat_lock_hold_us, start);
                             }
+                            if let Some(start) = parse_start {
+                                stat_parse += start.elapsed();
+                            }
+                            stat_bytes += processed as u64;
                         }
-                        self.pump.write_color_replies(replies);
-                    }
 
-                    drop(terminal);
-                    #[cfg(feature = "terminal-diagnostics")]
-                    if diagnostics_enabled {
-                        if let Some(start) = lock_started.take() {
-                            record_lock_sample(&mut stat_lock_hold_us, start);
-                        }
-                        if let Some(start) = parse_start {
-                            stat_parse += start.elapsed();
-                        }
-                        stat_bytes += processed as u64;
-                    }
-
-                    // The `Term` lock is released: publish the line count,
-                    // deliver reliable events (Bell/Title/OSC…) that did not
-                    // fit in the queue during `advance`, waiting for the UI if
-                    // needed, then post the batch's repaint hint so they are
-                    // seen before it.
-                    self.pump.finish_batch_blocking(processed > 0);
+                        // The `Term` lock is released: publish the line count,
+                        // deliver reliable events (Bell/Title/OSC…) that did not
+                        // fit in the queue during `advance`, waiting for the UI if
+                        // needed, then post the batch's repaint hint so they are
+                        // seen before it.
+                        self.pump.finish_batch_blocking(processed > 0);
+                    });
                 }
             }
 

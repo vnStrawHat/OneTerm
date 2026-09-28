@@ -48,6 +48,11 @@ enum Side {
 
 struct Interest {
     event: Event,
+    /// Built once per registration and posted by every wake-up: a packet is an
+    /// `Arc`, so posting a clone costs no allocation where building one per
+    /// wake-up cost one per chunk. The poller posts its own notify packet the
+    /// same way.
+    packet: CompletionPacket,
     poller: Arc<Poller>,
     mode: PollMode,
 }
@@ -99,6 +104,7 @@ impl Ring {
     }
 
     /// Post a completion packet so the caller's poll wakes up.
+    #[cfg_attr(feature = "hotpath-profiling", hotpath::measure(impl_type = "Ring"))]
     fn wake(&self) {
         let mut interest = self.interest();
         let Some(registered) = interest.as_ref() else {
@@ -113,9 +119,7 @@ impl Ring {
         }
         // Best effort: a closed poller means the caller is gone, and there is
         // nothing left to wake.
-        let _ = registered
-            .poller
-            .post(CompletionPacket::new(registered.event));
+        let _ = registered.poller.post(registered.packet.clone());
         if matches!(registered.mode, PollMode::Oneshot | PollMode::EdgeOneshot) {
             *interest = None;
         }
@@ -129,6 +133,7 @@ impl Ring {
     fn register(&self, poller: &Arc<Poller>, event: Event, mode: PollMode, prime: bool) {
         *self.interest() = Some(Interest {
             event,
+            packet: CompletionPacket::new(event),
             poller: poller.clone(),
             mode,
         });
@@ -201,6 +206,7 @@ impl PipeReader {
 }
 
 /// Append to the ring, blocking while it is full. `false` once the caller is gone.
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 fn push(ring: &Ring, data: &[u8]) -> bool {
     let mut bytes = ring.lock();
     while bytes.queue.len() >= ring.capacity && !bytes.closed {
@@ -367,6 +373,7 @@ fn spawn_pipe_thread(name: &str, body: impl FnOnce() + Send + 'static) -> io::Re
         .map(drop)
 }
 
+#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
 fn read_pipe(pipe: &OwnedHandle, buf: &mut [u8]) -> io::Result<usize> {
     let mut read = 0u32;
     // SAFETY: `buf` is a valid writable slice for `buf.len()` bytes and the

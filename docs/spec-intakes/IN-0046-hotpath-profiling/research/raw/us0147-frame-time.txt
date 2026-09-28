@@ -1,0 +1,25 @@
+US-0147 frame_time_under_output (terminal-view, fast-dev). The test drives TerminalElement over FakeTerminalSession; none of US-0147's code runs in it.
+
+Sequential, before (b101026a):
+  flood p50=1709 us p95=1930 us | p50=1728 us p95=2279 us | p50=1670 us p95=1788 us; idle p50=273/269/258 us
+Sequential, after (6 runs): flood p50=2034/1680/1944/1938/1713/1961 us; idle p50=367/269/274/332/329/306 us (machine under load from another agent's build)
+
+Interleaved saved binaries:
+before
+  flood (prepaint+paint): n=257 total=448 ms avg=1747 us p50=1711 us p95=1895 us max=3272 us
+  idle  (prepaint+paint): n=60 total=17 ms avg=285 us p50=282 us p95=296 us max=347 us
+after
+  flood (prepaint+paint): n=257 total=499 ms avg=1941 us p50=1935 us p95=2627 us max=3290 us
+  idle  (prepaint+paint): n=60 total=20 ms avg=334 us p50=324 us p95=532 us max=606 us
+before
+  flood (prepaint+paint): n=257 total=488 ms avg=1899 us p50=1793 us p95=2837 us max=3380 us
+  idle  (prepaint+paint): n=60 total=16 ms avg=273 us p50=272 us p95=283 us max=342 us
+after
+  flood (prepaint+paint): n=257 total=491 ms avg=1911 us p50=1746 us p95=3377 us max=4011 us
+  idle  (prepaint+paint): n=60 total=30 ms avg=514 us p50=511 us p95=579 us max=616 us
+before
+  flood (prepaint+paint): n=257 total=505 ms avg=1966 us p50=1774 us p95=3281 us max=3754 us
+  idle  (prepaint+paint): n=60 total=26 ms avg=434 us p50=476 us p95=513 us max=540 us
+after
+  flood (prepaint+paint): n=257 total=446 ms avg=1736 us p50=1714 us p95=1926 us max=2769 us
+  idle  (prepaint+paint): n=60 total=16 ms avg=270 us p50=269 us p95=283 us max=343 us
