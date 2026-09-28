@@ -3,12 +3,13 @@
 //! Design:
 //! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/graphics.md>
 //!
-//! Releasing a placement — through the sweep below or through
-//! [`MAX_PLACEMENTS`] eviction — also frees every extras entry its cells
-//! resolved to. A program that keeps re-sending the same image (a Sixel
-//! preview repainted every frame) therefore holds a small, bounded number of
-//! extras entries rather than one more per resend for the life of the
-//! terminal.
+//! Releasing a placement here (the sweep below, or [`MAX_PLACEMENTS`]
+//! eviction) does **not** free the extras entry its cells named: release
+//! means only "this table no longer tracks the placement" — cells in
+//! scrollback, or past `IL`/`SD` split off a tracked extent, can still name
+//! it. What reclaims those entries is the extras table's own periodic sweep
+//! (`Interner::extras`, triggered from `Terminal::feed`), which reads every
+//! cell before it frees anything.
 
 use std::sync::Arc;
 
@@ -66,13 +67,10 @@ pub(crate) fn place(state: &mut State, image: DecodedSixel) -> Vec<ScrollReport>
     // R-21: **one** interned extras entry for the whole image. A covered cell
     // that already carried a hyperlink keeps it and gets its own entry, which
     // is rare enough not to threaten the id space.
-    let graphic_only = state.interner.extras(&Extras {
+    let graphic_only = state.intern_extras(&Extras {
         hyperlink: None,
         graphic: Some(id),
     });
-    // Tracked so releasing this placement can free every extras entry it
-    // owns, not just this one — `stamp` records the rest below.
-    state.graphics.track_extras(id, graphic_only);
     // A full extras table cannot name the image on any cell, so it is decoded
     // and handed out but never painted, until `RIS` empties the table.
     if graphic_only == ExtrasId::NONE && !state.graphics.unstamped_warned {
@@ -152,12 +150,7 @@ fn cells_for(pixels: u32, cell: u16) -> u16 {
 /// this is not an overwrite, so it must not clear the row's wrap flag the way
 /// a write to the last column does (deviation G1).
 fn stamp(state: &mut State, line: RowId, col: u16, cols: u16, id: GraphicId, only: ExtrasId) {
-    let State {
-        grid,
-        interner,
-        graphics,
-        ..
-    } = state;
+    let State { grid, interner, .. } = state;
     let mut row = grid.screen_mut().row_mut(line);
     for offset in 0..cols {
         let column = col.saturating_add(offset);
@@ -169,12 +162,11 @@ fn stamp(state: &mut State, line: RowId, col: u16, cols: u16, id: GraphicId, onl
         } else {
             let mut merged = *interner.resolve_extras(cell.extras_id());
             merged.graphic = Some(id);
-            let merged_id = interner.extras(&merged);
-            // A cell that already carried a hyperlink merges into its own
-            // entry, distinct from `only`; track it too so it is not the one
-            // left behind when this placement is released.
-            graphics.track_extras(id, merged_id);
-            merged_id
+            // Not `State::intern_extras`: `row` already borrows `grid`, and
+            // the sweep it could trigger needs `grid` on its own. This is
+            // the rare path (a covered cell already carrying a hyperlink);
+            // `feed`'s own end-of-batch check is its backstop.
+            interner.extras(&merged)
         };
         row.repair(column, cell.with_extras(extras));
     }
@@ -202,23 +194,9 @@ pub(crate) fn sweep(state: &mut State) {
             continue;
         }
         state.graphics.placements.remove(index);
-        release(state, placement);
+        state.grid.anchors_mut().release(placement.anchor);
+        state.graphics.released.push(placement.id);
     }
-}
-
-/// Drop one placement's anchor, free every extras entry its cells resolved
-/// to, and queue the release event. Shared by the row-derived sweep above and
-/// [`evict_oldest`]: whichever one decided the placement is gone, nothing
-/// resolves to those entries any more, so the id space they held is free to
-/// reuse rather than outliving the image until `RIS`.
-fn release(state: &mut State, placement: Placement) {
-    state.grid.anchors_mut().release(placement.anchor);
-    if let Some(extras) = state.graphics.extras_by_graphic.remove(&placement.id) {
-        for extras_id in extras {
-            state.interner.extras.free(extras_id.0);
-        }
-    }
-    state.graphics.released.push(placement.id);
 }
 
 fn is_live(grid: &TerminalGrid, placement: Placement) -> bool {
@@ -245,26 +223,27 @@ pub(crate) fn drain_released(state: &mut State, out: &mut EventBatch) {
 }
 
 /// The oldest placement goes when the table is full, so a stream that emits an
-/// image per line frees the view's textures — and its extras entries —
-/// instead of leaking them. The path a same-position repaint takes: `stamp`
-/// overwrites the previous placement's cells directly, which keeps its row's
-/// `HAS_GRAPHIC` flag set and so keeps `sweep` from ever calling it dead; this
-/// bound is what still frees its extras entries, once 256 placements have
-/// piled up.
+/// image per line frees the view's textures instead of leaking them.
 fn evict_oldest(state: &mut State) {
     while state.graphics.placements.len() >= MAX_PLACEMENTS {
         let placement = state.graphics.placements.remove(0);
-        release(state, placement);
+        state.grid.anchors_mut().release(placement.anchor);
+        state.graphics.released.push(placement.id);
     }
 }
 
-/// The debug invariant: inside a live placement's extent, every `GraphicId` a
-/// cell carries resolves to a live placement.
+/// The debug invariant: inside a live placement's own extent, every
+/// `GraphicId` a cell carries resolves to a live placement.
 ///
-/// Scoped to those extents on purpose. A cell *outside* every extent can hold a
-/// stale id — an `SD` or `IL` can push part of an image below its own anchor's
-/// extent — and that is inert rather than wrong: the painter resolves the id
-/// through the placement table and paints nothing when it is gone.
+/// Scoped to that placement's own **columns**, not the whole row: two
+/// placements can share a row (one narrower than the screen next to
+/// another), and `HAS_GRAPHIC` is a row flag, sticky until `Row::reset`. A
+/// live placement's row can therefore carry another, already-evicted
+/// placement's id in columns this placement never covered — cells this
+/// check must not walk, because they are not this placement's to answer for.
+/// [`resolves`] already tolerates a stale id outside every live extent; this
+/// is the same tolerance, scoped correctly instead of accidentally reaching
+/// one column too far.
 ///
 /// ponytail: O(placements x rows x cols) per feed in debug builds; make it
 /// incremental if a debug session with hundreds of live images ever gets slow.
@@ -278,12 +257,19 @@ pub(crate) fn assert_integrity(state: &State) {
             continue;
         };
         let screen = state.grid.screen_of(pos.row);
+        let start = pos.col as usize;
+        let end = start + placement.cols as usize;
         for offset in 0..placement.rows {
             let row = screen.row(pos.row + u64::from(offset));
             if !row.flags().contains(RowFlags::HAS_GRAPHIC) {
                 continue;
             }
-            for cell in row.cells() {
+            let cells = row.cells();
+            let end = end.min(cells.len());
+            if start >= end {
+                continue;
+            }
+            for cell in &cells[start..end] {
                 debug_assert!(
                     resolves(state, *cell),
                     "a cell references a graphic with no live placement"

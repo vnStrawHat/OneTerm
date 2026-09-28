@@ -29,10 +29,8 @@ mod sixel;
 
 use std::sync::Arc;
 
-use rustc_hash::{FxHashMap, FxHashSet};
-
 use crate::grid::AnchorId;
-use crate::intern::{ExtrasId, GraphicId};
+use crate::intern::GraphicId;
 
 pub(crate) use placement::{assert_integrity, drain_released, place, sweep};
 pub(crate) use sixel::SixelParser;
@@ -127,12 +125,6 @@ pub(crate) struct GraphicsState {
     pub(crate) parser: Option<SixelParser>,
     /// Whether an image placed against a full extras table has been logged.
     pub(crate) unstamped_warned: bool,
-    /// The extras ids a live graphic's cells resolve to: the graphic-only
-    /// entry `place` stamps, plus one more per distinct hyperlink a covered
-    /// cell already carried when `stamp` merged it in. Consulted only when
-    /// the placement is released, so every one of them can be freed instead
-    /// of outliving the image until `RIS`.
-    pub(crate) extras_by_graphic: FxHashMap<GraphicId, FxHashSet<ExtrasId>>,
 }
 
 impl Default for GraphicsState {
@@ -146,7 +138,6 @@ impl Default for GraphicsState {
             released: Vec::new(),
             parser: None,
             unstamped_warned: false,
-            extras_by_graphic: FxHashMap::default(),
         }
     }
 }
@@ -161,27 +152,10 @@ impl GraphicsState {
     /// `RIS`: pending images and the in-flight decoder go, the id counter and
     /// the placements stay. The reset blanks every row, so the sweep releases
     /// the placements on its own — which is what makes the release event fire
-    /// exactly once rather than once here and once there. `extras_by_graphic`
-    /// goes too: `RIS` empties the whole extras table itself (see `intern`),
-    /// so there is nothing left in it for the sweep's own release to free.
+    /// exactly once rather than once here and once there.
     pub(crate) fn reset(&mut self) {
         self.pending.clear();
         self.parser = None;
-        self.extras_by_graphic.clear();
-    }
-
-    /// Record that `extras` is (at least in part) how `graphic`'s cells
-    /// resolve, so releasing `graphic` can free it. Skips `ExtrasId::NONE`:
-    /// a full extras table already logged its own warning, and id 0 is never
-    /// freed.
-    pub(crate) fn track_extras(&mut self, graphic: GraphicId, extras: ExtrasId) {
-        if extras == ExtrasId::NONE {
-            return;
-        }
-        self.extras_by_graphic
-            .entry(graphic)
-            .or_default()
-            .insert(extras);
     }
 
     /// The placement covering `id`, for the painter's offset arithmetic.

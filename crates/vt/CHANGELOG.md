@@ -243,15 +243,24 @@ carry no API change at all. Such a release says so below rather than being omitt
   those ids, so no live `ExtrasId` changes meaning.
 - A Sixel image placed while the extras table is full is still decoded and handed out but covers
   no cell, as before; it now logs a warning saying so, once per terminal.
-- **Behaviour, no signature: releasing an image's placement now frees the extras entries it
-  held.** Every placement was a fresh id, so a program that resends the same Sixel preview every
-  frame -- an Ink-style redraw, a file manager preview -- took one permanent extras entry per
-  resend; after 65,534 images the table was full and no later link or image got its cells, until
-  `RIS`. Releasing a placement (a row reset, a history trim, a reflow that drops the anchor, or
-  aging past the live-placement ceiling) now frees every extras entry its cells resolved to, so
-  the next image reuses the slot. A headless measure of 70,000 resends of one image: extras
-  entries bounded near the live-placement ceiling instead of filling to 65,535, and the last
-  resend, a later explicit `id=` link, and a later distinct image all still get their cells.
+- **Behaviour, no signature: the extras table now sweeps entries nothing references, instead of
+  only growing until `RIS`.** Every image placement is a fresh id, so a program that resends the
+  same Sixel preview every frame -- an Ink-style redraw, a file manager preview -- took one
+  permanent extras entry per resend; after 65,534 images the table was full and no later link or
+  image got its cells, until `RIS`. Past a threshold of new entries since the last sweep, the
+  table now reads every extras id that both screens' whole history, and the pen and erase cell of
+  both cursors, can still resolve, and frees every id that scan did not find; the next value
+  interned reuses a freed slot before the table grows further. No other id is renumbered. A
+  placement's release (an eviction, a history trim, an `IL`/`SD` that splits an image outside its
+  own tracked extent) does **not** by itself free anything -- an earlier attempt at this fix made
+  it do exactly that, and an adversarial verification pass found it recycled a still-referenced id
+  into whatever was interned next, turning a released image's surviving cells into an unrelated
+  link. A headless measure of 70,000 resends of one image: extras entries bounded well below the
+  65,535 ceiling instead of filling it, and the last resend, a later explicit `id=` link, and a
+  later distinct image all still get their cells. The bound is not a small constant -- freeing
+  never shrinks the table, so a sustained resend stream ratchets the high-water mark up a little
+  further each time the previous sweep's free list runs out -- but 70,000 resends, the size this
+  bug was measured at, lands nowhere near the ceiling.
 
 ### Removed
 

@@ -13,11 +13,18 @@
 //!   back to id 0 with one warning — no renumbering sweep, ever, because a
 //!   render copy taken under the lock holds resolved values and ids that a
 //!   sweep could invalidate are the design's own worst hazard. An id an
-//!   [`InternTable`] hands out still never changes what it resolves to while
-//!   anything can reach it; an owner that can *prove* nothing does any more
-//!   (the graphics module does, on a placement's release) may hand the id
-//!   back with `InternTable::free`, which is not a sweep — no other id moves
-//!   or changes meaning, only the one slot the owner just gave up.
+//!   [`InternTable`] hands out still resolves to the same value for as long
+//!   as anything can reach it. The extras table alone also frees ids, through
+//!   `InternTable::sweep_unreferenced` — a mark phase over the *whole grid*
+//!   supplies the proof (nothing else can), so freeing an id one at a time
+//!   from a single call site, trusting that call site's own bookkeeping to
+//!   know when nothing references it, was tried and rejected: a placement's
+//!   release does not mean its cells are gone (eviction, `IL`/`SD` splitting
+//!   a placement outside its tracked extent, and a history trim all leave
+//!   live cells behind), so nothing short of reading every cell proves an id
+//!   is free. Freeing still moves nothing else: a swept id's slot is the
+//!   first one [`intern`](InternTable::intern) reuses, and every other id
+//!   keeps its value.
 //! * **The grapheme arena is collected**, because unbounded growth there is
 //!   attacker-reachable: a stream of unique multi-codepoint cells grows it
 //!   without bound. Collection is by remap, and grapheme ids live in the cell's
@@ -26,7 +33,7 @@
 use std::fmt;
 use std::hash::Hash;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cell::{CONTENT_LIMIT, Style};
 
@@ -42,6 +49,15 @@ pub const GRAPHEME_SWEEP_CHARS: usize = 1 << 20;
 
 /// Id 0 is reserved in both tables, so `65_535` distinct values fit.
 const TABLE_LIMIT: usize = 65_535;
+
+/// New entries since the last [`InternTable::sweep_unreferenced`] above which
+/// another sweep is due (`needs_sweep`). An absolute count, not a fraction of
+/// [`TABLE_LIMIT`], for the same reason [`GRAPHEME_SWEEP_ENTRIES`] is one: it
+/// keeps a sweep rare for an ordinary session and still guarantees one long
+/// before a hostile stream's distinct values could fill the table. Unused by
+/// a table nothing ever calls [`InternTable::sweep_unreferenced`] on (styles,
+/// today).
+const TABLE_SWEEP_INTERVAL: usize = 4_096;
 
 /// Interned style id. Id 0 is the default style: it can never be evicted and
 /// never fails to resolve, which is what makes the overflow ladder safe — the
@@ -98,27 +114,30 @@ impl Extras {
     };
 }
 
-/// Content-hash interned table on the three-step no-sweep ladder.
+/// Content-hash interned table on the three-step no-sweep-by-default ladder.
 ///
 /// Step 1 reuses an interned value, step 2 inserts, and step 3 — the table is
 /// full — returns id 0 and warns once. An id, once issued, resolves to the
-/// same value for as long as anything can still reach it. Two things end
-/// that early: `RIS`, which empties the extras table wholesale because it
-/// first blanks every cell that could hold one of its ids, and
-/// `InternTable::free`, which an owner calls one id at a time once it can
-/// prove that one id specifically is unreachable — the graphics module's use
-/// on a placement's release is the only caller today. A freed id's slot is
-/// the first one [`intern`](Self::intern) reuses, so an owner that keeps
-/// freeing what it is done with keeps the table's size bounded by what is
-/// live, not by how many values ever passed through it.
+/// same value for as long as anything can still reach it. Three things end
+/// that: `RIS`, which empties the extras table wholesale because it first
+/// blanks every cell that could hold one of its ids; `free`, called once an
+/// id is individually proven unreferenced; and `sweep_unreferenced`, which
+/// proves a whole batch of ids unreferenced at once by reading every cell
+/// that can name one (its caller's job — this type has no access to a grid)
+/// and frees everything the read did not find live. A freed id's slot is the
+/// first one [`intern`](Self::intern) reuses, so a table an owner keeps
+/// sweeping stays bounded by what is live, not by how many values ever
+/// passed through it.
 #[derive(Debug)]
 pub struct InternTable<T> {
     entries: Vec<T>,
     index: FxHashMap<T, u16>,
-    /// Ids `free` released, waiting for [`intern`](Self::intern) to hand
-    /// them back out. Empty for a table nothing ever frees from (styles,
-    /// today).
-    free: Vec<u16>,
+    /// Ids [`free`](Self::free) released, waiting for
+    /// [`intern`](Self::intern) to hand them back out. Empty for a table
+    /// nothing ever frees from (styles, today).
+    free: FxHashSet<u16>,
+    /// New entries pushed since the last [`sweep_unreferenced`](Self::sweep_unreferenced).
+    since_sweep: u32,
     exhausted: u32,
     warned: bool,
     name: &'static str,
@@ -135,7 +154,8 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
         Self {
             entries: vec![default],
             index,
-            free: Vec::new(),
+            free: FxHashSet::default(),
+            since_sweep: 0,
             exhausted: 0,
             warned: false,
             name,
@@ -147,7 +167,8 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
         if let Some(&id) = self.index.get(value) {
             return id;
         }
-        if let Some(id) = self.free.pop() {
+        if let Some(&id) = self.free.iter().next() {
+            self.free.remove(&id);
             self.entries[id as usize] = *value;
             self.index.insert(*value, id);
             self.debug_assert_integrity();
@@ -157,6 +178,7 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
             let id = self.entries.len() as u16;
             self.entries.push(*value);
             self.index.insert(*value, id);
+            self.since_sweep = self.since_sweep.saturating_add(1);
             self.debug_assert_integrity();
             return id;
         }
@@ -193,39 +215,49 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
         self.index.clear();
         self.index.insert(default, 0);
         self.free.clear();
+        self.since_sweep = 0;
     }
 
-    /// Give back one id the caller has proven nothing resolves to any more,
-    /// so the next [`intern`](Self::intern) for a new value can reuse its
-    /// slot instead of growing the table. Id 0, the default, is not owned by
-    /// any one value and can never be freed.
+    /// Give back one id: the caller has proven nothing resolves to it any
+    /// more, so the next [`intern`](Self::intern) for a new value can reuse
+    /// its slot instead of growing the table. Id 0, the default, is not
+    /// owned by any one value and can never be freed. Idempotent in every
+    /// build, not only under `debug_assert!`: a caller (or
+    /// [`sweep_unreferenced`](Self::sweep_unreferenced)) that frees the same
+    /// id twice does nothing the second time, rather than handing it out
+    /// twice from the free list.
     ///
     /// Until reused, the slot reads back as the default value rather than
     /// keeping the stale one: a caller that still held this id past the
     /// point it proved unreachable gets "nothing" instead of silently
     /// resolving to whatever the next occupant turns out to be.
     pub(crate) fn free(&mut self, id: u16) {
-        if id == 0 {
+        if id == 0 || self.free.contains(&id) {
             return;
         }
         let Some(&value) = self.entries.get(id as usize) else {
             return;
         };
-        debug_assert!(
-            !self.free.contains(&id),
-            "{} table id {} freed twice",
-            self.name,
-            id
-        );
         if self.index.get(&value) == Some(&id) {
             self.index.remove(&value);
         }
         self.entries[id as usize] = T::default();
-        self.free.push(id);
+        self.free.insert(id);
         self.debug_assert_integrity();
     }
 
-    /// Interned values, including the default at id 0.
+    /// Whether `id` is on the free list: allocated once, and proven
+    /// unreferenced by the last [`sweep_unreferenced`](Self::sweep_unreferenced)
+    /// or [`free`](Self::free) call, waiting for [`intern`](Self::intern) to
+    /// hand it back out.
+    pub(crate) fn is_free(&self, id: u16) -> bool {
+        self.free.contains(&id)
+    }
+
+    /// Interned values, including the default at id 0. Never shrinks: a
+    /// freed slot stays counted here until it is reused, because freeing
+    /// hands a slot back for reuse without renumbering anything, and there
+    /// is no lower id to renumber it to.
     pub fn entries(&self) -> usize {
         self.entries.len()
     }
@@ -233,6 +265,39 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
     /// How many values were dropped because the table was full.
     pub fn exhausted(&self) -> u32 {
         self.exhausted
+    }
+
+    /// Whether [`TABLE_SWEEP_INTERVAL`] new entries have been interned since
+    /// the last sweep. The owner is expected to check this once per
+    /// operation it is cheap to check from (a `feed`, here), and, when true,
+    /// build the live set by reading every cell that can carry this table's
+    /// ids and call [`sweep_unreferenced`](Self::sweep_unreferenced).
+    pub(crate) fn needs_sweep(&self) -> bool {
+        self.since_sweep as usize >= TABLE_SWEEP_INTERVAL
+    }
+
+    /// Free every allocated id **not** in `live`, and reset the sweep
+    /// trigger. `live` must be exactly the ids something can still resolve
+    /// through — every cell in both screens' full history, the pen and erase
+    /// cell of both the active and the saved cursor, on both screens. A
+    /// short count is always safe (it only frees less), a long one is not: an
+    /// id missing from `live` that a cell still carries is exactly the hazard
+    /// this table exists to prevent, so the caller's scan must be complete,
+    /// never a `feed`-local approximation.
+    ///
+    /// Nothing here is renumbered: a kept id keeps its value and its slot: a
+    /// freed one is cleared to the default and pushed onto the free list,
+    /// same as [`free`](Self::free) called once per id. `O(entries)`, which
+    /// is why [`needs_sweep`](Self::needs_sweep) exists — the caller decides
+    /// how rare that cost should be, this method does not.
+    pub(crate) fn sweep_unreferenced(&mut self, live: &FxHashSet<u16>) {
+        let len = self.entries.len() as u16;
+        for id in 1..len {
+            if !self.free.contains(&id) && !live.contains(&id) {
+                self.free(id);
+            }
+        }
+        self.since_sweep = 0;
     }
 
     fn debug_assert_integrity(&self) {

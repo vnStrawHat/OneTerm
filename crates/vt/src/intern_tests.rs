@@ -206,6 +206,83 @@ fn freeing_an_entry_lets_intern_reuse_its_slot() {
     assert_eq!(extras.entries(), before);
 }
 
+/// F5: a double free must not hand the same id out twice. `free` is
+/// idempotent in every build, not only under `debug_assert!`.
+#[test]
+fn freeing_the_same_id_twice_does_not_alias_it() {
+    let mut extras = ExtrasTable::default();
+    let a = extras.intern(&Extras {
+        graphic: Some(GraphicId(1)),
+        ..Extras::NONE
+    });
+    extras.free(a);
+    extras.free(a); // the second call is a no-op, not a second free-list entry
+
+    let first = extras.intern(&Extras {
+        graphic: Some(GraphicId(2)),
+        ..Extras::NONE
+    });
+    let second = extras.intern(&Extras {
+        graphic: Some(GraphicId(3)),
+        ..Extras::NONE
+    });
+    assert_eq!(first, a, "the one legitimate free is still reused");
+    assert_ne!(
+        second, first,
+        "the phantom second free never aliases a live id"
+    );
+}
+
+#[test]
+fn sweep_unreferenced_frees_exactly_the_ids_missing_from_live() {
+    let mut extras = ExtrasTable::default();
+    let a = extras.intern(&Extras {
+        graphic: Some(GraphicId(1)),
+        ..Extras::NONE
+    });
+    let b = extras.intern(&Extras {
+        graphic: Some(GraphicId(2)),
+        ..Extras::NONE
+    });
+    let c = extras.intern(&Extras {
+        graphic: Some(GraphicId(3)),
+        ..Extras::NONE
+    });
+    assert!(
+        !extras.needs_sweep(),
+        "three interns is nowhere near the interval"
+    );
+
+    // Only `b` is "live": `a` and `c` are proven unreferenced.
+    let live: FxHashSet<u16> = [b].into_iter().collect();
+    extras.sweep_unreferenced(&live);
+
+    assert!(extras.is_free(a));
+    assert!(!extras.is_free(b));
+    assert!(extras.is_free(c));
+    assert_eq!(extras.resolve(a), &Extras::NONE);
+    assert_eq!(
+        extras.resolve(b),
+        &Extras {
+            graphic: Some(GraphicId(2)),
+            ..Extras::NONE
+        }
+    );
+
+    // Freed slots are what the next interns reuse.
+    let d = extras.intern(&Extras {
+        graphic: Some(GraphicId(4)),
+        ..Extras::NONE
+    });
+    let e = extras.intern(&Extras {
+        graphic: Some(GraphicId(5)),
+        ..Extras::NONE
+    });
+    assert!([a, c].contains(&d));
+    assert!([a, c].contains(&e));
+    assert_ne!(d, e);
+}
+
 #[test]
 fn extras_table_exhaustion_falls_back_to_no_extras() {
     let _guard = exhaustion_guard();

@@ -123,11 +123,14 @@ pub struct Extras {
 
 Interned exactly like `Style`, `u16` id, id 0 means "none", same three-step ladder. Style ids never
 change once assigned, for the life of the terminal; an extras id carries the same promise with one
-exception, added by `BUG-0081`: the graphics module may hand one back early, one id at a time, once
-it has proved — by tracking exactly which extras entries a placement's cells resolved to, not by
-scanning the grid — that the placement holding it has just been released. Freeing is not the
-renumbering sweep the design forbids: no *other* id moves or changes meaning, only the one slot its
-owner just gave up, and the freed slot resolves to "no hyperlink, no graphic" until something new is
+exception, added by `BUG-0081`: the extras table alone also frees ids, through its own periodic
+mark-and-sweep (`InternTable::sweep_unreferenced` in `oneterm_vt::intern`), which reads every cell
+that can carry an extras id — both screens' whole history, plus the pen and erase cell of both
+cursors — before it frees anything. A single call site owning "this one is unreferenced" bookkeeping
+was tried first and rejected: a placement's release does not mean its cells are gone (see
+`graphics.md`'s `BUG-0081` note), so nothing short of reading every cell proves an id is free. Freeing
+is not the renumbering sweep the design forbids: no *other* id moves or changes meaning, only the ids
+the scan did not find, and a freed slot resolves to "no hyperlink, no graphic" until something new is
 interned into it.
 
 **Why the per-cell offset is gone (R-21).** The earlier design stored

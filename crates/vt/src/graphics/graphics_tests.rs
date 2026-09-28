@@ -456,27 +456,177 @@ fn two_different_images_stay_distinct() {
     );
 }
 
-/// Releasing a placement frees the extras entry its cells resolved to, so a
-/// later, different image reuses the slot instead of the table growing
-/// without bound on every resend.
+/// A placement's release (a row reset, a history trim, a reflow drop, or
+/// `MAX_PLACEMENTS` eviction) does not by itself free its extras entry: cells
+/// outside the placement's own tracked extent, or outside the placements
+/// table entirely once evicted, can still name it (adversarial verification
+/// finding F1). Only the extras table's own periodic sweep -- which reads
+/// every cell before it frees anything -- may reclaim it. These four
+/// (`V1`, `V4`, `V8`, `V9`) each reproduce one of the ways F1 found a cell
+/// outliving its placement's release.
+const ONE_CELL: &str = "#0;2;100;0;0#0~"; // 1x6 px -> one cell at the 10x20 fallback
+
+fn place_at(session: &mut Session, row: u16, col: u16, body: &str) {
+    session.feed(format!("\x1b[{};{}H", row + 1, col + 1).as_bytes());
+    session.feed(&sixel(body));
+}
+
+/// V1: `MAX_PLACEMENTS` eviction releases the oldest placement while its cell
+/// is still on screen. A later, unrelated `OSC 8` link must not recycle that
+/// cell's extras entry.
 #[test]
-fn a_released_placements_extras_entry_is_reused() {
-    let mut session = Session::new(10, 5);
-    session.feed(b"\x1b[?1049h"); // alternate screen
-    session.feed(&sixel("\"1;1;16;16#0;2;100;0;0#0~"));
-    let before = session.term.interner().extras.entries();
+fn v1_an_evicted_placements_screen_cell_is_not_recycled_into_an_unrelated_link() {
+    let mut s = Session::new(20, 20);
+    for i in 0..257u16 {
+        place_at(&mut s, i / 20, i % 20, ONE_CELL);
+    }
+    assert_eq!(s.term.placements().len(), 256, "the oldest was evicted");
 
-    // `ED 2` on the alternate screen is a row reset, which releases the
-    // placement and, with it, the extras entry it owned.
-    session.feed(b"\x1b[2J");
-    assert!(session.term.placements().is_empty());
-
-    session.feed(&sixel("\"1;1;16;16#0;2;0;0;100#0~")); // a different image
-    let after = session.term.interner().extras.entries();
-    assert_eq!(
-        after, before,
-        "the freed slot was reused, not a new one pushed"
+    s.feed(b"\x1b[20;1H\x1b]8;;http://unrelated.example\x07x\x1b]8;;\x07");
+    let evicted_cell = s
+        .term
+        .interner()
+        .resolve_extras(s.cell(s.row_id(0), 0).extras_id());
+    assert_eq!(evicted_cell.hyperlink, None);
+    assert!(
+        evicted_cell.graphic.is_some(),
+        "still names the evicted image, inertly"
     );
+}
+
+/// V8: the same eviction, but the released image's cell sits in scrollback
+/// (a thumbnail-per-line stream, the `lsix`/`chafa` shape).
+#[test]
+fn v8_an_evicted_placements_history_cell_is_not_recycled_into_an_unrelated_link() {
+    let mut s = Session::new(20, 5);
+    let top = s.row_id(0);
+    for _ in 0..257 {
+        s.feed(&sixel(ONE_CELL));
+        s.feed(b"\r\n");
+    }
+    assert_eq!(s.term.placements().len(), 256);
+
+    s.feed(b"\x1b]8;;http://unrelated.example\x07link\x1b]8;;\x07\r\n");
+    assert_eq!(
+        s.term
+            .interner()
+            .resolve_extras(s.cell(top, 0).extras_id())
+            .hyperlink,
+        None
+    );
+}
+
+/// V9: the row-derived sweep releases a placement whose extent `IL` split; a
+/// region scroll then drops only the pushed-down rows out of the placement's
+/// own tracked extent, but the image's actual cell content survives them.
+#[test]
+fn v9_a_row_the_sweep_released_is_not_recycled_into_an_unrelated_link() {
+    let mut s = Session::new(10, 8);
+    s.feed(b"\x1b[2;1H");
+    s.feed(&sixel("\"1;1;10;40#0~-~-~-~-~-~-~")); // 2 rows at index 1..2
+    s.feed(b"\x1b[3;1H\x1b[L"); // IL: image row 2 -> index 3
+    s.feed(b"\x1b[2;3r\x1b[2S\x1b[r"); // region scroll discards index 1..2
+
+    s.feed(b"\x1b[8;1H\x1b]8;;http://unrelated.example\x07x\x1b]8;;\x07");
+    assert_eq!(
+        s.term
+            .interner()
+            .resolve_extras(s.cell(s.row_id(3), 0).extras_id())
+            .hyperlink,
+        None
+    );
+}
+
+/// V4: eviction frees nothing, including a **merged** hyperlink-and-graphic
+/// entry. An image placed over part of a link must not let eviction split
+/// the link into two targets once later links reuse the id space.
+#[test]
+fn v4_evicting_a_merged_hyperlink_and_graphic_entry_does_not_split_the_link() {
+    let mut s = Session::new(20, 20);
+    s.feed(b"\x1b[1;1H\x1b]8;id=a;http://original.example\x07AAAAAAAAAA\x1b]8;;\x07\x1b[1;1H");
+    s.feed(&sixel("\"1;1;20;6#0~~")); // 2 columns over cols 0-1, merged with link `a`
+    for i in 0..256u16 {
+        place_at(&mut s, i / 20 + 1, i % 20, ONE_CELL);
+    }
+    assert_eq!(
+        s.term.placements().len(),
+        256,
+        "the merged placement was evicted"
+    );
+
+    s.feed(b"\x1b[20;1H\x1b]8;id=b;http://b.example\x07x\x1b]8;;\x07");
+    s.feed(b"\x1b]8;id=c;http://c.example\x07y\x1b]8;;\x07");
+
+    let row0 = s.row_id(0);
+    let link_at = |s: &Session, col: u16| {
+        s.term
+            .interner()
+            .resolve_extras(s.cell(row0, col).extras_id())
+            .hyperlink
+            .and_then(|id| s.term.interner().hyperlinks.resolve(id))
+            .map(|link| link.uri.to_string())
+    };
+    for col in 0..10u16 {
+        assert_eq!(
+            link_at(&s, col).as_deref(),
+            Some("http://original.example"),
+            "col {col}"
+        );
+    }
+}
+
+/// V2: a released placement's cell, left unfreed by F1's fix (correctly), must
+/// never be *recycled* into a **different live** image's id -- the renderer's
+/// paint loop marks an id "seen" from the first cell that names it, so an
+/// aliased stale cell would hide the live image that actually owns that id.
+/// Every live placement must be reachable through some cell of its own.
+#[test]
+fn v2_every_live_placement_is_reachable_through_its_own_cells() {
+    let mut s = Session::new(20, 20);
+    for i in 0..258u16 {
+        place_at(&mut s, i / 20, i % 20, ONE_CELL);
+    }
+    let live: Vec<GraphicId> = s.term.placements().iter().map(|p| p.id).collect();
+    assert_eq!(live.len(), 256);
+
+    // Emulate the renderer's `seen`-before-`graphic_offset` loop: scan every
+    // cell, and the first one naming an id is the one credited with having
+    // painted it.
+    let mut painted = std::collections::HashSet::new();
+    for row_index in 0..20u16 {
+        let row = s.row_id(row_index);
+        for col in 0..20u16 {
+            if let Some(id) = s.graphic_at(row, col) {
+                painted.insert(id);
+            }
+        }
+    }
+    let unpainted: Vec<_> = live.iter().filter(|id| !painted.contains(id)).collect();
+    assert!(
+        unpainted.is_empty(),
+        "{}/{} live placements were never painted: {unpainted:?}",
+        live.len() - unpainted.len(),
+        live.len()
+    );
+}
+
+/// F3: the paranoid whole-history walk must be able to see F1's class of bug
+/// -- a cell naming an extras id the table itself believes is free -- not
+/// only "the id was never issued".
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "is on the free list but a cell")]
+fn integrity_rejects_an_extras_id_freed_while_a_cell_still_names_it() {
+    let mut session = Session::new(10, 5);
+    session.feed(&sixel("\"1;1;16;16#0~"));
+    let row = session.row_id(0);
+
+    let state = session.term.state_for_tests();
+    let id = state.grid.screen().row(row).cell(0).extras_id();
+    // Simulate exactly the bug this packet reworks: freeing an id a live
+    // cell still names.
+    state.interner.extras.free(id.0);
+    state.grid.assert_integrity(Some(&state.interner));
 }
 
 /// R-02: an in-region scroll moves content between row ids, so the placement

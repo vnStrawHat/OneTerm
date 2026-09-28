@@ -340,4 +340,15 @@ impl TerminalGrid {
     pub fn heap_bytes(&self) -> usize {
         self.primary.heap_bytes() + self.alt.heap_bytes()
     }
+
+    /// Every extras id something in either screen can still resolve: both
+    /// screens' whole history, and the pen and erase cell of both the active
+    /// and the saved cursor on each. `O(history)`; only the extras table's
+    /// own periodic sweep calls this, never a per-`feed` path.
+    pub(crate) fn live_extras_ids(&self) -> rustc_hash::FxHashSet<u16> {
+        let mut live = rustc_hash::FxHashSet::default();
+        self.primary.collect_live_extras_ids(&mut live);
+        self.alt.collect_live_extras_ids(&mut live);
+        live
+    }
 }

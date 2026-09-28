@@ -150,19 +150,30 @@ whose cells are all overwritten is invisible while its placement is retained. It
 and, through the view, a retained texture, until the row is reset or eviction reclaims it — which is
 why `US-0081`'s texture store must tolerate up to `MAX_PLACEMENTS` live textures.
 
-**Release frees the extras entries too (`BUG-0081`).** The table slot the previous paragraph means is
-literal: every placement `place` makes is a fresh `GraphicId`, so a redraw loop that resends one
-image took one permanent extras entry per resend until `RIS` — the collateral `BUG-0079` found and
-fixed for repainted hyperlinks does not reach graphics, because a resent image is never the same
-`GraphicId` twice. What bounds it instead is release: `sweep`'s row-reset path and `MAX_PLACEMENTS`
-eviction both go through one `release` function that frees every extras entry the dying placement's
-cells resolved to — the graphic-only entry `place` stamps, and one more per distinct hyperlink a
-covered cell already carried when `stamp` merged it in — before the next image can reuse the slot.
-Nothing scans the grid to prove an entry is free: each placement's own extras ids are tracked as
-they are created, in `GraphicsState::extras_by_graphic`, and consulted only at that placement's own
-release. A redraw loop whose `stamp` keeps overwriting the same still-`HAS_GRAPHIC` rows (the false
-positive above) is not caught by the sweep at all; `MAX_PLACEMENTS` eviction is what bounds it in
-that case, so the table plateaus a couple of entries past `MAX_PLACEMENTS`, never at 65,535.
+**Release does *not* free the extras entry (`BUG-0081`).** The "table slot" the previous paragraph
+means is a slot in `state.graphics.placements`, not in the extras table. A redraw loop that resends
+one image took one permanent extras entry per resend until `RIS` — the collateral `BUG-0079` found
+and fixed for repainted hyperlinks does not reach graphics, because a resent image is never the same
+`GraphicId` twice, so there is nothing here for a content-hash table to dedupe by. A first attempt
+made `release` free every extras entry the dying placement's cells resolved to, tracked as they were
+created; an adversarial verification pass (evidence `BUG-0081-verify.md`) rejected it: release means
+only "this table no longer tracks the placement", not "no cell names it any more" — eviction takes
+the *oldest* placement whether or not its cells are still on screen or in scrollback, and this
+section's own false-positive table already documents `SD`/`IL` splitting an image outside its
+tracked extent while its real cells survive. Freeing on release recycled a live cell's extras id
+into whatever was interned next: an old image's blank cells could turn into a clickable link to an
+unrelated URI, and a stale cell naming a *different*, still-live image could make the renderer skip
+painting it.
+
+**What actually bounds it: the extras table's own periodic mark-and-sweep**, in `oneterm_vt::intern`
+(`InternTable::sweep_unreferenced`, orchestrated from `Terminal::feed` and from `State::intern_extras`
+so it also catches a huge batch inside one `feed` call). Past a threshold of new entries since the
+last sweep, it reads every extras id both screens' whole history, and the pen and erase cell of both
+cursors, can resolve — not `sweep`'s row-flag approximation — and frees exactly the ids that scan did
+not find. Nothing here is graphics-specific: the sweep does not know what a "placement" is, only that
+an id is or is not named by a cell. See the `IN-0045` LLD note for why release-time freeing was
+rejected and the sweep's own bound (it ratchets up in bursts, not a small constant, under sustained
+adversarial resends — see that note's numbers).
 
 **Bound: `MAX_PLACEMENTS = 256`, oldest released first.** An unbounded placement table plus a linear
 sweep is a denial-of-service surface, so the table is a ring: the 257th image releases the first and

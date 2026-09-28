@@ -47,7 +47,7 @@ use crate::grid::{
     AnchorId, Charset, DEFAULT_SCROLLBACK, Pos, RowId, Screen, Size, TerminalGrid, Viewport,
 };
 use crate::input::{KeyEvent, KeyMods, KeySpec};
-use crate::intern::Interner;
+use crate::intern::{Extras, ExtrasId, Interner};
 use crate::parser::Parser;
 use crate::reflow::{ResizeOutcome, ResizePolicy};
 use crate::selection::{Selection, SelectionKind, SelectionRange, Side};
@@ -223,6 +223,33 @@ pub(crate) struct State {
     pub(crate) dispatched: bool,
 }
 
+impl State {
+    /// Intern `value` into the extras table, and run its bounded sweep right
+    /// after if enough new entries have piled up since the last one.
+    ///
+    /// The path every hot `interner.extras(..)` call site (`place`'s
+    /// graphic-only entry, `set_hyperlink`) should go through instead of
+    /// calling `interner.extras` directly: checking once per call, rather
+    /// than once per `feed`, is what keeps one `feed` carrying thousands of
+    /// resends (a full-screen repaint arriving in one read) from creating
+    /// far more entries than the sweep interval before anything looks at
+    /// whether they are still referenced. `stamp`'s rare merged hyperlink-
+    /// and-graphic entry calls
+    /// `interner.extras` directly instead: it is inside a loop already
+    /// borrowing `self.grid` for the row it is writing, and a live-set scan
+    /// needs `self.grid` on its own, so the two calls cannot interleave
+    /// without restructuring that loop. `feed`'s own end-of-batch check is
+    /// the backstop for that path.
+    pub(crate) fn intern_extras(&mut self, value: &Extras) -> ExtrasId {
+        let id = self.interner.extras(value);
+        if self.interner.extras.needs_sweep() {
+            let live = self.grid.live_extras_ids();
+            self.interner.extras.sweep_unreferenced(&live);
+        }
+        id
+    }
+}
+
 /// The VT engine.
 pub struct Terminal {
     parser: Parser,
@@ -319,6 +346,14 @@ impl Terminal {
         // liveness is derived from the rows the batch left behind.
         graphics::sweep(&mut self.state);
         graphics::drain_released(&mut self.state, batch);
+        // The extras table's own sweep: rare (`needs_sweep` is an O(1) counter
+        // check), and correct only because `live_extras_ids` reads every cell
+        // that can carry an id rather than trusting any one call site's
+        // bookkeeping about what it released.
+        if self.state.interner.extras.needs_sweep() {
+            let live = self.state.grid.live_extras_ids();
+            self.state.interner.extras.sweep_unreferenced(&live);
+        }
         if self.state.dispatched {
             batch.push_repaint();
         }

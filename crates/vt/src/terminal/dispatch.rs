@@ -1007,7 +1007,7 @@ impl Handler<'_> {
                 }
             },
         };
-        let new_id = self.state.interner.extras(&extras);
+        let new_id = self.state.intern_extras(&extras);
         let template = self.template().with_extras(new_id);
         self.set_template(template);
     }

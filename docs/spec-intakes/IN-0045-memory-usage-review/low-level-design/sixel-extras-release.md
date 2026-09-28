@@ -1,10 +1,11 @@
-# Low-Level Design: Sixel placement release frees its extras entries
+# Low-Level Design: Sixel extras entries and the extras table's own sweep
 
 Intake: IN-0045
 HLD: [high-level-design.md](../high-level-design.md)
-Topic: `oneterm-vt` extras table growth from a resent Sixel image, and what a placement's release
-now does to the entries its cells held
-Date: 2026-09-28
+Topic: `oneterm-vt` extras table growth from a resent Sixel image, and how the table proves an
+entry is safe to free
+Date: 2026-09-28. Reworked 2026-09-28 after adversarial verification failed the first design
+(`evidence/BUG-0081-verify.md`).
 
 ## Concern
 
@@ -17,92 +18,154 @@ Sixel preview every frame — a file manager, an Ink-style TUI — therefore too
 entry per resend, same as the hyperlink case, until the table filled at 65,535 entries and no later
 link or image got its cells, until `RIS`.
 
-## Design
+## First design (rejected by adversarial verification)
 
-**Content-hash reuse (BUG-0079's fix, generalised) does not fit graphics.** Deduplicating by the
-image's pixel bytes would let two placements share one `GraphicId`. `GraphicsState::placement`
-resolves an id to a placement with `.find(|p| p.id == id)` — the **first** match — so if a program
-ever shows the same image at two positions **at once** (a real case: two identical icons side by
-side), sharing an id would silently give the second occurrence the first one's anchor, cols and
-rows. Hyperlinks tolerate two simultaneous occurrences of one URI merging (`osc8-interning.md`
-accepts merged hover groups as a UX simplification); graphics do not tolerate two simultaneous
-placements merging into one, because the painter would draw the wrong rectangle. Content-hash reuse
-is therefore rejected outright, not chosen as the fallback the coordinator's brief allowed for.
+The first attempt tracked, per placement, every extras id `place`/`stamp` interned for it
+(`GraphicsState::extras_by_graphic`), and freed all of them when the placement was released — through
+`sweep`'s row-derived detection or `MAX_PLACEMENTS` eviction. It shipped as `3796cef0`, and
+`evidence/BUG-0081-verify.md` failed it (F1, High): **a placement's release does not mean its cells
+are gone.** `evict_oldest` releases the *oldest* placement whenever 256 are live, whether or not its
+cells are still on screen or in scrollback — "a stream that emits an image per line" is its own
+documented use case, and those images sit in history. `assert_integrity`'s own doc already said a
+cell outside a placement's tracked extent "can hold a stale id ... and that is inert" — `IL`/`SD`
+splitting an image outside its anchor's tracked extent is exactly that, and freeing on release broke
+the "inert" half of that sentence. A history trim that drops a tall image's anchor row while its
+lower rows survive is the same mechanism. In every one of these, the freed id's slot went to
+whatever was interned next — `place` interns the new image's own entry **before** `evict_oldest`
+frees the old one, so the very next placement or link anywhere in the terminal could take it —
+turning a released image's still-live cell into a link to an unrelated URI (V1, V8, V9), splitting
+one link into two targets when the freed entry was a hyperlink-plus-graphic merge (V4), or letting a
+recycled id alias a *different*, still-live image's id and hide it from the renderer's paint loop
+(F2/V2). `graphics.md`'s own risk table already listed the release paths that do not mean "gone";
+the first design's safety argument (`snapshot/row.rs` resolving `ExtrasId` under the lock) was true
+but answered a question nobody was asking — the grid itself, not a snapshot, is the long-lived holder
+the design never considered.
 
-**Chosen: release the extras entry when its placement is released.** `GraphicId` stays exactly as it
-is — a fresh counter value per placement, never reused, never renumbered — so there is no ambiguity
-between simultaneous placements. What changes is what happens when a placement dies. The engine
-already detects that moment twice:
+**Content-hash reuse** (`BUG-0079`'s fix, generalised to image bytes) was considered and rejected too,
+independently of the above: `GraphicsState::placement` resolves an id to a placement with
+`.find(|p| p.id == id)` — the **first** match — so if a program ever shows the same image at two
+positions **at once** (a real case: two identical icons side by side), sharing a `GraphicId` would
+silently give the second occurrence the first one's anchor, cols and rows. Hyperlinks tolerate two
+simultaneous occurrences of one URI merging (`osc8-interning.md` accepts merged hover groups as a UX
+simplification); graphics do not tolerate two simultaneous placements merging into one, because the
+painter would draw the wrong rectangle. This stays rejected in the rework: `GraphicId` keeps its
+fresh-per-placement identity unchanged.
 
-1. `sweep`, at the end of `feed`, when no row in a placement's extent still carries
-   `RowFlags::HAS_GRAPHIC` (a row reset, a history trim, a reflow that drops the anchor).
-2. `evict_oldest`, inside `place`, when `MAX_PLACEMENTS` (256) live placements would be exceeded —
-   the case a redraw loop that keeps overwriting the same still-`HAS_GRAPHIC` rows falls into,
-   because `sweep` never sees that placement's flag go false (a documented false positive, unchanged
-   by this packet).
+## Design (rework)
 
-Both already knew the placement was gone; neither told the extras table. Both now go through one
-`release` function that frees every extras entry the placement's cells resolved to before queuing the
-`GraphicReleased` event.
+**Free an id only once a scan of the whole grid proves nothing references it.** Nothing short of that
+proves it, per the first design's failure: not a placement's release, not `sweep`'s row-flag
+approximation, not any one call site's own bookkeeping about what it touched.
 
-**Freeing needs more than the one `graphic_only` entry `place` computes.** `stamp` merges a covered
-cell's existing hyperlink into a second, distinct extras value (`Extras { hyperlink: Some(h), graphic:
-Some(id) }`) when the cell already carried one; a placement can therefore own several extras entries,
-not one. `GraphicsState::extras_by_graphic: FxHashMap<GraphicId, FxHashSet<ExtrasId>>` records every
-extras id a placement's own `place`/`stamp` calls interned for it, as they are created — no grid scan
-is needed at release time, only a map lookup and remove.
+`InternTable<T>` gains:
 
-**`InternTable` gains a free list, not a sweep.** `free(id)` resets the slot at `id` to the value's
-default, removes it from the content-hash index, and pushes `id` onto a small `free: Vec<u16>`;
-`intern` checks that list before growing the table. No other id moves or changes meaning — the design
-rule the module doc already states ("styles and extras never move") is about renumbering, and this is
-not a renumbering: it is the *owner* of one id proving, without help from the table, that nothing
-reaches it any more, and handing it back. Id 0 (the default) can never be freed. The invariant
-`entries.len() == index.len() + free.len()` replaces the old `entries.len() == index.len()`, checked
-in `debug_assert_integrity` on every mutation, including `free`. `free` is generic on `InternTable<T>`
-but only ever called on the extras table; nothing calls it on styles.
+- `free: FxHashSet<u16>` — ids freed, waiting for `intern` to hand them back out. `intern` checks it
+  before growing the table.
+- `since_sweep: u32` — new entries pushed since the last sweep, incremented only on the growth branch
+  of `intern` (a genuinely new value, not a cache hit and not a free-list reuse).
+- `needs_sweep(&self) -> bool` — `since_sweep >= TABLE_SWEEP_INTERVAL` (4,096, an absolute count for
+  the same reason `GRAPHEME_SWEEP_ENTRIES` is one: keeps a sweep rare for an ordinary session while
+  still bounding a hostile one). Generic on `InternTable<T>`, but nothing calls the sweep for styles
+  today.
+- `sweep_unreferenced(&mut self, live: &FxHashSet<u16>)` — frees every allocated id **not** in `live`
+  and resets `since_sweep`. `O(entries)`. Nothing is renumbered: a kept id keeps its slot; a freed one
+  is cleared to the default and pushed onto the free list, same as calling `free` once per id.
+- `is_free(&self, id: u16) -> bool` — for the new paranoid check (below).
+- `free(&mut self, id: u16)` is now idempotent in every build, not only under `debug_assert!`
+  (`F5`): a second free of the same still-outstanding id is a no-op, so a bug in the caller cannot
+  hand the same id out twice from the free list.
 
-**Why this is safe against the render-copy hazard the module doc warns about.** The hazard the "no
-renumbering sweep" rule exists for is a stale id resolving to someone else's value while a render copy
-still holds it. `SnapshotRow` resolves `cell.extras_id()` into `hyperlink: Option<HyperlinkId>` and
-`graphic: Option<GraphicId>` **while the lock is still held**, and never stores a raw `ExtrasId` past
-that point — confirmed by reading `snapshot/row.rs`. A freed slot's id therefore never has to resolve
-correctly for anyone after the lock that saw it released, because nothing outside the lock ever held
-the raw id to begin with. Freeing degrades a freed-but-not-yet-reused slot to the default value rather
-than leaving the stale one in place, so even a caller that mishandles this invariant sees "nothing"
-instead of a different placement's data.
+**Building `live` is the caller's job, and it must be complete.** `InternTable` has no access to a
+grid. `Screen::collect_live_extras_ids` walks the screen's **whole** history (`oldest..=newest`, not
+`integrity_lo`'s O(rows) batch-touched approximation — this is a rare, O(history) operation by design,
+not a per-`feed` one) plus the pen (`template()`) and erase cell of both the active and the saved
+cursor, and `TerminalGrid::live_extras_ids` runs it for both screens. This list had to be exactly as
+complete as the first design's failure demanded: every holder `evidence/BUG-0081-verify.md` F1 named
+(scrollback, a split extent, the pen/erase cell of both cursors) is included; the only excluded field
+is `Screen::spare` (the one row kept only for its cell allocation after a history trim, "never read as
+content" — outside the ring `Screen::row` walks, so nothing observable can resolve through it).
 
-**Ids visible to embedders are not renumbered.** `GraphicId` keeps its counter semantics unchanged —
-per terminal, starts at 1, never reset, never reused. `ExtrasId` is the id freed and reused, and it is
-`pub`, but nothing outside the lock ever holds one (previous paragraph), so no embedder-visible value
-changes meaning underneath anything that still references it.
+**Orchestration: checked after every hot intern, not once per `feed`.** `state.interner.extras(..)`
+has three call sites. Checking `needs_sweep()` once at the end of `Terminal::feed` was the first
+instinct, and it is wrong on its own: a single `feed` can carry a whole screen's worth of resends (a
+full repaint arriving in one read), so `since_sweep` could run into the tens of thousands before the
+end-of-batch check ever looked. `State::intern_extras` wraps `place`'s graphic-only entry and
+`set_hyperlink`'s call with an immediate `needs_sweep`/sweep check, so growth is bounded within a
+`feed`, not only across them. `stamp`'s rare merged hyperlink-and-graphic entry keeps calling
+`interner.extras` directly: it runs inside a loop already borrowing `state.grid` for the row it is
+writing, and a live-set scan needs `state.grid` on its own, so the two cannot interleave without
+restructuring that loop for a path that needs many pre-existing distinct hyperlinks under one
+about-to-be-placed image to matter. `Terminal::feed`'s own end-of-batch check stays as that path's
+backstop.
+
+**The bound is not a small constant.** Freeing never shrinks `entries()` (a kept id must never move,
+so there is no lower slot to move a survivor to), so `entries()` is a high-water mark, not a live
+count. Under a sustained stream that always creates a genuinely new value — which every Sixel resend
+does; nothing here dedupes by content the way a repainted implicit hyperlink does — each "cycle"
+(reuse the previous sweep's free list, then grow `TABLE_SWEEP_INTERVAL` more before the next sweep
+triggers) adds exactly `TABLE_SWEEP_INTERVAL` to the high-water mark and never gives any of it back.
+Measured (see Measurements below): 70,000 resends of one image reach roughly 20,000 entries, not the
+258 the first design measured and not 65,535. This is the correct trade the packet's brief allowed
+for ("make the threshold keep it rare"): a provably safe bound that grows slowly under sustained
+adversarial load, chosen over an unsafe one that stayed small under the one shape of load anyone had
+tested.
+
+**`F4`, scoped while here.** `graphics::assert_integrity`'s debug check walked every cell of a live
+placement's **row**, not its own columns. Two placements sharing a row (one narrower than the screen
+next to another) meant a live placement's check could reach an evicted neighbour's columns and assert
+on its id — a pre-existing false positive the first design's bug happened to mask (a recycled id read
+back as "no graphic" or as some live id instead of the evicted one). Scoped to `pos.col ..
+pos.col + placement.cols` now.
 
 ## Interfaces
 
-No public signature changes. `InternTable::free` is `pub(crate)`, mirroring `InternTable::clear`.
-`GraphicsState::extras_by_graphic` and `GraphicsState::track_extras` are private to the graphics
-module.
+No public signature changes. `InternTable::free`, `is_free`, `needs_sweep`, `sweep_unreferenced` are
+`pub(crate)`. `Screen::collect_live_extras_ids` and `TerminalGrid::live_extras_ids` are `pub(crate)`.
+`State::intern_extras` is `pub(crate)`. `GraphicsState::extras_by_graphic` / `track_extras` from the
+first design are removed; `graphics/mod.rs` and `graphics/placement.rs` are otherwise unchanged from
+`main`.
 
 ## Edge Cases and Failure Modes
 
+- [x] `V1`/`V8`/`V9`/`V4`: a released placement's surviving cell (evicted while on screen, evicted
+  while in scrollback, split outside its tracked extent by `IL`/`SD`, or a merged hyperlink-and-graphic
+  entry) is never recycled into an unrelated value, because nothing frees an id the live-set scan
+  still finds.
+- [x] `V2`/F2: a recycled id can never alias a *different*, still-live image, for the same reason —
+  every live placement is reachable through some cell of its own.
 - [x] Two distinct images placed at once never share an extras entry (identity stays the fresh
-  `GraphicId`, unaffected by this packet).
-- [x] A released placement's freed extras entries are reused by the next distinct image, not
-  re-grown.
-- [x] `RIS` still empties the whole extras table at once (`InternTable::clear`, now also clearing the
-  free list); `GraphicsState::reset` (the `RIS` handler) clears `extras_by_graphic` in the same call,
-  so the sweep the reset's own row-blanking triggers at the end of that `feed` never tries to free an
-  id the wholesale clear already invalidated.
-- [x] A cell that carries both a hyperlink and a graphic frees its merged entry too, not only the
-  graphic-only one.
-- [x] A redraw loop that never resets the rows it overwrites (the `HAS_GRAPHIC` false positive) is
-  still bounded, by `MAX_PLACEMENTS` eviction rather than by the sweep.
+  `GraphicId`, unaffected by either design).
+- [x] `RIS` still empties the whole extras table at once (`InternTable::clear`, now also resetting
+  `since_sweep` and clearing the free set).
+- [x] `F5`: freeing the same id twice never hands it out twice — `free` is unconditionally idempotent.
+- [x] `F3`: the paranoid whole-history walk (`Screen::assert_interned_ids_resolve`) now checks
+  `!interner.extras.is_free(id)` for every cell's extras id **and** for the pen/erase cell of both
+  cursors, not only `id < entries()` — a freed id always passed the old check, because freeing never
+  shrinks the table.
+
+## Measurements
+
+Headless, release profile, throwaway counting allocator (removed before commit), one 20x4 terminal,
+`Config::default()`, one 1x6 Sixel resent with `CSI H` + the same `DCS q` 70,000 times:
+
+| | Extras entries | Live bytes |
+| --- | --- | --- |
+| `eed33058` (main, unfixed) | 65,535 (full) | see `evidence/BUG-0081-verify.md` |
+| `3796cef0` (first design, rejected) | 258 | see `evidence/BUG-0081-verify.md` |
+| This rework | recorded in the packet's Evidence and Gaps | recorded in the packet's Evidence and Gaps |
+
+Scan cost (`Screen::collect_live_extras_ids` for one screen, release profile): recorded in the
+packet's Evidence and Gaps, for the coordinator's requested worst-case shape (100,000 rows x 200
+columns) and for the test terminal's own small shape, so the threshold choice (4,096) can be judged
+against both.
 
 ## Verification
 
-- [x] `intern::tests`: a freed id is the next one `intern` reuses; freeing id 0 is a no-op.
-- [x] `graphics::tests`: two distinct images stay distinct; a released placement's extras entry is
-  reused by a later, different image.
+- [x] `intern::tests`: a freed id is the next one `intern` reuses; freeing id 0 is a no-op; freeing
+  the same id twice does not alias it; `sweep_unreferenced` frees exactly the ids missing from `live`.
+- [x] `graphics::tests`: `v1`/`v8`/`v9`/`v4` (released-but-still-live cells are never recycled);
+  `v2` (every live placement is reachable through its own cells); `two_different_images_stay_distinct`;
+  a paranoid-check regression (`integrity_rejects_an_extras_id_freed_while_a_cell_still_names_it`).
 - [x] `terminal::tests`: 70,000 resends of one Sixel image at a fixed cursor position keep the extras
-  table bounded near `MAX_PLACEMENTS`, the last resend still places, and a later explicit link and a
+  table well below the 65,535 ceiling, the last resend still places, and a later explicit link and a
   later distinct image both still get their cells.

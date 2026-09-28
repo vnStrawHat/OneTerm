@@ -30,7 +30,7 @@ new variant is a patch release rather than a break.
 | [`Osc`] | an OSC number routed `Forward` or `BuiltinAndForward` | your own protocol; chapter 5 |
 | [`RowsScrolled`] | content moved between row ids | shift a cache keyed by row id instead of rebuilding it |
 | [`RowsTrimmed`] | history was trimmed | rows older than `oldest` no longer exist; drop anything keyed to them |
-| [`GraphicReleased`] | the last cell referencing an image is gone | drop the texture you uploaded for that id |
+| [`GraphicReleased`] | the engine stopped tracking that image's placement | drop the texture you uploaded for that id |
 | [`Cwd`] | `OSC 7`, the shell reporting its directory | treat it as untrusted data; chapter 5 |
 | [`IconName`] | `OSC 1` | set an icon name, or ignore it |
 | [`Notification`] | `OSC 9` | your policy decides whether to show it, how big it may be and how often |
@@ -147,9 +147,13 @@ is gone. Both also reach a renderer indirectly through `SnapshotUpdate`, so a
 consumer that only draws does not have to handle them. A consumer that keeps its
 own index -- a search overlay, a link map, a block-level command history -- does.
 
-[`GraphicReleased`] is the same idea for images: the last cell referencing that
-id is gone, so the texture you uploaded can be dropped. Chapter 8 is the whole
-image lifecycle.
+[`GraphicReleased`] is the same idea for images: the engine's own placement
+tracking for that id ended -- its anchored row was reset or trimmed, a reflow
+dropped it, or the live-placement ceiling evicted it -- so the texture you
+uploaded can be dropped. That is close to, but not exactly, "every cell
+naming it is gone": an image can be evicted while it is still on screen or in
+scrollback, and a released id is never reused, so dropping the texture is
+always safe even then. Chapter 8 is the whole image lifecycle.
 
 ## What the engine will never do
 
