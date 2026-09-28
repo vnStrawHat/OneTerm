@@ -143,6 +143,34 @@ fn output_batch_coalesces_and_keeps_exited(cx: &mut TestAppContext) {
     assert!(ssh_closed, "a Closed behind the Output batch is handled");
 }
 
+/// `US-0147`: the pump posts no second hint until the first is released, so a
+/// frame after a hint the view releases it and stamps the output that came in
+/// without one. A view that draws no frame (an inactive tab) depends on this to
+/// hear from its pump again, and on the stamp to date the lines it did not see.
+#[gpui::test]
+fn output_that_came_without_a_hint_is_caught_up_a_frame_later(cx: &mut TestAppContext) {
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+    let stamped = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.gutter_times.times().len())
+    };
+
+    probe.feed(b"one\r\n");
+    probe.emit(SessionEvent::Output).expect("room for the hint");
+    cx.run_until_parked();
+    let after_hint = stamped(cx);
+    assert_eq!(probe.release_calls(), 0, "not before the catch-up");
+
+    probe.feed(b"two\r\nthree\r\n");
+    cx.executor().advance_clock(super::view::OUTPUT_CATCH_UP);
+    cx.run_until_parked();
+    assert_eq!(probe.release_calls(), 1, "the hint is released");
+    assert!(
+        stamped(cx) > after_hint,
+        "lines that arrived without a hint are stamped"
+    );
+}
+
 #[gpui::test]
 fn clipboard_read_reply_gated_by_setting(cx: &mut TestAppContext) {
     let (session, probe) = FakeTerminalSession::boxed(24, 80, "");

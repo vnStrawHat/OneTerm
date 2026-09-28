@@ -1,0 +1,28 @@
+US-0147 keystroke echo latency: cargo test -p oneterm-local-shell --profile fast-dev -- --ignored --nocapture keystroke_echo_latency
+400 keys (x / backspace alternately, 20 ms apart) through a real ConPTY cmd.exe; time from write to the Output hint whose snapshot shows the echo.
+
+Sequential runs (same source state each):
+before (sites only, b101026a): p50 226.3us p95 2.2479ms | p50 239.7us p95 2.3349ms | p50 233.8us p95 2.3212ms | p50 256.3us p95 2.3309ms
+after (first build of the fix):  p50 269.9us p95 2.2015ms | p50 120.7us p95 2.2113ms | p50 389.3us p95 2.2962ms | p50 294.8us p95 2.2828ms
+
+Interleaved runs of the two saved test binaries (10 pairs, the second five in swapped order):
+before keystroke echo over 400 keys: p50 411.4µs, p95 2.3257ms, max 156.7341ms
+after keystroke echo over 400 keys: p50 519µs, p95 2.3878ms, max 11.3209ms
+before keystroke echo over 400 keys: p50 602.8µs, p95 1.3103ms, max 10.5324ms
+after keystroke echo over 400 keys: p50 575.9µs, p95 2.3202ms, max 16.691ms
+before keystroke echo over 400 keys: p50 597.1µs, p95 1.7694ms, max 16.2454ms
+after keystroke echo over 400 keys: p50 550.9µs, p95 2.2637ms, max 11.7995ms
+before keystroke echo over 400 keys: p50 604.9µs, p95 2.1874ms, max 16.2719ms
+after keystroke echo over 400 keys: p50 561µs, p95 2.1941ms, max 12.5846ms
+before keystroke echo over 400 keys: p50 605.9µs, p95 1.9242ms, max 16.7314ms
+after keystroke echo over 400 keys: p50 572.1µs, p95 1.9237ms, max 16.311ms
+after keystroke echo over 400 keys: p50 247.6µs, p95 2.2821ms, max 15.8215ms
+before keystroke echo over 400 keys: p50 550.6µs, p95 2.4786ms, max 16.323ms
+after keystroke echo over 400 keys: p50 224.5µs, p95 2.7378ms, max 7.2787ms
+before keystroke echo over 400 keys: p50 197.3µs, p95 2.2041ms, max 11.0917ms
+after keystroke echo over 400 keys: p50 207.2µs, p95 2.2743ms, max 15.0731ms
+before keystroke echo over 400 keys: p50 201.9µs, p95 2.1821ms, max 10.9087ms
+after keystroke echo over 400 keys: p50 185.6µs, p95 2.2203ms, max 6.9237ms
+before keystroke echo over 400 keys: p50 204.4µs, p95 2.2536ms, max 11.6098ms
+after keystroke echo over 400 keys: p50 192.5µs, p95 2.213ms, max 11.305ms
+before keystroke echo over 400 keys: p50 209.7µs, p95 2.2058ms, max 11.4223ms

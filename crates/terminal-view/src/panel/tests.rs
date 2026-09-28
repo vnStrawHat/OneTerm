@@ -892,3 +892,79 @@ fn output_in_a_hidden_tab_does_not_notify_its_view(cx: &mut TestAppContext) {
 
     assert_eq!(*notified.borrow(), vec![shown_view.entity_id()]);
 }
+
+/// `US-0147` after `US-0145`: the repaint hint's catch-up, a frame after each
+/// hint, must not notify a view in a hidden tab either (a whole-window frame per
+/// hint), and must still release every hint so the hidden tab keeps hearing from
+/// its pump.
+#[gpui::test]
+fn the_catch_up_in_a_hidden_tab_releases_without_notifying(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AppState::init);
+
+    let panels = Rc::new(RefCell::new(Vec::new()));
+    let panels_for_window = panels.clone();
+    let (first_session, first_probe) = FakeTerminalSession::boxed(24, 80, "first");
+    let (second_session, second_probe) = FakeTerminalSession::boxed(24, 80, "second");
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let dock_area = cx.new(|cx| DockArea::new("hidden-tab-catch-up", None, window, cx));
+        let first =
+            cx.new(|cx| TerminalPanel::from_spec(session_spec(first_session, "First"), window, cx));
+        let second = cx
+            .new(|cx| TerminalPanel::from_spec(session_spec(second_session, "Second"), window, cx));
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.set_center(
+                DockLayout::tabs()
+                    .panel_view(panel_handle(first.clone()), cx)
+                    .panel_view(panel_handle(second.clone()), cx),
+                window,
+                cx,
+            );
+        });
+        panels_for_window.borrow_mut().extend([first, second]);
+        Root::new(dock_area, window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+
+    let panels = panels.borrow().clone();
+    let first_hidden = panels[0].read_with(cx, |panel, _| panel.is_hidden_tab());
+    let (hidden, probe) = if first_hidden {
+        (&panels[0], &first_probe)
+    } else {
+        (&panels[1], &second_probe)
+    };
+    let hidden_view = hidden.read_with(cx, |panel, _| panel.active_view().expect("a terminal"));
+
+    let notified = Rc::new(RefCell::new(0usize));
+    let counter = notified.clone();
+    let _subscription =
+        cx.update(|_, cx| cx.observe(&hidden_view, move |_, _| *counter.borrow_mut() += 1));
+    let releases_before = probe.release_calls();
+    for round in 0..5 {
+        probe.feed(format!("line {round}\r\n").as_bytes());
+        probe
+            .emit(oneterm_terminal::SessionEvent::Output)
+            .expect("room for the hint");
+        cx.run_until_parked();
+        // Output that came without a hint, so the catch-up has a line to stamp.
+        probe.feed(format!("more {round}\r\n").as_bytes());
+        // The view's `OUTPUT_CATCH_UP`.
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+
+    assert_eq!(
+        probe.release_calls() - releases_before,
+        5,
+        "every hint a hidden view handles is released"
+    );
+    assert_eq!(
+        *notified.borrow(),
+        0,
+        "the catch-up notified a hidden tab's view"
+    );
+}

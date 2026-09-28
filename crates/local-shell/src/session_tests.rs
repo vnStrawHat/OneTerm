@@ -462,3 +462,72 @@ fn e2e_echo_output_rendered_in_snapshot() {
         "`echo oneterm_e2e` never appeared in the snapshot; blank lines dropped: {lines:?}"
     );
 }
+
+/// `US-0147`: keystroke echo latency through a real ConPTY `cmd.exe` — the time
+/// from `write` of one key to the repaint hint of the batch that carries its
+/// echo, which is what the view waits for before it can draw the key. Types
+/// `x` and backspace alternately, 20 ms apart like a fast typist, and prints the
+/// median, p95 and worst. A measurement, not a gate — run it explicitly:
+///
+/// ```text
+/// cargo test -p oneterm-local-shell --profile fast-dev -- --ignored --nocapture keystroke_echo_latency
+/// ```
+#[cfg(windows)]
+#[test]
+#[ignore = "measurement; run it explicitly"]
+fn keystroke_echo_latency() {
+    const SAMPLES: usize = 400;
+
+    let cfg = oneterm_core::LocalShellConfig {
+        kind: oneterm_core::ShellKind::Cmd,
+        ..Default::default()
+    };
+    let s = spawn_guarded(cfg).expect("spawn cmd");
+    let events = s.take_events().expect("events");
+    assert!(wait_until(SHELL_ROUND_TRIP, || s
+        .snapshot()
+        .text()
+        .trim_end()
+        .ends_with('>')));
+    std::thread::sleep(Duration::from_millis(500));
+    while events.try_recv().is_ok() {}
+
+    // The loop runs on its own thread so a lost echo fails on the deadline
+    // instead of hanging the run in `recv_blocking`.
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let measure = std::thread::spawn(move || {
+        let mut samples = Vec::with_capacity(SAMPLES);
+        for index in 0..SAMPLES {
+            let typed = index % 2 == 0;
+            let started = Instant::now();
+            s.write(if typed { b"x" } else { b"\x08" }).expect("write");
+            loop {
+                let event = events.recv_blocking().expect("session events");
+                let at = started.elapsed();
+                if event == oneterm_terminal::SessionEvent::Output
+                    && s.snapshot().text().trim_end().ends_with('x') == typed
+                {
+                    samples.push(at);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = s.close();
+        let _ = done_tx.send(samples);
+    });
+    let mut samples = done_rx
+        .recv_timeout(Duration::from_secs(120))
+        .expect("every key echoed within the deadline");
+    measure.join().unwrap();
+
+    samples.sort_unstable();
+    let at = |fraction: f64| samples[((samples.len() - 1) as f64 * fraction).round() as usize];
+    println!(
+        "keystroke echo over {} keys: p50 {:?}, p95 {:?}, max {:?}",
+        samples.len(),
+        at(0.5),
+        at(0.95),
+        at(1.0)
+    );
+}

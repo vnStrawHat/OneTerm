@@ -272,6 +272,11 @@ pub trait TerminalRender: Send + Sync {
         *out = self.snapshot();
     }
 
+    /// The UI has caught up without a snapshot (a view that is not drawn), so
+    /// the backend may post the next [`SessionEvent::Output`]. A snapshot does
+    /// this itself. The default suits a session that posts a hint per batch.
+    fn release_repaint_hint(&self) {}
+
     /// Compact query state for non-render reads — mode, cursor, viewport size.
     /// Does NOT clone the full grid (O(1)). Use this for mode checks, cursor
     /// positioning, and viewport-size reads.
@@ -567,11 +572,17 @@ impl<O: PtyOwner> PtySession<O> {
 
 impl<O: PtyOwner> TerminalRender for PtySession<O> {
     fn snapshot(&self) -> TerminalContent {
+        self.state.release_repaint_hint();
         self.model().snapshot()
     }
 
     fn snapshot_into(&self, out: &mut TerminalContent) {
+        self.state.release_repaint_hint();
         self.model().snapshot_into(out)
+    }
+
+    fn release_repaint_hint(&self) {
+        self.state.release_repaint_hint();
     }
 
     fn query_state(&self) -> TerminalQueryState {
@@ -919,6 +930,25 @@ mod tests {
         assert_eq!(footprint(Some((9, 18))), (43, 32), "100 % display scale");
         assert_eq!(footprint(Some((18, 36))), (22, 16), "200 % display scale");
         assert_eq!(footprint(None), (39, 29), "no embedder, VT340 sizing");
+    }
+
+    /// `US-0147`: a render snapshot is what tells the pump the UI caught up, so
+    /// it releases the one repaint hint that may be out; so does the view's own
+    /// release for a frame that never came.
+    #[test]
+    fn a_snapshot_releases_the_repaint_hint() {
+        let session = fake_session();
+        assert!(session.state.claim_repaint_hint(), "none out yet");
+        assert!(!session.state.claim_repaint_hint(), "one is out");
+
+        session.snapshot_into(&mut session.snapshot());
+        assert!(
+            session.state.claim_repaint_hint(),
+            "released by the snapshot"
+        );
+
+        TerminalRender::release_repaint_hint(&session);
+        assert!(session.state.claim_repaint_hint(), "released by the view");
     }
 
     #[test]

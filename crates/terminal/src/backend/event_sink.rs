@@ -63,17 +63,23 @@ impl SessionEventSink {
 
     /// Post the coalescible repaint hint. Never blocks and never waits: a hint
     /// that does not fit is dropped, because the next one carries the same
-    /// information.
-    pub fn post_repaint(&self) {
-        if let Err(error) = self.event_tx.try_send(SessionEvent::Output) {
-            match error {
-                TrySendError::Full(_) => {
-                    self.counters.event_full.fetch_add(1, Ordering::Relaxed);
-                    log::debug!("SessionEventSink: coalesced repaint event");
-                }
-                error @ TrySendError::Closed(_) => self.record_closed(error),
+    /// information. `false` when it was not queued.
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "SessionEventSink")
+    )]
+    pub fn post_repaint(&self) -> bool {
+        let Err(error) = self.event_tx.try_send(SessionEvent::Output) else {
+            return true;
+        };
+        match error {
+            TrySendError::Full(_) => {
+                self.counters.event_full.fetch_add(1, Ordering::Relaxed);
+                log::debug!("SessionEventSink: coalesced repaint event");
             }
+            error @ TrySendError::Closed(_) => self.record_closed(error),
         }
+        false
     }
 
     /// Deliver a reliable event, waiting for the UI to make room.

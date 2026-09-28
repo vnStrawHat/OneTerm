@@ -81,6 +81,26 @@ fn a_reader_left_with_bytes_buffered_is_woken_again() {
     );
 }
 
+/// One packet serves every wake-up of a registration, so several posted before
+/// the caller polls must still arrive as several events, each with the key.
+#[test]
+fn wake_ups_posted_before_a_poll_all_arrive() {
+    let (pipe_read, _child) = std::io::pipe().expect("a pipe");
+    let mut reader = PipeReader::new(OwnedHandle::from(pipe_read), RING).expect("conout thread");
+    let poller = Arc::new(Poller::new().expect("poller"));
+    let mut events = Events::new();
+
+    reader.register(&poller, Event::readable(KEY), PollMode::Level);
+    for _ in 0..2 {
+        reader.ring.wake();
+    }
+    let mut keys = Vec::new();
+    while keys.len() < 3 && woken(&poller, &mut events) {
+        keys.extend(events.iter().map(|event| event.key));
+    }
+    assert_eq!(keys, [KEY; 3], "the priming packet and both wake-ups");
+}
+
 #[test]
 fn a_writer_with_room_left_is_woken_again() {
     let (_pipe_read, pipe_write) = std::io::pipe().expect("a pipe");

@@ -40,6 +40,10 @@ use crate::space::SplitContext;
 use crate::url::UrlHover;
 
 const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
+/// How long after a repaint hint the view catches up with output that arrived
+/// without one (`US-0147`): one 60 Hz frame. Bounds how late an inactive tab
+/// stamps a line; the gutter shows seconds.
+pub(super) const OUTPUT_CATCH_UP: Duration = Duration::from_millis(16);
 
 /// The process-level services a terminal view needs, resolved once by the
 /// panel that creates the view and handed down (ARCH-20) instead of being
@@ -351,6 +355,25 @@ impl TerminalView {
         }
     }
 
+    /// Stamp and invalidate for the output fed so far. `true` when it stamped a
+    /// line that had no stamp yet, which is what the gutter has to redraw for.
+    fn catch_up_with_output(&mut self, cx: &App) -> bool {
+        // The viewport is intentionally left where the user scrolled it;
+        // keyboard input re-snaps to the bottom.
+        //
+        // Stamp at the OUTPUT moment — the single stamper: the events task
+        // runs independently of render, so an inactive tab (not rendering)
+        // still stamps lines with the time they appeared.
+        let info = self.session.read(cx).terminal_info();
+        let stamped = self.gutter_times.covered();
+        self.gutter_times.update(&info);
+        // New output shifts the grid coordinate system, so stored search
+        // matches would point at the wrong rows. Mark them stale; `render`
+        // refreshes once per frame instead of once per PTY read.
+        self.search.mark_dirty();
+        self.gutter_times.covered() != stamped
+    }
+
     /// Apply one session event to the view. The single event handler used by
     /// both the events pump and the coalescing drain.
     pub(crate) fn handle_event(&mut self, ev: SessionEvent, cx: &mut Context<Self>) {
@@ -359,19 +382,25 @@ impl TerminalView {
                 cx.write_to_clipboard(ClipboardItem::new_string(text.unwrap_or_default()));
             }
             SessionEvent::Output => {
-                // The viewport is intentionally left where the user scrolled
-                // it; keyboard input re-snaps to the bottom.
-                //
-                // Stamp at the OUTPUT moment — the single stamper: the events
-                // task runs independently of render, so an inactive tab (not
-                // rendering) still stamps lines with the time they appeared.
-                let info = self.session.read(cx).terminal_info();
-                self.gutter_times.update(&info);
-                // New output shifts the grid coordinate system, so stored
-                // search matches would point at the wrong rows. Mark them
-                // stale; `render` refreshes once per frame instead of once
-                // per PTY read.
-                self.search.mark_dirty();
+                let _ = self.catch_up_with_output(cx);
+                // At most one hint is out (`US-0147`): output fed after this one
+                // posts none until a snapshot releases it. So catch up once more
+                // a frame later, and release it for a view that draws no frame
+                // (an inactive tab), which would otherwise never hear from its
+                // pump again. It repaints only for new stamps: a frame already
+                // drew the output itself, and a repaint per hint would double the
+                // frames of a TUI that the UI keeps up with. Never in a hidden tab:
+                // there a notify costs a whole-window frame (US-0145, below).
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(OUTPUT_CATCH_UP).await;
+                    let _ = this.update(cx, |view, cx| {
+                        view.session.read(cx).release_repaint_hint();
+                        if view.catch_up_with_output(cx) && !view.in_hidden_tab(cx) {
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
             }
             SessionEvent::Bell => self.has_bell = true,
             SessionEvent::Notification(msg) => self.queue_notification(msg),

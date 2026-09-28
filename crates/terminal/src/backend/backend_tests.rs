@@ -638,7 +638,8 @@ fn pump_batch_orders_reliable_events_before_repaint() {
 /// One repaint hint per chunk, last — the property the old listener had because
 /// the pump was the only source of `Output`, and the engine's per-batch
 /// `Repaint` must not become a second source. Three chunks, each carrying
-/// reliable events, must produce three `Output`s, each after its own chunk's
+/// reliable events and each met by a UI that caught up (a snapshot releases the
+/// hint, `US-0147`), must produce three `Output`s, each after its own chunk's
 /// reliable events.
 #[test]
 fn each_chunk_posts_exactly_one_output_after_its_reliable_events() {
@@ -649,6 +650,7 @@ fn each_chunk_posts_exactly_one_output_after_its_reliable_events() {
     for index in 0..3u8 {
         pump.process_chunk(&term, format!("\x1b]2;t{index}\x07\x07").as_bytes());
         pump.finish_batch_blocking(true);
+        f.state.release_repaint_hint();
     }
 
     let events = drain(&f.events);
@@ -667,6 +669,55 @@ fn each_chunk_posts_exactly_one_output_after_its_reliable_events() {
         ],
         "{events:?}"
     );
+}
+
+/// `US-0147`: at most one repaint hint is out. Batches the UI has not caught up
+/// with post none — their reliable events still leave, in order — and the first
+/// batch after a release posts again. Under ConPTY's line-per-chunk output a
+/// hint per chunk woke the UI thread once per line.
+#[test]
+fn no_second_hint_is_posted_until_the_first_is_released() {
+    let f = local(64);
+    let term = new_term();
+    let mut pump = TerminalPump::new(f.router.clone());
+
+    for index in 0..3u8 {
+        pump.process_chunk(&term, format!("\x1b]2;t{index}\x07line\r\n").as_bytes());
+        pump.finish_batch_blocking(true);
+    }
+    assert_eq!(
+        drain(&f.events),
+        vec![
+            SessionEvent::Title("t0".into()),
+            SessionEvent::Output,
+            SessionEvent::Title("t1".into()),
+            SessionEvent::Title("t2".into()),
+        ]
+    );
+
+    f.state.release_repaint_hint();
+    pump.process_chunk(&term, b"more\r\n");
+    pump.finish_batch_blocking(true);
+    assert_eq!(drain(&f.events), vec![SessionEvent::Output]);
+}
+
+/// A hint the queue had no room for was never out, so nothing will release it:
+/// the next batch must post again rather than wait forever.
+#[test]
+fn a_hint_dropped_on_a_full_queue_does_not_block_the_next() {
+    let f = local(1);
+    let term = new_term();
+    let mut pump = TerminalPump::new(f.router.clone());
+    f.events_tx.try_send(SessionEvent::Output).unwrap();
+
+    pump.process_chunk(&term, b"a\r\n");
+    pump.finish_batch_blocking(true);
+    assert_eq!(f.router.events().diagnostics().event_full, 1);
+    assert_eq!(drain(&f.events), vec![SessionEvent::Output], "the stand-in");
+
+    pump.process_chunk(&term, b"b\r\n");
+    pump.finish_batch_blocking(true);
+    assert_eq!(drain(&f.events), vec![SessionEvent::Output]);
 }
 
 /// Several `advance` calls can share one batch boundary — the local read loop
