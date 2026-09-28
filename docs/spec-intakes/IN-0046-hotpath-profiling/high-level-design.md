@@ -82,8 +82,9 @@ N/A — no UI surface. The report is text on stdout, or in the file named by
    `--features hotpath-profiling,hotpath/hotpath` on `oneterm-terminal-view`, which is how
    the per-site overhead was measured.
 
-Adding a site: put the `cfg_attr` line on a function in one of the crates above (a crate without the feature gets `hotpath-profiling = ["dep:hotpath"]`, the optional dependency, and a line in `oneterm-app`'s fan-out). Keep
-sites at batch granularity (per chunk, per frame, per row, per shaped run); a site in a
+Adding a site: put the `cfg_attr` line on a function in one of the crates above (a crate
+without the feature gets `hotpath-profiling = ["dep:hotpath"]`, the optional dependency,
+and a line in `oneterm-app`'s fan-out). Keep sites at batch granularity (per chunk, per frame, per row, per shaped run); a site in a
 per-byte or per-cell function costs more than the work it measures.
 
 ## Detail Design

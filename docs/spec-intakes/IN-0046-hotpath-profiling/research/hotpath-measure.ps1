@@ -33,6 +33,8 @@ param(
   # The opposite: post WA_INACTIVE, so an idle run measures an unfocused window (no blink)
   # whether or not Windows handed the new window the foreground.
   [switch] $Inactive,
+  # Start in Agent mode (the right dock shows the Agent panel, no cards) instead of SSH Client.
+  [switch] $AgentPanel,
   [string] $Scratch = (Join-Path ([IO.Path]::GetTempPath()) 'oneterm-in0046')
 )
 $ErrorActionPreference = 'Stop'
@@ -104,6 +106,7 @@ $work = Join-Path $Scratch "cwd-$Label"
 Remove-Item -Recurse -Force $home_, $work -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $home_, $work, "$home_\.OneTerm", $Out | Out-Null
 '{"auto_check": false, "schema_version": 1}' | Set-Content "$home_\.OneTerm\update_config.json"
+if ($AgentPanel) { '{"right_dock_mode": "agent"}' | Set-Content "$home_\.OneTerm\ui_config.json" }
 $Out = (Resolve-Path $Out).Path   # the app runs in $work, so a relative path would land there
 $report = Join-Path $Out "$Label.json"
 Remove-Item $report -ErrorAction SilentlyContinue

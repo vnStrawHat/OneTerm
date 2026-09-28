@@ -361,25 +361,40 @@ frame are that rebuild; OneTerm's own render functions are about 0.2 ms of a 4 m
    through `set_active(true)`. Unit test
    `panel::tests::output_in_a_hidden_tab_does_not_notify_its_view` (fails without the
    change).
-2. **Repainting timers share one grid** (`oneterm_state::until_next_tick`): the blink and
-   every status indicator wake on a wall-clock multiple of their interval, so a blink, a
-   clock tick and a resource tick land in one frame.
+2. **Repainting timers share one grid** (`oneterm_state::until_next_tick`): the blink,
+   every status indicator and (after the verification, F3) the Agent panel's
+   relative-time refresh wake on a wall-clock multiple of their interval, so a blink, a
+   clock tick and a resource tick land in one frame. An Agent panel with no cards no
+   longer ticks at all; its spinner keeps its 120 ms animation cadence. (The verification
+   measured 2.12 frames/s idle with the empty Agent panel shown before this; the effect
+   of the F3 change is not measured, see the packet.)
 
-UI thread, steady state, back-to-back pairs (`raw/us0145-{before,after}-time-*.json`):
+UI thread, steady state, back-to-back pairs (`raw/us0145-{before,after}-time-*.json`), with
+the independent verification's pairs (`../evidence/US-0145-verify.md` § 3) beside them:
 
-| Load | Before | After | Change |
-| --- | --- | --- | --- |
-| Idle, focused (90 s) | 35.1 Mcycles/s, 3.18 frames/s | 30.2 Mcycles/s, 2.11 frames/s | -14 % CPU, -34 % frames |
-| Idle, unfocused (90 s) | 23.3 Mcycles/s, 1.65 frames/s | 19.3 Mcycles/s, 1.25 frames/s | -17 % CPU, -24 % frames |
-| TUI, 2 tabs (3 min) | 413 Mcycles/s, 44.4 frames/s, 7,071 terminal renders | 202 Mcycles/s, 31.3 frames/s, 7,136 terminal renders | -51 % CPU, -30 % frames |
+| Load | Before | After | Change | Verification |
+| --- | --- | --- | --- | --- |
+| Idle, focused (90 s) | 35.1 Mcycles/s, 3.18 frames/s | 30.2 Mcycles/s, 2.11 frames/s | -14 % CPU, -34 % frames | 34.95 -> 33.73 Mcycles/s, 3.47 -> 2.04 frames/s: -3.5 % CPU, -41 % frames |
+| Idle, unfocused (90 s) | 23.3 Mcycles/s, 1.65 frames/s | 19.3 Mcycles/s, 1.25 frames/s | -17 % CPU, -24 % frames | 29.85 -> 18.51, 1.76 -> 1.23 |
+| TUI, 2 tabs, frame rate not capped (3 min) | 413 Mcycles/s, 44.4 frames/s, 7,071 terminal renders | 202 Mcycles/s, 31.3 frames/s, 7,136 terminal renders | -51 % CPU, -30 % frames | |
+| TUI, 2 tabs, frame rate capped (120 s, verification) | | | | 289.6 -> 403.4 Mcycles/s (+39 %), 32.0 -> 32.3 frames/s, terminal renders 50.4 % -> 99.8 % of frames |
 
-The same runs in hotpath's thread table (whole-run average, startup included): idle focused
-2.0 % -> 1.0 % of a core, TUI 19.4 % -> 9.0 %; tick-charged steady CPU: idle focused
-1.89 % -> 0.78 %, TUI 19.8 % -> 9.1 %. The TUI figures are three times US-0142's 6.0 %
-because this window drew 44 frames a second against 11 then: the frame rate follows whether
-the window is visible on the desktop, so only a back-to-back pair compares. The terminal
-renders are the same in both (7,071 and 7,136): the frames that went are the ones that drew
-no terminal.
+**The TUI result depends on whether the window's frame rate is capped.** The fix removes
+the frames that drew no terminal. In this run the window was not capped, so those frames
+simply went: 44 -> 31 frames a second with the same terminal renders (7,071 and 7,136), and
+the UI thread's cycles halved (hotpath thread table 19.4 % -> 9.0 %; tick-charged steady CPU
+19.8 % -> 9.1 %). In the verification the window drew ~32 frames a second in both builds:
+the frame budget the fix freed went to the shown terminal, which refreshed twice as often
+(16 -> 32 times a second), and cycles rose 39 % (hotpath thread 13.5 % -> 18.6 %). Both runs
+confirm the mechanism (no frame draws nothing any more); what a capped window gains is
+smoother, lower-latency output in the shown tab, not a CPU cut. The TUI figures are also not
+comparable with US-0142's 6.0 % (11 frames a second then): the frame rate follows whether the
+window is visible on the desktop, so only a back-to-back pair compares.
+
+Idle focused cycles fell 3.5 % to 14 % across the two pairs for a 34 % to 41 % frame cut:
+idle frames are cheap next to the fixed per-second cost of an idle UI thread, so the frame
+count moves more than the cycles. Tick-charged steady CPU there: 1.89 % -> 0.78 % (this
+run), 1.92 % -> 1.22 % (verification).
 
 Allocations: per frame unchanged (outside the sites 2,062 -> 2,207 idle, 2,135 -> 2,189
 TUI; it is the same frame), per second at idle **7,577 -> 4,971** (-34 %), following the

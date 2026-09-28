@@ -32,8 +32,11 @@ Created: 2026-09-28
    cursor-blink tick. A table from the idle and two-tab TUI loads says which renders run
    per frame, how often frames happen at idle, and what the ~2,500 allocations per frame
    outside the old sites are.
-2. **Cut.** Idle frames no longer come one per timer: a blink and the status-bar ticks
-   share a frame, and output in a tab that is not shown draws no frame. No visual change.
+2. **Cut.** Idle frames no longer come one per timer: a blink, the status-bar ticks and
+   the Agent panel's relative times share a frame, an empty Agent panel draws none, and
+   output in a tab that is not shown draws no frame. No visual change. Under load the
+   frames this frees are either saved (an uncapped window: less UI CPU) or spent on the
+   shown terminal (a window at its frame-rate cap: more frequent refreshes, not less CPU).
 
 ## Scope
 
@@ -69,6 +72,7 @@ Created: 2026-09-28
 - `docs/terminal-backend.md` § 6.4 — the output -> `cx.notify()` -> element pipeline and the
   "notify only when something changed" rule.
 - `docs/terminal-split.md` — Space tree rendering inside `TerminalPanel`; no change.
+- `docs/agent-panel-display.md` § 9 — the Agent panel's refresh tick (verification F3).
 - `high-level-design.md` (this intake) — how sites are wired; the leaf-crate list.
 - gpui-pre 0.3.7 `src/window.rs` (`mark_view_dirty`, `draw_roots`, `reuse_prepaint`,
   `reuse_paint`, `Frame::window_control_hitboxes`), `src/view.rs` (`prepaint_view`,
@@ -91,6 +95,8 @@ Changed: `docs/gui-layout.md` § Frames and re-rendering, `docs/terminal-backend
 `high-level-design.md` (leaf crates, how to add one), `IN-0046.md` (US-0145 done, surfaces),
 `research/hotpath-evaluation.md` § 8, `research/hotpath-measure.ps1`.
 `docs/terminal-split.md`: no change (the Space tree renders as before).
+`docs/agent-panel-display.md` § 9: the refresh tick's grid phase, the silent empty
+panel and the restart on a working card (cadences unchanged).
 
 ## Context
 
@@ -107,6 +113,9 @@ not, and cannot usefully be (research § 8.3).
   see; table.
 - [x] Try caching the dock area (measured worse, reverted); fix: hidden tabs do not notify,
   timers on one grid; measure after; test; docs; gates; commit.
+- [x] Verification findings (`evidence/US-0145-verify.md`): F1 TUI result stated as
+  conditional; F3 Agent panel timer on the grid, no frame when empty; F4 idle figures;
+  F5 records; F7 zero-interval guard.
 
 ## Decisions
 
@@ -126,7 +135,7 @@ None. The gpui constraints are recorded in `docs/gui-layout.md` § Frames and re
 - [x] Unit proof
 - [x] Integration proof
 - [ ] E2E proof
-- [x] Platform proof
+- [ ] Platform proof
 - [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
@@ -141,16 +150,38 @@ None. The gpui constraints are recorded in `docs/gui-layout.md` § Frames and re
 - Dock-area caching: built, measured worse (31.9 -> 33.9 Mcycles/s), reverted. Title-bar
   caching: not built (gpui does not replay window-control hitboxes).
 - Fix, back-to-back pairs (UI thread cycle counter, startup excluded): idle focused
-  35.1 -> 30.2 Mcycles/s and 3.18 -> 2.11 frames/s; idle unfocused 23.3 -> 19.3 and
-  1.65 -> 1.25; TUI 413 -> 202 Mcycles/s and 44.4 -> 31.3 frames/s with the same terminal
-  renders (7,071 / 7,136). hotpath thread table: idle 2.0 % -> 1.0 %, TUI 19.4 % -> 9.0 %.
-  Allocations per idle second 7,577 -> 4,971; per frame unchanged (~2,100-2,200).
+  3.18 -> 2.11 frames/s and 35.1 -> 30.2 Mcycles/s here, 3.47 -> 2.04 and 34.95 -> 33.73
+  in the verification (so -3.5 % to -14 % cycles for -34 % to -41 % frames); idle
+  unfocused 1.65 -> 1.25 frames/s and 23.3 -> 19.3 Mcycles/s (verification 1.76 -> 1.23,
+  29.85 -> 18.51). Allocations per idle second 7,577 -> 4,971; per frame unchanged
+  (~2,100-2,200).
+- TUI, two tabs: **the direction of the CPU change depends on whether the frame rate is
+  capped.** Here the window was not capped: 44.4 -> 31.3 frames/s with the same terminal
+  renders (7,071 / 7,136) and 413 -> 202 Mcycles/s (-51 %; hotpath thread 19.4 % ->
+  9.0 %). In the verification both builds drew ~32 frames/s: the frames that used to draw
+  nothing became terminal frames (terminal renders 50.4 % -> 99.8 % of frames, the shown
+  tab refreshed 16 -> 32 times a second) and UI cycles rose 289.6 -> 403.4 Mcycles/s
+  (+39 %). Both confirm the mechanism (no frame draws nothing); a capped window gets
+  smoother output from the fix, not a CPU cut.
+- Agent panel (F3): the relative-time tick sleeps on the 1 s grid and an empty panel draws
+  no frame; the spinner keeps 120 ms and restarts the tick when a card starts working.
+  Not measured: three release builds for the idle-with-Agent-panel run failed in rustc
+  (`STATUS_STACK_BUFFER_OVERRUN` compiling `windows` 0.62.2 at opt-level 3, the same
+  crash fat LTO with debug info gave earlier), so the expected drop from the verifier's
+  2.12 frames/s towards the SSH Client mode's 1.23 is unproven. `hotpath-measure.ps1
+  -AgentPanel` starts a run in Agent mode for whoever measures it.
 - `frame_time_under_output` (`fast-dev`, 3 runs): flood 1557-1649 us, idle 227-282 us,
   within US-0142's range; the harness does not go through either change.
 - Unit: `panel::tests::output_in_a_hidden_tab_does_not_notify_its_view` (fails without the
-  change: `[hidden, shown]` notified), `tick_tests::a_tick_lands_on_the_shared_grid`.
+  change: `[hidden, shown]` notified), `tick_tests::a_tick_lands_on_the_shared_grid`,
+  `tick_tests::a_zero_interval_wakes_now`.
   `cargo test -p oneterm-state -p oneterm-workspace -p oneterm-terminal-view`: 42 + 390
-  (3 ignored) + 42 (3 ignored) passed.
+  (3 ignored) + 42 (3 ignored) passed; after the verification fixes
+  `cargo test -p oneterm-state -p oneterm-agent-ui -p oneterm-workspace`: 43 + 6 + 42
+  (3 ignored) passed.
+- Independent verification: PASS, `evidence/US-0145-verify.md` (findings F1-F7; F1, F3,
+  F4, F5, F7 addressed in the follow-up commit; F2 folded into the ranges above; F6 is
+  informational, a one-tick window after a tab switch that the switch frame covers).
 - Clippy `-D warnings`: clean with no feature, `oneterm-app/hotpath-profiling` and
   `oneterm-app/hotpath-profiling-alloc`.
 - Full gate: `CARGO_BUILD_JOBS=3 pwsh scripts/ci-local.ps1` (no `target/release`), 141
@@ -161,4 +192,14 @@ None. The gpui constraints are recorded in `docs/gui-layout.md` § Frames and re
   the other side of a vsync from the blink draws its own frame). TUI frame rates vary
   with the window's visibility on the desktop, so only back-to-back pairs compare. The
   sampler slows the thread it samples and folds inlined frames into their caller. No
-  manual GUI check beyond the measurement runs (terminal renders equal before/after).
+  manual GUI check beyond the measurement runs and the verifier's walk. Platform proof
+  waits for CI (macOS and Linux not run).
+
+## Handoff
+
+- State: implemented and independently verified (PASS); verification findings addressed on
+  `perf/idle-render`; not merged, not pushed.
+- Next owner / action: coordinator re-checks the follow-up commit, then merge; CI run for
+  platform proof; `harness.db` row (proposed in the evidence file) written by whoever owns
+  the database.
+- Blockers: none.

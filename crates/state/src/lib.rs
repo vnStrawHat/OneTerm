@@ -42,14 +42,20 @@ pub use services::AppServices;
 /// How long a repeating UI timer should sleep to wake on the next multiple of
 /// `interval` since the Unix epoch.
 ///
-/// Every timer that repaints the window (the cursor blink, the status-bar
-/// indicators) sleeps with this, so timers whose intervals divide each other
-/// wake together and gpui draws one frame for all of them instead of one each
-/// (`US-0145`). A plain `timer(interval)` loop starts wherever its entity was
-/// created and drifts by its own work every lap, so the blink and the clock
-/// used to land in different frames.
+/// Every timer that repaints an idle window (the cursor blink, the status-bar
+/// indicators, the Agent panel's relative times) sleeps with this, so timers
+/// whose intervals divide each other wake together and gpui draws one frame for
+/// all of them instead of one each (`US-0145`). Animations (the Agent panel's
+/// spinner) keep their own cadence. A plain `timer(interval)` loop starts
+/// wherever its entity was created and drifts by its own work every lap, so the
+/// blink and the clock used to land in different frames.
+///
+/// A zero `interval` has no grid: the answer is zero, wake now.
 pub fn until_next_tick(interval: std::time::Duration) -> std::time::Duration {
-    let interval_ns = interval.as_nanos().max(1);
+    if interval.is_zero() {
+        return std::time::Duration::ZERO;
+    }
+    let interval_ns = interval.as_nanos();
     let now_ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -83,5 +89,10 @@ mod tick_tests {
                 "{off} ms off the grid"
             );
         }
+    }
+
+    #[test]
+    fn a_zero_interval_wakes_now() {
+        assert_eq!(super::until_next_tick(Duration::ZERO), Duration::ZERO);
     }
 }

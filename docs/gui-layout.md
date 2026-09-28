@@ -213,12 +213,20 @@ The rules that follow from it:
 - **Fewer frames is the lever.** A notify costs a whole-window frame, so a view notifies
   only when what it draws changed. A terminal in a tab its group is not showing does not
   notify on output (the tab strip reads that view, so the window tracks it); showing the
-  tab re-renders it, because `set_active(true)` notifies the panel.
-- **Repainting timers share one grid.** The cursor blink and every status-bar indicator
-  sleep with `oneterm_state::until_next_tick`, which wakes on a multiple of the interval
-  on the wall clock, so the blink (500 ms), the clock (1 s) and the resource indicator
-  (2 s) land in one frame: an idle, focused window draws 2 frames a second, an unfocused
-  one 1.
+  tab re-renders it, because `set_active(true)` notifies the panel. What a removed frame
+  buys depends on the load: an idle or uncapped window draws fewer frames and spends less
+  CPU; a window already at its frame-rate cap under output spends the freed frames on the
+  shown terminal instead, which refreshes more often (smoother, lower latency) at no CPU
+  saving (`US-0145`: two-tab TUI, -51 % UI cycles uncapped, +39 % with twice the shown-tab
+  refreshes when capped).
+- **Repainting timers share one grid.** The cursor blink, every status-bar indicator and
+  the Agent panel's relative-time refresh sleep with `oneterm_state::until_next_tick`,
+  which wakes on a multiple of the interval on the wall clock, so the blink (500 ms), the
+  clock (1 s), the Agent panel (1 s) and the resource indicator (2 s) land in one frame:
+  an idle, focused window draws about 2 frames a second, an unfocused one about 1.25
+  (measured 2.04-2.11 and 1.23-1.25). Animations keep their own cadence (the Agent
+  panel's spinner, 120 ms, only while a card works); an Agent panel with no cards does not
+  tick.
 - **Do not cache the title bar or the dock area.** gpui does not replay a cached view's
   window-control hitboxes, so a cached title bar stops moving the window and its
   caption buttons stop working after its first reused frame. Re-rendering a cached view
