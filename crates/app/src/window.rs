@@ -53,7 +53,7 @@ pub(crate) fn open_window(
         })?;
 
         window
-            .update(cx, |root, window, cx| {
+            .update(cx, |_, window, cx| {
                 window.activate_window();
                 let elevated = oneterm_core::elevation::is_restricted();
                 if !elevated {
@@ -68,7 +68,6 @@ pub(crate) fn open_window(
                     show_crash_reports(
                         pending_crash_reports,
                         crate::crash_report::delete_pending_report,
-                        root,
                         window,
                         cx,
                     );
@@ -82,16 +81,17 @@ pub(crate) fn open_window(
                 // account's profile, so it has none of the user's settings. Say
                 // so once; the marker is still correct, because it comes from
                 // the token and not from the configuration.
+                // Deferred like the crash reports: the notification host is a
+                // `Root` plugin, and this closure holds the `Root`.
                 if elevated && oneterm_settings::UiConfig::global(cx).read(cx).persist_blocked {
-                    gpui_component::WindowExt::push_notification(
-                        window,
-                        oneterm_theme::notif_ext::notify(
+                    window.defer(cx, |window, cx| {
+                        let note = oneterm_theme::notif_ext::notify(
                             gpui_component::notification::NotificationType::Info,
                             "Settings could not be read for this account; this window is using the defaults.",
                             cx,
-                        ),
-                        cx,
-                    );
+                        );
+                        gpui_component::WindowExt::push_notification(window, note, cx);
+                    });
                 }
                 // Closing the main window quits the app. The workspace persists
                 // its final layout synchronously in its own release hook; gpui

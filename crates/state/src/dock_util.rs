@@ -68,7 +68,6 @@ fn visit_active_tabs(
                 visit_active_tabs(child, dock_area, cx, panels);
             }
         }
-        PaneRef::Tiles { .. } => {}
     }
 }
 

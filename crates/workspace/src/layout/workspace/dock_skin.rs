@@ -8,13 +8,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, AnyView, App, AppContext as _, Axis, Div, Empty, IntoElement as _, Pixels, Role,
-    SharedString, Size, Stateful, StatefulInteractiveElement as _, Window,
+    AnyElement, AnyView, App, AppContext as _, Axis, Div, Empty, IntoElement as _, Role,
+    SharedString, Stateful, StatefulInteractiveElement as _, Window,
 };
 use gpui_base::ResizeHandleContext;
 use gpui_component::dock::{
     BasePanelView, DockArea, DockAreaRenderer, DockContext, DockSkin, DropIndicator, NodeId,
-    PanelState, TabGroupContext, TabGroupRenderer, TileContext, TilesRenderer,
+    PanelState, TabGroupContext, TabGroupRenderer,
 };
 use oneterm_state::panel_names;
 
@@ -95,12 +95,6 @@ impl DockAreaRenderer for OneTermDockSkin {
             inner: self.inner.tab_group_renderer(),
         })
     }
-
-    fn tiles_renderer(&self) -> Rc<dyn TilesRenderer> {
-        Rc::new(OneTermTilesSkin {
-            inner: self.inner.tiles_renderer(),
-        })
-    }
 }
 
 struct OneTermTabGroupSkin {
@@ -175,52 +169,5 @@ impl TabGroupRenderer for OneTermTabGroupSkin {
         cx: &mut App,
     ) -> Option<AnyElement> {
         self.inner.render_empty(group, window, cx)
-    }
-}
-
-struct OneTermTilesSkin {
-    inner: Rc<dyn TilesRenderer>,
-}
-
-impl TilesRenderer for OneTermTilesSkin {
-    fn frame(&self, window: &mut Window, cx: &mut App) -> Stateful<Div> {
-        self.inner
-            .frame(window, cx)
-            .role(Role::Pane)
-            .aria_label("Terminal tiles")
-    }
-
-    fn tile_frame(&self, tile: &TileContext, window: &mut Window, cx: &mut App) -> Stateful<Div> {
-        self.inner.tile_frame(tile, window, cx)
-    }
-
-    fn render_drag_bar(&self, tile: &TileContext, window: &mut Window, cx: &mut App) -> AnyElement {
-        self.inner.render_drag_bar(tile, window, cx)
-    }
-
-    fn render_resize_handles(
-        &self,
-        tile: &TileContext,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> AnyElement {
-        self.inner.render_resize_handles(tile, window, cx)
-    }
-
-    fn panel_frame(&self, tile: &TileContext, window: &mut Window, cx: &mut App) -> Stateful<Div> {
-        self.inner.panel_frame(tile, window, cx)
-    }
-
-    fn render_overlay(
-        &self,
-        content: Size<Pixels>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Option<AnyElement> {
-        self.inner.render_overlay(content, window, cx)
-    }
-
-    fn grid_size(&self, cx: &App) -> Pixels {
-        self.inner.grid_size(cx)
     }
 }

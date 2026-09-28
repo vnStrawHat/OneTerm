@@ -40,9 +40,9 @@ rust-version = "1.96.0"
 gpui = { package = "gpui-pre", version = "0.3" }
 gpui_platform = { package = "gpui-pre-platform", version = "0.3", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 # GPUI Kit layers move together as one release family.
-gpui-base = "0.6"
-gpui-component = "0.6"
-gpui-kit-assets = "0.6"
+gpui-base = "0.7"
+gpui-component = "0.7"
+gpui-kit-assets = "0.7"
 
 # Internal crates
 oneterm-core = { path = "crates/core" }
