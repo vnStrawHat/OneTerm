@@ -2,6 +2,13 @@
 //!
 //! Design:
 //! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/graphics.md>
+//!
+//! Releasing a placement — through the sweep below or through
+//! [`MAX_PLACEMENTS`] eviction — also frees every extras entry its cells
+//! resolved to. A program that keeps re-sending the same image (a Sixel
+//! preview repainted every frame) therefore holds a small, bounded number of
+//! extras entries rather than one more per resend for the life of the
+//! terminal.
 
 use std::sync::Arc;
 
@@ -63,6 +70,9 @@ pub(crate) fn place(state: &mut State, image: DecodedSixel) -> Vec<ScrollReport>
         hyperlink: None,
         graphic: Some(id),
     });
+    // Tracked so releasing this placement can free every extras entry it
+    // owns, not just this one — `stamp` records the rest below.
+    state.graphics.track_extras(id, graphic_only);
     // A full extras table cannot name the image on any cell, so it is decoded
     // and handed out but never painted, until `RIS` empties the table.
     if graphic_only == ExtrasId::NONE && !state.graphics.unstamped_warned {
@@ -142,7 +152,12 @@ fn cells_for(pixels: u32, cell: u16) -> u16 {
 /// this is not an overwrite, so it must not clear the row's wrap flag the way
 /// a write to the last column does (deviation G1).
 fn stamp(state: &mut State, line: RowId, col: u16, cols: u16, id: GraphicId, only: ExtrasId) {
-    let State { grid, interner, .. } = state;
+    let State {
+        grid,
+        interner,
+        graphics,
+        ..
+    } = state;
     let mut row = grid.screen_mut().row_mut(line);
     for offset in 0..cols {
         let column = col.saturating_add(offset);
@@ -154,7 +169,12 @@ fn stamp(state: &mut State, line: RowId, col: u16, cols: u16, id: GraphicId, onl
         } else {
             let mut merged = *interner.resolve_extras(cell.extras_id());
             merged.graphic = Some(id);
-            interner.extras(&merged)
+            let merged_id = interner.extras(&merged);
+            // A cell that already carried a hyperlink merges into its own
+            // entry, distinct from `only`; track it too so it is not the one
+            // left behind when this placement is released.
+            graphics.track_extras(id, merged_id);
+            merged_id
         };
         row.repair(column, cell.with_extras(extras));
     }
@@ -182,9 +202,23 @@ pub(crate) fn sweep(state: &mut State) {
             continue;
         }
         state.graphics.placements.remove(index);
-        state.grid.anchors_mut().release(placement.anchor);
-        state.graphics.released.push(placement.id);
+        release(state, placement);
     }
+}
+
+/// Drop one placement's anchor, free every extras entry its cells resolved
+/// to, and queue the release event. Shared by the row-derived sweep above and
+/// [`evict_oldest`]: whichever one decided the placement is gone, nothing
+/// resolves to those entries any more, so the id space they held is free to
+/// reuse rather than outliving the image until `RIS`.
+fn release(state: &mut State, placement: Placement) {
+    state.grid.anchors_mut().release(placement.anchor);
+    if let Some(extras) = state.graphics.extras_by_graphic.remove(&placement.id) {
+        for extras_id in extras {
+            state.interner.extras.free(extras_id.0);
+        }
+    }
+    state.graphics.released.push(placement.id);
 }
 
 fn is_live(grid: &TerminalGrid, placement: Placement) -> bool {
@@ -211,12 +245,16 @@ pub(crate) fn drain_released(state: &mut State, out: &mut EventBatch) {
 }
 
 /// The oldest placement goes when the table is full, so a stream that emits an
-/// image per line frees the view's textures instead of leaking them.
+/// image per line frees the view's textures — and its extras entries —
+/// instead of leaking them. The path a same-position repaint takes: `stamp`
+/// overwrites the previous placement's cells directly, which keeps its row's
+/// `HAS_GRAPHIC` flag set and so keeps `sweep` from ever calling it dead; this
+/// bound is what still frees its extras entries, once 256 placements have
+/// piled up.
 fn evict_oldest(state: &mut State) {
     while state.graphics.placements.len() >= MAX_PLACEMENTS {
         let placement = state.graphics.placements.remove(0);
-        state.grid.anchors_mut().release(placement.anchor);
-        state.graphics.released.push(placement.id);
+        release(state, placement);
     }
 }
 

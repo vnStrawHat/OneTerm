@@ -1772,6 +1772,58 @@ fn repainting_an_implicit_link_does_not_grow_the_tables() {
     assert_eq!(session.term.interner().extras.entries(), 4);
 }
 
+/// A TUI or file manager that resends the same Sixel preview on every redraw
+/// used to take one extras entry per resend, permanently, until the
+/// 65,535-entry ceiling made every later link and image lose its cells too.
+#[test]
+fn repainting_a_sixel_image_does_not_grow_the_extras_table() {
+    const REPAINTS: usize = 70_000;
+    let mut session = Session::new(20, 4);
+    let frame: &[u8] = b"\x1b[H\x1bPq#0;2;100;0;0#0~\x1b\\";
+    for _ in 0..REPAINTS / 10_000 {
+        session.feed(&frame.repeat(10_000));
+    }
+
+    let entries = session.term.interner().extras.entries();
+    assert!(
+        entries < 500,
+        "extras table grew past a small, MAX_PLACEMENTS-bound size: {entries}"
+    );
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .graphic
+            .is_some(),
+        "the last resend still placed"
+    );
+
+    // A later explicit link still gets its cells.
+    session.feed(b"\x1b[2;1H\x1b]8;id=x;http://b\x07ok\x1b]8;;\x07\x1b[3;1H");
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(1, 0).extras_id())
+            .hyperlink
+            .is_some(),
+        "an explicit link placed after the resends still gets cells"
+    );
+
+    // A different image still gets its cells too.
+    session.feed(b"\x1b[3;1H\x1bPq#0;2;0;100;0#0~\x1b\\");
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(2, 0).extras_id())
+            .graphic
+            .is_some(),
+        "a distinct image placed after the resends still gets cells"
+    );
+}
+
 #[test]
 fn hyperlink_table_exhaustion_drops_the_attribute_and_logs_once() {
     // The ladder: reuse, insert, drop. The text still renders; the link is

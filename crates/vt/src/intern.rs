@@ -12,7 +12,12 @@
 //! * **Styles and extras never move.** The ladder is reuse, insert, or fall
 //!   back to id 0 with one warning — no renumbering sweep, ever, because a
 //!   render copy taken under the lock holds resolved values and ids that a
-//!   sweep could invalidate are the design's own worst hazard.
+//!   sweep could invalidate are the design's own worst hazard. An id an
+//!   [`InternTable`] hands out still never changes what it resolves to while
+//!   anything can reach it; an owner that can *prove* nothing does any more
+//!   (the graphics module does, on a placement's release) may hand the id
+//!   back with `InternTable::free`, which is not a sweep — no other id moves
+//!   or changes meaning, only the one slot the owner just gave up.
 //! * **The grapheme arena is collected**, because unbounded growth there is
 //!   attacker-reachable: a stream of unique multi-codepoint cells grows it
 //!   without bound. Collection is by remap, and grapheme ids live in the cell's
@@ -96,13 +101,24 @@ impl Extras {
 /// Content-hash interned table on the three-step no-sweep ladder.
 ///
 /// Step 1 reuses an interned value, step 2 inserts, and step 3 — the table is
-/// full — returns id 0 and warns once. An id, once issued, is valid for the
-/// life of the terminal; the extras table alone is emptied by `RIS`, which
-/// first blanks every cell that could hold one of its ids.
+/// full — returns id 0 and warns once. An id, once issued, resolves to the
+/// same value for as long as anything can still reach it. Two things end
+/// that early: `RIS`, which empties the extras table wholesale because it
+/// first blanks every cell that could hold one of its ids, and
+/// `InternTable::free`, which an owner calls one id at a time once it can
+/// prove that one id specifically is unreachable — the graphics module's use
+/// on a placement's release is the only caller today. A freed id's slot is
+/// the first one [`intern`](Self::intern) reuses, so an owner that keeps
+/// freeing what it is done with keeps the table's size bounded by what is
+/// live, not by how many values ever passed through it.
 #[derive(Debug)]
 pub struct InternTable<T> {
     entries: Vec<T>,
     index: FxHashMap<T, u16>,
+    /// Ids `free` released, waiting for [`intern`](Self::intern) to hand
+    /// them back out. Empty for a table nothing ever frees from (styles,
+    /// today).
+    free: Vec<u16>,
     exhausted: u32,
     warned: bool,
     name: &'static str,
@@ -119,6 +135,7 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
         Self {
             entries: vec![default],
             index,
+            free: Vec::new(),
             exhausted: 0,
             warned: false,
             name,
@@ -128,6 +145,12 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
     /// Never fails: a full table falls back to id 0.
     pub fn intern(&mut self, value: &T) -> u16 {
         if let Some(&id) = self.index.get(value) {
+            return id;
+        }
+        if let Some(id) = self.free.pop() {
+            self.entries[id as usize] = *value;
+            self.index.insert(*value, id);
+            self.debug_assert_integrity();
             return id;
         }
         if self.entries.len() < TABLE_LIMIT {
@@ -169,6 +192,37 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
         self.entries.push(default);
         self.index.clear();
         self.index.insert(default, 0);
+        self.free.clear();
+    }
+
+    /// Give back one id the caller has proven nothing resolves to any more,
+    /// so the next [`intern`](Self::intern) for a new value can reuse its
+    /// slot instead of growing the table. Id 0, the default, is not owned by
+    /// any one value and can never be freed.
+    ///
+    /// Until reused, the slot reads back as the default value rather than
+    /// keeping the stale one: a caller that still held this id past the
+    /// point it proved unreachable gets "nothing" instead of silently
+    /// resolving to whatever the next occupant turns out to be.
+    pub(crate) fn free(&mut self, id: u16) {
+        if id == 0 {
+            return;
+        }
+        let Some(&value) = self.entries.get(id as usize) else {
+            return;
+        };
+        debug_assert!(
+            !self.free.contains(&id),
+            "{} table id {} freed twice",
+            self.name,
+            id
+        );
+        if self.index.get(&value) == Some(&id) {
+            self.index.remove(&value);
+        }
+        self.entries[id as usize] = T::default();
+        self.free.push(id);
+        self.debug_assert_integrity();
     }
 
     /// Interned values, including the default at id 0.
@@ -184,8 +238,8 @@ impl<T: Copy + Eq + Hash + Default + fmt::Debug> InternTable<T> {
     fn debug_assert_integrity(&self) {
         debug_assert_eq!(
             self.entries.len(),
-            self.index.len(),
-            "{} table index and entries disagree",
+            self.index.len() + self.free.len(),
+            "{} table entries, index and free list disagree",
             self.name
         );
         debug_assert_eq!(

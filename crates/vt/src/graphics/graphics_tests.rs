@@ -435,6 +435,50 @@ fn one_extras_entry_per_image() {
     assert_eq!(session.offset(199, 399), Some((image.id, 399, 199)));
 }
 
+/// Two distinct images placed side by side never share an extras entry, even
+/// though both are graphic-only: identity is the fresh `GraphicId` `place`
+/// gives each one, not the pixels.
+#[test]
+fn two_different_images_stay_distinct() {
+    let mut session = Session::new(20, 5);
+    session.feed(&sixel("#0;2;100;0;0#0~")); // red
+    let red = session.one_image();
+    session.feed(b"\x1b[2;1H");
+    session.feed(&sixel("#0;2;0;100;0#0~")); // green
+    let green = session.one_image();
+
+    assert_ne!(red.id, green.id);
+    assert_eq!(session.term.placements().len(), 2);
+    assert_ne!(
+        session.graphic(0, 0),
+        session.graphic(1, 0),
+        "each image keeps its own extras entry"
+    );
+}
+
+/// Releasing a placement frees the extras entry its cells resolved to, so a
+/// later, different image reuses the slot instead of the table growing
+/// without bound on every resend.
+#[test]
+fn a_released_placements_extras_entry_is_reused() {
+    let mut session = Session::new(10, 5);
+    session.feed(b"\x1b[?1049h"); // alternate screen
+    session.feed(&sixel("\"1;1;16;16#0;2;100;0;0#0~"));
+    let before = session.term.interner().extras.entries();
+
+    // `ED 2` on the alternate screen is a row reset, which releases the
+    // placement and, with it, the extras entry it owned.
+    session.feed(b"\x1b[2J");
+    assert!(session.term.placements().is_empty());
+
+    session.feed(&sixel("\"1;1;16;16#0;2;0;0;100#0~")); // a different image
+    let after = session.term.interner().extras.entries();
+    assert_eq!(
+        after, before,
+        "the freed slot was reused, not a new one pushed"
+    );
+}
+
 /// R-02: an in-region scroll moves content between row ids, so the placement
 /// follows its **anchor** — not a `RowId` it once recorded.
 #[test]

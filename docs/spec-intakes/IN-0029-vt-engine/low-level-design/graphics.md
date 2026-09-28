@@ -150,6 +150,20 @@ whose cells are all overwritten is invisible while its placement is retained. It
 and, through the view, a retained texture, until the row is reset or eviction reclaims it — which is
 why `US-0081`'s texture store must tolerate up to `MAX_PLACEMENTS` live textures.
 
+**Release frees the extras entries too (`BUG-0081`).** The table slot the previous paragraph means is
+literal: every placement `place` makes is a fresh `GraphicId`, so a redraw loop that resends one
+image took one permanent extras entry per resend until `RIS` — the collateral `BUG-0079` found and
+fixed for repainted hyperlinks does not reach graphics, because a resent image is never the same
+`GraphicId` twice. What bounds it instead is release: `sweep`'s row-reset path and `MAX_PLACEMENTS`
+eviction both go through one `release` function that frees every extras entry the dying placement's
+cells resolved to — the graphic-only entry `place` stamps, and one more per distinct hyperlink a
+covered cell already carried when `stamp` merged it in — before the next image can reuse the slot.
+Nothing scans the grid to prove an entry is free: each placement's own extras ids are tracked as
+they are created, in `GraphicsState::extras_by_graphic`, and consulted only at that placement's own
+release. A redraw loop whose `stamp` keeps overwriting the same still-`HAS_GRAPHIC` rows (the false
+positive above) is not caught by the sweep at all; `MAX_PLACEMENTS` eviction is what bounds it in
+that case, so the table plateaus a couple of entries past `MAX_PLACEMENTS`, never at 65,535.
+
 **Bound: `MAX_PLACEMENTS = 256`, oldest released first.** An unbounded placement table plus a linear
 sweep is a denial-of-service surface, so the table is a ring: the 257th image releases the first and
 emits its `GraphicReleased`. Note what this does **not** bound: `MAX_DIMENSION` allows one image to

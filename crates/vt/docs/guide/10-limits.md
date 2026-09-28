@@ -61,6 +61,16 @@ renders without them. A link without `id=` is keyed by its URI, so a program
 that repaints the same link every frame holds one entry, not one per frame.
 `RIS` empties the hyperlink table and the extras table behind it.
 
+A resent image works the other way: every placement is a fresh id, so a
+program that redraws the same Sixel preview every frame does not dedupe it the
+way a repainted link does. What keeps the extras table bounded instead is
+release: when a placement dies -- its row is reset, its anchor is trimmed out
+of history, or it ages out past the live-placement ceiling -- every extras
+entry its cells resolved to is freed and the next image reuses the slot. A
+program whose redraws keep overwriting the same still-`HAS_GRAPHIC` rows
+without ever resetting them accumulates placements up to that ceiling before
+release starts reclaiming, not one entry forever per resend.
+
 You normally never name any of it. The snapshot resolves a cell's hyperlink for
 you under the lock -- `SnapshotState::hyperlink` -- and a row's clusters are
 copied into the row itself. `Terminal::interner` is there for a consumer reading

@@ -243,6 +243,15 @@ carry no API change at all. Such a release says so below rather than being omitt
   those ids, so no live `ExtrasId` changes meaning.
 - A Sixel image placed while the extras table is full is still decoded and handed out but covers
   no cell, as before; it now logs a warning saying so, once per terminal.
+- **Behaviour, no signature: releasing an image's placement now frees the extras entries it
+  held.** Every placement was a fresh id, so a program that resends the same Sixel preview every
+  frame -- an Ink-style redraw, a file manager preview -- took one permanent extras entry per
+  resend; after 65,534 images the table was full and no later link or image got its cells, until
+  `RIS`. Releasing a placement (a row reset, a history trim, a reflow that drops the anchor, or
+  aging past the live-placement ceiling) now frees every extras entry its cells resolved to, so
+  the next image reuses the slot. A headless measure of 70,000 resends of one image: extras
+  entries bounded near the live-placement ceiling instead of filling to 65,535, and the last
+  resend, a later explicit `id=` link, and a later distinct image all still get their cells.
 
 ### Removed
 

@@ -180,6 +180,33 @@ fn one_extras_entry_per_image_not_per_cell() {
 }
 
 #[test]
+fn freeing_an_entry_lets_intern_reuse_its_slot() {
+    let mut extras = ExtrasTable::default();
+    let a = extras.intern(&Extras {
+        graphic: Some(GraphicId(1)),
+        ..Extras::NONE
+    });
+    let before = extras.entries();
+
+    extras.free(a);
+    // The freed slot reads back as the default until it is reused, not the
+    // stale value: a caller that still held `a` past the point it was proven
+    // unreachable sees "nothing" rather than someone else's entry.
+    assert_eq!(extras.resolve(a), &Extras::NONE);
+
+    let b = extras.intern(&Extras {
+        graphic: Some(GraphicId(2)),
+        ..Extras::NONE
+    });
+    assert_eq!(b, a, "the freed id is the first one reused");
+    assert_eq!(extras.entries(), before, "no new slot was pushed");
+
+    // Freeing id 0, the default, is a no-op: it is not owned by any value.
+    extras.free(0);
+    assert_eq!(extras.entries(), before);
+}
+
+#[test]
 fn extras_table_exhaustion_falls_back_to_no_extras() {
     let _guard = exhaustion_guard();
     let mut extras = ExtrasTable::default();
