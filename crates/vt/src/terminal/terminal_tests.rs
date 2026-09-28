@@ -1772,6 +1772,67 @@ fn repainting_an_implicit_link_does_not_grow_the_tables() {
     assert_eq!(session.term.interner().extras.entries(), 4);
 }
 
+/// A TUI or file manager that resends the same Sixel preview on every redraw
+/// used to take one extras entry per resend, permanently, until the
+/// 65,535-entry ceiling made every later link and image lose its cells too.
+///
+/// The extras table's own periodic sweep bounds this near the sweep
+/// interval plus however many values are genuinely live at once (roughly
+/// 4,100 here), not a small constant and not a mark that keeps climbing:
+/// `since_sweep` counts a free-list reuse the same as new table growth, so a
+/// sweep runs once per `TABLE_SWEEP_INTERVAL` *new values handed out*,
+/// whichever slot they land in, and the table settles there rather than
+/// growing every cycle (see `resending_1_5_million_times_keeps_the_extras_table_near_the_sweep_interval`
+/// for the same bound at a much larger resend count).
+#[test]
+fn repainting_a_sixel_image_does_not_grow_the_extras_table() {
+    const REPAINTS: usize = 70_000;
+    let mut session = Session::new(20, 4);
+    let frame: &[u8] = b"\x1b[H\x1bPq#0;2;100;0;0#0~\x1b\\";
+    for _ in 0..REPAINTS / 10_000 {
+        session.feed(&frame.repeat(10_000));
+    }
+
+    let entries = session.term.interner().extras.entries();
+    assert!(
+        entries < 5_000,
+        "extras table grew past the sweep interval's practical bound: {entries}"
+    );
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .graphic
+            .is_some(),
+        "the last resend still placed"
+    );
+
+    // A later explicit link still gets its cells.
+    session.feed(b"\x1b[2;1H\x1b]8;id=x;http://b\x07ok\x1b]8;;\x07\x1b[3;1H");
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(1, 0).extras_id())
+            .hyperlink
+            .is_some(),
+        "an explicit link placed after the resends still gets cells"
+    );
+
+    // A different image still gets its cells too.
+    session.feed(b"\x1b[3;1H\x1bPq#0;2;0;100;0#0~\x1b\\");
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(2, 0).extras_id())
+            .graphic
+            .is_some(),
+        "a distinct image placed after the resends still gets cells"
+    );
+}
+
 #[test]
 fn hyperlink_table_exhaustion_drops_the_attribute_and_logs_once() {
     // The ladder: reuse, insert, drop. The text still renders; the link is
@@ -1805,10 +1866,13 @@ fn hyperlink_table_exhaustion_drops_the_attribute_and_logs_once() {
     );
 }
 
-/// A full extras table leaves an image with no cell to name it; `RIS` empties
-/// the table, so images place again.
+/// A table stuffed with entries nothing references any more recovers on its
+/// own, through `State::intern_extras`'s sweep-and-retry at the exhausted
+/// step -- it does not have to wait for `RIS`. The entries below are
+/// synthetic and never written to any cell, so the live-set scan finds every
+/// one of them dead; `RIS` still empties the table unconditionally on top.
 #[test]
-fn ris_empties_a_full_extras_table_and_images_place_again() {
+fn a_table_full_of_dead_entries_recovers_via_sweep_and_retry() {
     let mut session = Session::new(20, 4);
     let mut index = 0u64;
     while session.term.interner().extras.entries() < 65_535 {
@@ -1832,16 +1896,328 @@ fn ris_empties_a_full_extras_table_and_images_place_again() {
             .graphic
     };
     session.feed(sixel);
-    assert_eq!(
-        graphic_at(&session),
-        None,
-        "no extras id left for the image"
+    assert!(
+        graphic_at(&session).is_some(),
+        "the sweep reclaims the dead entries, so the image places without RIS"
     );
+    // `entries()` is a high-water mark (freeing never shrinks the backing
+    // table), so it stays at 65,535; what changed is that the slot the
+    // image's id landed in was freed and reused, not that the table grew.
+    assert_eq!(session.term.interner().extras.entries(), 65_535);
 
     session.feed(b"\x1bc");
     assert_eq!(session.term.interner().extras.entries(), 1);
     session.feed(sixel);
     assert!(graphic_at(&session).is_some());
+}
+
+/// Fill the extras table to `entries() == 65_535` with values written onto
+/// real cells, one per cell, starting at row **1** and leaving row 0
+/// entirely untouched (the default cursor's home row, so a caller can still
+/// place something there without `stamp` seeing a pre-existing extras id and
+/// taking its merge path instead of the plain one). Every filled entry is
+/// genuinely live, so a sweep cannot reclaim any of it. The terminal must
+/// have at least 65,534 cells outside row 0 (`cols * (rows - 1)`).
+fn fill_extras_table_with_live_entries(session: &mut Session) {
+    let state = session.term.state_for_tests();
+    let cols = state.grid.screen().cols();
+    let mut index = 0u64;
+    while state.interner.extras.entries() < 65_535 {
+        let id = state.interner.extras.intern(&crate::intern::Extras {
+            graphic: Some(crate::intern::GraphicId(u64::MAX - index)),
+            ..crate::intern::Extras::NONE
+        });
+        let row_index = (index / cols as u64) as u16 + 1;
+        let col = (index % cols as u64) as u16;
+        let row_id = state.grid.screen().row_of_index(row_index);
+        let mut row = state.grid.screen_mut().row_mut(row_id);
+        let cell = row.cells()[col as usize].with_extras(crate::intern::ExtrasId(id));
+        row.repair(col, cell);
+        index += 1;
+    }
+}
+
+/// T1 (third adversarial pass): `intern_extras`'s sweep-and-retry, when the
+/// table is full of entries a real cell still references, must not become a
+/// full grid scan on **every** failing call. Nothing can ever be reclaimed
+/// from a table that is genuinely live-full, so an unrated retry turned an
+/// O(1) fallback (what `main` did) into an O(history) one, once per attempt,
+/// under a hostile stream that keeps resending distinct images against a
+/// live-full table.
+#[test]
+fn intern_extras_bounds_its_scan_rate_when_the_table_is_live_full() {
+    let mut session = Session::new(300, 220); // 66,000 cells, more than 65,535
+    fill_extras_table_with_live_entries(&mut session);
+
+    const ATTEMPTS: u32 = 1_000;
+    let swept_before = session.term.interner().extras.swept();
+    let start = std::time::Instant::now();
+    for _ in 0..ATTEMPTS {
+        session.feed(b"\x1bPq#0;2;100;0;0#0~\x1b\\"); // a fresh GraphicId, so a genuinely new value every time
+    }
+    let elapsed = start.elapsed();
+    let swept = session.term.interner().extras.swept() - swept_before;
+
+    assert_eq!(
+        session.term.interner().extras.exhausted(),
+        ATTEMPTS,
+        "each failing intern must count exactly once, not once for the first attempt and once for the retry"
+    );
+    let max_sweeps = ATTEMPTS.div_ceil(4_096) + 1;
+    assert!(
+        swept <= max_sweeps,
+        "swept {swept} times over {ATTEMPTS} failed attempts against a live-full table, expected at most {max_sweeps}"
+    );
+    // The sweep count above is the robust assertion; this is a generous
+    // backstop, loose enough to hold in an unoptimised debug build (where
+    // `cargo test` runs it) while still being far short of what the bug
+    // this regression targets would take: 1,000 full O(history) scans of a
+    // 66,000-cell grid, one per failing attempt, instead of at most two.
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "took {elapsed:?} for {ATTEMPTS} attempts; a full grid scan on every one would take far longer"
+    );
+}
+
+/// T5 (third adversarial pass): a table full of entries a real cell still
+/// references leaves a new image **unplaced**, with the one-time warning --
+/// the sweep-and-retry cannot reclaim what is genuinely still live -- and
+/// only `RIS` recovers it. Restores the terminal-level coverage the old
+/// `ris_empties_a_full_extras_table_and_images_place_again` had before its
+/// replacement (`a_table_full_of_dead_entries_recovers_via_sweep_and_retry`)
+/// started filling the table with *dead* synthetic entries instead, which a
+/// sweep reclaims without needing `RIS` at all.
+#[test]
+fn a_table_full_of_live_entries_leaves_an_image_unplaced_until_ris() {
+    let mut session = Session::new(300, 220);
+    fill_extras_table_with_live_entries(&mut session);
+
+    let sixel: &[u8] = b"\x1bPq#0;2;100;0;0#0~\x1b\\";
+    session.feed(sixel);
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .graphic
+            .is_none(),
+        "a table full of live entries leaves the image unplaced"
+    );
+    assert_eq!(session.term.interner().extras.exhausted(), 1);
+
+    session.feed(b"\x1bc"); // RIS
+    assert_eq!(session.term.interner().extras.entries(), 1);
+    session.feed(sixel);
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .graphic
+            .is_some(),
+        "RIS recovers it"
+    );
+}
+
+/// U1 (fourth adversarial pass): a live-full table that later goes mostly
+/// dead must still recover on its own within one sweep interval, not stay
+/// stranded until `RIS`. This is the "never stranded" property S2 fixed and
+/// T1 preserved: `try_intern`'s exhausted branch counts its own miss toward
+/// `since_sweep`, same as a push or a reuse, so a run of failing calls
+/// against a live-full table still makes the next sweep due. Drop that one
+/// line and every failing call after the due sweep is consumed goes
+/// uncounted forever -- `needs_sweep()` never fires again, and a later
+/// die-off is never noticed until `RIS`.
+#[test]
+fn a_live_full_table_that_goes_mostly_dead_still_recovers_without_ris() {
+    let mut session = Session::new(300, 220);
+    fill_extras_table_with_live_entries(&mut session);
+
+    let sixel: &[u8] = b"\x1bPq#0;2;100;0;0#0~\x1b\\";
+    let placed = |session: &Session| {
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .graphic
+            .is_some()
+    };
+
+    // Filling never sweeps (it interns straight through the backdoor, not
+    // through `State::intern_extras`), so a sweep is already due the moment
+    // the fill loop stops. Consume it with a handful of failing images --
+    // the table is still entirely live, so this sweep reclaims nothing and
+    // every one of these still fails.
+    for _ in 0..10 {
+        session.feed(sixel);
+    }
+    assert!(!placed(&session), "still live-full after the warm-up");
+
+    // Kill nearly every filled entry by resetting the rows the filler wrote
+    // (row 0 is left alone -- the probe below places its image there).
+    // Deliberately not `CSI 2 J`: on the primary screen that scrolls the
+    // occupied rows into scrollback instead of discarding them, which the
+    // mark-and-sweep walk still finds live -- it would not kill anything.
+    session
+        .term
+        .state_for_tests()
+        .grid
+        .screen_mut()
+        .reset_rows(1..220);
+
+    // `TABLE_SWEEP_INTERVAL` (`crates/vt/src/intern.rs`) is private; 4,096 is
+    // its value, kept in sync by `intern_extras_bounds_its_scan_rate_when_the_table_is_live_full`
+    // above, which asserts against the same number from the other direction.
+    const TABLE_SWEEP_INTERVAL: u32 = 4_096;
+    let swept_before = session.term.interner().extras.swept();
+    let mut placed_at = None;
+    for attempt in 1..=(TABLE_SWEEP_INTERVAL + 1) {
+        session.feed(sixel);
+        if placed(&session) {
+            placed_at = Some(attempt);
+            break;
+        }
+    }
+    let swept = session.term.interner().extras.swept() - swept_before;
+
+    assert!(
+        placed_at.is_some_and(|attempt| attempt <= TABLE_SWEEP_INTERVAL + 1),
+        "the image never placed within {} attempts after the die-off -- the table is stuck \
+         until RIS",
+        TABLE_SWEEP_INTERVAL + 1
+    );
+    assert_eq!(
+        swept, 1,
+        "exactly one sweep should have run to notice the die-off and reclaim it"
+    );
+}
+
+/// R1 (second adversarial pass, S1): the extras value whose own creation
+/// crosses the sweep threshold must keep its own cell. Sweeping *after*
+/// interning found the fresh value unreferenced (nothing had written it
+/// anywhere yet) and freed it out from under the caller about to use it.
+/// Each link is its own `feed`, so a per-`feed` integrity walk would see a
+/// mis-freed id before a later reuse could hide it.
+#[test]
+fn r1_the_value_that_triggers_a_sweep_keeps_its_own_cell() {
+    let mut session = Session::new(20, 5);
+    let top = session.term.screen().row_of_index(0);
+    for i in 0..4_200u32 {
+        session.feed(format!("\x1b]8;;http://x/{i}\x07x\x1b]8;;\x07\r\n").as_bytes());
+    }
+    let link_at = |session: &Session, i: u32| {
+        let row = top + u64::from(i);
+        let cell = session.term.screen().row(row).cell(0);
+        session
+            .term
+            .interner()
+            .resolve_extras(cell.extras_id())
+            .hyperlink
+            .and_then(|id| session.term.interner().hyperlinks.resolve(id))
+            .map(|link| link.uri.to_string())
+    };
+    // A sweep triggers once around the 4,096th distinct link; every link in
+    // this tail, including whichever one's own creation crossed the
+    // threshold, must resolve to its own URI, never a later one's.
+    for i in 4_090..4_200u32 {
+        assert_eq!(
+            link_at(&session, i).as_deref(),
+            Some(format!("http://x/{i}")).as_deref(),
+            "link {i}"
+        );
+    }
+}
+
+/// R2 (second adversarial pass, S1): the same hole on `place`'s side. 4,200
+/// distinct links all written into one cell, then overwritten with plain
+/// text -- so every one of them is genuinely dead by the time an image is
+/// placed there next -- must not let whichever sweep reclaims them also
+/// free the image's own just-created entry.
+#[test]
+fn r2_sweeping_to_make_room_never_frees_the_new_images_own_entry() {
+    let mut session = Session::new(10, 5);
+    for i in 0..4_200u32 {
+        session.feed(format!("\x1b[1;1H\x1b]8;;http://y/{i}\x07x\x1b]8;;\x07").as_bytes());
+    }
+    // Overwrite that cell with plain text: none of the 4,200 links above are
+    // referenced by any cell any more, so whichever sweep is due has plenty
+    // to reclaim right as the image below is placed.
+    session.feed(b"\x1b[1;1H \x1b[1;1H");
+    session.feed(b"\x1bPq#0;2;100;0;0#0~\x1b\\");
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .graphic
+            .is_some(),
+        "the image's own entry must survive whatever sweep its own creation triggered"
+    );
+}
+
+/// R4 (second adversarial pass, S4): a screen's cells and its saved cursor's
+/// pen (set by entering the alternate screen) must survive sweeps triggered
+/// entirely by activity on the *other*, currently active screen --
+/// `collect_live_extras_ids` walks both screens, not only the active one.
+#[test]
+fn r4_the_other_screens_cells_and_saved_pen_survive_sweeps_on_the_active_screen() {
+    let mut session = Session::new(10, 5);
+    session.feed(b"\x1b]8;;http://keep.example\x07AAA\x1b]8;;\x07");
+    session.feed(b"\x1b[?1049h"); // enter the alternate screen; primary's cursor is saved
+    for i in 0..9_000u32 {
+        session.feed(format!("\x1b]8;;http://alt/{i}\x07x\x1b]8;;\x07").as_bytes());
+    }
+    session.feed(b"\x1b[?1049l"); // back to the primary
+    session.feed(b"C");
+
+    let link_at = |session: &Session, col: u16| {
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, col).extras_id())
+            .hyperlink
+            .and_then(|id| session.term.interner().hyperlinks.resolve(id))
+            .map(|link| link.uri.to_string())
+    };
+    for col in 0..3u16 {
+        assert_eq!(
+            link_at(&session, col).as_deref(),
+            Some("http://keep.example"),
+            "col {col}"
+        );
+    }
+}
+
+/// The bound this table's own sweep actually promises: with `since_sweep`
+/// counting free-list reuses as well as pushes, the table settles to
+/// roughly `interval + live` and stays there, not a high-water mark that
+/// keeps climbing. 1,500,000 resends is large enough to show that directly:
+/// counting growth alone left the table filling and going silent well
+/// inside this range.
+#[test]
+fn resending_1_5_million_times_keeps_the_extras_table_near_the_sweep_interval() {
+    const REPAINTS: usize = 1_500_000;
+    let mut session = Session::new(20, 4);
+    let frame: &[u8] = b"\x1b[H\x1bPq#0;2;100;0;0#0~\x1b\\";
+    for _ in 0..REPAINTS / 10_000 {
+        session.feed(&frame.repeat(10_000));
+    }
+
+    let entries = session.term.interner().extras.entries();
+    assert!(
+        entries < 5_000,
+        "extras table did not settle near the sweep interval: {entries}"
+    );
+    assert_eq!(session.term.interner().extras.exhausted(), 0);
+    assert!(
+        session
+            .term
+            .interner()
+            .resolve_extras(session.cell(0, 0).extras_id())
+            .graphic
+            .is_some(),
+        "the last resend still placed"
+    );
 }
 
 #[test]

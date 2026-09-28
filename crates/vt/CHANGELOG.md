@@ -243,6 +243,31 @@ carry no API change at all. Such a release says so below rather than being omitt
   those ids, so no live `ExtrasId` changes meaning.
 - A Sixel image placed while the extras table is full is still decoded and handed out but covers
   no cell, as before; it now logs a warning saying so, once per terminal.
+- **Behaviour, no signature: the extras table now sweeps entries nothing references, instead of
+  only growing until `RIS`.** Every image placement is a fresh id, so a program that resends the
+  same Sixel preview every frame -- an Ink-style redraw, a file manager preview -- took one
+  permanent extras entry per resend; after 65,534 images the table was full and no later link or
+  image got its cells, until `RIS`. Past a threshold of new entries since the last sweep, the
+  table now reads every extras id that both screens' whole history, and the pen and erase cell of
+  both cursors, can still resolve, and frees every id that scan did not find; the next value
+  interned reuses a freed slot before the table grows further. No other id is renumbered. A
+  placement's release (an eviction, a history trim, an `IL`/`SD` that splits an image outside its
+  own tracked extent) does **not** by itself free anything -- three earlier attempts got this wrong,
+  each found by adversarial verification before release: the first freed on release and recycled a
+  still-referenced id into whatever was interned next, turning a released image's surviving cells
+  into an unrelated link; the second swept *after* interning and could free the very id it had just
+  handed back before the caller wrote it anywhere, and counted only new-table-growth toward its own
+  trigger, so the table filled and then stopped sweeping at all, for good, about eight times later
+  than the original bug; the third's fix for that -- sweep once and retry when the table looks full
+  -- had no rate limit, so a table genuinely full of still-referenced entries turned every single
+  later intern into a full scan of the terminal's whole history, an `O(1)` fallback under `main`
+  becoming tens of milliseconds per resend, and tens of seconds for ten thousand of them, under the
+  terminal lock the UI also needs. A headless measure of one image resent 70,000 and 1,500,000
+  times: extras entries settle near the sweep interval (about 4,100) in both cases and the last
+  resend always still places, instead of filling the 65,535-entry ceiling either quickly (the
+  original bug) or eventually (the first two attempts); the same measure against a table filled
+  with 65,535 entries each still referenced by a real cell, over 10,000 further resends, drops from
+  10,001 scans and about a minute to 3 scans and about 25 ms.
 
 ### Removed
 

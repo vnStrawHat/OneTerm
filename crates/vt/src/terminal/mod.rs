@@ -47,7 +47,7 @@ use crate::grid::{
     AnchorId, Charset, DEFAULT_SCROLLBACK, Pos, RowId, Screen, Size, TerminalGrid, Viewport,
 };
 use crate::input::{KeyEvent, KeyMods, KeySpec};
-use crate::intern::Interner;
+use crate::intern::{Extras, ExtrasId, Interner};
 use crate::parser::Parser;
 use crate::reflow::{ResizeOutcome, ResizePolicy};
 use crate::selection::{Selection, SelectionKind, SelectionRange, Side};
@@ -223,6 +223,87 @@ pub(crate) struct State {
     pub(crate) dispatched: bool,
 }
 
+impl State {
+    /// Intern `value` into the extras table, sweeping first if enough new
+    /// entries have piled up since the last sweep.
+    ///
+    /// Sweeping **before** interning, not after, is load-bearing: `value` is
+    /// not yet held by any cell or pen at the point this function is called
+    /// (both callers write the id it returns right after), so a sweep run
+    /// after interning would find that brand-new id unreferenced and free
+    /// it out from under the caller about to use it -- silently in release,
+    /// or caught by the paranoid `is_free` check in debug. Sweeping first
+    /// means every id already handed out is provably in a cell or on a pen
+    /// by the time the live-set scan reads the grid, and the value about to
+    /// be interned does not exist yet to be mis-swept.
+    ///
+    /// On the miss where the table is still full after that -- every id
+    /// live, none of them this table's own soon-to-exist one -- a **second**
+    /// rework's own bug lived here: sweeping and retrying unconditionally on
+    /// every such miss turned each one into a full grid scan, because a
+    /// table full of live entries has nothing to free and the next miss
+    /// does the same again -- an O(1) fallback under `main` became O(history)
+    /// per resend under a hostile stream that keeps the table live-full.
+    /// `try_intern`'s own failure still advances `since_sweep`, so the fix is
+    /// to trust the same interval here too: retry only when `needs_sweep`
+    /// says another sweep is due, which bounds the extra scan to once per
+    /// `TABLE_SWEEP_INTERVAL` failed attempts, not once per attempt, while a
+    /// table that does have something to reclaim still recovers within one
+    /// interval's worth of misses -- it can never be stranded at id 0 for
+    /// good, only for a bounded number of attempts at a time.
+    ///
+    /// The path every hot `interner.extras(..)` call site (`place`'s
+    /// graphic-only entry, `set_hyperlink`) should go through instead of
+    /// calling `interner.extras` directly: checking once per call, rather
+    /// than once per `feed`, is what keeps one `feed` carrying thousands of
+    /// resends (a full-screen repaint arriving in one read) from creating
+    /// far more entries than the sweep interval before anything looks at
+    /// whether they are still referenced. `stamp`'s rare merged hyperlink-
+    /// and-graphic entry calls `interner.extras` directly instead: it is
+    /// inside a loop already borrowing `self.grid` for the row it is
+    /// writing, and a live-set scan needs `self.grid` on its own, so the two
+    /// calls cannot interleave without restructuring that loop. That call
+    /// always writes its id to the cell it just read from in the same loop
+    /// iteration, before anything else can intern through this function and
+    /// possibly sweep, so it needs no sweep of its own; `feed`'s own
+    /// end-of-batch check is the backstop that keeps its share of
+    /// `since_sweep` from going unswept indefinitely.
+    pub(crate) fn intern_extras(&mut self, value: &Extras) -> ExtrasId {
+        self.sweep_extras_if_due();
+        if let Some(id) = self.interner.extras.try_intern(value) {
+            return ExtrasId(id);
+        }
+        // The table looked genuinely full. `try_intern`'s own miss already
+        // counted toward `since_sweep`, so retrying only when another sweep
+        // is due -- not on every failed call -- still cannot go uncounted
+        // forever, and it is the difference between an O(1) fallback and an
+        // O(history) one on a table a hostile stream keeps live-full.
+        if self.interner.extras.needs_sweep() {
+            self.sweep_extras();
+            if let Some(id) = self.interner.extras.try_intern(value) {
+                return ExtrasId(id);
+            }
+        }
+        // Exactly one exhaustion recorded for this call, whether or not a
+        // retry above was attempted -- `try_intern` itself never counts it,
+        // so there is nothing to double-count.
+        self.interner.extras.record_exhausted();
+        ExtrasId::NONE
+    }
+
+    /// Sweep the extras table if its own interval says it is due.
+    fn sweep_extras_if_due(&mut self) {
+        if self.interner.extras.needs_sweep() {
+            self.sweep_extras();
+        }
+    }
+
+    fn sweep_extras(&mut self) {
+        let live = self.grid.live_extras_ids();
+        self.interner.extras.sweep_unreferenced(&live);
+    }
+}
+
 /// The VT engine.
 pub struct Terminal {
     parser: Parser,
@@ -319,6 +400,14 @@ impl Terminal {
         // liveness is derived from the rows the batch left behind.
         graphics::sweep(&mut self.state);
         graphics::drain_released(&mut self.state, batch);
+        // The extras table's own sweep: rare (`needs_sweep` is an O(1) counter
+        // check), and correct only because `live_extras_ids` reads every cell
+        // that can carry an id rather than trusting any one call site's
+        // bookkeeping about what it released.
+        if self.state.interner.extras.needs_sweep() {
+            let live = self.state.grid.live_extras_ids();
+            self.state.interner.extras.sweep_unreferenced(&live);
+        }
         if self.state.dispatched {
             batch.push_repaint();
         }

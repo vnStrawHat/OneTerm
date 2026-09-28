@@ -61,10 +61,32 @@ renders without them. A link without `id=` is keyed by its URI, so a program
 that repaints the same link every frame holds one entry, not one per frame.
 `RIS` empties the hyperlink table and the extras table behind it.
 
+A resent image works the other way: every placement is a fresh id, so a
+program that redraws the same Sixel preview every frame does not dedupe it the
+way a repainted link does, and releasing the old placement does not by itself
+free its entry either -- a released placement's cells can still be on screen
+or in scrollback (an image evicted while 256 others are live, or an `IL`/`SD`
+that pushed part of one outside its own tracked extent, both leave real cells
+behind). What keeps the extras table bounded is its own periodic sweep: past
+a threshold of new entries handed out since the last one -- counting a reused
+slot the same as a new one, so the table cannot fill up while quietly no
+longer counting -- it reads every cell that can carry an extras id -- both
+screens' whole history, and the pen and erase cell of both cursors -- and
+frees exactly the ids that scan did not find. The table settles near that
+threshold plus however many values are genuinely live at once, rather than
+growing by one entry per resend. If the table is ever genuinely full of
+values still in use -- nothing left for a sweep to reclaim -- retrying costs
+one more scan, but only once per that same threshold's worth of failed
+attempts, not once per attempt: a program can still make each new link or
+image fall back to plain text or an unpainted image, but it cannot turn
+every failing one into a full scan of your history.
+
 You normally never name any of it. The snapshot resolves a cell's hyperlink for
 you under the lock -- `SnapshotState::hyperlink` -- and a row's clusters are
 copied into the row itself. `Terminal::interner` is there for a consumer reading
-the grid directly rather than through a snapshot.
+the grid directly rather than through a snapshot; such a consumer must resolve
+an `ExtrasId` -- `Cell::extras_id()` is public -- only while it still holds
+that borrow, never cache it, because a later sweep can free it.
 
 ## The counters
 

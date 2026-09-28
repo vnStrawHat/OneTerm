@@ -2,6 +2,14 @@
 //!
 //! Design:
 //! <https://github.com/vnStrawHat/OneTerm/blob/main/docs/spec-intakes/IN-0029-vt-engine/low-level-design/graphics.md>
+//!
+//! Releasing a placement here (the sweep below, or [`MAX_PLACEMENTS`]
+//! eviction) does **not** free the extras entry its cells named: release
+//! means only "this table no longer tracks the placement" — cells in
+//! scrollback, or past `IL`/`SD` split off a tracked extent, can still name
+//! it. What reclaims those entries is the extras table's own periodic sweep
+//! (`Interner::extras`, triggered from `Terminal::feed`), which reads every
+//! cell before it frees anything.
 
 use std::sync::Arc;
 
@@ -59,7 +67,7 @@ pub(crate) fn place(state: &mut State, image: DecodedSixel) -> Vec<ScrollReport>
     // R-21: **one** interned extras entry for the whole image. A covered cell
     // that already carried a hyperlink keeps it and gets its own entry, which
     // is rare enough not to threaten the id space.
-    let graphic_only = state.interner.extras(&Extras {
+    let graphic_only = state.intern_extras(&Extras {
         hyperlink: None,
         graphic: Some(id),
     });
@@ -154,6 +162,10 @@ fn stamp(state: &mut State, line: RowId, col: u16, cols: u16, id: GraphicId, onl
         } else {
             let mut merged = *interner.resolve_extras(cell.extras_id());
             merged.graphic = Some(id);
+            // Not `State::intern_extras`: `row` already borrows `grid`, and
+            // the sweep it could trigger needs `grid` on its own. This is
+            // the rare path (a covered cell already carrying a hyperlink);
+            // `feed`'s own end-of-batch check is its backstop.
             interner.extras(&merged)
         };
         row.repair(column, cell.with_extras(extras));
@@ -220,13 +232,18 @@ fn evict_oldest(state: &mut State) {
     }
 }
 
-/// The debug invariant: inside a live placement's extent, every `GraphicId` a
-/// cell carries resolves to a live placement.
+/// The debug invariant: inside a live placement's own extent, every
+/// `GraphicId` a cell carries resolves to a live placement.
 ///
-/// Scoped to those extents on purpose. A cell *outside* every extent can hold a
-/// stale id — an `SD` or `IL` can push part of an image below its own anchor's
-/// extent — and that is inert rather than wrong: the painter resolves the id
-/// through the placement table and paints nothing when it is gone.
+/// Scoped to that placement's own **columns**, not the whole row: two
+/// placements can share a row (one narrower than the screen next to
+/// another), and `HAS_GRAPHIC` is a row flag, sticky until `Row::reset`. A
+/// live placement's row can therefore carry another, already-evicted
+/// placement's id in columns this placement never covered — cells this
+/// check must not walk, because they are not this placement's to answer for.
+/// [`resolves`] already tolerates a stale id outside every live extent; this
+/// is the same tolerance, scoped correctly instead of accidentally reaching
+/// one column too far.
 ///
 /// ponytail: O(placements x rows x cols) per feed in debug builds; make it
 /// incremental if a debug session with hundreds of live images ever gets slow.
@@ -240,12 +257,19 @@ pub(crate) fn assert_integrity(state: &State) {
             continue;
         };
         let screen = state.grid.screen_of(pos.row);
+        let start = pos.col as usize;
+        let end = start + placement.cols as usize;
         for offset in 0..placement.rows {
             let row = screen.row(pos.row + u64::from(offset));
             if !row.flags().contains(RowFlags::HAS_GRAPHIC) {
                 continue;
             }
-            for cell in row.cells() {
+            let cells = row.cells();
+            let end = end.min(cells.len());
+            if start >= end {
+                continue;
+            }
+            for cell in &cells[start..end] {
                 debug_assert!(
                     resolves(state, *cell),
                     "a cell references a graphic with no live placement"

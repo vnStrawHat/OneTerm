@@ -1865,8 +1865,15 @@ impl Screen {
         );
     }
 
-    /// Every interned id a live cell names still resolves. Split out because it
-    /// needs the terminal's interner, which a screen does not own.
+    /// Every interned id a live cell names still resolves, **and**, for
+    /// extras, was not proven unreferenced by the extras table's own sweep.
+    /// Split out because it needs the terminal's interner, which a screen
+    /// does not own.
+    ///
+    /// A freed-but-not-yet-reused extras id still satisfies the first check
+    /// (`< entries()`; freeing never shrinks the table), which is exactly why
+    /// the second one exists: it is the one check that can fail if the sweep
+    /// ever frees an id a cell still carries.
     pub(crate) fn assert_interned_ids_resolve(&self, interner: &Interner) {
         if !cfg!(debug_assertions) {
             return;
@@ -1879,11 +1886,7 @@ impl Screen {
                     "style id {:?} was never issued",
                     cell.style_id()
                 );
-                debug_assert!(
-                    (cell.extras_id().0 as usize) < interner.extras.entries(),
-                    "extras id {:?} was never issued",
-                    cell.extras_id()
-                );
+                assert_extras_id_live(interner, cell.extras_id());
                 if let CellContent::Grapheme(grapheme) = cell.content() {
                     debug_assert!(
                         !interner.resolve_grapheme(grapheme).is_empty(),
@@ -1893,7 +1896,49 @@ impl Screen {
             }
             id = id + 1;
         }
+        // The pen and the erase cell of both the active and the saved
+        // cursor: not a cell in `self.slots`, so the row walk above never
+        // reaches them, and a hyperlink open on the pen is exactly the kind
+        // of holder `live_extras_ids` must also find.
+        for cursor in [&self.cursor, &self.saved_cursor] {
+            assert_extras_id_live(interner, cursor.template().extras_id());
+            assert_extras_id_live(interner, cursor.erase().extras_id());
+        }
     }
+
+    /// Add every extras id `self` can resolve -- both screens' whole history,
+    /// not the O(rows) `integrity_lo` range, plus the pen and erase cell of
+    /// both cursors -- into `out`.
+    ///
+    /// Only the extras table's own sweep calls this (through
+    /// [`TerminalGrid::live_extras_ids`]), and it must be exactly as
+    /// complete as [`assert_interned_ids_resolve`]'s own holder list above:
+    /// a holder missing from one is a holder the other cannot see the sweep
+    /// mishandle.
+    pub(crate) fn collect_live_extras_ids(&self, out: &mut rustc_hash::FxHashSet<u16>) {
+        let mut id = self.oldest;
+        while id <= self.newest {
+            for cell in self.row(id).cells() {
+                out.insert(cell.extras_id().0);
+            }
+            id = id + 1;
+        }
+        for cursor in [&self.cursor, &self.saved_cursor] {
+            out.insert(cursor.template().extras_id().0);
+            out.insert(cursor.erase().extras_id().0);
+        }
+    }
+}
+
+fn assert_extras_id_live(interner: &Interner, id: crate::intern::ExtrasId) {
+    debug_assert!(
+        (id.0 as usize) < interner.extras.entries(),
+        "extras id {id:?} was never issued"
+    );
+    debug_assert!(
+        !interner.extras.is_free(id.0),
+        "extras id {id:?} is on the free list but a cell or pen still names it"
+    );
 }
 
 /// Deliberately summarised: a screen holds up to a million slots, and the whole
