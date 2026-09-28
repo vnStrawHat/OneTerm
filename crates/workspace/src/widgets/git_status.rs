@@ -202,7 +202,7 @@ fn build_label(status: &str, (added, removed): (u64, u64)) -> Option<Label> {
             segments.push(Segment::new(tail, Tone::Foreground));
         }
     }
-    Some(Label(segments))
+    Some(Label::new(segments))
 }
 
 #[cfg(test)]
@@ -212,7 +212,7 @@ mod tests {
     fn text(label: &Option<Label>) -> Option<String> {
         label
             .as_ref()
-            .map(|l| l.0.iter().map(|s| s.text.as_str()).collect())
+            .map(|l| l.segments.iter().map(|s| s.text.as_str()).collect())
     }
 
     #[test]
@@ -226,9 +226,9 @@ mod tests {
             text(&Some(label.clone())).as_deref(),
             Some("main* (+100 -41)")
         );
-        assert_eq!(label.0[0].tone, Tone::Foreground);
-        assert_eq!(label.0[2], Segment::new("+100", Tone::Success));
-        assert_eq!(label.0[4], Segment::new("-41", Tone::Danger));
+        assert_eq!(label.segments[0].tone, Tone::Foreground);
+        assert_eq!(label.segments[2], Segment::new("+100", Tone::Success));
+        assert_eq!(label.segments[4], Segment::new("-41", Tone::Danger));
 
         // Untracked only: dirty marker without a diffstat.
         assert_eq!(text(&build_label(dirty, (0, 0))).as_deref(), Some("main*"));

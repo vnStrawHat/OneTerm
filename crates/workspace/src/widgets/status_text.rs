@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, Hsla,
+    App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, FontWeight, Hsla,
     InteractiveElement as _, IntoElement, ParentElement, Pixels, Render,
     StatefulInteractiveElement as _, Styled, Task, Window, div, px,
 };
@@ -62,21 +62,98 @@ impl Segment {
     }
 }
 
+/// A titled group of `(name, value)` rows in an indicator's hover table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Section {
+    pub title: &'static str,
+    pub rows: Vec<(&'static str, String)>,
+}
+
 /// The text of an indicator: one or more coloured segments. The icon takes the
 /// tone of the first segment.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Label(pub Vec<Segment>);
+pub struct Label {
+    pub segments: Vec<Segment>,
+    /// Sampled with the text and shown as a table on hover, in place of the
+    /// default tooltip (`US-0148`). Empty for most indicators.
+    pub details: Vec<Section>,
+}
 
 impl Label {
+    pub fn new(segments: Vec<Segment>) -> Self {
+        Self {
+            segments,
+            details: Vec::new(),
+        }
+    }
+
     fn plain_text(&self) -> String {
-        self.0.iter().map(|s| s.text.as_str()).collect()
+        self.segments.iter().map(|s| s.text.as_str()).collect()
     }
 }
 
 impl From<String> for Label {
     fn from(text: String) -> Self {
-        Self(vec![Segment::new(text, Tone::Foreground)])
+        Self::new(vec![Segment::new(text, Tone::Foreground)])
     }
+}
+
+/// A live view of an indicator's hover table (`US-0148` acceptance rework,
+/// 2026-09-28): observes the indicator entity and re-renders on each of its
+/// ticks, so an open tooltip tracks the same 2 s cadence as the item's own
+/// text instead of freezing at the sample it was built from.
+///
+/// The kit's `TooltipOverlay` calls the tooltip's builder closure once, when
+/// the tooltip is first shown (`gpui-base` `tooltip.rs`: `request_show`/the
+/// one-shot `show_task`), not on every repaint — so a `Vec<Section>` baked
+/// into that closure never changes again. A nested entity is the fix: once
+/// mounted as a child of the (otherwise static) tooltip content, it re-renders
+/// on its own whenever something notifies it, independently of its ancestors.
+struct DetailsTooltip {
+    source: Entity<StatusText>,
+}
+
+impl DetailsTooltip {
+    fn new(source: Entity<StatusText>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&source, |_, _, cx| cx.notify()).detach();
+        Self { source }
+    }
+}
+
+impl Render for DetailsTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let details = self.source.read(cx).details();
+        details_table(details, cx.theme().muted_foreground)
+    }
+}
+
+/// The hover table of [`Label::details`]: section titles and values in the
+/// tooltip's own text colour, row names muted, on the kit tooltip's popover fill.
+///
+/// Two columns of fixed-height cells rather than a grid: the tooltip sizes to
+/// its content, and a grid there collapsed to zero-width columns.
+fn details_table(sections: Vec<Section>, muted: Hsla) -> impl IntoElement {
+    let cell = || div().h_5().flex().items_center().whitespace_nowrap();
+    let (mut names, mut values) = (Vec::new(), Vec::new());
+    for section in sections {
+        names.push(
+            cell()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(section.title),
+        );
+        values.push(cell());
+        for (name, value) in section.rows {
+            names.push(cell().text_color(muted).child(name));
+            values.push(cell().justify_end().child(value));
+        }
+    }
+    div()
+        .flex()
+        .flex_none()
+        .gap_4()
+        .py_0p5()
+        .child(div().flex().flex_col().children(names))
+        .child(div().flex().flex_col().children(values))
 }
 
 /// Produces the label to show, or `None` to hide the indicator.
@@ -277,6 +354,15 @@ impl StatusText {
         self.label.as_ref().map(Label::plain_text)
     }
 
+    /// The indicator's current hover table, or empty when its label carries
+    /// none. Read live by [`DetailsTooltip`] on every tick, not sampled once.
+    fn details(&self) -> Vec<Section> {
+        self.label
+            .as_ref()
+            .map(|label| label.details.clone())
+            .unwrap_or_default()
+    }
+
     /// Tell this indicator how much width the bar has left for it. No-op for an
     /// indicator that never shortens.
     pub(crate) fn set_budget(&self, width: Pixels) {
@@ -305,7 +391,7 @@ impl Shorten {
         match self {
             Shorten::Never => {}
             Shorten::PathTail(_) => {
-                if let [segment] = label.0.as_mut_slice() {
+                if let [segment] = label.segments.as_mut_slice() {
                     segment.text = fit_to_width(&segment.text, budget, window, elide_path_left);
                 }
             }
@@ -313,7 +399,7 @@ impl Shorten {
                 // Only the first segment is the name; the rest (a diffstat,
                 // ahead/behind counts) are short and already bounded, so what
                 // they take comes off the name's budget.
-                let Some((name, rest)) = label.0.split_first_mut() else {
+                let Some((name, rest)) = label.segments.split_first_mut() else {
                     return label;
                 };
                 let rest: String = rest.iter().map(|segment| segment.text.as_str()).collect();
@@ -330,10 +416,11 @@ impl Render for StatusText {
         let copyable = self.presentation.copyable;
         let shorten = self.presentation.shorten.clone();
         let icon = self.presentation.icon.clone();
+        let source = cx.entity();
         let base_tone = self
             .label
             .as_ref()
-            .and_then(|label| label.0.first())
+            .and_then(|label| label.segments.first())
             .map_or(Tone::Foreground, |segment| segment.tone);
         div()
             .id(self.id)
@@ -353,6 +440,7 @@ impl Render for StatusText {
                     _ if copyable => Some("Click to copy".to_string()),
                     _ => None,
                 };
+                let details = label.details;
                 this.children(icon.map(|icon| icon.xsmall()))
                     // Segments sit in their own flex row so the outer `gap_1`
                     // does not open space between them; spacing is in the text.
@@ -360,14 +448,28 @@ impl Render for StatusText {
                         div()
                             .flex()
                             .items_center()
-                            .children(label.0.into_iter().map(|segment| {
+                            .children(label.segments.into_iter().map(|segment| {
                                 div().text_color(segment.tone.color(cx)).child(segment.text)
                             })),
                     )
-                    .when_some(tooltip, |this, tooltip| {
-                        this.tooltip(move |window, cx| {
-                            Tooltip::new(tooltip.clone()).build(window, cx)
-                        })
+                    .map(|this| {
+                        if !details.is_empty() {
+                            // A live entity, not the sample baked in here: the
+                            // kit builds this closure once, when the tooltip
+                            // first shows, so a snapshot would freeze
+                            // (`US-0148` acceptance rework).
+                            let source = source.clone();
+                            this.tooltip(move |window, cx| {
+                                let content = cx.new(|cx| DetailsTooltip::new(source.clone(), cx));
+                                Tooltip::element(move |_, _| content.clone()).build(window, cx)
+                            })
+                        } else if let Some(tooltip) = tooltip {
+                            this.tooltip(move |window, cx| {
+                                Tooltip::new(tooltip.clone()).build(window, cx)
+                            })
+                        } else {
+                            this
+                        }
                     })
                     .when(copyable, |this| {
                         this.cursor_pointer().on_click(
@@ -522,7 +624,7 @@ mod tests {
             assert_eq!(Shorten::Never.apply(memory.clone(), window), memory);
 
             // The git label's head is the branch; the diffstat segments stay.
-            let git = Label(vec![
+            let git = Label::new(vec![
                 Segment::new("worktree-agent-a1857284c8b933f27", Tone::Foreground),
                 Segment::new(" (+12 -3)", Tone::Success),
             ]);
@@ -531,16 +633,19 @@ mod tests {
                 + measure_status_text(window, "worktree-agent");
             let narrow = Shorten::HeadFirst(budget_of(room)).apply(git.clone(), window);
             assert!(
-                narrow.0[0].text.ends_with('…'),
+                narrow.segments[0].text.ends_with('…'),
                 "the branch keeps its head: {:?}",
-                narrow.0[0].text
+                narrow.segments[0].text
             );
             assert!(
-                git.0[0]
+                git.segments[0]
                     .text
-                    .starts_with(narrow.0[0].text.trim_end_matches('…'))
+                    .starts_with(narrow.segments[0].text.trim_end_matches('…'))
             );
-            assert_eq!(narrow.0[1], git.0[1], "the diffstat is not touched");
+            assert_eq!(
+                narrow.segments[1], git.segments[1],
+                "the diffstat is not touched"
+            );
 
             // A path policy on a multi-segment label leaves it alone: only a
             // single-run label is a path.

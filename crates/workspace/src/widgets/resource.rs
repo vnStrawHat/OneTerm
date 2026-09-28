@@ -4,6 +4,16 @@
 //! for `cpu_usage()` to produce a meaningful delta. The `System` is seeded with
 //! an initial refresh so the first tick gets a real delta instead of 0%.
 //!
+//! The refresh itself (the `sysinfo` walk plus, on Windows, the
+//! `CreateToolhelp32Snapshot` thread count) runs on `cx.background_executor()`,
+//! not the tick that starts it: on a machine with a few hundred processes it
+//! measured 10-14 ms (verifier finding F1, 2026-09-28), most of a 60 Hz frame,
+//! and that cost scales with the system's process count, not this one
+//! process's. The sampler `StatusText` calls every 2 s only checks an
+//! `AtomicBool` and reads a `Mutex` slot — sub-millisecond — the same
+//! stale-while-revalidate shape `git_status.rs` uses for its own background
+//! `git` calls.
+//!
 //! ## CPU normalisation
 //!
 //! `sysinfo`'s `Process::cpu_usage()` returns a **per-core** percentage
@@ -30,23 +40,54 @@
 //! it. Where it is unavailable the full working set (`sysinfo` `memory()`,
 //! shared pages included) stands in, so an older Windows reads higher: about
 //! 136 MB idle instead of 51. On Linux and macOS `memory()` is the
-//! resident set size. Commit (`virtual_memory()`, `PrivateUsage`) is not shown:
-//! it counts pages that were never touched (`US-0137`).
+//! resident set size. Commit (`virtual_memory()`, `PrivateUsage`) is not the
+//! item's figure: it counts pages that were never touched (`US-0137`).
 //!
 //! Format: `CPU 12.3%  MEM 45.2 MB`
+//!
+//! ## Hover table
+//!
+//! The same sample also fills a table the item shows on hover (`US-0148`): every
+//! memory figure the OS gives (see [`details`] for the per-platform names), the
+//! CPU figure with its core count, CPU time, thread count and uptime. Nothing extra
+//! is read for it: the table tracks this same 2 s sampler for as long as the
+//! tooltip stays open, via a nested entity in `status_text.rs`
+//! (`DetailsTooltip`) that observes this indicator and re-renders on every
+//! tick (2026-09-28 acceptance rework: the first cut baked the table into the
+//! tooltip's builder closure, which the kit only calls once per hover, so it
+//! froze at the sample open with it).
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{App, Entity, Window};
 use gpui_component::{Icon, IconName};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-use super::status_text::{Label, Presentation, Shorten, StatusText};
+use super::status_text::{Label, Presentation, Section, Shorten, StatusText};
 
 /// Only the two fields the indicator shows — the default kind also walks
 /// disk usage, the exe path, and (on Windows) every process thread (PERF-28).
+///
+/// `tasks` is not requested here and stays on anyway: `ProcessRefreshKind`
+/// defaults it to `true` even from `nothing()` (sysinfo treats a Linux task
+/// as a process in its own right, so it fetches the list regardless — see the
+/// `refresh_kind_keeps_tasks_on_for_the_linux_thread_count` test below), which
+/// is what lets `details()` read the Linux thread count off `process.tasks()`
+/// with no extra call.
 fn refresh_kind() -> ProcessRefreshKind {
     ProcessRefreshKind::nothing().with_cpu().with_memory()
+}
+
+/// The latest finished sample, or `None` before the first background refresh
+/// completes.
+type Slot = Arc<Mutex<Option<Label>>>;
+
+/// A poisoned slot only means a refresh thread panicked; the value is still a
+/// plain `Option`, so keep reading it (same shape as `git_status.rs`).
+fn lock(slot: &Slot) -> std::sync::MutexGuard<'_, Option<Label>> {
+    slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Indicator showing the CPU and memory usage of the OneTerm process.
@@ -61,13 +102,18 @@ pub fn resource(window: &mut Window, cx: &mut App) -> Entity<StatusText> {
         }
     };
 
-    // Seed the System with an initial refresh so the first timer tick gets a
-    // real CPU delta instead of 0%. This also lazily initialises the CPU list
-    // (needed for nb_cpus normalisation).
+    // Seed the System with an initial refresh so the first background refresh
+    // gets a real CPU delta instead of 0%. This also lazily initialises the
+    // CPU list (needed for nb_cpus normalisation). One-time startup cost, not
+    // the recurring one F1 was about.
     let mut sys = System::new();
     if let Some(pid) = pid {
         sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh_kind());
     }
+    let sys = Arc::new(Mutex::new(sys));
+
+    let slot: Slot = Arc::default();
+    let in_flight = Arc::new(AtomicBool::new(false));
 
     StatusText::new_entity(
         "resource-indicator",
@@ -78,22 +124,66 @@ pub fn resource(window: &mut Window, cx: &mut App) -> Entity<StatusText> {
             copyable: false,
             shorten: Shorten::Never,
         },
-        Box::new(move |_| {
+        // The tick itself only checks a flag and reads a mutex slot — the
+        // `sysinfo` refresh and the Windows thread snapshot run on the
+        // background executor, not here (F1, 2026-09-28).
+        Box::new(move |cx| {
             let pid = pid?;
-            sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh_kind());
-            let process = sys.process(pid)?;
-            // sysinfo returns per-core CPU (100% = 1 core). Divide by nb_cpus
-            // to get the total-system percentage that Task Manager shows.
-            let nb_cpus = sys.cpus().len().max(1) as f32;
-            Some(Label::from(format!(
-                "CPU {:.1}%  MEM {}",
-                process.cpu_usage() / nb_cpus,
-                format_memory(displayed_memory(private_working_set(), process.memory()))
-            )))
+            if !in_flight.swap(true, Ordering::AcqRel) {
+                let sys = sys.clone();
+                let slot = slot.clone();
+                let in_flight = in_flight.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        let label = sample_label(pid, &sys);
+                        *lock(&slot) = label;
+                        in_flight.store(false, Ordering::Release);
+                    })
+                    .detach();
+            }
+            lock(&slot).clone()
         }),
         window,
         cx,
     )
+}
+
+/// One full sample of `pid`: refreshes `sys` in place (kept across calls for
+/// the CPU-usage delta), reads the Windows-only memory and thread-count
+/// extras, and builds the label and its hover table. Blocking work, meant to
+/// run on the background executor, not the UI thread.
+fn sample_label(pid: Pid, sys: &Mutex<System>) -> Option<Label> {
+    let mut sys = sys.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh_kind());
+    let process = sys.process(pid)?;
+    // sysinfo returns per-core CPU (100% = 1 core). Divide by nb_cpus
+    // to get the total-system percentage that Task Manager shows.
+    let cores = sys.cpus().len().max(1);
+    let os = os_memory_counters();
+    let sample = Sample {
+        cpu_percent: process.cpu_usage() / cores as f32,
+        cores,
+        cpu_time: Duration::from_millis(process.accumulated_cpu_time()),
+        uptime: Duration::from_secs(process.run_time()),
+        threads: process
+            .tasks()
+            .map(|tasks| tasks.len())
+            .or_else(thread_count),
+        private_working_set: os.map(|c| c.private_working_set).filter(|&b| b > 0),
+        resident: process.memory(),
+        virtual_or_commit: process.virtual_memory(),
+        peak_working_set: os.map(|c| c.peak_working_set).filter(|&b| b > 0),
+    };
+    let mut label = Label::from(format!(
+        "CPU {:.1}%  MEM {}",
+        sample.cpu_percent,
+        format_memory(displayed_memory(
+            sample.private_working_set,
+            sample.resident
+        ))
+    ));
+    label.details = details(&sample);
+    Some(label)
 }
 
 /// The figure `MEM` shows: the private working set when the OS gave one,
@@ -105,8 +195,101 @@ fn displayed_memory(private_working_set: Option<u64>, resident: u64) -> u64 {
         .unwrap_or(resident)
 }
 
-/// This process's private working set, or `None` where the OS does not give it.
-fn private_working_set() -> Option<u64> {
+/// One 2 s reading of this process, everything the item and its table show.
+struct Sample {
+    /// Of all logical cores, as Task Manager shows it.
+    cpu_percent: f32,
+    cores: usize,
+    /// User plus kernel.
+    cpu_time: Duration,
+    uptime: Duration,
+    threads: Option<usize>,
+    /// Windows only (`PrivateWorkingSetSize`).
+    private_working_set: Option<u64>,
+    /// `sysinfo` `memory()`: the working set on Windows, RSS elsewhere.
+    resident: u64,
+    /// `sysinfo` `virtual_memory()`: commit (`PrivateUsage`) on Windows, the
+    /// virtual size elsewhere.
+    virtual_or_commit: u64,
+    /// Windows only (`PeakWorkingSetSize`).
+    peak_working_set: Option<u64>,
+}
+
+/// What `sysinfo` `memory()` and `virtual_memory()` are called on this OS.
+const RESIDENT_NAME: &str = if cfg!(windows) {
+    "Working set"
+} else {
+    "Resident (RSS)"
+};
+const VIRTUAL_NAME: &str = if cfg!(windows) {
+    "Commit (private bytes)"
+} else {
+    "Virtual size"
+};
+
+/// The hover table, in a fixed order. A figure the OS does not give is left out,
+/// except the thread count, whose absence is shown as `n/a`.
+fn details(sample: &Sample) -> Vec<Section> {
+    let mut memory = Vec::new();
+    if let Some(bytes) = sample.private_working_set {
+        memory.push(("Private working set", format_memory(bytes)));
+    }
+    memory.push((RESIDENT_NAME, format_memory(sample.resident)));
+    memory.push((VIRTUAL_NAME, format_memory(sample.virtual_or_commit)));
+    if let Some(bytes) = sample.peak_working_set {
+        memory.push(("Peak working set", format_memory(bytes)));
+    }
+    let cpu = vec![
+        (
+            "Usage",
+            format!(
+                "{:.1}% of {} logical cores",
+                sample.cpu_percent, sample.cores
+            ),
+        ),
+        ("CPU time (user + kernel)", format_duration(sample.cpu_time)),
+        (
+            "Threads",
+            sample
+                .threads
+                .map_or_else(|| "n/a".to_string(), |n| n.to_string()),
+        ),
+        ("Uptime", format_duration(sample.uptime)),
+    ];
+    vec![
+        Section {
+            title: "Memory",
+            rows: memory,
+        },
+        Section {
+            title: "CPU",
+            rows: cpu,
+        },
+    ]
+}
+
+/// `12.4 s` under a minute, `4m 05s` under an hour, `3h 07m` from there.
+fn format_duration(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    if secs < 60 {
+        format!("{:.1} s", duration.as_secs_f64())
+    } else if secs < 3600 {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {:02}m", secs / 3600, secs % 3600 / 60)
+    }
+}
+
+/// The two `PROCESS_MEMORY_COUNTERS_EX2` fields `sysinfo` does not give.
+#[derive(Clone, Copy)]
+struct OsMemoryCounters {
+    private_working_set: u64,
+    peak_working_set: u64,
+}
+
+/// This process's private and peak working set, or `None` where the OS does not
+/// give them.
+fn os_memory_counters() -> Option<OsMemoryCounters> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::System::ProcessStatus::{
@@ -132,7 +315,60 @@ fn private_working_set() -> Option<u64> {
                 size,
             )
         };
-        (ok != 0).then_some(counters.PrivateWorkingSetSize as u64)
+        (ok != 0).then_some(OsMemoryCounters {
+            private_working_set: counters.PrivateWorkingSetSize as u64,
+            peak_working_set: counters.PeakWorkingSetSize as u64,
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// This process's thread count where `sysinfo` has none (it has one on Linux
+/// only): the own entry of a process snapshot on Windows, `None` elsewhere.
+///
+/// ponytail: walks every process like `sysinfo`'s own refresh does, once per
+/// 2 s sample, now on the background executor alongside that refresh (F1,
+/// 2026-09-28) rather than the UI thread; revisit with a per-process (not
+/// whole-system) thread-count query if the background cost ever shows up in
+/// a profile — `NtQueryInformationProcess` does not give one, so it is not
+/// that call.
+fn thread_count() -> Option<usize> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+            TH32CS_SNAPPROCESS,
+        };
+
+        let own = std::process::id();
+        // SAFETY: the snapshot handle is closed below and not used after.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        // SAFETY: all-zero is a valid value of this plain-data struct.
+        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut threads = None;
+        // SAFETY: `snapshot` is valid and `entry` has its `dwSize` set.
+        let mut has_entry = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
+        while has_entry {
+            if entry.th32ProcessID == own {
+                threads = Some(entry.cntThreads as usize);
+                break;
+            }
+            // SAFETY: same valid snapshot and entry as above.
+            has_entry = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
+        }
+        // SAFETY: `snapshot` came from `CreateToolhelp32Snapshot` and is not used again.
+        unsafe {
+            CloseHandle(snapshot);
+        }
+        threads
     }
     #[cfg(not(windows))]
     {
@@ -162,7 +398,95 @@ fn format_memory(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{displayed_memory, format_memory};
+    use std::time::Duration;
+
+    use super::{
+        RESIDENT_NAME, Sample, VIRTUAL_NAME, details, displayed_memory, format_duration,
+        format_memory, refresh_kind,
+    };
+
+    // F2 (US-0148 acceptance rework, 2026-09-28): `refresh_kind()` never asks
+    // for `tasks` explicitly, relying on `ProcessRefreshKind::nothing()`
+    // defaulting it to `true` (sysinfo counts a Linux task as its own
+    // process, so it fetches the list regardless of what else is requested).
+    // Pin that default so an upstream sysinfo change that stops doing this is
+    // caught here instead of as a silently empty Linux thread count.
+    #[test]
+    fn refresh_kind_keeps_tasks_on_for_the_linux_thread_count() {
+        assert!(refresh_kind().tasks());
+    }
+
+    fn sample() -> Sample {
+        Sample {
+            cpu_percent: 1.25,
+            cores: 16,
+            cpu_time: Duration::from_millis(12_400),
+            uptime: Duration::from_secs(245),
+            threads: Some(31),
+            private_working_set: Some(49 << 20),
+            resident: 94 << 20,
+            virtual_or_commit: 182 << 20,
+            peak_working_set: Some(101 << 20),
+        }
+    }
+
+    /// `(section, name, value)` for every row, in order.
+    fn rows(sample: &Sample) -> Vec<(&'static str, &'static str, String)> {
+        details(sample)
+            .into_iter()
+            .flat_map(|section| {
+                section
+                    .rows
+                    .into_iter()
+                    .map(move |(name, value)| (section.title, name, value))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_table_lists_every_field_in_a_fixed_order() {
+        assert_eq!(
+            rows(&sample()),
+            vec![
+                ("Memory", "Private working set", "49.0 MB".to_string()),
+                ("Memory", RESIDENT_NAME, "94.0 MB".to_string()),
+                ("Memory", VIRTUAL_NAME, "182.0 MB".to_string()),
+                ("Memory", "Peak working set", "101.0 MB".to_string()),
+                ("CPU", "Usage", "1.2% of 16 logical cores".to_string()),
+                ("CPU", "CPU time (user + kernel)", "12.4 s".to_string()),
+                ("CPU", "Threads", "31".to_string()),
+                ("CPU", "Uptime", "4m 05s".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn figures_the_os_does_not_give_are_left_out_or_marked() {
+        // Linux and macOS: no private or peak working set; macOS: no threads.
+        let sample = Sample {
+            private_working_set: None,
+            peak_working_set: None,
+            threads: None,
+            ..sample()
+        };
+        let names: Vec<_> = rows(&sample).into_iter().map(|(_, n, v)| (n, v)).collect();
+        assert_eq!(names[0].0, RESIDENT_NAME);
+        assert_eq!(names[1].0, VIRTUAL_NAME);
+        assert_eq!(names[2].0, "Usage");
+        assert_eq!(names[4], ("Threads", "n/a".to_string()));
+    }
+
+    #[test]
+    fn durations_scale_to_their_size() {
+        assert_eq!(format_duration(Duration::from_millis(0)), "0.0 s");
+        assert_eq!(format_duration(Duration::from_millis(59_940)), "59.9 s");
+        assert_eq!(format_duration(Duration::from_secs(60)), "1m 00s");
+        assert_eq!(format_duration(Duration::from_secs(3599)), "59m 59s");
+        assert_eq!(
+            format_duration(Duration::from_secs(3 * 3600 + 7 * 60 + 9)),
+            "3h 07m"
+        );
+    }
 
     #[test]
     fn displayed_memory_prefers_the_private_working_set() {
