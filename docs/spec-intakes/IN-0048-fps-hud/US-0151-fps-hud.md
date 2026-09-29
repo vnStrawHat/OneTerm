@@ -13,7 +13,7 @@ Created: 2026-09-29
 - [x] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -26,19 +26,21 @@ Created: 2026-09-29
 ## Outcome
 
 A user can switch on a performance HUD when they need it and off again; it is off on a fresh
-profile and after an upgrade. While on it shows the kit's MAX FPS / INTERVAL / FRAME / P95 /
-DROP / INV / GPU % / CPU / MEM readings plus OneTerm's DEVICE (GPU name) and API rows; while
-off it runs nothing ([`high-level-design.md`](high-level-design.md)).
+profile and after an upgrade. While on it shows four rows — FPS, GPU (name), API and GPU
+usage — from OneTerm's own overlay; while off it runs nothing
+([`high-level-design.md`](high-level-design.md)). (Acceptance rework 2026-09-29: the first
+cut's GPUI Kit HUD and its ten readings are gone; see § Acceptance rework.)
 
 ## Scope
 
 - [x] In scope:
-  - root `Cargo.toml`: `gpui-fps = "0.7"`; `Cargo.lock`; `THIRD-PARTY-NOTICES.md`.
+  - root `Cargo.toml`: the `windows-sys` feature `Win32_System_Performance` (rework; the first
+    cut's `gpui-fps` dependency is removed, `Cargo.lock` and `THIRD-PARTY-NOTICES.md` are main's).
   - `crates/settings/src/ui_config.rs`: `show_fps` (serde default `false`, omitted while
     false) and `UiConfig::set_show_fps` (update, persist, refresh windows).
   - `crates/actions`: `ToggleFpsMonitor`; `elevated_policy.rs` classifies `toggle_fps`
     allowed (window chrome).
-  - `crates/workspace`: `widgets/fps_hud.rs` (monitor + strip), the root render, the app-menu
+  - `crates/workspace`: `widgets/fps_hud.rs` (the four-row overlay and its PDH sampler), the root render, the app-menu
     item and the action handler in `layout/app_menus.rs`.
   - `crates/settings-ui`: the General page switch; the Key Bindings row (unbound).
   - Docs: `docs/gui-layout.md`, `docs/agents/persistence.md`, `docs/agents/dependencies.md`.
@@ -62,6 +64,109 @@ off it runs nothing ([`high-level-design.md`](high-level-design.md)).
 - [x] Theme tokens only in OneTerm code; `python scripts/check-theme-contrast.py` passes.
 - [x] Full `pwsh scripts/ci-local.ps1` green; `cargo deny` if installed.
 
+## Acceptance rework — 2026-09-29
+
+Reopened on the owner's acceptance ruling of 2026-09-29, after the first cut (`09812f0d`) and
+its verification (`evidence/US-0151-verify.md`, commits `66ae88b9`, `30e12f20`):
+
+> The HUD shows ONLY fps, GPU name, Graphics API and GPU % usage, and must NOT depend on
+> `gpui-fps`.
+
+Why: `gpui-fps` turns on `gpui-pre`'s `profiler` feature for every build, which costs +4 MB
+and +55-65 ns per task run with the HUD off (verify F1); its frame-time chart made gpui's
+window-sized path textures resident (F2, the "30 MB"); a left click or drag on it reached the
+terminal (F4).
+
+### Reworked acceptance
+
+- [x] `gpui-fps` is gone and with it the `profiler` feature: `Cargo.lock` and
+  `THIRD-PARTY-NOTICES.md` are byte-for-byte main's again (`git diff e0db223f -- Cargo.lock
+  THIRD-PARTY-NOTICES.md` is empty); the only manifest change is the `windows-sys` feature
+  `Win32_System_Performance`.
+- [x] OneTerm's own overlay (`crates/workspace/src/widgets/fps_hud.rs`), theme tokens only, four
+  rows in this order:
+  - `FPS` — frames the window actually drew in the last second: the HUD view (not cached, so it
+    renders on every window frame) adds one to a `u64` per render; once a second, on the
+    `until_next_tick` grid, the count divided by the elapsed time is published and reset. It
+    forces no frame beyond that once-a-second refresh, which shares the status bar clock's tick,
+    so **it reads about 2 at idle and the real rate under output**; it is not a refresh rate or a
+    "max" (a follow-up if wanted).
+  - `GPU` — `Window::gpu_specs().device_name`, asked once when shown; `(software)` / `n/a`.
+  - `API` — compile-time constant: `Direct3D 11` / `Metal` / `Vulkan/GL (wgpu)`.
+  - `GPU usage` — own PDH sampler on `\GPU Engine(*)\Utilization Percentage`: this pid's
+    instances **summed per engine type, busiest type shown** (Task Manager's GPU column),
+    clamped to 100. The query is opened when the HUD is created and closed (`PdhCloseQuery`) when
+    it is dropped; one collection every 2 s on the background executor, never on the UI thread;
+    the FFI is `cfg(windows)`, `n/a` elsewhere.
+- [x] Off costs nothing: no entity, so no ticker, no count, no PDH query, no allocation.
+- [x] F4: the overlay is opaque to the mouse except the wheel (`block_mouse_except_scroll`):
+  clicks and drags on it do not reach the terminal; the wheel still scrolls it.
+- [x] Setting, action, menu item, Settings switch and Key Bindings row unchanged; tests kept,
+  plus PDH parsing of a fixed sample and the FPS arithmetic.
+
+### Rework evidence (Windows 11, Intel UHD 770, 60 Hz; fast-dev + `hotpath-profiling`, private `USERPROFILE`, own pid only)
+
+Idle, focused, one cmd.exe tab, 1280 x 800, 60 s measured after a 5 s settle. Frames/s =
+`OneTermWorkspace::render` calls / whole run (~72.6 s, startup included); UI cycles =
+`QueryThreadCycleTime` of the UI thread over the 60 s; memory read at the end of the run.
+Main is `e0db223f` built the same way.
+
+| Build, HUD | Frames/s | UI Mcycles/s | Private commit | Private working set |
+| --- | ---: | ---: | ---: | ---: |
+| main, run 1 / run 2 | 2.10 / 2.19 | 40.95 / 32.01 | 117.1 / 117.2 MB | 58.8 / 58.9 MB |
+| rework, off, run 1 / run 2 | 2.15 / 2.28 | 40.99 / 37.06 | 117.3 / 117.3 MB | 58.8 / 59.0 MB |
+| rework, on, run 1 / run 2 | 2.33 / 2.26 | 42.53 / 38.75 | 122.3 / 121.0 MB | 64.1 / 62.8 MB |
+| rework, on, then switched off from the menu (60 s later) | - | 36.45 | - | 62.6 MB |
+
+Allocations (`hotpath-profiling-alloc`, count metric, same idle run): `OneTermWorkspace::render`
+allocates **13 per call** in main (150 calls), in the rework with the HUD off (161 calls) and on
+(158 calls) — the off path and the on path add no allocation to the root render.
+
+Reading:
+
+- **Off = main.** Frames/s, UI cycles and memory are within run-to-run spread of main; the
+  +4 MB of the first cut is gone (117.3 vs 117.2 MB commit, 59.0 vs 58.9 MB working set). What
+  the off path runs is one `UiConfig` global read and an `Option` check in the root render.
+- **On:** no extra frames (2.3 vs 2.2 frames/s: the HUD's refresh lands on the clock's tick),
+  UI cycles within the spread, **+4-5 MB** commit and private working set (PDH's counter data
+  for every engine of every process). About 3.7 MB of it stays after the HUD is switched off
+  (62.6 vs 58.9 MB, the query itself is closed); not investigated further. No path textures: the
+  overlay draws no path, so the first cut's window-sized ~20 B/px jump is gone.
+- **FPS row:** reads 2-3 at idle (screenshots), 10-14 while the F4 drags below repainted.
+- **GPU usage:** the HUD read 0.5-0.6 % idle and 2.6-3.1 % during the drags; an independent
+  `Get-Counter "\GPU Engine(pid_<pid>_*)\Utilization Percentage"` (same pid, busiest engine
+  type) read 0.66-2.77 % in the same run at 10 s intervals. Same source, different sampling
+  instants; they agree to within the counter's own churn. Task Manager's window was not read.
+- **F4 in the GUI** (right dock None, so the HUD lies over the terminal): a drag that starts on
+  the HUD and ends over terminal text selects nothing
+  (`evidence/US-0151-rework-drag-from-hud-no-selection.png`); a selection made in the terminal
+  survives a left click on the HUD (`evidence/US-0151-rework-click-on-hud-keeps-selection.png`).
+- **Toggle:** OneTerm > Show FPS Monitor removed the HUD
+  (`evidence/US-0151-rework-toggled-off.png`).
+
+Screenshots: `evidence/US-0151-rework-hud-dark.png`, `evidence/US-0151-rework-hud-light.png`
+(Ayu Light). The adapter name wraps at the HUD's 220 px width
+(`Intel(R) UHD Graphics` / `770`).
+
+Tests (`cargo test -p oneterm-settings -p oneterm-actions -p oneterm-workspace
+-p oneterm-settings-ui`, all green): `widgets::fps_hud::tests::the_rows_are_fps_gpu_api_and_usage_in_that_order`,
+`...::n_renders_in_a_second_read_n_fps`, `...::gpu_usage_is_this_pids_busiest_engine_type`
+(PDH instance names -> percent, including a `pid_421_` neighbour of `pid_42_` and the clamp),
+plus the kept `the_toggle_action_flips_show_fps` and the `ui_config` default/round-trip tests.
+
+Rework gates: `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`,
+also with `--features oneterm-app/hotpath-profiling`; the four crates' tests; contrast (1482
+pairings >= 4.5:1); dependency graph; notices; doc paths; English; `cargo deny check licenses
+bans advisories` (`advisories ok, bans ok, licenses ok`); full `pwsh scripts/ci-local.ps1`
+(`CARGO_BUILD_JOBS=3`): `ci-local: all checks passed.`
+
+Rework gaps:
+
+- Linux/macOS not run; their `GPU usage` is `n/a` by design, `GPU`/`API` as before.
+- The ~3.7 MB left after switching the HUD off is attributed to PDH's process-wide counter
+  data from reasoning, not measured apart.
+- `FpsHud::render` itself is not a hotpath site, so its own allocations while on (the row
+  strings, about a dozen small ones per frame) are not in the alloc table above.
 ## Documentation
 
 ### Owning Docs Reviewed
@@ -93,7 +198,10 @@ Changed: `docs/gui-layout.md` (§ FPS HUD, the General page row, source map),
 `docs/agents/persistence.md` (`show_fps`), `docs/agents/dependencies.md` (§ 1 row and rule 2,
 § 2 declaration), `scripts/check-theme-contrast.py` (comment citations only: the strip draws
 `popover.foreground` and `muted.foreground` on `popover.background`, a pairing already in
-`SURFACES`), `THIRD-PARTY-NOTICES.md` (regenerated: `gpui-fps`, `hdrhistogram`).
+`SURFACES`). Rework: `docs/agents/dependencies.md` § 1 row, rule 2 and § 2 back to main, § 3
+Windows FFI row names `Win32_System_Performance` and why `gpui-fps` is not used;
+`docs/gui-layout.md` § FPS HUD rewritten (four rows, sources, mouse behaviour, cost);
+intake and HLD field lists; `THIRD-PARTY-NOTICES.md` regenerated back to main's.
 
 ## Context
 
@@ -134,6 +242,9 @@ None new. Placement is argued in the HLD; it is a view choice, not one future wo
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
+
+> First cut (`09812f0d`), superseded by § Acceptance rework above; kept as the record of
+> what the owner ruled on.
 
 ### What `gpui-fps` provides and what OneTerm adds
 
@@ -224,4 +335,5 @@ Screenshots (PrintWindow): `evidence/US-0151-hud-on-dark.png`, `evidence/US-0151
 
 ## Handoff
 
-Implemented on `feat/fps-hud`; awaiting owner acceptance and a verifier.
+Acceptance rework implemented on `feat/fps-hud` (on `30e12f20`); awaiting owner acceptance
+and a re-verification.

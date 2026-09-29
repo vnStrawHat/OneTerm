@@ -15,7 +15,6 @@ The workspace consumes the published GPUI Kit 0.7 release family from crates.io.
 | `gpui-base` | `gpui-base` | `0.7` | `0.7.0` | Move with all GPUI Kit 0.7 layers. |
 | `gpui-component` | `gpui-component` | `0.7` | `0.7.0` | Move with all GPUI Kit 0.7 layers. |
 | `gpui-kit-assets` | `gpui-kit-assets` | `0.7` | `0.7.0` | Move with all GPUI Kit 0.7 layers; app crate only. |
-| `gpui-fps` | `gpui-fps` | `0.7` | `0.7.0` | Move with all GPUI Kit 0.7 layers; `oneterm-workspace` only (the FPS HUD, `IN-0048`). Apache-2.0. It pins `gpui-pre =0.3.7` **with the `profiler` feature**, which Cargo unifies into every build: gpui then keeps its foreground journal (task polls, draws, presents) whether or not the HUD is shown. The measured idle cost is in `docs/spec-intakes/IN-0048-fps-hud/US-0151-fps-hud.md`. |
 
 There is **no terminal-engine dependency**. OneTerm's VT engine is `oneterm-vt`
 (`crates/vt`, `IN-0029`), first-party code with no third-party engine behind it; the
@@ -26,7 +25,7 @@ upstream plus patches. Do not re-add either.
 Rules:
 
 1. `gpui-pre` and `gpui-pre-platform` move together.
-2. `gpui-base`, `gpui-component`, `gpui-kit-assets`, and `gpui-fps` move together.
+2. `gpui-base`, `gpui-component`, and `gpui-kit-assets` move together.
 3. Do not adopt the `gpui-kit` facade or add GPUI from git without a new decision record. OneTerm intentionally keeps `use gpui::…` and `use gpui_component::…` imports.
 4. Do not add a `[patch]` for the UI layer. Fix compatibility application-side or upstream it.
 5. Cargo profile overrides use package names (`gpui-pre`, `gpui-pre-platform`), not workspace aliases.
@@ -45,7 +44,6 @@ gpui_platform = { package = "gpui-pre-platform", version = "0.3", features = [
 gpui-base = "0.7"
 gpui-component = "0.7"
 gpui-kit-assets = "0.7"
-gpui-fps = "0.7"
 ```
 
 A UI crate normally declares only what it directly imports:
@@ -87,7 +85,7 @@ Every third-party dependency is declared once in root `[workspace.dependencies]`
 | Auto-update | `reqwest`, `semver`, `sha2`, `zip`, `tar`, `flate2` |
 | UI helpers | `chrono`, `sysinfo`, `rust-embed` |
 | Terminal graphics | `image` (default features off: only the pixel-buffer types `gpui::RenderImage` takes; same major as GPUI's own `image`) |
-| Windows FFI | `windows-sys 0.59` with a workspace-wide feature union (`Win32_System_Pipes` + `Win32_Security` are `oneterm_vt::pty`'s `CreatePipe`) |
+| Windows FFI | `windows-sys 0.59` with a workspace-wide feature union (`Win32_System_Pipes` + `Win32_Security` are `oneterm_vt::pty`'s `CreatePipe`; `Win32_System_Performance` is the FPS HUD's PDH GPU counter, `US-0151`). GPUI Kit's `gpui-fps` is deliberately **not** used: it turns on `gpui-pre`'s `profiler` feature for every build, which costs 4 MB and ~60 ns per task poll with the HUD off (`US-0151` verification, F1). |
 | Profiling (developer-only, `IN-0046`) | `hotpath 0.26.x` (MIT): **optional everywhere**, reached only through the default-off `hotpath-profiling` feature of `oneterm-vt`, `oneterm-terminal`, `oneterm-highlight`, `oneterm-terminal-view`, `oneterm-local-shell` and `oneterm-ssh`, which `oneterm-app`'s `hotpath-profiling` / `hotpath-profiling-alloc` fan out and which alone only compile `hotpath`'s no-op macros. Sites are `#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]`, so a build without the feature has no `hotpath` in its graph. Only `oneterm-app` enables `hotpath/hotpath` (timing, plus its localhost metrics server; `HOTPATH_METRICS_SERVER_OFF=1`) and `hotpath/hotpath-alloc` (a counting allocator that wraps `OomResilientAlloc`). Never in a shipped build, so `THIRD-PARTY-NOTICES.md` (the default graph) does not list it; `cargo deny --all-features` covers it. Wiring: `docs/spec-intakes/IN-0046-hotpath-profiling/high-level-design.md`. |
 | Build / development | `embed-resource`; diagnostics also use `libc`, `polling`, and `oneterm-vt`; `futures` (dev-only) feeds russh's in-process SSH agent server in `oneterm-ssh` tests |
 

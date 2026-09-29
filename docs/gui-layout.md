@@ -160,30 +160,29 @@ item, the `ToggleFpsMonitor` action (Settings > Key Bindings > App Menu, "Toggle
 Monitor", shipped unbound per `DEC-0018`), and the **Show FPS Monitor** switch in Settings >
 General > Interface.
 
-When on, `OneTermWorkspace` renders an overlay at its root, pinned 12 px from the right edge
-and 12 px below the tab strip (`TITLE_BAR_HEIGHT` + 32 px), so it covers no caption button,
-right-dock toggle, tab-strip `+` or `...`; it lies over the top-right of whatever panel is
-there. On top is GPUI Kit's own HUD (`gpui-fps` 0.7's `FpsMonitor`): `MAX FPS` (the rate a
-full redraw could sustain, `1 / mean draw` capped by the display's refresh rate; right-click
-switches to the observed `FPS`, click collapses it to a tag), `INTERVAL`, `FRAME` (mean draw
-cost), `P95`, `DROP` (share of frames over one refresh period), `INV`, this process' `GPU` %
-(Windows: the PDH `GPU Engine` counters Task Manager uses; the row is absent where the
-platform has no per-process counter), `CPU` and `MEM` (private commit on Windows, not the
-status bar's private working set). The kit keeps its HUD on a fixed near-opaque dark palette
-and does not let an application change it. Under it OneTerm adds a strip in theme tokens
-(`popover` fill, `border`, `muted.foreground` labels, `popover.foreground` values): `DEVICE`,
-the name of the GPU gpui renders with (`Window::gpu_specs`, asked once when the HUD is shown;
-`n/a` where gpui does not say), and `API`, the renderer gpui-pre 0.3.7 compiles for the
-platform (`Direct3D 11`, `Metal`, `Vulkan/GL (wgpu)`) — a constant, because gpui does not
-report the backend or the Direct3D feature level at run time.
+When on, `OneTermWorkspace` renders the `FpsHud` view (`crates/workspace/src/widgets/fps_hud.rs`)
+at its root, pinned 12 px from the right edge and 12 px below the tab strip
+(`TITLE_BAR_HEIGHT` + 32 px), so it covers no caption button, right-dock toggle, tab-strip `+`
+or `...`; it lies over the top-right of whatever panel is there. It is OneTerm's own (GPUI
+Kit's `gpui-fps` was dropped on the owner's acceptance ruling of 2026-09-29, `US-0151`) and
+has four rows, in theme tokens only (`popover` fill, `border`, `muted.foreground` labels,
+`popover.foreground` values):
 
-Off, the workspace holds no monitor, so there is no readout clock, no frame trace and no
-resource probe. On, the kit's clock asks for one whole-window frame every 500 ms and samples
-CPU, memory and GPU on the background executor: an idle window goes from about 2 to about 4
-frames a second. What "off" still carries is gpui's `profiler` feature, which `gpui-fps`
-enables for the whole build: a 4 MiB foreground-journal ring, and no measurable UI-thread
-time. Measurements: `US-0151`.
+| Row | Value | Source |
+|---|---|---|
+| `FPS` | Frames the window actually drew in the last second | The HUD view is not cached, so it renders on every frame the window draws; it counts its renders and turns the count into a rate once a second on the `until_next_tick` grid. It never asks for a frame of its own beyond that once-a-second refresh, so an idle window reads about 2 and a window under output reads its real rate. It is not a refresh rate or a "max". |
+| `GPU` | The adapter gpui renders with | `Window::gpu_specs().device_name` (the DXGI adapter description on Windows), asked once when the HUD is shown; `(software)` for an emulated device, `n/a` where gpui returns none (macOS in gpui-pre 0.3.7). |
+| `API` | `Direct3D 11`, `Metal` or `Vulkan/GL (wgpu)` | A compile-time constant per platform: gpui-pre 0.3.7 reports neither the backend nor the Direct3D feature level at run time. |
+| `GPU usage` | This process' GPU share | Windows: PDH `\GPU Engine(*)\Utilization Percentage`, this pid's instances summed per engine type, the busiest type shown — what Task Manager's GPU column shows. The query is opened when the HUD is shown and closed when it is hidden, and sampled every 2 s on the background executor. `n/a` on Linux and macOS. |
 
+The HUD is opaque to the mouse except for the wheel (`block_mouse_except_scroll`): a click or
+a drag on it never reaches the terminal underneath (no selection change, nothing sent to a
+mouse-reporting TUI), while the wheel still scrolls it.
+
+Off, the workspace holds no HUD: no ticker, no PDH query, no per-frame count. On, the HUD
+costs one `u64` add per frame, one refresh a second (which lands on the status bar clock's
+own tick, so an idle window stays at about 2 frames a second), one PDH collection every 2 s off
+the UI thread, and about 4-5 MB for PDH's counter data. Measurements: `US-0151`.
 ## Text contrast floor and hierarchy
 
 Text in the built-in themes obeys two rules, both enforced by

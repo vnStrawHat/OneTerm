@@ -43,9 +43,6 @@ gpui_platform = { package = "gpui-pre-platform", version = "0.3", features = ["f
 gpui-base = "0.7"
 gpui-component = "0.7"
 gpui-kit-assets = "0.7"
-# The kit's FPS HUD (IN-0048), same release family. It turns on `gpui-pre/profiler` for the
-# whole graph; see docs/agents/dependencies.md § 1.
-gpui-fps = "0.7"
 
 # Internal crates
 oneterm-core = { path = "crates/core" }
@@ -135,6 +132,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_IO",
     "Win32_System_LibraryLoader",
     "Win32_System_Pipes",
+    # PDH `GPU Engine` counters: the FPS HUD's GPU usage (`US-0151`).
+    "Win32_System_Performance",
     # `GetProcessMemoryInfo`: the status bar's private working set (`US-0137`).
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",

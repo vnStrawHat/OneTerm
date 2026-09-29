@@ -174,9 +174,9 @@ pub struct OneTermWorkspace {
     /// (`on_app_quit` while the window is still open, `on_release` when the
     /// window closes) do not write the same document twice.
     layout_saved_on_exit: bool,
-    /// The FPS HUD while `UiConfig::show_fps` is on; `None` (and so no clock, no frame
-    /// trace, no sampler) while it is off (`US-0151`).
-    fps_hud: Option<crate::widgets::FpsHud>,
+    /// The FPS HUD while `UiConfig::show_fps` is on; `None` (and so no ticker, no PDH query,
+    /// no per-frame count) while it is off (`US-0151`).
+    fps_hud: Option<Entity<crate::widgets::FpsHud>>,
 }
 
 impl OneTermWorkspace {
@@ -627,6 +627,6 @@ impl Render for OneTermWorkspace {
             .child(self.title_bar.clone())
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
             .child(statusbar::build_status_bar(self, window, cx))
-            .children(self.fps_hud.as_ref().map(|hud| hud.render(cx)))
+            .children(self.fps_hud.clone())
     }
 }

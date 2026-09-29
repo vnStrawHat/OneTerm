@@ -27,7 +27,6 @@ oneterm-actions.workspace = true
 gpui.workspace = true
 gpui-base.workspace = true
 gpui-component.workspace = true
-gpui-fps.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 log.workspace = true
@@ -36,7 +35,8 @@ sysinfo.workspace = true
 hotpath = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
-# `GetProcessMemoryInfo` for the status bar's private working set (`US-0137`).
+# `GetProcessMemoryInfo` for the status bar's private working set (`US-0137`); PDH for the
+# FPS HUD's GPU usage (`US-0151`).
 windows-sys.workspace = true
 
 [dev-dependencies]
