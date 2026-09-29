@@ -44,7 +44,7 @@ Every test-only helper that builds a path with `std::env::temp_dir()` and remove
 unwind, so a failing assertion earlier in the test can no longer skip cleanup and leak the directory.
 
 `BUG-0082`'s Handoff named nine files as unverified candidates for this packet. Re-grepping
-`std::env::temp_dir()` under `crates/` this session (30 matches across 29 files — see Documentation)
+`std::env::temp_dir()` under `crates/` this session (31 files, 43 matches — see Documentation; the verify pass corrected the earlier "30 across 29")
 found that three of those nine were false positives (already guarded through an *imported* RAII type,
 not a locally-defined one, which is why `BUG-0082`'s own `impl Drop for` grep missed them) and found
 five more files with the same real leak shape that neither pass of `BUG-0082` named. The final, verified
@@ -257,7 +257,7 @@ automatic.
 
 - [x] Grep `std::env::temp_dir()` under `crates/` (Grep tool's `rg` backend is not installed on this
       box; used the Bash tool's `grep` and, where the rtk hook's git-command heuristic refused a
-      command, Read/individual `grep` calls instead) — 30 matches, 29 files.
+      command, Read/individual `grep` calls instead) — 31 files, 43 matches (corrected by the verify pass).
 - [x] For each file, read the surrounding code and classify: already guarded (skip), leak shape needing
       a fix, or out of scope (a real `fn main()` helper, not a test).
 - [x] Apply the `TemporaryFile`/`TemporaryDirectory` guard to each of the 11 files needing a fix (see
@@ -303,7 +303,7 @@ per file, reusing the existing pattern) is documented in Context and in the code
 
 ## Evidence and Gaps
 
-**Grep sweep, 29 files, 30 matches of `std::env::temp_dir()` under `crates/`** (already-fixed
+**Grep sweep, 31 files, 43 matches of `std::env::temp_dir()` under `crates/`** (already-fixed
 `BUG-0082` files included for completeness):
 
 | File | Status | Notes |

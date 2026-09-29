@@ -381,7 +381,7 @@ dependency (F7), public API / rustdoc / fmt / ignored-test census / `--no-defaul
 | --- | --- |
 | `process_is_alive_reports_dead_for_a_process_that_exited_with_code_259` (real `cmd /c exit 259` child) | PASS — reads dead; this exact case read alive before this rework |
 | `is_stale`/`sweep_keeps_a_sibling_named_after_a_live_pid`/`conpty_api_prefers_the_bundled_host`/`conpty_api_falls_back_to_the_system_host` (regression check, unchanged behavior) | PASS, all still green |
-| Full `pty::windows::conpty::tests` module (`cargo test -p oneterm-vt --lib -- conpty`) | 16 passed, 0 failed, 1 ignored (up from 15/0/1 — the one new test) |
+| Full `pty::windows::conpty::tests` module (`cargo test -p oneterm-vt --lib -- conpty`) | 15 passed, 0 failed, 1 ignored (16 test functions, up from 15: the one new test; verify pass 4 corrected the earlier "16 passed") |
 | `cargo clippy -p oneterm-vt --all-targets -- -D warnings` | PASS |
 | `cargo fmt --all -- --check` | PASS |
 | `python scripts/check-ignored-tests.py` | 19 ignored tests, all recorded (unchanged — no ignored test added or removed) |
