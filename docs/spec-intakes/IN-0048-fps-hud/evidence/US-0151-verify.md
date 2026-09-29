@@ -8,6 +8,28 @@ Builds: `fast-dev` of `09812f0d` and of `e0db223f`, each in this worktree's own 
 directory (fast-dev reads `ui_config.json` from `<cwd>\target`), and touched only the pid it
 launched.
 
+## Interim, superseded by the owner's scope change (2026-09-29)
+
+The owner narrowed the HUD to fps, GPU name, graphics API and GPU % and dropped the
+`gpui-fps` dependency (so gpui's `profiler` feature, `hdrhistogram` and the kit rows go). The
+verdict below is for `09812f0d` as built and is superseded. Facts that survive the change:
+
+1. **Per-frame cost of `profiler` with the HUD off.** Per draw: none measurable (release
+   micro-bench, min 54-58 us both ways; 258 allocations / 174,432 bytes per draw both ways).
+   Per task poll, every thread: +55-65 ns (hook 54-69 ns without, 115-137 ns with). Memory:
+   +4.1 MB commit, +3.8 MB private working set (the 4 MiB journal ring). Process-level idle and
+   flood time: no difference. Dropping the dependency removes all of it (F1).
+2. **The ~30 MB after toggling off** is gpui-pre-windows' per-window path textures (4x MSAA +
+   resolve, 20 B/px, committed at window creation, first touched by the kit chart's
+   `paint_path`); it scales with window area and is released on the next resize. Not PDH, not a
+   leak; 20 toggles do not ratchet (F2). A replacement HUD that draws no path avoids it.
+3. **`Window::gpu_specs()` on a dual-GPU box** names the adapter gpui renders with, by
+   construction: `gpu_specs` reads `GetDesc1` of the same `IDXGIAdapter1` the D3D11 device was
+   created on (first `EnumAdapters` entry that creates a device). Argued from source; this
+   machine has one adapter (F6).
+4. **D3D feature level:** not reachable through public API in gpui-pre 0.3.7. It is only
+   logged (`directx_devices.rs`); `GpuSpecs` has no such field (F6).
+
 ## Verdict
 
 **PASS**, with one owner decision before merge (F1) and four record corrections (F2-F5).
