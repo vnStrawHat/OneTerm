@@ -132,6 +132,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_IO",
     "Win32_System_LibraryLoader",
     "Win32_System_Pipes",
+    # PDH `GPU Engine` counters: the FPS HUD's GPU usage (`US-0151`).
+    "Win32_System_Performance",
     # `GetProcessMemoryInfo`: the status bar's private working set (`US-0137`).
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",

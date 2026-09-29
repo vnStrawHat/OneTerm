@@ -113,7 +113,8 @@ SURFACES: dict[str, tuple[str, ...]] = {
     # `popover.foreground` -- primary text on a popover that the kit routes through the more
     # specific token: a popup menu's title and empty label (kit `menu/popup_menu.rs:1441`),
     # a tooltip's body (kit `tooltip.rs:115`) and the command palette (kit
-    # `command/state.rs:828`). It falls back to `foreground` (kit `theme/schema.rs:970`), so
+    # `command/state.rs:828`), and the FPS HUD's row values
+    # (`crates/workspace/src/widgets/fps_hud.rs`). It falls back to `foreground` (kit `theme/schema.rs:970`), so
     # this row measures the primary colour in the variants that leave it unset and the
     # override in the 20 that set it.
     "popover.foreground": ("popover.background",),
@@ -156,7 +157,8 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #                         (`crates/terminal-view/src/panel/terminal_panel.rs:76`,
     #                         kit `menu/menu_item.rs:130`, `menu/popup_menu.rs:1341`),
     #                         tooltips and notification toasts (kit `tooltip.rs`,
-    #                         `notification.rs`, both popover-backed)
+    #                         `notification.rs`, both popover-backed), and the FPS HUD's
+    #                         row labels (`crates/workspace/src/widgets/fps_hud.rs`)
     #   accent.background     a hovered menu row, under the same shortcut hint: the `Kbd`
     #                         is drawn transparent over the row
     #                         (kit `menu/popup_menu.rs:1114`, `menu/menu_item.rs:115`)
