@@ -324,6 +324,27 @@ mod tests {
         form: SshAuthForm,
     }
 
+    /// Removes the fixture file on drop, including when an assertion panics
+    /// (`Drop` runs during unwind): a manual `std::fs::remove_file` as a
+    /// test's last statement never runs if an earlier assertion in the same
+    /// test panics (`BUG-0083`, same latent-leak shape `crash_report.rs`'s
+    /// `TemporaryDirectory` fixed for `BUG-0082`).
+    struct TemporaryFile(PathBuf);
+
+    impl Drop for TemporaryFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TemporaryFile {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
     impl Render for AuthFormTestView {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             gpui::div()
@@ -466,22 +487,20 @@ mod tests {
 
     #[test]
     fn private_key_validation_accepts_readable_file() {
-        let path = std::env::temp_dir().join(format!(
+        let path = TemporaryFile(std::env::temp_dir().join(format!(
             "oneterm-private-key-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos(),
-        ));
-        std::fs::write(&path, "not-a-real-key-but-readable").unwrap();
+        )));
+        std::fs::write(&*path, "not-a-real-key-but-readable").unwrap();
 
         assert_eq!(
             validate_private_key_path(path.to_str().unwrap()),
-            Ok(path.clone())
+            Ok(path.to_path_buf())
         );
-
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

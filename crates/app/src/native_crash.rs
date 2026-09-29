@@ -226,6 +226,30 @@ mod tests {
 
     use super::*;
 
+    /// Removes the fixture file on drop, including when an assertion panics
+    /// (`Drop` runs during unwind): a manual `fs::remove_file` as a test's
+    /// last statement never runs if an earlier assertion in the same test
+    /// panics (`BUG-0083`, same latent-leak shape `crash_report.rs`'s
+    /// `TemporaryDirectory` fixed for `BUG-0082`).
+    #[cfg(target_os = "windows")]
+    struct TemporaryFile(std::path::PathBuf);
+
+    #[cfg(target_os = "windows")]
+    impl Drop for TemporaryFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    impl std::ops::Deref for TemporaryFile {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
     #[test]
     fn fixed_buffer_formats_signed_and_hex_values_without_allocation() {
         let mut buffer = FixedBuffer::<64>::new();
@@ -239,19 +263,18 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn simulated_native_exception_writes_staging_report() {
-        let path = std::env::temp_dir().join(format!(
+        let path = TemporaryFile(std::env::temp_dir().join(format!(
             "oneterm-native-crash-test-{}.txt",
             std::process::id()
-        ));
-        drop(fs::remove_file(&path));
+        )));
+        drop(fs::remove_file(&*path));
         let handler = install(&path).expect("handler should attach");
 
         handler.simulate_exception(Some(crash_handler::ExceptionCode::User as i32));
         drop(handler);
 
-        let report = fs::read_to_string(&path).expect("native report should be readable");
+        let report = fs::read_to_string(&*path).expect("native report should be readable");
         assert!(report.contains("OneTerm Native Crash Report"));
         assert!(report.contains("Exception code: 0xCCA11ED"));
-        fs::remove_file(path).expect("fixture should be deleted");
     }
 }

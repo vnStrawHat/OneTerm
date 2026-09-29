@@ -2,6 +2,28 @@
 
 use super::*;
 
+/// Removes the fixture directory on drop, including when an assertion
+/// panics (`Drop` runs during unwind): a manual `std::fs::remove_dir_all`
+/// as a test's last statement never runs if an earlier assertion in the
+/// same test panics (`BUG-0083`, same latent-leak shape
+/// `crates/app/src/crash_report.rs`'s `TemporaryDirectory` fixed for
+/// `BUG-0082`).
+struct TemporaryDirectory(std::path::PathBuf);
+
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for TemporaryDirectory {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
 #[test]
 fn strip_line_comments() {
     let input = r#"{ "a": 1, // this is a comment
@@ -196,15 +218,15 @@ fn tab_title_osc_parses_and_round_trips() {
 
 #[test]
 fn explicit_path_persistence_is_isolated_and_quarantines_corruption() {
-    let directory = std::env::temp_dir().join(format!(
+    let directory = TemporaryDirectory(std::env::temp_dir().join(format!(
         "oneterm-terminal-config-test-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos(),
-    ));
-    std::fs::create_dir_all(&directory).unwrap();
+    )));
+    std::fs::create_dir_all(&*directory).unwrap();
     let path = directory.join("terminal.json");
     let missing = TerminalConfig::load_from(&path).unwrap();
     assert_eq!(missing.font.family, FontConfig::default().family);
@@ -219,14 +241,13 @@ fn explicit_path_persistence_is_isolated_and_quarantines_corruption() {
     let loaded = TerminalConfig::load_from(&path).unwrap();
     assert_eq!(loaded.font.family, FontConfig::default().family);
     assert!(!path.exists());
-    assert!(std::fs::read_dir(&directory).unwrap().any(|entry| {
+    assert!(std::fs::read_dir(&*directory).unwrap().any(|entry| {
         entry
             .unwrap()
             .file_name()
             .to_string_lossy()
             .contains(".invalid-")
     }));
-    let _ = std::fs::remove_dir_all(directory);
 }
 
 #[test]
@@ -234,14 +255,14 @@ fn legacy_fixture_migrates_and_current_save_is_idempotent() {
     let legacy = include_str!("../../tests/fixtures/persistence/terminal-v0.json");
     let config = TerminalConfig::parse_document(legacy).unwrap();
     assert_eq!(config.font.family.as_deref(), Some("Legacy Mono"));
-    let directory = std::env::temp_dir().join(format!(
+    let directory = TemporaryDirectory(std::env::temp_dir().join(format!(
         "oneterm-terminal-schema-test-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos(),
-    ));
+    )));
     let path = directory.join("terminal.json");
     config.save_to(&path).unwrap();
     let value: serde_json::Value =
@@ -249,19 +270,18 @@ fn legacy_fixture_migrates_and_current_save_is_idempotent() {
     assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
     let restored = TerminalConfig::load_from(&path).unwrap();
     assert_eq!(restored.font.family, config.font.family);
-    let _ = std::fs::remove_dir_all(directory);
 }
 
 #[test]
 fn unreadable_document_is_a_typed_load_error_and_is_left_untouched() {
-    let directory = std::env::temp_dir().join(format!(
+    let directory = TemporaryDirectory(std::env::temp_dir().join(format!(
         "oneterm-terminal-unreadable-test-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos(),
-    ));
+    )));
     // A directory in place of the file fails to read with something other than
     // NotFound on every platform, standing in for a permission failure.
     let path = directory.join("terminal.json");
@@ -272,5 +292,4 @@ fn unreadable_document_is_a_typed_load_error_and_is_left_untouched() {
         "expected ConfigLoad, got {error}"
     );
     assert!(path.is_dir(), "an unreadable document must not be replaced");
-    let _ = std::fs::remove_dir_all(directory);
 }

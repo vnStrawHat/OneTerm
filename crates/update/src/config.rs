@@ -333,33 +333,54 @@ fn merge_owned_fields(path: &Path, keys: &[&str], values: &Value) -> std::io::Re
 mod tests {
     use super::*;
 
+    /// Removes the fixture directory on drop, including when an assertion
+    /// panics (`Drop` runs during unwind): a manual `std::fs::remove_dir_all`
+    /// as a test's last statement never runs if an earlier assertion in the
+    /// same test panics (`BUG-0083`, same latent-leak shape
+    /// `crates/app/src/crash_report.rs`'s `TemporaryDirectory` fixed for
+    /// `BUG-0082`).
+    struct TemporaryDirectory(std::path::PathBuf);
+
+    impl Drop for TemporaryDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TemporaryDirectory {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
     #[test]
     fn missing_file_uses_defaults_and_creates_document() {
-        let dir = test_dir("missing");
+        let dir = TemporaryDirectory(test_dir("missing"));
         let path = dir.join("update_config.json");
         let loaded = UpdateConfig::read_from(&path);
         assert!(loaded.needs_document_repair);
         let config = loaded.config;
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&*dir).unwrap();
         config.save_preferences_to(&path).unwrap();
         assert_eq!(config.check_interval_hours, 24);
         assert!(config.auto_check);
         assert_eq!(config.proxy_url, None);
         assert!(config.verify_certificates);
         assert!(path.exists());
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn read_never_writes_but_reports_repair_need() {
-        let dir = test_dir("read-only");
+        let dir = TemporaryDirectory(test_dir("read-only"));
         let path = dir.join("update_config.json");
 
         let loaded = UpdateConfig::read_from(&path);
         assert!(loaded.needs_document_repair);
         assert!(!path.exists(), "read must not create the document");
 
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&*dir).unwrap();
         std::fs::write(&path, b"not-json").unwrap();
         let loaded = UpdateConfig::read_from(&path);
         assert!(loaded.needs_document_repair);
@@ -370,21 +391,20 @@ mod tests {
         loaded.config.save_preferences_to(&path).unwrap();
         let repaired = UpdateConfig::read_from(&path);
         assert!(!repaired.needs_document_repair);
-        assert!(std::fs::read_dir(&dir).unwrap().any(|entry| {
+        assert!(std::fs::read_dir(&*dir).unwrap().any(|entry| {
             entry
                 .unwrap()
                 .file_name()
                 .to_string_lossy()
                 .contains(".invalid-")
         }));
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn invalid_document_is_quarantined() {
-        let dir = test_dir("invalid");
+        let dir = TemporaryDirectory(test_dir("invalid"));
         let path = dir.join("update_config.json");
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&*dir).unwrap();
         std::fs::write(&path, b"not-json").unwrap();
         let loaded = UpdateConfig::read_from(&path);
         assert!(loaded.needs_document_repair);
@@ -395,22 +415,21 @@ mod tests {
         assert!(config.verify_certificates);
         // The invalid file is quarantined and a default document takes its place.
         assert!(!UpdateConfig::read_from(&path).needs_document_repair);
-        assert!(std::fs::read_dir(&dir).unwrap().any(|entry| {
+        assert!(std::fs::read_dir(&*dir).unwrap().any(|entry| {
             entry
                 .unwrap()
                 .file_name()
                 .to_string_lossy()
                 .contains(".invalid-")
         }));
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn preference_edit_during_check_survives_check_completion() {
-        let dir = test_dir("merge-check");
+        let dir = TemporaryDirectory(test_dir("merge-check"));
         let path = dir.join("update_config.json");
         // The UI entity is the in-memory truth; the checker works on a copy.
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&*dir).unwrap();
         let mut entity = UpdateConfig::read_from(&path).config;
         let mut checker_copy = entity.clone();
 
@@ -430,14 +449,13 @@ mod tests {
 
         let on_disk = UpdateConfig::read_from(&path).config;
         assert_eq!(on_disk, entity);
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn preference_and_cache_writers_do_not_lose_each_others_fields() {
-        let dir = test_dir("merge-concurrent");
+        let dir = TemporaryDirectory(test_dir("merge-concurrent"));
         let path = dir.join("update_config.json");
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&*dir).unwrap();
 
         let mut writers = Vec::new();
         for index in 0..4 {
@@ -476,12 +494,11 @@ mod tests {
         assert!(!on_disk.verify_certificates);
         assert!(on_disk.last_etag.as_deref().unwrap().starts_with("etag-"));
         assert_eq!(on_disk.last_checked_version.as_deref(), Some("0.3.0"));
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn cleared_fields_are_removed_and_corrupt_documents_are_quarantined() {
-        let dir = test_dir("merge-clear");
+        let dir = TemporaryDirectory(test_dir("merge-clear"));
         let path = dir.join("update_config.json");
         let mut config = UpdateConfig {
             proxy_url: Some("https://proxy.example".to_owned()),
@@ -502,14 +519,13 @@ mod tests {
         .unwrap();
         let on_disk = UpdateConfig::read_from(&path).config;
         assert_eq!(on_disk.last_etag.as_deref(), Some("etag"));
-        assert!(std::fs::read_dir(&dir).unwrap().any(|entry| {
+        assert!(std::fs::read_dir(&*dir).unwrap().any(|entry| {
             entry
                 .unwrap()
                 .file_name()
                 .to_string_lossy()
                 .contains(".invalid-")
         }));
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

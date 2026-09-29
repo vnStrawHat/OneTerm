@@ -288,17 +288,39 @@ impl UiConfig {
 mod tests {
     use super::*;
 
+    /// Removes the fixture directory on drop, including when an assertion
+    /// panics (`Drop` runs during unwind): a manual `std::fs::remove_dir_all`
+    /// as a test's last statement never runs if an earlier assertion in the
+    /// same test panics (`BUG-0083`, same latent-leak shape
+    /// `crates/app/src/crash_report.rs`'s `TemporaryDirectory` fixed for
+    /// `BUG-0082`).
+    struct TemporaryDirectory(std::path::PathBuf);
+
+    impl Drop for TemporaryDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TemporaryDirectory {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
     #[test]
     fn explicit_path_roundtrip_and_corruption_quarantine_are_isolated() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = TemporaryDirectory(std::env::temp_dir().join(format!(
             "oneterm-ui-config-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos(),
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
+        )));
+        std::fs::create_dir_all(&*directory).unwrap();
         let path = directory.join("ui_config.json");
         let missing = UiConfig::load_from(&path).unwrap();
         assert_eq!(missing.right_dock_mode, RightDockMode::SshClient);
@@ -331,14 +353,13 @@ mod tests {
         let fallback = UiConfig::load_from(&path).unwrap();
         assert!(fallback.theme_name.is_none());
         assert!(!path.exists());
-        assert!(std::fs::read_dir(&directory).unwrap().any(|entry| {
+        assert!(std::fs::read_dir(&*directory).unwrap().any(|entry| {
             entry
                 .unwrap()
                 .file_name()
                 .to_string_lossy()
                 .contains(".invalid-")
         }));
-        let _ = std::fs::remove_dir_all(directory);
     }
     #[test]
     fn legacy_partial_schema_uses_current_defaults() {
@@ -363,14 +384,14 @@ mod tests {
         let legacy = include_str!("../tests/fixtures/persistence/ui-config-v0.json");
         let config = UiConfig::parse_document(legacy).unwrap();
         assert_eq!(config.theme_name.as_deref(), Some("Legacy Theme"));
-        let directory = std::env::temp_dir().join(format!(
+        let directory = TemporaryDirectory(std::env::temp_dir().join(format!(
             "oneterm-ui-schema-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos(),
-        ));
+        )));
         let path = directory.join("ui_config.json");
         config.save_to(&path).unwrap();
         let value: serde_json::Value =
@@ -378,7 +399,6 @@ mod tests {
         assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
         let restored = UiConfig::load_from(&path).unwrap();
         assert_eq!(restored.theme_name, config.theme_name);
-        let _ = std::fs::remove_dir_all(directory);
     }
 
     /// M4 (`DEC-0019`): an elevated window reads `ui_config.json` and writes
@@ -402,14 +422,14 @@ mod tests {
 
     #[test]
     fn unreadable_document_is_typed_and_blocked_defaults_refuse_to_save() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = TemporaryDirectory(std::env::temp_dir().join(format!(
             "oneterm-ui-unreadable-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos(),
-        ));
+        )));
         // A directory in place of the file fails to read with something other
         // than NotFound on every platform, standing in for a permission failure.
         let path = directory.join("ui_config.json");
@@ -428,6 +448,5 @@ mod tests {
             Err(AppError::ConfigLoad { .. })
         ));
         assert!(!target.exists());
-        let _ = std::fs::remove_dir_all(directory);
     }
 }

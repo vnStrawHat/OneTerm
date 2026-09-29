@@ -7,7 +7,29 @@ use super::transfer::staging::{finalize_local_file, temporary_local_sibling};
 use super::transfer::upload::{LocalUploadEntry, collect_local_upload_entries};
 use super::*;
 
-fn temporary_dir() -> PathBuf {
+/// Removes the fixture directory on drop, including when an assertion
+/// panics (`Drop` runs during unwind): a manual `std::fs::remove_dir_all`
+/// as a test's last statement never runs if an earlier assertion in the
+/// same test panics (`BUG-0083`, same latent-leak shape
+/// `crates/app/src/crash_report.rs`'s `TemporaryDirectory` fixed for
+/// `BUG-0082`).
+struct TemporaryDirectory(PathBuf);
+
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for TemporaryDirectory {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+fn temporary_dir() -> TemporaryDirectory {
     // Distinct per call so parallel tests never share a directory, and so two
     // calls within one test (e.g. `root` and `outside`) can't alias when the
     // wall clock is too coarse to separate them (as on macOS). The atomic
@@ -21,10 +43,10 @@ fn temporary_dir() -> PathBuf {
         .unwrap()
         .as_nanos();
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
+    TemporaryDirectory(std::env::temp_dir().join(format!(
         "oneterm-sftp-security-{}-{nonce}-{sequence}",
         std::process::id()
-    ))
+    )))
 }
 
 #[test]
@@ -65,7 +87,7 @@ fn accepts_one_safe_component_and_keeps_it_below_root() {
 #[tokio::test]
 async fn local_finalization_replaces_only_after_complete_write() {
     let root = temporary_dir();
-    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&*root).unwrap();
     let target = root.join("result.txt");
     let temporary = temporary_local_sibling(&target, "part").unwrap();
     std::fs::write(&target, b"old").unwrap();
@@ -75,8 +97,7 @@ async fn local_finalization_replaces_only_after_complete_write() {
 
     assert_eq!(std::fs::read(&target).unwrap(), b"complete");
     assert!(!temporary.exists());
-    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
-    let _ = std::fs::remove_dir_all(root);
+    assert_eq!(std::fs::read_dir(&*root).unwrap().count(), 1);
 }
 
 /// Create a directory symlink `link` → `target`, or `None` when the platform
@@ -108,12 +129,10 @@ fn try_symlink_dir(target: &Path, link: &Path) -> Option<()> {
 async fn refuses_preexisting_symlink_below_download_root() {
     let root = temporary_dir();
     let outside = temporary_dir();
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::create_dir_all(&outside).unwrap();
-    let root = std::fs::canonicalize(&root).unwrap();
+    std::fs::create_dir_all(&*root).unwrap();
+    std::fs::create_dir_all(&*outside).unwrap();
+    let root = std::fs::canonicalize(&*root).unwrap();
     if try_symlink_dir(&outside, &root.join("linked")).is_none() {
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&outside);
         return;
     }
     let candidate = root.join("linked").join("file.txt");
@@ -122,9 +141,6 @@ async fn refuses_preexisting_symlink_below_download_root() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("symlink"));
-
-    let _ = std::fs::remove_dir_all(&root);
-    let _ = std::fs::remove_dir_all(&outside);
 }
 
 #[test]
@@ -161,7 +177,7 @@ fn local_upload_discovery_lists_directories_and_files() {
     std::fs::write(root.join("nested").join("second.txt"), b"second").unwrap();
 
     let discovered = collect_local_upload_entries(
-        root.clone(),
+        root.to_path_buf(),
         RemotePath::new("/remote"),
         &CancellationToken::new(),
     )
@@ -191,7 +207,6 @@ fn local_upload_discovery_lists_directories_and_files() {
             .count(),
         2
     );
-    let _ = std::fs::remove_dir_all(root);
 }
 
 /// SEC-16: the id databases are parsed line by line, so a truncated read

@@ -551,6 +551,30 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
 mod tests {
     use super::*;
 
+    /// Removes the fixture script on drop, including when an assertion
+    /// panics (`Drop` runs during unwind): a manual `std::fs::remove_file`
+    /// gated behind a successful write never runs if the write itself panics
+    /// (`BUG-0083`, same latent-leak shape `crash_report.rs`'s
+    /// `TemporaryDirectory` fixed for `BUG-0082`).
+    #[cfg(windows)]
+    struct TemporaryFile(PathBuf);
+
+    #[cfg(windows)]
+    impl Drop for TemporaryFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[cfg(windows)]
+    impl std::ops::Deref for TemporaryFile {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
     /// The shell literal whose *value* bash's `PS1` must end up carrying
     /// (`US-0136` MAJ-1, then NEW-MIN-1). The expectation, written out here:
     /// `BASH_OSC133_PROMPT_COMMAND` embeds it, and `crates/ssh`'s bootstrap
@@ -823,7 +847,8 @@ mod tests {
     fn enter_guard_verdict(exe: &str, label: &str, binding: &str) -> Option<String> {
         use std::io::Write;
 
-        let script = std::env::temp_dir().join(format!("oneterm-us0136-{label}.ps1"));
+        let script =
+            TemporaryFile(std::env::temp_dir().join(format!("oneterm-us0136-{label}.ps1")));
         let body = format!(
             "Import-Module PSReadLine -ErrorAction SilentlyContinue\n\
              {binding}\n\
@@ -831,14 +856,13 @@ mod tests {
              if ($global:__OneTermEnter) {{ 'INSTALLED:' + $global:__OneTermEnter }} \
              else {{ 'DECLINED' }}\n"
         );
-        std::fs::File::create(&script)
+        std::fs::File::create(&*script)
             .and_then(|mut file| file.write_all(body.as_bytes()))
             .expect("write the probe script");
         let output = std::process::Command::new(exe)
             .args(["-NoLogo", "-NoProfile", "-File"])
-            .arg(&script)
+            .arg(&*script)
             .output();
-        let _ = std::fs::remove_file(&script);
         let output = output.ok()?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         Some(

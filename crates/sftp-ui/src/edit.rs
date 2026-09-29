@@ -934,6 +934,28 @@ mod tests {
     };
     use oneterm_core::EditorChoice;
 
+    /// Removes the fixture directory on drop, including when an assertion
+    /// panics (`Drop` runs during unwind): a manual `std::fs::remove_dir_all`
+    /// gated behind several earlier assertions never runs if one of them
+    /// panics first (`BUG-0083`, same latent-leak shape
+    /// `crates/app/src/crash_report.rs`'s `TemporaryDirectory` fixed for
+    /// `BUG-0082`).
+    struct TemporaryDirectory(std::path::PathBuf);
+
+    impl Drop for TemporaryDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TemporaryDirectory {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
     #[test]
     fn os_default_editor_maps_to_os_default_choice() {
         let cfg = EditorConfig {
@@ -996,12 +1018,12 @@ mod tests {
 
     #[test]
     fn temp_signature_changes_on_content_edit_but_not_on_a_read() {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = TemporaryDirectory(std::env::temp_dir().join(format!(
             "oneterm-edit-sig-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        )));
+        std::fs::create_dir_all(&*dir).unwrap();
         let file = dir.join("f.txt");
         std::fs::write(&file, b"hello").unwrap();
 
@@ -1016,7 +1038,7 @@ mod tests {
         std::fs::write(&file, b"hello world").unwrap();
         assert_ne!(temp_signature(&file), sig);
         // A missing file has no fingerprint.
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&*dir).ok();
         assert_eq!(temp_signature(&file), None);
     }
 
