@@ -31,6 +31,7 @@ use crate::state::AppState;
 * Optimize only after profiling identifies a real bottleneck.
 * Windows-shaped strings are never built with `std::path`: `Path`/`PathBuf` use the *host's* separator and component rules, so a Windows path joined or split on the Linux or macOS CI runner comes out wrong (`US-0114`, `US-0130`) — build and read it as a string with `\` spelled out.
 * `#[cfg(windows)]` goes on the FFI call, not on the decision around it: a pure helper reachable only from a platform-gated body is dead code on the other runners, and its tests run on one OS instead of three. `#[allow(dead_code)]` there means the split is in the wrong place.
+* A helper used only from `cfg(windows)` code is gated `#[cfg(any(windows, test))]` (so its tests still run on every OS) or given a cross-platform caller — never `#[allow(dead_code)]`.
 * Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers, fallbacks, or migrations
 
 ### Crate organization
