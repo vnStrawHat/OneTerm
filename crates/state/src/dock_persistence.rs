@@ -325,14 +325,7 @@ mod persistence_tests {
 
     #[test]
     fn explicit_path_updates_are_isolated_and_atomic() {
-        let directory = std::env::temp_dir().join(format!(
-            "oneterm-dock-document-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-        ));
+        let directory = temp_directory("document-test");
         let path = directory.join("docks.json");
         update_dock_document_at(&path, |document| {
             document.zoomed_panel = Some("terminal".into());
@@ -358,15 +351,7 @@ mod persistence_tests {
 
     #[test]
     fn invalid_document_is_quarantined_and_updates_keep_working() {
-        let directory = std::env::temp_dir().join(format!(
-            "oneterm-dock-recovery-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
+        let directory = temp_directory("recovery-test");
         let path = directory.join("docks.json");
         std::fs::write(&path, b"{ not json").unwrap();
 
@@ -380,7 +365,7 @@ mod persistence_tests {
             panic!("expected recovery, got {outcome:?}");
         };
         let quarantined = quarantined.expect("the corrupt file must be moved aside");
-        assert_eq!(quarantined.parent(), Some(directory.as_path()));
+        assert_eq!(quarantined.parent(), Some(directory.as_ref()));
         assert_eq!(std::fs::read(&quarantined).unwrap(), b"{ not json");
         let restored = read_dock_document_from(&path)
             .unwrap()
@@ -414,15 +399,7 @@ mod persistence_tests {
 
     #[test]
     fn legacy_fixture_migrates_during_shared_update() {
-        let directory = std::env::temp_dir().join(format!(
-            "oneterm-dock-schema-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
+        let directory = temp_directory("schema-test");
         let path = directory.join("docks.json");
         std::fs::write(
             &path,
