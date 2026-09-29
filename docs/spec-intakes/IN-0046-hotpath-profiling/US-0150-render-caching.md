@@ -13,7 +13,7 @@ Created: 2026-09-29
 - [x] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -64,6 +64,9 @@ frames with no visual or functional regression; otherwise the reason is recorded
   toggle click work on the instance under test, as in `before`.
 - [x] A `#[gpui::test]` per kept view: not re-rendered on an unrelated notify, re-rendered
   when its own state changes; the status bar's cached height pinned against the kit layout.
+- [x] Accessibility (verification F1): while AccessKit is active both views are embedded
+  uncached, and the title bar's six nodes (`MenuBar`, `Button "OneTerm"`, `ToolBar` and its
+  three toggle `Button`s) stay in the UI Automation tree on every idle frame.
 - [x] Gates: fmt, clippy `-D warnings`, `cargo test -p oneterm-workspace -p oneterm-app
   -p oneterm-terminal-view`, theme contrast, doc paths, English, full
   `pwsh scripts/ci-local.ps1` (see Evidence).
@@ -149,14 +152,16 @@ Commits on `perf/render-caching`: `89536cc6` (title bar content cached), `e4133b
 | 2. Status bar cached | **Kept** | Bar renders 1.00 -> 0.51-0.61 per idle focused frame, 0.05-0.09 under TUI; its sites 112 -> 65 us per idle focused frame, 55 -> 4.6 under TUI. Whole-thread effect (`v1` -> `v2`): -0.7 % to +6 % idle (below noise), -1.5 % / -4.1 % / -28 % TUI per frame. Height pinned at rem 12-20; pixels 0 outside the clock's seconds and CPU/MEM value, also at a 20 px UI font. Tooltip (US-0148): hovered 8 s over the cached bar, table and label advanced together every 2 s (`raw/us0150/pixels/resource-tooltip-live-v2.png`). |
 | 3. Tab bar `+` trigger cached | **Dropped** | `v2` -> `after`: idle focused -3.0 % / +4.7 %, unfocused +15 %, TUI +2.1 % per frame; sampler dropdown triggers 7.0 / 10.6 -> 6.8 per frame (mostly the kit's `...` menus). Patch kept in `raw/us0150/tools/dropped-add-tab-button.patch`. Kit notes: research § 9.4. |
 | 4. Cursor overlay outside the dock | **Not built** | Ceiling: the blink is ~0.95 frames/s of 2.09 (`-NoBlink` runs). Needs a cached dock area, which gpui's refresh cascade makes worse on every output frame (US-0145 § 8.3); a block cursor re-paints the covered glyph from the element's glyph cache and the IME composition is anchored there, so an overlay is not pixel-identical without duplicating both. Research § 9.5. |
-| 5. Upstream gpui | Written, not filed | Window-control hitbox replay (`window.rs` 987 / 1014 / 1952 / 3879 / 5128, `div.rs` 2577); no refresh cascade for a dirty cached view (`view.rs` 489 / 501 / 564). Research § 9.6. |
+| 5. Upstream gpui | Written, not filed | Window-control hitbox replay (`window.rs` 987 / 1014 / 1952 / 3879 / 5128, `div.rs` 2577); no refresh cascade for a dirty cached view (`view.rs` 489 / 501 / 564); replay AccessKit nodes for a reused view (`window/a11y.rs` 275 / 429, `window.rs` 1004 / 3814 / 6794, `view.rs` 484-489; verification F1). Research § 9.6. |
 
 Before -> final (`v2`), interleaved pairs: idle focused 17.8-31.5 -> 16.8-26.5 Mcycles/s,
-5 of 6 pairs lower, median -9 %; frames/s unchanged (about 2.1); idle unfocused 3 of 4
-lower, median -15 %; TUI -8 % and -4 % Mcycles per frame (two pairs at the same frame
-rate); hotpath UI thread % follows the frame rate and is too coarse at idle (0.3-3.3 %).
-The first pair of the day (`after`, all three candidates) read 31.6 -> 25.2 (-20 %) idle
-focused and 20.6 -> 17.2 unfocused.
+5 of 6 pairs lower, median -9 %; frames/s unchanged (about 2.1); TUI -8 % and -4 %
+Mcycles per frame (two pairs at the same frame rate); hotpath UI thread % follows the
+frame rate and is too coarse at idle (0.3-3.3 %). **Idle unfocused: no expected change**
+(verification F4): the clock drives those frames and the status bar re-renders on 94 % of
+them, so only the title bar's ~16 us per frame can be saved; the pairs read -15 % here and
++22 % in the verification, both noise. The first pair of the day (`after`, all three
+candidates) read 31.6 -> 25.2 (-20 %) idle focused.
 
 Gates: `cargo fmt --all -- --check` clean; `cargo clippy --workspace --all-targets -- -D
 warnings` clean; `cargo test -p oneterm-workspace -p oneterm-app -p oneterm-terminal-view`
@@ -167,11 +172,58 @@ lines, none failed, final line `ci-local: all checks passed.`
 
 Tests: `title_bar::tests::caching::another_views_frame_reuses_the_content_and_a_mode_change_does_not`,
 `statusbar::tests::caching::another_views_frame_reuses_the_bar_and_an_item_notify_does_not`,
-`statusbar::tests::caching::status_bar_height_matches_the_kit_layout`; mutations (content
-embedded uncached, no `UiConfig` observer, height without the border) each fail one.
+`statusbar::tests::caching::status_bar_height_matches_the_kit_layout` (since the rework: the
+workspace's embed and its accessibility branch against the kit layout),
+`title_bar::tests::caching::the_content_fills_the_kit_row_cached_or_not` (rework); mutations
+(content embedded uncached, no `UiConfig` observer, height without the border, and the five
+of the rework) each fail one.
+
+### Rework after the verification (`evidence/US-0150-verify.md`, FAIL on F1)
+
+- **F1 (accessibility).** gpui-pre 0.3.7 does not replay a reused view's AccessKit nodes,
+  so the cached title-bar content took `MenuBar`, `Button "OneTerm"`, `ToolBar` and the three
+  toggle `Button`s out of the UI Automation tree on every reused frame. Both embeds now go
+  through `crate::layout::cached_unless_a11y` (`crates/workspace/src/layout/mod.rs`):
+  cached while `window.is_a11y_active()` is false, otherwise the view laid out uncached in a
+  box of the same style (AccessKit activation refreshes the window, `window.rs` 1649-1661).
+  UI Automation client against the own window (`raw/us0150/tools/uia.ps1`, 5 samples 3 s
+  apart after activation, idle): **6/6 title-bar nodes in every sample**, focused (18 nodes)
+  and unfocused (17), plus the status bar's dock `Button` (`raw/us0150/a11y/rework-*.txt`).
+  With a11y off, caching is unchanged: 0.08 content and 0.53 status-bar renders per idle
+  focused frame (`runs/us0150-rework-idleF2`). One launch had AccessKit activate by itself
+  1 s after start, with no client of ours (`a11y/us0150-rework-idleF-stderr.log`): that
+  window rendered both views on every frame (1.00 per frame), the fallback working as
+  designed. Unit test: not possible for the active branch, because the test platform's
+  window ignores `a11y_init` (gpui-pre 0.3.7 `platform.rs` line 1070, default no-op), so
+  `is_a11y_active` never turns true; the uncached branch is driven directly through
+  `embed_view(.., cached: false)` and must lay out exactly like the cached one
+  (`the_content_fills_the_kit_row_cached_or_not`, `status_bar_height_matches_the_kit_layout`).
+  Pre-existing, upstream, out of scope: the kit's cached right-dock panel (`Pane "SSH
+  client"`, `gpui-component` 0.7 `dock/tab_panel.rs` line 782) drops out of the tree the same
+  way on main.
+- **F2 (production embeds under test).** `statusbar::embed` owns the bar's box and the
+  switch and is what the workspace renders and the tests host; the title bar's box is
+  `content_style()`, used by `AppTitleBar::render` and the tests. Mutations, each killed:
+  embed always uncached, the a11y switch inverted, the bar at a fixed 28 px, the title
+  content at a fixed 100 px, the uncached box without its style.
+- **F3 (snap layouts).** The Windows 11 snap-layout flyout is proven only by this packet's
+  real-mouse capture (`raw/us0150/pixels/window-controls-before-after.png`); the
+  verification's synthetic hover did not register. The hit test answers `HTMAXBUTTON` there,
+  as on main.
+- **F4.** Idle unfocused reworded above and in research § 9.2.
+- Rework gates: fmt clean; clippy `-D warnings` clean with no feature and with
+  `oneterm-app/hotpath-profiling`; `cargo test -p oneterm-workspace -p oneterm-app
+  -p oneterm-terminal-view` 26 + 398 (3 ignored) + 46 (3 ignored) passed;
+  `check-doc-paths.py` (212 paths), `check-english.py` (1076 files) pass; full
+  `CARGO_BUILD_JOBS=3 pwsh scripts/ci-local.ps1`: 141 `test result: ok` lines, none failed,
+  final line `ci-local: all checks passed.`
 
 Gaps:
 
+- AccessKit on Windows stays active for the window's life once any UI Automation client
+  queries it (a screen reader, but also, as seen once here, an unidentified system client
+  1 s after launch). Such a window gets none of this story's gain (both views render on
+  every frame, as on main). How often that happens on users' machines is not measured.
 - The whole-thread cycle counter moves ±20 % between runs of the same build on this
   machine (another agent building, desktop state), so the status bar's share (about 1-2 %
   idle) is proven by its hotpath sites and render counts, not by the counter; the owner
@@ -192,7 +244,8 @@ Gaps:
 
 ## Handoff
 
-- State: implemented on `perf/render-caching`; not merged, not pushed.
-- Next owner / action: coordinator: independent verification, then merge; `harness.db`
+- State: reworked after the verification (F1-F4) on `perf/render-caching`; not merged,
+  not pushed.
+- Next owner / action: coordinator: re-check F1/F2, then merge; `harness.db`
   row by whoever owns the database.
 - Blockers: none.

@@ -1,0 +1,48 @@
+[2026-09-29T10:38:50Z INFO  oneterm_app] OneTerm starting up
+[2026-09-29T10:38:50Z INFO  gpui_windows::directx_devices] Using GPU: Intel(R) UHD Graphics 770
+[2026-09-29T10:38:50Z INFO  gpui_windows::directx_devices] Created device with Direct3D 11.1 feature level.
+[2026-09-29T10:38:50Z INFO  gpui_windows::direct_write] Use Segoe UI as UI font.
+[2026-09-29T10:38:50Z INFO  oneterm_settings::ui_config] Created default ui_config.json at "C:\\Users\\trunglt\\AppData\\Local\\Temp\\claude\\D--TrungKFC-Research-Rust-myTerm2\\fa2d0135-9c28-4a69-a255-ba7479e604cb\\scratchpad\\us0150\\runs\\home-us0150-rework-idleF\\.OneTerm\\ui_config.json"
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: zed-one-dark
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: zed-one-light
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: adventure
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: alduin
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: asciinema
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: aurora
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: ayu
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: catppuccin
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: everforest
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: fahrenheit
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: flexoki
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: gruvbox
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: harper
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: hybrid
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: jellybeans
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: kibble
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: macos-classic
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: matrix
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: mellifluous
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: molokai
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: solarized
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: spaceduck
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: tokyonight
+[2026-09-29T10:38:50Z DEBUG oneterm_theme::theme] loaded embedded theme: twilight
+[2026-09-29T10:38:50Z INFO  oneterm_settings::terminal_config::document] Created default terminal.json at "C:\\Users\\trunglt\\AppData\\Local\\Temp\\claude\\D--TrungKFC-Research-Rust-myTerm2\\fa2d0135-9c28-4a69-a255-ba7479e604cb\\scratchpad\\us0150\\runs\\home-us0150-rework-idleF\\.OneTerm\\terminal.json"
+[2026-09-29T10:38:51Z INFO  oneterm_vt::pty::windows::conpty] conpty: system
+[2026-09-29T10:38:51Z DEBUG oneterm_sftp_ui::panel] SftpPanel::new: observing workspace active state changes
+[2026-09-29T10:38:51Z DEBUG oneterm_workspace::layout::workspace::persistence] Save layout [trigger=reset_default_layout] → zoomed_panel=None, right_dock_open=true
+[2026-09-29T10:38:51Z INFO  oneterm_terminal_view::terminal_view::completion] completion: controller initialized (kind=Cmd, family=Cmd, enabled=true)
+[2026-09-29T10:38:51Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-29T10:38:51Z INFO  oneterm_settings_ui::updates::actions] Automatic update check is disabled in Settings.
+[2026-09-29T10:38:51Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-29T10:38:51Z DEBUG oneterm_terminal::backend::osc_router] OscRouter: shell mark PromptStart
+[2026-09-29T10:38:51Z DEBUG oneterm_terminal::backend::osc_router] OscRouter: shell mark PromptEnd
+[2026-09-29T10:38:51Z INFO  gpui::window] Accessibility activated
+[2026-09-29T10:38:51Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" prompt_found=true visible=false n=0
+[2026-09-29T10:38:51Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" prompt_found=true visible=false n=0
+[2026-09-29T10:38:53Z DEBUG oneterm_workspace::layout::workspace::persistence] Save layout [trigger=debounce] → zoomed_panel=None, right_dock_open=true
+[2026-09-29T10:39:56Z INFO  oneterm_workspace::layout::workspace] save_layout_on_exit [trigger=on_close] → writing dock state before quit
+[2026-09-29T10:39:56Z DEBUG oneterm_workspace::layout::workspace::persistence] Save layout [trigger=on_close] → zoomed_panel=None, right_dock_open=true
+[2026-09-29T10:39:56Z ERROR] Invalid window handle (0x80040102)
+[2026-09-29T10:39:56Z ERROR] Invalid window handle. (0x80070578)
+[2026-09-29T10:39:56Z ERROR] Invalid window handle. (0x80070578)

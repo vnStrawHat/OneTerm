@@ -247,6 +247,15 @@ The rules that follow from it:
   `status_bar_height_matches_the_kit_layout`, so a kit change that resizes the bar fails
   the test instead of shifting pixels. Caching the tab bar's `+` button was measured and
   dropped (no gain above noise); the rest of the tab-bar chrome is the kit's.
+- **A cached view falls back to uncached while accessibility is active.** gpui-pre 0.3.7
+  builds AccessKit nodes during prepaint and does not replay them for a reused view, so a
+  cached view's menus and buttons leave the UI Automation tree on every frame that reuses
+  it. Embed through `crate::layout::cached_unless_a11y` (`crates/workspace/src/layout/mod.rs`),
+  which caches only while `window.is_a11y_active()` is false and otherwise lays the view
+  out uncached in a box of the same style (AccessKit activation refreshes the window, so
+  the switch applies on the next frame). Keep the fallback until gpui replays AccessKit
+  nodes for reused views. The kit's own cached right-dock panel has the same gap, on main
+  as well (upstream).
 - **Do not cache the kit's `TitleBar` itself or the dock area.** gpui does not replay a
   cached view's window-control hitboxes, so a cached `TitleBar` stops moving the window
   and its caption buttons stop working after its first reused frame; the drag region

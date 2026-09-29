@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, ParentElement, Render,
-    StyleRefinement, Styled, Task, Window, div,
+    Styled, Task, Window, div,
 };
 use gpui_component::dock::{DockArea, DockSkin, PanelStyle};
 
@@ -585,14 +585,7 @@ impl Render for OneTermWorkspace {
             .child(self.title_bar.clone())
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
             // Cached (`US-0150`): a frame another view asked for reuses the
-            // bar. Its height is the kit's layout of it, in rems.
-            .child(
-                self.status_bar.clone().cached(
-                    StyleRefinement::default()
-                        .w_full()
-                        .flex_none()
-                        .h(statusbar::status_bar_height(window.rem_size())),
-                ),
-            )
+            // bar; `statusbar::embed` owns its box and the accessibility switch.
+            .child(statusbar::embed(&self.status_bar, window))
     }
 }

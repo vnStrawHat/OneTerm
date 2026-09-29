@@ -7,8 +7,9 @@
 //!
 //! ## A cached view (`US-0150`)
 //!
-//! The workspace embeds [`StatusBarView`] with `.cached(..)` at
-//! [`status_bar_height`], so a frame another view asked for (a cursor blink,
+//! The workspace embeds [`StatusBarView`] through [`embed`]: `.cached(..)` at
+//! [`status_bar_height`] (uncached while accessibility is active, see
+//! [`crate::layout::cached_unless_a11y`]), so a frame another view asked for (a cursor blink,
 //! terminal output) reuses the bar instead of measuring its five labels and
 //! laying it out again. The bar re-renders when one of its indicators notifies
 //! (each is a child view, so its notify dirties the bar too), when its own
@@ -32,7 +33,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    Context, Entity, IntoElement, ParentElement as _, Pixels, Render, Styled, Window, div, px,
+    AnyElement, Context, Entity, IntoElement, ParentElement as _, Pixels, Render, StyleRefinement,
+    Styled, Window, div, px,
 };
 use gpui_component::dock::{DockArea, DockEvent, DockPlacement};
 use gpui_component::{
@@ -97,6 +99,20 @@ fn divide_centre(window_width: Pixels, icons: usize, fixed: Pixels, git: Pixels)
 /// layout.
 pub(crate) fn status_bar_height(rem: Pixels) -> Pixels {
     rem * 1.75 + px(1.)
+}
+
+/// The bar's box in the workspace's column: full width, [`status_bar_height`].
+fn bar_style(window: &Window) -> StyleRefinement {
+    StyleRefinement::default()
+        .w_full()
+        .flex_none()
+        .h(status_bar_height(window.rem_size()))
+}
+
+/// How the workspace embeds the bar (`US-0150`): cached at [`bar_style`], or
+/// uncached in the same box while accessibility is active.
+pub(crate) fn embed(bar: &Entity<StatusBarView>, window: &Window) -> AnyElement {
+    crate::layout::cached_unless_a11y(bar.clone(), bar_style(window), window)
 }
 
 /// The status bar: owns its five indicators and lays them out.
@@ -320,13 +336,14 @@ mod tests {
 
         use gpui::{
             AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-            ParentElement as _, Render, StyleRefinement, Styled as _, TestAppContext,
-            VisualTestContext, Window, div, px,
+            ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window,
+            div, px,
         };
         use gpui_component::dock::DockArea;
         use gpui_component::{Icon, IconName};
 
-        use super::super::{StatusBarView, status_bar_height};
+        use super::super::{StatusBarView, bar_style, embed, status_bar_height};
+        use crate::layout::embed_view;
         use crate::widgets::StatusText;
         use crate::widgets::status_text::{Label, Presentation, Shorten};
 
@@ -339,39 +356,39 @@ mod tests {
             }
         }
 
+        /// How the host embeds the bar.
+        #[derive(Clone, Copy, PartialEq, Debug)]
+        enum Embed {
+            /// `statusbar::embed`, what the workspace renders.
+            Workspace,
+            /// The accessibility branch of the same embed (uncached box).
+            Uncached,
+            /// A plain child: the kit's own layout of the bar, to measure.
+            Natural,
+        }
+
         struct Host {
             bar: Entity<StatusBarView>,
             ticker: Entity<Ticker>,
-            /// Embed the bar as the workspace does, or uncached to measure it.
-            cached: bool,
+            embed: Embed,
             rem: gpui::Pixels,
         }
 
         impl Render for Host {
             fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
                 window.set_rem_size(self.rem);
-                let bar = if self.cached {
-                    self.bar
-                        .clone()
-                        .cached(
-                            StyleRefinement::default()
-                                .w_full()
-                                .flex_none()
-                                .h(status_bar_height(window.rem_size())),
-                        )
-                        .into_any_element()
-                } else {
-                    div()
-                        .debug_selector(|| "natural-bar".into())
-                        .child(self.bar.clone())
-                        .into_any_element()
+                let bar = match self.embed {
+                    Embed::Workspace => embed(&self.bar, window),
+                    Embed::Uncached => embed_view(self.bar.clone(), bar_style(window), false),
+                    Embed::Natural => self.bar.clone().into_any_element(),
                 };
                 div()
                     .size_full()
                     .flex()
                     .flex_col()
                     .child(self.ticker.clone())
-                    .child(bar)
+                    // Sized by the bar alone, so its bounds are the bar's.
+                    .child(div().debug_selector(|| "bar".into()).child(bar))
             }
         }
 
@@ -397,7 +414,7 @@ mod tests {
             )
         }
 
-        fn host(cached: bool, cx: &mut TestAppContext) -> (Entity<Host>, &mut VisualTestContext) {
+        fn host(embed: Embed, cx: &mut TestAppContext) -> (Entity<Host>, &mut VisualTestContext) {
             cx.update(gpui_component::init);
             cx.add_window_view(|window, cx| {
                 let budget = || Rc::new(Cell::new(px(f32::MAX)));
@@ -418,33 +435,37 @@ mod tests {
                 Host {
                     bar: cx.new(|_| StatusBarView::with_items(dock_area, items)),
                     ticker: cx.new(|_| Ticker),
-                    cached,
+                    embed,
                     rem: px(16.),
                 }
             })
         }
 
+        /// The workspace's embed, and its accessibility branch, lay the bar out
+        /// exactly where the kit would: same size at every UI font size.
         #[gpui::test]
         fn status_bar_height_matches_the_kit_layout(cx: &mut TestAppContext) {
-            let (host, cx) = host(false, cx);
+            let (host, cx) = host(Embed::Natural, cx);
             for rem in [12., 14., 16., 20.] {
-                host.update(cx, |host, cx| {
-                    host.rem = px(rem);
-                    cx.notify();
-                });
-                cx.run_until_parked();
-                let natural = cx
-                    .debug_bounds("natural-bar")
-                    .expect("bar drawn")
-                    .size
-                    .height;
-                assert_eq!(natural, status_bar_height(px(rem)), "rem {rem}");
+                let mut sizes = Vec::new();
+                for embed in [Embed::Natural, Embed::Workspace, Embed::Uncached] {
+                    host.update(cx, |host, cx| {
+                        host.rem = px(rem);
+                        host.embed = embed;
+                        cx.notify();
+                    });
+                    cx.run_until_parked();
+                    sizes.push(cx.debug_bounds("bar").expect("bar drawn").size);
+                }
+                assert_eq!(sizes[0].height, status_bar_height(px(rem)), "rem {rem}");
+                assert_eq!(sizes[1], sizes[0], "workspace embed, rem {rem}");
+                assert_eq!(sizes[2], sizes[0], "accessibility embed, rem {rem}");
             }
         }
 
         #[gpui::test]
         fn another_views_frame_reuses_the_bar_and_an_item_notify_does_not(cx: &mut TestAppContext) {
-            let (host, cx) = host(true, cx);
+            let (host, cx) = host(Embed::Workspace, cx);
             cx.run_until_parked();
             let renders = |cx: &mut VisualTestContext| {
                 host.read_with(cx, |host, cx| host.bar.read(cx).renders)

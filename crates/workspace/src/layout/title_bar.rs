@@ -16,6 +16,10 @@
 //! hitboxes, which gpui does not replay for a reused view
 //! (`docs/gui-layout.md` § Frames and re-rendering).
 //!
+//! While accessibility is active the content is embedded uncached
+//! ([`crate::layout::cached_unless_a11y`]): gpui does not replay a reused
+//! view's accessibility nodes, and the menu and toggles must stay in the tree.
+//!
 //! The content re-renders when it, or a view inside it (the app menu), is
 //! notified, and when the window is refreshed (a theme switch, a resize). The
 //! toggles read `UiConfig::right_dock_mode`, so the content observes `UiConfig`:
@@ -76,7 +80,7 @@ impl Render for AppTitleBar {
         feature = "hotpath-profiling",
         hotpath::measure(impl_type = "AppTitleBar")
     )]
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         TitleBar::new()
             // Sync the bottom border color with the Dock border.
             //
@@ -89,12 +93,17 @@ impl Render for AppTitleBar {
             .border_color(cx.theme().border)
             // The kit's `bar` row is a flex row; the content fills it, so its
             // size comes from the kit's layout and never from its own children.
-            .child(
-                self.content
-                    .clone()
-                    .cached(StyleRefinement::default().flex_1().h_full()),
-            )
+            .child(crate::layout::cached_unless_a11y(
+                self.content.clone(),
+                content_style(),
+                window,
+            ))
     }
+}
+
+/// The content's box: the whole of the kit's `bar` row, whatever its children.
+fn content_style() -> StyleRefinement {
+    StyleRefinement::default().flex_1().h_full()
 }
 
 /// What OneTerm draws inside the kit's title bar: the icon, the app menu and
@@ -120,6 +129,8 @@ impl Render for TitleBarContent {
         // The same row the kit's `bar` is (`h_flex`, `justify_between`), so the
         // two groups land where they did as the bar's own children.
         h_flex()
+            // Test builds only: `the_content_fills_the_kit_row_cached_or_not`.
+            .debug_selector(|| "title-bar-content".into())
             .size_full()
             .justify_between()
             // left side
@@ -282,13 +293,15 @@ mod tests {
     mod caching {
         use gpui::{
             AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-            TestAppContext, VisualTestContext, Window, div,
+            TestAppContext, VisualTestContext, Window, div, px, size,
         };
+        use gpui_component::TitleBar;
         use oneterm_actions::RightDockMode;
         use oneterm_settings::terminal_settings::{TerminalSettings, TerminalSettingsGlobal};
         use oneterm_settings::ui_config::{UiConfig, UiConfigGlobal};
 
-        use super::super::AppTitleBar;
+        use super::super::{AppTitleBar, content_style};
+        use crate::layout::embed_view;
 
         /// Stands in for every other view of the window (a terminal that blinks).
         struct Ticker {
@@ -363,6 +376,65 @@ mod tests {
             });
             cx.run_until_parked();
             assert_eq!(counts(&host, cx).0, content + 1);
+        }
+
+        /// A kit title bar around the real content, embedded cached or not.
+        struct Frame {
+            content: Entity<super::super::TitleBarContent>,
+            cached: bool,
+        }
+
+        impl Render for Frame {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size_full().child(TitleBar::new().child(embed_view(
+                    self.content.clone(),
+                    content_style(),
+                    self.cached,
+                )))
+            }
+        }
+
+        /// The content fills the kit's row in both branches of the
+        /// accessibility switch: it grows with the window and is as tall as
+        /// the row, cached or not (`US-0150` F1/F2).
+        #[gpui::test]
+        fn the_content_fills_the_kit_row_cached_or_not(cx: &mut TestAppContext) {
+            cx.update(|cx| {
+                gpui_component::init(cx);
+                let config = cx.new(|_| UiConfig::default());
+                cx.set_global(UiConfigGlobal(config));
+                let settings = cx.new(|_| TerminalSettings::default());
+                cx.set_global(TerminalSettingsGlobal(settings));
+            });
+            let (frame, cx) = cx.add_window_view(|window, cx| {
+                let title_bar = cx.new(|cx| AppTitleBar::new("OneTerm", true, window, cx));
+                Frame {
+                    content: title_bar.read(cx).content.clone(),
+                    cached: true,
+                }
+            });
+            let mut seen = Vec::new();
+            for cached in [true, false] {
+                frame.update(cx, |frame, cx| {
+                    frame.cached = cached;
+                    cx.notify();
+                });
+                for width in [900., 1100.] {
+                    cx.simulate_resize(size(px(width), px(600.)));
+                    cx.run_until_parked();
+                    let bounds = cx.debug_bounds("title-bar-content").expect("content drawn");
+                    seen.push((cached, width, bounds.size));
+                }
+            }
+            let [(_, _, a), (_, _, b), (_, _, c), (_, _, d)] = seen[..] else {
+                unreachable!()
+            };
+            assert_eq!(
+                b.width - a.width,
+                px(200.),
+                "cached content follows the row"
+            );
+            assert_eq!((c, d), (a, b), "the uncached branch lays out the same");
         }
     }
 }

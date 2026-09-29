@@ -448,7 +448,7 @@ Final code (`v2`) against `before`, interleaved pairs (`runs/us0150-{s2,s3}-*`):
 | --- | --- | --- | ---: | ---: |
 | Idle focused, Mcycles/s | 17.8, 18.4, 21.0, 26.0, 31.5, 24.2 | 16.8, 17.4, 18.4, 26.5, 21.7, 19.6 | 5 of 6 | -9 % (-31 % to +2 %) |
 | Idle focused, frames/s | 2.03-2.15 | 1.90-2.12 | | unchanged |
-| Idle unfocused, Mcycles/s | 18.9, 19.9, 14.4, 19.2 | 11.6, 18.7, 15.8, 14.5 | 3 of 4 | -15 % |
+| Idle unfocused, Mcycles/s | 18.9, 19.9, 14.4, 19.2 | 11.6, 18.7, 15.8, 14.5 | 3 of 4 | no expected change: the clock drives those frames and the bar re-renders on 94 % of them; -15 % here, +22 % in the verification's pair, both noise |
 | TUI, Mcycles per frame (same frame rate) | 7.73, 7.51 | 7.08, 7.24 | 2 of 2 | -8 %, -4 % |
 | Title-bar content renders per frame | 1.00 | 0.04-0.07 idle, 0.01 TUI | | |
 | Status-bar renders per frame | 1.00 | 0.51-0.61 idle focused, 0.94-0.97 unfocused, 0.05-0.09 TUI | | |
@@ -490,7 +490,13 @@ where the title bar's toggle group went.
   `WindowFromPoint` first): a caption drag moved the window by (120, 60), a double-click
   maximised and a second restored it, hovering close paints it red, hovering maximise
   opens the Windows 11 snap-layout flyout, and a click on "Agent" switched the mode and
-  wrote `right_dock_mode: agent`, in both builds (`pixels/window-controls-before-after.png`).
+  wrote `right_dock_mode: agent`, in both builds (`pixels/window-controls-before-after.png`). The snap-layout flyout is proven by this capture only; the independent
+  verification's synthetic hover did not register (`../evidence/US-0150-verify.md` F3).
+- **Accessibility** (verification F1, reworked): a cached view's AccessKit nodes are not
+  replayed, so both embeds fall back to uncached while `window.is_a11y_active()`
+  (`cached_unless_a11y`). UI Automation on the own window after activation, 5 idle samples
+  3 s apart: the six title-bar nodes present in all of them, focused and unfocused
+  (`raw/us0150/a11y/`).
 - **CPU/MEM hover table** (US-0148, `tools/tooltip.ps1`, `v2`): hovered for 8 s over the
   cached bar, the table and the label advanced together every 2 s (uptime 7.0 -> 9.0 ->
   11.0 -> 13.0 s, `pixels/resource-tooltip-live-v2.png`): the item's notify re-renders the
@@ -568,6 +574,18 @@ gain for a loss under output, with a high-risk rendering path.
    descendants (keep `refreshing` for `Window::refresh`, line 2271). Effect: a cached dock
    area or tab group keeps its clean panels on a terminal frame, which is what candidate 4
    and the kit note above need.
-3. **For reference, not a request:** `Window::request_animation_frame` (line 2622)
+3. **Replay AccessKit nodes for a reused view** (found by the verification,
+   `../evidence/US-0150-verify.md` F1). Nodes are built during prepaint
+   (`src/window/a11y.rs`: `begin_frame` line 275 clears them every frame, `push` line 429
+   adds them) and `reuse_prepaint` (`src/window.rs` line 3814) replays hitboxes, tooltips,
+   dispatch nodes and deferred draws but no a11y nodes; `prepaint_view` (`src/view.rs`
+   lines 484-489) reuses a view without looking at `Window::is_a11y_active` (line 6794).
+   Request: record the node range in `PrepaintStateIndex` (line 1004) and replay it, or
+   refuse reuse while a11y is active. Until then OneTerm embeds its cached views uncached
+   while a11y is active (`cached_unless_a11y`); AccessKit activation already refreshes the
+   window (`src/window.rs` lines 1649-1661). The kit's cached right-dock panel
+   (`gpui-component` 0.7 `dock/tab_panel.rs` line 782) drops out of the tree the same way,
+   on main as well.
+4. **For reference, not a request:** `Window::request_animation_frame` (line 2622)
    notifies the current view, and `mark_view_dirty` (line 2148) dirties every ancestor, so
    a repaint of one element is a re-render of its view path; that is gpui's model.

@@ -1,0 +1,3 @@
+label=us0150-rework-idleF2 pid=26860 mode=Idle
+ui-thread steady: 188 ms CPU in 20.1 s = 0.934 % of a core; 658.8 Mcycles = 32.83 Mcycles/s; tid 6412
+report: C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\us0150\raw5\us0150-rework-idleF2.json (24204 bytes)
