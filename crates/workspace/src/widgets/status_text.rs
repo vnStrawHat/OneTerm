@@ -160,7 +160,7 @@ fn details_table(sections: Vec<Section>, muted: Hsla) -> impl IntoElement {
 pub type Sampler = Box<dyn FnMut(&App) -> Option<Label> + 'static>;
 
 /// The width the status bar has left for one shortening indicator, refreshed
-/// every frame by [`crate::layout::statusbar::build_status_bar`].
+/// each time the bar renders, by `crate::layout::statusbar::build_status_bar`.
 ///
 /// A shared cell rather than entity state: the bar is the only place that knows
 /// every label, and it computes the split while building the same frame the

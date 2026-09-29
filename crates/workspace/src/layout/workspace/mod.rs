@@ -5,14 +5,14 @@ use std::time::Duration;
 
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, ParentElement, Render,
-    Styled, Task, Window, div,
+    StyleRefinement, Styled, Task, Window, div,
 };
 use gpui_component::dock::{DockArea, DockSkin, PanelStyle};
 
 use oneterm_state::AppState;
 
-use crate::layout::{statusbar, title_bar::AppTitleBar};
-use crate::widgets::{StatusText, breadcrumb, datetime_clock, git_status, net_speed, resource};
+use crate::layout::statusbar::{self, StatusBarView};
+use crate::layout::title_bar::AppTitleBar;
 
 pub(crate) mod actions;
 mod dock_skin;
@@ -147,18 +147,9 @@ pub struct OneTermWorkspace {
     pub title_bar: Entity<AppTitleBar>,
     pub dock_area: Entity<DockArea>,
     _dock_skin: Rc<DockSkin>,
-    /// Datetime clock — created once so the 1s timer fires reliably.
-    pub clock: Entity<StatusText>,
-    /// Network speed indicator — created once so the 1s timer fires reliably.
-    pub net_speed: Entity<StatusText>,
-    /// Breadcrumb (cwd + foreground process) indicator — created once so the
-    /// 500ms timer fires reliably.
-    pub breadcrumb: Entity<StatusText>,
-    /// Git status of the active local terminal's cwd — created once so the
-    /// 500ms timer fires reliably.
-    pub git_status: Entity<StatusText>,
-    /// CPU/memory resource indicator — created once so the 2s timer fires reliably.
-    pub resource: Entity<StatusText>,
+    /// The status bar, created once so its indicators' timers fire reliably;
+    /// embedded as a cached view (`US-0150`).
+    pub status_bar: Entity<StatusBarView>,
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
     _save_layout_task: Option<Task<()>>,
 
@@ -321,33 +312,13 @@ impl OneTermWorkspace {
             )
         });
 
-        let clock = datetime_clock(window, cx);
-        let net_speed = net_speed(dock_area.downgrade(), window, cx);
-        // The status bar refreshes both budgets every frame; they start wide
-        // enough that the first frame shows the labels whole.
-        let breadcrumb = breadcrumb(
-            dock_area.downgrade(),
-            Rc::new(std::cell::Cell::new(gpui::px(f32::MAX))),
-            window,
-            cx,
-        );
-        let git_status = git_status(
-            dock_area.downgrade(),
-            Rc::new(std::cell::Cell::new(gpui::px(f32::MAX))),
-            window,
-            cx,
-        );
-        let resource = resource(window, cx);
+        let status_bar = cx.new(|cx| StatusBarView::new(dock_area.clone(), window, cx));
 
         let me = Self {
             title_bar,
             dock_area: dock_area.clone(),
             _dock_skin: dock_skin,
-            clock,
-            net_speed,
-            breadcrumb,
-            git_status,
-            resource,
+            status_bar,
             last_layout_state: None,
             _save_layout_task: None,
             preferred_right_dock_width,
@@ -613,6 +584,15 @@ impl Render for OneTermWorkspace {
             .flex_col()
             .child(self.title_bar.clone())
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
-            .child(statusbar::build_status_bar(self, window, cx))
+            // Cached (`US-0150`): a frame another view asked for reuses the
+            // bar. Its height is the kit's layout of it, in rems.
+            .child(
+                self.status_bar.clone().cached(
+                    StyleRefinement::default()
+                        .w_full()
+                        .flex_none()
+                        .h(statusbar::status_bar_height(window.rem_size())),
+                ),
+            )
     }
 }
