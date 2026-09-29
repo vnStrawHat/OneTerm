@@ -490,13 +490,23 @@ where the title bar's toggle group went.
   `WindowFromPoint` first): a caption drag moved the window by (120, 60), a double-click
   maximised and a second restored it, hovering close paints it red, hovering maximise
   opens the Windows 11 snap-layout flyout, and a click on "Agent" switched the mode and
-  wrote `right_dock_mode: agent`, in both builds (`pixels/window-controls-before-after.png`). The snap-layout flyout is proven by this capture only; the independent
-  verification's synthetic hover did not register (`../evidence/US-0150-verify.md` F3).
+  wrote `right_dock_mode: agent`, in both builds
+  (`pixels/window-controls-before-after.png`). The snap-layout flyout is proven by this
+  capture only; the independent verification's synthetic hover did not register
+  (`../evidence/US-0150-verify.md` F3).
 - **Accessibility** (verification F1, reworked): a cached view's AccessKit nodes are not
   replayed, so both embeds fall back to uncached while `window.is_a11y_active()`
-  (`cached_unless_a11y`). UI Automation on the own window after activation, 5 idle samples
-  3 s apart: the six title-bar nodes present in all of them, focused and unfocused
-  (`raw/us0150/a11y/`).
+  (`cached_unless_a11y`). UI Automation on the own window after activation, 5 idle samples 3
+  s apart: the six title-bar nodes present in all of them, focused and unfocused
+  (`raw/us0150/a11y/`). AccessKit switches on at the first UI Automation or MSAA request for
+  the window (`WM_GETOBJECT` for the UIA root or `OBJID_CLIENT`; `accesskit_windows` 0.34
+  `adapter.rs` lines 535-560) and never switches off, so the caching gain holds only for
+  windows no such client has touched; a touched window renders both views on every frame for
+  its life, as on main. Measured on this desktop (verification pass 2): 8 of 11 launches
+  activated within 1-79 s in one hour, 0 of 33 in the next; the external client was not
+  identified (no screen reader or Magnifier running; candidates are processes that load
+  UIA/MSAA, such as explorer, Teams, Edge, PowerToys). `hotpath-measure.ps1` reports whether
+  the instance activated AccessKit, so such an idle run can be flagged.
 - **CPU/MEM hover table** (US-0148, `tools/tooltip.ps1`, `v2`): hovered for 8 s over the
   cached bar, the table and the label advanced together every 2 s (uptime 7.0 -> 9.0 ->
   11.0 -> 13.0 s, `pixels/resource-tooltip-live-v2.png`): the item's notify re-renders the

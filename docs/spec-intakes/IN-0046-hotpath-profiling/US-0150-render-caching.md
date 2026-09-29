@@ -41,6 +41,15 @@ frames with no visual or functional regression; otherwise the reason is recorded
    measured; not shipped unless pixel-identical and correct with IME and popups.
 5. Upstream gpui requests, with gpui-pre 0.3.7 file and line references. Not filed.
 
+Limit of the gain (verification F6): AccessKit switches on at the first UI Automation or
+MSAA request for the window (`WM_GETOBJECT` for the UIA root or `OBJID_CLIENT`;
+`accesskit_windows` 0.34 `adapter.rs` lines 535-560) and never switches off, so the caching
+gain holds only for windows no such client has touched; a touched window renders both views
+on every frame for its life, as on main. Measured on this desktop (verification pass 2): 8
+of 11 launches activated within 1-79 s in one hour, 0 of 33 in the next; the external client
+was not identified (no screen reader or Magnifier running; candidates are processes that
+load UIA/MSAA, such as explorer, Teams, Edge, PowerToys).
+
 ## Scope
 
 - [x] In scope: `crates/workspace/src/layout/{title_bar.rs,statusbar.rs,workspace/*}`,
@@ -220,10 +229,17 @@ of the rework) each fail one.
 
 Gaps:
 
-- AccessKit on Windows stays active for the window's life once any UI Automation client
-  queries it (a screen reader, but also, as seen once here, an unidentified system client
-  1 s after launch). Such a window gets none of this story's gain (both views render on
-  every frame, as on main). How often that happens on users' machines is not measured.
+- AccessKit switches on at the first UI Automation or MSAA request for the window
+  (`WM_GETOBJECT` for the UIA root or `OBJID_CLIENT`; `accesskit_windows` 0.34 `adapter.rs`
+  lines 535-560) and never switches off, so the caching gain holds only for windows no such
+  client has touched; a touched window renders both views on every frame for its life, as on
+  main. Measured on this desktop (verification pass 2): 8 of 11 launches activated within
+  1-79 s in one hour, 0 of 33 in the next; the external client was not identified (no screen
+  reader or Magnifier running; candidates are processes that load UIA/MSAA, such as
+  explorer, Teams, Edge, PowerToys).
+  How often it happens on users' machines is unknown. `hotpath-measure.ps1` now reports
+  whether the measured instance activated AccessKit, so a skewed idle run can be flagged
+  (the verification's pass-1 -32 % pair was skewed this way).
 - The whole-thread cycle counter moves ±20 % between runs of the same build on this
   machine (another agent building, desktop state), so the status bar's share (about 1-2 %
   idle) is proven by its hotpath sites and render counts, not by the counter; the owner

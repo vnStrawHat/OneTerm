@@ -192,3 +192,8 @@ try {
   foreach ($k in $tree) { Stop-Process -Id $k.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 if (Test-Path $report) { Write-Host "report: $report ($((Get-Item $report).Length) bytes)" } else { Write-Host 'NO REPORT' }
+# US-0150: AccessKit, once a UI Automation / MSAA client touches the window, stays on and
+# turns OneTerm's cached views off, so an idle run from such an instance is not comparable.
+$a11y = @(Select-String -Path (Join-Path $work 'stderr.log') -Pattern 'Accessibility activated' -ErrorAction SilentlyContinue)
+if ($a11y.Count) { Write-Host "a11y: ACTIVATED during the run (cached views off; flag this run): $($a11y[0].Line)" }
+else { Write-Host 'a11y: not activated' }
