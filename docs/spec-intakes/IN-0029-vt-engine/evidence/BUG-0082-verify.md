@@ -339,3 +339,201 @@ bypassing `cargo test`; no source was mutated for this probe. F2's throwaway
 reverted with `git checkout -- crates/vt/src/pty/windows/conpty.rs`; `git status --porcelain` was
 empty immediately before and after. This evidence file is the only change carried into the
 `verify/bug-0082` commit.
+
+---
+
+## Pass 2 (2026-09-29): re-verification of the rework at `8ddf10fc`
+
+Subject: `8ddf10fc` on `fix/vt-pty-test-tempdir`, one commit on top of this file's own `326bc389`
+(which is one commit on top of `a7854507`, on top of `main @8b4b7abd`).
+
+### Verdict
+
+**PASS.** The rework replaces the unconditional name-only sweep with a liveness check
+(`is_stale` + `process_is_alive`, `OpenProcess`/`GetExitCodeProcess`) and closes every case F1/F1a/F1b
+found. All four liveness cases behave correctly, the 15-round real concurrent race that failed 13/15
+times in pass 1 now passes 15/15, and the full local CI gate is green. One residual gap is worth the
+owner's attention but does not block acceptance: `GetExitCodeProcess`'s `STILL_ACTIVE` ambiguity is
+unhandled (no `WaitForSingleObject` disambiguation) — see F9 — but its only possible failure mode is
+an extra-conservative "treat as alive, keep the directory," the same safe default the code already
+chooses deliberately elsewhere, and it requires a dead process to have exited with the exact code 259,
+which no PID this sweep ever evaluates (a `cargo test` binary: exit 0/101; a `cmd /c pause` child: not
+259 either) is likely to produce.
+
+### F1 re-test — the four liveness cases, explicitly
+
+All four run against the *real* production code path (the shipped `scratch_directory` /
+`process_is_alive`, not a re-implementation), by pre-seeding fake sibling directories under the
+`system` family's prefix and running the real `conpty_api_falls_back_to_the_system_host` test, which
+invokes the real sweep over all `oneterm-vt-pty-system-*` entries:
+
+| Case | PID used | Expected | Observed |
+| --- | --- | --- | --- |
+| Live PID | `explorer.exe`, PID 32020 (real, running for the whole test) | kept (survives) | **kept** — directory existed after the sweep |
+| Dead PID | a `cmd.exe` child spawned then `Stop-Process -Force`d by this session, confirmed not running (`Get-Process -Id <pid>` empty) before the sweep ran | swept (removed) | **swept** — directory gone after the sweep |
+| Unopenable / protected PID | `csrss.exe`, PID 1328 (a protected system process; `OpenProcess` fails with `ERROR_ACCESS_DENIED`, not `ERROR_INVALID_PARAMETER`, since the process genuinely exists) | kept (safe default — "any other `OpenProcess` failure answers alive") | **kept** — directory existed after the sweep |
+| Unparsable name | `oneterm-vt-pty-system-not-a-pid` (suffix does not parse as `u32`) | kept (not a directory this code owns) | **kept** — directory existed after the sweep |
+
+```
+Before: unparsable=True dead=True protected=True live=True
+test pty::windows::conpty::tests::conpty_api_falls_back_to_the_system_host ... ok
+After:  unparsable=True dead=False protected=True live=True
+```
+
+All four match the claimed decision table exactly. The "protected" case is the one pass 1 did not
+test at all: `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, 1328)` against a genuinely-running
+process this session cannot open returns `ERROR_ACCESS_DENIED` (not `ERROR_INVALID_PARAMETER`), which
+`process_is_alive` correctly routes to "alive" (the `!= ERROR_INVALID_PARAMETER` branch), so the
+directory is kept rather than deleted out from under a process this code merely lacks permission to
+inspect.
+
+### F1b re-test — 15 rounds of real concurrency, 0 spurious failures
+
+Same harness as pass 1 (two independently-launched OS processes, each running
+`conpty_api_prefers_the_bundled_host --exact --test-threads=1` directly against the built `.exe`,
+bypassing `cargo test`), 15 rounds:
+
+```
+Total spurious failures across 15 concurrent iterations: 0
+```
+
+Where pass 1 hit **13 of 15** spurious `assert_eq!` panics, this pass hits **0 of 15**. The mechanism
+is now liveness, not lock-accident: a peer's sweep no longer removes a directory just because the DLL
+hasn't been `LoadLibraryW`'d into it yet — it is skipped because its owning PID is alive, at every
+stage of that owner's own setup. Also ran the shipped `#[ignore]`d
+`concurrent_bundled_host_race_does_not_spuriously_fail` test directly (its own internal 10 iterations):
+`ok`, `1 passed; 0 failed`.
+
+### F-PIDreuse — PID reuse is the accepted residual, not a new hole
+
+The "live PID" case above **is** the PID-reuse case: `explorer.exe`'s PID was never truly the PID of a
+`oneterm-vt-pty-system-*` scratch-directory owner. The code has no way to distinguish "the same
+conceptual test process that created this directory" from "some unrelated live process that now holds
+this PID number" — `is_stale`/`process_is_alive` only ever ask "is *a* process alive at this PID right
+now," which is exactly what PID reuse requires. Consequence, as the task frames it: a stale directory
+whose PID has been reused by an unrelated live process is kept (never deleted while that PID names
+anything alive), and is swept later by whichever process's sweep runs after the reusing process (or
+the original, whichever exited later) finally exits and the PID goes idle or gets reused by something
+this crate's own next test process also doesn't collide with. This is the correct, safe residual:
+over-retention, never over-deletion.
+
+### F9 — `STILL_ACTIVE` (259) cast ambiguity: unhandled, severity low
+
+Grepped `crates/vt/src/pty/windows/conpty.rs` for `WaitForSingleObject`: zero matches. `process_is_alive`
+disambiguates a dead-vs-alive process only by `GetExitCodeProcess(handle, &mut exit_code) != 0 &&
+exit_code == STILL_ACTIVE as u32`. This is the documented Win32 ambiguity: if a process has **already
+exited** with the specific exit code `259` (`STILL_ACTIVE`, `0x103`) and something still holds the
+kernel process object alive (so `OpenProcess` by PID still resolves to it rather than failing with
+`ERROR_INVALID_PARAMETER`), `GetExitCodeProcess` returns `259` indistinguishably from "still running,"
+and `process_is_alive` reports **alive** for an actually-dead process. The documented fix is an
+additional `WaitForSingleObject(handle, 0)`: `WAIT_OBJECT_0` means the process object is signaled
+(exited) regardless of what `GetExitCodeProcess` reports; `WAIT_TIMEOUT` means still running. Not
+present here.
+
+**Severity: low, not a safety defect.** Two independent reasons:
+
+1. **The failure direction is the safe one.** A misclassified dead-as-alive PID causes the sweep to
+   *keep* that stale directory rather than delete it — the exact same "when genuinely uncertain, don't
+   delete" default the code already chooses on purpose for `ERROR_ACCESS_DENIED` and unparsable names.
+   It can never cause a live directory's deletion, which is the property this whole rework exists to
+   guarantee. At worst it is one extra directory not yet swept.
+2. **The trigger condition does not apply to any PID this sweep ever evaluates.** The only PIDs that
+   ever appear in `oneterm-vt-pty-{bundled,system}-<pid>` names are `std::process::id()` of the
+   `oneterm_vt-*.exe` test binary process itself (`cargo test`'s Rust test harness exits `0` on success
+   or `101` on failure — never `259`) and, in the new `sweep_keeps_a_sibling_named_after_a_live_pid`
+   regression test, a `cmd /c pause` child that is always explicitly `kill()`ed by the test rather than
+   left to exit on its own with any particular code. `259` is not a code either process family
+   organically produces, so this is a latent gap in the general-purpose `process_is_alive` helper, not
+   a live exposure of the specific sweep it backs today. Worth a one-line `WaitForSingleObject(handle,
+   0)` if this helper is ever reused somewhere PIDs are less controlled (recorded here rather than
+   fixed, since fixing it is outside a verification pass's scope and the packet did not claim to have
+   handled it).
+
+A secondary, even narrower gap in the same function: if `OpenProcess` succeeds but the immediately
+following `GetExitCodeProcess` itself fails (returns `0`), `still_active` short-circuits to `false`
+(treated as dead). `GetExitCodeProcess` only needs `PROCESS_QUERY_LIMITED_INFORMATION`, the exact right
+`OpenProcess` just granted, on a handle used once immediately after opening it, so this is expected to
+be unreachable in practice; noted for completeness, not filed separately.
+
+### Census and ignored-test entry
+
+`scripts/ignored-tests.txt` gained exactly one line, in alphabetical position:
+`pty::windows::conpty::tests::concurrent_bundled_host_race_does_not_spuriously_fail`. Confirmed against
+the live file (`git show 8ddf10fc -- scripts/ignored-tests.txt`). `python scripts/check-ignored-tests.py`
+on this host:
+
+```
+check-ignored-tests: 19 ignored tests, all recorded
+```
+
+(18 before this rework, matching pass 1's own count; 19 after, matching the packet's claim exactly.)
+
+### Counts, flat over 3 runs
+
+| Family | Config | Runs | Before -> After |
+| --- | --- | --- | --- |
+| `oneterm-vt-pty-*` | `cargo test -p oneterm-vt --lib` (default) | x3 | 2->1 (draining a leftover pair from the F1b race probe above), 1->1, 1->1 |
+| `oneterm-vt-pty-*` | `--features vt-paranoid` | x3 | 1->1, 1->1, 1->1 |
+| `oneterm-vt-pty-*` | `--no-default-features` | x1 | all suites `ok`, `0 failed` |
+
+Every `oneterm-vt --lib` run: 593 passed, 0 failed, 3 ignored (up from 588/2 in pass 1 — the four new
+`is_stale` unit tests plus one net new test, minus the one now-`#[ignore]`d race test moving out of
+the counted total). `is_stale`'s four unit tests and `sweep_keeps_a_sibling_named_after_a_live_pid`
+all pass individually; the `#[ignore]`d race test passes both via its own internal 10 iterations and
+via this pass's independent 15-round external harness (F1b above).
+
+### Static gates
+
+```
+$ python scripts/vt-public-api.py --check --no-doc   (fresh cargo doc -p oneterm-vt --no-deps --all-features)
+public API surface unchanged (public-api.windows.txt)
+
+$ python scripts/vt-public-api.py --diff-platforms
+(only the pre-existing 6-line pty delta; unchanged by this commit)
+
+$ grep -rn '...US-0.../BUG-0.../DEC-0.../IN-0.../crates\//docs\/...' crates/vt/src --include='*.rs' | grep -v 'https://github.com/'
+(no matches -- passes. The new code does cite `BUG-0082` four times (`conpty.rs:581,650,688,698`),
+but the grep's pattern only matches `///`/`//!` doc-comment lines, and every one of those four is a
+plain `//` line comment inside `#[cfg(test)] mod tests` -- never emitted into rustdoc and never a doc
+comment to begin with, so the grep correctly does not flag them)
+
+$ cargo fmt --all -- --check
+(exit 0)
+
+$ cargo clippy -p oneterm-vt --all-targets -- -D warnings
+(exit 0)
+```
+
+### Gate
+
+Run at `8ddf10fc`, clean tree before and after (only this evidence file's edit outstanding),
+`CARGO_BUILD_JOBS=4`, `target/debug/incremental` deleted before the run:
+
+```
+ci-local: all checks passed.
+```
+
+Exit code 0. `grep "test result:" | grep -v "0 failed"` over the whole run's output: no matches (every
+suite reports `0 failed`).
+
+### Records
+
+**Proposed final `story` row** (`harness.db`, table `story`, `id='BUG-0082'`, rowid 168,
+`intake_id` 34 — read-only in this session; not written). The row already shows `evidence` and
+`last_verified_result='fail'` from pass 1 (set outside this session, between passes); this proposes
+promoting it to the pass-2 result:
+
+| Column | Value before this pass | Proposed |
+| --- | --- | --- |
+| `status` | `in_progress` | `implemented` |
+| `unit_proof` | 0 | 1 |
+| `integration_proof` | 0 | 1 (the two-real-process concurrent regression and the live-child-PID regression are process-level integration checks, not pure unit tests) |
+| `e2e_proof` | 0 | 0 (unchanged — no end-to-end app scenario touches this code) |
+| `platform_proof` | 0 | 0 (unchanged — verified on this developer machine only; `#[cfg(windows)]` code, so CI's Windows job is the only place platform proof can come from, and this branch was not pushed) |
+| `evidence` | `docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0082-verify.md` | unchanged (this file, now with the Pass 2 section) |
+| `verify_command` | `NULL` | `cargo test -p oneterm-vt --lib -- conpty; cargo test -p oneterm-vt --lib -- --ignored concurrent_bundled_host_race; pwsh scripts/ci-local.ps1` |
+| `last_verified_at` | `2026-09-29T00:00:00Z` | `2026-09-29T<pass-2 time>Z` |
+| `last_verified_result` | `fail` | `pass` |
+| `notes` | (pass-1 note, see file history) | append: `"Verify PASS (pass 2) <sha> (Fable 5.1, thinking high) on 8ddf10fc: is_stale/process_is_alive liveness check closes F1/F1a/F1b. All 4 liveness cases confirmed against the real sweep (live PID kept, dead PID swept, ERROR_ACCESS_DENIED-protected PID kept, unparsable name kept) -- the protected-PID case is new coverage pass 1 did not have. 15/15 concurrent real-process rounds now pass (was 13/15 FAIL in pass 1); shipped #[ignore]d race test's own 10 iterations also pass. PID reuse is the accepted residual (kept, swept later once the reusing PID also dies) -- not a new hole, same mechanism as the live-PID case. F9 (new): STILL_ACTIVE=259 cast ambiguity is unhandled (no WaitForSingleObject) but severity low -- only biases toward the same safe keep-it default already used elsewhere, and no PID this sweep ever evaluates (cargo test exit 0/101; a killed cmd/pause child) plausibly exits with 259. Counts flat over 3 runs, ignored-test census at 19 (was 18), full ci-local green (ci-local: all checks passed.). BUG-0083 candidate list (9 files) already folded into the packet's Handoff. Full evidence: docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0082-verify.md, Pass 2 section."` |
+
+The `notes` append preserves every prior entry; only a further append is proposed.
