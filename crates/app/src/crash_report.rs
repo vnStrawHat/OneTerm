@@ -435,14 +435,35 @@ mod tests {
 
     use super::*;
 
-    fn temporary_directory(name: &str) -> PathBuf {
+    /// Removes the fixture directory on drop, including when an assertion
+    /// panics (`Drop` runs during unwind): manual cleanup at the end of a
+    /// test only runs when every earlier assertion in it passed, which is
+    /// how `deleting_a_report_outside_the_current_store_is_refused` used to
+    /// leak its directory on every run (`BUG-0082`).
+    struct TemporaryDirectory(PathBuf);
+
+    impl Drop for TemporaryDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TemporaryDirectory {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    fn temporary_directory(name: &str) -> TemporaryDirectory {
         let path = std::env::temp_dir().join(format!(
             "oneterm-crash-report-test-{}-{name}",
             std::process::id()
         ));
         drop(fs::remove_dir_all(&path));
         fs::create_dir_all(&path).expect("fixture directory should be created");
-        path
+        TemporaryDirectory(path)
     }
 
     fn completed_path(directory: &Path, identity: &str) -> PathBuf {
@@ -488,7 +509,6 @@ mod tests {
         assert!(identity.ends_with(random));
         let second = unique_identity(&directory).expect("second identity should be generated");
         assert_ne!(identity, second);
-        fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 
     #[test]
@@ -502,7 +522,6 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read_to_string(&path).unwrap(), "first crash");
-        fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 
     #[cfg(unix)]
@@ -510,7 +529,11 @@ mod tests {
     fn reports_and_store_are_private_to_the_user() {
         use std::os::unix::fs::PermissionsExt;
 
-        let directory = temporary_directory("private").join("crashes");
+        // Bound separately so the guard covers the whole test: chaining
+        // `.join()` off the temporary would drop (and remove) `root` at the
+        // end of this statement, before the test uses `directory`.
+        let root = temporary_directory("private");
+        let directory = root.join("crashes");
         create_private_dir(&directory).expect("store should be created");
         let path = completed_path(&directory, "20260811T023500000Z-p1-a7f3c912");
         write_new_report(&path, b"crash").expect("report should be written");
@@ -523,7 +546,6 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        fs::remove_dir_all(directory.parent().unwrap()).expect("fixture should be deleted");
     }
 
     #[cfg(windows)]
@@ -548,7 +570,6 @@ mod tests {
 
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].contents, "readable");
-        fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 
     #[test]
@@ -574,7 +595,6 @@ mod tests {
                 .len(),
             20
         );
-        fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 
     #[test]
@@ -592,7 +612,6 @@ mod tests {
                 .expect("completed report should be readable"),
             "native report"
         );
-        fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 
     #[test]
@@ -611,7 +630,6 @@ mod tests {
         assert!(combined.contains("panic report"));
         assert!(combined.contains("native report"));
         assert!(!claimed.exists());
-        fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 
     #[test]
@@ -625,7 +643,6 @@ mod tests {
             None
         );
         assert!(!path.exists());
-        fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 
     #[test]
@@ -666,7 +683,6 @@ mod tests {
             fs::read_to_string(&path).expect("report should be readable"),
             loaded
         );
-        fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 
     #[test]

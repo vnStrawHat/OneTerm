@@ -482,11 +482,59 @@ mod tests {
             .expect("the bundled conpty.dll must exist (DEC-0013)")
     }
 
-    fn scratch_directory(name: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("oneterm-vt-pty-{name}-{}", std::process::id()));
+    // Removes the scratch directory on drop, including when an assertion
+    // panics (`Drop` runs during unwind), so a test run never leaves one
+    // behind in the OS temp directory.
+    //
+    // `conpty_api_prefers_the_bundled_host` stages `conpty.dll` here and
+    // loads it with `LoadLibraryW`, which `load_bundled` never frees: the
+    // module stays mapped for the rest of this test process, and on
+    // Windows a directory holding a currently-loaded DLL cannot be
+    // removed (verified: this `Drop` alone left one new directory behind
+    // per run). It is harmless to defer: `scratch_directory` sweeps stale
+    // siblings from earlier, by-now-exited processes on its way in, so
+    // the directory this Drop cannot remove today is removed on the next
+    // test run instead. Only that one directory (the current process's)
+    // is ever left standing at a time.
+    struct ScratchDirectory(PathBuf);
+
+    impl Drop for ScratchDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for ScratchDirectory {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    fn scratch_directory(name: &str) -> ScratchDirectory {
+        let base = std::env::temp_dir();
+        let prefix = format!("oneterm-vt-pty-{name}-");
+        let current_name = format!("{prefix}{}", std::process::id());
+
+        // Sweep siblings left by earlier test processes before creating this
+        // one. Their PID has since exited, so any DLL they loaded from
+        // inside is unloaded and the directory is free to remove now.
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if name
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(&prefix) && name != current_name.as_str())
+                {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+
+        let directory = base.join(&current_name);
         std::fs::create_dir_all(&directory).expect("scratch directory");
-        directory
+        ScratchDirectory(directory)
     }
 
     // `DEC-0013`: this is the test that stops a refactor from quietly turning
