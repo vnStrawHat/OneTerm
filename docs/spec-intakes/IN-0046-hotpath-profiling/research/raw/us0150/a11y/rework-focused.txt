@@ -1,0 +1,95 @@
+== sample 1 : 18 nodes; title-bar nodes present 6/6 [MenuBar, Button "OneTerm", ToolBar, ToolBar>Button, ToolBar>Button, ToolBar>Button]
+Window "OneTerm"
+  MenuBar
+    Button "OneTerm"
+  ToolBar
+    Button
+    Button
+    Button
+  Pane "OneTerm workspace"
+    Pane "Terminal tabs"
+      Tab
+        TabItem
+        Button
+        Button
+        Button
+        Button
+      Pane "Terminal"
+    Pane "Terminal tabs"
+  Button
+== sample 2 : 18 nodes; title-bar nodes present 6/6 [MenuBar, Button "OneTerm", ToolBar, ToolBar>Button, ToolBar>Button, ToolBar>Button]
+Window "OneTerm"
+  MenuBar
+    Button "OneTerm"
+  ToolBar
+    Button
+    Button
+    Button
+  Pane "OneTerm workspace"
+    Pane "Terminal tabs"
+      Tab
+        TabItem
+        Button
+        Button
+        Button
+        Button
+      Pane "Terminal"
+    Pane "Terminal tabs"
+  Button
+== sample 3 : 18 nodes; title-bar nodes present 6/6 [MenuBar, Button "OneTerm", ToolBar, ToolBar>Button, ToolBar>Button, ToolBar>Button]
+Window "OneTerm"
+  MenuBar
+    Button "OneTerm"
+  ToolBar
+    Button
+    Button
+    Button
+  Pane "OneTerm workspace"
+    Pane "Terminal tabs"
+      Tab
+        TabItem
+        Button
+        Button
+        Button
+        Button
+      Pane "Terminal"
+    Pane "Terminal tabs"
+  Button
+== sample 4 : 18 nodes; title-bar nodes present 6/6 [MenuBar, Button "OneTerm", ToolBar, ToolBar>Button, ToolBar>Button, ToolBar>Button]
+Window "OneTerm"
+  MenuBar
+    Button "OneTerm"
+  ToolBar
+    Button
+    Button
+    Button
+  Pane "OneTerm workspace"
+    Pane "Terminal tabs"
+      Tab
+        TabItem
+        Button
+        Button
+        Button
+        Button
+      Pane "Terminal"
+    Pane "Terminal tabs"
+  Button
+== sample 5 : 18 nodes; title-bar nodes present 6/6 [MenuBar, Button "OneTerm", ToolBar, ToolBar>Button, ToolBar>Button, ToolBar>Button]
+Window "OneTerm"
+  MenuBar
+    Button "OneTerm"
+  ToolBar
+    Button
+    Button
+    Button
+  Pane "OneTerm workspace"
+    Pane "Terminal tabs"
+      Tab
+        TabItem
+        Button
+        Button
+        Button
+        Button
+      Pane "Terminal"
+    Pane "Terminal tabs"
+  Button

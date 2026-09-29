@@ -13,7 +13,7 @@ use super::status_text::{Budget, Presentation, Shorten, StatusText};
 /// Indicator showing the breadcrumb (cwd path) of the active terminal session.
 ///
 /// `budget` is the width the status bar leaves for the path; the bar refreshes
-/// it every frame.
+/// it each time it renders.
 pub fn breadcrumb(
     dock_area: WeakEntity<DockArea>,
     budget: Budget,

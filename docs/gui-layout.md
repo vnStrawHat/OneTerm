@@ -235,9 +235,10 @@ above both (`Molokai Light`'s `foreground` is 19:1).
 ## Frames and re-rendering
 
 gpui draws a frame only after something calls `cx.notify()` (or `window.refresh()`), and
-every frame is built from the window root down: `Root`, `OneTermWorkspace`, the title bar,
-the dock area with every tab group and tab strip, and the status bar all run their `render`
-and are laid out, prepainted and painted again. `cx.notify()` marks the notified view and
+every frame is built from the window root down: `Root`, `OneTermWorkspace`, the kit's
+title bar, the dock area with every tab group and tab strip all run their `render` and are
+laid out, prepainted and painted again (the title bar's content and the status bar are
+cached views since `US-0150`, below). `cx.notify()` marks the notified view and
 each of its ancestors dirty; a child view is skipped only when it is embedded with
 `.cached(style)` and is not dirty. GPUI Kit caches each tab group's active panel, so a
 terminal frame reuses the right dock's contents. Measured cost (`IN-0046`, `US-0145`): about
@@ -264,12 +265,43 @@ The rules that follow from it:
   (measured 2.04-2.11 and 1.23-1.25). Animations keep their own cadence (the Agent
   panel's spinner, 120 ms, only while a card works); an Agent panel with no cards does not
   tick.
-- **Do not cache the title bar or the dock area.** gpui does not replay a cached view's
-  window-control hitboxes, so a cached title bar stops moving the window and its
-  caption buttons stop working after its first reused frame. Re-rendering a cached view
-  sets gpui's `refreshing` flag for its whole subtree, so a cached dock area that a
+- **What OneTerm caches (`US-0150`).** Two views are embedded with `.cached(style)`, so
+  a frame another view asked for (a blink, a status tick, terminal output) reuses them:
+  - the title bar's content (`TitleBarContent` in `crates/workspace/src/layout/title_bar.rs`:
+    icon, app menu, elevation suffix, SSH Client / Agent / None toggles), laid out to fill
+    the kit's `bar` row (`flex_1`, `h_full`);
+  - the status bar (`StatusBarView` in `crates/workspace/src/layout/statusbar.rs`), at
+    `status_bar_height(rem)` = 1.75 rem + 1 px.
+
+  A cached view re-renders only when it or a view inside it notifies, when the window
+  is refreshed (theme switch, resize, DPI change: `Window::bounds_changed` refreshes), or
+  when its bounds change. So **whatever a cached view reads must notify it**: the toggles
+  observe `UiConfig` (change `right_dock_mode` only through `UiConfig::update` + notify);
+  the status bar's indicators are child views, so an indicator's notify re-renders the
+  bar (where the labels are measured and the budgets set). A cached view is laid out from
+  its style, never measured: the title bar's content takes the kit row's size, and the
+  status bar's height is pinned against the uncached layout at four rem sizes by
+  `status_bar_height_matches_the_kit_layout`, so a kit change that resizes the bar fails
+  the test instead of shifting pixels. Caching the tab bar's `+` button was measured and
+  dropped (no gain above noise); the rest of the tab-bar chrome is the kit's.
+- **A cached view falls back to uncached while accessibility is active.** gpui-pre 0.3.7
+  builds AccessKit nodes during prepaint and does not replay them for a reused view, so a
+  cached view's menus and buttons leave the UI Automation tree on every frame that reuses
+  it. Embed through `crate::layout::cached_unless_a11y` (`crates/workspace/src/layout/mod.rs`),
+  which caches only while `window.is_a11y_active()` is false and otherwise lays the view
+  out uncached in a box of the same style (AccessKit activation refreshes the window, so
+  the switch applies on the next frame). Keep the fallback until gpui replays AccessKit
+  nodes for reused views. The kit's own cached right-dock panel has the same gap, on main
+  as well (upstream).
+- **Do not cache the kit's `TitleBar` itself or the dock area.** gpui does not replay a
+  cached view's window-control hitboxes, so a cached `TitleBar` stops moving the window
+  and its caption buttons stop working after its first reused frame; the drag region
+  (the kit's `bar` row) and min/max/close must stay in an uncached view (`AppTitleBar`
+  renders the kit's `TitleBar` uncached around the cached content). Re-rendering a cached
+  view sets gpui's `refreshing` flag for its whole subtree, so a cached dock area that a
   terminal frame dirties re-renders every panel in it, including the right dock the kit
-  had cached: measured worse than not caching it.
+  had cached: measured worse than not caching it. For the same reason a cached view
+  inside another cached view is only reused while the outer one is clean.
 
 ## Source map
 

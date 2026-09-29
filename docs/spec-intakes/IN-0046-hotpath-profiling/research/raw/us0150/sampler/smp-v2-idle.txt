@@ -1,0 +1,214 @@
+thread 12864: 490.8 Mcycles in 60.3 s; 14533 samples taken while it ran, 151 in a wait dropped, 14382 busy samples; 1 wake-ups
+== inclusive (share of busy samples) ==
+ 97.9%  IsWindowUnicode
+ 97.7%  gpui_windows::platform::impl$5::run
+ 97.7%  oneterm_app::run
+ 97.7%  std::sys::backtrace::__rust_begin_short_backtrace<void (*)(),tuple$<> >
+ 97.6%  std::rt::lang_start::closure$0<tuple$<> >
+ 97.6%  std::rt::lang_start_internal
+ 97.6%  main
+ 97.4%  __scrt_common_main_seh
+ 97.3%  BaseThreadInitThunk
+ 97.2%  RtlUserThreadStart
+ 97.2%  CallWindowProcW
+ 96.6%  gpui::app::App::update_window_erased
+ 94.9%  gpui_windows::window::window_procedure
+ 89.0%  NtUserDispatchMessage
+ 88.5%  gpui_windows::window::WindowsWindowInner::draw_window
+ 88.3%  KiUserCallbackDispatcher
+ 88.3%  GetFocus
+ 88.3%  GetWindowDpiAwarenessContext
+ 88.2%  gpui::window::impl$29::new::closure$10
+ 87.4%  gpui::window::impl$29::new::closure$10::closure$3
+ 87.2%  gpui::app::impl$10::update_window_id::closure$0<tuple$<>,gpui::window::impl$29::new::closure$10::closure$3::closure_env$0>
+ 80.7%  gpui::window::Window::draw
+ 76.6%  gpui::window::Window::draw_roots
+ 37.7%  gpui::elements::div::impl$7::request_layout::closure$1
+ 37.7%  gpui::elements::div::impl$7::request_layout
+ 37.7%  gpui::elements::div::impl$9::request_layout::closure$0<gpui::elements::div::impl$7::request_layout::closure$1::closure_env$0>
+ 37.3%  gpui::view::request_layout_component
+ 37.1%  gpui::element::Drawable::request_layout<gpui::elements::div::Stateful<gpui::elements::div::Div> >
+ 37.0%  gpui::elements::div::impl$7::request_layout::closure$1::closure$0::closure$0
+ 35.9%  gpui::view::request_layout_view
+ 32.4%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui::view::AnyView> >
+ 32.2%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_component::window_border::WindowBorder> >
+ 30.8%  gpui::element::Drawable::request_layout<gpui::elements::div::Div>
+ 28.9%  gpui::element::AnyElement::prepaint_as_root
+ 24.3%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui::app::entity_map::Entity<gpui_base::dock::dock_area::DockArea> > >
+ 22.0%  gpui::view::prepaint_component
+ 22.0%  gpui::element::impl$5::prepaint<gpui::view::ViewElement<gpui_component::window_border::WindowBorder> >
+ 22.0%  gpui::view::prepaint_view
+ 22.0%  gpui::element::impl$5::prepaint<gpui::view::ViewElement<gpui::view::AnyView> >
+ 22.0%  gpui::element::impl$5::prepaint<gpui::elements::div::Stateful<gpui::elements::div::Div> >
+ 21.8%  gpui::elements::div::impl$7::prepaint
+ 21.6%  gpui::elements::div::impl$9::prepaint::closure$0<enum2$<core::option::Option<gpui::window::Hitbox> >,gpui::elements::div::impl$7::prepaint::closure_env$1>
+ 21.5%  gpui::elements::div::impl$7::prepaint::closure$1::closure$0::closure$0
+ 21.5%  gpui::elements::div::impl$7::prepaint::closure$1::closure$0
+ 21.5%  gpui::elements::div::impl$9::prepaint::closure$0::closure$1::closure$0<enum2$<core::option::Option<gpui::window::Hitbox> >,gpui::elements::div::impl$7::prepaint::closure_env$1>
+ 21.5%  gpui::elements::div::impl$9::prepaint::closure$0::closure$1<enum2$<core::option::Option<gpui::window::Hitbox> >,gpui::elements::div::impl$7::prepaint::closure_env$1>
+ 21.0%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_base::resizable::panel::ResizablePanelGroup> >
+ 19.6%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_base::resizable::panel::ResizablePanel> >
+ 18.1%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui::app::entity_map::Entity<gpui_base::dock::tab_group::TabGroup> > >
+ 16.9%  gpui::view::prepaint_view::closure$0::closure$0
+ 16.8%  gpui::app::App::update_entity_erased
+ 16.3%  RtlAllocateHeap
+ 16.2%  gpui::element::impl$5::paint<gpui::view::ViewElement<gpui::view::AnyView> >
+ 15.8%  gpui::elements::div::impl$9::paint::closure$1::closure$1::closure$0::closure$0::closure$0::closure$0<gpui::elements::div::impl$7::paint::closure$1::closure_env$0>
+ 15.8%  gpui::elements::div::impl$9::paint::closure$1::closure$1::closure$0::closure$0::closure$0<gpui::elements::div::impl$7::paint::closure$1::closure_env$0>
+ 15.8%  gpui::elements::div::impl$9::paint::closure$1::closure$1::closure$0::closure$0<gpui::elements::div::impl$7::paint::closure$1::closure_env$0>
+ 15.8%  gpui::elements::div::impl$9::paint::closure$1::closure$1<gpui::elements::div::impl$7::paint::closure$1::closure_env$0>
+ 15.8%  gpui::elements::div::impl$9::paint::closure$1<gpui::elements::div::impl$7::paint::closure$1::closure_env$0>
+ 15.8%  gpui::elements::div::impl$7::paint::closure$1
+ 15.8%  gpui::elements::div::impl$7::paint
+ 15.8%  gpui::element::impl$5::paint<gpui::elements::div::Div>
+ 15.8%  gpui::view::paint_view
+ 15.8%  gpui::element::impl$5::paint<gpui::elements::div::Stateful<gpui::elements::div::Div> >
+ 15.8%  gpui::view::paint_component
+ 14.9%  gpui::element::impl$5::paint<gpui::view::ViewElement<gpui_component::window_border::WindowBorder> >
+ 14.4%  gpui_windows::platform::window_procedure
+ 13.5%  gpui::element::impl$5::prepaint<gpui::view::ViewElement<gpui::app::entity_map::Entity<oneterm_workspace::layout::statusbar::StatusBarView> > >
+ 12.2%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_component::tab::tab_bar::TabBar> >
+ 11.6%  gpui::window::Window::compute_layout
+ 11.4%  taffy::tree::taffy_tree::impl$10::compute_child_layout::closure$0<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1>
+ 11.1%  taffy::compute::flexbox::compute_preliminary<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1> >
+ 11.1%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_base::tabs::Tabs> >
+ 11.0%  gpui::element::impl$5::paint<gpui::view::ViewElement<gpui::app::entity_map::Entity<gpui_base::dock::dock_area::DockArea> > >
+ 10.9%  gpui::view::paint_view::closure$0::closure$0
+ 10.4%  gpui_windows::window::impl$7::draw
+  9.3%  gpui::element::impl$5::paint<gpui::view::ViewElement<gpui::app::entity_map::Entity<gpui_base::dock::tab_group::TabGroup> > >
+  9.1%  D3D11CoreRegisterLayers
+  8.7%  taffy::compute::block::compute_inner<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1> >
+  8.7%  taffy::compute::block::compute_block_layout<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1> >
+  8.6%  gpui::element::impl$5::paint<gpui::view::ViewElement<gpui_base::resizable::panel::ResizablePanelGroup> >
+  7.9%  gpui::element::impl$5::paint<gpui::view::ViewElement<gpui_base::resizable::panel::ResizablePanel> >
+  7.8%  gpui::element::impl$5::layout_as_root<gpui::view::ViewElement<gpui_component::status_bar::StatusBar> >
+  7.7%  OpenAdapter_D3D11On12
+  6.9%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_component::button::button::Button> >
+  6.9%  gpui::element::impl$5::layout_as_root<gpui::view::ViewElement<gpui::view::AnyView> >
+  6.8%  gpui::window::Window::dispatch_event
+  6.8%  gpui::app::impl$10::update_window_id::closure$0<gpui::window::DispatchEventResult,gpui::window::impl$29::new::closure$20::closure_env$0>
+  6.8%  gpui::window::impl$29::new::closure$20
+  6.8%  gpui_windows::window::WindowsWindowInner::handle_activate_msg
+  6.3%  gpui::element::impl$5::prepaint<gpui::elements::div::Div>
+  6.3%  gpui::element::impl$5::prepaint<gpui::view::ViewElement<gpui::app::entity_map::Entity<gpui_base::dock::dock_area::DockArea> > >
+  5.9%  gpui::element::impl$5::prepaint<gpui::view::ViewElement<gpui::app::entity_map::Entity<gpui_base::dock::tab_group::TabGroup> > >
+  5.8%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_component::menu::dropdown_menu::DropdownMenuPopover<gpui_component::button::button::Button> > >
+  5.6%  gpui::element::Drawable::request_layout<gpui_component::menu::dropdown_menu::TriggerFocus>
+  5.5%  gpui_component::menu::dropdown_menu::impl$6::request_layout
+  5.5%  RtlFreeHeap
+  5.4%  gpui::view::impl$16::request_layout::closure$0<gpui::app::entity_map::Entity<gpui_base::dock::tab_group::TabGroup> >
+  5.4%  gpui::view::impl$12::render<gpui_base::dock::tab_group::TabGroup>
+  5.4%  CompatString
+  5.3%  0x7fff73360ccf
+  5.3%  gpui::app::impl$11::update_entity::closure$0<gpui_base::dock::tab_group::TabGroup,gpui::element::AnyElement,gpui::view::impl$12::render::closure_env$0<gpui_base::dock::tab_group::TabGroup> >
+  5.2%  gpui_base::dock::tab_group::impl$6::render
+  5.2%  oneterm_workspace::widgets::status_text::measure_status_text
+  5.1%  D3DKMTOpenResource
+  5.1%  gpui::text_system::WindowTextSystem::layout_line
+  5.1%  gpui::view::impl$12::render<oneterm_workspace::layout::statusbar::StatusBarView>
+  5.1%  core::ops::function::FnOnce::call_once<gpui::view::impl$16::prepaint::closure_env$0<gpui::app::entity_map::Entity<oneterm_workspace::layout::statusbar::StatusBarView> >,tuple$<ref_mut$<gpui::window::Window>,ref_mut$<gpui::app::App> > >
+  5.1%  gpui::app::impl$11::update_entity::closure$0<oneterm_workspace::layout::statusbar::StatusBarView,gpui::element::AnyElement,gpui::view::impl$12::render::closure_env$0<oneterm_workspace::layout::statusbar::StatusBarView> >
+  5.0%  oneterm_workspace::layout::statusbar::impl$1::render
+  5.0%  gpui::window::Window::take_element_state
+  4.9%  OpenAdapter10_2
+  4.9%  gpui_windows::directx_renderer::DirectXRenderer::render
+  4.9%  PIXBeginCapture
+  4.8%  gpui::text_system::line_layout::LineLayoutCache::layout_line<ref$<gpui_shared_string::SharedString> >
+  4.7%  oneterm_workspace::layout::statusbar::build_status_bar::closure$1
+  4.7%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui::app::entity_map::Entity<oneterm_workspace::layout::title_bar::AppTitleBar> > >
+  4.7%  _NLG_Return2
+  4.7%  gpui::element::impl$5::paint<gpui::view::ViewElement<gpui::app::entity_map::Entity<oneterm_workspace::layout::statusbar::StatusBarView> > >
+  4.6%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_component::title_bar::TitleBar> >
+  4.6%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_component::status_bar::StatusBar> >
+  4.5%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_component::popover::Popover> >
+  4.4%  hashbrown::map::HashMap::remove_entry<tuple$<gpui::element::GlobalElementId,core::any::TypeId>,gpui::window::ElementStateBox,rustc_hash::FxBuildHasher,alloc::alloc::Global,tuple$<gpui::element::GlobalElementId,core::any::TypeId> >
+  4.4%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_base::popover::Popover> >
+  4.4%  gpui_windows::direct_write::impl$3::layout_line
+  4.3%  taffy::compute::flexbox::calculate_flex_item<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1> >
+  4.3%  taffy::compute::flexbox::calculate_layout_line<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1> >
+  4.3%  oneterm_workspace::layout::workspace::dock_skin::impl$2::render_tab_bar
+  4.3%  DXGIDeclareAdapterRemovalSupport
+  4.3%  gpui_component::dock::tab_panel::impl$2::render_tab_bar
+  4.2%  gpui::element::impl$5::paint<gpui::view::ViewElement<gpui_component::status_bar::StatusBar> >
+  4.0%  0x7fff73360b61
+  3.9%  core::ops::function::FnOnce::call_once<gpui::view::impl$16::request_layout::closure_env$1<gpui_component::button::button::Button>,tuple$<ref_mut$<gpui::window::Window>,ref_mut$<gpui::app::App> > >
+  3.9%  gpui_component::button::button::impl$13::render
+  3.5%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_component::title_bar::WindowControls> >
+  3.5%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_base::popup::Popup> >
+  3.3%  gpui::element::impl$5::prepaint<gpui::view::ViewElement<gpui_base::resizable::panel::ResizablePanelGroup> >
+  3.2%  gpui::element::impl$5::prepaint<gpui::view::ViewElement<gpui_base::resizable::panel::ResizablePanel> >
+  3.2%  gpui::arena::Arena::force_clear
+  3.1%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<enum2$<gpui_component::title_bar::ControlIcon> > >
+  3.1%  gpui::element::impl$5::paint<gpui::view::ViewElement<gpui::app::entity_map::Entity<oneterm_workspace::widgets::status_text::StatusText> > >
+  3.0%  gpui::element::impl$5::paint<gpui_component::menu::context_menu::ContextMenu<gpui::elements::div::Stateful<gpui::elements::div::Div> > >
+  3.0%  gpui::elements::div::Interactivity::compute_style_internal
+  2.9%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui::app::entity_map::Entity<oneterm_workspace::widgets::status_text::StatusText> > >
+  2.9%  gpui::element::Drawable::request_layout<gpui::view::ViewElement<gpui_base::button::Button> >
+  2.9%  gpui::window::ArenaClearNeeded::clear
+  2.7%  gpui::elements::div::Interactivity::new
+  2.7%  0x7fff774cf7bd
+  2.7%  0x7fff774cf997
+  2.7%  RtlReleaseSRWLockExclusive
+  2.7%  gpui::window::with_element_arena_erased
+== exclusive ==
+ 10.4%  RtlAllocateHeap
+  4.7%  _NLG_Return2
+  3.9%  taffy::compute::flexbox::compute_preliminary<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1> >
+  2.1%  core::ptr::drop_in_place<enum2$<gpui::window::ElementId> >
+  2.1%  memcpy
+  1.8%  gpui::window::impl$210::hash<rustc_hash::FxHasher>
+  1.7%  ZwAllocateVirtualMemoryEx
+  1.6%  GetProcessHeap
+  1.4%  smol_str::impl$16::hash<rustc_hash::FxHasher>
+  1.3%  taffy::tree::taffy_tree::impl$10::compute_child_layout::closure$0<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1>
+  1.2%  gpui::style::impl$57::refine
+  1.2%  RtlConvertHostPerfCounterToPerfCounter
+  1.2%  gpui::window::with_element_arena_erased
+  1.1%  NtGdiDdDDISignalSynchronizationObjectFromGpu2
+  1.0%  gpui::elements::div::Interactivity::compute_style_internal
+  1.0%  gpui::elements::div::impl$9::paint::closure$1::closure$1::closure$0::closure$0::closure$0::closure$0<gpui::elements::div::impl$7::paint::closure$1::closure_env$0>
+  1.0%  D3D11CoreRegisterLayers
+  0.9%  NtSetInformationVirtualMemory
+  0.9%  smol_str::impl$5::eq
+  0.8%  hashbrown::map::HashMap::insert<tuple$<gpui::element::GlobalElementId,core::any::TypeId>,gpui::window::ElementStateBox,rustc_hash::FxBuildHasher,alloc::alloc::Global>
+  0.8%  gpui::text_system::TextSystem::raster_bounds
+  0.7%  NtUserDispatchMessage
+  0.6%  RtlRbRemoveNode
+  0.6%  RtlFreeHeap
+  0.6%  gpui::taffy::TaffyLayoutEngine::layout_bounds
+  0.6%  gpui::taffy::impl$18::to_taffy<enum2$<gpui::geometry::Length>,taffy::style::dimension::LengthPercentageAuto>
+  0.6%  gpui::window::impl$209::eq
+  0.6%  gpui::elements::div::impl$7::request_layout::closure$1::closure$0::closure$0
+  0.6%  gpui::bounds_tree::BoundsTree::insert<gpui::geometry::ScaledPixels>
+  0.6%  core::iter::adapters::map::impl$2::next<taffy::compute::flexbox::FlexItem,core::iter::adapters::filter::Filter<core::iter::adapters::filter::Filter<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<taffy::tree::taffy_tree::TaffyTreeChildIter>,taffy::compute::flexbox::generate_anonymous_flex_items::closure_env$0<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1> > >,taffy::compute::flexbox::generate_anonymous_flex_items::closure_env$1<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1> > >,taffy::compute::flexbox::generate_anonymous_flex_items::closure_env$2<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1> > >,taffy::compute::flexbox::generate_anonymous_flex_items::closure_env$3<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1> > >
+  0.6%  gpui::elements::div::impl$7::prepaint
+  0.6%  0x7fff73363354
+  0.6%  memcmp
+  0.6%  gpui::elements::div::Interactivity::paint_mouse_listeners
+  0.6%  gpui::window::Window::take_element_state
+  0.6%  gpui::window::impl$205::clone
+  0.6%  gpui::elements::div::impl$9::request_layout::closure$0<gpui::elements::div::impl$7::request_layout::closure$1::closure_env$0>
+  0.5%  gpui_windows::directx_atlas::impl$1::get_or_insert_with
+  0.5%  RtlReleaseSRWLockExclusive
+  0.5%  slotmap::basic::SlotMap::try_insert_with_key<slotmap::DefaultKey,taffy::tree::taffy_tree::NodeData,slotmap::basic::impl$5::insert::closure_env$0<slotmap::DefaultKey,taffy::tree::taffy_tree::NodeData>,enum2$<slotmap::util::Never> >
+  0.5%  core::any::impl$0::type_id<enum2$<core::option::Option<gpui::elements::div::InteractiveElementState> > >
+  0.5%  gpui::element::impl$5::paint<gpui::view::ViewElement<gpui::view::AnyView> >
+  0.5%  gpui::taffy::impl$5::to_taffy
+  0.5%  ZwSetTimer2
+  0.5%  gpui::style::impl$102::refine
+  0.5%  hashbrown::map::HashMap::remove_entry<tuple$<gpui::element::GlobalElementId,core::any::TypeId>,gpui::window::ElementStateBox,rustc_hash::FxBuildHasher,alloc::alloc::Global,tuple$<gpui::element::GlobalElementId,core::any::TypeId> >
+  0.5%  NtGdiDdDDIPresent
+  0.5%  taffy::compute::block::compute_inner<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$1> >
+  0.5%  gpui::app::App::flush_effects
+  0.5%  gpui::element::impl$5::paint<gpui::elements::div::Div>
+  0.5%  gpui::element::impl$5::prepaint<gpui::elements::div::Stateful<gpui::elements::div::Div> >
+  0.5%  core::ptr::drop_in_place<gpui_component::tooltip::ManagedTooltipExt::managed_tooltip_with_placement::closure_env$1<gpui_base::radio::Radio,gpui_component::tooltip::impl$4::apply::closure_env$1<gpui_base::radio::Radio> > >
+  0.4%  core::ptr::drop_in_place<alloc::vec::into_iter::IntoIter<core::pin::Pin<alloc::boxed::Box<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > >,alloc::alloc::Global> >,alloc::alloc::Global> >
+  0.4%  gpui::key_dispatch::DispatchTree::set_active_node
+  0.4%  gpui::window::Window::paint_glyph
+  0.4%  gpui::element::impl$5::prepaint<gpui::view::ViewElement<gpui::app::entity_map::Entity<oneterm_workspace::layout::statusbar::StatusBarView> > >
+  0.4%  ZwUnlockFile
+  0.4%  gpui::app::impl$10::spawn::async_block$0<gpui::window::impl$31::spawn::closure_env$0<gpui::app::context::impl$2::spawn_in::closure_env$0<oneterm_workspace::widgets::status_text::StatusText,oneterm_workspace::widgets::status_text::impl$7::new_entity::closure$0::closure_env$0,tuple$<> >,tuple$<> >,tuple$<> >
+  0.4%  core::ptr::drop_in_place<enum2$<gpui::element::ElementDrawPhase<gpui::elements::div::DivFrameState,enum2$<core::option::Option<gpui::window::Hitbox> > > > >
+  0.4%  gpui::elements::div::Interactivity::new
+

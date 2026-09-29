@@ -1,0 +1,45 @@
+busy samples: 14492
+ 61.4%  Window::draw (build the frame)
+ 60.8%    draw_roots
+ 18.6%      taffy layout (compute_layout)
+ 13.0%      Render::render of views (view render fns)
+  5.4%      paint phase
+  4.6%    arena clear / element drop
+  1.8%  present (DirectX)
+ 17.0%  WM_GETOBJECT (UI Automation)
+ 21.3%  IME / text services (Ctf/TF_)
+ 14.5%  heap alloc/free (RtlAllocateHeap/RtlFreeHeap anywhere)
+  0.1%  PTY/terminal (oneterm_terminal_view element)
+
+View subtrees (inclusive, any phase):
+ 60.8%  gpui::view::AnyView
+ 49.7%  gpui_component::window_border::WindowBorder
+ 24.1%  gpui::app::entity_map::Entity<gpui_base::dock::dock_area::DockArea
+ 20.8%  gpui::app::entity_map::Entity<gpui_base::dock::tab_group::TabGroup
+ 17.7%  gpui_base::resizable::panel::ResizablePanelGroup
+ 17.1%  gpui_base::resizable::panel::ResizablePanel
+ 17.1%  gpui::app::entity_map::Entity<oneterm_workspace::layout::statusbar::StatusBarView
+ 11.4%  gpui_component::status_bar::StatusBar
+  8.3%  gpui_component::tab::tab_bar::TabBar
+  8.1%  gpui_base::tabs::Tabs
+  6.7%  gpui_component::button::button::Button
+  4.7%  gpui_base::button::Button
+  3.6%  gpui::app::entity_map::Entity<oneterm_workspace::layout::title_bar::AppTitleBar
+  3.5%  gpui_component::title_bar::TitleBar
+  3.1%  gpui::app::entity_map::Entity<oneterm_workspace::widgets::status_text::StatusText
+  2.7%  gpui_component::menu::dropdown_menu::DropdownMenuPopover<gpui_component::button::button::Button
+  2.3%  gpui_component::popover::Popover
+  2.3%  gpui_base::popover::Popover
+  1.9%  gpui_component::icon::Icon
+  1.6%  gpui_base::popup::Popup
+  1.5%  gpui_component::tab::tab::Tab
+  1.5%  gpui::app::entity_map::Entity<oneterm_workspace::layout::title_bar::TitleBarContent
+  1.5%  gpui::app::entity_map::Entity<gpui_component::touch_selection::window_overlay::WindowTouchSelectionOverlay
+  1.4%  gpui_component::button::button_icon::ButtonIcon
+  1.4%  gpui_base::tabs::Tab
+
+Top exclusive:
+  9.0%  RtlAllocateHeap
+  4.8%  taffy::compute::flexbox::compute_preliminary<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout
+  3.9%  ZwQueryKey
+  2.7%  _NLG_Return2

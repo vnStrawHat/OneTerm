@@ -1,0 +1,66 @@
+busy samples: 14382
+ 80.9%  Window::draw (build the frame)
+ 76.6%    draw_roots
+ 11.6%      taffy layout (compute_layout)
+ 15.2%      Render::render of views (view render fns)
+ 16.2%      paint phase
+  3.2%    arena clear / element drop
+  4.9%  present (DirectX)
+  0.0%  WM_GETOBJECT (UI Automation)
+  0.0%  IME / text services (Ctf/TF_)
+ 14.7%  heap alloc/free (RtlAllocateHeap/RtlFreeHeap anywhere)
+  2.2%  PTY/terminal (oneterm_terminal_view element)
+
+View subtrees (inclusive, any phase):
+ 77.4%  gpui::view::AnyView
+ 69.0%  gpui_component::window_border::WindowBorder
+ 41.6%  gpui::app::entity_map::Entity<gpui_base::dock::dock_area::DockArea
+ 33.3%  gpui::app::entity_map::Entity<gpui_base::dock::tab_group::TabGroup
+ 33.0%  gpui_base::resizable::panel::ResizablePanelGroup
+ 30.7%  gpui_base::resizable::panel::ResizablePanel
+ 18.5%  gpui::app::entity_map::Entity<oneterm_workspace::layout::statusbar::StatusBarView
+ 14.6%  gpui_component::tab::tab_bar::TabBar
+ 13.4%  gpui_base::tabs::Tabs
+ 12.0%  gpui_component::status_bar::StatusBar
+  8.6%  gpui_component::button::button::Button
+  6.5%  gpui_component::menu::dropdown_menu::DropdownMenuPopover<gpui_component::button::button::Button
+  6.0%  gpui::app::entity_map::Entity<oneterm_workspace::widgets::status_text::StatusText
+  5.1%  gpui_component::popover::Popover
+  5.1%  gpui::app::entity_map::Entity<oneterm_workspace::layout::title_bar::AppTitleBar
+  5.1%  gpui_base::popover::Popover
+  5.0%  gpui_component::title_bar::TitleBar
+  4.4%  gpui_base::button::Button
+  4.3%  gpui_component::icon::Icon
+  4.1%  gpui_base::popup::Popup
+  3.7%  gpui_component::title_bar::WindowControls
+  3.4%  enum2$<gpui_component::title_bar::ControlIcon
+  3.2%  gpui::app::entity_map::Entity<oneterm_terminal_view::terminal_view::view::TerminalView
+  2.9%  gpui_component::tab::tab::Tab
+  2.4%  gpui_base::tabs::Tab
+
+Top exclusive:
+ 10.4%  RtlAllocateHeap
+  4.7%  _NLG_Return2
+  3.9%  taffy::compute::flexbox::compute_preliminary<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout
+  2.1%  core::ptr::drop_in_place<enum2$<gpui::window::ElementId> >
+  2.1%  memcpy
+  1.8%  gpui::window::impl$210::hash<rustc_hash::FxHasher>
+  1.7%  ZwAllocateVirtualMemoryEx
+  1.6%  GetProcessHeap
+  1.4%  smol_str::impl$16::hash<rustc_hash::FxHasher>
+  1.3%  taffy::tree::taffy_tree::impl$10::compute_child_layout::closure$0<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$
+  1.2%  gpui::style::impl$57::refine
+  1.2%  RtlConvertHostPerfCounterToPerfCounter
+  1.2%  gpui::window::with_element_arena_erased
+  1.1%  NtGdiDdDDISignalSynchronizationObjectFromGpu2
+  1.0%  gpui::elements::div::Interactivity::compute_style_internal
+  1.0%  gpui::elements::div::impl$9::paint::closure$1::closure$1::closure$0::closure$0::closure$0::closure$0<gpui::elements::div::impl$7::paint::clo
+  1.0%  D3D11CoreRegisterLayers
+  0.9%  NtSetInformationVirtualMemory
+  0.9%  smol_str::impl$5::eq
+  0.8%  hashbrown::map::HashMap::insert<tuple$<gpui::element::GlobalElementId,core::any::TypeId>,gpui::window::ElementStateBox,rustc_hash::FxBuildHa
+  0.8%  gpui::text_system::TextSystem::raster_bounds
+  0.7%  NtUserDispatchMessage
+  0.6%  RtlRbRemoveNode
+  0.6%  RtlFreeHeap
+  0.6%  gpui::taffy::TaffyLayoutEngine::layout_bounds

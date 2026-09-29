@@ -2,8 +2,18 @@
 //! network speed, the CPU/memory indicator and the right-dock toggle.
 //!
 //! The clock, net-speed, breadcrumb, git-status, and resource entities are created once in
-//! `OneTermWorkspace::new` and passed in here, avoiding a fresh one each render
-//! (which would drop the timer Task → updates stop).
+//! [`StatusBarView::new`], avoiding a fresh one each render (which would drop the
+//! timer Task → updates stop).
+//!
+//! ## A cached view (`US-0150`)
+//!
+//! The workspace embeds [`StatusBarView`] through [`embed`]: `.cached(..)` at
+//! [`status_bar_height`] (uncached while accessibility is active, see
+//! [`crate::layout::cached_unless_a11y`]), so a frame another view asked for (a cursor blink,
+//! terminal output) reuses the bar instead of measuring its five labels and
+//! laying it out again. The bar re-renders when one of its indicators notifies
+//! (each is a child view, so its notify dirties the bar too), when its own
+//! button is hovered, and when the window is refreshed or resized.
 //!
 //! ## Who gives way when the window is narrow (`US-0112`)
 //!
@@ -19,16 +29,22 @@
 //! pieces (icons, separators, the button, padding), which do not depend on the
 //! text.
 
-use gpui::{Context, ParentElement as _, Pixels, Styled, Window, div, px};
-use gpui_component::dock::{DockEvent, DockPlacement};
+use std::cell::Cell;
+use std::rc::Rc;
+
+use gpui::{
+    AnyElement, Context, Entity, IntoElement, ParentElement as _, Pixels, Render, StyleRefinement,
+    Styled, Window, div, px,
+};
+use gpui_component::dock::{DockArea, DockEvent, DockPlacement};
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable,
     button::{Button, ButtonVariants as _},
     status_bar::StatusBar,
 };
 
-use crate::layout::OneTermWorkspace;
 use crate::widgets::status_text::measure_status_text;
+use crate::widgets::{StatusText, breadcrumb, datetime_clock, git_status, net_speed, resource};
 
 /// Everything in the bar that is not a label: the bar's padding, the gaps
 /// between its items, the four separators and the dock-toggle button.
@@ -72,24 +88,112 @@ fn divide_centre(window_width: Pixels, icons: usize, fixed: Pixels, git: Pixels)
     }
 }
 
-/// Build the `StatusBar` for `OneTermWorkspace`.
+/// The height the kit's `StatusBar` lays itself out at, for the cached embed
+/// (a cached view is laid out from its style, not measured).
 ///
-/// The indicator entities are read from the workspace, which created them once
-/// so their timers fire reliably — not recreated each render. This is also where
-/// the two shortening indicators are told how much width they have, because the
-/// bar is the only place that sees every label at once.
+/// `py_1` above and below, a 1 px top border, and the tallest item: the
+/// `xsmall` dock button (`h_5`, 1.25 rem). The labels are `text_xs` at gpui's
+/// default line height (0.75 rem x 1.618 = 1.21 rem), so they never set it.
+/// Everything but the border is in rems, so the bar follows the UI font size;
+/// `status_bar_height_matches_the_kit_layout` pins the sum against the real
+/// layout.
+pub(crate) fn status_bar_height(rem: Pixels) -> Pixels {
+    rem * 1.75 + px(1.)
+}
+
+/// The bar's box in the workspace's column: full width, [`status_bar_height`].
+fn bar_style(window: &Window) -> StyleRefinement {
+    StyleRefinement::default()
+        .w_full()
+        .flex_none()
+        .h(status_bar_height(window.rem_size()))
+}
+
+/// How the workspace embeds the bar (`US-0150`): cached at [`bar_style`], or
+/// uncached in the same box while accessibility is active.
+pub(crate) fn embed(bar: &Entity<StatusBarView>, window: &Window) -> AnyElement {
+    crate::layout::cached_unless_a11y(bar.clone(), bar_style(window), window)
+}
+
+/// The status bar: owns its five indicators and lays them out.
+pub struct StatusBarView {
+    dock_area: Entity<DockArea>,
+    /// Datetime clock — created once so the 1s timer fires reliably.
+    clock: Entity<StatusText>,
+    /// Network speed indicator — created once so the 1s timer fires reliably.
+    net_speed: Entity<StatusText>,
+    /// Breadcrumb (cwd + foreground process) indicator — created once so the
+    /// 500ms timer fires reliably.
+    breadcrumb: Entity<StatusText>,
+    /// Git status of the active local terminal's cwd — created once so the
+    /// 500ms timer fires reliably.
+    git_status: Entity<StatusText>,
+    /// CPU/memory resource indicator — created once so the 2s timer fires reliably.
+    resource: Entity<StatusText>,
+    #[cfg(test)]
+    renders: usize,
+}
+
+impl StatusBarView {
+    pub fn new(dock_area: Entity<DockArea>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // The bar refreshes both budgets every time it renders; they start wide
+        // enough that the first frame shows the labels whole.
+        let budget = || Rc::new(Cell::new(px(f32::MAX)));
+        Self {
+            clock: datetime_clock(window, cx),
+            net_speed: net_speed(dock_area.downgrade(), window, cx),
+            breadcrumb: breadcrumb(dock_area.downgrade(), budget(), window, cx),
+            git_status: git_status(dock_area.downgrade(), budget(), window, cx),
+            resource: resource(window, cx),
+            dock_area,
+            #[cfg(test)]
+            renders: 0,
+        }
+    }
+
+    /// A bar over the given indicators, for tests that need labels they control.
+    #[cfg(test)]
+    pub(crate) fn with_items(dock_area: Entity<DockArea>, items: [Entity<StatusText>; 5]) -> Self {
+        let [clock, net_speed, breadcrumb, git_status, resource] = items;
+        Self {
+            dock_area,
+            clock,
+            net_speed,
+            breadcrumb,
+            git_status,
+            resource,
+            renders: 0,
+        }
+    }
+}
+
+impl Render for StatusBarView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.renders += 1;
+        }
+        // The cached embed fixes the bar's size; the bar fills it.
+        build_status_bar(self, window, cx).size_full()
+    }
+}
+
+/// Build the kit `StatusBar` from the indicators.
+///
+/// This is also where the two shortening indicators are told how much width
+/// they have, because the bar is the only place that sees every label at once.
 #[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]
-pub fn build_status_bar(
-    workspace: &OneTermWorkspace,
+fn build_status_bar(
+    bar: &StatusBarView,
     window: &mut Window,
-    cx: &mut Context<OneTermWorkspace>,
+    cx: &mut Context<StatusBarView>,
 ) -> StatusBar {
-    let dock_area = workspace.dock_area.clone();
-    let clock = workspace.clock.clone();
-    let net_speed = workspace.net_speed.clone();
-    let breadcrumb = workspace.breadcrumb.clone();
-    let git_status = workspace.git_status.clone();
-    let resource = workspace.resource.clone();
+    let dock_area = bar.dock_area.clone();
+    let clock = bar.clock.clone();
+    let net_speed = bar.net_speed.clone();
+    let breadcrumb = bar.breadcrumb.clone();
+    let git_status = bar.git_status.clone();
+    let resource = bar.resource.clone();
 
     let width_of = |entity: &gpui::Entity<crate::widgets::StatusText>| {
         entity
@@ -221,6 +325,169 @@ mod tests {
                 budgets.git
             );
             assert!(budgets.path >= px(0.) && budgets.git >= px(0.));
+        }
+    }
+
+    /// `US-0150`: the bar is a cached view laid out at [`status_bar_height`].
+    mod caching {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use std::time::Duration;
+
+        use gpui::{
+            AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+            ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window,
+            div, px,
+        };
+        use gpui_component::dock::DockArea;
+        use gpui_component::{Icon, IconName};
+
+        use super::super::{StatusBarView, bar_style, embed, status_bar_height};
+        use crate::layout::embed_view;
+        use crate::widgets::StatusText;
+        use crate::widgets::status_text::{Label, Presentation, Shorten};
+
+        /// Stands in for every other view of the window (a terminal that blinks).
+        struct Ticker;
+
+        impl Render for Ticker {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().flex_1()
+            }
+        }
+
+        /// How the host embeds the bar.
+        #[derive(Clone, Copy, PartialEq, Debug)]
+        enum Embed {
+            /// `statusbar::embed`, what the workspace renders.
+            Workspace,
+            /// The accessibility branch of the same embed (uncached box).
+            Uncached,
+            /// A plain child: the kit's own layout of the bar, to measure.
+            Natural,
+        }
+
+        struct Host {
+            bar: Entity<StatusBarView>,
+            ticker: Entity<Ticker>,
+            embed: Embed,
+            rem: gpui::Pixels,
+        }
+
+        impl Render for Host {
+            fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                window.set_rem_size(self.rem);
+                let bar = match self.embed {
+                    Embed::Workspace => embed(&self.bar, window),
+                    Embed::Uncached => embed_view(self.bar.clone(), bar_style(window), false),
+                    Embed::Natural => self.bar.clone().into_any_element(),
+                };
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(self.ticker.clone())
+                    // Sized by the bar alone, so its bounds are the bar's.
+                    .child(div().debug_selector(|| "bar".into()).child(bar))
+            }
+        }
+
+        /// An indicator with a fixed label and an icon, like the real ones.
+        fn item(
+            id: &'static str,
+            text: &'static str,
+            shorten: Shorten,
+            window: &mut Window,
+            cx: &mut gpui::App,
+        ) -> Entity<StatusText> {
+            StatusText::new_entity(
+                id,
+                Duration::from_secs(3600),
+                Presentation {
+                    icon: Some(Icon::new(IconName::Info)),
+                    copyable: false,
+                    shorten,
+                },
+                Box::new(move |_| Some(Label::from(text.to_string()))),
+                window,
+                cx,
+            )
+        }
+
+        fn host(embed: Embed, cx: &mut TestAppContext) -> (Entity<Host>, &mut VisualTestContext) {
+            cx.update(gpui_component::init);
+            cx.add_window_view(|window, cx| {
+                let budget = || Rc::new(Cell::new(px(f32::MAX)));
+                let dock_area = cx.new(|cx| DockArea::new("status-test", None, window, cx));
+                let items = [
+                    item("clock", "2026-09-29 10:00:00", Shorten::Never, window, cx),
+                    item("net", "0 B/s", Shorten::Never, window, cx),
+                    item(
+                        "crumb",
+                        r"C:\Users\me",
+                        Shorten::PathTail(budget()),
+                        window,
+                        cx,
+                    ),
+                    item("git", "main", Shorten::HeadFirst(budget()), window, cx),
+                    item("res", "CPU 0.2%  MEM 57.0 MB", Shorten::Never, window, cx),
+                ];
+                Host {
+                    bar: cx.new(|_| StatusBarView::with_items(dock_area, items)),
+                    ticker: cx.new(|_| Ticker),
+                    embed,
+                    rem: px(16.),
+                }
+            })
+        }
+
+        /// The workspace's embed, and its accessibility branch, lay the bar out
+        /// exactly where the kit would: same size at every UI font size.
+        #[gpui::test]
+        fn status_bar_height_matches_the_kit_layout(cx: &mut TestAppContext) {
+            let (host, cx) = host(Embed::Natural, cx);
+            for rem in [12., 14., 16., 20.] {
+                let mut sizes = Vec::new();
+                for embed in [Embed::Natural, Embed::Workspace, Embed::Uncached] {
+                    host.update(cx, |host, cx| {
+                        host.rem = px(rem);
+                        host.embed = embed;
+                        cx.notify();
+                    });
+                    cx.run_until_parked();
+                    sizes.push(cx.debug_bounds("bar").expect("bar drawn").size);
+                }
+                assert_eq!(sizes[0].height, status_bar_height(px(rem)), "rem {rem}");
+                assert_eq!(sizes[1], sizes[0], "workspace embed, rem {rem}");
+                assert_eq!(sizes[2], sizes[0], "accessibility embed, rem {rem}");
+            }
+        }
+
+        #[gpui::test]
+        fn another_views_frame_reuses_the_bar_and_an_item_notify_does_not(cx: &mut TestAppContext) {
+            let (host, cx) = host(Embed::Workspace, cx);
+            cx.run_until_parked();
+            let renders = |cx: &mut VisualTestContext| {
+                host.read_with(cx, |host, cx| host.bar.read(cx).renders)
+            };
+            let first = renders(cx);
+            assert!(first >= 1, "first frame drew the bar");
+
+            // Three frames the ticker asked for: the bar is reused.
+            for _ in 0..3 {
+                host.update(cx, |host, cx| host.ticker.update(cx, |_, cx| cx.notify()));
+                cx.run_until_parked();
+            }
+            assert_eq!(renders(cx), first);
+
+            // An indicator that changed (the clock ticking) re-renders the bar,
+            // which is where the labels are measured.
+            host.update(cx, |host, cx| {
+                host.bar
+                    .update(cx, |bar, cx| bar.clock.update(cx, |_, cx| cx.notify()))
+            });
+            cx.run_until_parked();
+            assert_eq!(renders(cx), first + 1);
         }
     }
 }

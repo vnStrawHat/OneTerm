@@ -1,0 +1,139 @@
+5b65458b8a9f61fd41a9660f2c46d3baab7adc91
+perf(terminal-view): the tab bar's "+" button is a cached view (US-0150)
+
+diff --git a/crates/terminal-view/src/panel/terminal_panel.rs b/crates/terminal-view/src/panel/terminal_panel.rs
+index c2c7645b..db094f07 100644
+--- a/crates/terminal-view/src/panel/terminal_panel.rs
++++ b/crates/terminal-view/src/panel/terminal_panel.rs
+@@ -10,7 +10,7 @@
+ use gpui::{
+     Anchor, App, AppContext as _, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
+     Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+-    Styled as _, Subscription, WeakEntity, Window, div, px,
++    StyleRefinement, Styled as _, Subscription, WeakEntity, Window, div, px,
+ };
+ use gpui_component::dock::{ClosePanel, Panel, PanelControl, PanelEvent, TabGroup};
+ use gpui_component::{
+@@ -187,6 +187,9 @@ pub struct TerminalPanel {
+     pub(super) _channels_sub: Option<Subscription>,
+     /// The services this panel's terminal views receive (ARCH-20).
+     pub(super) deps: TerminalDeps,
++    /// The tab bar's "+" button, a cached view created on first use
++    /// (`US-0150`, see [`AddTabButton`]).
++    pub(super) add_tab_button: Option<Entity<AddTabButton>>,
+ }
+ 
+ /// What a new terminal tab hosts. Passed to [`TerminalPanel::open`].
+@@ -301,6 +304,7 @@ impl TerminalPanel {
+             _settings_sub,
+             _channels_sub,
+             deps,
++            add_tab_button: None,
+         };
+         if let Some(view) = &view {
+             this.attach_split_ctx(view, active, cx);
+@@ -743,12 +747,33 @@ impl Panel for TerminalPanel {
+     /// "+" button next to the zoom button — dropdown to spawn a new terminal tab
+     /// with a specific shell, open the New SSH Session dialog, or open one of
+     /// the saved SSH sessions (`IN-0033`).
++    ///
++    /// A cached view of the button's own fixed size (`US-0150`): the kit
++    /// rebuilds the tab bar on every frame the terminal draws, and the
++    /// dropdown trigger (button, popover, tooltip) was a measurable part of
++    /// that. It re-renders on its own hover, press and open state.
+     fn title_suffix(
+         &mut self,
+         _window: &mut Window,
+-        _cx: &mut Context<Self>,
++        cx: &mut Context<Self>,
+     ) -> Option<impl IntoElement> {
+-        let btn = Button::new("add-shell-tab")
++        let button = self
++            .add_tab_button
++            .get_or_insert_with(|| cx.new(|_| AddTabButton))
++            .clone();
++        Some(button.cached(StyleRefinement::default().size_5().flex_none()))
++    }
++}
++
++/// The tab bar's "+" button and its dropdown, as a view so the tab bar can
++/// embed it cached (`US-0150`). An `xsmall` icon button is `size_5` (1.25 rem
++/// square), which is the size the cached embed lays it out at;
++/// `the_add_tab_button_is_the_size_it_is_cached_at` pins that.
++pub(crate) struct AddTabButton;
++
++impl Render for AddTabButton {
++    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
++        Button::new("add-shell-tab")
+             .icon(IconName::Plus)
+             .xsmall()
+             .ghost()
+@@ -842,7 +867,6 @@ impl Panel for TerminalPanel {
+ 
+                 menu.scrollable(menu_scrolls(menu_rows(false, session_rows), window))
+             })
+-            .anchor(Anchor::TopRight);
+-        Some(btn)
++            .anchor(Anchor::TopRight)
+     }
+ }
+diff --git a/crates/terminal-view/src/panel/tests.rs b/crates/terminal-view/src/panel/tests.rs
+index 8a74bb3d..f36777de 100644
+--- a/crates/terminal-view/src/panel/tests.rs
++++ b/crates/terminal-view/src/panel/tests.rs
+@@ -968,3 +968,55 @@ fn the_catch_up_in_a_hidden_tab_releases_without_notifying(cx: &mut TestAppConte
+         "the catch-up notified a hidden tab's view"
+     );
+ }
++
++/// `US-0150`: the tab bar embeds the "+" button as a cached view laid out at
++/// `size_5` (1.25 rem square) rather than measured, so that must be the size
++/// the button draws at — at any UI font size.
++#[gpui::test]
++fn the_add_tab_button_is_the_size_it_is_cached_at(cx: &mut TestAppContext) {
++    use gpui::{
++        Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
++        Styled as _, Window, div, px,
++    };
++
++    use crate::panel::terminal_panel::AddTabButton;
++
++    struct Host {
++        button: Entity<AddTabButton>,
++        rem: gpui::Pixels,
++    }
++
++    impl Render for Host {
++        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++            window.set_rem_size(self.rem);
++            // The kit's tab bar suffix is a centred row; so is this.
++            div().flex().items_center().h(px(40.)).child(
++                div()
++                    .debug_selector(|| "add-tab-button".into())
++                    .child(self.button.clone()),
++            )
++        }
++    }
++
++    cx.update(gpui_component::init);
++    let (host, cx) = cx.add_window_view(|_, cx| Host {
++        button: cx.new(|_| AddTabButton),
++        rem: px(16.),
++    });
++    for rem in [12., 16., 20.] {
++        host.update(cx, |host, cx| {
++            host.rem = px(rem);
++            cx.notify();
++        });
++        cx.run_until_parked();
++        let size = cx
++            .debug_bounds("add-tab-button")
++            .expect("button drawn")
++            .size;
++        assert_eq!(
++            size,
++            gpui::size(px(rem * 1.25), px(rem * 1.25)),
++            "rem {rem}"
++        );
++    }
++}

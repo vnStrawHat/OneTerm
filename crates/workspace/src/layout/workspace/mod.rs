@@ -11,8 +11,8 @@ use gpui_component::dock::{DockArea, DockSkin, PanelStyle};
 
 use oneterm_state::AppState;
 
-use crate::layout::{statusbar, title_bar::AppTitleBar};
-use crate::widgets::{StatusText, breadcrumb, datetime_clock, git_status, net_speed, resource};
+use crate::layout::statusbar::{self, StatusBarView};
+use crate::layout::title_bar::AppTitleBar;
 
 pub(crate) mod actions;
 mod dock_skin;
@@ -147,18 +147,9 @@ pub struct OneTermWorkspace {
     pub title_bar: Entity<AppTitleBar>,
     pub dock_area: Entity<DockArea>,
     _dock_skin: Rc<DockSkin>,
-    /// Datetime clock — created once so the 1s timer fires reliably.
-    pub clock: Entity<StatusText>,
-    /// Network speed indicator — created once so the 1s timer fires reliably.
-    pub net_speed: Entity<StatusText>,
-    /// Breadcrumb (cwd + foreground process) indicator — created once so the
-    /// 500ms timer fires reliably.
-    pub breadcrumb: Entity<StatusText>,
-    /// Git status of the active local terminal's cwd — created once so the
-    /// 500ms timer fires reliably.
-    pub git_status: Entity<StatusText>,
-    /// CPU/memory resource indicator — created once so the 2s timer fires reliably.
-    pub resource: Entity<StatusText>,
+    /// The status bar, created once so its indicators' timers fire reliably;
+    /// embedded as a cached view (`US-0150`).
+    pub status_bar: Entity<StatusBarView>,
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
     _save_layout_task: Option<Task<()>>,
 
@@ -312,48 +303,25 @@ impl OneTermWorkspace {
             // the kit gives a menu name no place for a second colour. The
             // elevation suffix is drawn beside it by `AppTitleBar::render`, which
             // is ours to colour (`DEC-0019` M5 as amended).
-            let bar = AppTitleBar::new(
+            //
+            // M1: an elevated window has no right dock, so there is nothing to
+            // switch between — the three segments are absent rather than
+            // disabled.
+            AppTitleBar::new(
                 oneterm_core::elevation::window_title_parts(oneterm_core::elevation::elevation()).0,
+                !elevated,
                 window,
                 cx,
-            );
-            if elevated {
-                // M1: an elevated window has no right dock, so there is nothing
-                // to switch between — the three segments are absent rather than
-                // disabled.
-                bar
-            } else {
-                bar.child(|_window, cx| crate::layout::title_bar::mode_toggle_group(cx))
-            }
+            )
         });
 
-        let clock = datetime_clock(window, cx);
-        let net_speed = net_speed(dock_area.downgrade(), window, cx);
-        // The status bar refreshes both budgets every frame; they start wide
-        // enough that the first frame shows the labels whole.
-        let breadcrumb = breadcrumb(
-            dock_area.downgrade(),
-            Rc::new(std::cell::Cell::new(gpui::px(f32::MAX))),
-            window,
-            cx,
-        );
-        let git_status = git_status(
-            dock_area.downgrade(),
-            Rc::new(std::cell::Cell::new(gpui::px(f32::MAX))),
-            window,
-            cx,
-        );
-        let resource = resource(window, cx);
+        let status_bar = cx.new(|cx| StatusBarView::new(dock_area.clone(), window, cx));
 
         let me = Self {
             title_bar,
             dock_area: dock_area.clone(),
             _dock_skin: dock_skin,
-            clock,
-            net_speed,
-            breadcrumb,
-            git_status,
-            resource,
+            status_bar,
             last_layout_state: None,
             _save_layout_task: None,
             preferred_right_dock_width,
@@ -394,11 +362,11 @@ impl OneTermWorkspace {
         if next == current {
             return;
         }
+        // The title bar's toggles observe `UiConfig`, so this notify repaints them.
         oneterm_settings::UiConfig::global(cx).update(cx, |config, cx| {
             config.right_dock_mode = next;
             cx.notify();
         });
-        self.title_bar.update(cx, |_, cx| cx.notify());
         oneterm_settings::UiConfig::persist(cx);
     }
 
@@ -626,7 +594,9 @@ impl Render for OneTermWorkspace {
             .flex_col()
             .child(self.title_bar.clone())
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
-            .child(statusbar::build_status_bar(self, window, cx))
+            // Cached (`US-0150`): a frame another view asked for reuses the
+            // bar; `statusbar::embed` owns its box and the accessibility switch.
+            .child(statusbar::embed(&self.status_bar, window))
             .children(self.fps_hud.clone())
     }
 }
