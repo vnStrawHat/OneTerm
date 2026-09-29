@@ -616,3 +616,72 @@ pass (unlike passes 1 and 2). No second reviewer ran the concurrent two-process 
 live-PID probe again, since neither mechanism changed in this rework — only `process_is_alive`'s
 internal decision procedure did, and that is covered by the new regression test plus the unchanged
 passing suite above.
+
+---
+
+## Pass 4 (2026-09-29): independent third-pass verification of `db80b150`, alongside BUG-0083
+
+Subject: `db80b150` (BUG-0082 acceptance rework, exit code 259) and `a217404f` (BUG-0083,
+this packet's independent verifier for the latter is
+`docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0083-verify.md`), both on
+`fix/test-tempdirs-and-liveness`, on top of `main @fcff0cf3`.
+Verifier host: Windows 11, MSVC target, debug builds throughout, `CARGO_BUILD_JOBS=6`
+(sole builder in this worktree's own `target/`), `target/debug/incremental` deleted before
+the full gate.
+Date: 2026-09-29. This is the first genuinely independent re-verification of the exit-code-259
+rework — Pass 3 above was the implementer's own self-verification, not a separate pass.
+
+### Verdict
+
+**PASS.** `process_is_alive` (`crates/vt/src/pty/windows/conpty.rs`) reads exactly as the
+packet's third-pass Context/Plan describe: `OpenProcess` now requests
+`PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION` (was
+`PROCESS_QUERY_LIMITED_INFORMATION` alone); `ERROR_INVALID_PARAMETER` on a null handle
+still answers dead (unchanged); the `GetExitCodeProcess`/`STILL_ACTIVE` read is gone
+entirely, replaced by `WaitForSingleObject(handle, 0)` — `WAIT_OBJECT_0` answers dead,
+`WAIT_TIMEOUT`/`WAIT_FAILED` both answer alive (the same safe default the function
+already used elsewhere). No dependency manifest changed
+(`git show db80b150 --stat -- Cargo.toml Cargo.lock crates/vt/Cargo.toml` is empty).
+
+The shipped regression (`process_is_alive_reports_dead_for_a_process_that_exited_with_
+code_259`, a real `cmd /c exit 259` child) passes. An independent adversarial battery of
+7 additional cases against the real, unmodified `process_is_alive` — live child, dead
+exit 0, a second independent dead-exit-259 check, a protected process (`csrss.exe`,
+`OpenProcess` access-denied), PID 0 (System Idle Process), PID 4 (System), and a
+1,000-call process-handle-count leak probe — all behave correctly with **zero handle
+growth** (79 before, 79 after). The shipped `#[ignore]`d two-process race test still
+passes 10/10 internal rounds, confirming the sweep's liveness *decision* logic
+(`is_stale`, unchanged by this rework) is unaffected by the lower-level signal swap.
+Full detail, evidence, and the proposed `harness.db` row update are recorded in
+`docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0083-verify.md` (F1, F2, and the
+BUG-0082 records section), which covers both commits together since they share one
+verification session, one branch, and one combined gate run; this section is the pointer
+required by this packet's own instruction to record a dated pass here rather than a
+duplicate of that file's content.
+
+### One finding: the packet's own third-pass Evidence table miscounts the conpty module result
+
+`BUG-0082`'s own third-pass Evidence table (above, this file) claims "16 passed, 0
+failed, 1 ignored (up from 15/0/1)" for `cargo test -p oneterm-vt --lib -- conpty`.
+Independent re-run: **15 passed, 0 failed, 1 ignored** (16 total test functions: 14
+before this rework + the 1 new regression = 15 non-ignored + 1 ignored). Confirmed by
+counting `#[test]` attributes at `fcff0cf3` (15 total) versus `db80b150` (16 total) —
+the packet's claimed "16 passed" and "up from 15" are each off by one. This does not
+change the verdict: every test in the module genuinely passes with `0` failed, and the
+one new regression genuinely exists and genuinely passes. Filed in full as F6 in
+`BUG-0083-verify.md` (this is a `BUG-0082` packet defect, recorded there to keep one
+evidence trail per finding rather than splitting it across both files).
+
+### Gate
+
+Combined with `BUG-0083` (same branch, same session): the full `pwsh scripts/ci-local.ps1`
+run, directory-count sweeps, and per-crate test results covering both commits together
+are recorded in `docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0083-verify.md`'s own
+"Gates" and "Directory counts" sections. Final line, reproduced here for this file's own
+record:
+
+```
+ci-local: all checks passed.
+```
+
+Exit code 0.
