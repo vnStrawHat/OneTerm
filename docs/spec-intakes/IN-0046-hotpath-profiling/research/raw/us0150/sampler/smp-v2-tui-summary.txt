@@ -1,0 +1,66 @@
+busy samples: 13216
+ 84.7%  Window::draw (build the frame)
+ 79.0%    draw_roots
+ 16.5%      taffy layout (compute_layout)
+  8.7%      Render::render of views (view render fns)
+ 11.8%      paint phase
+  2.0%    arena clear / element drop
+  2.3%  present (DirectX)
+  0.0%  WM_GETOBJECT (UI Automation)
+  0.6%  IME / text services (Ctf/TF_)
+ 14.8%  heap alloc/free (RtlAllocateHeap/RtlFreeHeap anywhere)
+ 25.1%  PTY/terminal (oneterm_terminal_view element)
+
+View subtrees (inclusive, any phase):
+ 79.1%  gpui::view::AnyView
+ 68.9%  gpui_component::window_border::WindowBorder
+ 53.7%  gpui::app::entity_map::Entity<gpui_base::dock::dock_area::DockArea
+ 50.4%  gpui::app::entity_map::Entity<gpui_base::dock::tab_group::TabGroup
+ 47.2%  gpui_base::resizable::panel::ResizablePanelGroup
+ 46.5%  gpui_base::resizable::panel::ResizablePanel
+ 26.6%  gpui::app::entity_map::Entity<oneterm_terminal_view::terminal_view::view::TerminalView
+  8.4%  gpui_component::tab::tab_bar::TabBar
+  8.2%  gpui_base::tabs::Tabs
+  6.6%  gpui::app::entity_map::Entity<oneterm_workspace::layout::statusbar::StatusBarView
+  6.1%  gpui::app::entity_map::Entity<oneterm_workspace::layout::title_bar::AppTitleBar
+  6.0%  gpui_component::title_bar::TitleBar
+  5.5%  gpui_component::button::button::Button
+  5.5%  gpui_component::status_bar::StatusBar
+  4.2%  gpui::app::entity_map::Entity<oneterm_workspace::layout::title_bar::TitleBarContent
+  3.8%  gpui_component::menu::dropdown_menu::DropdownMenuPopover<gpui_component::button::button::Button
+  3.6%  gpui_base::button::Button
+  3.1%  gpui_component::popover::Popover
+  2.9%  gpui_base::popover::Popover
+  2.5%  gpui::app::entity_map::Entity<oneterm_session_ui::panel::SessionPanel
+  2.2%  gpui_base::popup::Popup
+  2.1%  gpui_component::tab::tab::Tab
+  1.9%  gpui_base::tabs::Tab
+  1.6%  gpui_component::icon::Icon
+  1.5%  gpui_component::button::toggle::ToggleGroup
+
+Top exclusive:
+  9.3%  RtlAllocateHeap
+  4.2%  _NLG_Return2
+  4.0%  taffy::compute::flexbox::compute_preliminary<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout
+  1.9%  oneterm_terminal_view::render::frame::FrameRow::cell
+  1.8%  taffy::compute::block::compute_inner<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closur
+  1.6%  gpui::window::impl$210::hash<rustc_hash::FxHasher>
+  1.5%  smol_str::impl$16::hash<rustc_hash::FxHasher>
+  1.5%  powf
+  1.5%  core::iter::adapters::map::impl$2::next<taffy::compute::flexbox::FlexItem,core::iter::adapters::filter::Filter<core::iter::adapters::filter:
+  1.4%  taffy::tree::taffy_tree::impl$10::compute_child_layout::closure$0<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$
+  1.4%  ZwAllocateVirtualMemoryEx
+  1.4%  memcpy
+  1.3%  NtSetInformationVirtualMemory
+  1.2%  core::slice::sort::stable::quicksort::quicksort<gpui::scene::MonochromeSprite,alloc::slice::impl$0::sort_by_key::closure_env$0<gpui::scene::
+  1.2%  RtlConvertHostPerfCounterToPerfCounter
+  1.2%  oneterm_terminal_view::render::row_plan::build_row_plan
+  1.1%  GetProcessHeap
+  0.9%  hashbrown::map::HashMap::remove_entry<tuple$<gpui::element::GlobalElementId,core::any::TypeId>,gpui::window::ElementStateBox,rustc_hash::FxB
+  0.9%  hashbrown::map::HashMap::insert<gpui::app::entity_map::EntityId,tuple$<>,rustc_hash::FxBuildHasher,alloc::alloc::Global>
+  0.9%  oneterm_terminal_view::render::glyphs::GlyphCache::shape
+  0.8%  RtlFreeHeap
+  0.8%  DWriteCreateFactory
+  0.8%  RtlAcquireSRWLockExclusive
+  0.7%  NtUserGetKeyState
+  0.7%  gpui::taffy::impl$5::to_taffy

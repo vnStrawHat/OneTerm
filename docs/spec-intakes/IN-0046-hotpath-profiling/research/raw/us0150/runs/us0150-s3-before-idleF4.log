@@ -1,0 +1,3 @@
+label=us0150-s3-before-idleF4 pid=11444 mode=Idle
+ui-thread steady: 547 ms CPU in 90.3 s = 0.606 % of a core; 2,183.7 Mcycles = 24.19 Mcycles/s; tid 8836
+report: C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\us0150\raw3\us0150-s3-before-idleF4.json (23109 bytes)

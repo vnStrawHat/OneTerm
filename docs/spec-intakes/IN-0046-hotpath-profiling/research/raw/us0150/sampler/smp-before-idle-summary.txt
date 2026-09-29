@@ -1,0 +1,45 @@
+busy samples: 17308
+ 64.0%  Window::draw (build the frame)
+ 62.9%    draw_roots
+ 19.9%      taffy layout (compute_layout)
+ 10.4%      Render::render of views (view render fns)
+  6.9%      paint phase
+  5.2%    arena clear / element drop
+  6.1%  present (DirectX)
+  6.2%  WM_GETOBJECT (UI Automation)
+  7.8%  IME / text services (Ctf/TF_)
+ 12.6%  heap alloc/free (RtlAllocateHeap/RtlFreeHeap anywhere)
+  0.1%  PTY/terminal (oneterm_terminal_view element)
+
+View subtrees (inclusive, any phase):
+ 59.8%  gpui::view::AnyView
+ 39.1%  gpui_component::window_border::WindowBorder
+ 11.0%  gpui::app::entity_map::Entity<oneterm_workspace::layout::title_bar::AppTitleBar
+ 11.0%  gpui::app::entity_map::Entity<gpui_base::dock::dock_area::DockArea
+ 10.3%  gpui_component::title_bar::TitleBar
+  8.4%  gpui::app::entity_map::Entity<gpui_base::dock::tab_group::TabGroup
+  6.5%  gpui_base::resizable::panel::ResizablePanelGroup
+  6.3%  gpui_base::resizable::panel::ResizablePanel
+  6.1%  gpui_component::status_bar::StatusBar
+  5.3%  gpui_component::button::button::Button
+  4.9%  gpui_component::tab::tab_bar::TabBar
+  4.7%  gpui_base::tabs::Tabs
+  4.0%  gpui_base::button::Button
+  3.4%  gpui::app::entity_map::Entity<oneterm_workspace::widgets::status_text::StatusText
+  3.2%  gpui_component::button::toggle::ToggleGroup
+  2.8%  gpui::app::entity_map::Entity<gpui_component::menu::app_menu_bar::AppMenuBar
+  2.8%  gpui_base::toggle_group::ToggleGroup
+  2.5%  gpui_component::button::toggle::Toggle
+  2.5%  gpui_component::menu::dropdown_menu::DropdownMenuPopover<gpui_component::button::button::Button
+  2.5%  gpui_component::title_bar::WindowControls
+  2.3%  gpui::app::entity_map::Entity<gpui_component::menu::app_menu_bar::AppMenu
+  1.9%  gpui_base::toggle::Toggle
+  1.8%  enum2$<gpui_component::title_bar::ControlIcon
+  1.8%  gpui_component::icon::Icon
+  1.8%  gpui_component::popover::Popover
+
+Top exclusive:
+  8.4%  RtlAllocateHeap
+  5.3%  taffy::compute::flexbox::compute_preliminary<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout
+  2.4%  GetProcessHeap
+  2.3%  taffy::tree::taffy_tree::impl$10::compute_child_layout::closure$0<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout::closure_env$

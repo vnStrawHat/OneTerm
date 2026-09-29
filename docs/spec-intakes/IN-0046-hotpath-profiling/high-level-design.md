@@ -46,7 +46,8 @@ oneterm-app  features:
      |                       Windows conout thread: read_pipe, push, Ring::wake
      +--> oneterm-ssh/hotpath-profiling: copy_sequential (SFTP transfer body)
      +--> oneterm-workspace/hotpath-profiling (US-0145): OneTermWorkspace::render,
-     |       build_status_bar, AppTitleBar::render, StatusText::render
+     |       build_status_bar, AppTitleBar::render, StatusText::render;
+     |       US-0150: TitleBarContent::render (the cached title-bar content)
      +--> oneterm-session-ui/hotpath-profiling (US-0145): SessionPanel::render
      +--> oneterm-sftp-ui/hotpath-profiling (US-0145): SftpPanel::render, LocalPane::render
      (US-0145 also: TerminalView::render / blink_tick, TerminalPanel::render / title,

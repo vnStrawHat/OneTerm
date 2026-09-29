@@ -1,0 +1,4 @@
+label=us0150-s2-after-tui pid=19712 mode=Tui
+load took 121 s
+ui-thread steady: 13,953 ms CPU in 156.5 s = 8.915 % of a core; 31,045.0 Mcycles = 198.35 Mcycles/s; tid 30564
+report: C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\us0150\raw2\us0150-s2-after-tui.json (24223 bytes)

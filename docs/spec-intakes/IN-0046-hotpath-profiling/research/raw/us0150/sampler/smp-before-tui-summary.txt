@@ -1,0 +1,66 @@
+busy samples: 15700
+ 79.2%  Window::draw (build the frame)
+ 75.9%    draw_roots
+  3.7%      taffy layout (compute_layout)
+ 10.8%      Render::render of views (view render fns)
+ 16.7%      paint phase
+  1.5%    arena clear / element drop
+  3.1%  present (DirectX)
+  0.0%  WM_GETOBJECT (UI Automation)
+  0.0%  IME / text services (Ctf/TF_)
+ 12.5%  heap alloc/free (RtlAllocateHeap/RtlFreeHeap anywhere)
+ 27.7%  PTY/terminal (oneterm_terminal_view element)
+
+View subtrees (inclusive, any phase):
+ 75.5%  gpui::view::AnyView
+ 72.2%  gpui_component::window_border::WindowBorder
+ 48.5%  gpui::app::entity_map::Entity<gpui_base::dock::dock_area::DockArea
+ 46.9%  gpui::app::entity_map::Entity<gpui_base::dock::tab_group::TabGroup
+ 46.0%  gpui_base::resizable::panel::ResizablePanelGroup
+ 45.0%  gpui_base::resizable::panel::ResizablePanel
+ 30.3%  gpui::app::entity_map::Entity<oneterm_terminal_view::terminal_view::view::TerminalView
+ 14.1%  gpui::app::entity_map::Entity<oneterm_workspace::layout::title_bar::AppTitleBar
+ 13.8%  gpui_component::title_bar::TitleBar
+  7.3%  gpui_component::tab::tab_bar::TabBar
+  7.3%  gpui_base::tabs::Tabs
+  6.7%  gpui_component::button::button::Button
+  6.1%  gpui_component::button::toggle::ToggleGroup
+  5.7%  gpui_base::toggle_group::ToggleGroup
+  5.5%  gpui_component::button::toggle::Toggle
+  4.9%  gpui_base::button::Button
+  4.3%  gpui_base::toggle::Toggle
+  3.7%  gpui_component::title_bar::WindowControls
+  3.4%  gpui_component::status_bar::StatusBar
+  2.7%  gpui_component::tab::tab::Tab
+  2.6%  gpui_base::tabs::Tab
+  2.5%  enum2$<gpui_component::title_bar::ControlIcon
+  2.5%  gpui_component::menu::dropdown_menu::DropdownMenuPopover<gpui_component::button::button::Button
+  2.4%  gpui::app::entity_map::Entity<gpui_component::menu::app_menu_bar::AppMenuBar
+  2.2%  gpui_component::icon::Icon
+
+Top exclusive:
+  6.9%  RtlAllocateHeap
+  2.5%  _NLG_Return2
+  1.8%  smol_str::impl$16::hash<rustc_hash::FxHasher>
+  1.5%  DWriteCreateFactory
+  1.4%  RtlConvertHostPerfCounterToPerfCounter
+  1.3%  NtSetInformationVirtualMemory
+  1.3%  RtlReleaseSRWLockExclusive
+  1.2%  RtlEnterCriticalSection
+  1.2%  ZwAllocateVirtualMemoryEx
+  1.2%  oneterm_terminal_view::render::frame::FrameRow::cell
+  1.2%  NtGdiDdDDIPresent
+  1.1%  gpui::window::impl$210::hash<rustc_hash::FxHasher>
+  1.0%  RtlAcquireSRWLockExclusive
+  1.0%  FreeOtlResources
+  0.9%  powf
+  0.9%  fmodf
+  0.9%  oneterm_terminal_view::theme::contrast::contrast_ratio
+  0.8%  memcpy
+  0.8%  oneterm_terminal_view::render::row_plan::build_row_plan
+  0.8%  RtlRbRemoveNode
+  0.8%  gpui::style::impl$57::refine
+  0.8%  gpui::window::Frame::hit_test
+  0.8%  hashbrown::map::HashMap::remove_entry<tuple$<gpui::element::GlobalElementId,core::any::TypeId>,gpui::window::ElementStateBox,rustc_hash::FxB
+  0.7%  taffy::compute::flexbox::compute_preliminary<taffy::tree::taffy_tree::TaffyView<gpui::taffy::NodeContext,gpui::taffy::impl$0::compute_layout
+  0.7%  hashbrown::map::HashMap::insert<tuple$<gpui::element::GlobalElementId,core::any::TypeId>,gpui::window::ElementStateBox,rustc_hash::FxBuildHa

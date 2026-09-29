@@ -1,0 +1,3 @@
+label=us0150-s2-after-idleF1 pid=4920 mode=Idle
+ui-thread steady: 1,750 ms CPU in 90.3 s = 1.938 % of a core; 1,469.6 Mcycles = 16.27 Mcycles/s; tid 23748
+report: C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\us0150\raw2\us0150-s2-after-idleF1.json (23541 bytes)

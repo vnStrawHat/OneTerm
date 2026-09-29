@@ -19,6 +19,8 @@
 #   Tui    a second tab, then tui-mimic.py (IN-0045) in both tabs for -LoadSeconds,
 #          switching the visible tab every 10 s; wait for both to exit, idle 5 s.
 # -NoLigatures writes a terminal.json with `font.ligatures: false` (US-0146's fast path).
+# -NoBlink writes `cursor.blink: false` (US-0150: an idle focused window without the blink
+# frames, the most a blink that does not rebuild the window could save).
 # The report (hotpath JSON) goes to <Out>\<Label>.json.
 param(
   [Parameter(Mandatory)] [string] $Exe,
@@ -28,6 +30,7 @@ param(
   [string] $AllocMetric = '',
   [int] $LoadSeconds = 180,
   [switch] $NoLigatures,
+  [switch] $NoBlink,
   [int] $IdleSeconds = 60,
   # Post WM_ACTIVATE so gpui treats the window as active (the terminal is focused and
   # its cursor blinks) without taking the real foreground from the user (US-0145).
@@ -108,7 +111,12 @@ $work = Join-Path $Scratch "cwd-$Label"
 Remove-Item -Recurse -Force $home_, $work -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $home_, $work, "$home_\.OneTerm", $Out | Out-Null
 '{"auto_check": false, "schema_version": 1}' | Set-Content "$home_\.OneTerm\update_config.json"
-if ($NoLigatures) { '{"schema_version": 1, "font": {"ligatures": false}}' | Set-Content "$home_\.OneTerm\terminal.json" }
+if ($NoLigatures -or $NoBlink) {
+  $terminal = @{ schema_version = 1 }
+  if ($NoLigatures) { $terminal.font = @{ ligatures = $false } }
+  if ($NoBlink) { $terminal.cursor = @{ blink = $false } }
+  ($terminal | ConvertTo-Json) | Set-Content "$home_\.OneTerm\terminal.json"
+}
 if ($AgentPanel) { '{"right_dock_mode": "agent"}' | Set-Content "$home_\.OneTerm\ui_config.json" }
 $Out = (Resolve-Path $Out).Path   # the app runs in $work, so a relative path would land there
 $report = Join-Path $Out "$Label.json"
@@ -174,7 +182,7 @@ try {
     }
   }
   $uiCpu = (Ui-CpuMs) - $uiCpu0; $uiCyc = [HpProbe]::Cycles($uiTid) - $uiCyc0; $uiSec = $uiClock.Elapsed.TotalSeconds
-  Write-Host ("ui-thread steady: {0:n0} ms CPU in {1:n1} s = {2:n3} % of a core; {3:n1} Mcycles = {4:n2} Mcycles/s" -f $uiCpu, $uiSec, (100 * $uiCpu / 1000 / $uiSec), ($uiCyc / 1e6), ($uiCyc / 1e6 / $uiSec))
+  Write-Host ("ui-thread steady: {0:n0} ms CPU in {1:n1} s = {2:n3} % of a core; {3:n1} Mcycles = {4:n2} Mcycles/s; tid {5}" -f $uiCpu, $uiSec, (100 * $uiCpu / 1000 / $uiSec), ($uiCyc / 1e6), ($uiCyc / 1e6 / $uiSec), $uiTid)
   # Close the window we own: `run()` returns and the hotpath guard writes the report.
   Post 0x0010 0 0
   if (-not $p.WaitForExit(60000)) { Write-Host 'did not exit after WM_CLOSE' }

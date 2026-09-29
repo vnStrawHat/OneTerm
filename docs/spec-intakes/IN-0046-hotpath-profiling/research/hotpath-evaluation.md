@@ -405,6 +405,8 @@ is on its path.
 
 ### 8.5 Remaining candidates (not done)
 
+Taken up by US-0150: see § 9 for what was kept, dropped and why.
+
 | Candidate | Share | Change | Risk |
 | --- | --- | --- | --- |
 | The title bar's mode toggles and app menu as a cached view of fixed size, window controls left uncached | about 10 % of an idle frame | a `ModeToggles` entity, `.cached()` at its exact rem-based size | Medium: the size must match to the pixel |
@@ -412,3 +414,160 @@ is on its path.
 | The status bar as a cached view | 2 % | its own entity, `.cached()` at its rem-based height | Low-medium |
 | gpui: replay window-control hitboxes for cached views; no `refreshing` cascade for a dirty cached view | enables the rows above | upstream | Not ours (`docs/PROJECT.md`) |
 | The tab bar's `+` dropdown and tab chrome rebuilt every frame | 5 to 11 % | GPUI Kit | Upstream |
+
+## 9. US-0150: the § 8.5 candidates
+
+Date: 2026-09-29, main `e0db223f`, same machine. Packet:
+[`../US-0150-render-caching.md`](../US-0150-render-caching.md). Raw data: `raw/us0150/`
+(`runs/` hotpath reports and measure logs, `sampler/`, `pixels/`, `tools/`).
+
+### 9.1 Method
+
+- **Builds.** Four release builds with the same flags (thin LTO, line tables, no strip,
+  `oneterm-app/hotpath-profiling`; the sampler needs the symbols and fat LTO with debug info
+  crashes rustc here): `before` (main), `v1` (title bar cached, `89536cc6`), `v2` (+ status
+  bar cached, the final code), `after` (+ the tab bar's `+` button cached, dropped, patch in
+  `raw/us0150/tools/dropped-add-tab-button.patch`).
+- **Runs.** `hotpath-measure.ps1` idle focused (`-Activate`) and unfocused (`-Inactive`)
+  90 s, TUI two tabs 120 s, interleaved build by build (`tools/run-series3.ps1`). The
+  script now prints the UI thread id, so the hotpath thread row is the UI thread's.
+- **Noise.** The same build's idle focused figure moved between 17.8 and 31.6 Mcycles/s
+  across the day (another agent was building; the desktop's state changes the frame rate),
+  so only interleaved pairs compare, and a change of a few per cent is below what one pair
+  can show. Two TUI runs where the load did not start (3.6 and 5.3 frames/s) are left out.
+- **Sampler.** `raw/us0145-sampler/` on idle focused runs, read per drawn frame
+  (`tools/perframe.py`) rather than as shares, because the share moves with unrelated work
+  (UI Automation and IME were 17 % and 22 % of one run, 0 % of the next). It slows the UI
+  thread to about 0.8 frames/s.
+
+### 9.2 Results
+
+Final code (`v2`) against `before`, interleaved pairs (`runs/us0150-{s2,s3}-*`):
+
+| Load | before | v2 | Pairs lower | Median change |
+| --- | --- | --- | ---: | ---: |
+| Idle focused, Mcycles/s | 17.8, 18.4, 21.0, 26.0, 31.5, 24.2 | 16.8, 17.4, 18.4, 26.5, 21.7, 19.6 | 5 of 6 | -9 % (-31 % to +2 %) |
+| Idle focused, frames/s | 2.03-2.15 | 1.90-2.12 | | unchanged |
+| Idle unfocused, Mcycles/s | 18.9, 19.9, 14.4, 19.2 | 11.6, 18.7, 15.8, 14.5 | 3 of 4 | -15 % |
+| TUI, Mcycles per frame (same frame rate) | 7.73, 7.51 | 7.08, 7.24 | 2 of 2 | -8 %, -4 % |
+| Title-bar content renders per frame | 1.00 | 0.04-0.07 idle, 0.01 TUI | | |
+| Status-bar renders per frame | 1.00 | 0.51-0.61 idle focused, 0.94-0.97 unfocused, 0.05-0.09 TUI | | |
+| `AppTitleBar` + `TitleBarContent` render, us per frame | 12-15 | 1.7 | | |
+| `build_status_bar` + `StatusText::render`, us per frame | 112 idle focused, 55 TUI | 65 idle focused, 4.6 TUI | | |
+| hotpath UI thread % (avg) | 0.4-3.3 idle, 11.2-16.6 TUI | 0.3-2.7 idle, 6.3-10.3 TUI | | follows the frame rate; too coarse for idle |
+
+The dock area renders the same in both (`TerminalPanel::title` 1.00 per frame,
+`SshClientPanel::render` 0.06): caching the two views did not start a refresh cascade.
+
+Per candidate, from the four-build series (`runs/us0150-s2-*`, `s4-*`):
+
+| Candidate | Idle focused Mcycles/s | Idle unfocused | TUI Mcycles/frame | Sampler, samples per frame | Kept? |
+| --- | --- | --- | --- | --- | --- |
+| 1. Title bar content cached (`before` -> `v1`) | -4.8 %, -4.0 % | -20 % | -7.0 % | title-bar subtree 30.8 / 20.8 -> 9.1-14.9; toggle group 8.9 / 5.3 -> 0 | **kept** |
+| 2. Status bar cached (`v1` -> `v2`) | -0.7 %, -1.5 %, -1.2 %, -6.6 %, +6.0 % | -23 % (one pair; its frames all re-render the bar) | -1.5 %, -28 %, -4.1 % | not resolvable (own layout pass now counted in its subtree) | **kept** on the hotpath sites: its own work -42 % idle focused, -92 % under TUI; the whole-thread effect is below the run-to-run noise |
+| 3. Tab bar `+` cached (`v2` -> `after`) | -3.0 %, +4.7 % | +15 % | +2.1 % | dropdown triggers 7.0 / 10.6 -> 6.8 | **dropped**: no gain in any measure |
+
+The sampler does not resolve the whole change: its per-frame `Window::draw` samples were
+178.7 and 210.8 for `before`, 190.7 and 185.2 for `v2` (153.4 for `after`), and the
+dock-area subtree read 30.7 / 50.3 against 98.0 / 82.2 with no change in the dock and the
+same render counts there. All busy samples per frame: 279 / 338 -> 236 / 260. The cycle
+counter pairs and the hotpath render counts are the evidence; the sampler confirms only
+where the title bar's toggle group went.
+
+### 9.3 No visual or functional change
+
+- **Pixels** (`tools/pixel.ps1`): the `before` and `v2`+`+` builds side by side, same
+  home, same second, unfocused, PrintWindow 1280x800 at 96 DPI (`pixels/`). Zed One Dark,
+  Zed One Light, Zed One Light in Agent mode, and Zed One Dark at a 20 px UI font: **0
+  differing pixels in the title bar and tab bar rows** in all four; in the status bar the
+  only differing pixels are the clock's seconds digit (when the two captures straddle a
+  second) and the CPU/MEM label (each process's own memory). With the UI font at 20 px the
+  bar is taller and still lines up to the pixel. The terminal's cursor differed in one pair
+  (blink phase).
+- **Window controls** (`tools/walk.ps1`, own pid only): `WM_NCHITTEST` after idle frames
+  and after hovering the toggles returns caption / min / max / close at the same points as
+  `before`; real mouse on the instance made topmost (each point checked with
+  `WindowFromPoint` first): a caption drag moved the window by (120, 60), a double-click
+  maximised and a second restored it, hovering close paints it red, hovering maximise
+  opens the Windows 11 snap-layout flyout, and a click on "Agent" switched the mode and
+  wrote `right_dock_mode: agent`, in both builds (`pixels/window-controls-before-after.png`).
+- **CPU/MEM hover table** (US-0148, `tools/tooltip.ps1`, `v2`): hovered for 8 s over the
+  cached bar, the table and the label advanced together every 2 s (uptime 7.0 -> 9.0 ->
+  11.0 -> 13.0 s, `pixels/resource-tooltip-live-v2.png`): the item's notify re-renders the
+  bar, and the table's own view observes the item.
+- **DPI**: only 96 DPI was available to the private instance. A scale change goes through
+  `Window::bounds_changed` (gpui-pre 0.3.7 `src/window.rs` line 2683), which calls
+  `refresh()`, so every cached view re-renders at the new scale; the sizes are in rems and
+  pixels of the layout, not device pixels.
+- **Tests**: `title_bar::tests::caching::another_views_frame_reuses_the_content_and_a_mode_change_does_not`,
+  `statusbar::tests::caching::another_views_frame_reuses_the_bar_and_an_item_notify_does_not`,
+  `statusbar::tests::caching::status_bar_height_matches_the_kit_layout` (rem 12, 14, 16,
+  20). Mutations: embedding the content uncached, dropping the `UiConfig` observer, and
+  the height without its 1 px border each fail a test.
+
+### 9.4 Candidate 3: the tab bar chrome
+
+OneTerm controls two things in the kit's tab bar: the tab label (`TerminalPanel::title`,
+about 25-38 us per frame by hotpath, content-sized, so a cached view would need its width
+measured every frame, which is the cost it would save) and the `+` trigger
+(`title_suffix`). The `+` was built as a cached view at `size_5` (pinned by a test) and
+measured: no gain (§ 9.2), because the dropdown machinery the sampler charged to
+`DropdownMenuPopover` is mostly the kit's own `...` menus, one per tab group. Dropped.
+
+Upstream notes for GPUI Kit 0.7 (not filed):
+
+- `gpui-base` 0.7.0 `src/dock/dock_area.rs` line 1356: a tab group is embedded as
+  `cached.entity.clone().into_any_element()`, uncached, so every dock-area render re-renders
+  every tab group, including the right dock's tab bar and toolbar on every terminal frame.
+  Its slot is sized by the resizable panel, so `.cached(size_full)` would fit; with gpui's
+  refresh cascade (below) a dirty group would still re-render its own cached panel.
+- `gpui-component` 0.7.0 `src/dock/tab_panel.rs`: `render_toolbar` (line 272) rebuilds the
+  zoom button and the `...` `DropdownMenuPopover` (line 329) on every render, and
+  `render_tabs` (line 430) the whole strip; a per-group cached toolbar view would take them
+  out of a terminal frame.
+
+### 9.5 Candidate 4: the cursor drawn outside the dock
+
+Not built, for reasons measured or read, not for lack of trying the numbers:
+
+- **The ceiling.** With the blink off (`hotpath-measure.ps1 -NoBlink`) an idle focused
+  window draws 1.14 frames/s against 2.09 with it: the blink is about 0.95 frames/s at
+  8-12 Mcycles each. That is the most a free blink could save.
+- **It needs the dock area cached.** An overlay view outside the dock is a sibling under
+  `OneTermWorkspace`; the blink would dirty the workspace, and an uncached child view (the
+  dock area) re-renders with its parent. So the dock area would have to be cached, which
+  US-0145 built and measured worse (§ 8.3: 31.9 -> 33.9 Mcycles/s, `SshClientPanel::render`
+  12 -> 196 calls): every output frame dirties the dock, and gpui's refresh cascade then
+  re-renders every panel in it, the right dock's included. Under output that is a
+  regression on every frame to buy an idle gain.
+- **It cannot be pixel-identical cheaply.** The terminal element paints the cursor and,
+  for a block cursor, re-paints the covered glyph in the cursor's text colour from its own
+  glyph cache (`crates/terminal-view/src/render/cursor.rs`). An overlay would have to shape
+  and paint that glyph itself, follow the IME composition (`terminal_view/ime.rs`, anchored
+  at the cursor), the selection, the scrolled viewport (cursor
+  hidden when scrolled away), split Spaces (only the focused one blinks), zoom, hidden
+  tabs, and stay under the context menu, the completion popup and dialogs (deferred draws
+  with their own priorities).
+
+So candidate 4 waits for the gpui change below; without it the overlay trades an idle
+gain for a loss under output, with a high-risk rendering path.
+
+### 9.6 Upstream requests (gpui-pre 0.3.7; not filed)
+
+1. **Replay window-control hitboxes for a reused view.** `Frame::window_control_hitboxes`
+   (`src/window.rs` line 987) is filled only by `Window::insert_window_control_hitbox`
+   (line 5128), called from `Interactivity::paint` (`src/elements/div.rs` line 2577), and
+   read by the platform hit test (`src/window.rs` line 1952). `PaintIndex` (line 1014) has
+   no index for it, so `reuse_paint` (line 3879) cannot copy it, unlike cursor styles and
+   mouse listeners. Request: an index in `PaintIndex` and a copy in `reuse_paint`. Effect:
+   the kit's whole `TitleBar`, window controls included, could be cached.
+2. **No refresh cascade for a dirty cached view.** `prepaint_view` (`src/view.rs`
+   line 501) and `paint_view` (line 564) set `window.refreshing = true` while a dirty
+   cached view re-renders, and the reuse test (line 489) refuses every cached descendant
+   while it is set. Request: re-render a dirty cached view without forcing its clean cached
+   descendants (keep `refreshing` for `Window::refresh`, line 2271). Effect: a cached dock
+   area or tab group keeps its clean panels on a terminal frame, which is what candidate 4
+   and the kit note above need.
+3. **For reference, not a request:** `Window::request_animation_frame` (line 2622)
+   notifies the current view, and `mark_view_dirty` (line 2148) dirties every ancestor, so
+   a repaint of one element is a re-render of its view path; that is gpui's model.

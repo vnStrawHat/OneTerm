@@ -1,0 +1,861 @@
+{
+  "type": "hotpath_report",
+  "version": "0.26.1",
+  "meta": {
+    "rustc": "1.96.0",
+    "os": "windows-x86_64",
+    "created_at": "2026-09-29T08:00:47Z"
+  },
+  "functions_timing": {
+    "profiling_mode": "timing",
+    "time_elapsed": "95.99 s",
+    "total_elapsed_ns": 95994863100,
+    "description": "Execution duration of functions.",
+    "caller_name": "oneterm_app::run",
+    "percentiles": [
+      50.0,
+      95.0,
+      99.0
+    ],
+    "data": [
+      {
+        "id": 39,
+        "name": "oneterm_app::run",
+        "calls": 1,
+        "sampled_calls": 1,
+        "avg": "95.99 s",
+        "p95": "96.03 s",
+        "p50": "96.03 s",
+        "p99": "96.03 s",
+        "total": "95.99 s",
+        "percent_total": "100.00%",
+        "location": {
+          "file": "crates\\app\\src\\lib.rs",
+          "line": 91,
+          "column": 8
+        }
+      },
+      {
+        "id": 2,
+        "name": "loop::poll_wait",
+        "calls": 8,
+        "sampled_calls": 8,
+        "avg": "11.98 s",
+        "p95": "95.50 s",
+        "p99": "95.50 s",
+        "p50": "3.42 ms",
+        "total": "95.82 s",
+        "percent_total": "99.82%",
+        "location": {
+          "file": "crates\\local-shell\\src\\event_loop.rs",
+          "line": 324,
+          "column": 31
+        }
+      },
+      {
+        "id": 17,
+        "name": "oneterm_vt::pty::windows::pipe::read_pipe",
+        "calls": 4,
+        "sampled_calls": 4,
+        "avg": "86.16 ms",
+        "p99": "317.98 ms",
+        "p50": "9.89 ms",
+        "p95": "317.98 ms",
+        "total": "344.64 ms",
+        "percent_total": "0.36%",
+        "location": {
+          "file": "crates\\vt\\src\\pty\\windows\\pipe.rs",
+          "line": 377,
+          "column": 4
+        }
+      },
+      {
+        "id": 14,
+        "name": "oneterm_workspace::layout::workspace::OneTermWorkspace::render",
+        "calls": 201,
+        "sampled_calls": 201,
+        "avg": "96.70 µs",
+        "p50": "62.11 µs",
+        "p95": "226.18 µs",
+        "p99": "404.74 µs",
+        "total": "19.44 ms",
+        "percent_total": "0.02%",
+        "location": {
+          "file": "crates\\workspace\\src\\layout\\workspace\\mod.rs",
+          "line": 602,
+          "column": 8
+        }
+      },
+      {
+        "id": 13,
+        "name": "oneterm_workspace::layout::statusbar::build_status_bar",
+        "calls": 201,
+        "sampled_calls": 201,
+        "avg": "86.43 µs",
+        "p95": "214.91 µs",
+        "p99": "383.74 µs",
+        "p50": "46.11 µs",
+        "total": "17.37 ms",
+        "percent_total": "0.02%",
+        "location": {
+          "file": "crates\\workspace\\src\\layout\\statusbar.rs",
+          "line": 82,
+          "column": 8
+        }
+      },
+      {
+        "id": 35,
+        "name": "oneterm_terminal_view::render::element::TerminalElement::paint",
+        "calls": 199,
+        "sampled_calls": 199,
+        "avg": "73.28 µs",
+        "p50": "54.72 µs",
+        "p95": "103.61 µs",
+        "p99": "183.68 µs",
+        "total": "14.58 ms",
+        "percent_total": "0.02%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\render\\element.rs",
+          "line": 172,
+          "column": 8
+        }
+      },
+      {
+        "id": 34,
+        "name": "oneterm_terminal_view::render::element::GridPainter::paint",
+        "calls": 199,
+        "sampled_calls": 199,
+        "avg": "71.33 µs",
+        "p50": "53.02 µs",
+        "p99": "178.30 µs",
+        "p95": "100.35 µs",
+        "total": "14.19 ms",
+        "percent_total": "0.01%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\render\\element.rs",
+          "line": 279,
+          "column": 8
+        }
+      },
+      {
+        "id": 30,
+        "name": "oneterm_terminal_view::render::element::TerminalElement::prepaint",
+        "calls": 199,
+        "sampled_calls": 199,
+        "avg": "43.40 µs",
+        "p50": "4.10 µs",
+        "p95": "8.90 µs",
+        "p99": "918.53 µs",
+        "total": "8.64 ms",
+        "percent_total": "0.01%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\render\\element.rs",
+          "line": 99,
+          "column": 8
+        }
+      },
+      {
+        "id": 23,
+        "name": "oneterm_terminal_view::terminal_view::render::TerminalView::render",
+        "calls": 199,
+        "sampled_calls": 199,
+        "avg": "38.61 µs",
+        "p95": "58.91 µs",
+        "p99": "431.87 µs",
+        "p50": "24.30 µs",
+        "total": "7.68 ms",
+        "percent_total": "0.01%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\terminal_view\\render.rs",
+          "line": 143,
+          "column": 8
+        }
+      },
+      {
+        "id": 29,
+        "name": "oneterm_terminal_view::render::plan_cache::PlanCache::update",
+        "calls": 199,
+        "sampled_calls": 199,
+        "avg": "37.84 µs",
+        "p99": "772.61 µs",
+        "p50": "300 ns",
+        "p95": "900 ns",
+        "total": "7.53 ms",
+        "percent_total": "0.01%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\render\\plan_cache.rs",
+          "line": 176,
+          "column": 19
+        }
+      },
+      {
+        "id": 20,
+        "name": "oneterm_workspace::widgets::status_text::StatusText::render",
+        "calls": 1005,
+        "sampled_calls": 1005,
+        "avg": "6.98 µs",
+        "p95": "25.31 µs",
+        "p99": "46.81 µs",
+        "p50": "3.40 µs",
+        "total": "7.01 ms",
+        "percent_total": "0.01%",
+        "location": {
+          "file": "crates\\workspace\\src\\widgets\\status_text.rs",
+          "line": 422,
+          "column": 8
+        }
+      },
+      {
+        "id": 16,
+        "name": "oneterm_terminal_view::panel::terminal_panel::TerminalPanel::title",
+        "calls": 201,
+        "sampled_calls": 201,
+        "avg": "22.91 µs",
+        "p95": "48.22 µs",
+        "p99": "58.43 µs",
+        "p50": "19.10 µs",
+        "total": "4.60 ms",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\panel\\terminal_panel.rs",
+          "line": 721,
+          "column": 8
+        }
+      },
+      {
+        "id": 27,
+        "name": "oneterm_terminal_view::render::row_plan::class_rows_into",
+        "calls": 4,
+        "sampled_calls": 4,
+        "avg": "1.03 ms",
+        "p50": "54.11 µs",
+        "p95": "3.74 ms",
+        "p99": "3.74 ms",
+        "total": "4.13 ms",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\render\\row_plan.rs",
+          "line": 501,
+          "column": 15
+        }
+      },
+      {
+        "id": 28,
+        "name": "oneterm_terminal_view::render::row_plan::build_row_plan",
+        "calls": 166,
+        "sampled_calls": 166,
+        "avg": "15.62 µs",
+        "p99": "136.83 µs",
+        "p95": "24.21 µs",
+        "p50": "11.10 µs",
+        "total": "2.59 ms",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\render\\row_plan.rs",
+          "line": 721,
+          "column": 15
+        }
+      },
+      {
+        "id": 15,
+        "name": "oneterm_workspace::layout::title_bar::AppTitleBar::render",
+        "calls": 201,
+        "sampled_calls": 201,
+        "avg": "12.60 µs",
+        "p99": "35.81 µs",
+        "p50": "10.21 µs",
+        "p95": "25.61 µs",
+        "total": "2.53 ms",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\workspace\\src\\layout\\title_bar.rs",
+          "line": 65,
+          "column": 8
+        }
+      },
+      {
+        "id": 22,
+        "name": "oneterm_terminal_view::panel::terminal_panel::TerminalPanel::render",
+        "calls": 199,
+        "sampled_calls": 199,
+        "avg": "7.79 µs",
+        "p99": "29.90 µs",
+        "p50": "6.40 µs",
+        "p95": "16.21 µs",
+        "total": "1.55 ms",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\panel\\terminal_panel.rs",
+          "line": 611,
+          "column": 8
+        }
+      },
+      {
+        "id": 7,
+        "name": "loop::drain_pty",
+        "calls": 5,
+        "sampled_calls": 5,
+        "avg": "129.70 µs",
+        "p50": "59.10 µs",
+        "p99": "457.21 µs",
+        "p95": "457.21 µs",
+        "total": "648.50 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\local-shell\\src\\event_loop.rs",
+          "line": 403,
+          "column": 21
+        }
+      },
+      {
+        "id": 36,
+        "name": "oneterm_terminal_view::terminal_view::view::TerminalView::blink_tick",
+        "calls": 192,
+        "sampled_calls": 192,
+        "avg": "2.96 µs",
+        "p50": "2.60 µs",
+        "p95": "6.30 µs",
+        "p99": "13.90 µs",
+        "total": "568.80 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\terminal_view\\view.rs",
+          "line": 323,
+          "column": 19
+        }
+      },
+      {
+        "id": 11,
+        "name": "oneterm_terminal::backend::pump::Pump::advance",
+        "calls": 4,
+        "sampled_calls": 4,
+        "avg": "138.82 µs",
+        "p95": "409.86 µs",
+        "p99": "409.86 µs",
+        "p50": "45.50 µs",
+        "total": "555.30 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal\\src\\backend\\pump.rs",
+          "line": 112,
+          "column": 12
+        }
+      },
+      {
+        "id": 26,
+        "name": "oneterm_terminal::content::TerminalContent::refill",
+        "calls": 199,
+        "sampled_calls": 199,
+        "avg": "2.30 µs",
+        "p95": "2.40 µs",
+        "p50": "1.30 µs",
+        "p99": "33.92 µs",
+        "total": "457.70 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal\\src\\content.rs",
+          "line": 228,
+          "column": 12
+        }
+      },
+      {
+        "id": 38,
+        "name": "oneterm_terminal_view::render::glyphs::GlyphCache::shape",
+        "calls": 6,
+        "sampled_calls": 6,
+        "avg": "71.03 µs",
+        "p50": "57.50 µs",
+        "p99": "170.24 µs",
+        "p95": "170.24 µs",
+        "total": "426.20 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\render\\glyphs.rs",
+          "line": 184,
+          "column": 19
+        }
+      },
+      {
+        "id": 21,
+        "name": "oneterm_terminal_view::space::render::SpaceTree::render",
+        "calls": 199,
+        "sampled_calls": 199,
+        "avg": "2.05 µs",
+        "p95": "3.80 µs",
+        "p99": "12.50 µs",
+        "p50": "1.60 µs",
+        "total": "407.90 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\space\\render.rs",
+          "line": 59,
+          "column": 19
+        }
+      },
+      {
+        "id": 25,
+        "name": "oneterm_vt::terminal::Terminal::snapshot_update",
+        "calls": 199,
+        "sampled_calls": 199,
+        "avg": "2.02 µs",
+        "p99": "33.63 µs",
+        "p50": "1.00 µs",
+        "p95": "2.00 µs",
+        "total": "401.60 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\vt\\src\\terminal\\mod.rs",
+          "line": 450,
+          "column": 12
+        }
+      },
+      {
+        "id": 31,
+        "name": "oneterm_app::ssh_client_panel::SshClientPanel::render",
+        "calls": 11,
+        "sampled_calls": 11,
+        "avg": "28.25 µs",
+        "p99": "65.66 µs",
+        "p50": "22.91 µs",
+        "p95": "65.66 µs",
+        "total": "310.70 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\app\\src\\ssh_client_panel.rs",
+          "line": 284,
+          "column": 8
+        }
+      },
+      {
+        "id": 37,
+        "name": "oneterm_highlight::scanner::scan_line_into",
+        "calls": 3,
+        "sampled_calls": 3,
+        "avg": "85.70 µs",
+        "p95": "251.52 µs",
+        "p99": "251.52 µs",
+        "p50": "4.80 µs",
+        "total": "257.10 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\highlight\\src\\scanner\\mod.rs",
+          "line": 76,
+          "column": 8
+        }
+      },
+      {
+        "id": 32,
+        "name": "oneterm_session_ui::render::SessionPanel::render",
+        "calls": 11,
+        "sampled_calls": 11,
+        "avg": "21.14 µs",
+        "p50": "14.41 µs",
+        "p95": "43.90 µs",
+        "p99": "43.90 µs",
+        "total": "232.60 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\session-ui\\src\\render.rs",
+          "line": 21,
+          "column": 8
+        }
+      },
+      {
+        "id": 24,
+        "name": "oneterm_terminal_view::render::element::TerminalElement::request_layout",
+        "calls": 199,
+        "sampled_calls": 199,
+        "avg": "1.13 µs",
+        "p95": "2.70 µs",
+        "p99": "4.10 µs",
+        "p50": "800 ns",
+        "total": "225.10 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal-view\\src\\render\\element.rs",
+          "line": 81,
+          "column": 8
+        }
+      },
+      {
+        "id": 10,
+        "name": "oneterm_vt::terminal::Terminal::feed",
+        "calls": 4,
+        "sampled_calls": 4,
+        "avg": "38.08 µs",
+        "p95": "60.93 µs",
+        "p50": "28.61 µs",
+        "p99": "60.93 µs",
+        "total": "152.30 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\vt\\src\\terminal\\mod.rs",
+          "line": 375,
+          "column": 12
+        }
+      },
+      {
+        "id": 9,
+        "name": "oneterm_vt::parser::Parser::advance",
+        "calls": 4,
+        "sampled_calls": 4,
+        "avg": "36.98 µs",
+        "p95": "60.51 µs",
+        "p50": "27.81 µs",
+        "p99": "60.51 µs",
+        "total": "147.90 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\vt\\src\\parser\\mod.rs",
+          "line": 153,
+          "column": 12
+        }
+      },
+      {
+        "id": 3,
+        "name": "loop::commands",
+        "calls": 7,
+        "sampled_calls": 7,
+        "avg": "9.38 µs",
+        "p95": "38.02 µs",
+        "p99": "38.02 µs",
+        "p50": "1.40 µs",
+        "total": "65.70 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\local-shell\\src\\event_loop.rs",
+          "line": 340,
+          "column": 13
+        }
+      },
+      {
+        "id": 6,
+        "name": "oneterm_terminal::backend::pump::Pump::finish_batch_blocking",
+        "calls": 5,
+        "sampled_calls": 5,
+        "avg": "12.70 µs",
+        "p95": "41.31 µs",
+        "p99": "41.31 µs",
+        "p50": "6.90 µs",
+        "total": "63.50 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal\\src\\backend\\pump.rs",
+          "line": 183,
+          "column": 12
+        }
+      },
+      {
+        "id": 33,
+        "name": "oneterm_sftp_ui::render::SftpPanel::render",
+        "calls": 11,
+        "sampled_calls": 11,
+        "avg": "3.64 µs",
+        "p95": "13.81 µs",
+        "p99": "13.81 µs",
+        "p50": "2.30 µs",
+        "total": "40.00 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\sftp-ui\\src\\render.rs",
+          "line": 40,
+          "column": 8
+        }
+      },
+      {
+        "id": 18,
+        "name": "oneterm_vt::pty::windows::pipe::push",
+        "calls": 4,
+        "sampled_calls": 4,
+        "avg": "4.72 µs",
+        "p99": "5.90 µs",
+        "p50": "4.20 µs",
+        "p95": "5.90 µs",
+        "total": "18.90 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\vt\\src\\pty\\windows\\pipe.rs",
+          "line": 210,
+          "column": 4
+        }
+      },
+      {
+        "id": 1,
+        "name": "oneterm_vt::pty::windows::pipe::Ring::wake",
+        "calls": 6,
+        "sampled_calls": 6,
+        "avg": "2.45 µs",
+        "p50": "2.30 µs",
+        "p99": "3.20 µs",
+        "p95": "3.20 µs",
+        "total": "14.70 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\vt\\src\\pty\\windows\\pipe.rs",
+          "line": 108,
+          "column": 8
+        }
+      },
+      {
+        "id": 12,
+        "name": "oneterm_terminal::backend::event_sink::SessionEventSink::post_repaint",
+        "calls": 3,
+        "sampled_calls": 3,
+        "avg": "4.70 µs",
+        "p99": "11.10 µs",
+        "p50": "2.80 µs",
+        "p95": "11.10 µs",
+        "total": "14.10 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\terminal\\src\\backend\\event_sink.rs",
+          "line": 71,
+          "column": 12
+        }
+      },
+      {
+        "id": 4,
+        "name": "oneterm_local_shell::event_loop::pty_read",
+        "calls": 9,
+        "sampled_calls": 9,
+        "avg": "1.11 µs",
+        "p50": "400 ns",
+        "p95": "6.40 µs",
+        "p99": "6.40 µs",
+        "total": "10.00 µs",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\local-shell\\src\\event_loop.rs",
+          "line": 666,
+          "column": 4
+        }
+      },
+      {
+        "id": 8,
+        "name": "loop::lock",
+        "calls": 4,
+        "sampled_calls": 4,
+        "avg": "225 ns",
+        "p50": "100 ns",
+        "p95": "400 ns",
+        "p99": "400 ns",
+        "total": "900 ns",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\local-shell\\src\\event_loop.rs",
+          "line": 437,
+          "column": 59
+        }
+      },
+      {
+        "id": 5,
+        "name": "loop::unlock",
+        "calls": 5,
+        "sampled_calls": 5,
+        "avg": "60 ns",
+        "p50": "100 ns",
+        "p95": "100 ns",
+        "p99": "100 ns",
+        "total": "300 ns",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\local-shell\\src\\event_loop.rs",
+          "line": 537,
+          "column": 25
+        }
+      },
+      {
+        "id": 19,
+        "name": "oneterm_vt::grid::screen::Screen::scroll_up",
+        "calls": 1,
+        "sampled_calls": 1,
+        "avg": "200 ns",
+        "p50": "200 ns",
+        "p95": "200 ns",
+        "p99": "200 ns",
+        "total": "200 ns",
+        "percent_total": "0.00%",
+        "location": {
+          "file": "crates\\vt\\src\\grid\\screen.rs",
+          "line": 794,
+          "column": 19
+        }
+      }
+    ],
+    "total_count": 39,
+    "included_count": 39
+  },
+  "threads": {
+    "current_elapsed_ns": 95996597900,
+    "sample_interval_ms": 250,
+    "thread_count": 18,
+    "rss_bytes": "104.2 MB",
+    "rss_bytes_max": "110.0 MB",
+    "data": [
+      {
+        "os_tid": 25168,
+        "name": "0xdd100001",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "45.6%",
+        "cpu_percent_avg": "0.8%"
+      },
+      {
+        "os_tid": 35468,
+        "name": "thread_35468",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "16.7%",
+        "cpu_percent_avg": "0.4%"
+      },
+      {
+        "os_tid": 20228,
+        "name": "hp-threads",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "10.9%",
+        "cpu_percent_max": "16.6%",
+        "cpu_percent_avg": "10.5%"
+      },
+      {
+        "os_tid": 35664,
+        "name": "thread_35664",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "11.3%",
+        "cpu_percent_avg": "0.2%"
+      },
+      {
+        "os_tid": 15292,
+        "name": "thread_15292",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "11.2%",
+        "cpu_percent_avg": "0.3%"
+      },
+      {
+        "os_tid": 29348,
+        "name": "VSyncProvider",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "11.2%",
+        "cpu_percent_avg": "0.3%"
+      },
+      {
+        "os_tid": 21588,
+        "name": "thread_21588",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "11.1%",
+        "cpu_percent_avg": "0.2%"
+      },
+      {
+        "os_tid": 20316,
+        "name": "thread_20316",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "10.6%",
+        "cpu_percent_avg": "0.2%"
+      },
+      {
+        "os_tid": 30700,
+        "name": "hp-functions",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "5.7%",
+        "cpu_percent_avg": "0.1%"
+      },
+      {
+        "os_tid": 23176,
+        "name": "0xc0550001",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "5.7%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 35360,
+        "name": "thread_35360",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "5.6%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 9848,
+        "name": "0x16c00001",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 9268,
+        "name": "DManip Delegate Thread",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 22748,
+        "name": "thread_22748",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 9532,
+        "name": "PTY owner",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 10888,
+        "name": "oneterm-vt-pty-conout",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 15388,
+        "name": "oneterm-vt-pty-conin",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      },
+      {
+        "os_tid": 11984,
+        "name": "thread_11984",
+        "status": "Unknown",
+        "status_code": "",
+        "cpu_percent": "0.0%",
+        "cpu_percent_max": "0.0%",
+        "cpu_percent_avg": "0.0%"
+      }
+    ],
+    "total_count": 18,
+    "included_count": 18
+  }
+}
