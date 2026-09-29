@@ -63,6 +63,11 @@ pub struct UiConfig {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub agent_stale_threshold_ms: Option<u64>,
 
+    /// Show the FPS HUD (`US-0151`). Off by default; omitted from the file while off.
+    /// Written only through [`UiConfig::set_show_fps`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub show_fps: bool,
+
     /// `ui_config.json` existed but could not be read at startup (e.g.
     /// permission denied), so this is the built-in default and must not be
     /// written back over a possibly valid file (CORR-61). Never persisted.
@@ -250,6 +255,17 @@ impl UiConfig {
         .detach();
     }
 
+    /// Switch the FPS HUD on or off: the one writer of [`Self::show_fps`], shared by the
+    /// toggle action and the Settings switch. Persists and redraws every window.
+    pub fn set_show_fps(show: bool, cx: &mut App) {
+        Self::global(cx).update(cx, |cfg, cx| {
+            cfg.show_fps = show;
+            cx.notify();
+        });
+        Self::persist(cx);
+        cx.refresh_windows();
+    }
+
     /// Schedule persistence of a snapshot of the global config off the UI thread.
     /// Does nothing (with a warning) while [`Self::persist_blocked`] is set.
     pub fn persist(cx: &App) {
@@ -295,10 +311,12 @@ mod tests {
                 .collect(),
             right_dock_mode: RightDockMode::Agent,
             agent_stale_threshold_ms: Some(42),
+            show_fps: true,
             persist_blocked: false,
         };
         config.save_to(&path).unwrap();
         let restored = UiConfig::load_from(&path).unwrap();
+        assert!(restored.show_fps);
         assert_eq!(restored.ui_font_size, Some(18.0));
         assert_eq!(restored.theme_name.as_deref(), Some("Test Theme"));
         assert_eq!(
@@ -330,6 +348,10 @@ mod tests {
         .unwrap();
         assert_eq!(config.ui_font_size, Some(14.0));
         assert_eq!(config.right_dock_mode, RightDockMode::SshClient);
+        // The FPS HUD is off unless the file says otherwise (`US-0151`), and "off" is not
+        // written back, so an untouched file keeps its shape.
+        assert!(!config.show_fps);
+        assert!(!serde_json::to_string(&config).unwrap().contains("show_fps"));
         assert_eq!(
             config.agent_stale_threshold_ms(),
             UiConfig::DEFAULT_AGENT_STALE_THRESHOLD_MS

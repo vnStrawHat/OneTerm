@@ -48,6 +48,8 @@ actions!(
         About,
         /// Toggle the gutter (timestamp + line number) in the terminal.
         ToggleGutter,
+        /// Show or hide the FPS HUD (`US-0151`); flips `UiConfig::show_fps`.
+        ToggleFpsMonitor,
         /// Open the dialog to create a new SSH session (saved to `ssh_session.json`).
         NewSession,
         /// Open the General Settings panel (font, theme, key bindings).

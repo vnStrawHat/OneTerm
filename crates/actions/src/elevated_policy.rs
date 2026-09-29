@@ -75,6 +75,8 @@ const ALLOWED_WHEN_ELEVATED: &[&str] = &[
     "terminal_copy",
     "terminal_paste",
     "terminal_select_all",
+    // A view overlay; in an elevated window it shows but is not saved (M4).
+    "toggle_fps",
     "toggle_gutter",
     "toggle_zoom",
 ];

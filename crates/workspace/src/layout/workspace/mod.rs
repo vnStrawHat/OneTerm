@@ -174,6 +174,9 @@ pub struct OneTermWorkspace {
     /// (`on_app_quit` while the window is still open, `on_release` when the
     /// window closes) do not write the same document twice.
     layout_saved_on_exit: bool,
+    /// The FPS HUD while `UiConfig::show_fps` is on; `None` (and so no clock, no frame
+    /// trace, no sampler) while it is off (`US-0151`).
+    fps_hud: Option<crate::widgets::FpsHud>,
 }
 
 impl OneTermWorkspace {
@@ -356,6 +359,7 @@ impl OneTermWorkspace {
             preferred_right_dock_width,
             zoomed_panel: None,
             layout_saved_on_exit: false,
+            fps_hud: None,
         };
 
         // Restore zoom (fullscreen) for the panel matching the saved name.
@@ -600,6 +604,12 @@ impl Render for OneTermWorkspace {
         hotpath::measure(impl_type = "OneTermWorkspace")
     )]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Created on the first frame the HUD is shown, dropped on the first it is not.
+        if !oneterm_settings::UiConfig::global(cx).read(cx).show_fps {
+            self.fps_hud = None;
+        } else if self.fps_hud.is_none() {
+            self.fps_hud = Some(crate::widgets::FpsHud::new(window, cx));
+        }
         div()
             .id("oneterm-workspace")
             .on_action(cx.listener(Self::on_action_add_panel))
@@ -617,5 +627,6 @@ impl Render for OneTermWorkspace {
             .child(self.title_bar.clone())
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
             .child(statusbar::build_status_bar(self, window, cx))
+            .children(self.fps_hud.as_ref().map(|hud| hud.render(cx)))
     }
 }

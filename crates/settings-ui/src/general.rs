@@ -27,25 +27,40 @@ pub(crate) fn page(cx: &App) -> SettingPage {
         .group(super::terminal::shell_group())
 }
 
-/// "Interface" group — the UI (non-terminal) font size.
+/// "Interface" group — the UI (non-terminal) font size and the FPS HUD switch.
 fn interface_group() -> SettingGroup {
-    SettingGroup::new().title("Interface").item(
-        SettingItem::new(
-            "UI Font Size",
-            SettingField::number_input(
-                NumberFieldOptions {
-                    min: 8.0,
-                    max: 32.0,
-                    ..Default::default()
-                },
-                |cx: &App| cx.theme().font_size.as_f32() as f64,
-                |val: f64, cx: &mut App| {
-                    Theme::global_mut(cx).font_size = px(val as f32);
-                    cx.refresh_windows();
-                },
+    SettingGroup::new()
+        .title("Interface")
+        .item(
+            SettingItem::new(
+                "UI Font Size",
+                SettingField::number_input(
+                    NumberFieldOptions {
+                        min: 8.0,
+                        max: 32.0,
+                        ..Default::default()
+                    },
+                    |cx: &App| cx.theme().font_size.as_f32() as f64,
+                    |val: f64, cx: &mut App| {
+                        Theme::global_mut(cx).font_size = px(val as f32);
+                        cx.refresh_windows();
+                    },
+                )
+                .default_value(16.0),
             )
-            .default_value(16.0),
+            .description("Size of all non-terminal text, in px. Terminal text has its own size."),
         )
-        .description("Size of all non-terminal text, in px. Terminal text has its own size."),
-    )
+        .item(
+            SettingItem::new(
+                "Show FPS Monitor",
+                SettingField::switch(
+                    |cx: &App| oneterm_settings::UiConfig::global(cx).read(cx).show_fps,
+                    |val: bool, cx: &mut App| oneterm_settings::UiConfig::set_show_fps(val, cx),
+                )
+                .default_value(false),
+            )
+            .description(
+                "Frame times, dropped frames and GPU usage in the main window's top-right corner.",
+            ),
+        )
 }

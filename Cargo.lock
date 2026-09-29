@@ -2893,6 +2893,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-fps"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0306762f211b29d520431f789bd64e79b5632b83d6efa8fbe3aa0eb25bc82692"
+dependencies = [
+ "core-graphics 0.24.0",
+ "gpui-pre",
+ "libc",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "sysinfo 0.37.2",
+ "uuid",
+ "wayland-client",
+ "web-time",
+ "windows 0.58.0",
+]
+
+[[package]]
 name = "gpui-kit-assets"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2938,6 +2956,7 @@ dependencies = [
  "gpui-pre-sum-tree",
  "gpui-pre-util",
  "gpui-pre-util-macros",
+ "hdrhistogram",
  "heapless",
  "image",
  "inventory",
@@ -5746,6 +5765,7 @@ dependencies = [
  "chrono",
  "gpui-base",
  "gpui-component",
+ "gpui-fps",
  "gpui-pre",
  "hotpath",
  "log",

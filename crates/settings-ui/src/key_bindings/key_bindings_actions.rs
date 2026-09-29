@@ -18,7 +18,9 @@
 
 use gpui::{Action, KeyBinding, Keystroke};
 
-use oneterm_actions::{About, AddPanel, NewSession, OpenSettings, Quit, ToggleGutter};
+use oneterm_actions::{
+    About, AddPanel, NewSession, OpenSettings, Quit, ToggleFpsMonitor, ToggleGutter,
+};
 use oneterm_core::InputChannel;
 
 // ── Bindable action registry ─────────────────────────────────────────
@@ -105,6 +107,17 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         context: None,
         make: |ks, ctx| make_binding(ks, ToggleGutter, ctx),
         name_fn: <ToggleGutter as Action>::name_for_type,
+    },
+    BindableAction {
+        id: "toggle_fps",
+        label: "Toggle FPS Monitor",
+        group: "App Menu",
+        // Unbound for Toggle Gutter's reason (`DEC-0018`): a view toggle that the app menu
+        // and Settings > General already reach buys nothing with a default keystroke.
+        default: None,
+        context: None,
+        make: |ks, ctx| make_binding(ks, ToggleFpsMonitor, ctx),
+        name_fn: <ToggleFpsMonitor as Action>::name_for_type,
     },
     BindableAction {
         id: "about",

@@ -15,6 +15,7 @@ The workspace consumes the published GPUI Kit 0.7 release family from crates.io.
 | `gpui-base` | `gpui-base` | `0.7` | `0.7.0` | Move with all GPUI Kit 0.7 layers. |
 | `gpui-component` | `gpui-component` | `0.7` | `0.7.0` | Move with all GPUI Kit 0.7 layers. |
 | `gpui-kit-assets` | `gpui-kit-assets` | `0.7` | `0.7.0` | Move with all GPUI Kit 0.7 layers; app crate only. |
+| `gpui-fps` | `gpui-fps` | `0.7` | `0.7.0` | Move with all GPUI Kit 0.7 layers; `oneterm-workspace` only (the FPS HUD, `IN-0048`). Apache-2.0. It pins `gpui-pre =0.3.7` **with the `profiler` feature**, which Cargo unifies into every build: gpui then keeps its foreground journal (task polls, draws, presents) whether or not the HUD is shown. The measured idle cost is in `docs/spec-intakes/IN-0048-fps-hud/US-0151-fps-hud.md`. |
 
 There is **no terminal-engine dependency**. OneTerm's VT engine is `oneterm-vt`
 (`crates/vt`, `IN-0029`), first-party code with no third-party engine behind it; the
@@ -25,7 +26,7 @@ upstream plus patches. Do not re-add either.
 Rules:
 
 1. `gpui-pre` and `gpui-pre-platform` move together.
-2. `gpui-base`, `gpui-component`, and `gpui-kit-assets` move together.
+2. `gpui-base`, `gpui-component`, `gpui-kit-assets`, and `gpui-fps` move together.
 3. Do not adopt the `gpui-kit` facade or add GPUI from git without a new decision record. OneTerm intentionally keeps `use gpui::…` and `use gpui_component::…` imports.
 4. Do not add a `[patch]` for the UI layer. Fix compatibility application-side or upstream it.
 5. Cargo profile overrides use package names (`gpui-pre`, `gpui-pre-platform`), not workspace aliases.
@@ -44,6 +45,7 @@ gpui_platform = { package = "gpui-pre-platform", version = "0.3", features = [
 gpui-base = "0.7"
 gpui-component = "0.7"
 gpui-kit-assets = "0.7"
+gpui-fps = "0.7"
 ```
 
 A UI crate normally declares only what it directly imports:

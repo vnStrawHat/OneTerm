@@ -49,7 +49,7 @@ The pages, in sidebar order:
 
 | Page | Groups |
 |---|---|
-| General | Theme (mode + colour theme), Interface (UI font size), Shell |
+| General | Theme (mode + colour theme), Interface (UI font size, Show FPS Monitor), Shell |
 | Key Bindings | App Menu, Edit Menu |
 | Key Bindings: Terminal | Terminal Context Menu, Input Channel |
 | Key Bindings: Sessions | Session Tabs Context Menu, SFTP Context Menu |
@@ -152,6 +152,38 @@ The bar neither wraps nor scrolls, so something has to give when the window is n
 
 Inside that region `build_status_bar` divides the room between the two: it **measures** every label through the window's text system, gives the branch what it asks for while the path keeps at least 80 px, and takes it out of the branch below that (down to 40 px of branch). The path then elides from the **left**, at a path separator, behind a leading ellipsis (`…\scratchpad\ux\home`), keeping the directory the user is in; the branch elides from the **right**, keeping the head that identifies it (`worktree-agent-a18…`). Only a single component longer than the whole budget is cut inside itself. A shortened indicator shows its full value in a tooltip, and click-to-copy still copies the sampled path, not the shortened one.
 
+## FPS HUD
+
+Off by default (`IN-0048`, `US-0151`). `ui_config.json`'s `show_fps` switches it; three entry
+points write it through `UiConfig::set_show_fps`: the app menu's checked **Show FPS Monitor**
+item, the `ToggleFpsMonitor` action (Settings > Key Bindings > App Menu, "Toggle FPS
+Monitor", shipped unbound per `DEC-0018`), and the **Show FPS Monitor** switch in Settings >
+General > Interface.
+
+When on, `OneTermWorkspace` renders an overlay at its root, pinned 12 px from the right edge
+and 12 px below the tab strip (`TITLE_BAR_HEIGHT` + 32 px), so it covers no caption button,
+right-dock toggle, tab-strip `+` or `...`; it lies over the top-right of whatever panel is
+there. On top is GPUI Kit's own HUD (`gpui-fps` 0.7's `FpsMonitor`): `MAX FPS` (the rate a
+full redraw could sustain, `1 / mean draw` capped by the display's refresh rate; right-click
+switches to the observed `FPS`, click collapses it to a tag), `INTERVAL`, `FRAME` (mean draw
+cost), `P95`, `DROP` (share of frames over one refresh period), `INV`, this process' `GPU` %
+(Windows: the PDH `GPU Engine` counters Task Manager uses; the row is absent where the
+platform has no per-process counter), `CPU` and `MEM` (private commit on Windows, not the
+status bar's private working set). The kit keeps its HUD on a fixed near-opaque dark palette
+and does not let an application change it. Under it OneTerm adds a strip in theme tokens
+(`popover` fill, `border`, `muted.foreground` labels, `popover.foreground` values): `DEVICE`,
+the name of the GPU gpui renders with (`Window::gpu_specs`, asked once when the HUD is shown;
+`n/a` where gpui does not say), and `API`, the renderer gpui-pre 0.3.7 compiles for the
+platform (`Direct3D 11`, `Metal`, `Vulkan/GL (wgpu)`) — a constant, because gpui does not
+report the backend or the Direct3D feature level at run time.
+
+Off, the workspace holds no monitor, so there is no readout clock, no frame trace and no
+resource probe. On, the kit's clock asks for one whole-window frame every 500 ms and samples
+CPU, memory and GPU on the background executor: an idle window goes from about 2 to about 4
+frames a second. What "off" still carries is gpui's `profiler` feature, which `gpui-fps`
+enables for the whole build: a 4 MiB foreground-journal ring, and no measurable UI-thread
+time. Measurements: `US-0151`.
+
 ## Text contrast floor and hierarchy
 
 Text in the built-in themes obeys two rules, both enforced by
@@ -250,4 +282,5 @@ The rules that follow from it:
 - Channel submenu, chips, and Space badge: `crates/terminal-view/src/input/menu.rs`,
   `crates/terminal-view/src/panel/tab_title.rs`, `crates/terminal-view/src/space/render.rs`
 - Focused layout regressions: `crates/workspace/src/layout/workspace/layout_tests.rs`
+- FPS HUD overlay: `crates/workspace/src/widgets/fps_hud.rs`; its switch: `crates/settings/src/ui_config.rs`, `crates/workspace/src/layout/app_menus.rs`
 - Built-in themes and the contrast floor: `crates/theme/themes/`, `scripts/check-theme-contrast.py`

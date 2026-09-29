@@ -1,14 +1,16 @@
 //! App menu bar — builds the native menu (OneTerm).
 //!
 //! Mirrors `reference/.../story/src/app_menus.rs`, keeping Appearance (Light/Dark)
-//! and the Theme submenu. The Edit / View / Help menus were removed; their
+//! and the Theme submenu, plus the checked Show FPS Monitor item (`US-0151`). The Edit / View / Help menus were removed; their
 //! actions remain reachable via key bindings and the in-app UI.
 
 use gpui::{App, Entity, Menu, MenuItem, OwnedMenu, SharedString};
 use gpui_component::{ActiveTheme as _, GlobalState, Theme, ThemeRegistry, menu::AppMenuBar};
 
-use oneterm_actions::{About, OpenSettings, Quit, SwitchTheme, SwitchThemeMode, ToggleGutter};
-use oneterm_settings::TerminalSettings;
+use oneterm_actions::{
+    About, OpenSettings, Quit, SwitchTheme, SwitchThemeMode, ToggleFpsMonitor, ToggleGutter,
+};
+use oneterm_settings::{TerminalSettings, UiConfig};
 
 /// Initialize the `AppMenuBar` and wire up theme observation to refresh check states.
 pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> {
@@ -36,6 +38,17 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
     })
     .detach();
 
+    // Observe the UI config to refresh the Show FPS Monitor check state.
+    cx.observe(&UiConfig::global(cx), {
+        let title = title.clone();
+        let app_menu_bar = app_menu_bar.clone();
+        move |_, cx| {
+            update_app_menu(title.clone(), app_menu_bar.clone(), cx);
+        }
+    })
+    .detach();
+    cx.on_action(toggle_fps_monitor);
+
     // Gutter — toggle the timestamp + line number column (kept for key-binding reachability).
     cx.on_action(|_: &ToggleGutter, cx| {
         let new_val = !TerminalSettings::global(cx).read(cx).show_gutter;
@@ -48,6 +61,12 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
         cx.refresh_windows();
     });
     app_menu_bar
+}
+
+/// Flip the FPS HUD (`US-0151`).
+fn toggle_fps_monitor(_: &ToggleFpsMonitor, cx: &mut App) {
+    let show = !UiConfig::global(cx).read(cx).show_fps;
+    UiConfig::set_show_fps(show, cx);
 }
 
 fn update_app_menu(title: impl Into<SharedString>, app_menu_bar: Entity<AppMenuBar>, cx: &mut App) {
@@ -115,6 +134,8 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
                 disabled: false,
             }),
             theme_menu(cx),
+            MenuItem::action("Show FPS Monitor", ToggleFpsMonitor)
+                .checked(UiConfig::global(cx).read(cx).show_fps),
             MenuItem::Separator,
             MenuItem::action("Settings...", OpenSettings),
             MenuItem::Separator,
@@ -139,4 +160,31 @@ fn theme_menu(cx: &App) -> MenuItem {
             .collect(),
         disabled: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::AppContext as _;
+    use oneterm_settings::ui_config::UiConfigGlobal;
+
+    use super::*;
+
+    #[gpui::test]
+    fn the_toggle_action_flips_show_fps(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            // `persist_blocked` keeps the test from writing a real `ui_config.json`.
+            let config = cx.new(|_| UiConfig {
+                persist_blocked: true,
+                ..UiConfig::default()
+            });
+            cx.set_global(UiConfigGlobal(config.clone()));
+            cx.on_action(toggle_fps_monitor);
+
+            assert!(!config.read(cx).show_fps, "off by default");
+            cx.dispatch_action(&ToggleFpsMonitor);
+            assert!(config.read(cx).show_fps);
+            cx.dispatch_action(&ToggleFpsMonitor);
+            assert!(!config.read(cx).show_fps);
+        });
+    }
 }

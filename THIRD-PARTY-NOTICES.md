@@ -364,6 +364,7 @@ package in the Cargo registry / git checkout.
 | `gpui-base` | 0.7.0 | Apache-2.0 | crates.io |
 | `gpui-component` | 0.7.0 | Apache-2.0 | crates.io |
 | `gpui-component-macros` | 0.7.0 | Apache-2.0 | crates.io |
+| `gpui-fps` | 0.7.0 | Apache-2.0 | crates.io |
 | `gpui-kit-assets` | 0.7.0 | Apache-2.0 | crates.io |
 | `gpui-pre` | 0.3.7 | Apache-2.0 | crates.io |
 | `gpui-pre-apple` | 0.3.7 | Apache-2.0 | crates.io |
@@ -396,6 +397,7 @@ package in the Cargo registry / git checkout.
 | `hashbrown` | 0.15.5 | MIT OR Apache-2.0 | crates.io |
 | `hashbrown` | 0.16.1 | MIT OR Apache-2.0 | crates.io |
 | `hashbrown` | 0.17.1 | MIT OR Apache-2.0 | crates.io |
+| `hdrhistogram` | 7.6.0 | MIT/Apache-2.0 | crates.io |
 | `heapless` | 0.9.3 | MIT OR Apache-2.0 | crates.io |
 | `heck` | 0.4.1 | MIT OR Apache-2.0 | crates.io |
 | `heck` | 0.5.0 | MIT OR Apache-2.0 | crates.io |
@@ -1000,4 +1002,4 @@ package in the Cargo registry / git checkout.
 | `zvariant_derive` | 5.12.0 | MIT | crates.io |
 | `zvariant_utils` | 3.4.0 | MIT | crates.io |
 
-_905 third-party packages._
+_907 third-party packages._
