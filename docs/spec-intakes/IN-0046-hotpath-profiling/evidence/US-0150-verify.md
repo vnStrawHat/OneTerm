@@ -226,3 +226,178 @@ run 3: 141 `test result: ok` lines, none failed, `check-doc-paths.py` 212 paths,
 ```
 ci-local: all checks passed.
 ```
+
+
+---
+
+# Pass 2 (2026-09-29): rework `39563a98`
+
+- Commit under test: `39563a98` (`fix(workspace): cached views fall back to uncached while
+  accessibility is active`), on top of pass 1 (`a027a7d6`). Builds as in pass 1: `before`
+  (main's `crates/workspace`), `after` (`fee8947e`, pass 1), `rework` (`39563a98`), release
+  with thin LTO, line tables, `oneterm-app/hotpath-profiling`; this worktree's own `target/`,
+  `CARGO_BUILD_JOBS=3`, the only builder. Every instance launched here with a private
+  `USERPROFILE`, driven through its own pid only. No real input except the two activation
+  probes in § P4 (a real cursor move and a real Shift tap, both only onto this run's own
+  window).
+
+## Verdict: PASS (F6 must be fixed in the records before merge)
+
+F1 is fixed: with AccessKit active the title bar keeps all six nodes on every idle sample,
+pixel-identical to main; with it inactive the cached path is taken and the helper costs
+nothing. F2 is fixed (production embeds under test, mutations killed). What remains is the
+records' account of how often AccessKit is active (F6): on this desktop it was switched on by
+an unidentified client in 8 of 11 launches during one hour and in 0 of 33 afterwards, so
+the packet's "seen once, rate not measured" understates it.
+
+## Evidence (pass 2)
+
+### P1. Same-script UIA contrast (own windows, AccessKit activated by this reader)
+
+One reader (`uia2.ps1`: `FromHandle` + `FindAll(Descendants)` once, then a raw-view walk
+every 3 s, 6 samples, no input in between), both builds, focused and unfocused:
+
+| Build | Focused: nodes, title-bar nodes per sample | Unfocused |
+| --- | --- | --- |
+| `fee8947e` | 11, **0/6** in 6 of 6 samples | 10, **0/6** in 6 of 6 |
+| `39563a98` | 17, **6/6** in 6 of 6 | 16, **6/6** in 6 of 6 |
+
+The status bar's dock `Button` is the last node in every sample of both. `39563a98`'s 17 /
+16 nodes are main's count from pass 1. Caveat found on the way: a posted `WM_ACTIVATE`
+before each sample makes gpui draw a full frame, and then `fee8947e` also reads 6/6: a
+reader must not poke the window between samples (the implementer's `uia.ps1` does not).
+
+### P2. AccessKit active: pixels and window controls against main
+
+Side-by-side pairs, `before` vs `rework`, both activated by a UIA query first (both
+`stderr.log`s show `Accessibility activated`):
+
+- Dark, 1280 px: idle, hover on `None` and away, hover close, app menu open / Down x2 /
+  Escape, Agent click, status-bar dock button collapse and reopen, maximise, restore, 800 px.
+- Zed One Light at a 12 px UI font: runtime switch to light, 800 px.
+- Dark at 20 px: menu, 800 px, 640 px. Dark at 32 px: 1280, 800, 640 px.
+
+**0 differing pixels in the title-bar and tab-bar rows in all 27 captures**; in the status
+bar only the clock's seconds and the CPU/MEM value (checked by eye at 32 px). `WM_NCHITTEST`
+with AccessKit active (idle focused, after toggle hover, menu open, maximised): identical to
+main at all 13 points; caption double-click restores and re-maximises in both.
+
+### P3. AccessKit not active: the cached path, and the helper's cost
+
+Interleaved idle runs, 90 s each, every run's `stderr.log` checked: AccessKit **not active in
+any of the eight**. The desktop was quiet in this window, so these are the steadiest pairs
+of the day:
+
+| Run | Mcycles/s | frames/s | Mcycles/frame | Title content / frame | Status bar / frame | `AppTitleBar` + content, us/frame |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| before idle F | 27.77 | 2.11 | 13.18 | - | 1.00 | 16.1 |
+| rework idle F | 26.58 | 2.12 | 12.56 | 0.04 | 0.51 | 1.7 |
+| fee8947e idle F | 26.86 | 2.13 | 12.63 | 0.04 | 0.52 | 2.0 |
+| fee8947e idle F #2 | 26.83 | 2.12 | 12.68 | 0.04 | 0.51 | 1.9 |
+| rework idle F #2 | 26.32 | 2.10 | 12.50 | 0.04 | 0.51 | 1.9 |
+| before idle F #2 | 29.62 | 2.08 | 14.22 | - | 1.00 | 18.2 |
+| rework idle U | 18.90 | 1.12 | 16.94 | 0.07 | 0.96 | 2.4 |
+| before idle U | 20.80 | 1.14 | 18.30 | - | 1.00 | 14.0 |
+
+- The cached path is taken (0.04 / 0.51 per frame, as `fee8947e`), and `rework` equals
+  `fee8947e` within 1 % per frame: `cached_unless_a11y` (one flag read) adds nothing.
+- Idle focused per frame: 13.18 / 14.22 -> 12.56 / 12.50 (-5 % / -12 %); idle unfocused
+  -7 % (one pair). The implementer's AccessKit-active run (`raw/us0150/runs/us0150-rework-idleF`)
+  renders both views on every frame (1.00 / 1.00): the fallback works as designed there.
+
+### P4. The spontaneous activation (activator, and the rate on this desktop)
+
+AccessKit on Windows (`accesskit_windows` 0.34 `adapter.rs` 535-560) activates on the first
+`WM_GETOBJECT` for `UiaRootObjectId` **or `OBJID_CLIENT`**, i.e. any UI Automation or MSAA
+client asking for the window, and it has no deactivation path, so the window stays active
+for its life. Every launch this verification made without a UIA query of its own, with
+gpui's `Accessibility activated` line looked up in the instance's own `stderr.log`:
+
+| When (UTC) | Launches | Activated | Delay after start |
+| --- | ---: | ---: | --- |
+| 09:41-10:05 (pass 1: tooltip, pixel-pair, hit-test and measurement runs whose logs survive) | 11 | **8** | +1, +2, +6, +6, +47, +65, +66, +79 s |
+| 10:38 (implementer, rework runs) | 3 | 1 | +1 s |
+| 10:54-11:22 (this pass) | 33 (22 probe launches, 3 windows idle 300 s, 8 measurement runs of 90 s) | **0** | - |
+
+Probes in the quiet period, each on its own window: plain launch holding the real
+foreground for 16-20 s (9 launches), the real cursor moved over the window (3), a real Shift
+tap into it while foreground (3), posted `WM_ACTIVATE` every 5 s with no foreground (4), the
+measurement script itself (3), three windows side by side for 300 s: **none activated**. So
+the activator is not launch, focus, foreground, mouse, keyboard or the measurement
+tooling; it is an external UIA/MSAA client active in the session for about an hour and
+then gone. Not identified: `WM_GETOBJECT` carries no sender, and a hook inside the process
+would need a native hook DLL or a gpui patch. Processes in the session holding
+`UIAutomationCore.dll` or `oleacc.dll` (candidates, not proven): explorer, sihost,
+SearchHost, ApplicationFrameHost, ms-teams, msedge / webview2, olk, OneDrive, PowerToys,
+Zed, notepad++, Lens, OpenConsole; screen readers and Magnifier were not running.
+
+Consequence, stated plainly: the gain is real only for a window no UIA or MSAA client has
+asked for; once one has (a screen reader, an IME or tool that uses MSAA, a UI tester, as
+here for an hour), both views render on every frame for the rest of the window's life, as on
+main. On this desktop that was 8 of 11 launches in one hour and 0 of 33 in the next.
+
+Also a measurement confounder for all of IN-0046: an active AccessKit makes every frame
+build its node tree, so an idle pair where one side activates mid-run is skewed. Pass 1's
+pairs were (`before` idle F activated at +1 s, `after` at +66 s), which is part of pass 1's
+-32 %; the measurement script should report the activation.
+
+### P5. Tests and mutations
+
+`cargo test -p oneterm-workspace -p oneterm-app -p oneterm-terminal-view`: 26 + 398 (3
+ignored) + 46 (3 ignored) passed. Mutations (applied, `cargo test -p oneterm-workspace --lib
+-- caching`, restored from the original bytes):
+
+| Mutation | Result |
+| --- | --- |
+| R1 `cached_unless_a11y` always uncached | killed (2 reuse tests) |
+| R2 the a11y switch inverted | killed (2 reuse tests) |
+| R3 status bar box at a fixed 28 px | killed (height test) |
+| R4 title content box at a fixed 100 px | killed (`the_content_fills_the_kit_row_cached_or_not`) |
+| R5 uncached box without its style | killed (same) |
+| R6 `UiConfig` observer does not notify | killed (title reuse test) |
+| R7 height without the 1 px border | killed (height test) |
+| R8 status bar box without `w_full` | survives: equivalent (the workspace column stretches its children; so does the test host) |
+
+Not testable, accepted: "the switch removed, always cached" (the test platform's
+`a11y_init` is a no-op, gpui-pre 0.3.7 `platform.rs` 1070); P1 covers it.
+
+### P6. Records
+
+- Packet: template followed, dated, Reopened ticked, rework section with F1-F4, upstream
+  request 3 with correct lines (`window/a11y.rs` 275 / 429, `window.rs` 1004 / 1649-1661 /
+  3814 / 6794, `view.rs` 484-489, kit `dock/tab_panel.rs` 782, all checked), the
+  pre-existing kit right-dock note, Handoff. `docs/gui-layout.md` rule accurate.
+- Needs (F6): the first gap to carry P4's rate and the plain consequence, and the note
+  that AccessKit also activates on MSAA `OBJID_CLIENT`, not only UIA.
+- Nit: research § 9.3's window-controls bullet has one unwrapped line (> 100 columns).
+
+## Findings (pass 2)
+
+- F1 (pass 1): **fixed** (P1, P2).
+- F2 (pass 1): **fixed** (P5).
+- F3, F4 (pass 1): recorded in the packet as asked.
+- **F6 (Medium, records, fix before merge)**: the packet's gap says AccessKit activated
+  "once here" and the rate "is not measured"; measured here: 8 of 11 launches in one hour,
+  0 of 33 in the next, activator external and unidentified, and permanent per window. The
+  packet, research § 9.3 and `IN-0046.md` should say that the gain holds only for windows no
+  UIA/MSAA client has touched, with these numbers.
+- **F7 (Low, method)**: idle measurements should log whether AccessKit activated
+  (`hotpath-measure.ps1` can grep the instance's `stderr.log`); pass 1's -32 % pair was
+  confounded by it.
+
+## Gaps (pass 2)
+
+- The activator is not identified (no sender on `WM_GETOBJECT` without an in-process hook);
+  the rate is from one desktop on one afternoon.
+- The AccessKit-active path was driven by this verification's own UIA reader, not by a
+  screen reader.
+
+## Gate line (pass 2)
+
+`CARGO_BUILD_JOBS=3 pwsh scripts/ci-local.ps1` on `39563a98` with this section in the tree (no
+`target/release`, no incremental dir): 141 `test result: ok` lines, none failed,
+`check-doc-paths.py` 212 paths, `check-english.py` 1076 files.
+
+```
+ci-local: all checks passed.
+```
