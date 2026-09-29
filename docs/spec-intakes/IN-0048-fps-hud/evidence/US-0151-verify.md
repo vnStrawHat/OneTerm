@@ -316,3 +316,227 @@ skipped it.
 - One flood length (100k lines) and three pairs; fast-dev leaves OneTerm crates and `gpui-fps`
   at opt-level 0, so absolute on-costs are higher than in a release build.
 - Task Manager's GPU column was not read (window outside the launched pid).
+
+## Second pass: acceptance rework `2a8a7e65` (2026-09-29)
+
+Verifier: Claude Fable 5.1. Target: `feat/fps-hud` @ `2a8a7e65` (own four-row HUD, no
+`gpui-fps`). Same machine and method as above. Builds: `fast-dev`, plain and with
+`hotpath-profiling`, of `2a8a7e65` in this worktree's own target dir, `CARGO_BUILD_JOBS=3`.
+Main is the `e0db223f` fast-dev from the first pass. Private `USERPROFILE`, own pids only.
+
+### Verdict
+
+**PASS.** The zero-cost-when-off invariant now holds, both by construction and by measurement.
+The four rows are honest. The HUD adds no frame in steady state. The PDH query is released
+every time, and 20 toggles do not ratchet. Two Low findings (R1, R2) should be fixed or
+reworded before or right after the merge; the rest are Info.
+
+### Findings
+
+| # | Severity | Finding |
+| --- | --- | --- |
+| R1 | Low | The first PDH open runs on the UI thread: about 165 ms, once per process |
+| R2 | Low (records, or about 3 lines) | `GPU usage` sums engines per *type*; Task Manager shows the busiest single *engine* |
+| R3 | Info | The one-time ~4 MB left after the first show is PDH's own initialisation; bounded, no ratchet |
+| R4 | Info (cosmetic) | The GPU name wraps at 220 px |
+| R5 | Info | The HUD blocks clicks on whatever it covers (by design), e.g. the right part of the SSH search box |
+| R6 | Info (records) | Text from the first cut is still in the packet and reads as current |
+
+**R1: the first PDH open runs on the UI thread (Low).** `FpsHud::new` runs inside
+`OneTermWorkspace::render` and calls `gpu::Probe::open()` there: `PdhOpenQueryW`,
+`PdhAddEnglishCounterW` and a baseline `PdhCollectQueryData` over `\GPU Engine(*)`. Only the
+periodic samples run on the background executor, so the packet's "never on the UI thread" is
+not exact. Measured:
+
+- In a separate process (`pdhprobe.ps1`, the same three calls), the first open takes
+  **165 ms**; later opens take 0.6-1.0 ms (579 instances).
+- In OneTerm, the UI thread spent **368 Mcycles in the second after the first show**. That
+  compares with 25-70 Mcycles in the second after each of the 19 later shows, and 18 with no
+  toggle.
+
+The result is a one-time hitch of roughly 100 ms per process when the HUD is first shown. It
+also happens at startup when `show_fps` is saved as on.
+
+Fix (about 5 lines): open the probe in the ticker's first background spawn, as `gpui-fps` did
+(`probe = executor.spawn(async { gpu::Probe::open() })`). The row already has a `Pending` state
+for the wait.
+
+**R2: busiest engine type vs Task Manager's busiest engine (Low).** Microsoft defines the
+Processes tab's GPU column as "the utilization of the busiest engine, across all GPUs"
+([GPUs in the task manager](https://devblogs.microsoft.com/directx/gpus-in-the-task-manager/)).
+
+- `busiest_engine` does something different: it sums this pid's instances per engine *type*
+  (and across adapters), then takes the busiest type.
+- The two differ when two engines of the same type are busy at once. This iGPU exposes two
+  `VideoProcessing` and two `VideoDecode` engines per process (instances `eng_1`/`eng_4` and
+  `eng_3`/`eng_11`), so hardware video decode could read up to 2x Task Manager.
+- On this machine the results are identical in practice, because only `3D` is busy.
+
+Two ways to resolve it:
+
+- Take the max over this pid's instances. The code gets simpler (no per-type table); the test's
+  expected 1.75 changes, and M5 still kills a plain sum.
+- Or reword `docs/gui-layout.md`, the HLD and the packet to say "summed per engine type"
+  instead of "what Task Manager shows".
+
+**R3: the ~4 MB left after the first show (Info).** 20 toggles (F9, 5 s on / 5 s off,
+1280 x 800):
+
+| Point | Commit | Private WS | Handles |
+| --- | --- | --- | --- |
+| Baseline, HUD off | 109.9 MB | 50.6 MB | 498 |
+| After the first on/off | 114.0 MB | 54.8 MB | 512 |
+| Every later off state | 113.8-114.7 MB | 54.5-55.6 MB | 505-509 |
+| End of the run, and 30 s later | 113.9 MB | 54.7 MB | 505 |
+
+- The first show costs a one-time +4.1 MB and +7 handles, which stay flat for the next 19
+  cycles: no ratchet.
+- Each show opens the query and each hide closes it (+2 handles on, -2 off).
+- Threads went from 19 to 16 (the thread pool trimming).
+
+The standalone probe shows the same shape: the first open takes 165 ms and about 3 MB, and
+later opens stay flat. That is PDH's per-process counter-name and provider initialisation,
+which Windows keeps once loaded. It is bounded, and not OneTerm's to release.
+
+**R4: the GPU name wraps (Info, cosmetic).** At `HUD_WIDTH` 220 px in `text_xs` mono, the value
+column holds about 23 characters. `Intel(R) UHD Graphics 770` (25) wraps to two lines in every
+screenshot, and `NVIDIA GeForce RTX 4060 Laptop GPU` (34) would too. Two possible fixes:
+
+- Keep the name on one line with `.whitespace_nowrap().overflow_hidden().text_ellipsis()` on the
+  value, and show the full name in a tooltip.
+- Or replace the fixed width with `.min_w(HUD_WIDTH)`, so the box grows to fit the name (it only
+  extends to the left).
+
+**R5: the HUD blocks what it covers (Info).** `block_mouse_except_scroll` works as claimed (see
+Mouse below). The flip side: the part of the panel under the HUD cannot be clicked. With the SSH
+Client dock, that is the right ~40 % of "Search sessions..." at 1280 px and most of it at
+800 px. This is by design, and worth one line in `docs/gui-layout.md`.
+
+**R6: first-cut text still in the packet (Info, records).**
+
+- The packet still has the first cut's Acceptance list (MAX FPS, FRAME, P95, DROP, the
+  DEVICE/API strip, "no monitor entity"). Its Scope still says "out of scope ... the kit HUD's
+  palette". Its Context still says "gpui-fps depends on ...". Its Documentation Action still
+  lists "`gpui-fps` in the 0.7 family". All of these should be marked as superseded by
+  § Acceptance rework.
+- The cost lines in the HLD and `docs/gui-layout.md` should add R1 and R3: a one-time ~165 ms
+  and ~4 MB on the first show in each process.
+- `docs/gui-layout.md` is missing a blank line before `## Text contrast floor and hierarchy`.
+
+### Measurements
+
+**(1) HUD off = main.**
+
+- **Dependencies:** `git diff e0db223f 2a8a7e65` shows no change to `Cargo.lock` or
+  `THIRD-PARTY-NOTICES.md`. The only new manifest item is the `windows-sys` feature
+  `Win32_System_Performance`.
+- **gpui features:** `cargo tree -e features -i gpui-pre` shows no `profiler`. The features are
+  `default`, `font-kit`, `wayland`, `x11` and `windows-manifest`, plus the dev-only
+  `test-support`.
+- **So gpui is compiled exactly as on main,** and the first pass's "profiler OFF"
+  micro-benchmark numbers apply to this build: draw min 54-58 µs, 258 allocations /
+  174,432 bytes per draw, and 54-69 ns per task-run hook.
+- **Modules:** main already loads `pdh.dll` at startup (via `sysinfo`); both builds load 81
+  modules.
+- **Render path:** with the HUD off, `OneTermWorkspace::render` does one `UiConfig` global read
+  and one `Option` check, with no allocation (`children(None)`).
+
+Process runs (idle 60 s focused, then a 100k-line flood; two pairs). A concurrent build made the
+flood row noisy.
+
+| | main | rework, HUD off |
+| --- | --- | --- |
+| Idle UI thread, Mcycles/s | 30.3, 26.9 | 26.7, 28.3 |
+| Idle process, Mcycles/s | 66.2, 57.6 | 54.2, 61.6 |
+| Commit / private WS after ~68 s | 110.3 / 51.2, 110.6 / 51.4 MB | 112.2 / 53.1, 110.1 / 50.9 MB |
+| Flood wall time | 19.4, 17.3 s | 16.3, 21.6 s |
+
+**(2) Frames, counted independently by hotpath** (`OneTermWorkspace::render` calls). The
+steady-state rate is (count at 180 s - count at 60 s) / 120 s, which removes startup.
+
+| Window | HUD off | HUD on |
+| --- | --- | --- |
+| Inactive (no blink; clock ticks 1/s; WM_ACTIVATE re-posted every 10 s) | 60 s: 76, 73; 180 s: 215 -> **1.17/s** | 60 s: 78, 84; 180 s: 211 -> **1.08/s** |
+| Active (cursor blink 2/s) | 60 s: 121; 180 s: 379 -> **2.15/s** | 60 s: 139; 180 s: 389 -> **2.08/s** |
+
+- If the HUD's 1 s refresh were not aligned with the clock, the inactive rate would have
+  doubled. It stays at about 1.1/s, so the HUD's tick lands in the clock's frame: one frame,
+  not two.
+- Startup with the HUD on draws a few more frames (+2 to +18 in the first minute: creation and
+  the first ticks), then no more.
+
+**(2) FPS honesty.** HUD on, 300k-line flood lasting 40.7 s:
+
+- hotpath counted 2,555 renders in 59.1 s, about 2,490 of them during the flood, so **about
+  61 frames/s**.
+- 26 PrintWindow captures taken during the flood read 58, 59, 60 or 61 every time.
+- At idle, the HUD reads 2 (window active) or 1 (inactive), matching the table above.
+
+**(2) GPU usage.** Compared against an independent `Get-Counter "\GPU Engine(pid_<pid>_*)\
+Utilization Percentage"` reading (busiest type, 3 x 1 s):
+
+- Idle: HUD 0.4 %, Get-Counter 0.38 / 0.38 / 0.39 %.
+- Under `ping -t` output: HUD 1.2 %, Get-Counter 1.16 / 1.18 / 1.57 %.
+
+They agree within 0.1 point when the load is steady. Task Manager's own window was not read.
+
+**(3) Mouse and layout.** With the right dock set to None, the HUD lies over the terminal:
+
+- The wheel over the HUD scrolls the terminal back (rows 176-194 shown).
+- A drag that starts on the HUD selects nothing.
+- A terminal selection survives a left click on the HUD.
+- A right-click on the HUD opens no context menu.
+
+At 800 x 600 with the SSH Client dock, the HUD starts at y = 78, clear of the tab strip `+` and
+`...`, the dock toggles and the caption buttons. In Ayu Light and Zed One Dark the HUD follows
+the theme (popover fill, border, muted labels, `popover.foreground` values) and is legible in
+both. The contrast script passes in the gate.
+
+**(4) Tests and mutations.** `cargo test` runs in the gate for all crates. Each mutation was
+restored afterwards, and all five were killed:
+
+| Mutation | Test that fails |
+| --- | --- |
+| M1: `show_fps` serde default `true` | `ui_config::tests::legacy_partial_schema_uses_current_defaults` |
+| M2: owner prefix `pid_{pid}` without the trailing `_`, so `pid_421_` leaks into `pid_42` | `gpu_usage_is_this_pids_busiest_engine_type` |
+| M3: no zero-elapsed guard in `per_second` | `n_renders_in_a_second_read_n_fps` |
+| M4: no 100 % clamp | the GPU test |
+| M5: plain sum over all engine types | the GPU test |
+
+**(5) Records.** The intake, HLD and packet carry the four-row field list and a dated
+§ Acceptance rework. `docs/agents/dependencies.md` § 1 has no `gpui-fps` row (rule 2 and § 2 are
+back to main's), and § 3 names `Win32_System_Performance` and why `gpui-fps` is not used. R6 lists
+what is still out of date.
+
+**(6) Gate.** `pwsh scripts/ci-local.ps1`, `CARGO_BUILD_JOBS=3`, own target dir, after deleting
+`target/release`, `target/debug/incremental` and `target/fast-dev`. It exited 0 with the final
+line `ci-local: all checks passed.`
+
+### Proposed harness rows (final)
+
+`intake` (12 columns): as in the first pass (`id` 53, `document_number` 48, `new_spec`,
+`normal`, `doc_path` `docs/spec-intakes/IN-0048-fps-hud/IN-0048.md`, `design_doc`
+`docs/spec-intakes/IN-0048-fps-hud/high-level-design.md`), with
+`risk_flags='one optional persisted field; Windows PDH FFI (cfg(windows)); no new dependency'`,
+`affected_docs='docs/gui-layout.md; docs/agents/persistence.md; docs/agents/dependencies.md'`,
+`notes='Owner ruling 2026-09-29: four rows (FPS, GPU, API, GPU usage), no gpui-fps. US-0151 first cut 09812f0d (verify 66ae88b9), rework 2a8a7e65, verify #2 PASS.'`.
+
+`story` (17 columns): `id='US-0151'`, `title='FPS HUD, off by default'`,
+`created_at='2026-09-29T00:00:00Z'`, `risk_lane='normal'`, `contract_doc='docs/gui-layout.md'`,
+`packet_doc='docs/spec-intakes/IN-0048-fps-hud/US-0151-fps-hud.md'`, `status='implemented'`,
+`unit_proof=1`, `integration_proof=0`, `e2e_proof=1`, `platform_proof=0`,
+`evidence='docs/spec-intakes/IN-0048-fps-hud/evidence/US-0151-verify.md'`,
+`verify_command='cargo test -p oneterm-settings -p oneterm-actions -p oneterm-workspace -p oneterm-settings-ui; pwsh scripts/ci-local.ps1'`,
+`last_verified_at='<verify #2 commit time>'`, `last_verified_result='pass'`,
+`notes='Rework 2a8a7e65 (own HUD, no gpui-fps). Verify #2 PASS: off = main (no profiler, lock/notices identical); steady frames on = off (1.08 vs 1.17/s inactive); FPS 58-61 vs hotpath ~61 in a flood; GPU usage within 0.1 pt of Get-Counter; 20 toggles no ratchet (one-time +4 MB PDH). R1 first PDH open on UI thread ~165 ms; R2 busiest type vs Task Manager busiest engine; R4 name wraps.'`,
+`intake_id=53`.
+
+### Gaps (second pass)
+
+- Windows only, with one adapter. The Linux and macOS rows are `n/a` or constants by design,
+  and were not run.
+- The first-show hitch (R1) is inferred from UI-thread cycles and a standalone timing, not from a
+  frame-time trace.
+- The R2 difference is argued from the instance list and Microsoft's definition; it was not
+  reproduced with hardware video decode.
+- Task Manager's GPU column was not read: its window is outside the launched pid.
