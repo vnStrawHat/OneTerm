@@ -237,6 +237,7 @@ fn hud_rows(
 /// `pid_4242_luid_0x00000000_0x0000BEEF_phys_0_eng_1_engtype_3D`; the reading is this pid's
 /// busiest single engine across all GPUs, which is how Task Manager defines its GPU column
 /// (Microsoft, "GPUs in the task manager"), clamped to 100 %.
+#[cfg(any(windows, test))]
 fn busiest_engine<'a>(
     pid: u32,
     instances: impl IntoIterator<Item = (&'a str, f64)>,

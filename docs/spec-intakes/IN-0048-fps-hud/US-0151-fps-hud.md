@@ -201,6 +201,56 @@ two Low findings and records notes, fixed here:
   Acceptance, Scope line, Context and Documentation Action are marked superseded; R1/R3 are in
   the HLD and `docs/gui-layout.md` cost lines; the missing blank line before
   `## Text contrast floor and hierarchy` is back.
+### Acceptance rework — non-Windows dead code — 2026-09-29
+
+CI's Linux/macOS jobs failed after the owner pushed the rework: `busiest_engine`
+(`fps_hud.rs:240`) is pure and its only lib caller is `Probe::sample` under
+`#[cfg(windows)] mod gpu`, so on those runners it has no caller outside `#[cfg(test)]`
+and `-D dead-code` (implied by `-D warnings`) fails the lib build. Fix: gate the function
+`#[cfg(any(windows, test))]` — tests keep exercising it on every OS, the lib uses it only
+on Windows, no `#[allow(dead_code)]`.
+
+Audit of `fps_hud.rs` and `resource.rs` (US-0137/US-0148 FFI helpers) for the same shape —
+an item reachable only from a `cfg(windows)` path:
+
+- `fps_hud.rs::busiest_engine` — was ungated, lib-dead on non-Windows. **Fixed**:
+  `#[cfg(any(windows, test))]`.
+- `fps_hud.rs::mod gpu` (both the `#[cfg(windows)]` real `Probe` and the
+  `#[cfg(not(windows))]` stub `Probe`) — each variant is compiled on exactly one platform
+  and both are called unconditionally from the common ticker (`gpu::Probe::open()`,
+  `probe.sample()`); no split item is dead on either side. Not changed.
+- `fps_hud.rs::GRAPHICS_API` — three `#[cfg(...)]`-gated const definitions, each used
+  unconditionally by `hud_rows`; not the "helper behind a cfg(windows) body" shape. Not
+  changed.
+- `fps_hud.rs::FpsHud::new` — the `cfg!(windows)` in its body is a runtime `bool`
+  expression selecting `GpuUsage::Pending` vs. `Unavailable`, not an item split by
+  `#[cfg(windows)]`; both arms compile and run on every platform. Not changed.
+- `resource.rs::os_memory_counters` and `resource.rs::thread_count` — each has
+  `#[cfg(windows)]` / `#[cfg(not(windows))]` blocks *inside* the function body (the
+  `AGENTS.md` rule's preferred shape: the cfg is on the FFI call, not around the
+  decision), and the function itself is called unconditionally from `sample_label`
+  (cross-platform). Neither branch nor the function is ever dead. Not changed.
+- `resource.rs::OsMemoryCounters` — constructed only inside the `#[cfg(windows)]` branch
+  of `os_memory_counters`, but that branch is live on Windows and the type does not exist
+  as a free-standing item on other platforms (no non-Windows definition to go dead). Not
+  changed.
+- `resource.rs::RESIDENT_NAME` / `VIRTUAL_NAME` — `const` computed via the runtime
+  `cfg!(windows)` macro, not `#[cfg(...)]` attributes; a single definition compiled and
+  used on every platform. Not changed.
+
+No disagreement with the diagnosis: `busiest_engine` was the only item in either file
+shaped as "pure helper reachable only from a platform-gated body". `os_memory_counters`
+and `thread_count` already follow the AGENTS.md-preferred shape (cfg inside the function,
+not around it), which is why they were not affected by the same CI failure.
+
+Verification here (msvc host only): `cargo clippy -p oneterm-workspace --all-targets --
+-D warnings` (Windows target, includes `busiest_engine`'s Windows-live path and the test
+target); `cargo test -p oneterm-workspace`; `cargo fmt --all -- --check`;
+`python scripts/check-doc-paths.py`; `python scripts/check-english.py`. The non-Windows
+lib build itself cannot be reproduced on this host (no cross target installed); the fix
+was reasoned per item instead, as listed above, and CI is the authority on the
+Linux/macOS lib compile.
+
 ## Documentation
 
 ### Owning Docs Reviewed
