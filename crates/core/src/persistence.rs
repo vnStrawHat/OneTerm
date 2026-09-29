@@ -200,16 +200,38 @@ mod tests {
     // pid and timestamp keep names unique across processes and test runs.
     static TEST_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    fn test_dir() -> PathBuf {
+    /// Removes the fixture directory on drop, including when an assertion
+    /// panics (`Drop` runs during unwind): a manual `fs::remove_dir_all` as
+    /// a test's last statement never runs if an earlier assertion in the
+    /// same test panics (`BUG-0083`, same latent-leak shape
+    /// `crates/app/src/crash_report.rs`'s `TemporaryDirectory` fixed for
+    /// `BUG-0082`).
+    struct TemporaryDirectory(PathBuf);
+
+    impl Drop for TemporaryDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TemporaryDirectory {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    fn test_dir() -> TemporaryDirectory {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let sequence = TEST_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
+        TemporaryDirectory(std::env::temp_dir().join(format!(
             "oneterm-persistence-{}-{nonce}-{sequence}",
             std::process::id()
-        ))
+        )))
     }
 
     #[test]
@@ -224,8 +246,7 @@ mod tests {
             fs::read_to_string(dir.join("state.bak")).unwrap(),
             r#"{"version":1}"#
         );
-        assert_eq!(fs::read_dir(&dir).unwrap().count(), 3);
-        let _ = fs::remove_dir_all(dir);
+        assert_eq!(fs::read_dir(&*dir).unwrap().count(), 3);
     }
 
     #[test]
@@ -253,7 +274,6 @@ mod tests {
         let document: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(document["count"], 8);
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -290,7 +310,6 @@ mod tests {
         let document: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(document["count"], 4);
-        let _ = fs::remove_dir_all(dir);
     }
 
     /// A failed write leaves the previous document intact and removes the
@@ -306,21 +325,19 @@ mod tests {
         assert!(atomic_write(&path, br#"{"version":2}"#).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"version":1}"#);
         // No temporary file was left behind (state.json, state.bak/, .lock).
-        assert_eq!(fs::read_dir(&dir).unwrap().count(), 3);
-        let _ = fs::remove_dir_all(dir);
+        assert_eq!(fs::read_dir(&*dir).unwrap().count(), 3);
     }
 
     #[test]
     fn quarantine_moves_invalid_content_without_overwriting_it() {
         let dir = test_dir();
         let path = dir.join("state.json");
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&*dir).unwrap();
         fs::write(&path, b"invalid").unwrap();
 
         let quarantined = quarantine_file(&path).unwrap().unwrap();
         assert!(!path.exists());
         assert_eq!(fs::read(quarantined).unwrap(), b"invalid");
-        let _ = fs::remove_dir_all(dir);
     }
 
     /// CORR-47: a second quarantine of the same document (as after a
@@ -330,7 +347,7 @@ mod tests {
     fn quarantine_names_never_collide_across_runs() {
         let dir = test_dir();
         let path = dir.join("state.json");
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&*dir).unwrap();
 
         // Occupy the names the next quarantine would pick (this second and
         // the next, in case the clock ticks over) as if an earlier run left
@@ -357,6 +374,5 @@ mod tests {
         for existing in &occupied {
             assert_eq!(fs::read(existing).unwrap(), b"earlier run");
         }
-        let _ = fs::remove_dir_all(dir);
     }
 }

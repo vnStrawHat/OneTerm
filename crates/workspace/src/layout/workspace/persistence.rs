@@ -208,6 +208,28 @@ mod tests {
         }
     }
 
+    /// Removes the fixture directory on drop, including when an assertion
+    /// panics (`Drop` runs during unwind): a manual `std::fs::remove_dir_all`
+    /// as a test's last statement never runs if an earlier assertion in the
+    /// same test panics (`BUG-0083`, same latent-leak shape
+    /// `crates/app/src/crash_report.rs`'s `TemporaryDirectory` fixed for
+    /// `BUG-0082`).
+    struct TemporaryDirectory(std::path::PathBuf);
+
+    impl Drop for TemporaryDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TemporaryDirectory {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
     /// `M4`, `IN-0043` MIN-5 — `docks.json`. The guard reads a **process-global**
     /// switch, so this test must be the only one in the process:
     ///
@@ -220,15 +242,15 @@ mod tests {
     #[test]
     #[ignore = "flips the process-global elevation switch; run with --test-threads=1"]
     fn an_elevated_window_writes_no_dock_layout() {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = TemporaryDirectory(std::env::temp_dir().join(format!(
             "oneterm-elevated-docks-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos(),
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
+        )));
+        std::fs::create_dir_all(&*directory).unwrap();
         let path = directory.join("docks.json");
         let state = DockAreaState::default();
 
@@ -247,8 +269,6 @@ mod tests {
             !path.exists(),
             "an elevated window must write no dock layout"
         );
-        drop(_restricted);
-        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

@@ -332,8 +332,32 @@ pub fn ssh_log_identity(username: &str, host: &str, port: u16) -> String {
 mod tests {
     use super::*;
 
-    fn test_dir(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("oneterm-logging-{name}-{}", std::process::id()))
+    /// Removes the fixture directory on drop, including when an assertion
+    /// panics (`Drop` runs during unwind): a manual `std::fs::remove_dir_all`
+    /// as a test's last statement never runs if an earlier assertion in the
+    /// same test panics (`BUG-0083`, same latent-leak shape
+    /// `crates/app/src/crash_report.rs`'s `TemporaryDirectory` fixed for
+    /// `BUG-0082`).
+    struct TemporaryDirectory(PathBuf);
+
+    impl Drop for TemporaryDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TemporaryDirectory {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    fn test_dir(name: &str) -> TemporaryDirectory {
+        TemporaryDirectory(
+            std::env::temp_dir().join(format!("oneterm-logging-{name}-{}", std::process::id())),
+        )
     }
 
     #[test]
@@ -368,7 +392,7 @@ mod tests {
     #[test]
     fn write_modes_preserve_or_truncate_an_existing_file() {
         let directory = test_dir("write-mode");
-        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::create_dir_all(&*directory).unwrap();
         let path = directory.join("existing.log");
         std::fs::write(&path, "old\n").unwrap();
 
@@ -381,7 +405,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "replacement\n");
-        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -391,7 +414,7 @@ mod tests {
         let path = controller
             .start(&TerminalLogConfig {
                 enabled: true,
-                directory: directory.clone(),
+                directory: directory.to_path_buf(),
                 write_mode: LogWriteMode::Overwrite,
             })
             .unwrap();
@@ -400,6 +423,5 @@ mod tests {
 
         let content = std::fs::read_to_string(path).unwrap();
         assert!(content.ends_with("] partial\n"));
-        std::fs::remove_dir_all(directory).unwrap();
     }
 }
