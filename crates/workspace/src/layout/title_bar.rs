@@ -1,19 +1,35 @@
 //! [`AppTitleBar`] — OneTerm's title bar.
 //!
-//! Mirrors `reference/.../story/src/title_bar.rs`, keeping `AppMenuBar` + child
-//! (right-dock mode toggle group: SSH Client / Agent).
+//! Mirrors `reference/.../story/src/title_bar.rs`, keeping `AppMenuBar` + the
+//! right-dock mode toggle group (SSH Client / Agent / None).
 //!
 //! Drops GitHub / Bell (not used in a terminal app).
-
-use std::rc::Rc;
+//!
+//! ## What is cached (`US-0150`)
+//!
+//! Everything OneTerm puts in the bar — the icon, the app menu, the elevation
+//! suffix and the toggles — is one [`TitleBarContent`] view embedded with
+//! `.cached(..)`, so a frame that some other view asked for (a cursor blink, a
+//! status-bar tick, terminal output) reuses it instead of rebuilding and laying
+//! out the toggle group again. The kit's `TitleBar` around it is **not**
+//! cached: its drag region and min/max/close buttons register window-control
+//! hitboxes, which gpui does not replay for a reused view
+//! (`docs/gui-layout.md` § Frames and re-rendering).
+//!
+//! The content re-renders when it, or a view inside it (the app menu), is
+//! notified, and when the window is refreshed (a theme switch, a resize). The
+//! toggles read `UiConfig::right_dock_mode`, so the content observes `UiConfig`:
+//! anything that changes the mode must go through `UiConfig::update` + notify.
 
 use gpui::{
-    AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, Pixels, Render, Styled as _, Window, div, px, svg,
+    AnyElement, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement as _, Pixels, Render, StyleRefinement, Styled as _, Subscription,
+    Window, div, px, svg,
 };
 use gpui_component::{
     ActiveTheme as _, Sizable as _, TitleBar,
     button::{Toggle, ToggleGroup, ToggleVariants as _},
+    h_flex,
     menu::AppMenuBar,
 };
 
@@ -28,32 +44,30 @@ const MODE_TOGGLE_WIDE: Pixels = px(70.);
 const MODE_TOGGLE_NARROW: Pixels = px(50.);
 
 pub struct AppTitleBar {
-    app_menu_bar: Entity<AppMenuBar>,
-    child: Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>,
+    content: Entity<TitleBarContent>,
 }
 
 impl AppTitleBar {
-    /// Create a new title bar.
+    /// Create a new title bar. `mode_toggles` adds the right-dock mode toggle
+    /// group; an elevated window has no right dock and passes `false`.
     pub fn new(
         title: impl Into<gpui::SharedString>,
+        mode_toggles: bool,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let app_menu_bar = app_menus::init(title, cx);
-        Self {
-            app_menu_bar,
-            child: Rc::new(|_, _| div().into_any_element()),
-        }
-    }
-
-    /// Set the child element (the right-dock mode toggle group).
-    pub fn child<F, E>(mut self, f: F) -> Self
-    where
-        E: IntoElement,
-        F: Fn(&mut Window, &mut App) -> E + 'static,
-    {
-        self.child = Rc::new(move |window, cx| f(window, cx).into_any_element());
-        self
+        let content = cx.new(|cx| {
+            let config = oneterm_settings::UiConfig::global(cx);
+            TitleBarContent {
+                app_menu_bar,
+                mode_toggles,
+                _config: cx.observe(&config, |_, _, cx| cx.notify()),
+                #[cfg(test)]
+                renders: 0,
+            }
+        });
+        Self { content }
     }
 }
 
@@ -62,7 +76,7 @@ impl Render for AppTitleBar {
         feature = "hotpath-profiling",
         hotpath::measure(impl_type = "AppTitleBar")
     )]
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         TitleBar::new()
             // Sync the bottom border color with the Dock border.
             //
@@ -73,6 +87,41 @@ impl Render for AppTitleBar {
             // is not a marker: themes are user-editable" — so what is left is
             // what was always carrying the weight.
             .border_color(cx.theme().border)
+            // The kit's `bar` row is a flex row; the content fills it, so its
+            // size comes from the kit's layout and never from its own children.
+            .child(
+                self.content
+                    .clone()
+                    .cached(StyleRefinement::default().flex_1().h_full()),
+            )
+    }
+}
+
+/// What OneTerm draws inside the kit's title bar: the icon, the app menu and
+/// the elevation suffix on the left, the mode toggles on the right.
+struct TitleBarContent {
+    app_menu_bar: Entity<AppMenuBar>,
+    mode_toggles: bool,
+    _config: Subscription,
+    #[cfg(test)]
+    renders: usize,
+}
+
+impl Render for TitleBarContent {
+    #[cfg_attr(
+        feature = "hotpath-profiling",
+        hotpath::measure(impl_type = "TitleBarContent")
+    )]
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.renders += 1;
+        }
+        // The same row the kit's `bar` is (`h_flex`, `justify_between`), so the
+        // two groups land where they did as the bar's own children.
+        h_flex()
+            .size_full()
+            .justify_between()
             // left side
             .child(
                 div()
@@ -96,7 +145,7 @@ impl Render for AppTitleBar {
                     .px_2()
                     .gap_2()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child((self.child.clone())(window, cx)),
+                    .children(self.mode_toggles.then(|| mode_toggle_group(cx))),
             )
     }
 }
@@ -226,5 +275,94 @@ mod tests {
     fn an_unchanged_vector_reports_no_click() {
         assert_eq!(clicked_mode_index(&[true, false, false], 0), None);
         assert_eq!(clicked_mode_index(&[], 0), None);
+    }
+
+    /// `US-0150`: the content is a cached view — a frame another view asked for
+    /// reuses it, and a right-dock mode change re-renders it.
+    mod caching {
+        use gpui::{
+            AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+            TestAppContext, VisualTestContext, Window, div,
+        };
+        use oneterm_actions::RightDockMode;
+        use oneterm_settings::terminal_settings::{TerminalSettings, TerminalSettingsGlobal};
+        use oneterm_settings::ui_config::{UiConfig, UiConfigGlobal};
+
+        use super::super::AppTitleBar;
+
+        /// Stands in for every other view of the window (a terminal that blinks).
+        struct Ticker {
+            renders: usize,
+        }
+
+        impl Render for Ticker {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.renders += 1;
+                div()
+            }
+        }
+
+        struct Host {
+            title_bar: Entity<AppTitleBar>,
+            ticker: Entity<Ticker>,
+        }
+
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(self.title_bar.clone())
+                    .child(self.ticker.clone())
+            }
+        }
+
+        fn counts(host: &Entity<Host>, cx: &mut VisualTestContext) -> (usize, usize) {
+            host.read_with(cx, |host, cx| {
+                (
+                    host.title_bar.read(cx).content.read(cx).renders,
+                    host.ticker.read(cx).renders,
+                )
+            })
+        }
+
+        #[gpui::test]
+        fn another_views_frame_reuses_the_content_and_a_mode_change_does_not(
+            cx: &mut TestAppContext,
+        ) {
+            cx.update(|cx| {
+                gpui_component::init(cx);
+                let config = cx.new(|_| UiConfig::default());
+                cx.set_global(UiConfigGlobal(config));
+                let settings = cx.new(|_| TerminalSettings::default());
+                cx.set_global(TerminalSettingsGlobal(settings));
+            });
+            let (host, cx) = cx.add_window_view(|window, cx| Host {
+                title_bar: cx.new(|cx| AppTitleBar::new("OneTerm", true, window, cx)),
+                ticker: cx.new(|_| Ticker { renders: 0 }),
+            });
+            cx.run_until_parked();
+            let (content, ticker) = counts(&host, cx);
+            assert!(content >= 1 && ticker >= 1, "first frame drew both");
+
+            // Three frames the ticker asked for: the window re-renders from the
+            // root, the title bar's content is reused.
+            for _ in 0..3 {
+                host.update(cx, |host, cx| host.ticker.update(cx, |_, cx| cx.notify()));
+                cx.run_until_parked();
+            }
+            assert_eq!(counts(&host, cx), (content, ticker + 3));
+
+            // The toggles read the right-dock mode: changing it re-renders them.
+            cx.update(|_, cx| {
+                UiConfig::global(cx).update(cx, |config, cx| {
+                    config.right_dock_mode = RightDockMode::Agent;
+                    cx.notify();
+                });
+            });
+            cx.run_until_parked();
+            assert_eq!(counts(&host, cx).0, content + 1);
+        }
     }
 }

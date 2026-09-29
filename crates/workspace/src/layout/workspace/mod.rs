@@ -309,19 +309,16 @@ impl OneTermWorkspace {
             // the kit gives a menu name no place for a second colour. The
             // elevation suffix is drawn beside it by `AppTitleBar::render`, which
             // is ours to colour (`DEC-0019` M5 as amended).
-            let bar = AppTitleBar::new(
+            //
+            // M1: an elevated window has no right dock, so there is nothing to
+            // switch between — the three segments are absent rather than
+            // disabled.
+            AppTitleBar::new(
                 oneterm_core::elevation::window_title_parts(oneterm_core::elevation::elevation()).0,
+                !elevated,
                 window,
                 cx,
-            );
-            if elevated {
-                // M1: an elevated window has no right dock, so there is nothing
-                // to switch between — the three segments are absent rather than
-                // disabled.
-                bar
-            } else {
-                bar.child(|_window, cx| crate::layout::title_bar::mode_toggle_group(cx))
-            }
+            )
         });
 
         let clock = datetime_clock(window, cx);
@@ -390,11 +387,11 @@ impl OneTermWorkspace {
         if next == current {
             return;
         }
+        // The title bar's toggles observe `UiConfig`, so this notify repaints them.
         oneterm_settings::UiConfig::global(cx).update(cx, |config, cx| {
             config.right_dock_mode = next;
             cx.notify();
         });
-        self.title_bar.update(cx, |_, cx| cx.notify());
         oneterm_settings::UiConfig::persist(cx);
     }
 

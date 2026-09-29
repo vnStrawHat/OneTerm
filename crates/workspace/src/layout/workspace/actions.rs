@@ -148,8 +148,9 @@ impl super::OneTermWorkspace {
         let new_mode = action.0;
         Self::apply_right_dock_mode(&self.dock_area, new_mode, window, cx);
 
-        // Persist the new mode to ui_config.json and notify the title bar so the
-        // segmented control re-renders before the next click.
+        // Persist the new mode to ui_config.json. The title bar's segmented
+        // control observes `UiConfig`, so the notify re-renders it before the
+        // next click.
         let current = oneterm_settings::UiConfig::global(cx)
             .read(cx)
             .right_dock_mode;
@@ -160,7 +161,6 @@ impl super::OneTermWorkspace {
             cfg.right_dock_mode = new_mode;
             cx.notify();
         });
-        self.title_bar.update(cx, |_, cx| cx.notify());
         oneterm_settings::UiConfig::persist(cx);
     }
 
