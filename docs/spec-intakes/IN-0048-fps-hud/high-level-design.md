@@ -63,8 +63,8 @@ scrolls the terminal.
 1. The switch writes `UiConfig.show_fps`, persists `ui_config.json` off the UI thread (refused
    in an elevated window, like every other write) and refreshes the windows.
 2. `OneTermWorkspace::render` reads the flag. Off: it drops its `Entity<FpsHud>`. On: it
-   creates the entity on the first shown frame (reading `gpu_specs()` once and opening the PDH
-   query) and renders it.
+   creates the entity on the first shown frame (reading `gpu_specs()` once) and renders it; the
+   ticker's first step opens the PDH query on the background executor.
 3. Each window frame renders the HUD view, which adds one to its frame count.
 4. The ticker wakes on the shared one-second grid, publishes `frames / elapsed` and notifies;
    every second tick it also runs one PDH collection on the background executor and stores the
@@ -77,7 +77,7 @@ scrolls the terminal.
 | `FPS` | Renders of the HUD view per second (whole number) | Frames actually drawn. Idle reads about 2 (the cursor blink and the clock share the grid), output reads the real rate. The HUD forces no frames beyond its once-a-second refresh, which coincides with the clock's tick. Not a refresh rate or a "max"; that would be a follow-up. |
 | `GPU` | `Window::gpu_specs().device_name` (Windows: DXGI `GetDesc1` of the adapter gpui's D3D11 device runs on; Linux: the wgpu adapter name); `(software)` for an emulated device; `n/a` where gpui answers `None` (macOS in 0.3.7) | The GPU's name. |
 | `API` | Compile-time constant per platform | See the matrix. |
-| `GPU usage` | Windows: PDH `\GPU Engine(*)\Utilization Percentage`, instances named `pid_<this pid>_…`, summed per engine type (`engtype_3D`, `engtype_Copy`, …), busiest type shown, clamped to 100 | This process' GPU share, as Task Manager's GPU column shows it. 2 s cadence. |
+| `GPU usage` | Windows: PDH `\GPU Engine(*)\Utilization Percentage`, instances named `pid_<this pid>_…`, the busiest single engine across all GPUs, clamped to 100 | This process' GPU share, as Task Manager defines its GPU column. 2 s cadence. |
 
 ### Platform matrix
 
@@ -93,9 +93,11 @@ scrolls the terminal.
 - **Off:** no entity, so no ticker, no PDH query, no count, no allocation. `render` reads one
   bool from the `UiConfig` global. No new dependency and no gpui feature.
 - **On:** one `u64` add per frame; one notify a second, on the grid the clock already repaints
-  on; one `gpu_specs()` call when shown; one PDH collection (`PdhCollectQueryData` +
+  on; one `gpu_specs()` call when shown; the PDH open on the background executor, whose first
+  run in a process costs ~100-165 ms there and ~4 MB that Windows keeps (later shows add
+  nothing); one PDH collection (`PdhCollectQueryData` +
   `PdhGetFormattedCounterArrayW`, every engine of every process) every 2 s on the background
-  executor. Measured in `US-0151`.
+  executor. Nothing PDH runs on the UI thread. Measured in `US-0151`.
 
 ## Detail Design
 

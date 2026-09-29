@@ -171,18 +171,24 @@ has four rows, in theme tokens only (`popover` fill, `border`, `muted.foreground
 | Row | Value | Source |
 |---|---|---|
 | `FPS` | Frames the window actually drew in the last second | The HUD view is not cached, so it renders on every frame the window draws; it counts its renders and turns the count into a rate once a second on the `until_next_tick` grid. It never asks for a frame of its own beyond that once-a-second refresh, so an idle window reads about 2 and a window under output reads its real rate. It is not a refresh rate or a "max". |
-| `GPU` | The adapter gpui renders with | `Window::gpu_specs().device_name` (the DXGI adapter description on Windows), asked once when the HUD is shown; `(software)` for an emulated device, `n/a` where gpui returns none (macOS in gpui-pre 0.3.7). |
+| `GPU` | The adapter gpui renders with, on one line (a long name widens the HUD leftwards from its 220 px minimum) | `Window::gpu_specs().device_name` (the DXGI adapter description on Windows), asked once when the HUD is shown; `(software)` for an emulated device, `n/a` where gpui returns none (macOS in gpui-pre 0.3.7). |
 | `API` | `Direct3D 11`, `Metal` or `Vulkan/GL (wgpu)` | A compile-time constant per platform: gpui-pre 0.3.7 reports neither the backend nor the Direct3D feature level at run time. |
-| `GPU usage` | This process' GPU share | Windows: PDH `\GPU Engine(*)\Utilization Percentage`, this pid's instances summed per engine type, the busiest type shown — what Task Manager's GPU column shows. The query is opened when the HUD is shown and closed when it is hidden, and sampled every 2 s on the background executor. `n/a` on Linux and macOS. |
+| `GPU usage` | This process' GPU share | Windows: PDH `\GPU Engine(*)\Utilization Percentage`, this pid's busiest single engine across all GPUs, clamped to 100 % — how Task Manager defines its GPU column. The query is opened on the background executor when the HUD is shown (the row reads `-` until the first sample) and closed when it is hidden, and sampled every 2 s on the background executor. `n/a` on Linux and macOS. |
 
 The HUD is opaque to the mouse except for the wheel (`block_mouse_except_scroll`): a click or
 a drag on it never reaches the terminal underneath (no selection change, nothing sent to a
-mouse-reporting TUI), while the wheel still scrolls it.
+mouse-reporting TUI), while the wheel still scrolls it. The other side of that: whatever the HUD
+covers cannot be clicked while it is shown (with the SSH Client dock, the right part of
+"Search sessions..."); switch the HUD off to reach it.
 
 Off, the workspace holds no HUD: no ticker, no PDH query, no per-frame count. On, the HUD
 costs one `u64` add per frame, one refresh a second (which lands on the status bar clock's
 own tick, so an idle window stays at about 2 frames a second), one PDH collection every 2 s off
-the UI thread, and about 4-5 MB for PDH's counter data. Measurements: `US-0151`.
+the UI thread, and about 4-5 MB for PDH's counter data. The first show in a process also pays
+PDH's one-time initialisation, off the UI thread: ~100-165 ms on a background thread and
+~4 MB that Windows keeps for the life of the process (no growth on later shows).
+Measurements: `US-0151`.
+
 ## Text contrast floor and hierarchy
 
 Text in the built-in themes obeys two rules, both enforced by

@@ -44,11 +44,14 @@ cut's GPUI Kit HUD and its ten readings are gone; see § Acceptance rework.)
     item and the action handler in `layout/app_menus.rs`.
   - `crates/settings-ui`: the General page switch; the Key Bindings row (unbound).
   - Docs: `docs/gui-layout.md`, `docs/agents/persistence.md`, `docs/agents/dependencies.md`.
-- [x] Out of scope: the Direct3D feature level at run time and a frame counter (intake
-  follow-ups); changing the kit HUD's palette, rows or cadence (it is a published crate;
-  `docs/PROJECT.md` forbids patching dependencies).
+- [x] Out of scope: the Direct3D feature level at run time, a refresh-rate / "max" FPS row,
+  and GPU usage on Linux/macOS (intake follow-ups). (The first cut's "kit HUD palette" line is
+  superseded: there is no kit HUD any more.)
 
 ## Acceptance
+
+> **Superseded** by § Acceptance rework (first cut `09812f0d`); kept as the record of what the
+> owner ruled on.
 
 - [x] `show_fps` is `false` when `ui_config.json` lacks it, and survives a save/load round trip.
 - [x] The `ToggleFpsMonitor` action flips it; the app menu shows a checked "Show FPS Monitor"
@@ -94,9 +97,10 @@ terminal (F4).
   - `GPU` — `Window::gpu_specs().device_name`, asked once when shown; `(software)` / `n/a`.
   - `API` — compile-time constant: `Direct3D 11` / `Metal` / `Vulkan/GL (wgpu)`.
   - `GPU usage` — own PDH sampler on `\GPU Engine(*)\Utilization Percentage`: this pid's
-    instances **summed per engine type, busiest type shown** (Task Manager's GPU column),
-    clamped to 100. The query is opened when the HUD is created and closed (`PdhCloseQuery`) when
-    it is dropped; one collection every 2 s on the background executor, never on the UI thread;
+    instances, **busiest single engine across all GPUs** (how Task Manager defines its GPU
+    column), clamped to 100 (verify #2 R2; the rework first summed per engine type). The query is opened when the HUD is created and closed (`PdhCloseQuery`) when
+    it is dropped; the open (verify #2 R1) and one collection every 2 s run on the background
+    executor, never on the UI thread;
     the FFI is `cfg(windows)`, `n/a` elsewhere.
 - [x] Off costs nothing: no entity, so no ticker, no count, no PDH query, no allocation.
 - [x] F4: the overlay is opaque to the mouse except the wheel (`block_mouse_except_scroll`):
@@ -145,12 +149,12 @@ Reading:
   (`evidence/US-0151-rework-toggled-off.png`).
 
 Screenshots: `evidence/US-0151-rework-hud-dark.png`, `evidence/US-0151-rework-hud-light.png`
-(Ayu Light). The adapter name wraps at the HUD's 220 px width
-(`Intel(R) UHD Graphics` / `770`).
+(Ayu Light). In these the adapter name still wrapped at 220 px; since verify #2 R4 it stays on
+one line and widens the HUD (`evidence/US-0151-rework2-one-line-name.png`).
 
 Tests (`cargo test -p oneterm-settings -p oneterm-actions -p oneterm-workspace
 -p oneterm-settings-ui`, all green): `widgets::fps_hud::tests::the_rows_are_fps_gpu_api_and_usage_in_that_order`,
-`...::n_renders_in_a_second_read_n_fps`, `...::gpu_usage_is_this_pids_busiest_engine_type`
+`...::n_renders_in_a_second_read_n_fps`, `...::gpu_usage_is_this_pids_busiest_single_engine`
 (PDH instance names -> percent, including a `pid_421_` neighbour of `pid_42_` and the clamp),
 plus the kept `the_toggle_action_flips_show_fps` and the `ui_config` default/round-trip tests.
 
@@ -167,6 +171,36 @@ Rework gaps:
   data from reasoning, not measured apart.
 - `FpsHud::render` itself is not a hotpath site, so its own allocations while on (the row
   strings, about a dozen small ones per frame) are not in the alloc table above.
+### Verify #2 fixes — 2026-09-29
+
+The rework's verification (`evidence/US-0151-verify.md` § Second pass, `25f85759`) passed with
+two Low findings and records notes, fixed here:
+
+- **R1:** the PDH query is opened in the ticker's first step on the background executor, not in
+  `OneTermWorkspace::render`. The `GPU usage` row reads `-` until the first sample (or `n/a` if
+  the open fails). UI-thread cycles in the second after the **first** show of the HUD in a
+  process (fast-dev + `hotpath-profiling`, own pid, HUD toggled on from the app menu; idle
+  seconds before it for scale), three runs each:
+
+  | Build | Idle seconds before | Menu open | First-show second | Next second |
+  | --- | --- | --- | --- | --- |
+  | `2a8a7e65` (open on the UI thread) | 31-69 | 22.8-23.3 | **365.2, 325.3, 381.4** | 21-49 |
+  | this fix | 34-59 | 28.6-32.6 | **48.1, 46.1, 35.5** | 39-48 |
+
+  Mcycles. The first-show second is now inside the idle spread: no hitch. The ~165 ms and the
+  one-time ~4 MB of PDH's first initialisation (R3) now land on a background thread.
+- **R2:** `GPU usage` is this pid's busiest single engine across all GPUs (max over instances),
+  which is how Task Manager defines its GPU column; the per-type sum could read up to 2x on
+  this iGPU's duplicate VideoDecode/VideoProcessing engines. Test
+  `gpu_usage_is_this_pids_busiest_single_engine` (1.25 from a sample whose type sum is 1.75,
+  two busy VideoDecode engines read 40 not 70, clamp at 100).
+- **R4:** the GPU name stays on one line: the HUD's width is a 220 px minimum and the value does
+  not wrap, so a longer name widens the box leftwards
+  (`evidence/US-0151-rework2-one-line-name.png`: `Intel(R) UHD Graphics 770` on one line).
+- **R5/R6:** `docs/gui-layout.md` says the HUD blocks clicks on what it covers; the first cut's
+  Acceptance, Scope line, Context and Documentation Action are marked superseded; R1/R3 are in
+  the HLD and `docs/gui-layout.md` cost lines; the missing blank line before
+  `## Text contrast floor and hierarchy` is back.
 ## Documentation
 
 ### Owning Docs Reviewed
@@ -186,6 +220,9 @@ Rework gaps:
 
 ### Documentation Action
 
+> **Superseded** by § Acceptance rework (first cut `09812f0d`); kept as the record of what the
+> owner ruled on.
+
 - Update required: `docs/gui-layout.md` (new § FPS HUD, General page row),
   `docs/agents/persistence.md` (`show_fps`), `docs/agents/dependencies.md` (`gpui-fps` in the
   0.7 family and its `profiler` feature side effect).
@@ -204,6 +241,9 @@ Windows FFI row names `Win32_System_Performance` and why `gpui-fps` is not used;
 intake and HLD field lists; `THIRD-PARTY-NOTICES.md` regenerated back to main's.
 
 ## Context
+
+> **Superseded** by § Acceptance rework (first cut `09812f0d`); kept as the record of what the
+> owner ruled on.
 
 - `gpui-fps` depends on `gpui-pre =0.3.7` with `features = ["profiler"]`; Cargo unifies that
   feature into OneTerm's `gpui-pre`, which is why the "off" cost is measured against main and

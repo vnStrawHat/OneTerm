@@ -4,7 +4,8 @@
 //!
 //! Nothing here exists while the HUD is off: the workspace holds an
 //! `Option<Entity<FpsHud>>` and drops it on the first frame the setting is off, which drops
-//! the ticker and, on Windows, closes the PDH query. While on, the HUD counts its own renders
+//! the ticker and, on Windows, closes the PDH query. While on, the HUD opens that query on the
+//! background executor (the first open in a process takes ~100-165 ms), counts its own renders
 //! (it is not `cached`, so it renders on every frame the window draws), turns the count into a
 //! rate once a second on the shared `until_next_tick` grid, and samples the GPU counters every
 //! 2 s on the background executor. It never asks for a frame beyond that once-a-second refresh,
@@ -18,7 +19,7 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme as _, TITLE_BAR_HEIGHT};
 
-/// Wide enough for a typical adapter name on one line; a longer one wraps.
+/// The narrowest the HUD gets; a longer adapter name widens it (leftwards), never wraps.
 const HUD_WIDTH: Pixels = px(220.);
 /// The tab strip under the title bar (the kit's fixed tab height). The HUD starts below it so
 /// the strip's `+` and `...`, the caption buttons and the right-dock toggles stay clickable.
@@ -57,7 +58,7 @@ pub struct FpsHud {
 enum GpuUsage {
     /// No per-process counter on this platform, or the query could not be opened.
     Unavailable,
-    /// The query is open; no sample has landed yet.
+    /// The query is being opened, or is open and no sample has landed yet.
     Pending,
     Percent(f32),
 }
@@ -68,14 +69,20 @@ impl FpsHud {
     pub fn new(window: &mut Window, cx: &mut App) -> Entity<Self> {
         let device = device_name(window.gpu_specs().as_ref());
         cx.new(|cx| {
-            let probe = gpu::Probe::open();
-            let gpu = if probe.is_some() {
-                GpuUsage::Pending
-            } else {
-                GpuUsage::Unavailable
-            };
             let ticker = cx.spawn_in(window, async move |this, window| {
-                let mut probe = probe;
+                // The first PDH open in a process takes ~100-165 ms (PDH loads its counter
+                // names and providers), so it runs here, off the UI thread, like every sample.
+                let mut probe = window
+                    .background_executor()
+                    .spawn(async { gpu::Probe::open() })
+                    .await;
+                if probe.is_none()
+                    && this
+                        .update(window, |hud: &mut Self, _| hud.gpu = GpuUsage::Unavailable)
+                        .is_err()
+                {
+                    return;
+                }
                 let mut tick = 0u64;
                 loop {
                     let wait = oneterm_state::until_next_tick(FPS_INTERVAL);
@@ -120,7 +127,13 @@ impl FpsHud {
                 frames: 0,
                 since: Instant::now(),
                 fps: None,
-                gpu,
+                // Until the background open answers; `n/a` from the start where there is
+                // no counter to open.
+                gpu: if cfg!(windows) {
+                    GpuUsage::Pending
+                } else {
+                    GpuUsage::Unavailable
+                },
                 _ticker: ticker,
             }
         })
@@ -149,7 +162,7 @@ impl Render for FpsHud {
             // (a selection, or a click a mouse-reporting TUI would receive); the wheel still
             // scrolls what is underneath.
             .block_mouse_except_scroll()
-            .w(HUD_WIDTH)
+            .min_w(HUD_WIDTH)
             .px_2()
             .py_1()
             .rounded(px(4.))
@@ -165,7 +178,13 @@ impl Render for FpsHud {
                         .justify_between()
                         .gap_2()
                         .child(div().flex_none().text_color(muted).child(label))
-                        .child(div().min_w_0().text_right().text_color(value).child(text))
+                        .child(
+                            div()
+                                .whitespace_nowrap()
+                                .text_right()
+                                .text_color(value)
+                                .child(text),
+                        )
                 },
             ))
     }
@@ -214,35 +233,21 @@ fn hud_rows(
 }
 
 /// This process' share of the GPU from PDH's `GPU Engine` counters, the source of Task
-/// Manager's GPU column. Every instance is named after its process and engine type, as in
-/// `pid_4242_luid_0x00000000_0x0000BEEF_phys_0_eng_1_engtype_3D`; this pid's instances are
-/// summed per engine type and the busiest type is the reading, which is what Task Manager
-/// shows (3D, Copy and Video run concurrently, so a plain sum could pass 100 %).
+/// Manager's GPU column. Every instance is one engine of one process, named as in
+/// `pid_4242_luid_0x00000000_0x0000BEEF_phys_0_eng_1_engtype_3D`; the reading is this pid's
+/// busiest single engine across all GPUs, which is how Task Manager defines its GPU column
+/// (Microsoft, "GPUs in the task manager"), clamped to 100 %.
 fn busiest_engine<'a>(
     pid: u32,
     instances: impl IntoIterator<Item = (&'a str, f64)>,
 ) -> Option<f32> {
     let owner = format!("pid_{pid}_");
-    let mut by_type: Vec<(&str, f64)> = Vec::new();
-    for (name, value) in instances {
-        let Some(engine) = name
-            .strip_prefix(&owner)
-            .and_then(|rest| rest.rsplit_once("engtype_"))
-            .map(|(_, engine)| engine)
-        else {
-            continue;
-        };
-        match by_type.iter_mut().find(|(known, _)| *known == engine) {
-            Some((_, sum)) => *sum += value,
-            None => by_type.push((engine, value)),
-        }
-    }
-    by_type
+    instances
         .into_iter()
-        .map(|(_, sum)| sum.clamp(0.0, 100.0) as f32)
+        .filter(|(name, _)| name.starts_with(&owner))
+        .map(|(_, value)| value.clamp(0.0, 100.0) as f32)
         .reduce(f32::max)
 }
-
 #[cfg(windows)]
 mod gpu {
     use windows_sys::Win32::System::Performance::{
@@ -425,9 +430,10 @@ mod tests {
     }
 
     #[test]
-    fn gpu_usage_is_this_pids_busiest_engine_type() {
+    fn gpu_usage_is_this_pids_busiest_single_engine() {
         let sample = [
-            // This pid: two 3D engines (summed) and a copy engine.
+            // This pid: two 3D engines and a copy engine. The busiest engine is the reading,
+            // not the sum of an engine type (1.75) nor of everything (2.75).
             (
                 "pid_42_luid_0x00000000_0x0000BEEF_phys_0_eng_0_engtype_3D",
                 1.25,
@@ -450,18 +456,23 @@ mod tests {
                 50.0,
             ),
         ];
-        assert_eq!(busiest_engine(42, sample), Some(1.75));
+        assert_eq!(busiest_engine(42, sample), Some(1.25));
         // A process with no engines has no reading, not zero.
         assert_eq!(busiest_engine(9, sample), None);
-        // Summed engines of one type never pass 100 %.
+        // Two busy engines of one type (this iGPU has two VideoDecode engines) read as the
+        // busier one, and a counter overshoot is clamped to 100 %.
         assert_eq!(
             busiest_engine(
                 1,
                 [
-                    ("pid_1_luid_0x0_0x1_phys_0_eng_0_engtype_3D", 80.0),
-                    ("pid_1_luid_0x0_0x1_phys_0_eng_1_engtype_3D", 70.0),
+                    ("pid_1_luid_0x0_0x1_phys_0_eng_3_engtype_VideoDecode", 40.0),
+                    ("pid_1_luid_0x0_0x1_phys_0_eng_11_engtype_VideoDecode", 30.0),
                 ]
             ),
+            Some(40.0)
+        );
+        assert_eq!(
+            busiest_engine(1, [("pid_1_luid_0x0_0x1_phys_0_eng_0_engtype_3D", 130.0)]),
             Some(100.0)
         );
     }
