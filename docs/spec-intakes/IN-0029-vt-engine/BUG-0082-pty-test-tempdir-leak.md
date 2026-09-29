@@ -11,9 +11,9 @@ Created: 2026-09-29
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
 - [ ] In progress
-- [x] Implemented
+- [ ] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -53,6 +53,24 @@ present setup often does — spuriously failed `conpty_api_prefers_the_bundled_h
 adds a PID-liveness check (`OpenProcess` / `GetExitCodeProcess`) before a sibling is ever swept; see
 Context for the mechanism and why it also closes the create/load-DLL race, not just the two
 findings' reproduction cases.
+
+**Acceptance rework — exit code 259 (2026-09-29, third pass).** Independent
+verification's second pass (`evidence/BUG-0082-verify.md`, F9) accepted the packet but flagged a
+low-severity residual gap: `process_is_alive` decided liveness by reading `GetExitCodeProcess` and
+comparing the result against `STILL_ACTIVE` (`259`), which cannot distinguish "the process is still
+running" from "the process has already exited with the specific exit code 259" -- a dead process
+whose own exit code happened to be 259 would read as alive forever (safe direction, but wrong; the
+directory is kept, never over-deleted, but the leak this whole packet exists to close is not actually
+closed for that one case). Owner ruling (2026-09-29): fix it. `process_is_alive` now opens the
+process with `PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION` and decides with
+`WaitForSingleObject(handle, 0)` instead of reading an exit code at all: `WAIT_OBJECT_0` (the process
+object is signaled) means dead, `WAIT_TIMEOUT` (still running) or `WAIT_FAILED` (unknown) both mean
+alive -- the same safe default the function already used for `OpenProcess` failures other than
+`ERROR_INVALID_PARAMETER`. The `GetExitCodeProcess`/`STILL_ACTIVE` read is removed entirely, so the
+ambiguity no longer exists for this call. See Verification Plan / Evidence for the new
+`process_is_alive_reports_dead_for_a_process_that_exited_with_code_259` regression (a real
+`cmd /c exit 259` child, waited on, then checked against its own PID) and the updated ignored-test
+census and full-gate result.
 
 ## Reported by
 
@@ -104,6 +122,9 @@ packet's own verification.
       pattern `crates/state/src/dock_persistence.rs` already used for its later tests; the liveness
       check uses `windows-sys`' `Win32_System_Threading`, already an enabled workspace feature).
 - [x] Full CI-local gate passes.
+- [x] `process_is_alive` decides liveness with `WaitForSingleObject`, not `GetExitCodeProcess` /
+      `STILL_ACTIVE`: a process that has actually exited with the numeric value `259` reads as dead,
+      proven with a real child process (`cmd /c exit 259`), not a simulated liveness function.
 
 ## Documentation
 
@@ -264,6 +285,17 @@ duplicated here.
       race test by hand, and re-run the full CI gate.
 - [x] Fold the verifier's complete BUG-0083 candidate list (F5) into Handoff.
 
+**Rework (third pass, acceptance rework — exit code 259, owner ruling 2026-09-29):**
+
+- [x] Replace `process_is_alive`'s `GetExitCodeProcess`/`STILL_ACTIVE` read with
+      `OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, ...)` followed by
+      `WaitForSingleObject(handle, 0)`: `WAIT_OBJECT_0` = dead, anything else (`WAIT_TIMEOUT` or
+      `WAIT_FAILED`) = alive; keep `ERROR_INVALID_PARAMETER` on `OpenProcess` = dead.
+- [x] Add `process_is_alive_reports_dead_for_a_process_that_exited_with_code_259`: spawn
+      `cmd /c exit 259`, wait for it, keep its PID, assert `process_is_alive` reports dead.
+- [x] Re-run the conpty test module, `cargo fmt`, `cargo clippy -p oneterm-vt`, the rustdoc
+      self-containment grep, and the full CI-local gate; update this packet and the evidence file.
+
 ## Decisions
 
 None. No architectural or public-contract choice is made here; the mechanism and its trade-off are
@@ -295,6 +327,8 @@ documented in Context and in the code comments at each guard.
 - The rustdoc self-containment grep over `crates/vt/src` (no `US-`/`BUG-`/`DEC-`/`IN-` citation or
   bare `crates/`/`docs/` path in a `///`/`//!` line).
 - Full `pwsh scripts/ci-local.ps1`.
+- `cargo test -p oneterm-vt --lib -- conpty::tests::process_is_alive_reports_dead_for_a_process_that_exited_with_code_259`
+  (third pass — a real `cmd /c exit 259` child, not a simulated liveness function).
 
 ## Evidence and Gaps
 
@@ -341,6 +375,24 @@ dependency (F7), public API / rustdoc / fmt / ignored-test census / `--no-defaul
 | `python scripts/check-english.py` | PASS (1083 files) |
 | Full `pwsh scripts/ci-local.ps1`, `CARGO_BUILD_JOBS=4`, `target/debug/incremental` deleted first | PASS — final line: `ci-local: all checks passed.` |
 
+**Third pass (this session — acceptance rework, exit code 259):**
+
+| Check | Result |
+| --- | --- |
+| `process_is_alive_reports_dead_for_a_process_that_exited_with_code_259` (real `cmd /c exit 259` child) | PASS — reads dead; this exact case read alive before this rework |
+| `is_stale`/`sweep_keeps_a_sibling_named_after_a_live_pid`/`conpty_api_prefers_the_bundled_host`/`conpty_api_falls_back_to_the_system_host` (regression check, unchanged behavior) | PASS, all still green |
+| Full `pty::windows::conpty::tests` module (`cargo test -p oneterm-vt --lib -- conpty`) | 16 passed, 0 failed, 1 ignored (up from 15/0/1 — the one new test) |
+| `cargo clippy -p oneterm-vt --all-targets -- -D warnings` | PASS |
+| `cargo fmt --all -- --check` | PASS |
+| `python scripts/check-ignored-tests.py` | 19 ignored tests, all recorded (unchanged — no ignored test added or removed) |
+| `python scripts/vt-public-api.py --check --no-doc` (fresh `cargo doc -p oneterm-vt --no-deps --all-features`) | public API surface unchanged |
+| `python scripts/vt-public-api.py --diff-platforms` | unchanged (still only the 6-line pty delta) |
+| Rustdoc self-containment check over `crates/vt/src` (no `///`/`//!` line cites `US-`/`BUG-`/`DEC-`/`IN-` or a bare `crates/`/`docs/` path) | clean — every `BUG-0082` citation in the new code is a plain `//` line inside `#[cfg(test)] mod tests`, never a doc comment |
+| `python scripts/check-doc-paths.py` | PASS (212 paths, 11 documents) |
+| `python scripts/check-english.py` | PASS (1083 files) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | PASS |
+| Full `pwsh scripts/ci-local.ps1`, `CARGO_BUILD_JOBS=6`, `target/debug/incremental` deleted first | see this session's combined BUG-0082/BUG-0083 gate run — final line: `ci-local: all checks passed.` |
+
 **Gaps:**
 - No CI runner run of this fix (Windows-only; verified on this developer machine only). The
   `oneterm-vt` pty code is `#[cfg(windows)]`-only, so CI's Windows job is the only place this can
@@ -349,15 +401,19 @@ dependency (F7), public API / rustdoc / fmt / ignored-test census / `--no-defaul
 - The concurrency regression test is `#[ignore]`d (it forks two child processes ten times and takes a
   few seconds), so it does not run in the default gate; it must be run explicitly (see Verification
   Plan) whenever this sweep changes again.
-- BUG-0083 candidates (see Handoff) are unverified; none were run in isolation to check whether they
-  leak, since the owner's report did not include them and this packet keeps to the reported scope.
+- BUG-0083 (`docs/spec-intakes/IN-0029-vt-engine/BUG-0083-test-temp-dirs-without-guards.md`) was
+  opened this session from the candidate list below; it supersedes this list with a verified,
+  corrected inventory (three of the nine files named here turned out to already be guarded through an
+  imported RAII type, not a real leak — see that packet).
 
 ## Handoff
 
-Implemented and re-verified in this session after a FAIL / rework cycle. Branch
-`fix/vt-pty-test-tempdir`; first pass `a7854507`, verification `326bc389` (FAIL, evidence at
-`docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0082-verify.md`), rework on top in one further
-commit. Not pushed.
+Implemented and re-verified across three passes. Passes one and two landed on
+`fix/vt-pty-test-tempdir` (first pass `a7854507`, verification `326bc389` FAIL, second-pass rework
+`8ddf10fc`, evidence at `docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0082-verify.md`), merged to
+`main`. This third pass (acceptance rework, exit code 259 / F9) is on branch
+`fix/test-tempdirs-and-liveness`, alongside `BUG-0083`; see that commit's sha in this branch's own
+history. Not pushed as of this session.
 
 **BUG-0083 candidates (complete list — first pass named 2, independent verification's F5 found 7
 more).** Every file below uses `std::env::temp_dir()` in test code with no `Drop`-based guard, the

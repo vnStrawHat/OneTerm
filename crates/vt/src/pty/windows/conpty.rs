@@ -471,9 +471,9 @@ fn push_entry(block: &mut Vec<u16>, key: &OsStr, value: &OsStr) {
 
 #[cfg(test)]
 mod tests {
-    use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, GetLastError, STILL_ACTIVE};
+    use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, GetLastError, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, WaitForSingleObject,
     };
 
     use super::*;
@@ -540,31 +540,76 @@ mod tests {
 
     // True only if `pid` is provably no longer a live process: `OpenProcess`
     // fails with `ERROR_INVALID_PARAMETER` (no such process), or it succeeds
-    // but `GetExitCodeProcess` reports something other than `STILL_ACTIVE`
-    // (the process object still exists but has already exited). Any other
-    // `OpenProcess` failure (for example `ERROR_ACCESS_DENIED` against a
-    // process owned by another user) answers "alive": the safe direction
-    // when liveness cannot actually be determined. `Win32_System_Threading`
-    // is already an enabled `windows-sys` feature (`Cargo.toml`, for
+    // but `WaitForSingleObject` reports the process object as signaled (the
+    // process has exited). Any other `OpenProcess` failure (for example
+    // `ERROR_ACCESS_DENIED` against a process owned by another user) or a
+    // `WaitForSingleObject` failure answers "alive": the safe direction when
+    // liveness cannot actually be determined. `Win32_System_Threading` is
+    // already an enabled `windows-sys` feature (`Cargo.toml`, for
     // `GetProcessMemoryInfo`), so this needs no new dependency.
+    //
+    // BUG-0082 acceptance rework: this used to read `GetExitCodeProcess` and
+    // compare against `STILL_ACTIVE` (259), which cannot tell "still
+    // running" apart from "already exited with the numeric exit code 259" --
+    // a real process whose own exit code happens to be 259 would read as
+    // alive forever. `WaitForSingleObject(handle, 0)` asks the kernel
+    // directly whether the process object is signaled, which happens the
+    // instant the process terminates regardless of what code it exited
+    // with, so the ambiguity does not exist for this call.
     fn process_is_alive(pid: u32) -> bool {
         // SAFETY: FFI call with no pointer arguments; `pid` is a plain value.
-        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        let handle = unsafe {
+            OpenProcess(
+                PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                pid,
+            )
+        };
         if handle.is_null() {
             // SAFETY: called immediately after the failing call above, before
             // any other API that could change the last-error value.
             return unsafe { GetLastError() } != ERROR_INVALID_PARAMETER;
         }
-        let mut exit_code = 0u32;
-        // SAFETY: `handle` was just returned by `OpenProcess` above and is
-        // valid; `exit_code` is a valid out-parameter for this one call.
-        let still_active = unsafe {
-            GetExitCodeProcess(handle, &mut exit_code) != 0 && exit_code == STILL_ACTIVE as u32
-        };
+        // SAFETY: `handle` was just returned by `OpenProcess` above, is
+        // valid, and was opened with `PROCESS_SYNCHRONIZE`; a zero timeout
+        // makes this a non-blocking poll.
+        let wait = unsafe { WaitForSingleObject(handle, 0) };
         // SAFETY: `handle` is the same handle `OpenProcess` returned above,
         // not used again after this call, and closed exactly once.
         unsafe { CloseHandle(handle) };
-        still_active
+        match wait {
+            // Signaled: the process object has been notified of exit.
+            WAIT_OBJECT_0 => false,
+            // `WAIT_TIMEOUT` (still running) or `WAIT_FAILED` (unknown):
+            // both answer "alive", the safe default.
+            _ => true,
+        }
+    }
+
+    // BUG-0082 acceptance rework regression: a process that has actually
+    // exited with the numeric value 259 (`STILL_ACTIVE`) must still read as
+    // dead. A `GetExitCodeProcess`-only check could not tell this apart from
+    // "still running" -- this exact case read alive before this rework.
+    #[test]
+    fn process_is_alive_reports_dead_for_a_process_that_exited_with_code_259() {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit 259"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn a child process that exits with code 259");
+        let pid = child.id();
+        let status = child.wait().expect("wait for the child to exit");
+        assert_eq!(
+            status.code(),
+            Some(259),
+            "the child must actually exit with code 259 for this regression to be meaningful"
+        );
+
+        assert!(
+            !process_is_alive(pid),
+            "a process that exited with STILL_ACTIVE's numeric value must read as dead"
+        );
     }
 
     fn scratch_directory(name: &str) -> ScratchDirectory {

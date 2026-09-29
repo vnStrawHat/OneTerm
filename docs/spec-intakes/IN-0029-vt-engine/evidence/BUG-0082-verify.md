@@ -537,3 +537,82 @@ promoting it to the pass-2 result:
 | `notes` | (pass-1 note, see file history) | append: `"Verify PASS (pass 2) <sha> (Fable 5.1, thinking high) on 8ddf10fc: is_stale/process_is_alive liveness check closes F1/F1a/F1b. All 4 liveness cases confirmed against the real sweep (live PID kept, dead PID swept, ERROR_ACCESS_DENIED-protected PID kept, unparsable name kept) -- the protected-PID case is new coverage pass 1 did not have. 15/15 concurrent real-process rounds now pass (was 13/15 FAIL in pass 1); shipped #[ignore]d race test's own 10 iterations also pass. PID reuse is the accepted residual (kept, swept later once the reusing PID also dies) -- not a new hole, same mechanism as the live-PID case. F9 (new): STILL_ACTIVE=259 cast ambiguity is unhandled (no WaitForSingleObject) but severity low -- only biases toward the same safe keep-it default already used elsewhere, and no PID this sweep ever evaluates (cargo test exit 0/101; a killed cmd/pause child) plausibly exits with 259. Counts flat over 3 runs, ignored-test census at 19 (was 18), full ci-local green (ci-local: all checks passed.). BUG-0083 candidate list (9 files) already folded into the packet's Handoff. Full evidence: docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0082-verify.md, Pass 2 section."` |
 
 The `notes` append preserves every prior entry; only a further append is proposed.
+
+---
+
+## Pass 3 (2026-09-29): acceptance rework for F9 (exit code 259), self-verified with implementation
+
+Subject: the rework applied on branch `fix/test-tempdirs-and-liveness` (this session), on top of
+`main @fcff0cf3` (which already includes pass 2's `8ddf10fc`).
+
+### What changed
+
+`process_is_alive` (`crates/vt/src/pty/windows/conpty.rs`) no longer reads `GetExitCodeProcess` /
+`STILL_ACTIVE` at all. `OpenProcess` now requests `PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION`,
+and liveness is decided with `WaitForSingleObject(handle, 0)`: `WAIT_OBJECT_0` (signaled) means dead,
+anything else (`WAIT_TIMEOUT` or `WAIT_FAILED`) means alive. This closes F9 exactly as that finding's
+"documented fix" section proposed: the process object's own signaled state, not its numeric exit code,
+now decides liveness, so a process that genuinely exited with the value `259` no longer collides with
+"still running."
+
+### Regression proof
+
+A new non-ignored test, `process_is_alive_reports_dead_for_a_process_that_exited_with_code_259`, spawns
+a real `cmd /c exit 259` child, waits for it (`status.code() == Some(259)` asserted first, so the test
+is meaningless unless the child really did exit 259), then calls the real `process_is_alive` against its
+PID:
+
+```
+test pty::windows::conpty::tests::process_is_alive_reports_dead_for_a_process_that_exited_with_code_259 ... ok
+```
+
+Confirmed by inspection (not re-run against the pre-rework code in this session, since the pre-rework
+source is not on this branch to build): on `main @fcff0cf3`'s `process_is_alive`, `GetExitCodeProcess`
+on this same exited child would return `259`, which equals `STILL_ACTIVE as u32`, so `still_active`
+would be `true` — the exact false-alive misclassification F9 named. `WaitForSingleObject` cannot make
+this mistake: it reports the kernel object's own signaled state, which is set at process termination
+regardless of the numeric exit code.
+
+### Full regression suite, still green
+
+`pty::windows::conpty::tests`: 16 passed, 0 failed, 1 ignored (`concurrent_bundled_host_race_does_not_spuriously_fail`,
+unaffected by this change, not re-run by hand this pass since the sweep's own liveness mechanism did
+not change — only the low-level signal used to decide it did). `is_stale`'s four unit tests,
+`sweep_keeps_a_sibling_named_after_a_live_pid`, `conpty_api_prefers_the_bundled_host`, and
+`conpty_api_falls_back_to_the_system_host` all still pass unmodified.
+
+### Static gates
+
+```
+$ cargo clippy -p oneterm-vt --all-targets -- -D warnings
+(exit 0)
+
+$ cargo fmt --all -- --check
+(exit 0)
+
+$ python scripts/check-ignored-tests.py
+check-ignored-tests: 19 ignored tests, all recorded
+
+$ python scripts/vt-public-api.py --check --no-doc   (fresh cargo doc -p oneterm-vt --no-deps --all-features)
+public API surface unchanged (public-api.windows.txt)
+
+$ python scripts/vt-public-api.py --diff-platforms
+(only the pre-existing 6-line pty delta; unchanged)
+
+$ (rustdoc self-containment check over crates/vt/src, python-based since rg is not installed on this
+   box) -- 0 hits: every BUG-0082 citation in the new code is a plain `//` line inside
+   `#[cfg(test)] mod tests`, never `///`/`//!`
+```
+
+### Gate
+
+Combined with `BUG-0083` (same branch, same session): see that packet's evidence for the full
+`pwsh scripts/ci-local.ps1` run covering both changes together.
+
+### What was not independently re-verified this pass
+
+This is the implementer's own self-verification recorded alongside the fix, not a separate verifier's
+pass (unlike passes 1 and 2). No second reviewer ran the concurrent two-process race probe or the F1a
+live-PID probe again, since neither mechanism changed in this rework — only `process_is_alive`'s
+internal decision procedure did, and that is covered by the new regression test plus the unchanged
+passing suite above.
