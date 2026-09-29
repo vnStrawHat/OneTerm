@@ -26,6 +26,7 @@ ext_memory_stays_bounded
 layout::workspace::layout_tests::an_elevated_window_never_reads_the_saved_layout
 layout::workspace::layout_tests::the_elevated_startup_path_yields_a_dock_state_with_no_right_dock
 layout::workspace::persistence::tests::an_elevated_window_writes_no_dock_layout
+pty::windows::conpty::tests::concurrent_bundled_host_race_does_not_spuriously_fail
 reflow::tests::resize_latency
 render::element::element_tests::frame_time_under_output
 render::shapes::shapes_tests::shape_bitmaps_for_visual_review

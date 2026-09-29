@@ -40,8 +40,19 @@ Created: 2026-09-29
 
 After this packet: none of the three families grow across repeated `cargo test` runs (measured
 below); the `oneterm-vt-pty-bundled-*` family is additionally self-healing — each new run sweeps
-away stale siblings left by earlier, by-now-exited test processes, so the pre-existing backlog on a
-developer machine drains on its own over normal use instead of needing a manual purge.
+away stale siblings left by earlier, provably-exited test processes, so the pre-existing backlog on
+a developer machine drains on its own over normal use instead of needing a manual purge.
+
+**Rework note (2026-09-29, second pass).** Independent verification
+(`docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0082-verify.md`) found the first pass's sweep
+(commit `a7854507`) unsafe: it deleted any same-prefix sibling directory by name alone, with no check
+that the PID in its name was actually dead. Two real concurrent `cargo test -p oneterm-vt` processes
+— exactly the shape of running several worktree agents on one machine, as this repository's own
+present setup often does — spuriously failed `conpty_api_prefers_the_bundled_host` in 13 of 15 runs
+(F1b), and a fake sibling named after a real live PID was deleted outright (F1a). This second pass
+adds a PID-liveness check (`OpenProcess` / `GetExitCodeProcess`) before a sibling is ever swept; see
+Context for the mechanism and why it also closes the create/load-DLL race, not just the two
+findings' reproduction cases.
 
 ## Reported by
 
@@ -53,7 +64,9 @@ packet's own verification.
 
 - [ ] In scope:
   - `crates/vt/src/pty/windows/conpty.rs` `#[cfg(test)] mod tests` — `scratch_directory` and its
-    two callers (`conpty_api_prefers_the_bundled_host`, `conpty_api_falls_back_to_the_system_host`).
+    two callers (`conpty_api_prefers_the_bundled_host`, `conpty_api_falls_back_to_the_system_host`);
+    the added `is_stale` (pure) and `process_is_alive` (real `OpenProcess`/`GetExitCodeProcess`)
+    helpers and their tests, including the `#[ignore]`d two-process race regression.
   - `crates/app/src/crash_report.rs` `#[cfg(test)] mod tests` — `temporary_directory` and every
     caller (ten tests; one, `deleting_a_report_outside_the_current_store_is_refused`, is the one
     that was actually leaking — the other nine already cleaned up manually, but manual cleanup
@@ -81,9 +94,15 @@ packet's own verification.
 - [x] Every directory removal is best-effort and runs on a panicking assertion too (`Drop`), except
       where a still-loaded DLL makes immediate removal impossible on Windows — that case is
       documented and deferred to the next process instead of silently accepted as unfixable.
+- [x] A sweep never removes a same-prefix sibling directory whose PID is a live process, checked
+      (not assumed): a fake sibling named after a real live PID survives (regression test), and two
+      genuinely concurrent processes running `conpty_api_prefers_the_bundled_host` never spuriously
+      fail each other (10/10 iterations of the `#[ignore]`d two-process race regression, run by
+      hand — this reproduced 13/15 failures before this pass; see Context).
 - [x] No new dependency added (`tempfile` is not in `oneterm-vt`, `oneterm-app`, or `oneterm-state`'s
       dependency graph as a direct dependency; a small RAII guard is used instead, matching the
-      pattern `crates/state/src/dock_persistence.rs` already used for its later tests).
+      pattern `crates/state/src/dock_persistence.rs` already used for its later tests; the liveness
+      check uses `windows-sys`' `Win32_System_Threading`, already an enabled workspace feature).
 - [x] Full CI-local gate passes.
 
 ## Documentation
@@ -131,17 +150,58 @@ for the life of the process"). Measured empirically on this machine: with only a
 `conpty.dll` is absent) stayed at 24. Windows will not remove a directory containing a file that is
 still mapped into a running process.
 
-**The fix actually used.** `scratch_directory` now sweeps stale same-`name` siblings (matched by the
-`oneterm-vt-pty-{name}-` prefix, excluding its own current-PID directory) out of the OS temp
-directory *before* creating its own. A sibling from an earlier test process is safe to remove
-unconditionally: that process has exited, so any DLL it loaded is already unloaded and the
-directory is unlocked. Combined with the existing best-effort `Drop`, this means: the `system`
-family is removed immediately (no locked file, `Drop` succeeds); the `bundled` family always has at
-most one directory standing (the current process's, removed by the very next process's sweep).
-Measured after the fix: `oneterm-vt-pty-bundled-*` dropped from 28 (all stale) to 1 on the very next
-run, and stayed at 1 across three more full-suite runs, `vt-paranoid`, `--no-default-features`, and
+**The fix actually used (first pass — superseded by the liveness check below).**
+`scratch_directory` sweeps stale same-`name` siblings (matched by the `oneterm-vt-pty-{name}-`
+prefix, excluding its own current-PID directory) out of the OS temp directory *before* creating its
+own. Combined with the existing best-effort `Drop`, this means: the `system` family is removed
+immediately (no locked file, `Drop` succeeds); the `bundled` family always has at most one directory
+standing (the current process's, removed by the very next process's sweep). Measured after the fix:
+`oneterm-vt-pty-bundled-*` dropped from 28 (all stale) to 1 on the very next run, and stayed at 1
+across three more full-suite runs, `vt-paranoid`, `--no-default-features`, and
 `--test-threads=1`/`=8`. This also means the fix is self-healing for the owner's existing backlog —
 it does not require a manual purge of `%LOCALAPPDATA%\Temp`.
+
+**Why "a sibling is safe to remove because that process has exited" was wrong as written.** The first
+pass asserted this but never checked it: the sweep matched on name alone (same prefix, not the
+sweeper's own current-PID name), so *any* same-prefix directory was removed regardless of whether its
+owning process was still running. It happened to be safe for the steady-state, single-process-at-a-
+time case this packet's own before/after counts exercised, but independent verification
+(`evidence/BUG-0082-verify.md`, findings F1/F1a/F1b) found it unsafe under real concurrency:
+
+* **F1a** — a directory named after a real, running, unrelated process's PID was deleted outright.
+* **F1b** — two genuinely concurrent OS processes each running `conpty_api_prefers_the_bundled_host`
+  produced a spurious `assert_eq!` panic in 13 of 15 runs: process A creates its directory and starts
+  staging `conpty.dll`; before A calls `LoadLibraryW` (the only thing that would have made the first
+  pass's directory-locked accident protect it), B's sweep runs, sees A's directory as an unrecognized
+  same-prefix sibling, and removes it. `resolve_in` then falls back to `System`, and A's own assertion
+  (`assert_eq!(..., Bundled)`) fails. This repository's own present working setup — several
+  `worktree-agent-*` branches, i.e. multiple concurrent Claude Code sessions building and testing the
+  same crate on one physical Windows machine, each with `%LOCALAPPDATA%\Temp` in common — is exactly
+  this shape.
+
+**The fix now used: liveness, not name-matching alone.** Before a same-prefix sibling is removed, its
+trailing PID is parsed out of the name (`is_stale`, a pure function taking an injected `alive: impl
+Fn(u32) -> bool`, unit-tested directly with no real OS process involved) and checked against a real
+liveness probe (`process_is_alive`): `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, ...)` fails with
+`ERROR_INVALID_PARAMETER` (no such process), or it succeeds but `GetExitCodeProcess` reports anything
+other than `STILL_ACTIVE` (the process object still exists but has already exited). Any other
+`OpenProcess` failure (for example `ERROR_ACCESS_DENIED`) answers "alive" — the safe direction when
+liveness genuinely cannot be determined. A name that does not parse as `<prefix><u32>` is left alone;
+so is the sweeper's own current-PID name, unconditionally (it does not even ask `alive`, which
+matters for the regression test that injects an always-"dead" liveness function). No new dependency:
+`Win32_System_Threading` (`OpenProcess`, `GetExitCodeProcess`) is already an enabled workspace
+`windows-sys` feature (added for `US-0137`'s `GetProcessMemoryInfo`), and `windows-sys` is already an
+optional dependency of `oneterm-vt` under the `pty` feature.
+
+**Why this also closes the create/load-DLL race, not just the two reproduction cases.** F1b's root
+cause was never really about `LoadLibraryW` specifically — that was only ever an *accidental* protection
+that happened to exist after the DLL load completed, and never before it. Once the sweep asks "is this
+PID alive" instead of "is this name mine," the window between `create_dir_all` and `LoadLibraryW`
+stops mattering: a live process's directory is skipped by any peer's sweep the instant it exists
+(`create_dir_all` succeeding *is* the claim — a directory whose name embeds a live PID unconditionally
+survives everyone else's sweep, at every stage of that PID's setup, DLL loaded or not). Verified: the
+same two-process race that failed 13/15 times before this pass now passes 10/10 (regression test
+`concurrent_bundled_host_race_does_not_spuriously_fail`, run by hand — see Verification Plan).
 
 **Why the other two families needed no such workaround.** Neither `crash_report.rs`'s
 `temporary_directory` nor `dock_persistence.rs`'s tests load anything that keeps a file handle open
@@ -165,17 +225,12 @@ existing helper instead of building their own `std::env::temp_dir().join(...)` p
 
 **Other `std::env::temp_dir()` users checked and left alone (BUG-0083 candidates).** Grepped every
 `std::env::temp_dir()` call in `crates/` (Grep tool; `rg` is not installed on this box) and checked
-each file for an existing `Drop`-based guard. Most already have one (`session-ui/src/session_state.rs`,
-`sftp-ui/src/test_backend.rs`, `ssh/src/sftp_task/handle_limit_tests.rs`,
-`ssh/src/sftp_task/transfer/in0037_verify_tests.rs`, `workspace/src/layout/workspace/layout_tests.rs`,
-`workspace/src/layout/workspace/persistence.rs`) and are not candidates. Two do not and have the same
-latent-panic-leak shape `crash_report.rs` had before this packet (manual `remove_dir_all` as the last
-statement of each test, so an earlier failing assertion skips it):
-  - `crates/settings/src/ui_config.rs:293,341,366,381,405,431` (three tests)
-  - `crates/settings/src/terminal_config/document_tests.rs:199,229,237,252,257,275` (three tests)
-Neither was in the owner's report — nothing here indicates either is actually leaking today — so
-both are out of scope for this packet (see Scope) and are listed here only as a starting point if
-`BUG-0083` is opened to convert them to the same guard pattern pre-emptively.
+each file for an existing `Drop`-based guard; two lacked one
+(`settings/src/ui_config.rs`, `settings/src/terminal_config/document_tests.rs`). Independent
+verification (`evidence/BUG-0082-verify.md`, finding F5) cross-referenced the same grep against every
+file containing `impl Drop for` and found this list incomplete — seven more unguarded, test-only,
+same-shape users. The complete candidate list (nine files) is recorded once, in Handoff, rather than
+duplicated here.
 
 ## Plan
 
@@ -192,6 +247,22 @@ both are out of scope for this packet (see Scope) and are listed here only as a 
       impl provides).
 - [x] Verify before/after directory counts per crate/run configuration (see Evidence).
 - [x] Run the full local CI gate.
+
+**Rework (second pass, after `evidence/BUG-0082-verify.md` FAIL):**
+
+- [x] Add a pure `is_stale(name, prefix, current_pid, alive: impl Fn(u32) -> bool) -> bool` helper
+      and a real `process_is_alive(pid) -> bool` (`OpenProcess` + `GetExitCodeProcess`); wire the
+      sweep to use them instead of name-matching alone.
+- [x] Unit-test `is_stale` directly (live PID kept, dead PID removed, own PID kept regardless of
+      `alive`, unparsable name kept).
+- [x] Add a non-ignored regression test that a sibling named after a real live PID (a spawned
+      `cmd /c pause` child this test controls and later kills) survives the sweep.
+- [x] Add an `#[ignore]`d regression test that spawns two concurrent processes of this same test
+      binary running only `conpty_api_prefers_the_bundled_host`, ten times, and requires 0 failures;
+      record it in `scripts/ignored-tests.txt` via `check-ignored-tests.py --write`.
+- [x] Re-verify directory counts flat, re-run the full configuration matrix, run the new ignored
+      race test by hand, and re-run the full CI gate.
+- [x] Fold the verifier's complete BUG-0083 candidate list (F5) into Handoff.
 
 ## Decisions
 
@@ -215,6 +286,14 @@ documented in Context and in the code comments at each guard.
   counts before/after.
 - `cargo test -p oneterm-state --lib -- dock_persistence` x3, comparing `oneterm-dock-*` counts
   before/after.
+- `cargo test -p oneterm-vt --lib -- --ignored concurrent_bundled_host_race`, run by hand once
+  (10 internal iterations, 0 failures required — this is the F1b regression check).
+- `python scripts/check-ignored-tests.py --write` to record the new ignored test, then
+  `python scripts/check-ignored-tests.py` clean.
+- `python scripts/vt-public-api.py --check --no-doc` / `--diff-platforms` after a fresh
+  `cargo doc -p oneterm-vt --no-deps --all-features`.
+- The rustdoc self-containment grep over `crates/vt/src` (no `US-`/`BUG-`/`DEC-`/`IN-` citation or
+  bare `crates/`/`docs/` path in a `///`/`//!` line).
 - Full `pwsh scripts/ci-local.ps1`.
 
 ## Evidence and Gaps
@@ -236,19 +315,70 @@ time the sweep ran, because it cleaned up the historical backlog too.
 **Test results:** every `cargo test` invocation above reported `0 failed`. Full counts are in this
 session's tool transcript; not reproduced here.
 
-**Gate:** `pwsh scripts/ci-local.ps1` — final line recorded below once run to completion for this
-packet's changes (see commit message / handoff for the actual pasted line).
+**Independent verification, first pass: FAIL.** `docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0082-verify.md`
+(commit `326bc389`) found the first pass's sweep unsafe under real concurrency (F1/F1a/F1b — see
+Context for the mechanism and the fix). Everything else in that verification passed: `Drop`-on-panic
+correct (F2), no other `.join()`-off-a-temporary chaining bug (F3), counts flat across the specified
+configuration matrix (F4), sweep is best-effort and does not panic on a locked sibling (F6), no new
+dependency (F7), public API / rustdoc / fmt / ignored-test census / `--no-default-features` all pass
+(F8). F5 (BUG-0083 candidate list incomplete) is folded into Handoff below.
+
+**Second pass, re-verification (this session):**
+
+| Check | Result |
+| --- | --- |
+| `is_stale` unit tests (4 cases) | PASS |
+| `sweep_keeps_a_sibling_named_after_a_live_pid` (real live child PID) | PASS |
+| `concurrent_bundled_host_race_does_not_spuriously_fail`, run by hand (`--ignored`) | PASS — 10/10 iterations, 0 failures (was 13/15 *failures* before this pass) |
+| `oneterm-vt-pty-bundled-*` / `-system-*` counts, x3 runs | flat at 1 / 0 |
+| `cargo test -p oneterm-vt` default / `vt-paranoid` / `--no-default-features` | PASS, 0 failed each |
+| `python scripts/vt-public-api.py --check --no-doc` / `--diff-platforms` (fresh `cargo doc`) | unchanged |
+| Rustdoc self-containment grep (`crates/vt/src`) | clean |
+| `python scripts/check-ignored-tests.py --write` then plain | recorded 19 ignored tests, then clean |
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy -p oneterm-vt --all-targets -- -D warnings` | PASS |
+| `python scripts/check-doc-paths.py` | PASS (212 paths, 11 documents) |
+| `python scripts/check-english.py` | PASS (1083 files) |
+| Full `pwsh scripts/ci-local.ps1`, `CARGO_BUILD_JOBS=4`, `target/debug/incremental` deleted first | PASS — final line: `ci-local: all checks passed.` |
 
 **Gaps:**
 - No CI runner run of this fix (Windows-only; verified on this developer machine only). The
   `oneterm-vt` pty code is `#[cfg(windows)]`-only, so CI's Windows job is the only place this can
   run in CI, and this packet was not pushed as part of this session.
 - `harness.db` was not touched (see Status). Status/proof are hand-maintained here.
-- BUG-0083 candidates (see Context) are unverified; none were run in isolation to check whether they
+- The concurrency regression test is `#[ignore]`d (it forks two child processes ten times and takes a
+  few seconds), so it does not run in the default gate; it must be run explicitly (see Verification
+  Plan) whenever this sweep changes again.
+- BUG-0083 candidates (see Handoff) are unverified; none were run in isolation to check whether they
   leak, since the owner's report did not include them and this packet keeps to the reported scope.
 
 ## Handoff
 
-Implemented and verified in this session. Branch `fix/vt-pty-test-tempdir`, not pushed. Next owner:
-whoever pushes/opens the PR should also decide whether to open `BUG-0083` for the candidates listed
-in Context, or drop them.
+Implemented and re-verified in this session after a FAIL / rework cycle. Branch
+`fix/vt-pty-test-tempdir`; first pass `a7854507`, verification `326bc389` (FAIL, evidence at
+`docs/spec-intakes/IN-0029-vt-engine/evidence/BUG-0082-verify.md`), rework on top in one further
+commit. Not pushed.
+
+**BUG-0083 candidates (complete list — first pass named 2, independent verification's F5 found 7
+more).** Every file below uses `std::env::temp_dir()` in test code with no `Drop`-based guard, the
+same latent-panic-leak shape this packet fixed for `crash_report.rs` and `dock_persistence.rs`: none
+were run in isolation to confirm an actual leak (same caveat both passes already record), so this is
+a starting point for whoever opens `BUG-0083`, not a proven leak list.
+
+- `crates/settings/src/ui_config.rs` (three tests)
+- `crates/settings/src/terminal_config/document_tests.rs` (three tests)
+- `crates/app/src/native_crash.rs:242` — `fs::remove_file(path).expect(...)` as the last statement
+  (one file, not a directory tree, leaks on an earlier panic)
+- `crates/session-ui/src/auth_form.rs:469` — same shape, one file
+- `crates/core/src/config/shell.rs` — test module using `temp_dir()`, no `impl Drop` in the file
+- `crates/ssh/src/agent_tests.rs`, `crates/ssh/src/route_tests.rs`, `crates/ssh/src/tunnel_tests.rs`
+  — no `impl Drop` in any of the three, unlike sibling files in the same crate that already have one
+  (`handler_tests.rs`, `keyfile_tests.rs`, `test_support.rs`, `sftp_task/handle_limit_tests.rs`,
+  `sftp_task/transfer/in0037_verify_tests.rs`, `sftp_task/transfer/pipeline_budget_tests.rs`,
+  `us0095_verify_tests.rs`) — the crate is inconsistent, not uniformly exposed
+- `crates/update/src/config.rs` — no `impl Drop` in the file (its siblings `archive_tests.rs` and
+  `manager_tests.rs` in the same crate do have one)
+
+Next owner: whoever pushes/opens the PR should also decide whether to open `BUG-0083` for this list,
+or drop it. If the sweep in `conpty.rs` changes again, re-run the `#[ignore]`d
+`concurrent_bundled_host_race_does_not_spuriously_fail` by hand — it is not in the default gate.

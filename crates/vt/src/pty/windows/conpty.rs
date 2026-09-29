@@ -471,6 +471,11 @@ fn push_entry(block: &mut Vec<u16>, key: &OsStr, value: &OsStr) {
 
 #[cfg(test)]
 mod tests {
+    use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, GetLastError, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
     use super::*;
 
     /// The `conpty.dll` OneTerm ships, so the preference is tested against the
@@ -492,7 +497,7 @@ mod tests {
     // Windows a directory holding a currently-loaded DLL cannot be
     // removed (verified: this `Drop` alone left one new directory behind
     // per run). It is harmless to defer: `scratch_directory` sweeps stale
-    // siblings from earlier, by-now-exited processes on its way in, so
+    // siblings from earlier, provably-exited processes on its way in, so
     // the directory this Drop cannot remove today is removed on the next
     // test run instead. Only that one directory (the current process's)
     // is ever left standing at a time.
@@ -512,20 +517,76 @@ mod tests {
         }
     }
 
+    // Whether a same-prefix sibling directory is safe to remove: its trailing
+    // PID no longer names a live process. `alive` is injected so this
+    // decision is unit-tested without touching real OS processes; production
+    // code passes `process_is_alive` below.
+    //
+    // A name that is not `<prefix><u32>` is left alone -- it is not a
+    // directory this code owns, so it is never a removal candidate. Neither
+    // is `current_pid`'s own name: it is definitionally alive for the whole
+    // time this function can run against it, so it is always kept regardless
+    // of what `alive` answers (guards a PID-reuse edge case in tests that
+    // inject a liveness function returning `false` unconditionally).
+    fn is_stale(name: &str, prefix: &str, current_pid: u32, alive: impl Fn(u32) -> bool) -> bool {
+        let Some(suffix) = name.strip_prefix(prefix) else {
+            return false;
+        };
+        let Ok(pid) = suffix.parse::<u32>() else {
+            return false;
+        };
+        pid != current_pid && !alive(pid)
+    }
+
+    // True only if `pid` is provably no longer a live process: `OpenProcess`
+    // fails with `ERROR_INVALID_PARAMETER` (no such process), or it succeeds
+    // but `GetExitCodeProcess` reports something other than `STILL_ACTIVE`
+    // (the process object still exists but has already exited). Any other
+    // `OpenProcess` failure (for example `ERROR_ACCESS_DENIED` against a
+    // process owned by another user) answers "alive": the safe direction
+    // when liveness cannot actually be determined. `Win32_System_Threading`
+    // is already an enabled `windows-sys` feature (`Cargo.toml`, for
+    // `GetProcessMemoryInfo`), so this needs no new dependency.
+    fn process_is_alive(pid: u32) -> bool {
+        // SAFETY: FFI call with no pointer arguments; `pid` is a plain value.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            // SAFETY: called immediately after the failing call above, before
+            // any other API that could change the last-error value.
+            return unsafe { GetLastError() } != ERROR_INVALID_PARAMETER;
+        }
+        let mut exit_code = 0u32;
+        // SAFETY: `handle` was just returned by `OpenProcess` above and is
+        // valid; `exit_code` is a valid out-parameter for this one call.
+        let still_active = unsafe {
+            GetExitCodeProcess(handle, &mut exit_code) != 0 && exit_code == STILL_ACTIVE as u32
+        };
+        // SAFETY: `handle` is the same handle `OpenProcess` returned above,
+        // not used again after this call, and closed exactly once.
+        unsafe { CloseHandle(handle) };
+        still_active
+    }
+
     fn scratch_directory(name: &str) -> ScratchDirectory {
         let base = std::env::temp_dir();
         let prefix = format!("oneterm-vt-pty-{name}-");
-        let current_name = format!("{prefix}{}", std::process::id());
+        let current_pid = std::process::id();
+        let current_name = format!("{prefix}{current_pid}");
 
         // Sweep siblings left by earlier test processes before creating this
-        // one. Their PID has since exited, so any DLL they loaded from
-        // inside is unloaded and the directory is free to remove now.
+        // one, skipping any whose PID is still alive. A live sibling's
+        // directory is never swept regardless of how far into its own setup
+        // it is -- including the window between `create_dir_all` and
+        // `LoadLibraryW` -- because liveness alone decides, not whether the
+        // DLL happens to be loaded yet (BUG-0082 F1/F1b: the earlier,
+        // unconditional sweep deleted a live peer's just-created directory
+        // in exactly that window).
         if let Ok(entries) = std::fs::read_dir(&base) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 if name
                     .to_str()
-                    .is_some_and(|name| name.starts_with(&prefix) && name != current_name.as_str())
+                    .is_some_and(|name| is_stale(name, &prefix, current_pid, process_is_alive))
                 {
                     let _ = std::fs::remove_dir_all(entry.path());
                 }
@@ -535,6 +596,131 @@ mod tests {
         let directory = base.join(&current_name);
         std::fs::create_dir_all(&directory).expect("scratch directory");
         ScratchDirectory(directory)
+    }
+
+    #[test]
+    fn is_stale_keeps_a_sibling_whose_pid_is_still_alive() {
+        assert!(!is_stale(
+            "oneterm-vt-pty-bundled-4242",
+            "oneterm-vt-pty-bundled-",
+            9999,
+            |_| true
+        ));
+    }
+
+    #[test]
+    fn is_stale_removes_a_sibling_whose_pid_has_exited() {
+        assert!(is_stale(
+            "oneterm-vt-pty-bundled-4242",
+            "oneterm-vt-pty-bundled-",
+            9999,
+            |_| false
+        ));
+    }
+
+    #[test]
+    fn is_stale_keeps_its_own_pid_even_if_the_liveness_check_would_say_dead() {
+        // A liveness function that always answers "dead" would still be
+        // wrong about the current process (it is, by definition, running
+        // this code); the own-PID check does not even ask.
+        assert!(!is_stale(
+            "oneterm-vt-pty-bundled-4242",
+            "oneterm-vt-pty-bundled-",
+            4242,
+            |_| false
+        ));
+    }
+
+    #[test]
+    fn is_stale_keeps_a_name_that_does_not_parse_as_prefix_plus_pid() {
+        assert!(!is_stale(
+            "oneterm-vt-pty-bundled-not-a-pid",
+            "oneterm-vt-pty-bundled-",
+            9999,
+            |_| true
+        ));
+        assert!(!is_stale(
+            "some-unrelated-directory",
+            "oneterm-vt-pty-bundled-",
+            9999,
+            |_| true
+        ));
+    }
+
+    // BUG-0082 F1/F1a regression: a sibling directory named after a real,
+    // live process's PID must survive `scratch_directory`'s sweep. Uses a
+    // `cmd /c pause` child this test spawns and controls (rather than a
+    // fake/simulated liveness answer) so the check exercises the real
+    // `process_is_alive` FFI path end to end, not just `is_stale`'s pure
+    // logic (already covered above).
+    #[test]
+    fn sweep_keeps_a_sibling_named_after_a_live_pid() {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "pause"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn a live child process");
+        let live_pid = child.id();
+
+        // The family name embeds `live_pid` too, so this test's sweep
+        // (scoped to its own prefix) can never collide with another test's
+        // `bundled`/`system` family or with another concurrent run of this
+        // same test on the same machine.
+        let family = format!("sweep-liveness-test-{live_pid}");
+        let sibling = std::env::temp_dir().join(format!("oneterm-vt-pty-{family}-{live_pid}"));
+        std::fs::create_dir_all(&sibling).expect("fake sibling directory");
+
+        let own = scratch_directory(&family);
+
+        assert!(
+            sibling.exists(),
+            "a sibling directory named after a live PID must not be swept"
+        );
+
+        drop(own);
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&sibling);
+    }
+
+    // BUG-0082 F1b regression: two processes racing `scratch_directory` for
+    // the same family must never sweep each other's live, just-created
+    // directory. Spawns this test binary as two concurrent child processes
+    // running only `conpty_api_prefers_the_bundled_host`, ten times, and
+    // requires both to pass every time (before the liveness check, this
+    // failed 13 of 15 real iterations -- see the packet's verify evidence).
+    // `#[ignore]`d: it takes several seconds and forks child processes.
+    // Run explicitly:
+    // `cargo test -p oneterm-vt --lib -- --ignored concurrent_bundled_host_race`.
+    #[test]
+    #[ignore = "spawns two concurrent child test processes 10x (BUG-0082 F1b regression)"]
+    fn concurrent_bundled_host_race_does_not_spuriously_fail() {
+        let exe = std::env::current_exe().expect("test binary path");
+        for iteration in 0..10 {
+            let spawn = || {
+                std::process::Command::new(&exe)
+                    .args([
+                        "conpty_api_prefers_the_bundled_host",
+                        "--exact",
+                        "--test-threads=1",
+                    ])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .expect("spawn concurrent test process")
+            };
+            let mut a = spawn();
+            let mut b = spawn();
+            let status_a = a.wait().expect("wait for process A");
+            let status_b = b.wait().expect("wait for process B");
+            assert!(
+                status_a.success() && status_b.success(),
+                "iteration {iteration}: two concurrent bundled-host runs must both pass, \
+                 got A={status_a:?} B={status_b:?}"
+            );
+        }
     }
 
     // `DEC-0013`: this is the test that stops a refactor from quietly turning
