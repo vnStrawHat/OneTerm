@@ -8,10 +8,12 @@
 //! itself when the operation succeeds.
 //!
 //! **Memory limit (documented, `IN-0050` Security Analysis 4):** gpui's
-//! `InputState` holds its text as a `SharedString`, which cannot be zeroized.
-//! The text is copied into a [`SecretString`] once at submit, a rejected
-//! password is cleared from its input (`set_value` also clears the undo
-//! history), and the inputs are dropped with the dialog.
+//! `InputState` keeps its text in a rope that cannot be zeroized. At submit
+//! each field is copied out of the rope exactly once, straight into a
+//! [`SecretString`] (zeroized on drop); the strength hint only counts
+//! characters and copies nothing. A rejected password is cleared from its
+//! input (`set_value` also clears the undo history), and the inputs are dropped
+//! with the dialog.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -26,6 +28,7 @@ use gpui_component::{
     ActiveTheme as _, Disableable as _, IconName, WindowExt as _,
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
+    notification::NotificationType,
     v_flex,
 };
 use oneterm_core::SecretString;
@@ -34,6 +37,9 @@ use crate::form_dialog::{FieldRequirement, FormDialog, labelled_field};
 use crate::vault_state::{
     MIN_PASSWORD_CHARS, VaultActionError, VaultPhase, VaultState, retry_message,
 };
+
+/// Why an elevated window offers no set-up, change or reset (`DEC-0019` M4).
+pub const READ_ONLY_NOTE: &str = "Managed from the normal OneTerm window.";
 
 /// What the Reset dialog asks the user to type.
 pub const RESET_CONFIRMATION: &str = "RESET";
@@ -66,7 +72,8 @@ pub fn open_reset_dialog(window: &mut Window, cx: &mut App) {
 /// Run `on_ready` once the vault is unlocked: at once when it already is,
 /// after the Unlock dialog when it is locked, after the Set up dialog when no
 /// master password exists. Cancelling the dialog runs nothing; so does an
-/// unavailable vault, whose reason the caller shows.
+/// unavailable vault, whose reason the caller shows. An elevated window with no
+/// vault says where to set one up instead of offering a set-up it would refuse.
 pub fn ensure_unlocked(
     window: &mut Window,
     cx: &mut App,
@@ -75,18 +82,27 @@ pub fn ensure_unlocked(
     let Some(state) = VaultState::try_global(cx) else {
         return;
     };
-    match state.read(cx).phase() {
+    let state = state.read(cx);
+    match state.phase() {
         VaultPhase::Unlocked => on_ready(window, cx),
         VaultPhase::Locked => open(DialogKind::Unlock, Some(Box::new(on_ready)), window, cx),
+        VaultPhase::Uninitialised if state.is_read_only() => window.push_notification(
+            (
+                NotificationType::Warning,
+                format!("No master password is set up. {READ_ONLY_NOTE}"),
+            ),
+            cx,
+        ),
         VaultPhase::Uninitialised => open(DialogKind::SetUp, Some(Box::new(on_ready)), window, cx),
         VaultPhase::Unavailable => {}
     }
 }
 
 /// The length-based strength hint under a new master password (intake Q8: no
-/// composition rules). `None` while the field is empty.
-pub(crate) fn strength_hint(password: &str) -> Option<String> {
-    let hint = match password.chars().count() {
+/// composition rules), from the password's length in characters. `None` while
+/// the field is empty.
+pub(crate) fn strength_hint(chars: usize) -> Option<String> {
+    let hint = match chars {
         0 => return None,
         n if n < MIN_PASSWORD_CHARS => {
             format!("Too short: use at least {MIN_PASSWORD_CHARS} characters.")
@@ -274,33 +290,38 @@ impl VaultForm {
         let Some(state) = VaultState::try_global(cx) else {
             return;
         };
-        let values: Vec<SharedString> = self
+        // One copy per field, straight from the rope into a zeroizing string.
+        let mut values: Vec<SecretString> = self
             .inputs
             .iter()
-            .map(|input| input.read(cx).value())
+            .map(|input| SecretString::new(input.read(cx).text().to_string()))
             .collect();
         let task = match self.kind {
             DialogKind::SetUp => {
-                if let Err(message) = validate_new_password(&values[0], &values[1]) {
+                if let Err(message) =
+                    validate_new_password(values[0].expose_secret(), values[1].expose_secret())
+                {
                     return self.show_error(message, cx);
                 }
-                let password = SecretString::new(values[0].to_string());
+                let password = values.swap_remove(0);
                 state.update(cx, |state, cx| state.set_up(password, cx))
             }
             DialogKind::Unlock => {
-                let password = SecretString::new(values[0].to_string());
+                let password = values.swap_remove(0);
                 state.update(cx, |state, cx| state.unlock(password, cx))
             }
             DialogKind::Change => {
-                if let Err(message) = validate_new_password(&values[1], &values[2]) {
+                if let Err(message) =
+                    validate_new_password(values[1].expose_secret(), values[2].expose_secret())
+                {
                     return self.show_error(message, cx);
                 }
-                let old = SecretString::new(values[0].to_string());
-                let new = SecretString::new(values[1].to_string());
+                let new = values.swap_remove(1);
+                let old = values.swap_remove(0);
                 state.update(cx, |state, cx| state.change_password(old, new, cx))
             }
             DialogKind::Reset => {
-                if values[0].trim() != RESET_CONFIRMATION {
+                if values[0].expose_secret().trim() != RESET_CONFIRMATION {
                     return self.show_error(format!("Type {RESET_CONFIRMATION} to confirm."), cx);
                 }
                 state.update(cx, |state, cx| state.reset(cx))
@@ -413,7 +434,7 @@ impl Render for VaultForm {
             .enumerate()
             .map(|(index, (field, input))| {
                 let hint = (new_field == Some(index))
-                    .then(|| strength_hint(&input.read(cx).value()))
+                    .then(|| strength_hint(input.read(cx).text().len_chars()))
                     .flatten();
                 let mut control = Input::new(input).disabled(self.busy);
                 if field.masked {
@@ -498,22 +519,12 @@ mod tests {
 
     #[test]
     fn the_strength_hint_follows_length_only() {
-        assert_eq!(strength_hint(""), None);
-        assert!(strength_hint("short").unwrap().contains("at least 8"));
-        assert!(strength_hint("abcdefgh").unwrap().contains("fair"));
-        // No composition rules: twelve of one letter is as good as any twelve.
-        assert!(strength_hint("aaaaaaaaaaaa").unwrap().contains("good"));
-        assert!(
-            strength_hint("correct horse battery")
-                .unwrap()
-                .contains("strong")
-        );
-        // Characters, not bytes: eight accented letters are long enough.
-        assert!(
-            strength_hint("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}")
-                .unwrap()
-                .contains("fair")
-        );
+        assert_eq!(strength_hint(0), None);
+        assert!(strength_hint(5).unwrap().contains("at least 8"));
+        assert!(strength_hint(8).unwrap().contains("fair"));
+        // No composition rules: only the length counts.
+        assert!(strength_hint(12).unwrap().contains("good"));
+        assert!(strength_hint(21).unwrap().contains("strong"));
     }
 
     #[test]

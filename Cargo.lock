@@ -5622,6 +5622,7 @@ dependencies = [
 name = "oneterm-state"
 version = "0.6.8"
 dependencies = [
+ "futures",
  "gpui-base",
  "gpui-component",
  "gpui-pre",

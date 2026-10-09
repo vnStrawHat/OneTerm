@@ -11,13 +11,15 @@
 //! OneTerm) cannot open this process (`idle-lock-overlay.md`, edge cases). The
 //! cost: a password changed in another process is picked up at the next start.
 //!
-//! Each operation returns a `Task` that applies its result to the state when
-//! it completes. Await it or detach it: a gpui task is cancelled on drop, which
-//! would leave the state busy.
+//! Each operation applies its result to the state in a step the state
+//! detaches itself; the `Task` a caller receives only carries the answer, so
+//! dropping it never leaves the state busy. A lock asked for while an
+//! operation runs wins: the operation's result never puts a key back.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use futures::channel::oneshot;
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Global, Task};
 use oneterm_core::SecretString;
 use oneterm_vault::{UnlockedVault, VaultError, VaultHeader, VaultStatus};
@@ -71,6 +73,9 @@ pub enum VaultActionError {
     /// The operation does not apply to the current phase (another window
     /// changed it first).
     WrongPhase,
+    /// The password was right, but OneTerm was locked while it was checked,
+    /// and the lock wins.
+    LockedMeanwhile,
 }
 
 impl VaultActionError {
@@ -94,6 +99,9 @@ impl VaultActionError {
             Self::Vault(other) => format!("The master password operation failed: {other}."),
             Self::RetryIn(wait) => retry_message(*wait),
             Self::Busy => "Another master password operation is still running.".to_owned(),
+            Self::LockedMeanwhile => {
+                "OneTerm was locked while the password was checked. Unlock again.".to_owned()
+            }
             Self::WrongPhase => {
                 "The master password changed in the meantime. Close this dialog and try again."
                     .to_owned()
@@ -155,6 +163,8 @@ pub struct VaultState {
     retry_at: Option<Instant>,
     /// One master-password operation at a time.
     busy: bool,
+    /// A lock was asked for while the running operation ran.
+    locked_meanwhile: bool,
 }
 
 impl EventEmitter<VaultEvent> for VaultState {}
@@ -202,6 +212,7 @@ impl VaultState {
             failures: 0,
             retry_at: None,
             busy: false,
+            locked_meanwhile: false,
         }
     }
 
@@ -265,7 +276,8 @@ impl VaultState {
         }
     }
 
-    /// Set up a master password: Uninitialised -> Unlocked.
+    /// Set up a master password: Uninitialised -> Unlocked (Locked when a lock
+    /// was asked for while it ran).
     pub fn set_up(
         &mut self,
         password: SecretString,
@@ -274,14 +286,12 @@ impl VaultState {
         if let Err(error) = self.check_write(matches!(self.phase, Phase::Uninitialised)) {
             return Task::ready(Err(error));
         }
-        self.start(cx);
         let dir = self.dir.clone();
-        let work = cx.background_spawn(async move { create_vault(&dir, &password) });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            this.update(cx, |state, cx| state.finish_set_up(result, cx))
-                .unwrap_or(Err(VaultActionError::WrongPhase))
-        })
+        self.run(
+            cx,
+            async move { create_vault(&dir, &password) },
+            Self::finish_set_up,
+        )
     }
 
     /// Unlock with `password`, verified against the header held in memory:
@@ -299,20 +309,19 @@ impl VaultState {
         if let Err(error) = self.check_attempt() {
             return Task::ready(Err(error));
         }
-        self.start(cx);
-        let work = cx.background_spawn(async move {
-            // The password goes back with the vault: the rehash needs it.
-            oneterm_vault::unlock(&header, &password).map(|vault| (vault, password))
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            this.update(cx, |state, cx| state.finish_unlock(result, cx))
-                .unwrap_or(Err(VaultActionError::WrongPhase))
-        })
+        self.run(
+            cx,
+            async move {
+                // The password goes back with the vault: the rehash needs it.
+                oneterm_vault::unlock(&header, &password).map(|vault| (vault, password))
+            },
+            Self::finish_unlock,
+        )
     }
 
-    /// Change the master password (Locked or Unlocked -> Unlocked). `old` is
-    /// checked against the header held in memory.
+    /// Change the master password (Locked or Unlocked -> Unlocked; stays
+    /// Locked when a lock was asked for while it ran). `old` is checked against
+    /// the header held in memory.
     pub fn change_password(
         &mut self,
         old: SecretString,
@@ -328,18 +337,21 @@ impl VaultState {
         let Some(header) = self.header().cloned() else {
             return Task::ready(Err(VaultActionError::WrongPhase));
         };
-        self.start(cx);
         let dir = self.dir.clone();
-        let work = cx.background_spawn(async move { rewrap(&dir, &header, &old, &new) });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            this.update(cx, |state, cx| state.finish_change(result, cx))
-                .unwrap_or(Err(VaultActionError::WrongPhase))
-        })
+        self.run(
+            cx,
+            async move { rewrap(&dir, &header, &old, &new) },
+            Self::finish_change,
+        )
     }
 
-    /// Drop the key: Unlocked -> Locked. Does nothing in any other phase.
+    /// Drop the key: Unlocked -> Locked. While an operation runs, the request
+    /// is also remembered, and the operation's result never puts a key back
+    /// (a lock taken meanwhile wins, whatever the phase was).
     pub fn lock(&mut self, cx: &mut Context<Self>) {
+        if self.busy {
+            self.locked_meanwhile = true;
+        }
         let Phase::Unlocked(vault) = &self.phase else {
             return;
         };
@@ -351,23 +363,22 @@ impl VaultState {
 
     /// Remove `vault.json` and its backup -> Uninitialised. [`VaultEvent::Reset`]
     /// is emitted first so owners wipe their sealed values; the key is dropped
-    /// at once.
+    /// at once. If the removal then fails the state stays Locked: owners must
+    /// wipe idempotently and not assume Uninitialised follows `Reset`.
     pub fn reset(&mut self, cx: &mut Context<Self>) -> Task<Result<(), VaultActionError>> {
         if let Err(error) = self.check_write(self.can_reset()) {
             return Task::ready(Err(error));
         }
-        self.start(cx);
         if let Phase::Unlocked(vault) = &self.phase {
             self.phase = Phase::Locked(vault.header().clone());
         }
         cx.emit(VaultEvent::Reset);
         let dir = self.dir.clone();
-        let work = cx.background_spawn(async move { oneterm_vault::reset(&dir) });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            this.update(cx, |state, cx| state.finish_reset(result, cx))
-                .unwrap_or(Err(VaultActionError::WrongPhase))
-        })
+        self.run(
+            cx,
+            async move { oneterm_vault::reset(&dir) },
+            Self::finish_reset,
+        )
     }
 
     fn header(&self) -> Option<&VaultHeader> {
@@ -401,9 +412,43 @@ impl VaultState {
         }
     }
 
-    fn start(&mut self, cx: &mut Context<Self>) {
-        self.busy = true;
+    /// Mark the state busy, run `work` on the background executor, and apply
+    /// its result with `apply` in a step this state detaches itself, so `busy`
+    /// is always cleared even when the caller drops the returned task (which
+    /// then only loses the answer).
+    fn run<T: Send + 'static>(
+        &mut self,
+        cx: &mut Context<Self>,
+        work: impl Future<Output = T> + Send + 'static,
+        apply: impl FnOnce(&mut Self, T, &mut Context<Self>) -> Result<(), VaultActionError> + 'static,
+    ) -> Task<Result<(), VaultActionError>> {
+        self.begin();
         cx.notify();
+        let work = cx.background_spawn(work);
+        let (answer, receiver) = oneshot::channel();
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let outcome = this
+                .update(cx, |state, cx| apply(state, result, cx))
+                .unwrap_or(Err(VaultActionError::WrongPhase));
+            // Nobody is listening when the caller dropped its task; the state
+            // has been updated either way.
+            _ = answer.send(outcome);
+        })
+        .detach();
+        cx.spawn(async move |_, _| receiver.await.unwrap_or(Err(VaultActionError::WrongPhase)))
+    }
+
+    fn begin(&mut self) {
+        self.busy = true;
+        self.locked_meanwhile = false;
+    }
+
+    /// End the running operation; true when a lock was asked for while it ran.
+    fn end(&mut self, cx: &mut Context<Self>) -> bool {
+        self.busy = false;
+        cx.notify();
+        std::mem::take(&mut self.locked_meanwhile)
     }
 
     fn record_attempt<T>(&mut self, result: &Result<T, VaultActionError>) {
@@ -425,14 +470,20 @@ impl VaultState {
         result: Result<UnlockedVault, VaultError>,
         cx: &mut Context<Self>,
     ) -> Result<(), VaultActionError> {
-        self.busy = false;
-        cx.notify();
+        let locked_meanwhile = self.end(cx);
         match result {
             Ok(vault) => {
-                self.phase = Phase::Unlocked(Box::new(vault));
                 self.failures = 0;
                 self.retry_at = None;
-                cx.emit(VaultEvent::Initialised);
+                if locked_meanwhile {
+                    // The vault exists now, but the lock wins: no key is kept.
+                    self.phase = Phase::Locked(vault.header().clone());
+                    cx.emit(VaultEvent::Initialised);
+                    cx.emit(VaultEvent::Locked);
+                } else {
+                    self.phase = Phase::Unlocked(Box::new(vault));
+                    cx.emit(VaultEvent::Initialised);
+                }
                 Ok(())
             }
             Err(error) => {
@@ -451,14 +502,18 @@ impl VaultState {
         result: Result<(UnlockedVault, SecretString), VaultError>,
         cx: &mut Context<Self>,
     ) -> Result<(), VaultActionError> {
-        self.busy = false;
-        cx.notify();
+        let locked_meanwhile = self.end(cx);
         if !matches!(self.phase, Phase::Locked(_)) {
             return Err(VaultActionError::WrongPhase);
         }
         let result = result.map_err(VaultActionError::Vault);
         self.record_attempt(&result);
         let (vault, password) = result?;
+        if locked_meanwhile {
+            // The password was right, but a lock asked for since wins: the key
+            // is dropped here and the header stays as it was.
+            return Err(VaultActionError::LockedMeanwhile);
+        }
         let needs_rehash = vault.needs_rehash();
         self.phase = Phase::Unlocked(Box::new(vault));
         cx.emit(VaultEvent::Unlocked);
@@ -473,11 +528,15 @@ impl VaultState {
         result: Result<UnlockedVault, VaultError>,
         cx: &mut Context<Self>,
     ) -> Result<(), VaultActionError> {
-        self.busy = false;
-        cx.notify();
+        let locked_meanwhile = self.end(cx);
         let result = result.map_err(VaultActionError::Vault);
         self.record_attempt(&result);
         let vault = result?;
+        if locked_meanwhile {
+            // `vault.json` now holds the new header; keep only that.
+            self.phase = Phase::Locked(vault.header().clone());
+            return Ok(());
+        }
         let was_locked = matches!(self.phase, Phase::Locked(_));
         self.phase = Phase::Unlocked(Box::new(vault));
         if was_locked {
@@ -491,8 +550,9 @@ impl VaultState {
         result: Result<(), VaultError>,
         cx: &mut Context<Self>,
     ) -> Result<(), VaultActionError> {
-        self.busy = false;
-        cx.notify();
+        // The key was dropped when the reset started; a lock meanwhile has
+        // nothing more to take.
+        self.end(cx);
         result.map_err(VaultActionError::Vault)?;
         self.phase = Phase::Uninitialised;
         self.failures = 0;
@@ -506,27 +566,33 @@ impl VaultState {
         let Some(header) = self.header().cloned() else {
             return;
         };
-        self.busy = true;
         let dir = self.dir.clone();
-        let work = cx.background_spawn(async move { rewrap(&dir, &header, &password, &password) });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            // The global lives as long as the app; nothing to do when it is gone.
-            _ = this.update(cx, |state, cx| state.finish_rehash(result, cx));
-        })
+        // Nobody awaits a rehash; `run` applies it regardless.
+        self.run(
+            cx,
+            async move { rewrap(&dir, &header, &password, &password) },
+            Self::finish_rehash,
+        )
         .detach();
     }
 
-    fn finish_rehash(&mut self, result: Result<UnlockedVault, VaultError>, cx: &mut Context<Self>) {
-        self.busy = false;
-        cx.notify();
+    fn finish_rehash(
+        &mut self,
+        result: Result<UnlockedVault, VaultError>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), VaultActionError> {
+        let locked_meanwhile = self.end(cx);
         match result {
-            // Only Lock can have run meanwhile (`busy` holds the rest off). A
-            // locked process keeps just the new header, which is what
-            // `vault.json` now holds.
+            // `vault.json` now holds the new header. Only Lock can have run
+            // meanwhile (`busy` holds the rest off), and it wins: a locked
+            // process keeps just the header.
             Ok(vault) => match self.phase {
-                Phase::Locked(_) => self.phase = Phase::Locked(vault.header().clone()),
-                Phase::Unlocked(_) => self.phase = Phase::Unlocked(Box::new(vault)),
+                Phase::Unlocked(_) if !locked_meanwhile => {
+                    self.phase = Phase::Unlocked(Box::new(vault));
+                }
+                Phase::Locked(_) | Phase::Unlocked(_) => {
+                    self.phase = Phase::Locked(vault.header().clone());
+                }
                 Phase::Uninitialised | Phase::Unavailable { .. } => {}
             },
             Err(error) if is_expected_rehash_refusal(&error) => {
@@ -534,6 +600,7 @@ impl VaultState {
             }
             Err(error) => log::warn!("vault rehash failed: {error}"),
         }
+        Ok(())
     }
 }
 

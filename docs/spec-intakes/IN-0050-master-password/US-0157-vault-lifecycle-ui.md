@@ -13,7 +13,7 @@ Created: 2026-10-09
 - [x] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -124,6 +124,13 @@ settings-ui file list), `IN-0050.md` (US-0157 created). Also `docs/architecture.
 (no new document or field), `crate-dependency-rules.md` (`state -> vault` is L2 -> L1, allowed by
 R2; the edge is in `scripts/dependency-graph-policy.json`).
 
+Rework (after [`evidence/US-0157-verify.md`](evidence/US-0157-verify.md)): also changed
+`low-level-design/persistence-and-migration.md` § 8 (no unlock re-reads `vault.json`; the one
+re-read is `AlreadyInitialised` from Uninitialised), `low-level-design/idle-lock-overlay.md`
+§ 5 (back-off formula `min(2^(n-4), 30)`, matching its own list) and § Interfaces (`unlock`
+comment), and the as-built state-machine note in `high-level-design.md` (a lock taken during an
+operation wins).
+
 ## Context
 
 - `oneterm_vault::unlock(&header, pw)` never reads the file; `UnlockedVault::change_password`
@@ -170,6 +177,37 @@ R2; the edge is in `scripts/dependency-graph-policy.json`).
 - **Icon:** `crates/theme/assets/icons/lock.svg` (Lucide, like the other app icons) gives
   `AppIcon::Lock` to the page; `US-0159`'s lock screen can reuse it.
 - **Set-up text** does not mention the screen lock yet (it does not exist until `US-0159`).
+
+### Rework after independent verification (2026-10-09)
+
+[`evidence/US-0157-verify.md`](evidence/US-0157-verify.md): PASS with two Medium latent defects,
+fixed before merge because `US-0158` / `US-0159` build on `VaultState`. The verifier's commit
+(`8033a6f0`, 7 tests) is the base of the rework.
+
+| Defect | Fix |
+| --- | --- |
+| D1 (Medium): `busy` was cleared only inside the task handed to the caller, so a dropped task left the state busy until restart | `crates/state/src/vault_state.rs` `run` (`:419`): every operation (set-up, unlock, change, reset, rehash) goes through it. The state spawns **and detaches** the apply step itself and answers through a `futures::channel::oneshot`; the caller's task only awaits the receiver, so dropping it loses the answer, never the state update. `futures` (already in `Cargo.lock`) is a new direct dependency of `oneterm-state`. Test `verifier_d1_a_dropped_operation_task_still_applies` (inverted). |
+| D2 (Medium): a Lock taken while a change ran was undone (key put back, `Unlocked` emitted) | `lock()` (`:351`) records `locked_meanwhile` whenever an operation runs, whatever the phase; `begin` / `end` (`:442`, `:448`) reset and read it. Every `finish_*` lets the lock win: set-up keeps only the new header (emits `Initialised` then `Locked`, `:468`), unlock drops the key and returns `VaultActionError::LockedMeanwhile` (`:500`; the right password still resets the failure count, no rehash), change keeps only the new header and emits nothing (`:526`), rehash keeps only the new header (`:579`), reset had already dropped the key (`:548`). `US-0159`'s `IdleLocked` reuses the same flag. Tests `verifier_d2_a_lock_during_a_change_wins` (inverted), `a_lock_during_an_unlock_wins`, `a_lock_during_a_set_up_wins`. |
+| D3 (Low): `InputState::value()` copied the text on every call (once per field at submit, once per frame for the hint) | `crates/state/src/vault_dialogs.rs` `submit` (`:286`): each field is copied once, `text().to_string()` straight into a `SecretString`, and the new password / confirmation are compared through `expose_secret()`; the hint takes `text().len_chars()` (`:437`), which copies nothing. Module doc (`:10`) states the real behaviour. |
+| D4 (Low, docs) | LLD corrections listed under Reconciliation. |
+| Elevated `ensure_unlocked` with no vault (verifier attack f) | `vault_dialogs.rs` `ensure_unlocked` (`:89`): shows a warning notification "No master password is set up. Managed from the normal OneTerm window." instead of a Set up dialog every submit would refuse. The note is one constant, `vault_dialogs::READ_ONLY_NOTE` (`:42`), which the Security page reuses. |
+
+### Notes for `US-0158` (and `US-0159`) from the verification
+
+- **Wipe idempotently on `VaultEvent::Reset`.** It is emitted before the removal; the removal
+  can still fail, leaving the state Locked with `vault.json` in place. Do not assume
+  Uninitialised follows `Reset`. A reset from Unlocked emits only `Reset`, never `Locked`.
+- **`ensure_unlocked`** runs `on_ready` on success only: never on cancel, never when the vault
+  is Unavailable (show the reason yourself), and in an elevated window with no vault it shows
+  the read-only note. Check `is_read_only()` before offering to save a password.
+- **A cancelled dialog does not mean nothing changed:** the operation completes and applies;
+  re-read the phase.
+- **An unlock can answer `LockedMeanwhile`** (the password was right but a lock won).
+- **Still owed by `US-0158`:** the re-read of `vault.json` before each seal
+  (`persistence-and-migration.md` § 8, "Reset in A while B is unlocked").
+- **`US-0159`:** `lock()` acts only on Unlocked but records a lock during any operation;
+  `IdleLocked` must set the same `locked_meanwhile` flag so every `finish_*` keeps the screen
+  locked.
 
 ## Decisions
 
@@ -260,6 +298,24 @@ Gaps:
   the directory, not by two GUI instances.
 - Linux / macOS not run (CI). The full `cargo test --workspace` runs on `main` after
   independent verification.
+
+**Rework gate** (worktree, `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`):
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo test -p oneterm-state` | 68 passed (66 after the verifier's 7, plus 2 new; D1 and D2 tests inverted) |
+| `cargo test -p oneterm-settings-ui` | 58 passed, 1 ignored; `--ignored --test-threads=1`: 1 passed |
+| `cargo test -p oneterm-vault` / `-p oneterm-actions` | 50 / 4 passed |
+| `python scripts/verify-dependency-graph.py` | pass |
+| `python scripts/check-doc-paths.py` | pass (223 paths) |
+| `python scripts/check-english.py` | pass (1113 files) |
+| `python scripts/third-party-notices.py --check` | pass, unchanged |
+| `python scripts/check-ignored-tests.py` | pass, 19 ignored tests, all recorded |
+
+The rework changes no UI: the GUI walk was not repeated. The Elevated acceptance item stays
+open for the owner's walk.
 
 ## Handoff
 

@@ -20,7 +20,7 @@ use oneterm_state::{VaultPhase, VaultState, vault_dialogs};
 use oneterm_theme::icon::AppIcon;
 
 /// Shown on the status row of the elevated window (M4).
-pub(crate) const ELEVATED_NOTE: &str = "Managed from the normal OneTerm window.";
+pub(crate) const ELEVATED_NOTE: &str = vault_dialogs::READ_ONLY_NOTE;
 
 /// Build the "Security" settings page.
 pub(crate) fn page(cx: &App) -> SettingPage {

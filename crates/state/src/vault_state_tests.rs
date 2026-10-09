@@ -424,18 +424,19 @@ const _: fn() = || {
 /// step that clears `busy`, so every later set-up, unlock, change and reset of
 /// this process answers `Busy` until restart.
 #[gpui::test]
-async fn verifier_d1_a_dropped_operation_task_leaves_the_state_busy(cx: &mut TestAppContext) {
+async fn verifier_d1_a_dropped_operation_task_still_applies(cx: &mut TestAppContext) {
     let dir = fixture_dir();
     let state = state_in(&dir, false, cx);
     let task = state.update(cx, |state, cx| state.unlock(secret(V1_PASSWORD), cx));
     drop(task);
     cx.run_until_parked();
+    // The unlock (and the rehash it started) applied without anyone awaiting.
     state.read_with(cx, |state, _| {
-        assert!(state.is_busy(), "busy is never cleared");
-        assert_eq!(state.phase(), VaultPhase::Locked);
+        assert!(!state.is_busy(), "busy is cleared by the state's own step");
+        assert_eq!(state.phase(), VaultPhase::Unlocked);
     });
-    let error = unlock(&state, V1_PASSWORD, cx).await.unwrap_err();
-    assert!(matches!(error, VaultActionError::Busy));
+    state.update(cx, |state, cx| state.lock(cx));
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
 }
 
 /// Lock while a rehash runs: allowed; set-up, unlock, change and reset are
@@ -487,7 +488,7 @@ async fn verifier_lock_during_a_rehash_keeps_the_new_header(cx: &mut TestAppCont
 /// finishes: the key is back in memory and `Unlocked` is emitted, with no
 /// password typed after the lock. `US-0159`'s idle lock calls the same path.
 #[gpui::test]
-async fn verifier_d2_a_lock_during_a_change_is_undone(cx: &mut TestAppContext) {
+async fn verifier_d2_a_lock_during_a_change_wins(cx: &mut TestAppContext) {
     let dir = fixture_dir();
     let state = state_in(&dir, false, cx);
     unlock(&state, V1_PASSWORD, cx).await.unwrap();
@@ -499,8 +500,57 @@ async fn verifier_d2_a_lock_during_a_change_is_undone(cx: &mut TestAppContext) {
         task
     });
     task.await.unwrap();
-    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
-    assert_eq!(*events.borrow(), [VaultEvent::Locked, VaultEvent::Unlocked]);
+    // The change happened, but no key came back.
+    assert_eq!(phase(&state, cx), VaultPhase::Locked);
+    assert_eq!(*events.borrow(), [VaultEvent::Locked]);
+    assert_eq!(read(&dir, "vault.bak"), read(&dir, "vault.json"));
+    // The held header is the new one: the new password unlocks, the old not.
+    unlock(&state, V1_PASSWORD, cx).await.unwrap_err();
+    unlock(&state, "new master password", cx).await.unwrap();
+}
+
+#[gpui::test]
+async fn a_lock_during_an_unlock_wins(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    let events = record_events(&state, cx);
+    let task = state.update(cx, |state, cx| {
+        let task = state.unlock(secret(V1_PASSWORD), cx);
+        state.lock(cx);
+        task
+    });
+    let error = task.await.unwrap_err();
+    assert!(matches!(error, VaultActionError::LockedMeanwhile));
+    cx.run_until_parked();
+    state.read_with(cx, |state, _| {
+        assert_eq!(state.phase(), VaultPhase::Locked);
+        assert!(state.unlocked().is_none());
+        assert!(!state.is_busy());
+        // The right password still counts as a success.
+        assert_eq!(state.failures, 0);
+    });
+    assert!(events.borrow().is_empty());
+    // No rehash ran: the fixture is untouched.
+    assert_eq!(read(&dir, "vault.json").unwrap(), V1);
+}
+
+#[gpui::test]
+async fn a_lock_during_a_set_up_wins(cx: &mut TestAppContext) {
+    let dir = test_dir();
+    let state = state_in(&dir, false, cx);
+    let events = record_events(&state, cx);
+    let task = state.update(cx, |state, cx| {
+        let task = state.set_up(secret("first master password"), cx);
+        state.lock(cx);
+        task
+    });
+    task.await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Locked);
+    assert_eq!(
+        *events.borrow(),
+        [VaultEvent::Initialised, VaultEvent::Locked]
+    );
+    unlock(&state, "first master password", cx).await.unwrap();
 }
 
 /// Another process set up first: the state leaves Uninitialised for what the

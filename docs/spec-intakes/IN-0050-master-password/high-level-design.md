@@ -99,7 +99,10 @@ Locked / Unlocked / Unavailable (`IdleLocked` arrives with `US-0159`); Locked ho
 read once at start and an unlock verifies against it, never against a fresh read of
 `vault.json`; one operation runs at a time; a successful unlock of a header below the default
 parameters rehashes it in the background; `VaultEvent::Reset` is emitted before the file is
-removed.
+removed. A lock asked for while an operation runs wins: the operation's result never puts a key
+back (an unlock answers `LockedMeanwhile`; a set-up, change or rehash keeps only the new
+header). The state applies every result itself, so a caller dropping its task never leaves it
+busy.
 
 - `Locked -> IdleLocked` on idle too: screen protection does not depend on the user ever having
   unlocked.
