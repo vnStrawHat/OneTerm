@@ -158,7 +158,7 @@ The `IdleClock` is stamped.
 | Clipboard | A remote OSC 52 write still reaches the system clipboard (terminal policy unchanged); nothing is read from it. |
 | Screenshots, screen sharing, Alt+Tab, taskbar hover | Live captures show only the lock screen. **Open risk:** a window minimised before the lock may keep a stale DWM thumbnail; `US-0159` checks it and, if so, forces a repaint or an iconic thumbnail. |
 | FPS HUD | Part of the workspace: not drawn while locked. |
-| OS session lock or sleep | Not hooked (gpui exposes no session-change event); sleep is partly covered by the wall-clock term. Follow-up. |
+| OS session lock or sleep | Not hooked (gpui exposes no session-change event); sleep is covered by the wall-clock term, the late-input rule and the one-minute recheck (As built). Follow-up. |
 | No vault | No timer, no plugin effect, Lock action shows "Set up a master password first" with a button to Settings > Security. |
 
 ### 8. Lock on demand
@@ -224,6 +224,52 @@ before `open_window`.
   the file therefore cannot unlock a locked window; only the password current for the
   in-memory header does. Cost: after a legitimate password change in *another* process, a
   window that was already locked still wants the previous password (rare; documented).
+
+## As built (`US-0159`)
+
+Where the build differs from, or settles, the design above (`US-0159-idle-lock-screen.md`):
+
+- **Phase.** No fifth `VaultPhase`: `VaultPhase` stays `Locked` while the screen is locked and
+  `VaultState::is_screen_locked()` carries the second fact (HLD § Lifecycle, as built).
+  `lock_screen` drops the key (emits `Locked` if one was held), sets the lock and emits
+  `ScreenLocked`; it records `locked_meanwhile` while an operation runs. `unlock_screen` ends
+  Unlocked. Set-up, the dialog `unlock`, change and reset are refused while the screen is locked.
+  The plugins follow `is_screen_locked()` on every `VaultState` notification, never the
+  `Locked` event (a refused seal emits it too).
+- **Interceptor rule (§ 6.2).** Computed from the keymap rather than a key list: a keystroke
+  passes only when the context stack holds `OneTermLock` and every binding
+  `Keymap::bindings_for_input` resolves for it there is `input::*` or `root::*`, with no pending
+  chord. Text with no binding passes (input handler, so AltGr and IME work). `ctrl-shift-left`
+  (the input's word selection and Split Left) is therefore stopped, which a password field does
+  not miss.
+- **Late input locks first (§ 2, new).** Every stamp first checks the idle time: input that
+  arrives after more than the timeout (the timer was late, the machine slept) locks and is
+  stopped (keys in the interceptor, mouse in the capture phase), so the first key or click after
+  a resume never reaches the terminal and never re-arms the clock.
+- **Timer (§ 3).** It sleeps `min(remaining, 60 s)`: one wake a minute at most, no frame, so a
+  deadline passed during a sleep is noticed within a minute of the resume even without input
+  (Windows relative timers may not count the time asleep). The task is restarted on every
+  `VaultState` and `UiConfig` notification.
+- **Timeout.** `lock_after_idle_minutes` is clamped to 1..=480 on read and parsed leniently (a
+  non-integer loads as the default 15); the file is not rewritten for it.
+- **No-vault notice.** A plain Info notification naming Settings > Security; no button.
+- **Lock view text.** The reset explanation is always shown (no disclosure): the lock screen
+  cannot reset; quit and restart opens OneTerm unlocked (Q1), where Settings > Security > Reset
+  is. No eye toggle on the password input.
+- **Diagnostics.** At each unlock every window logs `lock screen: N frames in S s` at debug
+  level (the lock view renders on every frame its window draws).
+
+Spike (`US-0159` Evidence): the `decorate` replacement keeps focus (restored to the terminal on
+unlock) and keyboard input in the lock input (posted `WM_CHAR`); the own `TitleBar` draws its
+caption buttons, and closing the window (`WM_CLOSE`) quits. Dragging and the caption buttons
+are hit-tested by Windows (`WM_NCHITTEST`) and were not exercised: the walk drives the window
+with posted messages only, never the owner's real mouse. Live captures by another process show only the lock.
+A hidden terminal's output costs no frame (gpui test; GUI frame counts with and without a
+flooding tab). **Not settled:** the DWM thumbnail of a window minimised before the lock (no
+capture of it was possible here; a minimised window's DWM thumbnail is the frame from before the
+minimise, so the risk stands); the follow-up is `DWMWA_FORCE_ICONIC_REPRESENTATION` while locked,
+which needs the raw `HWND`. `Instant` across a real sleep was not walked: the wall-clock term and
+the late-input rule cover it by construction and are unit-tested.
 
 ## Verification
 

@@ -140,6 +140,8 @@ OneTerm/
 │   ├── workspace/                  # `oneterm-workspace` — feature-AGNOSTIC app shell
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export OneTermWorkspace
+│   │       ├── lock_screen.rs      # idle lock (US-0159): IdleClock, keystroke interceptor, deadline timer,
+│   │       │                       #   LockScreen RootPlugin (replaces every window's surface), LockOneTerm
 │   │       ├── layout/             # title_bar, app_menus, statusbar, workspace/{mod,actions,layout,persistence,zoom}
 │   │       │                       #   builds feature panels by NAME via gpui-component PanelRegistry
 │   │       └── widgets/            # statusbar widgets (breadcrumb, git_status, net_speed, datetime_clock, resource)
