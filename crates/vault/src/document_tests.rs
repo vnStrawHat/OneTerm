@@ -422,6 +422,76 @@ mod verify {
         assert!(dir.join(DOCUMENT_NAME).is_dir());
     }
 
+    /// Re-verification of the rework: the rewrap compares the salt and the
+    /// wrapped key one by one. A file that differs from the unlocked header in
+    /// only one of them (still `Ready`, same id) is refused with
+    /// `ChangedElsewhere`, and `vault.json` and `vault.bak` stay as they are.
+    #[test]
+    fn rewrap_refuses_a_header_that_differs_only_in_salt_or_only_in_wrapped_key() {
+        let other_wrap = |vault: &UnlockedVault| {
+            let mut kid = [0u8; KID_LEN];
+            kid.copy_from_slice(&vault.vault_id()[..KID_LEN]);
+            let envelope = Envelope {
+                kid,
+                nonce: [9; crate::envelope::NONCE_LEN],
+                sealed: vec![7; crate::kdf::KEY_LEN + TAG_LEN],
+            };
+            json!(envelope.encode())
+        };
+        for salt_only in [true, false] {
+            let case = if salt_only {
+                "salt only"
+            } else {
+                "wrapped key only"
+            };
+            let dir = test_dir();
+            let mut vault = init_with(&dir, &SecretString::new("pw"), FAST_PARAMS, false).unwrap();
+            let path = dir.join(DOCUMENT_NAME);
+            let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            if salt_only {
+                document["kdf"]["salt"] = json!(STANDARD.encode([0x5a; 16]));
+            } else {
+                document["wrapped_key"] = other_wrap(&vault);
+            }
+            let raw = document.to_string();
+            fs::write(&path, &raw).unwrap();
+            let bak = fs::read(backup(&dir)).unwrap();
+            assert!(
+                matches!(load(&dir).unwrap(), VaultStatus::Ready(_)),
+                "{case}"
+            );
+
+            assert!(
+                matches!(change(&mut vault, &dir), Err(VaultError::ChangedElsewhere)),
+                "{case}"
+            );
+            assert_eq!(fs::read_to_string(&path).unwrap(), raw, "{case}");
+            assert_eq!(fs::read(backup(&dir)).unwrap(), bak, "{case}");
+        }
+    }
+
+    /// Re-verification of the rework, documented behaviour (not a defect):
+    /// the rewrap does not compare the Argon2id parameters. A `Ready` file with
+    /// this vault's id, salt and wrapped key but other parameters (which no
+    /// password can unlock: the KEK differs) is rewritten into a valid header.
+    #[test]
+    fn rewrap_over_a_parameters_only_edit_rewrites_it() {
+        let dir = test_dir();
+        let mut vault = init_with(&dir, &SecretString::new("pw"), FAST_PARAMS, false).unwrap();
+        let path = dir.join(DOCUMENT_NAME);
+        let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        document["kdf"]["iterations"] = json!(FAST_PARAMS.iterations + 1);
+        let raw = document.to_string();
+        fs::write(&path, &raw).unwrap();
+        assert!(matches!(load(&dir).unwrap(), VaultStatus::Ready(_)));
+
+        change(&mut vault, &dir).unwrap();
+        let VaultStatus::Ready(header) = load(&dir).unwrap() else {
+            panic!("the rewritten header must load as Ready");
+        };
+        assert!(unlock(&header, &SecretString::new("new")).is_ok());
+    }
+
     /// `Debug` of a whole load outcome carries neither the wrapped key nor the
     /// salt.
     #[test]

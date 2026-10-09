@@ -271,3 +271,131 @@ together with the create-only check it produces D1.
 - `an_empty_ciphertext_is_rejected_at_the_tag`
 - `the_wrapped_key_never_opens_as_an_item`
 - `nonces_never_repeat_and_an_empty_secret_round_trips`
+
+## Re-verification of 50bbb219
+
+Head verified: `50bbb219`, the rework, on top of `faa5cf27`, which is the commit above
+cherry-picked. Branch `verify/US-0156` was reset to it with `git checkout -B verify/US-0156
+50bbb219`. Same rules as before: worktree-local `target`, only `-p oneterm-vault -p oneterm-core`,
+`CARGO_BUILD_JOBS=4`. The D1 and D2 tests above were renamed by the rework and now assert the
+fixed behaviour: `set_up_refuses_an_empty_object_file_d1` and
+`rewrap_refuses_a_damaged_or_unsupported_file_of_the_same_vault_d2`.
+
+### Verdict: PASS
+
+D1, D2 (with O1), D3, D4, N1 and O2 are fixed. I could not break any of the fixes. What remains is
+informational (R1-R5 below), and none of it blocks.
+
+### Command log
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `%TEMP%` count of `oneterm-vault-*` / `oneterm-persistence-*` before | 0 / 0 |
+| 2 | `cargo fmt --all -- --check` | pass |
+| 3 | `cargo clippy -p oneterm-vault -p oneterm-core --all-targets -- -D warnings` | pass |
+| 4 | `cargo test -p oneterm-vault` | **50 passed**: 46 from the first verification, plus 2 tests the rework added (O1, D3), plus the 2 new verifier tests below |
+| 5 | `cargo test -p oneterm-core` | 91 passed |
+| 6 | `RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vault --no-deps` | pass |
+| 7 | `python scripts/verify-dependency-graph.py` | pass |
+| 8 | `python scripts/check-doc-paths.py` | pass (222 paths) |
+| 9 | `python scripts/check-english.py` | pass (1106 files, and again after this section was added) |
+| 10 | `python scripts/third-party-notices.py --check` | pass |
+| 11 | `git diff e61ac466..HEAD -- Cargo.lock` | empty: the lock is unchanged from the first verification (`main..HEAD` is still the same +15 lines) |
+| 12 | Timing stress: `unlock_cost_contract` 48 times, 24 at once | 48 / 48 passed. Under load: defaults 1.3-1.5 s, floor 0.36-0.40 s, ratio about 3.7 against the bound of 2 |
+| 13 | Same test, once, unloaded (debug, `argon2` / `blake2` at opt-level 3) | defaults 637 ms, floor 161 ms |
+| 14 | `cargo test -p oneterm-vault --release unlock_cost_contract -- --nocapture` | defaults 133 ms, floor 26 ms (the first verification recorded 80-84 ms; see R4) |
+| 15 | `%TEMP%` count after all runs | 0 / 0 |
+
+### Attacks on each fix
+
+- **D2 / O1, the rewrap arm (`document.rs:263-271`).**
+  - `update_json_file_as` takes the inter-process lock, then reads the file, then runs the
+    closure, then writes. So `parse_value` runs on the bytes the write replaces, **inside the
+    lock**. No other OneTerm process can write between the parse and the write. A non-OneTerm
+    writer ignores an advisory lock, but the threat model excludes it.
+  - The four `Damaged` / `Unsupported` cases with the same id are refused with
+    `VaultReplaced`, and `vault.json` and `vault.bak` are byte for byte unchanged (renamed d2
+    test).
+  - Rewrapped by another process (salt and wrapped key both differ): refused with
+    `ChangedElsewhere`, newer header kept (the rework's test).
+  - New test, `rewrap_refuses_a_header_that_differs_only_in_salt_or_only_in_wrapped_key`. A
+    `Ready` file with the same id differing **only** in the salt, and one differing **only** in
+    the wrapped key (another valid envelope with this vault's kid), are each refused with
+    `ChangedElsewhere`, and `vault.json` and `vault.bak` stay unchanged.
+  - Missing, non-JSON and schema-2 files are still refused (`VaultReplaced`, `Io`,
+    `VaultReplaced`), with `vault.bak` intact (existing verifier test).
+  - A refusal is never `Io`: the closure's placeholder error is replaced by the recorded
+    refusal. Pass.
+- **D1, the create arm (`document.rs:247-256`).**
+  - Every existing file is refused with `AlreadyInitialised` and left untouched, with no
+    `vault.bak` created: `{ }`, non-JSON, a 0-byte file, `[1,2]`, `null`, schema 9, parameters
+    above the ceiling, `argon2i`, kid of another vault (renamed tests).
+  - A directory in place gives `Io`.
+  - The check runs before the lock and again inside the closure. That second check is reached
+    only after the transaction has parsed the file. So a **non-JSON** file created by another
+    process inside that window surfaces as `Io` (InvalidData) rather than `AlreadyInitialised`
+    (R2). It is still never overwritten. Pass.
+- **D3, the remove arm (`document.rs:234-245`).**
+  - `Unsupported` is refused with `VaultError::Unsupported` and the file kept. `Damaged` and
+    `Ready` are reset. A read error refuses with `Io`. Pass.
+  - The window the code comments on is real: the status is read by `load` before
+    `remove_document` takes the lock. Losing that race requires another process to turn the
+    file `Unsupported` (a newer OneTerm's set-up or rewrap) in the microseconds between, during
+    a reset the user typed `RESET` to confirm. I accept it as documented (R3). Closing it would
+    need a predicate checked inside `remove_document`'s lock.
+- **D4 (`kdf.rs:83-97`).** Pass on every check below.
+  - The working memory is a `Zeroizing<Vec<argon2::Block>>`.
+  - `try_reserve_exact(block_count)` and then `resize(block_count)` cannot reallocate, so no
+    copy is left behind.
+  - `zeroize 1.9.0`'s `Vec<Z: Zeroize>` impl clears every element and the spare capacity, and
+    `argon2::Block: Zeroize` comes from the `zeroize` feature.
+  - Every return after the allocation drops `blocks` through `Zeroizing`: success, the
+    `hash_password_into_with_memory` error, and a panic unwind. Before the allocation there is
+    nothing to clear.
+  - The block count is `params.block_count()`, which is exactly what argon2's own
+    `hash_password_into` allocates.
+  - The frozen KEK vector and the independent `vault-v1.json` fixture still derive the same
+    keys (all tests pass).
+- **O2 (`crates/core/src/persistence.rs:179-184`).** `remove_document` returns
+  `PermissionDenied` when `elevation::is_restricted()`, before it takes the lock. This is review
+  only, like the other M4 guards: flipping the process global needs an `#[ignore]`d test.
+  `document::write` refuses even earlier with `ReadOnly`.
+- **Tests.**
+  - The flipped tests assert the fixed behaviour, and that `vault.json` and `vault.bak` are
+    untouched on refusal.
+  - `FAST_PARAMS = KdfParams::FLOOR` weakens nothing. The only test that relied on sub-floor
+    parameters (a set-up header loading as `Unsupported`) now asserts `Ready` and an unlock
+    through `load`, which is stronger. `needs_rehash` is still true at the floor. The cost
+    contract names its parameters explicitly.
+- **Profiles and docs.**
+  - `argon2` and `blake2` are at `opt-level = 3` in `[profile.dev.package]`, which `test`
+    inherits, and in `[profile.fast-dev.package]`. Release is unaffected.
+  - The `dependencies.md` note and the `persistence.md` `vault.json` row match the code. N1 is
+    fixed: non-JSON is now `AlreadyInitialised`, as the row says.
+
+### Remaining (informational, non-blocking)
+
+- **R1:** the rewrap does not compare the Argon2id parameters. A `Ready` file with this vault's
+  id, salt and wrapped key but other parameters is rewritten into a valid header. That file can
+  only come from a hand edit or corruption, and no password unlocks it. This matches the
+  documented rule ("same id, salt and wrapped key") and is pinned by
+  `rewrap_over_a_parameters_only_edit_rewrites_it`.
+- **R2:** see D1 above. A create race with a non-JSON file gives `Io` instead of
+  `AlreadyInitialised`, and the file is never overwritten.
+- **R3:** see D3 above. The status read happens outside the lock, as commented.
+- **R4:** the explicit `resize` and the volatile zeroization of 64 MiB cost real time:
+  - Release unlock at the defaults is 133 ms here, against 80-84 ms before the rework. The
+    added time is memory writes, not KDF hardness.
+  - Debug unlock is 0.64 s even with `argon2` optimized, because `oneterm-vault` and `zeroize`
+    stay at opt-level 0.
+  - If the debug loop matters to `US-0157`, add `zeroize` to the dev overrides. If release
+    cost matters, allocate zeroed memory (`alloc_zeroed`) instead of the explicit `resize`.
+- **R5:** the Unix `0600` code is unchanged and still unverified on this Windows host. CI on
+  Linux and macOS runs it. The carry-forward O3 for `US-0158` still stands.
+
+### Tests added in the re-verification (kept; both pass)
+
+`crates/vault/src/document_tests.rs`, `mod verify`:
+
+- `rewrap_refuses_a_header_that_differs_only_in_salt_or_only_in_wrapped_key`
+- `rewrap_over_a_parameters_only_edit_rewrites_it` (pins R1)
