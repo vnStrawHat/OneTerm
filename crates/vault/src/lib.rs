@@ -20,6 +20,8 @@ pub use document::{DOCUMENT_NAME, VaultHeader, VaultStatus, load};
 pub use envelope::SealedSecret;
 pub use error::{OpenError, VaultError};
 pub use kdf::KdfParams;
+#[cfg(feature = "test-support")]
+pub use vault::init_with_params;
 pub use vault::{SealContext, SecretPurpose, UnlockedVault, init, reset, unlock};
 
 #[cfg(test)]

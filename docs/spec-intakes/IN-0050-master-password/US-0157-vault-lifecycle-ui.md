@@ -10,8 +10,8 @@ Created: 2026-10-09
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -59,28 +59,28 @@ happens off the UI thread. The elevated window shows the page read-only.
 
 From the `IN-0050` US-0157 candidate, made concrete:
 
-- [ ] Settings > Security shows the status (Not set up / Set, locked / Set, unlocked /
+- [x] Settings > Security shows the status (Not set up / Set, locked / Set, unlocked /
   Unavailable with the reason) and only the buttons that apply: Set up (Uninitialised), Unlock
   (Locked), Change (Locked or Unlocked), Lock now (Unlocked), Reset (Locked, Unlocked or a
   damaged file).
-- [ ] Set up: entered twice, at least 8 characters, no composition rules, a length-based
+- [x] Set up: entered twice, at least 8 characters, no composition rules, a length-based
   strength hint, the irreversibility warning ("forgot means wipe"), mismatch shown inline.
   Verified on Windows: `vault.json` holds no password and carries the Argon2id parameters.
-- [ ] Restart, then Unlock from the page; Change (old + new twice): `vault.bak` equals the new
+- [x] Restart, then Unlock from the page; Change (old + new twice): `vault.bak` equals the new
   `vault.json` afterwards; Reset (type `RESET`): `vault.json` and `vault.bak` gone. Each step
   verified on Windows with the files inspected.
-- [ ] A wrong password shows an inline error and clears the input; from the 5th consecutive
+- [x] A wrong password shows an inline error and clears the input; from the 5th consecutive
   failure the next attempt waits `2, 4, 8, 16, 30, 30 ...` seconds with a visible countdown;
   never a lockout, never a wipe; a success resets the count.
-- [ ] Argon2id runs on the background executor: the confirm button shows a spinner while it
+- [x] Argon2id runs on the background executor: the confirm button shows a spinner while it
   runs and the window keeps drawing (a frame captured during an unlock).
-- [ ] After an unlock whose header is below the default parameters, a background rehash
+- [x] After an unlock whose header is below the default parameters, a background rehash
   rewraps it with the typed password kept until it finishes; `ReadOnly`, `VaultReplaced` and
   `ChangedElsewhere` skip it silently.
-- [ ] Locked never re-reads `vault.json`: unlock verifies against the header held in memory.
+- [x] Locked never re-reads `vault.json`: unlock verifies against the header held in memory.
 - [ ] Elevated window: status and "Managed from the normal OneTerm window."; no Set up, Change
   or Reset (refused in `VaultState` too); Unlock and Lock now allowed (Q5).
-- [ ] Unit tests: Uninitialised -> set up -> Unlocked -> lock -> unlock; wrong-password count
+- [x] Unit tests: Uninitialised -> set up -> Unlocked -> lock -> unlock; wrong-password count
   and back-off; rehash skip on the three refusals; elevated read-only; all at
   `KdfParams::FLOOR`, no temporary directory left behind, timing asserted only as ratios.
 
@@ -116,7 +116,13 @@ Reason: a new Settings page and a new runtime global other packets build on.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+Docs changed, as planned: `docs/gui-layout.md` (Security row in the page table, a paragraph on
+the page, "thirteen pages"), `high-level-design.md` (state machine as built, Settings > Security
+wireframe as built), `docs/agents/structure.md` (state tree and row, vault `test-support`,
+settings-ui file list), `IN-0050.md` (US-0157 created). Also `docs/architecture.md` (the
+`oneterm-state` ownership row), which the plan had not listed. Not changed: `persistence.md`
+(no new document or field), `crate-dependency-rules.md` (`state -> vault` is L2 -> L1, allowed by
+R2; the edge is in `scripts/dependency-graph-policy.json`).
 
 ## Context
 
@@ -129,9 +135,9 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Plan
 
-- [ ] Records first (commit 1, docs only): this packet, `IN-0050.md` candidate ticked.
-- [ ] `VaultState` + tests; dialogs; Security page; app init; policy; docs (commit 2).
-- [ ] Gate; GUI walk on Windows with a private config directory; evidence here.
+- [x] Records first (commit 1, docs only): this packet, `IN-0050.md` candidate ticked.
+- [x] `VaultState` + tests; dialogs; Security page; app init; policy; docs (commit 2).
+- [x] Gate; GUI walk on Windows with a private config directory; evidence here.
 
 ### Choices the LLDs leave open (simplest taken)
 
@@ -148,7 +154,22 @@ Before completion, list docs changed or confirm the recorded no-change reason re
   sealed values wipe them first (`oneterm_vault::reset` doc).
 - **No new action** in this packet: `LockOneTerm` belongs to `US-0159`.
 - **`ensure_unlocked`** calls `on_ready` only on success (set up when Uninitialised, unlock when
-  Locked, immediately when Unlocked); cancel calls nothing.
+  Locked, immediately when Unlocked); cancel calls nothing, and so does an Unavailable vault (the
+  caller shows why). The LLD sketch's `UnlockReason` / `UnlockOutcome` (with "Type passwords
+  instead") are left to `US-0158`, which owns that button.
+- **Back-off sequence.** The idle-lock LLD gives the formula `min(2^(n-5), 30)` but lists
+  `2, 4, 8, 16, 30`; the intake says "2, 4, 8 ... capped at 30 s". The listed sequence is built
+  (`2^(n-4)` from the 5th failure).
+- **Cancel while busy.** Cancel closes the dialog at once; the background operation still
+  completes and `VaultState` applies it (a set-up started and then cancelled leaves a vault).
+- **Read errors** (`vault.json` unreadable, not just damaged) are Unavailable with no Reset.
+- **Spinner.** GPUI Kit draws a button's spinner only in its icon slot, so a busy confirm button
+  is given an icon (`LoaderCircle`) that the spinner replaces.
+- **`VaultState::load(dir, read_only)`** is public: `init` uses it, and other crates' tests (the
+  Security page here, the session dialogs in `US-0158`) build a state on a temporary directory.
+- **Icon:** `crates/theme/assets/icons/lock.svg` (Lucide, like the other app icons) gives
+  `AppIcon::Lock` to the page; `US-0159`'s lock screen can reuse it.
+- **Set-up text** does not mention the screen lock yet (it does not exist until `US-0159`).
 
 ## Decisions
 
@@ -170,16 +191,75 @@ Before completion, list docs changed or confirm the recorded no-change reason re
   screenshot while an unlock runs shows the spinner. Screenshots in the session scratchpad.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
+- [x] Unit proof
 - [ ] Integration proof
-- [ ] E2E proof
+- [x] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+Worktree gate, 2026-10-09, Windows 11, `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=3` (2 for the
+app build and the census: the first app build crashed rustc with `0xc0000409` on `windows` at
+3 jobs, the known memory limit; the retry at 2 passed):
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo test -p oneterm-state` | 59 passed (16 new: 13 `vault_state_tests`, 3 dialog helpers) |
+| `cargo test -p oneterm-settings-ui` | 58 passed, 1 ignored (4 new: Security page rows) |
+| `cargo test -p oneterm-settings-ui --lib -- --ignored --test-threads=1` | 1 passed (the existing elevation test) |
+| `cargo test -p oneterm-actions` | 4 passed |
+| `cargo test -p oneterm-vault` | 50 passed |
+| `cargo test -p oneterm-theme -p oneterm-app` | pass |
+| `python scripts/verify-dependency-graph.py` | pass (21 packages; `argon2` / `aes-gcm` still named only by `oneterm-vault`) |
+| `python scripts/check-doc-paths.py` | pass (223 paths) |
+| `python scripts/check-english.py` | pass (1112 files) |
+| `python scripts/third-party-notices.py --check` | pass, unchanged (`argon2` / `aes-gcm` already reached the app through `russh`) |
+| `python scripts/check-ignored-tests.py` (`CARGO_BUILD_JOBS=2`) | pass, 19 ignored tests, all recorded (none added) |
+
+- `%TEMP%` after the runs: no `oneterm-vault-state-*` or `oneterm-security-page-*` directory.
+- The unit tests run Argon2id at `KdfParams::FLOOR` (fixture `vault-v1.json` and the
+  `test-support` constructors); timing is never asserted.
+
+**GUI walk (debug `oneterm.exe` from this worktree, private profile: `USERPROFILE` and the
+working directory in a scratch folder, so `config_dir()` = `<scratch>/cwd/target`; driven by
+posted window messages to the launched pid only; screenshots `us0157-*.png` in the session
+scratchpad):**
+
+| Step | Result |
+| --- | --- |
+| Settings > Security, no vault (`03`) | "Not set up." and **Set Up...** only |
+| Set up dialog (`04`-`06`) | intro, two masked fields with eye toggles, the warning; "abc" shows "Too short: use at least 8 characters."; 12 characters shows "Strength: good."; a different confirmation shows "The two passwords differ." inline |
+| Create (`07b`, `08`) | while Argon2id runs the inputs, Create and the page's Set Up are disabled and the window keeps drawing; then "Set, unlocked." with Change, Lock Now, Reset |
+| `vault.json` after set-up | schema 1, `argon2id` v19, 65536 KiB / 3 passes / 1 lane, 16-byte salt, `otv1:` wrapped key; the password text is absent; `vault.bak` byte-equal |
+| Restart (`09`) | "Set, locked. Saved passwords need it before they can be used." with Unlock, Change, Reset |
+| Wrong password (`11a`, `11b`) | spinner in the Unlock button during the run (the frame proves the UI thread drew while Argon2id ran); then "Wrong master password." and the input cleared |
+| Wrong 5, 6, 7 times (`12`-`14`) | after the 6th: "Too many wrong attempts. Try again in 4 s." and Unlock disabled; the 7th, typed after the wait, gave 8 s ("7 s" a second later); the countdown ticks and clears (`16`) |
+| Right password (`17`) | "Set, unlocked."; `vault.json` unchanged (defaults: no rehash) |
+| Lock Now (`18`) | back to "Set, locked." |
+| Change from Locked (`19`-`21b`) | current + new twice, strength hint, spinner during the run; then "Set, unlocked."; `vault.json` has a new salt and wrapped key under the same vault id, `vault.bak` byte-equal to it, the old wrapped key gone from both, no plaintext in either |
+| Lock, unlock with the new password (`22`) | unlocked |
+| Reset (`23`-`25`) | typing `reset` shows "Type RESET to confirm."; `RESET` removes `vault.json` and `vault.bak`; page back to "Not set up." |
+| Rehash (`26`) | the floor-parameter fixture placed as `vault.json`, unlocked from the page: the file is rewritten at 65536 KiB / 3 passes with a new salt, same vault id, `vault.bak` equal |
+| Change after the rehash (`27`) | succeeds (the state holds the rewrapped header, so no "changed elsewhere") |
+| Logs | no vault warning; only the pre-existing DirectX debug-layer lines |
+
+Gaps:
+
+- **Elevated window not walked.** It needs a UAC-elevated second process; the read-only
+  behaviour is proved by unit tests only (`the_elevated_window_unlocks_but_never_writes`,
+  `the_elevated_page_is_read_only_but_unlocks`). The Elevated acceptance item stays open for
+  the verifier or the owner.
+- No frame-rate measurement during Argon2id: responsiveness is shown by frames captured while
+  the operation ran (spinner drawn, buttons disabled), not by a timing.
+- Two-process races (set-up in two instances, change in one while the other is locked) are
+  covered by `oneterm-vault`'s tests and the `VaultState` tests with a second vault written to
+  the directory, not by two GUI instances.
+- Linux / macOS not run (CI). The full `cargo test --workspace` runs on `main` after
+  independent verification.
 
 ## Handoff
 

@@ -11,7 +11,9 @@ use gpui::App;
 
 use oneterm_settings::{TerminalSettings, UiConfig};
 use oneterm_state::commands::WorkspaceCommands;
-use oneterm_state::{AppServices, AppState, GlobalCompletionHistory, InputChannelRegistry};
+use oneterm_state::{
+    AppServices, AppState, GlobalCompletionHistory, InputChannelRegistry, VaultState,
+};
 
 /// Initialize OneTerm's UI layer: globals + feature registration + commands.
 ///
@@ -31,6 +33,8 @@ pub(crate) fn init(cx: &mut App) {
     GlobalCompletionHistory::init(cx);
     // Broadcast input channel membership (in-memory, per Space — DEC-0009).
     InputChannelRegistry::init(cx);
+    // Master-password vault phase (IN-0050): reads vault.json once, never writes.
+    VaultState::init(cx);
 
     // Feature inits — each registers its dock panel(s) + feature globals.
     // Terminal: "terminal" + "terminal-settings" panels + status-bar metrics.

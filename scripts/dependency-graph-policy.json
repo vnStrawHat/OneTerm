@@ -92,7 +92,8 @@
     "oneterm-state": [
       "oneterm-completion",
       "oneterm-core",
-      "oneterm-terminal"
+      "oneterm-terminal",
+      "oneterm-vault"
     ],
     "oneterm-terminal": [
       "oneterm-core",

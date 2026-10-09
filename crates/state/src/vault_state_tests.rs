@@ -1,0 +1,402 @@
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use gpui::{AppContext as _, Entity, TestAppContext};
+use oneterm_core::SecretString;
+use oneterm_vault::{KdfParams, VaultError};
+
+use super::*;
+
+/// Made by an implementation independent of OneTerm, at `KdfParams::FLOOR`
+/// (see `crates/vault/src/document_tests.rs`), so it needs a rehash.
+const V1: &str = include_str!("../../vault/tests/fixtures/persistence/vault-v1.json");
+const V1_PASSWORD: &str = "correct horse battery staple";
+const V9: &str = include_str!("../../vault/tests/fixtures/persistence/vault-v9.json");
+
+static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Removes the directory on drop, including when an assertion panics
+/// (`BUG-0083`).
+struct TemporaryDirectory(PathBuf);
+
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        // Best effort: nothing in a destructor can report a failed cleanup.
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for TemporaryDirectory {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+fn test_dir() -> TemporaryDirectory {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "oneterm-vault-state-{}-{nonce}-{sequence}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).unwrap();
+    TemporaryDirectory(path)
+}
+
+fn secret(text: &str) -> SecretString {
+    SecretString::new(text)
+}
+
+fn read(dir: &Path, name: &str) -> Option<String> {
+    std::fs::read_to_string(dir.join(name)).ok()
+}
+
+/// A directory holding the `vault-v1.json` fixture.
+fn fixture_dir() -> TemporaryDirectory {
+    let dir = test_dir();
+    std::fs::write(dir.join("vault.json"), V1).unwrap();
+    dir
+}
+
+fn state_in(dir: &Path, read_only: bool, cx: &mut TestAppContext) -> Entity<VaultState> {
+    cx.new(|_| VaultState::load(dir.to_path_buf(), read_only))
+}
+
+fn record_events(
+    state: &Entity<VaultState>,
+    cx: &mut TestAppContext,
+) -> Rc<RefCell<Vec<VaultEvent>>> {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let sink = events.clone();
+    cx.update(|cx| {
+        cx.subscribe(state, move |_, event: &VaultEvent, _| {
+            sink.borrow_mut().push(*event)
+        })
+        .detach();
+    });
+    events
+}
+
+fn phase(state: &Entity<VaultState>, cx: &mut TestAppContext) -> VaultPhase {
+    state.read_with(cx, |state, _| state.phase())
+}
+
+async fn unlock(
+    state: &Entity<VaultState>,
+    password: &str,
+    cx: &mut TestAppContext,
+) -> Result<(), VaultActionError> {
+    let task = state.update(cx, |state, cx| state.unlock(secret(password), cx));
+    let result = task.await;
+    // Let a rehash started by the unlock finish.
+    cx.run_until_parked();
+    result
+}
+
+#[test]
+fn the_backoff_starts_at_the_fifth_failure_and_caps_at_thirty_seconds() {
+    for failures in 0..=4 {
+        assert_eq!(backoff_after(failures), None, "{failures}");
+    }
+    let seconds: Vec<u64> = (5..=10)
+        .map(|failures| backoff_after(failures).unwrap().as_secs())
+        .collect();
+    assert_eq!(seconds, [2, 4, 8, 16, 30, 30]);
+    assert_eq!(backoff_after(200), Some(Duration::from_secs(30)));
+    assert_eq!(backoff_after(u32::MAX), Some(Duration::from_secs(30)));
+}
+
+#[test]
+fn the_retry_message_never_reads_zero_seconds() {
+    assert!(retry_message(Duration::from_millis(1)).contains("in 1 s"));
+    assert!(retry_message(Duration::from_millis(1500)).contains("in 2 s"));
+    assert!(retry_message(Duration::from_secs(30)).contains("in 30 s"));
+}
+
+#[test]
+fn only_the_three_refusals_skip_the_rehash_silently() {
+    assert!(is_expected_rehash_refusal(&VaultError::ReadOnly));
+    assert!(is_expected_rehash_refusal(&VaultError::VaultReplaced));
+    assert!(is_expected_rehash_refusal(&VaultError::ChangedElsewhere));
+    assert!(!is_expected_rehash_refusal(&VaultError::WrongPassword));
+    assert!(!is_expected_rehash_refusal(&VaultError::Randomness));
+}
+
+#[gpui::test]
+async fn set_up_lock_and_unlock_walk_the_phases(cx: &mut TestAppContext) {
+    let dir = test_dir();
+    let state = state_in(&dir, false, cx);
+    let events = record_events(&state, cx);
+    assert_eq!(phase(&state, cx), VaultPhase::Uninitialised);
+    state.read_with(cx, |state, _| {
+        assert!(!state.can_change());
+        assert!(!state.can_reset());
+    });
+
+    let task = state.update(cx, |state, cx| {
+        state.set_up(secret("first master password"), cx)
+    });
+    assert!(state.read_with(cx, |state, _| state.is_busy()));
+    task.await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+    let raw = read(&dir, "vault.json").unwrap();
+    assert!(!raw.contains("first master password"));
+    assert!(raw.contains("\"memory_kib\""));
+    assert!(raw.contains("\"argon2id\""));
+
+    state.update(cx, |state, cx| state.lock(cx));
+    assert_eq!(phase(&state, cx), VaultPhase::Locked);
+    assert!(state.read_with(cx, |state, _| state.unlocked().is_none()));
+
+    unlock(&state, "first master password", cx).await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+    assert_eq!(
+        *events.borrow(),
+        [
+            VaultEvent::Initialised,
+            VaultEvent::Locked,
+            VaultEvent::Unlocked
+        ]
+    );
+}
+
+#[gpui::test]
+async fn wrong_passwords_back_off_from_the_fifth_and_a_success_resets_the_count(
+    cx: &mut TestAppContext,
+) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    for attempt in 1..=4 {
+        let error = unlock(&state, "wrong", cx).await.unwrap_err();
+        assert!(matches!(
+            error,
+            VaultActionError::Vault(VaultError::WrongPassword)
+        ));
+        assert_eq!(
+            state.read_with(cx, |state, _| state.retry_after()),
+            None,
+            "attempt {attempt}"
+        );
+    }
+    unlock(&state, "wrong", cx).await.unwrap_err();
+    let wait = state.read_with(cx, |state, _| state.retry_after()).unwrap();
+    assert!(wait <= Duration::from_secs(2));
+
+    // While backing off, even the right password is not tried.
+    let error = unlock(&state, V1_PASSWORD, cx).await.unwrap_err();
+    assert!(matches!(error, VaultActionError::RetryIn(_)));
+    assert_eq!(phase(&state, cx), VaultPhase::Locked);
+
+    // Expire the wait instead of sleeping through it.
+    state.update(cx, |state, _| state.retry_at = Some(Instant::now()));
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    state.read_with(cx, |state, _| {
+        assert_eq!(state.phase(), VaultPhase::Unlocked);
+        assert_eq!(state.failures, 0);
+        assert_eq!(state.retry_after(), None);
+    });
+}
+
+#[gpui::test]
+async fn an_unlock_below_the_defaults_rehashes_in_the_background(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+
+    let raw = read(&dir, "vault.json").unwrap();
+    assert_ne!(raw, V1, "the header was rewrapped");
+    assert_eq!(read(&dir, "vault.bak").as_deref(), Some(raw.as_str()));
+    assert!(!state.read_with(cx, |state, _| state.is_busy()));
+
+    // The state holds the new header: a later change is not refused as
+    // "changed elsewhere", and the password still unlocks after a lock.
+    state.update(cx, |state, cx| state.lock(cx));
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    let task = state.update(cx, |state, cx| {
+        state.change_password(secret(V1_PASSWORD), secret("another password"), cx)
+    });
+    task.await.unwrap();
+}
+
+#[gpui::test]
+async fn locked_never_rereads_the_file_and_a_missing_file_skips_the_rehash(
+    cx: &mut TestAppContext,
+) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    std::fs::remove_file(dir.join("vault.json")).unwrap();
+
+    // Verified against the header read at start, not the (missing) file.
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+    // The rehash met `VaultReplaced` and wrote nothing.
+    assert!(!dir.join("vault.json").exists());
+    assert!(!state.read_with(cx, |state, _| state.is_busy()));
+}
+
+#[gpui::test]
+async fn a_passer_by_vault_neither_unlocks_nor_blocks_the_owner(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    std::fs::remove_file(dir.join("vault.json")).unwrap();
+    oneterm_vault::init_with_params(&dir, &secret("passer-by password"), KdfParams::FLOOR).unwrap();
+    let passer_by = read(&dir, "vault.json").unwrap();
+
+    let error = unlock(&state, "passer-by password", cx).await.unwrap_err();
+    assert!(matches!(
+        error,
+        VaultActionError::Vault(VaultError::WrongPassword)
+    ));
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    // The rehash saw another vault and left the file alone.
+    assert_eq!(read(&dir, "vault.json").unwrap(), passer_by);
+}
+
+#[gpui::test]
+async fn a_header_rewrapped_elsewhere_skips_the_rehash(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    // Another process changes the password after this one read the header.
+    let VaultStatus::Ready(header) = oneterm_vault::load(&dir).unwrap() else {
+        panic!("fixture must load");
+    };
+    let mut other = oneterm_vault::unlock(&header, &secret(V1_PASSWORD)).unwrap();
+    other
+        .change_password_with_params(
+            &dir,
+            &secret(V1_PASSWORD),
+            &secret("changed elsewhere"),
+            KdfParams::FLOOR,
+        )
+        .unwrap();
+    let changed = read(&dir, "vault.json").unwrap();
+
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+    assert_eq!(read(&dir, "vault.json").unwrap(), changed);
+    assert!(!state.read_with(cx, |state, _| state.is_busy()));
+}
+
+#[gpui::test]
+async fn change_password_checks_the_old_one_and_scrubs_the_backup(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    let events = record_events(&state, cx);
+
+    let task = state.update(cx, |state, cx| {
+        state.change_password(secret("not it"), secret("new master password"), cx)
+    });
+    let error = task.await.unwrap_err();
+    assert!(matches!(
+        error,
+        VaultActionError::Vault(VaultError::WrongPassword)
+    ));
+    assert_eq!(state.read_with(cx, |state, _| state.failures), 1);
+    assert_eq!(read(&dir, "vault.json").unwrap(), V1);
+
+    // From Locked: a right old password also unlocks.
+    let task = state.update(cx, |state, cx| {
+        state.change_password(secret(V1_PASSWORD), secret("new master password"), cx)
+    });
+    task.await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+    assert_eq!(*events.borrow(), [VaultEvent::Unlocked]);
+    let raw = read(&dir, "vault.json").unwrap();
+    assert_eq!(read(&dir, "vault.bak").unwrap(), raw);
+
+    state.update(cx, |state, cx| state.lock(cx));
+    unlock(&state, V1_PASSWORD, cx).await.unwrap_err();
+    unlock(&state, "new master password", cx).await.unwrap();
+}
+
+#[gpui::test]
+async fn reset_announces_itself_first_then_removes_both_files(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    assert!(dir.join("vault.bak").exists());
+    let events = record_events(&state, cx);
+
+    let task = state.update(cx, |state, cx| state.reset(cx));
+    // The key is dropped at once, before the file goes.
+    assert!(state.read_with(cx, |state, _| state.unlocked().is_none()));
+    assert_eq!(*events.borrow(), [VaultEvent::Reset]);
+    task.await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Uninitialised);
+    assert!(!dir.join("vault.json").exists());
+    assert!(!dir.join("vault.bak").exists());
+}
+
+#[gpui::test]
+async fn the_elevated_window_unlocks_but_never_writes(cx: &mut TestAppContext) {
+    let empty = test_dir();
+    let state = state_in(&empty, true, cx);
+    let task = state.update(cx, |state, cx| state.set_up(secret("some password"), cx));
+    let error = task.await.unwrap_err();
+    assert!(matches!(
+        error,
+        VaultActionError::Vault(VaultError::ReadOnly)
+    ));
+    assert!(!empty.join("vault.json").exists());
+
+    let dir = fixture_dir();
+    let state = state_in(&dir, true, cx);
+    state.read_with(cx, |state, _| {
+        assert!(state.is_read_only());
+        assert!(!state.can_change());
+        assert!(!state.can_reset());
+    });
+    // Unlock is allowed (intake Q5); the rehash is not attempted.
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+    assert_eq!(read(&dir, "vault.json").unwrap(), V1);
+    assert!(!dir.join("vault.bak").exists());
+
+    let task = state.update(cx, |state, cx| {
+        state.change_password(secret(V1_PASSWORD), secret("other password"), cx)
+    });
+    assert!(matches!(
+        task.await.unwrap_err(),
+        VaultActionError::Vault(VaultError::ReadOnly)
+    ));
+    let task = state.update(cx, |state, cx| state.reset(cx));
+    assert!(matches!(
+        task.await.unwrap_err(),
+        VaultActionError::Vault(VaultError::ReadOnly)
+    ));
+    assert_eq!(read(&dir, "vault.json").unwrap(), V1);
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+}
+
+#[gpui::test]
+fn damaged_and_newer_files_are_unavailable_and_only_damaged_resets(cx: &mut TestAppContext) {
+    let damaged = test_dir();
+    std::fs::write(damaged.join("vault.json"), "not json").unwrap();
+    let state = state_in(&damaged, false, cx);
+    state.read_with(cx, |state, _| {
+        assert_eq!(state.phase(), VaultPhase::Unavailable);
+        assert!(state.unavailable_reason().unwrap().contains("damaged"));
+        assert!(state.can_reset());
+        assert!(!state.can_change());
+    });
+
+    let newer = test_dir();
+    std::fs::write(newer.join("vault.json"), V9).unwrap();
+    let state = state_in(&newer, false, cx);
+    state.read_with(cx, |state, _| {
+        assert_eq!(state.phase(), VaultPhase::Unavailable);
+        assert!(state.unavailable_reason().unwrap().contains("newer"));
+        assert!(!state.can_reset());
+    });
+    // Loading never touched either file.
+    assert_eq!(read(&damaged, "vault.json").unwrap(), "not json");
+    assert_eq!(read(&newer, "vault.json").unwrap(), V9);
+}

@@ -6,7 +6,9 @@
 //! - **runtime state** shared across features: [`AppState`] (active SFTP
 //!   backend / cwd source per workspace), [`AgentRegistry`] (the folded agent-status
 //!   agent model behind the Agent Panel), [`CompletionHistory`],
-//!   [`InputChannelRegistry`] (broadcast input channel membership + fan-out);
+//!   [`InputChannelRegistry`] (broadcast input channel membership + fan-out),
+//!   [`VaultState`] (the master-password vault's phase, `IN-0050`) and its
+//!   dialogs ([`vault_dialogs`]);
 //! - **injection**: [`AppServices`] — the single composition-root bundle through
 //!   which features receive the session factory and contribute the workspace
 //!   commands / active-terminal metrics / agent focuser the shell and other
@@ -28,6 +30,8 @@ pub mod input_channel_registry;
 pub mod panel_names;
 pub mod persist_queue;
 pub mod services;
+pub mod vault_dialogs;
+pub mod vault_state;
 
 pub use agent_registry::{
     AgentCard, AgentNav, AgentRegistry, AgentStateCounts, ApprovalInfo, FileEntry, Grouping,
@@ -38,6 +42,7 @@ pub use completion_history::{CompletionHistory, GlobalCompletionHistory};
 pub use input_channel_registry::{BroadcastInput, InputChannelRegistry};
 pub use persist_queue::PersistQueue;
 pub use services::AppServices;
+pub use vault_state::{VaultEvent, VaultPhase, VaultState};
 
 /// How long a repeating UI timer should sleep to wake on the next multiple of
 /// `interval` since the Unix epoch.

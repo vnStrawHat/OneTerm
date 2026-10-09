@@ -11,6 +11,11 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Set-up and rewrap with explicit Argon2id parameters, so other crates' tests can
+# run at `KdfParams::FLOOR` (`US-0157`). Production code never enables it.
+test-support = []
+
 [dependencies]
 oneterm-core.workspace = true
 aes-gcm.workspace = true

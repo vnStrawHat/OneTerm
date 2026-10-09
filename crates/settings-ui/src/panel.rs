@@ -13,7 +13,7 @@
 //!
 //! The pages, in sidebar order: General; Key Bindings, Key Bindings: Terminal,
 //! Key Bindings: Sessions; Terminal, Terminal Display, Mouse & Clipboard,
-//! Terminal Logging, Completion; SSH; Network; About. Each owning module builds
+//! Terminal Logging, Completion; SSH; Security; Network; About. Each owning module builds
 //! its own and `docs/gui-layout.md` §Settings window is the list's home. The
 //! Terminal pages read/write the global [`TerminalSettings`] and persist changes
 //! to `terminal.json`; General's theme group drives the gpui-component [`Theme`]
@@ -46,7 +46,7 @@ use gpui_component::{
     v_flex,
 };
 
-use super::{about, general, key_bindings, ssh, terminal, updates};
+use super::{about, general, key_bindings, security, ssh, terminal, updates};
 
 const SETTINGS_GROUP_VARIANT: GroupBoxVariant = GroupBoxVariant::Outline;
 const SETTINGS_PANEL_ROLE: Role = Role::Pane;
@@ -92,6 +92,11 @@ impl SettingsPanel {
             |_, _, cx| cx.notify(),
         )
         .detach();
+        // The Security page shows the master password's phase and which
+        // actions apply, so it follows every `VaultState` change.
+        if let Some(vault) = oneterm_state::VaultState::try_global(cx) {
+            cx.observe(&vault, |_, _, cx| cx.notify()).detach();
+        }
         Self {
             focus_handle: cx.focus_handle(),
         }
@@ -110,6 +115,7 @@ impl SettingsPanel {
         pages.extend(key_bindings::pages());
         pages.extend(terminal::pages());
         pages.push(ssh::page(cx));
+        pages.push(security::page(cx));
         // M2 (`DEC-0019`, `IN-0043` MIN-4): the Network page configures how the
         // updater reaches GitHub, and an elevated window has no updater. A page
         // whose edits are silently discarded is worse than one that is not

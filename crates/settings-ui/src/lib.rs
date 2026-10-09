@@ -23,6 +23,7 @@ mod appearance;
 mod general;
 mod key_bindings;
 mod panel;
+mod security;
 mod ssh;
 mod terminal;
 mod updates;

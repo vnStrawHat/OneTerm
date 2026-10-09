@@ -5625,9 +5625,11 @@ dependencies = [
  "gpui-base",
  "gpui-component",
  "gpui-pre",
+ "log",
  "oneterm-completion",
  "oneterm-core",
  "oneterm-terminal",
+ "oneterm-vault",
  "serde",
  "serde_json",
 ]

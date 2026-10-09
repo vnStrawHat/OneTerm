@@ -125,6 +125,22 @@ pub fn reset(dir: &Path) -> Result<(), VaultError> {
     reset_with(dir, oneterm_core::elevation::is_restricted())
 }
 
+/// [`init`] with explicit Argon2id parameters, for other crates' tests
+/// (`test-support` feature). Production set-up always uses the defaults.
+#[cfg(feature = "test-support")]
+pub fn init_with_params(
+    dir: &Path,
+    password: &SecretString,
+    params: KdfParams,
+) -> Result<UnlockedVault, VaultError> {
+    init_with(
+        dir,
+        password,
+        params,
+        oneterm_core::elevation::is_restricted(),
+    )
+}
+
 pub(crate) fn init_with(
     dir: &Path,
     password: &SecretString,
@@ -225,6 +241,25 @@ impl UnlockedVault {
             old_password,
             new_password,
             KdfParams::DEFAULT,
+            oneterm_core::elevation::is_restricted(),
+        )
+    }
+
+    /// [`Self::change_password`] with explicit Argon2id parameters, for other
+    /// crates' tests (`test-support` feature).
+    #[cfg(feature = "test-support")]
+    pub fn change_password_with_params(
+        &mut self,
+        dir: &Path,
+        old_password: &SecretString,
+        new_password: &SecretString,
+        params: KdfParams,
+    ) -> Result<(), VaultError> {
+        self.change_password_with(
+            dir,
+            old_password,
+            new_password,
+            params,
             oneterm_core::elevation::is_restricted(),
         )
     }
