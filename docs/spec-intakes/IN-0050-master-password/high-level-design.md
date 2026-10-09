@@ -94,6 +94,16 @@ Two facts make the state: is the data key in memory, and is the screen covered.
    start (vault.json damaged or newer) --> Unavailable: no saving, no lock; Settings explains
 ```
 
+As built by `US-0157` (`crates/state/src/vault_state.rs`): `VaultPhase` is Uninitialised /
+Locked / Unlocked / Unavailable (`IdleLocked` arrives with `US-0159`); Locked holds the header
+read once at start and an unlock verifies against it, never against a fresh read of
+`vault.json`; one operation runs at a time; a successful unlock of a header below the default
+parameters rehashes it in the background; `VaultEvent::Reset` is emitted before the file is
+removed. A lock asked for while an operation runs wins: the operation's result never puts a key
+back (an unlock answers `LockedMeanwhile`; a set-up, change or rehash keeps only the new
+header). The state applies every result itself, so a caller dropping its task never leaves it
+busy.
+
 - `Locked -> IdleLocked` on idle too: screen protection does not depend on the user ever having
   unlocked.
 - "Lock now" from the Settings page before `US-0159` drops the key only (`Unlocked -> Locked`);
@@ -219,6 +229,33 @@ Two facts make the state: is the data key in memory, and is the screen covered.
 ```
 
 ### Settings > Security (new page)
+
+As built by `US-0157` (the screen-lock group and the shortcut on Lock Now arrive with `US-0159`):
+
+```text
++-------------------+------------------------------------------------------+
+| ...               |  Security                                            |
+| SSH               |  Master Password                                     |
+| Security   <      |  +------------------------------------------------+  |
+| Network           |  | Status                                         |  |
+| About             |  |  Set, locked. Saved passwords need it ...      |  |
+|                   |  |                                  [ Unlock... ] |  |
+|                   |  | Change                                         |  |
+|                   |  |  Saved passwords stay valid; ... [ Change... ] |  |
+|                   |  | Lock Now   (Unlocked only)       [ Lock Now ]  |  |
+|                   |  | Reset                                          |  |
+|                   |  |  Delete the master password and  [ Reset... ]  |  |
+|                   |  |  every saved password. Sessions are kept.      |  |
+|                   |  +------------------------------------------------+  |
+|                   |  Uninitialised: "Not set up." + [ Set Up... ] only.  |
+|                   |  Damaged vault.json: the reason + [ Reset... ] only; |
+|                   |  newer vault.json: the reason, no button.            |
+|                   |  Elevated: status + "Managed from the normal OneTerm |
+|                   |  window."; Unlock / Lock Now only.                   |
++-------------------+------------------------------------------------------+
+```
+
+The design sketch it refines:
 
 ```text
 +-------------------+------------------------------------------------------+

@@ -157,10 +157,14 @@ elevated window has no lock.
 - **Processes** (OneTerm has no single-instance guard; the elevated window is always a second
   process) each have their own phase, key and timer.
   - Set-up race: solved by the create-only transaction (section 4).
-  - Change password in process A: B keeps working (same data key). B's next **dialog** unlock
-    (`Locked -> Unlocked`) re-reads the file and so takes the new password when the `vault_id`
-    is unchanged. B's **lock screen** never re-reads the file (`idle-lock-overlay.md`, edge
-    cases): replacing `vault.json` must not be a way past a locked window.
+  - Change password in process A: B keeps working (same data key). **No unlock in B re-reads
+    the file** (`US-0157`, one unlock path): neither the Settings / dialog unlock nor the lock
+    screen. Both verify against the header B read at start (or at its last set-up, change or
+    rehash), so replacing `vault.json` is never a way past a locked process
+    (`idle-lock-overlay.md`, edge cases). Cost: B wants the previous password until it
+    restarts, and a change attempted in B is refused with `ChangedElsewhere`. The one re-read
+    after start is a set-up in B refused with `AlreadyInitialised` (another process was
+    first), which can only move B from Uninitialised to what the file says.
   - A file whose `vault_id` matches but whose wrapped key was forged by someone who can write
     the folder would unwrap to a different data key: existing items then fail as `Rejected`,
     which shows. That attacker can also edit `terminal.json`; the threat model excludes them.

@@ -124,7 +124,7 @@ The `IdleClock` is stamped.
 - Inline "Wrong master password." under the input; the input is cleared.
 - The failure count lives in `VaultState` (process-wide, in memory, shared by every window and
   by the unlock dialog). From the 5th consecutive failure the input and button are disabled for
-  `min(2^(n-5), 30)` seconds with a countdown (`2, 4, 8, 16, 30, 30 ...`).
+  `min(2^(n-4), 30)` seconds with a countdown (`2, 4, 8, 16, 30, 30 ...`).
 - Never a permanent lockout, never a wipe, never persisted (a restart resets the count; the
   KDF cost, not the UI counter, is what limits guessing).
 - Each attempt runs one KDF off the UI thread; the button shows a spinner and further
@@ -182,7 +182,7 @@ impl VaultState {
     pub fn phase(&self) -> VaultPhase;
     pub fn retry_after(&self) -> Option<Duration>;                 // back-off remaining
     pub fn unlock(&mut self, password: SecretString, cx: &mut Context<Self>)
-        -> Task<Result<(), UnlockError>>;     // Locked -> Unlocked; re-reads vault.json (picks up a change elsewhere)
+        -> Task<Result<(), UnlockError>>;     // Locked -> Unlocked; in-memory header only (US-0157: no re-read)
     pub fn unlock_screen(&mut self, password: SecretString, cx: &mut Context<Self>)
         -> Task<Result<(), UnlockError>>;     // IdleLocked -> Unlocked; in-memory header only
     pub fn lock_key(&mut self, cx: &mut Context<Self>);             // Unlocked -> Locked

@@ -116,6 +116,8 @@ OneTerm/
 │   │       ├── dock_persistence.rs # docks.json path + DockDocument schema owner (read/update transaction, quarantine)
 │   │       ├── dock_util.rs        # DockArea walking + set_right_dock_open (shared shell/feature helper)
 │   │       ├── panel_names.rs      # Registered dock panel name constants (persisted contract)
+│   │       ├── vault_state.rs      # VaultState (global Entity): master-password phase, key, back-off (IN-0050)
+│   │       ├── vault_dialogs.rs    # Set up / Unlock / Change / Reset dialogs + ensure_unlocked
 │   │       └── form_dialog.rs      # FormDialog + labelled_field (shared dialog scaffolding)
 │   │
 │   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
@@ -124,7 +126,8 @@ OneTerm/
 │   ├── vault/                      # `oneterm-vault` (IN-0050, DEC-0021) — master-password vault, gpui-free
 │   │   ├── src/                    # lib.rs (re-exports) + vault.rs (init/unlock/reset, UnlockedVault seal/open/
 │   │   │                           #   change_password) / document.rs (vault.json load + the one write fn) /
-│   │   │                           #   envelope.rs (otv1: + associated data) / kdf.rs (Argon2id) / error.rs
+│   │   │                           #   envelope.rs (otv1: + associated data) / kdf.rs (Argon2id) / error.rs;
+│   │   │                           #   feature "test-support": set-up / rewrap with explicit KDF parameters
 │   │   └── tests/fixtures/persistence/ # vault-v1.json (made by an independent implementation) + invalid cases
 │   │
 │   ├── theme/                      # `oneterm-theme` — theme registry + AppIcon (has build.rs)
@@ -166,7 +169,7 @@ OneTerm/
 │   │
 │   ├── settings-ui/                # `oneterm-settings-ui` — General Settings window
 │   │   └── src/                    # lib.rs: open_settings + setup_key_bindings commands;
-│   │                               #   panel/window/general/terminal/appearance/about/key_bindings …
+│   │                               #   panel/window/general/terminal/appearance/security/about/key_bindings …
 │   │                               #   update_controls/updates state
 │   │
 │   ├── agent-ui/                   # `oneterm-agent-ui` — AGENT feature (right-dock fleet view + compact cards)
@@ -252,7 +255,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `terminal` (`oneterm-terminal`) | `core`, `vt` | engine | The adapter over `oneterm-vt` (no gpui): `TerminalSession`, `TerminalModel`, the `TerminalHandle` lock plus the render-demand handshake, the `EventBatch` drain and its delivery policy, the `TerminalContent` frame, palette/OSC helpers, and `SessionFactory`. Key and mouse encoding moved to `oneterm_vt::input` at `US-0099`; this crate re-exports the names so a consumer keeps one `use`. |
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
 | `settings` (`oneterm-settings`) | `core`, gpui, gpui-component | shared | `TerminalConfig`, live `TerminalSettings` (defaults single-sourced from the config), and `UiConfig` including the `Theme` observer that persists `ui_config.json`. |
-| `state` (`oneterm-state`) | `core`, `terminal`, `completion`, gpui, gpui-component | shared | Cross-feature runtime state (`AppState`, `AgentRegistry`, `CompletionHistory`) + injection (`AppServices` bundle: session factory, `WorkspaceCommands`, active-terminal metrics, agent focuser) + shared shell contracts (`docks.json` document owner, panel names, dock helpers). |
+| `state` (`oneterm-state`) | `core`, `terminal`, `completion`, `vault`, gpui, gpui-component | shared | Cross-feature runtime state (`AppState`, `AgentRegistry`, `CompletionHistory`, the master-password `VaultState` and its dialogs, `IN-0050`) + injection (`AppServices` bundle: session factory, `WorkspaceCommands`, active-terminal metrics, agent focuser) + shared shell contracts (`docks.json` document owner, panel names, dock helpers). |
 | `update` (`oneterm-update`) | `core`, `chrono`, `reqwest`, `semver`, `sha2`, `tar`, `flate2`, `zip` | shared | GitHub Releases auto-update checks, asset selection, download verification, staging, and installer orchestration. |
 | `vault` (`oneterm-vault`) | `core`, `argon2`, `aes-gcm`, `base64`, `serde`, `serde_json`, `thiserror`, `zeroize` | shared (L1) | Master-password vault (`IN-0050`, `DEC-0021`): Argon2id key-encryption key, the wrapped random data key, AES-256-GCM `otv1:` envelopes bound to a purpose and context, and the `vault.json` header (load, create-only set-up, vault-id-checked rewrap, reset; elevated writes refused in one function). gpui-free, and the **only** crate allowed to depend on `argon2` / `aes-gcm` (`scripts/dependency-graph-policy.json`). |
 | `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, generated `AppIcon`, brand accent, and theme-tinted notification builders (`notif_ext`). |

@@ -1,6 +1,6 @@
 [package]
 name = "oneterm-state"
-description = "OneTerm cross-feature runtime state (AppState, AgentRegistry, completion history) + injection (AppServices) + shared docks.json ownership."
+description = "OneTerm cross-feature runtime state (AppState, AgentRegistry, completion history, master-password VaultState) + injection (AppServices) + shared docks.json ownership."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,12 +15,16 @@ workspace = true
 oneterm-core.workspace = true
 oneterm-terminal.workspace = true
 oneterm-completion.workspace = true
+oneterm-vault.workspace = true
 gpui.workspace = true
 gpui-base.workspace = true
 gpui-component.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+log.workspace = true
+futures.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 oneterm-terminal = { workspace = true, features = ["test-support"] }
+oneterm-vault = { workspace = true, features = ["test-support"] }
