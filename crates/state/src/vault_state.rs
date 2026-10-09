@@ -254,6 +254,18 @@ impl VaultState {
         self.screen_locked && matches!(self.phase, Phase::Locked(_))
     }
 
+    /// Whether the screen is locked in this process (`false` before
+    /// [`Self::init`]).
+    ///
+    /// **Rule for work the lock screen does not cover** (`idle-lock-overlay.md`
+    /// § 7): a native OS dialog (file picker, Save dialog) is a window of its own
+    /// that stays usable over the lock, and another keystroke interceptor still
+    /// sees the key that locked. Their continuations check this first and drop
+    /// the result while locked.
+    pub fn screen_locked(cx: &App) -> bool {
+        Self::try_global(cx).is_some_and(|state| state.read(cx).is_screen_locked())
+    }
+
     /// Whether a vault exists that a screen lock can be lifted with: no vault
     /// (or an unusable one) means no lock (`idle-lock-overlay.md` § 7).
     pub fn can_lock_screen(&self) -> bool {

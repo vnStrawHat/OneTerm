@@ -607,6 +607,11 @@ fn browse_for_private_key(
             };
             let value = selected.to_string_lossy().into_owned();
             _ = cx.update(|window, cx| {
+                // The OS dialog stays usable over the lock screen (US-0159).
+                if oneterm_state::VaultState::screen_locked(cx) {
+                    log::debug!("SSH private-key picker answered while locked; ignored");
+                    return;
+                }
                 key_path.update(cx, |state, cx| state.set_value(value, window, cx));
                 if let Some(focus_after) = focus_after {
                     window.defer(cx, move |window, cx| {
@@ -674,6 +679,49 @@ mod tests {
                 .p_4()
                 .child(self.form.render(true, cx))
         }
+    }
+
+    /// `US-0159` verify D2: the OS file dialog stays usable over the lock
+    /// screen, so a key picked while locked is dropped; picked unlocked, it lands.
+    #[gpui::test]
+    fn a_key_picked_while_the_screen_is_locked_is_dropped(cx: &mut TestAppContext) {
+        struct Directory(PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                // Best effort: nothing in a destructor can report a failed cleanup.
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = Directory(
+            std::env::temp_dir().join(format!("oneterm-key-picker-lock-{}", std::process::id())),
+        );
+        std::fs::create_dir_all(&dir.0).unwrap();
+        std::fs::write(
+            dir.0.join("vault.json"),
+            include_str!("../../vault/tests/fixtures/persistence/vault-v1.json"),
+        )
+        .unwrap();
+        cx.update(gpui_component::init);
+        let vault = cx.new(|_| oneterm_state::VaultState::load(dir.0.clone(), false));
+        cx.update(|cx| cx.set_global(oneterm_state::vault_state::VaultStateGlobal(vault.clone())));
+        let (key_path, cx) = cx.add_window_view(|window, cx| InputState::new(window, cx));
+        let pick = |cx: &mut VisualTestContext| {
+            let input = key_path.clone();
+            cx.update(|window, cx| browse_for_private_key(input, None, window, cx));
+            cx.simulate_path_prompt_response(|_| Some(vec![PathBuf::from("picked_key")]));
+            cx.run_until_parked();
+            cx.update(|_, cx| key_path.read(cx).value().to_string())
+        };
+
+        vault.update(cx, |state, cx| state.lock_screen(cx));
+        assert_eq!(pick(cx), "", "a result applied under the lock");
+        let task = vault.update(cx, |state, cx| {
+            state.unlock_screen(SecretString::new("correct horse battery staple"), cx)
+        });
+        cx.run_until_parked();
+        drop(task);
+        assert!(!vault.read_with(cx, |state, _| state.is_screen_locked()));
+        assert_eq!(pick(cx), "picked_key");
     }
 
     #[gpui::test]

@@ -617,6 +617,11 @@ impl SftpPanel {
 
             // The panel may be gone before the picker closes; nothing to upload then.
             _ = cx.update(|window, cx| {
+                // The OS dialog stays usable over the lock screen (US-0159).
+                if oneterm_state::VaultState::screen_locked(cx) {
+                    log::debug!("SftpPanel: upload picker answered while locked; ignored");
+                    return;
+                }
                 panel.update(cx, |this, cx| {
                     this.do_upload_paths(paths, window, cx);
                 });
@@ -709,6 +714,16 @@ impl SftpPanel {
                     return;
                 }
             };
+
+            // The OS dialog stays usable over the lock screen (US-0159); a window
+            // that is gone has nothing to download into either.
+            if cx
+                .update(|_, cx| oneterm_state::VaultState::screen_locked(cx))
+                .unwrap_or(true)
+            {
+                log::debug!("SftpPanel: download Save dialog answered while locked; ignored");
+                return;
+            }
 
             log::info!(
                 "SftpPanel: download \"{remote_path}\" → \"{}\"",

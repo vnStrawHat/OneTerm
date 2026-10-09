@@ -141,9 +141,12 @@ The `IdleClock` is stamped.
    Tab, Escape, and paste for password managers); stop everything else, which removes the
    context-free global bindings (`ctrl-shift-q` Quit, theme switch, FPS toggle ...).
 3. **Mouse:** only the lock view's elements exist to receive clicks.
-4. **Window close and Alt+F4** are OS events, not keystrokes. Closing the main window quits the
-   app (its existing `on_release` hook), which the design allows (intake Q6); closing the
-   Settings window just closes it.
+4. **Window close** (the caption button) is an OS event, not a keystroke. Closing the main
+   window quits the app (its existing `on_release` hook), which the design allows (intake Q6);
+   closing the Settings window just closes it. **Alt+F4 is not an OS-level bypass** (`US-0159`
+   verify D4): on Windows `WM_SYSKEYDOWN` goes through gpui's keystroke dispatch first, so the
+   interceptor sees it; it closes the window only because an unbound key passes inside the lock
+   view. A physical Alt+F4 was not walked (a posted one closes nothing, locked or not).
 
 ### 7. Interactions
 
@@ -155,6 +158,9 @@ The `IdleClock` is stamped.
 | Toasts / notifications | The notification layer is inside the surface: nothing shows while locked. Toasts raised meanwhile may expire unseen; failures that matter are also shown in place (connect dialog inline error, tab disconnect state). |
 | Open dialogs (connect, host key, session edit) | Hidden, not closed; back unchanged after unlock. A typed but unsent SSH password stays in that dialog's memory (accepted). |
 | App menus | Windows and Linux draw them in-window (title bar): gone with the surface. macOS native menu items dispatch to the focused window; workspace handlers are unreachable; the few global handlers are harmless. Swapping the macOS menu while locked is a follow-up (untested platform). |
+| Native OS dialogs (file picker, Save dialog) | **Not covered by the lock**: a dialog open when the lock comes is a window of its own and stays usable over the lock screen. **Rule:** a continuation that applies a native dialog's result checks `VaultState::screen_locked(cx)` first and drops the result while locked (`US-0159` verify D2: the SSH key picker, the log-folder picker, SFTP upload and download Save). There is no shared picker wrapper; every new `prompt_for_paths` / `prompt_for_new_path` caller must follow the rule. |
+| Other keystroke interceptors | gpui runs every interceptor whatever an earlier one did, so the key that locks (late input) still reaches them. **Rule:** an interceptor that acts on a key returns early when `VaultState::screen_locked(cx)` (the Key Bindings recorder does, `US-0159` verify D1). |
+| Element-keyed UI state | gpui keeps keyed element state only for elements rendered in the last frame, so a lock drops it: the Settings window comes back on its first page (General), because the kit's `Settings` keeps the selected page in element state with no way to set it from outside. Entity state (dialogs, inputs, terminals, the dock) survives. Known limit (`US-0159` verify D3). |
 | Clipboard | A remote OSC 52 write still reaches the system clipboard (terminal policy unchanged); nothing is read from it. |
 | Screenshots, screen sharing, Alt+Tab, taskbar hover | Live captures show only the lock screen. **Open risk:** a window minimised before the lock may keep a stale DWM thumbnail; `US-0159` checks it and, if so, forces a repaint or an iconic thumbnail. |
 | FPS HUD | Part of the workspace: not drawn while locked. |
@@ -256,6 +262,10 @@ Where the build differs from, or settles, the design above (`US-0159-idle-lock-s
 - **Lock view text.** The reset explanation is always shown (no disclosure): the lock screen
   cannot reset; quit and restart opens OneTerm unlocked (Q1), where Settings > Security > Reset
   is. No eye toggle on the password input.
+- **Empty Enter** on the lock input is ignored: no Argon2id run, no failure counted (verify I4).
+- **Rework after verification** (`evidence/US-0159-verify.md`): the native-dialog and
+  interceptor rules in § 7 (D1, D2); the Settings page reset recorded as a known limit (D3);
+  § 6.4 corrected (D4).
 - **Diagnostics.** At each unlock every window logs `lock screen: N frames in S s` at debug
   level (the lock view renders on every frame its window draws).
 

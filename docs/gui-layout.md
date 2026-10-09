@@ -209,8 +209,12 @@ the wall clock as well as the monotonic one) locks before it is delivered.
 the Settings panel), its dialogs, toasts, tooltips and the FPS HUD are not rendered, laid out
 or painted, so no frame and no screenshot holds a terminal pixel and a hidden terminal's output
 asks for no frame (gpui invalidates only windows whose last frame rendered the notifying view).
-Sessions keep running underneath; open dialogs come back unchanged after the unlock, and each
-window gets its previous focus back.
+Sessions keep running underneath; open dialogs, inputs, terminals and the dock come back
+unchanged after the unlock, and each window gets its previous focus back. Element-keyed state
+does not survive a lock: the Settings window comes back on General, whatever page it showed
+(known limit, the kit keeps the page in element state). A native OS dialog (file picker, Save
+dialog) is not covered by the lock and stays usable over it; whatever is picked in it while
+locked is dropped.
 
 The lock view has its own title bar (drag, minimise, maximise, close; the elevated window's
 `(Administrator)` marker), the lock icon, "OneTerm is locked", a masked password input focused
@@ -222,9 +226,11 @@ OneTerm unlocked, where Settings > Security > Reset is), and **Quit OneTerm**. I
 host, tab, session or notification. While locked, one app-wide keystroke interceptor stops
 every keystroke except text and the password input's own editing keys (a keystroke passes only
 inside the lock view, and only when every binding it resolves to there is `input::*` or
-`root::*`), so no workspace or global shortcut fires, `ctrl-shift-q` included; closing a window
-(its close button, Alt+F4) still works, and closing the main window quits. The lock screen
-checks the password against the vault header read at start, never against `vault.json` on
+`root::*`), so no workspace or global shortcut fires, `ctrl-shift-q` included; an empty Enter
+is not an attempt. Closing a window with its close button still works, and closing the main
+window quits (Alt+F4 passes through the same keystroke filter as an unbound key and was not
+walked). The lock screen checks the password against the vault header held in memory (read at
+start, replaced by a set-up, change or rehash in this process), never against `vault.json` on
 disk, so a vault reset or replaced by another OneTerm cannot open it.
 
 ## Text contrast floor and hierarchy

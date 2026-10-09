@@ -480,7 +480,9 @@ impl LockView {
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.can_submit(cx) {
+        // An empty Enter is not an attempt: it would cost an Argon2id run and
+        // count toward the back-off for nothing (`US-0159` verify I4).
+        if !self.can_submit(cx) || self.input.read(cx).text().len_chars() == 0 {
             return;
         }
         let Some(state) = VaultState::try_global(cx) else {

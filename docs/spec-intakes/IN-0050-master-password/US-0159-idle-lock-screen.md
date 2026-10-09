@@ -13,7 +13,7 @@ Created: 2026-10-09
 - [x] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -81,8 +81,9 @@ From the `IN-0050` US-0159 candidate, made concrete:
 - [x] Unlock with the master password restores each window's previous focus (a dead handle is
   tolerated); a wrong password shows the inline error, clears the input, and backs off from the
   5th failure (`VaultState`'s count, shared with the dialogs).
-- [x] Quit (button, window close, Alt+F4) works while locked (button and `WM_CLOSE` walked;
-  Alt+F4 sends the same `WM_CLOSE`).
+- [x] Quit (button, window close) works while locked (button and `WM_CLOSE` walked). Alt+F4:
+  **not walked** (a posted Alt+F4 closes nothing in either state, verify D4); the owner presses a
+  physical Alt+F4. It is not an OS bypass: it passes the keystroke filter as an unbound key.
 - [x] No vault (Uninitialised / Unavailable): no timer, no lock; the action says why.
 - [ ] Sleep longer than the timeout locks on resume: the wall-clock term of the idle time
   (unit-tested decision; a real sleep is walked if possible, otherwise recorded as a gap).
@@ -193,6 +194,38 @@ Q11 findings). Not changed: `crate-dependency-rules.md` / `scripts/dependency-gr
   not depend on which actions the table holds; the GUI walk checked the real table's
   `ctrl-shift-q` and `ctrl-shift-l`.
 
+### Rework after independent verification (2026-10-09)
+
+[`evidence/US-0159-verify.md`](evidence/US-0159-verify.md): PASS with one Medium and three Low
+defects, fixed on top of the verifier's commit (`dd57f82f`, 7 tests).
+
+| Defect | Fix |
+| --- | --- |
+| D2 (Medium): a native OS file dialog open when the lock comes stays usable over it, and its result was applied while locked (walked: the log folder was saved to `terminal.json` under the lock; the same path starts an SFTP upload or saves a download) | No shared picker wrapper exists, so the rule lives in one helper, `VaultState::screen_locked(cx)` (`crates/state/src/vault_state.rs:265`), checked by each continuation before it applies anything, with a debug log: `crates/session-ui/src/auth_form.rs:611` (SSH key), `crates/settings-ui/src/terminal/logging.rs:193` (log folder), `crates/sftp-ui/src/transfer.rs:621` (upload) and `:721` (download Save; a window that is gone counts as locked). The rule for future pickers is in `idle-lock-overlay.md` § 7. Tests: `a_key_picked_while_the_screen_is_locked_is_dropped` (session-ui; the test platform's path prompt answered while locked and again unlocked; fails with the guard removed) and `the_app_wide_screen_lock_check_follows_the_global` (state). |
+| D1 (Low): gpui runs every keystroke interceptor, so the Key Bindings recorder could record the key that locked (late input) | `crates/settings-ui/src/key_bindings/key_bindings_ui.rs:293` `recorder_armed` returns false while `VaultState::screen_locked`; the lock's interceptor is installed at init, before any recorder, so it has locked by then. Test `the_recorder_takes_no_key_while_the_screen_is_locked`; the verifier's `verifier_d1_a_later_interceptor_still_sees_the_key_that_locked` is flipped to the rule (0 keys taken). The rule for future interceptors is in § 7. |
+| D3 (Low): a lock drops element-keyed state; the Settings window returns to General | **Known limit, recorded** (LLD § 7, `docs/gui-layout.md` § Lock screen): the kit's `Settings` keeps the selected page in a private keyed `SettingsState` with no setter or change callback (`gpui-component 0.7.0` `setting/settings.rs`), so holding it in the panel would mean forking the widget. Dialogs, inputs, terminals and the dock are entities and come back intact (verifier). |
+| D4 (docs) | LLD § 6.4: Alt+F4 is not an OS bypass; the Alt+F4 acceptance tick says "not walked"; `docs/gui-layout.md`: the password is checked against the header held in memory (read at start, replaced by set-up, change or rehash). |
+| I4 (note, taken) | An empty Enter on the lock input is no longer an attempt (`crates/workspace/src/lock_screen.rs:485`): no Argon2id run, no failure counted; tested in `unlocking_restores_the_focus_and_counts_a_wrong_password`. |
+
+The verifier's other notes, recorded (not defects):
+
+- **I1:** a stopped keystroke is still offered to the first capture-phase key listener on the
+  focus path (gpui quirk); no terminal registers one, pinned by a verifier test.
+- **I2:** text without a keystroke (`VK_PACKET` auto-type, IME composition) skips the key filter
+  and the idle clock; while locked it can only reach the lock input, the one painted input
+  handler. Unlocked, such typing does not postpone the lock.
+- **I3:** window deactivation and system-generated mouse moves (z-order changes under a resting
+  cursor) postpone the lock; they never open it.
+- **I5:** `is_screen_locked()` is `screen_locked && Locked`, so it fails open by construction if
+  a future transition leaves Locked without clearing the flag; today only a reset does, on
+  purpose.
+- **I6:** a reset that lands after a lock lifts it, by design (nothing is left to unlock with).
+- **I7:** an unlock during the post-unlock rehash answers Busy, counts nothing, and the lock
+  holds until the rehash lands.
+- **I9:** OSC 9;4 taskbar progress and OSC 52 clipboard writes still leave a locked OneTerm.
+- **Follow-up:** the minimised-window DWM thumbnail stays an open, unverified risk; the fix is
+  `DWMWA_FORCE_ICONIC_REPRESENTATION` while locked (needs the raw `HWND`).
+
 ## Decisions
 
 - [`DEC-0021`](../../decisions/DEC-0021-secrets-at-rest-are-sealed-by-a-master-password-vault.md)
@@ -296,6 +329,29 @@ Gaps:
 - **Elevated window** not walked (UAC); unit test `the_elevated_window_locks_and_unlocks_read_only`.
 - Linux / macOS not run (CI). The full `cargo test --workspace` runs on `main` after independent
   verification.
+
+**Rework gate** (worktree, `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, 11.7 GB free):
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo test -p oneterm-state` | 86 passed (85 after the verifier + 1 new) |
+| `cargo test -p oneterm-workspace` | 64 passed, 3 ignored (verifier D1 test flipped; empty-Enter check added) |
+| `cargo test -p oneterm-settings` / `-p oneterm-actions` | 50 / 4 passed |
+| `cargo test -p oneterm-settings-ui` | 59 passed, 1 ignored (1 new: recorder while locked) |
+| `cargo test -p oneterm-session-ui` | 100 passed, 1 ignored (1 new: key picked while locked) |
+| `cargo test -p oneterm-sftp-ui` | 75 passed |
+| `--ignored --test-threads=1` for workspace / session-ui / settings-ui | 3 / 1 / 1 passed |
+| `python scripts/verify-dependency-graph.py` | pass |
+| `python scripts/check-doc-paths.py` | pass |
+| `python scripts/check-english.py` | pass |
+| `python scripts/check-theme-contrast.py` | pass |
+
+Mutation: with the key-picker guard disabled, `a_key_picked_while_the_screen_is_locked_is_dropped`
+fails ("a result applied under the lock"). The rework changes no visible layout (the native
+dialog itself was not re-walked); the GUI walk was not repeated. `%TEMP%`: no
+`oneterm-key-picker-lock-*` or `oneterm-recorder-lock-*` directory left.
 
 ## Handoff
 

@@ -272,6 +272,15 @@ async fn unlocking_restores_the_focus_and_counts_a_wrong_password(cx: &mut TestA
     cx.run_until_parked();
     cx.update(|window, _| assert!(!content_focus.is_focused(window)));
 
+    // An empty Enter is not an attempt (verify I4): no error, nothing running.
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let view = lock_view(cx);
+    cx.update(|_, cx| {
+        assert_eq!(view.read(cx).error, None);
+        assert!(!view.read(cx).busy);
+    });
+
     cx.simulate_input("wrong");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -597,11 +606,11 @@ async fn verifier_after_an_unlock_the_timer_locks_again(cx: &mut TestAppContext)
     let _ = (f.content, f.renders, f.quits);
 }
 
-/// Defect D1 (Low): "input after the timeout is not delivered" holds for
-/// bindings and listeners, but gpui runs every keystroke interceptor whatever
-/// an earlier one did. The Key Bindings page's recorder is one (armed while
-/// its capture element has focus), so the late key is still recorded as a
-/// binding there. Inverted by a fix.
+/// Defect D1 (Low), fixed: gpui runs every keystroke interceptor whatever an
+/// earlier one did, so a later one (the Key Bindings recorder) still sees the
+/// key that locked. The lock's interceptor is installed first and has locked by
+/// then, so an interceptor that asks `VaultState::screen_locked` first (the
+/// rule; the recorder's own test is in `oneterm-settings-ui`) takes nothing.
 #[gpui::test]
 async fn verifier_d1_a_later_interceptor_still_sees_the_key_that_locked(cx: &mut TestAppContext) {
     let f = fixture(cx);
@@ -610,6 +619,9 @@ async fn verifier_d1_a_later_interceptor_still_sees_the_key_that_locked(cx: &mut
     let counter = seen.clone();
     let _recorder = cx.update(|_, cx| {
         cx.intercept_keystrokes(move |_, _, cx| {
+            if VaultState::screen_locked(cx) {
+                return;
+            }
             counter.set(counter.get() + 1);
             cx.stop_propagation();
         })
@@ -617,7 +629,7 @@ async fn verifier_d1_a_later_interceptor_still_sees_the_key_that_locked(cx: &mut
     idle_for(Duration::from_secs(16 * 60), cx);
     cx.simulate_keystrokes("k");
     assert!(is_locked(&f.vault, cx));
-    assert_eq!(seen.get(), 1, "D1: the later interceptor saw the late key");
+    assert_eq!(seen.get(), 0, "D1: the later interceptor took the late key");
     let _ = (f.content, f.renders, f.quits);
 }
 

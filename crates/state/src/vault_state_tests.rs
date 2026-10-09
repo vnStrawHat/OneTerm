@@ -1115,3 +1115,18 @@ async fn verifier_a_screen_lock_during_the_rehash_holds_and_unlocks_after(cx: &m
     unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
     assert!(!screen_locked(&state, cx));
 }
+
+/// The app-wide check native-dialog continuations and other interceptors ask
+/// (US-0159 verify D1, D2): false before init, true only while locked.
+#[gpui::test]
+async fn the_app_wide_screen_lock_check_follows_the_global(cx: &mut TestAppContext) {
+    assert!(!cx.update(|cx| VaultState::screen_locked(cx)));
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    cx.update(|cx| cx.set_global(VaultStateGlobal(state.clone())));
+    assert!(!cx.update(|cx| VaultState::screen_locked(cx)));
+    state.update(cx, |state, cx| state.lock_screen(cx));
+    assert!(cx.update(|cx| VaultState::screen_locked(cx)));
+    unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
+    assert!(!cx.update(|cx| VaultState::screen_locked(cx)));
+}
