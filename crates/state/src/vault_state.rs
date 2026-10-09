@@ -22,7 +22,9 @@ use std::time::{Duration, Instant};
 use futures::channel::oneshot;
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Global, Task};
 use oneterm_core::SecretString;
-use oneterm_vault::{UnlockedVault, VaultError, VaultHeader, VaultStatus};
+use oneterm_vault::{
+    SealContext, SealedSecret, SecretPurpose, UnlockedVault, VaultError, VaultHeader, VaultStatus,
+};
 
 /// The shortest master password set-up and change accept, in characters.
 pub const MIN_PASSWORD_CHARS: usize = 8;
@@ -76,6 +78,9 @@ pub enum VaultActionError {
     /// The password was right, but OneTerm was locked while it was checked,
     /// and the lock wins.
     LockedMeanwhile,
+    /// A seal found `vault.json` reset or replaced by another OneTerm process;
+    /// the key was dropped and nothing was sealed.
+    ResetElsewhere,
 }
 
 impl VaultActionError {
@@ -101,6 +106,10 @@ impl VaultActionError {
             Self::Busy => "Another master password operation is still running.".to_owned(),
             Self::LockedMeanwhile => {
                 "OneTerm was locked while the password was checked. Unlock again.".to_owned()
+            }
+            Self::ResetElsewhere => {
+                "The master password was reset in another OneTerm window. Nothing was saved."
+                    .to_owned()
             }
             Self::WrongPhase => {
                 "The master password changed in the meantime. Close this dialog and try again."
@@ -274,6 +283,39 @@ impl VaultState {
             Phase::Unlocked(vault) => Some(vault),
             _ => None,
         }
+    }
+
+    /// Seal `plaintext` for `purpose` at `context` (`US-0158`).
+    ///
+    /// `vault.json` is re-read first: when it is no longer the vault this
+    /// process unlocked (reset or replaced in another OneTerm process), the key
+    /// is dropped, the phase follows the file, and the seal is refused, so a
+    /// value is never sealed under a vault nobody can open any more
+    /// (`persistence-and-migration.md` § 8). Unlock itself never re-reads.
+    pub fn seal(
+        &mut self,
+        purpose: SecretPurpose,
+        context: &SealContext<'_>,
+        plaintext: &SecretString,
+        cx: &mut Context<Self>,
+    ) -> Result<SealedSecret, VaultActionError> {
+        let Phase::Unlocked(vault) = &self.phase else {
+            return Err(VaultActionError::WrongPhase);
+        };
+        let on_disk = match oneterm_vault::load(&self.dir) {
+            Ok(VaultStatus::Ready(header)) => Some(header.vault_id()),
+            _ => None,
+        };
+        if on_disk != Some(vault.vault_id()) {
+            log::warn!("vault.json was reset or replaced elsewhere; dropping the key");
+            self.phase = read_phase(&self.dir);
+            cx.emit(VaultEvent::Locked);
+            cx.notify();
+            return Err(VaultActionError::ResetElsewhere);
+        }
+        vault
+            .seal(purpose, context, plaintext)
+            .map_err(VaultActionError::Vault)
     }
 
     /// Set up a master password: Uninitialised -> Unlocked (Locked when a lock
