@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "next_session_id": 3,
+  "sessions": [
+    {
+      "id": 1,
+      "label": "hand edited",
+      "host": "10.0.0.1",
+      "port": 22,
+      "username": "deploy",
+      "group": null,
+      "sealed_password": { "password": "not a string" }
+    },
+    {
+      "id": 2,
+      "label": "neighbour",
+      "host": "10.0.0.2",
+      "port": 22,
+      "group": null,
+      "sealed_password": 42
+    }
+  ]
+}

@@ -64,7 +64,8 @@
       "oneterm-state",
       "oneterm-terminal",
       "oneterm-terminal-view",
-      "oneterm-theme"
+      "oneterm-theme",
+      "oneterm-vault"
     ],
     "oneterm-settings": [
       "oneterm-core"

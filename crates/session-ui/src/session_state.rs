@@ -34,11 +34,13 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext, Entity, Global};
 use oneterm_core::{
-    AppError, atomic_write, config_dir, migrate_json_value, quarantine_file, set_schema_version,
-    versioned_object,
+    AppError, atomic_write_sealed, config_dir, migrate_json_value, quarantine_file,
+    set_schema_version, versioned_object,
 };
 use oneterm_core::{MAX_JUMP_HOPS, PortForward};
 use oneterm_state::PersistQueue;
+use oneterm_state::vault_state::{VaultEvent, VaultState};
+use oneterm_vault::{SealContext, SealedSecret};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -50,6 +52,7 @@ const DOCUMENT_NAME: &str = "ssh_session.json";
 const NEXT_ID_FIELD: &str = "next_session_id";
 const SESSIONS_FIELD: &str = "sessions";
 const ID_FIELD: &str = "id";
+const SEALED_FIELD: &str = "sealed_password";
 
 // ── SshSession ───────────────────────────────────────────────────────
 
@@ -168,6 +171,54 @@ pub struct SshSession {
     /// Forward the local SSH agent to the remote host (US-0060); off by default.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_forwarding: bool,
+    /// The login password sealed under the master-password vault (`US-0158`,
+    /// `DEC-0021`), bound to `host`, `port` and `username`. Never plain text.
+    /// Optional, so the document stays at schema v2 and older binaries ignore
+    /// it; parsed leniently, so a hand edit never quarantines the sessions.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_sealed"
+    )]
+    pub sealed_password: Option<SealedSecret>,
+}
+
+/// `sealed_password` as stored: any string is kept as an opaque envelope
+/// (judged only when opened), anything else is dropped with a warning instead
+/// of failing the whole document (`persistence-and-migration.md` § 5).
+fn lenient_sealed<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<SealedSecret>, D::Error> {
+    match Value::deserialize(deserializer)? {
+        Value::String(text) => Ok(serde_json::from_value(Value::String(text)).ok()),
+        Value::Null => Ok(None),
+        _ => {
+            log::warn!("{DOCUMENT_NAME}: a sealed_password that is not a string was ignored");
+            Ok(None)
+        }
+    }
+}
+
+impl SshSession {
+    /// The address a saved password is bound to, or `None` without a
+    /// username (a password cannot be saved for an unknown user).
+    pub fn seal_context(&self) -> Option<SealContext<'_>> {
+        let username = self.username.as_deref().filter(|user| !user.is_empty())?;
+        Some(SealContext {
+            host: &self.host,
+            port: self.port,
+            username,
+        })
+    }
+
+    /// The saved password, when this session authenticates with a password
+    /// and has one; a stale value behind another method is ignored.
+    pub fn saved_password(&self) -> Option<&SealedSecret> {
+        match self.auth_method {
+            SshAuthPreference::Password => self.sealed_password.as_ref(),
+            SshAuthPreference::PrivateKey | SshAuthPreference::Agent => None,
+        }
+    }
 }
 
 /// Why a `jump_host` chain cannot be followed.
@@ -404,6 +455,33 @@ impl SshSessionStore {
         }
     }
 
+    /// Store `sealed` as the saved password of session `id` + save the file +
+    /// notify observers, provided the session still has the address the
+    /// password was sealed for (it may have been edited while connecting).
+    pub fn set_sealed_password(
+        &mut self,
+        id: SshSessionId,
+        context: &SealContext<'_>,
+        sealed: SealedSecret,
+        cx: &mut gpui::Context<Self>,
+    ) -> Result<(), String> {
+        set_sealed_in(&mut self.entries, id, context, sealed)?;
+        cx.notify();
+        self.save(cx);
+        Ok(())
+    }
+
+    /// Drop every saved password + save the file (its `.bak` scrubbed) +
+    /// notify observers. Runs on [`VaultEvent::Reset`]; idempotent, so a
+    /// second reset (or a reset whose removal failed and is retried) writes
+    /// nothing.
+    pub fn clear_sealed_passwords(&mut self, cx: &mut gpui::Context<Self>) {
+        if clear_sealed_in(&mut self.entries) {
+            cx.notify();
+            self.save(cx);
+        }
+    }
+
     /// Load the session list from `ssh_session.json`. See [`Self::load_from`].
     fn load() -> Result<LoadedSessions, AppError> {
         Self::load_from(&config_dir().join(DOCUMENT_NAME))
@@ -498,15 +576,70 @@ impl SshSessionStore {
             log::error!("Failed to version ssh sessions: {error}");
             return;
         }
+        let kept = sealed_values(&value);
+        // Scrub `.bak` only when this write drops or replaces a sealed value
+        // the replaced document held (an unreadable one counts as holding some).
+        let retires_secret = |previous: &[u8]| match serde_json::from_slice::<Value>(previous) {
+            Ok(previous) => !sealed_values(&previous).is_subset(&kept),
+            Err(_) => true,
+        };
         match serde_json::to_string_pretty(&value) {
             Ok(json) => {
-                if let Err(e) = atomic_write(path, json.as_bytes()) {
+                if let Err(e) = atomic_write_sealed(path, json.as_bytes(), retires_secret) {
                     log::error!("Failed to write {DOCUMENT_NAME}: {e}");
                 }
             }
             Err(e) => log::error!("Failed to serialize ssh sessions: {e}"),
         }
     }
+}
+
+/// Every `sealed_password` string in a serialized session document.
+fn sealed_values(document: &Value) -> HashSet<String> {
+    document
+        .get(SESSIONS_FIELD)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|session| session.get(SEALED_FIELD).and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Whether `context` is the address `session` would seal its password for.
+pub(crate) fn same_address(session: &SshSession, context: &SealContext<'_>) -> bool {
+    session.seal_context().is_some_and(|own| {
+        own.host == context.host && own.port == context.port && own.username == context.username
+    })
+}
+
+/// Store `sealed` on session `id`, refused when the session is gone, no
+/// longer uses a password, or moved to another address.
+fn set_sealed_in(
+    entries: &mut [SshSessionEntry],
+    id: SshSessionId,
+    context: &SealContext<'_>,
+    sealed: SealedSecret,
+) -> Result<(), String> {
+    let entry = entries
+        .iter_mut()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| "the session no longer exists.".to_owned())?;
+    let session = &mut entry.session;
+    if session.auth_method != SshAuthPreference::Password || !same_address(session, context) {
+        return Err("the session's address or method changed meanwhile.".to_owned());
+    }
+    session.sealed_password = Some(sealed);
+    Ok(())
+}
+
+/// Drop every saved password. Returns whether any session had one.
+fn clear_sealed_in(entries: &mut [SshSessionEntry]) -> bool {
+    let mut changed = false;
+    for entry in entries {
+        changed |= entry.session.sealed_password.take().is_some();
+    }
+    changed
 }
 
 /// Move every session in group `old_name` to `new_name` (trimmed; empty →
@@ -725,6 +858,16 @@ impl SshSessionStore {
             log::info!("{DOCUMENT_NAME}: migrated to schema v{CURRENT_SCHEMA_VERSION}; re-saving");
             entity.update(cx, |store, cx| store.save(cx));
         }
+        // A reset wipes every saved password before `vault.json` goes (DEC-0021).
+        if let Some(vault) = VaultState::try_global(cx) {
+            let store = entity.downgrade();
+            cx.subscribe(&vault, move |_, event: &VaultEvent, cx| {
+                if *event == VaultEvent::Reset {
+                    _ = store.update(cx, |store, cx| store.clear_sealed_passwords(cx));
+                }
+            })
+            .detach();
+        }
         cx.set_global(SshSessionStoreGlobal(entity));
     }
 }
@@ -837,6 +980,7 @@ mod tests {
             jump_host: None,
             port_forwards: Vec::new(),
             agent_forwarding: false,
+            sealed_password: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(!json.contains("username"));
@@ -857,6 +1001,7 @@ mod tests {
             jump_host: None,
             port_forwards: Vec::new(),
             agent_forwarding: false,
+            sealed_password: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("\"username\":\"root\""));
@@ -877,6 +1022,7 @@ mod tests {
             jump_host: None,
             port_forwards: Vec::new(),
             agent_forwarding: false,
+            sealed_password: None,
         };
 
         let json = serde_json::to_string(&session).unwrap();
@@ -901,6 +1047,7 @@ mod tests {
             jump_host: None,
             port_forwards: Vec::new(),
             agent_forwarding: false,
+            sealed_password: None,
         };
 
         let json = serde_json::to_string(&session).unwrap();
@@ -926,6 +1073,7 @@ mod tests {
             jump_host: None,
             port_forwards: Vec::new(),
             agent_forwarding: false,
+            sealed_password: None,
         };
         assert!(
             !serde_json::to_string(&session)
@@ -958,6 +1106,7 @@ mod tests {
                     jump_host: jump.map(SshSessionId),
                     port_forwards: Vec::new(),
                     agent_forwarding: false,
+                    sealed_password: None,
                 },
             });
         }
@@ -1033,6 +1182,7 @@ mod tests {
             jump_host: None,
             port_forwards: Vec::new(),
             agent_forwarding: false,
+            sealed_password: None,
         };
         assert!(
             !serde_json::to_string(&session)
@@ -1068,6 +1218,7 @@ mod tests {
             jump_host: None,
             port_forwards: Vec::new(),
             agent_forwarding: false,
+            sealed_password: None,
         };
         assert!(
             !serde_json::to_string(&session)
@@ -1098,6 +1249,7 @@ mod tests {
                 jump_host: None,
                 port_forwards: Vec::new(),
                 agent_forwarding: false,
+                sealed_password: None,
             },
         };
         let json = serde_json::to_value(&entry).unwrap();
@@ -1139,6 +1291,7 @@ mod tests {
                 jump_host: None,
                 port_forwards: Vec::new(),
                 agent_forwarding: false,
+                sealed_password: None,
             },
         };
         let before = SshSessionStore::with_document(SessionDocument {
@@ -1225,6 +1378,7 @@ mod persistence_tests {
             jump_host: None,
             port_forwards: Vec::new(),
             agent_forwarding: false,
+            sealed_password: None,
         }
     }
 
@@ -1454,6 +1608,9 @@ mod persistence_tests {
             bind_port: 1080,
         }];
         source.agent_forwarding = true;
+        // `US-0158`: the copy keeps the envelope; it stays valid because the
+        // session id is not part of its context.
+        source.sealed_password = Some(sealed(OTV1));
 
         let mut entries = document(vec![(3, source.clone()), (4, session("staging"))], 5).entries;
         assert!(duplicate_in(&mut entries, SshSessionId(3), SshSessionId(5)));
@@ -1583,5 +1740,223 @@ mod persistence_tests {
                 .entries
                 .is_empty()
         );
+    }
+
+    const V2_SEALED: &str =
+        include_str!("../tests/fixtures/persistence/ssh-session-v2-sealed.json");
+    const OTV1: &str = "otv1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4v";
+    const OTV2: &str = "otv2:a-format-this-binary-does-not-know";
+
+    fn sealed(text: &str) -> SealedSecret {
+        serde_json::from_value(Value::String(text.to_owned())).unwrap()
+    }
+
+    /// `US-0158`: the field needs no schema bump. A v2 document carrying it
+    /// loads without a re-save, and both envelopes, including one from a newer
+    /// OneTerm, are written back byte for byte.
+    #[test]
+    fn a_v2_document_with_sealed_passwords_round_trips_them_untouched() {
+        let directory = temporary_dir("v2-sealed");
+        let path = directory.join("ssh_session.json");
+        std::fs::write(&path, V2_SEALED).unwrap();
+
+        let loaded = SshSessionStore::load_from(&path).unwrap();
+        assert!(!loaded.needs_resave, "no migration, no schema bump");
+        let entries = &loaded.document.entries;
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].session.sealed_password, Some(sealed(OTV1)));
+        assert_eq!(entries[1].session.sealed_password, Some(sealed(OTV2)));
+        assert_eq!(entries[2].session.sealed_password, None);
+
+        SshSessionStore::save_snapshot(&loaded.document, &path);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains(&format!("\"sealed_password\": \"{OTV1}\"")));
+        assert!(raw.contains(&format!("\"sealed_password\": \"{OTV2}\"")));
+        assert_eq!(
+            raw.matches("sealed_password").count(),
+            2,
+            "absent stays absent"
+        );
+        let value: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["schema_version"], 2);
+    }
+
+    /// A `sealed_password` that is not a string (a hand edit) drops that field
+    /// only: the document is neither rejected nor quarantined.
+    #[test]
+    fn a_non_string_sealed_password_is_ignored_without_quarantine() {
+        let directory = temporary_dir("sealed-type");
+        let path = directory.join("ssh_session.json");
+        std::fs::write(
+            &path,
+            include_str!("../tests/fixtures/persistence/ssh-session-invalid-sealed-type.json"),
+        )
+        .unwrap();
+
+        let loaded = SshSessionStore::load_from(&path).unwrap();
+        let entries = &loaded.document.entries;
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.session.sealed_password.is_none())
+        );
+        assert_eq!(entries[0].session.username.as_deref(), Some("deploy"));
+        assert!(path.exists(), "never quarantined");
+        assert_eq!(std::fs::read_dir(&*directory).unwrap().count(), 1);
+    }
+
+    /// The session record as it was before `US-0158` (v0.6.8): the same serde
+    /// attributes, no `sealed_password`, and no `deny_unknown_fields`.
+    #[derive(Serialize, Deserialize)]
+    struct PreUs0158Entry {
+        id: u64,
+        label: String,
+        host: String,
+        #[serde(default = "default_port")]
+        port: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+        #[serde(default, skip_serializing_if = "is_password_auth")]
+        auth_method: SshAuthPreference,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key_path: Option<PathBuf>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+        group: Option<String>,
+        #[serde(default, skip_serializing_if = "is_inherited_logging")]
+        logging: SshLoggingOverride,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        jump_host: Option<SshSessionId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        port_forwards: Vec<PortForward>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        agent_forwarding: bool,
+    }
+
+    /// The compatibility matrix row "old binary, new document"
+    /// (`persistence-and-migration.md` § 6): every session loads, and the old
+    /// binary's next write drops every `sealed_password`, nothing else.
+    #[test]
+    fn an_older_binary_keeps_every_session_and_drops_the_field_on_write() {
+        let value: Value = serde_json::from_str(V2_SEALED).unwrap();
+        let old: Vec<PreUs0158Entry> =
+            serde_json::from_value(value[SESSIONS_FIELD].clone()).unwrap();
+        assert_eq!(old.len(), 3);
+        let rewritten = serde_json::to_string(&old).unwrap();
+        assert!(!rewritten.contains("sealed_password"));
+        assert!(!rewritten.contains("otv"));
+
+        let entries: Vec<SshSessionEntry> = serde_json::from_str(&rewritten).unwrap();
+        let labels: Vec<_> = entries.iter().map(|e| e.session.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["prod", "from a newer OneTerm", "no saved password"]
+        );
+        assert!(entries.iter().all(|e| e.session.sealed_password.is_none()));
+        assert_eq!(entries[0].session.username.as_deref(), Some("deploy"));
+    }
+
+    fn with_password(label: &str, envelope: &str) -> SshSession {
+        let mut session = session(label);
+        session.username = Some("deploy".into());
+        session.sealed_password = Some(sealed(envelope));
+        session
+    }
+
+    /// `US-0156` carry-forward: an ordinary write keeps the previous
+    /// generation in `.bak`; a write that drops or replaces a sealed value
+    /// scrubs it.
+    #[test]
+    fn only_a_write_that_retires_a_sealed_password_scrubs_the_backup() {
+        let directory = temporary_dir("scrub");
+        let path = directory.join("ssh_session.json");
+        let backup = directory.join("ssh_session.bak");
+        let first = document(vec![(1, with_password("a", OTV1))], 2);
+        SshSessionStore::save_snapshot(&first, &path);
+
+        // A rename keeps the envelope: the backup is the previous generation.
+        let mut renamed = with_password("renamed", OTV1);
+        renamed.group = Some("g".into());
+        SshSessionStore::save_snapshot(&document(vec![(1, renamed)], 2), &path);
+        let previous = std::fs::read_to_string(&backup).unwrap();
+        assert!(previous.contains("\"label\": \"a\""));
+
+        // Replacing the envelope retires the old one: backup = new document.
+        SshSessionStore::save_snapshot(&document(vec![(1, with_password("a", OTV2))], 2), &path);
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            std::fs::read(&path).unwrap()
+        );
+        assert!(!std::fs::read_to_string(&backup).unwrap().contains(OTV1));
+
+        // Removing it too.
+        SshSessionStore::save_snapshot(&document(vec![(1, session("a"))], 2), &path);
+        let backup = std::fs::read_to_string(&backup).unwrap();
+        assert!(!backup.contains("sealed_password"), "{backup}");
+    }
+
+    /// `VaultEvent::Reset` wipes every saved password, and a second wipe (a
+    /// reset retried after its removal failed) changes nothing.
+    #[test]
+    fn the_reset_wipe_is_idempotent_and_leaves_no_envelope_on_disk() {
+        let directory = temporary_dir("wipe");
+        let path = directory.join("ssh_session.json");
+        let mut doc = document(
+            vec![
+                (1, with_password("a", OTV1)),
+                (2, with_password("b", OTV2)),
+                (3, session("c")),
+            ],
+            4,
+        );
+        SshSessionStore::save_snapshot(&doc, &path);
+
+        assert!(clear_sealed_in(&mut doc.entries));
+        SshSessionStore::save_snapshot(&doc, &path);
+        assert!(!clear_sealed_in(&mut doc.entries), "nothing left to wipe");
+        assert_eq!(doc.entries.len(), 3, "sessions are kept");
+        for file in ["ssh_session.json", "ssh_session.bak"] {
+            let raw = std::fs::read_to_string(directory.join(file)).unwrap();
+            assert!(!raw.contains("otv"), "{file}: {raw}");
+        }
+    }
+
+    /// A password sealed after a connect lands only on a session that still
+    /// has the address it was sealed for.
+    #[test]
+    fn a_sealed_password_is_stored_only_for_its_own_address() {
+        let mut entries = document(vec![(1, with_password("a", OTV1))], 2).entries;
+        let context = SealContext {
+            host: "a.example.test",
+            port: 22,
+            username: "deploy",
+        };
+        set_sealed_in(&mut entries, SshSessionId(1), &context, sealed(OTV2)).unwrap();
+        assert_eq!(entries[0].session.sealed_password, Some(sealed(OTV2)));
+
+        let moved = SealContext {
+            host: "elsewhere.example.test",
+            ..context
+        };
+        assert!(set_sealed_in(&mut entries, SshSessionId(1), &moved, sealed(OTV1)).is_err());
+        assert!(set_sealed_in(&mut entries, SshSessionId(9), &context, sealed(OTV1)).is_err());
+        entries[0].session.auth_method = SshAuthPreference::Agent;
+        assert!(set_sealed_in(&mut entries, SshSessionId(1), &context, sealed(OTV1)).is_err());
+        assert_eq!(entries[0].session.sealed_password, Some(sealed(OTV2)));
+    }
+
+    /// A saved password behind another method, or without a username, is
+    /// never offered.
+    #[test]
+    fn a_saved_password_needs_the_password_method_and_a_username() {
+        let mut session = with_password("a", OTV1);
+        assert!(session.saved_password().is_some());
+        assert!(session.seal_context().is_some());
+        session.auth_method = SshAuthPreference::PrivateKey;
+        assert!(session.saved_password().is_none());
+        session.auth_method = SshAuthPreference::Password;
+        session.username = Some(String::new());
+        assert!(session.seal_context().is_none());
     }
 }

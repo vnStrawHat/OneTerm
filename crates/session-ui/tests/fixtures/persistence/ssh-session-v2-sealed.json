@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "next_session_id": 4,
+  "sessions": [
+    {
+      "id": 1,
+      "label": "prod",
+      "host": "10.0.0.1",
+      "port": 22,
+      "username": "deploy",
+      "group": "infra",
+      "sealed_password": "otv1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4v"
+    },
+    {
+      "id": 2,
+      "label": "from a newer OneTerm",
+      "host": "10.0.0.2",
+      "port": 2222,
+      "username": "ops",
+      "group": null,
+      "sealed_password": "otv2:a-format-this-binary-does-not-know"
+    },
+    {
+      "id": 3,
+      "label": "no saved password",
+      "host": "10.0.0.3",
+      "port": 22,
+      "username": "root",
+      "group": null
+    }
+  ]
+}

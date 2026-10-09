@@ -3,6 +3,10 @@
 //! When the user clicks a session item (or selects "Open" in the context menu):
 //! - If `SshSession.username = None`, the dialog also asks for a username.
 //! - Authentication fields follow the saved password or private-key preference.
+//! - A saved password (`US-0158`) shows as "Using saved password" for the
+//!   target and every jump hop once the vault is unlocked (one unlock covers
+//!   the chain); Enter connects. A typed target password can be saved; it is
+//!   sealed only after the server accepted it.
 //!
 //! Built on `oneterm_state::form_dialog::FormDialog`: **Cancel** + a stateful
 //! **Connect** button ([`ConnectButton`]); Enter submits, Escape/Cancel abort a
@@ -23,23 +27,29 @@ use gpui::{
     Window, div,
 };
 use gpui_component::{
-    WindowExt as _,
+    Disableable as _, WindowExt as _,
     checkbox::Checkbox,
     input::{Input, InputState},
     notification::NotificationType,
 };
 
-use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SshConfig};
+use oneterm_core::{
+    AppError, ConnectPhase, ConnectionCancellation, HostKeyPolicy, SecretString, SshAuthMethod,
+    SshConfig,
+};
 use oneterm_state::form_dialog::{FieldRequirement, FormDialog, control_label, labelled_field};
+use oneterm_state::vault_dialogs::ensure_unlocked;
+use oneterm_state::{VaultPhase, VaultState};
 use oneterm_theme::notif_ext::notify;
+use oneterm_vault::{SealContext, SecretPurpose};
 
-use super::auth_form::SshAuthForm;
+use super::auth_form::{SavedPassword, SshAuthForm};
 use super::common::{
     ConnectButton, InlineError, SshConnectRequest, connect_ssh_session, defer_initial_focus_once,
     parse_user_host_port, server_info_banner,
 };
 use super::jump_hops::{HopSpec, JumpHopForms};
-use crate::session_state::{SshSession, SshSessionId, SshSessionStore};
+use crate::session_state::{SshAuthPreference, SshSession, SshSessionId, SshSessionStore};
 
 /// Open the SSH connect dialog.
 ///
@@ -88,6 +98,11 @@ pub(crate) fn open_connect_dialog(
         }
     };
     let auth_form = SshAuthForm::new(session.auth_method, session.key_path.as_deref(), window, cx);
+    auth_form.set_saved(SavedPassword::of(&session));
+    auth_form.offer_save(session.auth_method == SshAuthPreference::Password);
+    let mut password_forms: Vec<SshAuthForm> = hop_forms.forms().cloned().collect();
+    password_forms.push(auth_form.clone());
+    let unlock_first = activate_saved_passwords(&password_forms, cx);
 
     // Username state — only created when needed.
     let username_state: Option<gpui::Entity<InputState>> = if ask_username {
@@ -114,7 +129,7 @@ pub(crate) fn open_connect_dialog(
         Rc::new(RefCell::new(None));
 
     // ── Shared connect logic (Connect button + keyboard Enter) ──
-    let connect_logic: Rc<dyn Fn(&mut Window, &mut App) -> bool> = Rc::new({
+    let attempt: Rc<dyn Fn(&mut Window, &mut App) -> bool> = Rc::new({
         let username_state = username_state.clone();
         let auth_form = auth_form.clone();
         let hop_forms = hop_forms.clone();
@@ -135,7 +150,7 @@ pub(crate) fn open_connect_dialog(
                 &username_state,
                 &auth_form,
                 &hop_forms,
-                save_username.get(),
+                save_username.get() || auth_form.save_ticked(),
                 &connection_cancellation,
                 connecting.clone(),
                 inline_error.clone(),
@@ -145,8 +160,60 @@ pub(crate) fn open_connect_dialog(
         }
     });
 
+    // Saving a typed password needs the vault unlocked **before** the attempt,
+    // never after a connection is up (`ssh-password-save-flow.md` § 5).
+    let connect_logic: Rc<dyn Fn(&mut Window, &mut App) -> bool> = Rc::new({
+        let auth_form = auth_form.clone();
+        let connecting = connecting.clone();
+        move |window, cx| {
+            if connecting.load(Ordering::Relaxed) || !auth_form.save_ticked() {
+                return attempt(window, cx);
+            }
+            if auth_form.typed_is_empty(cx) {
+                window.push_notification(
+                    notify(
+                        NotificationType::Warning,
+                        "Enter the password to save, or untick Save password.",
+                        cx,
+                    ),
+                    cx,
+                );
+                return false;
+            }
+            let state = VaultState::try_global(cx);
+            let phase = state.as_ref().map(|state| state.read(cx).phase());
+            match phase {
+                Some(VaultPhase::Unlocked) => attempt(window, cx),
+                Some(VaultPhase::Locked | VaultPhase::Uninitialised) => {
+                    let attempt = attempt.clone();
+                    ensure_unlocked(window, cx, move |window, cx| {
+                        attempt(window, cx);
+                    });
+                    false
+                }
+                Some(VaultPhase::Unavailable) | None => {
+                    let reason = state
+                        .and_then(|state| state.read(cx).unavailable_reason().map(str::to_owned))
+                        .unwrap_or_else(|| "no master password store.".to_owned());
+                    window.push_notification(
+                        notify(
+                            NotificationType::Warning,
+                            format!(
+                                "Saved passwords are unavailable: {reason} Untick Save password to connect."
+                            ),
+                            cx,
+                        ),
+                        cx,
+                    );
+                    false
+                }
+            }
+        }
+    });
+
     let connect_button = cx.new(|_| ConnectButton::new(connect_logic.clone(), connecting));
     let initial_focus_pending = Rc::new(Cell::new(true));
+    let refocus = initial_focus_pending.clone();
     let cancel_connection = {
         let connection_cancellation = connection_cancellation.clone();
         move |_: &mut Window, _: &mut App| {
@@ -160,11 +227,14 @@ pub(crate) fn open_connect_dialog(
         let auth_form = auth_form.clone();
         let hop_forms = hop_forms.clone();
         move |window: &mut Window, cx: &mut App| {
+            // The first field still to type; when every password is saved,
+            // the saved row, so Enter connects (intake Q4).
             let focus = match username_state.as_ref() {
                 Some(state) => Some(state.read(cx).focus_handle(cx)),
                 None => hop_forms
                     .first_secret_focus(cx)
-                    .or_else(|| auth_form.focus_handle(cx)),
+                    .or_else(|| auth_form.focus_handle(cx))
+                    .or_else(|| hop_forms.forms().find_map(SshAuthForm::saved_focus_handle)),
             };
             if let Some(focus) = focus {
                 defer_initial_focus_once(&initial_focus_pending, focus, window, cx);
@@ -192,15 +262,19 @@ pub(crate) fn open_connect_dialog(
                     ))
                 })
                 .child(auth_form.render(true, cx))
-                // "Save username" checkbox — only shown when ask_username.
+                // "Save username" checkbox — only shown when ask_username. A
+                // saved password is bound to a username, so ticking "Save
+                // password" ticks and locks this one too.
                 .when_some(username_state.as_ref(), |content, _st| {
+                    let forced = auth_form.save_ticked();
                     content.child(
                         div().pt_1().child(
                             Checkbox::new("save-username")
                                 .items_center()
                                 .accessibility_label("Save username to session")
                                 .child(control_label("Save username to session"))
-                                .checked(save_username.get())
+                                .checked(save_username.get() || forced)
+                                .disabled(forced)
                                 .on_click({
                                     let save_username = save_username.clone();
                                     move |checked: &bool, _window, _cx| {
@@ -221,6 +295,112 @@ pub(crate) fn open_connect_dialog(
     .on_cancel(cancel_connection)
     .on_render(initial_focus)
     .open(window, cx);
+
+    if unlock_first {
+        // Stacked on the connect dialog; Cancel ("type the passwords instead")
+        // leaves the ordinary inputs.
+        ensure_unlocked(window, cx, move |window, _| {
+            for form in &password_forms {
+                form.use_saved(true);
+            }
+            refocus.set(true);
+            window.refresh();
+        });
+    }
+}
+
+/// Put every form with a saved password into saved mode when the vault is
+/// unlocked, or say why it cannot be used. Returns whether the vault must be
+/// unlocked first (it is locked).
+fn activate_saved_passwords(forms: &[SshAuthForm], cx: &App) -> bool {
+    let saved: Vec<&SshAuthForm> = forms.iter().filter(|form| form.has_saved()).collect();
+    if saved.is_empty() {
+        return false;
+    }
+    let state = VaultState::try_global(cx);
+    let state = state.as_ref().map(|state| state.read(cx));
+    let note = match state.map(VaultState::phase) {
+        Some(VaultPhase::Unlocked) => {
+            for form in &saved {
+                form.use_saved(true);
+            }
+            return false;
+        }
+        Some(VaultPhase::Locked) => return true,
+        Some(VaultPhase::Uninitialised) => {
+            "Saved password unavailable: the master password was reset. Type the password."
+                .to_owned()
+        }
+        Some(VaultPhase::Unavailable) | None => format!(
+            "Saved password unavailable: {}",
+            state
+                .and_then(VaultState::unavailable_reason)
+                .unwrap_or("no master password store.")
+        ),
+    };
+    for form in saved {
+        form.set_note(note.clone());
+    }
+    false
+}
+
+/// A rejected saved password (`ssh-password-save-flow.md` § 6): the row it was
+/// used in turns into an empty input. The saved value is **not** removed (a
+/// lockout or a typo on the server must not destroy it); a new one replaces it
+/// only when the target connects with "Update saved password" ticked.
+fn reveal_rejected_saved_password(error: &AppError, target: &SshAuthForm, hops: &JumpHopForms) {
+    let AppError::Connect {
+        phase: ConnectPhase::Authentication,
+        message,
+    } = error
+    else {
+        return;
+    };
+    match hops.form_for_error(message) {
+        Some(hop) if hop.uses_saved() => hop.reveal_input(
+            "The server rejected the saved password. Type the current one; update it in that jump host's session.",
+            false,
+        ),
+        Some(_) => {}
+        None if target.uses_saved() => target.reveal_input(
+            "The server rejected the saved password. Type the current one.",
+            true,
+        ),
+        None => {}
+    }
+}
+
+/// Seal the password the server just accepted and store it on session `id`
+/// (`ssh-password-save-flow.md` § 5): never before the connection is up, so a
+/// wrong password is never saved.
+fn save_connected_password(
+    id: SshSessionId,
+    password: &SecretString,
+    context: &SealContext<'_>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let sealed = match VaultState::try_global(cx) {
+        Some(state) => state
+            .update(cx, |state, cx| {
+                state.seal(SecretPurpose::SshPassword, context, password, cx)
+            })
+            .map_err(|error| error.message()),
+        None => Err("saved passwords are unavailable.".to_owned()),
+    };
+    let stored = sealed.and_then(|sealed| {
+        SshSessionStore::global(cx).update(cx, |store, cx| {
+            store.set_sealed_password(id, context, sealed, cx)
+        })
+    });
+    let (kind, message) = match stored {
+        Ok(()) => (NotificationType::Success, "Password saved.".to_owned()),
+        Err(reason) => (
+            NotificationType::Warning,
+            format!("Connected, but the password was not saved: {reason}"),
+        ),
+    };
+    window.push_notification(notify(kind, message, cx), cx);
 }
 
 /// Handler for the Connect button — validates inputs, builds SshConfig, connects.
@@ -300,7 +480,23 @@ fn on_connect_click(
         });
     }
 
-    // 4. Build the connection config and connect off-thread.
+    // 4. Build the connection config and connect off-thread. A password to
+    //    save is kept (zeroizing) until the server has accepted it.
+    let to_save = match (auth_form.save_ticked(), &auth) {
+        (true, SshAuthMethod::Password { password }) => Some(password.clone()),
+        _ => None,
+    };
+    let on_connected = to_save.map(|password| {
+        let (host, username) = (host.clone(), username.clone());
+        Rc::new(move |window: &mut Window, cx: &mut App| {
+            let context = SealContext {
+                host: &host,
+                port,
+                username: &username,
+            };
+            save_connected_password(id, &password, &context, window, cx);
+        }) as Rc<dyn Fn(&mut Window, &mut App)>
+    });
     let cfg = SshConfig {
         host,
         port,
@@ -319,7 +515,15 @@ fn on_connect_click(
         cfg,
         SshConnectRequest {
             logging_override: session.logging,
-            on_failed: Some(Rc::new(move |message, _cx| inline_error.set(message))),
+            on_connected,
+            on_failed: Some({
+                let auth_form = auth_form.clone();
+                let hop_forms = hop_forms.clone();
+                Rc::new(move |error, message, _cx| {
+                    inline_error.set(message);
+                    reveal_rejected_saved_password(error, &auth_form, &hop_forms);
+                })
+            }),
             ..SshConnectRequest::new(session.label.clone())
         },
         connecting,
@@ -350,6 +554,96 @@ mod tests {
                 .track_focus(&self.initial)
                 .child(div().track_focus(&self.user_selected))
         }
+    }
+
+    fn saved(host: &str) -> SavedPassword {
+        SavedPassword {
+            sealed: serde_json::from_value(serde_json::Value::String("otv1:AAAA".into())).unwrap(),
+            host: host.into(),
+            port: 22,
+            username: "ops".into(),
+        }
+    }
+
+    fn auth_error(message: &str) -> AppError {
+        AppError::Connect {
+            phase: ConnectPhase::Authentication,
+            message: message.into(),
+        }
+    }
+
+    /// `ssh-password-save-flow.md` § 4 and 6: a rejected saved password turns
+    /// only its own row (hop or target) into an input; other failures leave
+    /// the rows alone; with no unlocked vault a saved row opens nothing and
+    /// asks for the password instead.
+    #[gpui::test]
+    fn a_rejected_saved_password_reveals_only_its_own_row(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let probe = Rc::new(RefCell::new(None));
+        let probe_for_window = probe.clone();
+        let (_view, cx) = cx.add_window_view(move |window, cx| {
+            let target = SshAuthForm::new(SshAuthPreference::Password, None, window, cx);
+            target.set_saved(Some(saved("10.0.0.1")));
+            let hops = JumpHopForms::new(
+                vec![HopSpec {
+                    label: "bastion".into(),
+                    host: "10.0.0.2".into(),
+                    port: 22,
+                    username: "ops".into(),
+                    auth_method: SshAuthPreference::Password,
+                    key_path: None,
+                    saved: Some(saved("10.0.0.2")),
+                }],
+                window,
+                cx,
+            );
+            let mut forms: Vec<SshAuthForm> = hops.forms().cloned().collect();
+            forms.push(target.clone());
+            for form in &forms {
+                form.use_saved(true);
+            }
+            *probe_for_window.borrow_mut() = Some((target, hops));
+            FocusTestView {
+                initial: cx.focus_handle(),
+                user_selected: cx.focus_handle(),
+            }
+        });
+        let cx: &mut VisualTestContext = cx;
+        let (target, hops) = probe.borrow().clone().unwrap();
+        let hop = hops.forms().next().unwrap().clone();
+        assert!(target.uses_saved() && hop.uses_saved());
+
+        // A network failure is not a rejection.
+        let transport = AppError::Connect {
+            phase: ConnectPhase::Transport,
+            message: "timed out".into(),
+        };
+        reveal_rejected_saved_password(&transport, &target, &hops);
+        assert!(target.uses_saved() && hop.uses_saved());
+
+        // The hop's own address picks the hop; the target keeps its row.
+        reveal_rejected_saved_password(
+            &auth_error("jump host ops@10.0.0.2:22: the server rejected the password"),
+            &target,
+            &hops,
+        );
+        assert!(!hop.uses_saved() && !hop.save_ticked());
+        assert!(target.uses_saved());
+
+        // Otherwise it is the target's, with "Update saved password" ticked.
+        reveal_rejected_saved_password(
+            &auth_error("the server rejected the password"),
+            &target,
+            &hops,
+        );
+        assert!(!target.uses_saved());
+        assert!(target.save_ticked());
+
+        // With no unlocked vault the saved row opens nothing.
+        target.use_saved(true);
+        let auth = cx.update(|_, cx| target.take_auth(cx));
+        assert!(auth.unwrap_err().contains("locked"));
+        assert!(!target.uses_saved(), "the input is revealed instead");
     }
 
     #[gpui::test]

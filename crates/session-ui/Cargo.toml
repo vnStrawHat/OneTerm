@@ -25,6 +25,7 @@ oneterm-settings.workspace = true
 oneterm-state.workspace = true
 oneterm-theme.workspace = true
 oneterm-actions.workspace = true
+oneterm-vault.workspace = true
 
 gpui.workspace = true
 gpui-base.workspace = true
@@ -36,3 +37,4 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+oneterm-vault = { workspace = true, features = ["test-support"] }
