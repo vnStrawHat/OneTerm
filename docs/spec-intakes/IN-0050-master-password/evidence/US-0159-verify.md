@@ -250,3 +250,98 @@ fired all of OneTerm's real default chords at both windows).
 - D1, D3 and D4 can ship and be fixed as follow-ups.
 - Still unwalked, as in the packet: a real sleep and resume, the elevated window (UAC), the DWM
   thumbnail of a minimised window, a physical Alt+F4, IME composition, Linux and macOS.
+
+## Re-verification of fedd8734
+
+Rework head `fedd8734` on `feat/idle-lock-screen`, built on the verifier's `dd57f82f`. Checked
+out as `verify/US-0159` in the same worktree (12 GB free throughout).
+
+### Verdict: PASS, no open defect
+
+D1 and D2 are fixed. Each fix is proved by a test that fails with the guard removed, and D2 also
+by the GUI walk. D3 is recorded as a known limit. D4's wording is corrected. I4 is taken: an
+empty Enter is not an attempt. What remains is the list of notes and unwalked items above
+(I1-I3, I5-I10). It is unchanged by the rework.
+
+### Attacks and results
+
+- **D2: one helper, four continuations.** `VaultState::screen_locked(cx)`
+  (`crates/state/src/vault_state.rs:265`) is `try_global` plus `is_screen_locked()`. It returns
+  false before init.
+  - Placement: each guard sits **inside the same UI-thread step** that applies the result.
+    - `auth_form.rs:611`: before the key path is set.
+    - `logging.rs:193`: before both the input and the `set(...)` that saves `terminal.json`.
+    - `transfer.rs:621`: before `do_upload_paths`.
+    - `transfer.rs:721`: download. A separate `cx.update` runs right before
+      `Self::download_to(...)`, with no `.await` between them. A window that is gone counts as
+      locked.
+  - Lock between pick and continuation: a lock that fires after the picker returns but before
+    the continuation runs is caught. The new SFTP download test locks in exactly that gap.
+  - Nothing leaks before a guard. Before the upload guard, only the path count is logged. Before
+    the download guard, nothing is logged or written. The OS Save dialog creates no file.
+  - Coverage: `rtk proxy grep -rn "prompt_for" crates` finds exactly the four call sites
+    (`auth_form.rs:584`, `logging.rs:170`, `transfer.rs:577`, `:696`). The other match is an
+    OSC 133 test name. There is no `window.prompt` and no other file-dialog API in `crates/`.
+- **D1.** `recorder_armed` (`key_bindings_ui.rs:293`) answers false while locked, before it
+  reads its own state.
+  - Ordering: gpui keeps interceptors in a `SubscriberSet`, a `BTreeMap` keyed by an increasing
+    subscriber id, so they run in registration order (`gpui-pre 0.3.7` `subscription.rs:20, 54`).
+    The lock's interceptor is registered once, in `app::init` (`crates/app/src/init.rs:93`,
+    before any window). The recorder's interceptor is created only by a click on Edit
+    (`key_bindings_ui.rs:272`). So the lock runs first and has locked by the time the recorder
+    asks.
+  - Tests: the flipped `verifier_d1_a_later_interceptor_still_sees_the_key_that_locked` asserts
+    0 keys taken. Note: the settings-ui test fails under mutation only because no
+    `KeyBindingsState` exists (a panic), not because an armed recorder took a key. The ordering
+    proof is the workspace test.
+- **I4.** `lock_screen.rs:485`: `submit` returns when `len_chars() == 0`, before
+  `unlock_screen`. So there is no Argon2id run, no failure counted and no back-off change. The
+  Unlock button goes through `submit` too. A space is one character and **is** an attempt.
+  That matches Q8 (bytes as typed, never trimmed). The docs say "an empty Enter", which reads
+  correctly. The button stays enabled on an empty field and a click does nothing: cosmetic.
+- **D3, D4 docs.** LLD § 7 has the native-dialog and interceptor rules and the element-state
+  limit. LLD § 6.4 now says Alt+F4 is not an OS bypass. The packet's Alt+F4 tick reads "not
+  walked". `docs/gui-layout.md` names the header held in memory and records the Settings page
+  reset.
+
+### Mutation checks (each run, then reverted; `git diff` shows only the added tests)
+
+| Guard disabled | Test | Result |
+| --- | --- | --- |
+| `auth_form.rs:611` | `a_key_picked_while_the_screen_is_locked_is_dropped` | FAILED ("a result applied under the lock", left `picked_key`) |
+| `transfer.rs:621` and `:721` | the two new `reverify_*` tests below | both FAILED |
+| `recorder_armed`'s lock check | `the_recorder_takes_no_key_while_the_screen_is_locked` | FAILED (panic: no `KeyBindingsState`) |
+| the empty-Enter check | `unlocking_restores_the_focus_and_counts_a_wrong_password` | FAILED (`lock_screen_tests.rs:280`) |
+
+### Tests added (pass)
+
+`crates/sftp-ui/src/transfer.rs` tests, with a `locked_vault` helper (the floor fixture in a
+`TempDir`):
+
+- `reverify_a_save_path_answered_into_a_lock_downloads_nothing`: the Save dialog opens
+  unlocked, the path is picked, and the lock fires before the continuation runs. The backend
+  gets no transfer request, and no queue item appears.
+- `reverify_an_upload_picked_under_the_lock_uploads_nothing`: a pick while locked starts no
+  upload and no collision dialog. After an unlock, the same pick uploads `/home/u/a.txt`.
+
+### GUI walk (rebuilt debug binary, `cargo build -p oneterm-app` 15 s, private profile, own pid)
+
+| Step | Result |
+| --- | --- |
+| Settings > Terminal Logging > Log Folder: the native "Select Folder" dialog opens | as before |
+| No input for 80 s | both windows locked under the dialog (`us0159v-r01`, `r02`) |
+| In the dialog: path `...\us0159v-attacker-logs`, Select (`WM_SETTEXT` + `BM_CLICK` to the dialog's controls) | the dialog closes; `terminal.json` **unchanged** (last write 19:11:33, at startup; `directory` still the default); log line `log folder picker answered while locked; ignored`; both windows still locked (`r03`, `r04`) |
+| Control: unlock, the same pick | `terminal.json` saved at 19:14:30 with `us0159v-attacker-logs`. The method works, so the drop under the lock is real |
+| Logs | no panic; the password appears nowhere in the log or the profile's JSON |
+
+### Gate (head `fedd8734` plus the two tests)
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo test -p oneterm-state -p oneterm-workspace -p oneterm-settings -p oneterm-settings-ui -p oneterm-actions -p oneterm-session-ui -p oneterm-sftp-ui` | pass: state 86, workspace 64 + 3 ignored, settings 50, settings-ui 59 + 1 ignored, actions 4, session-ui 100 + 1 ignored, sftp-ui 77 (75 + 2 new) |
+| `--ignored --test-threads=1` for workspace / settings-ui / session-ui | 3 / 1 / 1 passed |
+| `verify-dependency-graph.py`, `check-doc-paths.py`, `check-english.py`, `check-theme-contrast.py`, `third-party-notices.py --check` | pass |
+| `Cargo.lock` | unchanged since `ce80f17c` |
+| `%TEMP%` | 42 `oneterm-*` entries before and after; no `oneterm-key-picker-lock-*`, `oneterm-recorder-lock-*` or `oneterm-local-pane-*` left |
