@@ -37,7 +37,8 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
   diagnostics binaries live in `crates/tools`.
 - Persistence: JSON files in `oneterm_core::config_dir()` (`target/` in debug builds,
   `~/.OneTerm/` in release): `terminal.json`, `ui_config.json`, `docks.json`,
-  `ssh_session.json`, `update_config.json`, plus `crashes/` and the SFTP
+  `ssh_session.json`, `update_config.json`, `vault.json` (the master-password vault header,
+  `oneterm-vault`, created only when the user sets one up), plus `crashes/` and the SFTP
   `edit-cache/<pid>/` (transient local copies of remote files opened with the
   SFTP "Edit" action; per-process so concurrent instances stay isolated. Each
   `<pid>` dir is pruned once empty; a startup sweep reclaims `<pid>` dirs whose
@@ -53,8 +54,9 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
 - Terminal-controlled input (PTY / SSH output, OSC payloads, paste): sanitised through
   `crates/terminal` policies before it reaches the UI or the clipboard.
 - SSH servers: host keys are checked against `known_hosts` with a confirmation dialog;
-  authentication material (passwords, key passphrases) stays in memory only
-  (`docs/decisions/0001-ssh-key-secret-persistence.md`).
+  authentication material (passwords, key passphrases) stays in memory only, except a password
+  sealed under the master-password vault (`docs/decisions/0001-ssh-key-secret-persistence.md`,
+  superseded in part by `DEC-0021`).
 - SFTP: remote paths are `RemotePath` values; local destinations are contained under the chosen
   directory; transfers run behind `SftpBackend` (`crates/core/src/sftp.rs`).
 - Persisted files: read/updated through `crates/core/src/persistence.rs` (atomic replace,
@@ -75,8 +77,9 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
   (`gpui-base`, `gpui-component`, `gpui-kit-assets`) move together.
 - No forked third-party source and no `[patch]` section: a capability the terminal engine
   lacks is added to `crates/vt` under ordinary review (`DEC-0014`).
-- No secrets are persisted (`ui_config.json`, `terminal.json`, `docks.json`, `ssh_session.json`
-  never contain passwords or passphrases).
+- Secrets are persisted only sealed (`DEC-0021`): a password is written only as an `otv1:`
+  envelope under the master-password vault (`vault.json`, owned by `oneterm-vault`); no document
+  ever contains a plain-text password, a passphrase, the master password or a key derived from it.
 - English-only contributor text and code comments (`python scripts/check-english.py`).
 - Every crate inherits `[workspace.package] version` (`python scripts/verify-dependency-graph.py`).
 - Do not hard-code colours in components — read `cx.theme()` / `TerminalTheme`.

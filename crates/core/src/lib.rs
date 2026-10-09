@@ -22,7 +22,9 @@ pub use config::{LocalShellConfig, RightDockMode, ShellKind, config_dir, home_di
 pub use editor_launcher::{EditorChoice, launch_editor};
 pub use error::{AppError, ConnectPhase, SftpStatus};
 pub use input_channel::InputChannel;
-pub use persistence::{atomic_write, quarantine_file, update_json_file};
+pub use persistence::{
+    atomic_write, quarantine_file, remove_document, update_json_file, update_secret_json_file,
+};
 pub use port_forward::{PortForward, PortForwardError, loopback};
 pub use schema::{
     SCHEMA_VERSION_FIELD, migrate_json_value, parse_versioned_document, schema_version,

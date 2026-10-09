@@ -318,6 +318,7 @@ dependencies = [
  "blake2",
  "cpufeatures 0.3.0",
  "password-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -5718,6 +5719,20 @@ dependencies = [
  "tar",
  "windows-sys 0.59.0",
  "zip",
+]
+
+[[package]]
+name = "oneterm-vault"
+version = "0.6.8"
+dependencies = [
+ "aes-gcm",
+ "argon2",
+ "base64",
+ "oneterm-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "zeroize",
 ]
 
 [[package]]

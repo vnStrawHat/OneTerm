@@ -6,6 +6,8 @@ Date: 2026-08-11
 
 Accepted
 
+Superseded in part by [`DEC-0021`](DEC-0021-secrets-at-rest-are-sealed-by-a-master-password-vault.md) (2026-10-09): passwords may be persisted when sealed by the master-password vault; passphrases and key contents stay forbidden.
+
 ## Context
 
 Private-key authentication needs a reusable identity selection for saved sessions, but an encrypted key's passphrase is a credential. Persisting the passphrase would expand OneTerm's secret-storage and encryption responsibilities, while asking users to select the same key on every connection would make saved sessions unnecessarily cumbersome.

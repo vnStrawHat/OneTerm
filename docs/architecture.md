@@ -16,6 +16,7 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
 | Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, registered dock panel names, Agent folded model, process-global completion history, broadcast input channel membership | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/panel_names.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/completion_history.rs`, `crates/state/src/input_channel_registry.rs` |
 | Shared services | `oneterm-update` | GitHub Releases auto-update service, release selection, download, verification, staging, and install orchestration | `crates/update/src/lib.rs`, `crates/update/src/config.rs`, `crates/update/src/github.rs`, `crates/update/src/archive.rs`, `crates/update/src/install.rs` |
+| Shared services | `oneterm-vault` | Master-password vault (`IN-0050`, `DEC-0021`): Argon2id key derivation, the wrapped data key, AES-256-GCM `otv1:` envelopes, the `vault.json` header. gpui-free; the only crate that depends on the crypto crates | `crates/vault/src/lib.rs`, `crates/vault/src/vault.rs`, `crates/vault/src/document.rs`, `crates/vault/src/envelope.rs`, `crates/vault/src/kdf.rs` |
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
 | Backend | `oneterm-local-shell` | Local PTY session implementation (owns the poll loop over `oneterm_vt::pty`) | `crates/local-shell/src/lib.rs`, `crates/local-shell/src/session_terminal.rs`, `crates/local-shell/src/event_loop.rs` |
 | Backend | `oneterm-ssh` | SSH shell and SFTP implementations | `crates/ssh/src/lib.rs`, `crates/ssh/src/session_terminal.rs`, `crates/ssh/src/sftp_task.rs`, `crates/ssh/src/sftp_task/`, `crates/ssh/src/sftp_task/transfer/` |
@@ -100,6 +101,7 @@ the placeholder panel.
 - Window shell and dock layout: `crates/workspace/`.
 - Persistent file lifecycle mechanics: `crates/core/src/persistence.rs`; the typed dock document is owned by `crates/state/src/dock_persistence.rs`; schema ownership is documented in [`docs/agents/persistence.md`](agents/persistence.md).
 - Auto-update service and GitHub Releases release flow: `crates/update/`.
+- Secrets at rest (master password, sealed values, `vault.json`): `crates/vault/`; design in `docs/spec-intakes/IN-0050-master-password/high-level-design.md`.
 - Auto-update design and GitHub Releases packaging requirements: [`docs/auto-update.md`](auto-update.md).
 
 ## Navigation and validation

@@ -18,7 +18,8 @@ L3  workspace (shell) │ terminal-view · sftp-ui · session-ui · settings-ui 
     │
 L2  state · theme            (shared runtime state / theming)
     │
-L1  actions · settings · update   (gpui action structs / config load-save / GitHub Releases updater)
+L1  actions · settings · update · vault   (gpui action structs / config load-save / GitHub Releases updater /
+                                          master-password vault, the only crate on the crypto crates)
     │
 L0  core · terminal · completion · highlight · vt   (domain + engine + leaf; core = pure domain)
 ```
@@ -56,7 +57,8 @@ L0 leaves — today `vt` and, since `US-0135`'s `highlight-bench`, `highlight`.
 ## Full-graph verification (one shot)
 
 ```bash
-python scripts/verify-dependency-graph.py                   # policy + manifest allow-list
+python scripts/verify-dependency-graph.py                   # policy + manifest allow-list (incl. argon2 /
+                                                          #   aes-gcm used by oneterm-vault only, DEC-0021)
 cargo build --workspace                                   # R1 (no cycle)
 cargo tree -i oneterm-ssh -e normal                       # R3: only oneterm-app
 cargo tree -i oneterm-local-shell -e normal               # R3: only oneterm-app

@@ -81,7 +81,7 @@ Every third-party dependency is declared once in root `[workspace.dependencies]`
 | Serialization | `serde`, `serde_json` |
 | Errors and logs | `anyhow`, `thiserror`, `log`, `env_logger` |
 | Native crash capture | `crash-handler = 0.8.0` (app only) |
-| Secrets | `zeroize` |
+| Secrets | `zeroize`; `argon2 0.6` (`default-features = false`, `alloc` + `zeroize`: the raw Argon2id KDF, no `password-hash`) and `aes-gcm 0.11` (`aes`, `alloc`, `getrandom`, `zeroize`) for the master-password vault (`IN-0050`, `DEC-0021`). Both already resolve through `russh -> ssh-key`, so the lock gains no package; they move when russh moves them, and the vault's known-answer tests fail if an update ever changes an output. **Only `oneterm-vault` may depend on them** (`scripts/dependency-graph-policy.json`, `restricted_third_party_dependencies`). Randomness comes from the OS through `aead::Generate` (`getrandom 0.4`), not from `rand`. `argon2` and its inner hash `blake2` are built at `opt-level = 3` in `[profile.dev.package]` and `[profile.fast-dev.package]` (and so in `test`): unoptimized, one unlock at the default cost takes 1.4-3.7 s in a debug build. |
 | Auto-update | `reqwest`, `semver`, `sha2`, `zip`, `tar`, `flate2` |
 | UI helpers | `chrono`, `sysinfo`, `rust-embed` |
 | Terminal graphics | `image` (default features off: only the pixel-buffer types `gpui::RenderImage` takes; same major as GPUI's own `image`) |

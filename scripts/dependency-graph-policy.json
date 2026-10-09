@@ -19,7 +19,8 @@
     "crates/ssh",
     "crates/completion",
     "crates/tools",
-    "crates/vt"
+    "crates/vt",
+    "crates/vault"
   ],
   "internal_dependencies": {
     "oneterm-actions": [
@@ -119,6 +120,9 @@
     "oneterm-update": [
       "oneterm-core"
     ],
+    "oneterm-vault": [
+      "oneterm-core"
+    ],
     "oneterm-workspace": [
       "oneterm-actions",
       "oneterm-core",
@@ -144,6 +148,14 @@
   "allowed_feature_dependencies": {
     "oneterm-session-ui": [
       "oneterm-terminal-view"
+    ]
+  },
+  "restricted_third_party_dependencies": {
+    "aes-gcm": [
+      "oneterm-vault"
+    ],
+    "argon2": [
+      "oneterm-vault"
     ]
   }
 }

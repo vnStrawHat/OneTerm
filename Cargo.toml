@@ -20,6 +20,7 @@ members = [
     "crates/completion",
     "crates/tools",
     "crates/vt",
+    "crates/vault",
 ]
 resolver = "3"
 
@@ -62,6 +63,7 @@ oneterm-local-shell = { path = "crates/local-shell" }
 oneterm-update = { path = "crates/update" }
 oneterm-ssh = { path = "crates/ssh" }
 oneterm-completion = { path = "crates/completion" }
+oneterm-vault = { path = "crates/vault" }
 # `default-features = false` turns the engine's default-on `pty` feature off
 # for the workspace; `local-shell` and `tools` are the only members that name
 # `oneterm_vt::pty`, and each asks for it with `features = ["pty"]`. An
@@ -106,6 +108,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 zeroize = { version = "1.8", features = ["derive"] }
+# Master-password vault (IN-0050, DEC-0021): Argon2id and AES-256-GCM. Both already
+# resolve in Cargo.lock through russh -> ssh-key, so the graph does not grow. Only
+# `oneterm-vault` may depend on them (scripts/dependency-graph-policy.json).
+# `default-features = false` keeps argon2 off the `password-hash` path: the vault calls
+# the raw KDF.
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "getrandom", "zeroize"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots", "system-proxy"] }
 semver = "1"
 sha2 = "0.10"
@@ -198,6 +207,11 @@ split-debuginfo = "unpacked"
 gpui-pre = { opt-level = 3 }
 gpui-pre-platform = { opt-level = 3 }
 smol = { opt-level = 3 }
+# The vault's Argon2id (IN-0050 US-0156): at opt-level 0 one unlock at the default
+# 64 MiB / 3 passes takes 1.4-3.7 s in a debug build against about 80 ms in release.
+# `blake2` is Argon2's inner hash. Applies to `test` as well, which inherits `dev`.
+argon2 = { opt-level = 3 }
+blake2 = { opt-level = 3 }
 
 # `fast-dev` — dev profile with OneTerm's own hot-path crates optimized too
 # (`cargo run -p oneterm-app --profile fast-dev`). Use it to run DOOM-fire and
@@ -225,6 +239,8 @@ inherits = "dev"
 gpui-pre = { opt-level = 3 }
 gpui-pre-platform = { opt-level = 3 }
 smol = { opt-level = 3 }
+argon2 = { opt-level = 3 }
+blake2 = { opt-level = 3 }
 # The VT engine (IN-0029 `US-0081`): the hot path runs through it, so it is
 # optimized here rather than left at `dev`'s opt-level = 0.
 oneterm-vt = { opt-level = 3 }

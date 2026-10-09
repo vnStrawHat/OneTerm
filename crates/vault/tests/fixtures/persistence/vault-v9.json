@@ -1,0 +1,6 @@
+{
+  "schema_version": 9,
+  "vault_id": "3f9c0a4e8b1d4c27a6e2f0b9c1d2e3f4",
+  "kdf": { "algorithm": "argon2id-v9" },
+  "wrapped_key": "otv9:AAAA"
+}
