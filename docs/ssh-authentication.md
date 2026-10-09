@@ -38,6 +38,20 @@ It must never contain a password, private-key contents, or private-key passphras
 
 `auth_method` is `password` (the default, omitted when serialized), `private_key`, or `agent`; `key_path` only accompanies `private_key`. Existing session documents with no authentication metadata load as Password. The added fields are backward-compatible; the document schema itself is versioned separately (v2 adds a stable `id` per session, see `crates/session-ui/src/session_state.rs`).
 
+### Master-password vault (`IN-0050`, `DEC-0021`)
+
+Saved passwords are sealed by the master-password vault, never stored in plain text. The vault
+itself is `oneterm-vault` (`US-0156`): the master password derives a key-encryption key with
+Argon2id (64 MiB, 3 passes, 1 lane by default, parameters and a random salt in `vault.json`),
+which wraps a random 256-bit data key with AES-256-GCM. An SSH password is sealed under the
+data key into an `otv1:` envelope whose associated data binds the vault id, the purpose
+`ssh-password` and the session's host, port and username, so a hand-edited `host` makes the
+saved password fail to open instead of sending it elsewhere; the session id is not bound, so a
+duplicated session keeps a working copy. Forgetting the master password means Reset, which
+deletes every saved password and keeps the sessions. Until `US-0158` adds the
+`sealed_password` field and the save flow, `ssh_session.json` holds no password at all; the
+policy above is the one in force.
+
 ## Architecture
 
 - `oneterm-session-ui` owns persisted session authentication preferences, credential collection, path selection, and user-facing validation.
@@ -53,4 +67,4 @@ No UI crate depends directly on `oneterm-ssh`.
 - Interactive keyboard-interactive dialogs (multi-round prompts, one-time codes, prompts that are not password prompts).
 - Automatic discovery or fallback across `~/.ssh/id_*` identities.
 - Key generation, conversion, or import.
-- Persisting passphrases or integrating a credential vault/platform keychain.
+- Persisting passphrases, or a platform keychain. Passwords may be persisted only sealed by the master-password vault (`DEC-0021`, `IN-0050`); the save flow arrives with `US-0158`.
