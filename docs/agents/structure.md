@@ -121,6 +121,12 @@ OneTerm/
 │   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
 │   │   └── src/                    # lib.rs + config/github (ReleaseClient trait)/archive/install/version; *_tests.rs siblings
 │   │
+│   ├── vault/                      # `oneterm-vault` (IN-0050, DEC-0021) — master-password vault, gpui-free
+│   │   ├── src/                    # lib.rs (re-exports) + vault.rs (init/unlock/reset, UnlockedVault seal/open/
+│   │   │                           #   change_password) / document.rs (vault.json load + the one write fn) /
+│   │   │                           #   envelope.rs (otv1: + associated data) / kdf.rs (Argon2id) / error.rs
+│   │   └── tests/fixtures/persistence/ # vault-v1.json (made by an independent implementation) + invalid cases
+│   │
 │   ├── theme/                      # `oneterm-theme` — theme registry + AppIcon (has build.rs)
 │   │   ├── build.rs                # Sets ONETERM_UI_ICONS_DIR for the icon_named! macro
 │   │   ├── assets/icons/           # OneTerm SVG icons (auto-generate AppIcon variants)
@@ -226,7 +232,7 @@ OneTerm/
 ## 2. Structure conventions
 
 - **One module, one responsibility.** The file name = the main module name (snake_case).
-- **One crate per layer / feature.** Shared logic goes in a low crate (`core` / `terminal` / `actions` / `settings` / `state` / `update` / `theme`); each user-facing feature is its own `*-ui` crate; the shell (`workspace`) is feature-agnostic.
+- **One crate per layer / feature.** Shared logic goes in a low crate (`core` / `terminal` / `actions` / `settings` / `state` / `update` / `vault` / `theme`); each user-facing feature is its own `*-ui` crate; the shell (`workspace`) is feature-agnostic.
 - **Feature crates never depend on each other's internals** except the acyclic edge `session-ui → terminal-view` (a new SSH session opens a `TerminalPanel`). Cross-cutting helpers live in `state`.
 - **Feature crates never depend on `ssh`/`local-shell`.** They create sessions through the `oneterm_terminal::SessionFactory` process-global that the `app` installs at startup.
 - **Theme JSON** lives at `crates/theme/themes/<name>.json`, loaded via `EMBEDDED_THEME_FILES` in `crates/theme/src/theme.rs`. Do not hardcode colors — read from `cx.theme()` / `TerminalTheme`.
@@ -248,6 +254,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `settings` (`oneterm-settings`) | `core`, gpui, gpui-component | shared | `TerminalConfig`, live `TerminalSettings` (defaults single-sourced from the config), and `UiConfig` including the `Theme` observer that persists `ui_config.json`. |
 | `state` (`oneterm-state`) | `core`, `terminal`, `completion`, gpui, gpui-component | shared | Cross-feature runtime state (`AppState`, `AgentRegistry`, `CompletionHistory`) + injection (`AppServices` bundle: session factory, `WorkspaceCommands`, active-terminal metrics, agent focuser) + shared shell contracts (`docks.json` document owner, panel names, dock helpers). |
 | `update` (`oneterm-update`) | `core`, `chrono`, `reqwest`, `semver`, `sha2`, `tar`, `flate2`, `zip` | shared | GitHub Releases auto-update checks, asset selection, download verification, staging, and installer orchestration. |
+| `vault` (`oneterm-vault`) | `core`, `argon2`, `aes-gcm`, `base64`, `serde`, `serde_json`, `thiserror`, `zeroize` | shared (L1) | Master-password vault (`IN-0050`, `DEC-0021`): Argon2id key-encryption key, the wrapped random data key, AES-256-GCM `otv1:` envelopes bound to a purpose and context, and the `vault.json` header (load, create-only set-up, vault-id-checked rewrap, reset; elevated writes refused in one function). gpui-free, and the **only** crate allowed to depend on `argon2` / `aes-gcm` (`scripts/dependency-graph-policy.json`). |
 | `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, generated `AppIcon`, brand accent, and theme-tinted notification builders (`notif_ext`). |
 | `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, gpui-component | shell | Feature-agnostic app shell. Maps domain placement types to the UI dock and drives features through `WorkspaceCommands`. |
 | `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight`, `completion`, gpui-component | feature | Terminal panel, rendering/input, split spaces, the terminal settings panel, and the auto-completion overlay + controller. |

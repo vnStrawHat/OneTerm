@@ -72,26 +72,50 @@ fn backup_path(path: &Path) -> PathBuf {
 /// serialization and schema/version handling.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let _lock = InterProcessLock::acquire(path)?;
-    atomic_write_unlocked(path, bytes)
+    atomic_write_unlocked(path, bytes, Sensitivity::Ordinary)
 }
 
-fn atomic_write_unlocked(path: &Path, bytes: &[u8]) -> io::Result<()> {
+/// Whether a document holds secret material (`DEC-0021`), which changes how
+/// its files are written.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sensitivity {
+    /// `.bak` keeps the previous generation; files get the process umask.
+    Ordinary,
+    /// `.bak` becomes a copy of the new document, so an old wrapped key or
+    /// ciphertext does not outlive the write that replaced it; on Unix every
+    /// file the write creates is owner-only (`0600`).
+    Secret,
+}
+
+fn atomic_write_unlocked(path: &Path, bytes: &[u8], sensitivity: Sensitivity) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
     let temporary = temporary_path(path);
     let write_result = (|| {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)?;
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        if sensitivity == Sensitivity::Secret {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
 
-        if path.exists() {
-            fs::copy(path, backup_path(path))?;
+        // `fs::copy` carries the source's permission bits, so a scrubbed
+        // backup is owner-only too.
+        match sensitivity {
+            Sensitivity::Ordinary if path.exists() => {
+                fs::copy(path, backup_path(path))?;
+            }
+            Sensitivity::Ordinary => {}
+            Sensitivity::Secret => {
+                fs::copy(&temporary, backup_path(path))?;
+            }
         }
 
         replace_file(&temporary, path)
@@ -108,6 +132,29 @@ pub fn update_json_file(
     path: &Path,
     update: impl FnOnce(&mut serde_json::Value) -> io::Result<()>,
 ) -> io::Result<()> {
+    update_json_file_as(path, update, Sensitivity::Ordinary)
+}
+
+/// [`update_json_file`] for a document that holds secret material
+/// (`DEC-0021`; today only `vault.json`).
+///
+/// The sibling `.bak` is replaced by a copy of the **new** document instead of
+/// the previous generation, so a write that retires a secret (a password
+/// change rewrapping the data key) leaves no copy of it behind. On Unix the
+/// document and its backup are created owner-only (`0600`); on Windows the
+/// profile ACL applies.
+pub fn update_secret_json_file(
+    path: &Path,
+    update: impl FnOnce(&mut serde_json::Value) -> io::Result<()>,
+) -> io::Result<()> {
+    update_json_file_as(path, update, Sensitivity::Secret)
+}
+
+fn update_json_file_as(
+    path: &Path,
+    update: impl FnOnce(&mut serde_json::Value) -> io::Result<()>,
+    sensitivity: Sensitivity,
+) -> io::Result<()> {
     let _lock = InterProcessLock::acquire(path)?;
     let mut value = match fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str(&raw)
@@ -117,7 +164,23 @@ pub fn update_json_file(
     };
     update(&mut value)?;
     let bytes = serde_json::to_vec_pretty(&value).map_err(io::Error::other)?;
-    atomic_write_unlocked(path, &bytes)
+    atomic_write_unlocked(path, &bytes, sensitivity)
+}
+
+/// Remove a document and its `.bak` under the document's inter-process lock.
+///
+/// Either file being absent already is not an error. The lock file itself
+/// stays, like every lock file (`docs/agents/persistence.md`).
+pub fn remove_document(path: &Path) -> io::Result<()> {
+    let _lock = InterProcessLock::acquire(path)?;
+    for file in [path.to_path_buf(), backup_path(path)] {
+        match fs::remove_file(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// Replace `target` with `temporary`. `fs::rename` overwrites an existing
@@ -326,6 +389,56 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"version":1}"#);
         // No temporary file was left behind (state.json, state.bak/, .lock).
         assert_eq!(fs::read_dir(&*dir).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn secret_updates_leave_a_backup_equal_to_the_new_document() {
+        let dir = test_dir();
+        let path = dir.join("secret.json");
+        for generation in [1, 2] {
+            update_secret_json_file(&path, |document| {
+                document["generation"] = serde_json::Value::from(generation);
+                Ok(())
+            })
+            .unwrap();
+        }
+
+        let current = fs::read(&path).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&current).unwrap();
+        assert_eq!(document["generation"], 2);
+        assert_eq!(fs::read(backup_path(&path)).unwrap(), current);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_documents_and_their_backups_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = test_dir();
+        let path = dir.join("secret.json");
+        update_secret_json_file(&path, |document| {
+            document["generation"] = serde_json::Value::from(1);
+            Ok(())
+        })
+        .unwrap();
+
+        for file in [path.clone(), backup_path(&path)] {
+            let mode = fs::metadata(&file).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{}", file.display());
+        }
+    }
+
+    #[test]
+    fn remove_document_removes_the_file_and_its_backup_and_tolerates_absence() {
+        let dir = test_dir();
+        let path = dir.join("state.json");
+        atomic_write(&path, br#"{"version":1}"#).unwrap();
+        atomic_write(&path, br#"{"version":2}"#).unwrap();
+
+        remove_document(&path).unwrap();
+        assert!(!path.exists());
+        assert!(!backup_path(&path).exists());
+        remove_document(&path).unwrap();
     }
 
     #[test]

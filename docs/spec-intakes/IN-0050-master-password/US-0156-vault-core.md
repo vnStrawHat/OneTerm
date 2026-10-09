@@ -11,7 +11,7 @@ Created: 2026-10-09
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [x] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -59,46 +59,46 @@ page, no saved SSH password, no lock screen (`US-0157`..`US-0159`).
 
 ## Acceptance
 
-- [ ] RFC 9106 § 5.3 Argon2id vector passes against the `argon2` crate; a frozen vector passes
+- [x] RFC 9106 § 5.3 Argon2id vector passes against the `argon2` crate; a frozen vector passes
   through OneTerm's own KDF wrapper; the NIST CAVP AES-256-GCM vector (`gcmEncryptExtIV256`,
   96-bit IV, 128-bit PT and AAD) passes through OneTerm's own seal / open internals.
-- [ ] The `otv1:` layout of an SSH-password envelope is frozen by a known-answer test (fixed key,
+- [x] The `otv1:` layout of an SSH-password envelope is frozen by a known-answer test (fixed key,
   vault id and nonce through a test-only constructor), and `vault-v1.json` plus a sealed password
   made by an **independent** implementation unlock and open through the crate.
-- [ ] Seal / open round trip; each seal uses a fresh nonce; a 1024-byte secret seals, 1025 does
+- [x] Seal / open round trip; each seal uses a fresh nonce; a 1024-byte secret seals, 1025 does
   not.
-- [ ] Wrong password -> `WrongPassword` (never trimmed: a trailing space is wrong); empty ->
+- [x] Wrong password -> `WrongPassword` (never trimmed: a trailing space is wrong); empty ->
   `EmptyPassword`; a flipped kid -> `OtherVault`; a flipped nonce, ciphertext or tag byte, or
   another host / port / user -> `Rejected`; another vault -> `OtherVault`; `otv2:` ->
   `NewerFormat`; plain text -> `Malformed`.
-- [ ] An unknown-version or plain-text value round-trips through serde byte for byte.
-- [ ] `change_password` checks the old password, rewraps the same data key under a fresh salt:
+- [x] An unknown-version or plain-text value round-trips through serde byte for byte.
+- [x] `change_password` checks the old password, rewraps the same data key under a fresh salt:
   the old password stops working, the new one works, items sealed before still open,
   `vault.bak` equals `vault.json`, the old wrapped key is gone from both, and unknown fields at
   top level and inside `kdf` survive. Refused (`VaultReplaced`, file untouched) when the file on
   disk is another vault.
-- [ ] `reset` removes `vault.json` and `vault.bak`, works on a damaged or absent file.
-- [ ] Set-up is create-only: a second set-up or two concurrent ones give exactly one vault and
+- [x] `reset` removes `vault.json` and `vault.bak`, works on a damaged or absent file.
+- [x] Set-up is create-only: a second set-up or two concurrent ones give exactly one vault and
   `AlreadyInitialised`; a damaged file is never overwritten.
-- [ ] Load: missing -> `Uninitialised`; read error -> `AppError::ConfigLoad`; every field rule of
+- [x] Load: missing -> `Uninitialised`; read error -> `AppError::ConfigLoad`; every field rule of
   `persistence-and-migration.md` § 2-3 gives its `Damaged` / `Unsupported` outcome, including
   parameters below the floor (19 MiB / 2 passes) or above the ceiling; unknown fields are
   ignored; **no load ever writes, renames or quarantines**.
-- [ ] Elevated: set-up, change and reset each return `ReadOnly` with nothing changed on disk,
+- [x] Elevated: set-up, change and reset each return `ReadOnly` with nothing changed on disk,
   proved by ordinary unit tests through the `elevated` parameter (no new `#[ignore]`d test).
-- [ ] An unlock verifies only against the header the caller holds: replacing `vault.json` with a
+- [x] An unlock verifies only against the header the caller holds: replacing `vault.json` with a
   passer-by's vault neither accepts the passer-by's password nor rejects the owner's.
-- [ ] No `Debug` / `Display` output carries a password, a key or an envelope payload;
+- [x] No `Debug` / `Display` output carries a password, a key or an envelope payload;
   `UnlockedVault` is neither `Clone` nor `Debug`.
-- [ ] Unlock cost contract (ratios only): a wrong password costs a full KDF like a right one
+- [x] Unlock cost contract (ratios only): a wrong password costs a full KDF like a right one
   (ratio within 0.5..=2), and the defaults cost more than twice the floor. The default-parameter
   unlock time on this machine is recorded below.
-- [ ] `Cargo.lock` gains no `[[package]]` other than `oneterm-vault`;
+- [x] `Cargo.lock` gains no `[[package]]` other than `oneterm-vault`;
   `python scripts/third-party-notices.py --check` passes unchanged; `cargo tree -i argon2` and
   `-i aes-gcm` list `oneterm-vault` as the only first-party user (enforced by
   `verify-dependency-graph.py`).
-- [ ] No test leaves a temporary directory behind (RAII guard, `BUG-0083` pattern).
-- [ ] Gate in the worktree: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets
+- [x] No test leaves a temporary directory behind (RAII guard, `BUG-0083` pattern).
+- [x] Gate in the worktree: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets
   -- -D warnings`, `cargo test -p oneterm-vault`, `cargo test -p oneterm-core`, the Python
   checks of `AGENTS.md` § 4 that this change touches.
 
@@ -138,7 +138,13 @@ Reason: a new crate, a new persisted document and a rule that reverses `DEC-0001
 
 ### Reconciliation
 
-To be completed with the implementation commit.
+Docs changed, as planned: `DEC-0021` (new), `DEC-0001` status, `docs/PROJECT.md`,
+`docs/ssh-authentication.md` (non-goal + "Master-password vault" subsection),
+`docs/agents/persistence.md` (`vault.json` row, never-quarantine exception, "Secrets at rest",
+elevation row), `docs/agents/structure.md`, `docs/agents/crate-dependency-rules.md`,
+`docs/agents/dependencies.md`, `docs/architecture.md`, `IN-0050.md`. Not changed:
+`docs/gui-layout.md` (no UI in this packet). `persistence-and-migration.md`'s `vault.json` rows and
+the LLD interfaces stay as designed; the deviations are listed under Plan.
 
 ## Context
 
@@ -152,8 +158,8 @@ To be completed with the implementation commit.
 
 - [x] Records first (commit 1, docs only): `DEC-0021`, `DEC-0001` note, `PROJECT.md`,
   `ssh-authentication.md`, `IN-0050.md` rulings, this packet.
-- [ ] Crate, core helpers, policy, tests, fixtures, docs (commit 2).
-- [ ] Gate; record evidence and the Argon2id timing here.
+- [x] Crate, core helpers, policy, tests, fixtures, docs (commit 2).
+- [x] Gate; record evidence and the Argon2id timing here.
 
 ### Choices the LLDs left open (simplest taken)
 
@@ -202,16 +208,60 @@ To be completed with the implementation commit.
   `0600` tests run in CI on Linux / macOS only.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
+- [x] Unit proof
 - [ ] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-To be recorded after implementation.
+Worktree gate, 2026-10-09, Windows 11, `CARGO_BUILD_JOBS=6`:
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo test -p oneterm-vault` | 34 passed (debug, about 12 s) |
+| `cargo test -p oneterm-core` | 91 passed (3 new: secret backup, `remove_document`, and the Unix `0600` test, which compiles only on Unix) |
+| `python scripts/verify-dependency-graph.py` | pass (21 packages; `argon2` / `aes-gcm` named only by `oneterm-vault`) |
+| `python scripts/check-doc-paths.py` | pass |
+| `python scripts/check-english.py` | pass |
+| `python scripts/third-party-notices.py --check` | pass, file unchanged (nothing reaches `oneterm-vault` from `oneterm-app` yet) |
+| `python scripts/check-ignored-tests.py` | pass, 19 ignored tests, all recorded (no new one). The first two attempts crashed rustc with `0xc0000409` while it built `windows` / `gpui`: free commit was 5.8 GB. The third ran with `CARGO_BUILD_JOBS=2` |
+
+- **`Cargo.lock`:** one new `[[package]]`, `oneterm-vault`, and one new dependency **edge**,
+  `argon2 -> zeroize` (the `zeroize` feature; both were already packages). No package added.
+- **Independent cross-checks:** the frozen KEK vector and the frozen `otv1:` envelope were each
+  reproduced byte for byte by Python `cryptography` 44 (OpenSSL); `vault-v1.json` and its sealed
+  SSH password were generated by that implementation and unlock / open through the crate.
+- **Temporary directories:** none left in `%TEMP%` after the runs (`oneterm-vault-*`,
+  `oneterm-persistence-*`: 0).
+
+**Argon2id unlock time (Q11, first part)** — `unlock_cost_contract`, fastest of 3:
+
+| Build | Defaults (64 MiB, 3 passes, 1 lane) | Floor (19 MiB, 2 passes) |
+| --- | --- | --- |
+| `cargo test -p oneterm-vault --release` | **80-84 ms** | 14-15 ms |
+| debug (`dev`, argon2 at opt-level 0) | 1.4-1.7 s | 0.27-0.35 s |
+
+The release time is **below** the LLD's 0.25-1 s target. Moving `iterations` within the allowed
+2..=4 would give about 110 ms, still below it. Reaching the target needs more memory (for
+example 256 MiB, 3 passes, about 0.3 s), which `DEC-0021` and the brief fix at 64 MiB, so the
+defaults are **unchanged** and this is an **open owner question**. Parameters are data and
+`needs_rehash()` upgrades existing vaults after an unlock, so raising them later needs no
+format change. Separately, the 1.4-1.7 s debug unlock makes `US-0157`'s dev loop slow. Adding
+`argon2` and `blake2` to `[profile.dev.package]` with opt-level 3, as `gpui-pre` already is,
+would fix that. It is not done here.
+
+Gaps:
+
+- No integration, E2E or platform proof: no UI reaches the crate (by scope).
+- The Unix `0600` tests (`oneterm-core`, `oneterm-vault`) were not run locally; CI runs them on
+  Linux and macOS.
+- `cargo deny` was not run (not installed in this session's gate).
+- The full `cargo test --workspace` runs on `main` after independent verification, not here.
 
 ## Handoff
 

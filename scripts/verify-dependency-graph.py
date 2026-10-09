@@ -171,6 +171,18 @@ def main() -> None:
         if backend_dependencies:
             errors.append(f"{feature} depends on backends: {backend_dependencies}")
 
+    # Third-party crates only some workspace crates may name directly, in any
+    # dependency kind (`DEC-0021` rule 3: only `oneterm-vault` depends on the
+    # crypto crates, so the code that handles secret material stays one crate).
+    for crate, allowed in sorted(policy["restricted_third_party_dependencies"].items()):
+        users = sorted(
+            name
+            for name, package in packages.items()
+            if any(dependency["name"] == crate for dependency in package["dependencies"])
+        )
+        if users != sorted(allowed):
+            errors.append(f"{crate} may be a direct dependency of only {allowed}; found {users}")
+
     # `[workspace.package] version` is the single version source; every crate
     # inherits it.
     workspace_version = manifest["workspace"]["package"].get("version")

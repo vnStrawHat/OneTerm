@@ -20,6 +20,7 @@ members = [
     "crates/completion",
     "crates/tools",
     "crates/vt",
+    "crates/vault",
 ]
 resolver = "3"
 
@@ -62,6 +63,7 @@ oneterm-local-shell = { path = "crates/local-shell" }
 oneterm-update = { path = "crates/update" }
 oneterm-ssh = { path = "crates/ssh" }
 oneterm-completion = { path = "crates/completion" }
+oneterm-vault = { path = "crates/vault" }
 # `default-features = false` turns the engine's default-on `pty` feature off
 # for the workspace; `local-shell` and `tools` are the only members that name
 # `oneterm_vt::pty`, and each asks for it with `features = ["pty"]`. An
@@ -106,6 +108,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 zeroize = { version = "1.8", features = ["derive"] }
+# Master-password vault (IN-0050, DEC-0021): Argon2id and AES-256-GCM. Both already
+# resolve in Cargo.lock through russh -> ssh-key, so the graph does not grow. Only
+# `oneterm-vault` may depend on them (scripts/dependency-graph-policy.json).
+# `default-features = false` keeps argon2 off the `password-hash` path: the vault calls
+# the raw KDF.
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "getrandom", "zeroize"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots", "system-proxy"] }
 semver = "1"
 sha2 = "0.10"
