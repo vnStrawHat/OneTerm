@@ -362,15 +362,16 @@ mod hop_attribution {
         assert_eq!(index_of(&forms, "rejected by the server"), None);
     }
 
-    /// Defect D1 (Low), pinned: two IPv6 hops where one address is the other
-    /// followed by `:<group>` (`2001:db8::1` and `2001:db8::1:22`, both port
-    /// 22). The second hop's failure `jump host ops@2001:db8::1:22:22: ...`
-    /// contains the first hop's pattern `jump host ops@2001:db8::1:22:`, and
-    /// `form_for_error` takes the first match, so the **first** hop's row is
-    /// revealed. Flip the expectation to `Some(1)` when hop failures carry a
-    /// structured index (LLD § 6) or the label is bracketed.
+    /// Defect D1 (fixed in the rework): two IPv6 hops where one address is the
+    /// other followed by `:<group>` (`2001:db8::1` and `2001:db8::1:22`, both
+    /// port 22). The second hop's failure `jump host ops@2001:db8::1:22:22: ...`
+    /// also starts with the first hop's prefix `jump host ops@2001:db8::1:22:`;
+    /// the longest matching prefix picks the second hop, and the first hop's
+    /// own failure still picks the first.
     #[gpui::test]
-    fn d1_an_ipv6_hop_whose_address_extends_another_is_misattributed(cx: &mut TestAppContext) {
+    fn d1_an_ipv6_hop_whose_address_extends_another_picks_the_longest_prefix(
+        cx: &mut TestAppContext,
+    ) {
         cx.update(gpui_component::init);
         let forms = hops(
             vec![spec("2001:db8::1", 22), spec("2001:db8::1:22", 22)],
@@ -378,8 +379,21 @@ mod hop_attribution {
         );
         assert_eq!(
             index_of(&forms, &rejected("ops@2001:db8::1:22:22")),
-            Some(0),
-            "D1: should be Some(1)"
+            Some(1)
+        );
+        assert_eq!(index_of(&forms, &rejected("ops@2001:db8::1:22")), Some(0));
+        // Listed the other way round, the same messages pick the same hops.
+        let reversed = hops(
+            vec![spec("2001:db8::1:22", 22), spec("2001:db8::1", 22)],
+            cx,
+        );
+        assert_eq!(
+            index_of(&reversed, &rejected("ops@2001:db8::1:22:22")),
+            Some(0)
+        );
+        assert_eq!(
+            index_of(&reversed, &rejected("ops@2001:db8::1:22")),
+            Some(1)
         );
     }
 }

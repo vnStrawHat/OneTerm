@@ -265,10 +265,19 @@ The design above holds; where the build differs or chose among open options:
 - **Reseal without a vault.** Uninitialised: the old envelope cannot open, so it is dropped
   with a note (no set-up offered for it). Unavailable: Save is refused with the reason (the user
   can Remove). A typed Seal with Uninitialised runs Set up first.
-- **Failure routing.** `SshConnectRequest::on_failed` receives the `AppError`; a hop is found by
-  the `jump host user@host:port:` prefix `oneterm-ssh` already puts on hop errors, not by a
-  structured hop index (no core or backend change). `on_connected` also receives the window, to
-  report "Password saved." or why not.
+- **Failure routing.** `SshConnectRequest::on_failed` receives the `AppError` and the window;
+  a hop is found by the `jump host user@host:port:` prefix `oneterm-ssh` already puts on hop
+  errors (the message must start with it, and the longest matching prefix wins, so an IPv6
+  address extending another hop's is attributed correctly), not by a structured hop index (no
+  core or backend change). `on_connected` also receives the window, to report "Password
+  saved." or why not.
+- **Rejected after a host-key approval.** That approval closes the connect dialog, so the row
+  cannot be revealed: the toast says to open the session, and an in-memory map (session id ->
+  rejected envelope) makes the next connect dialog open the target row as an input with
+  "Update saved password" ticked while the session still holds that envelope. A successful
+  connect forgets it.
+- **Replace and Remove.** Only **Remove** drops the saved password on Save. **Replace** shows
+  the input with "Update saved password" ticked; unticking it keeps the saved password.
 - **Seal path.** `VaultState::seal` (`oneterm-state`) re-reads `vault.json` and compares
   `vault_id()` first; a mismatch or a missing file drops the key, moves the phase to what the
   file says, emits `VaultEvent::Locked` and refuses with `VaultActionError::ResetElsewhere`.

@@ -464,10 +464,13 @@ as built in `connect_dialog.rs` and `auth_form.rs`:
   (`SshConnectRequest::on_connected` now receives the window to report the outcome).
 - **Rejected saved password.** `SshConnectRequest::on_failed` now receives the `AppError`.
   An `Authentication` failure turns the row that used a saved password back into an input:
-  the target's with "Update saved password" ticked, a hop's (matched by the
-  `jump host user@host:port:` prefix `oneterm-ssh` puts on hop errors) with a note to update it
-  in that hop's session. The sealed value is kept until a new password connects with the box
-  ticked.
+  the target's with "Update saved password" ticked, a hop's (matched by the longest
+  `jump host user@host:port:` prefix `oneterm-ssh` puts at the start of hop errors) with a note
+  to update it in that hop's session. The sealed value is kept until a new password connects
+  with the box ticked. When the dialog is already closed (a first-use host-key approval closes
+  it before the retry), the toast says to open the session, and the next connect dialog opens
+  that row as an input with the box ticked (remembered in memory for the rejected envelope;
+  a successful connect forgets it).
 - **Quick Connect** uses a picked jump host's saved password only when the vault is already
   unlocked; it never prompts and never saves one (follow-up).
 

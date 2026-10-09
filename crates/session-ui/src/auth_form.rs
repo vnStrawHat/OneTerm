@@ -93,6 +93,10 @@ pub(crate) struct SshAuthForm {
     use_saved: Rc<Cell<bool>>,
     /// "Save password" / "Update saved password" is ticked.
     save_ticked: Rc<Cell<bool>>,
+    /// The session dialog's **Remove** was clicked: the saved password goes
+    /// on Save. Only Remove sets it; unticking "Update saved password" after
+    /// Replace keeps the saved password.
+    removed: Rc<Cell<bool>>,
     /// Whether a typed password may be saved from this form.
     offers_save: Rc<Cell<bool>>,
     /// Why the saved password is not in use, shown under the input.
@@ -135,6 +139,7 @@ impl SshAuthForm {
             saved: Rc::new(RefCell::new(None)),
             use_saved: Rc::new(Cell::new(false)),
             save_ticked: Rc::new(Cell::new(false)),
+            removed: Rc::new(Cell::new(false)),
             offers_save: Rc::new(Cell::new(false)),
             note: Rc::new(RefCell::new(None)),
             saved_focus: cx.focus_handle(),
@@ -188,6 +193,32 @@ impl SshAuthForm {
         self.use_saved.set(false);
         self.save_ticked.set(tick);
         self.set_note(note);
+    }
+
+    /// Whether Save keeps the saved password (session dialog): it exists, was
+    /// not removed, and no typed password replaces it. Replace followed by
+    /// unticking "Update saved password" keeps it.
+    pub(crate) fn keeps_saved(&self) -> bool {
+        self.has_saved() && !self.removed.get() && !self.save_ticked()
+    }
+
+    /// The session dialog's **Replace**: an empty input with "Update saved
+    /// password" ticked; unticking it again keeps the saved password.
+    pub(crate) fn begin_replace(&self) {
+        self.use_saved.set(false);
+        self.save_ticked.set(true);
+        self.removed.set(false);
+    }
+
+    /// Tick or untick "Save password" / "Update saved password".
+    pub(crate) fn set_save_ticked(&self, on: bool) {
+        self.save_ticked.set(on);
+    }
+
+    /// The session dialog's **Remove**: the saved password is dropped on Save.
+    pub(crate) fn remove_saved(&self) {
+        self.reveal_input("The saved password is removed when you save.", false);
+        self.removed.set(true);
     }
 
     /// Whether the password input is empty (copies nothing).
@@ -305,14 +336,14 @@ impl SshAuthForm {
         } else {
             SAVE_PASSWORD_LABEL
         };
-        let ticked = self.save_ticked.clone();
+        let form = self.clone();
         Checkbox::new("save-password")
             .items_center()
             .accessibility_label(label)
             .child(control_label(label))
-            .checked(ticked.get())
+            .checked(self.save_ticked.get())
             .on_click(move |checked: &bool, window, _| {
-                ticked.set(*checked);
+                form.set_save_ticked(*checked);
                 window.refresh();
             })
     }
@@ -360,8 +391,7 @@ impl SshAuthForm {
                         .outline()
                         .small()
                         .on_click(move |_, window, cx| {
-                            replace.use_saved.set(false);
-                            replace.save_ticked.set(true);
+                            replace.begin_replace();
                             window.refresh();
                             let focus = replace.password.read(cx).focus_handle(cx);
                             window.defer(cx, move |window, cx| focus.focus(window, cx));
@@ -373,10 +403,7 @@ impl SshAuthForm {
                         .outline()
                         .small()
                         .on_click(move |_, window, _| {
-                            remove.reveal_input(
-                                "The saved password is removed when you save.",
-                                false,
-                            );
+                            remove.remove_saved();
                             window.refresh();
                         }),
                 ),

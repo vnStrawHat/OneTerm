@@ -13,6 +13,7 @@
 //! connection attempt in flight.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{
     Arc,
@@ -23,8 +24,8 @@ use std::sync::{
 use gpui::FocusHandle;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, Focusable as _, IntoElement as _, ParentElement as _, SharedString, Styled,
-    Window, div,
+    App, AppContext, Focusable as _, Global, IntoElement as _, ParentElement as _, SharedString,
+    Styled, Window, div,
 };
 use gpui_component::{
     Disableable as _, WindowExt as _,
@@ -41,7 +42,7 @@ use oneterm_state::form_dialog::{FieldRequirement, FormDialog, control_label, la
 use oneterm_state::vault_dialogs::ensure_unlocked;
 use oneterm_state::{VaultPhase, VaultState};
 use oneterm_theme::notif_ext::notify;
-use oneterm_vault::{SealContext, SecretPurpose};
+use oneterm_vault::{SealContext, SealedSecret, SecretPurpose};
 
 use super::auth_form::{SavedPassword, SshAuthForm};
 use super::common::{
@@ -101,7 +102,13 @@ pub(crate) fn open_connect_dialog(
     auth_form.set_saved(SavedPassword::of(&session));
     auth_form.offer_save(session.auth_method == SshAuthPreference::Password);
     let mut password_forms: Vec<SshAuthForm> = hop_forms.forms().cloned().collect();
-    password_forms.push(auth_form.clone());
+    if was_rejected(id, &session, cx) {
+        // Rejected after a host-key approval closed the last dialog: open with
+        // the input and "Update saved password" ticked (rework D2).
+        auth_form.reveal_input(REJECTED_NOTE, true);
+    } else {
+        password_forms.push(auth_form.clone());
+    }
     let unlock_first = activate_saved_passwords(&password_forms, cx);
 
     // Username state — only created when needed.
@@ -344,30 +351,93 @@ fn activate_saved_passwords(forms: &[SshAuthForm], cx: &App) -> bool {
     false
 }
 
+const REJECTED_NOTE: &str = "The server rejected the saved password. Type the current one.";
+
+/// Which saved password a failure rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rejected {
+    Target,
+    Hop,
+}
+
+/// Sessions whose saved password the server rejected, with the envelope it
+/// rejected (in memory only). The next connect dialog opens that row as an
+/// input with "Update saved password" ticked, as long as the session still
+/// holds that envelope; a successful connect forgets it (rework D2).
+#[derive(Default)]
+struct RejectedSavedPasswords(HashMap<SshSessionId, SealedSecret>);
+
+impl Global for RejectedSavedPasswords {}
+
+fn was_rejected(id: SshSessionId, session: &SshSession, cx: &App) -> bool {
+    let rejected = cx
+        .try_global::<RejectedSavedPasswords>()
+        .and_then(|rejected| rejected.0.get(&id));
+    rejected.is_some() && rejected == session.saved_password()
+}
+
 /// A rejected saved password (`ssh-password-save-flow.md` § 6): the row it was
 /// used in turns into an empty input. The saved value is **not** removed (a
 /// lockout or a typo on the server must not destroy it); a new one replaces it
 /// only when the target connects with "Update saved password" ticked.
-fn reveal_rejected_saved_password(error: &AppError, target: &SshAuthForm, hops: &JumpHopForms) {
+fn reveal_rejected_saved_password(
+    error: &AppError,
+    target: &SshAuthForm,
+    hops: &JumpHopForms,
+) -> Option<Rejected> {
     let AppError::Connect {
         phase: ConnectPhase::Authentication,
         message,
     } = error
     else {
-        return;
+        return None;
     };
     match hops.form_for_error(message) {
-        Some(hop) if hop.uses_saved() => hop.reveal_input(
-            "The server rejected the saved password. Type the current one; update it in that jump host's session.",
-            false,
-        ),
-        Some(_) => {}
-        None if target.uses_saved() => target.reveal_input(
-            "The server rejected the saved password. Type the current one.",
-            true,
-        ),
-        None => {}
+        Some(hop) if hop.uses_saved() => {
+            hop.reveal_input(
+                "The server rejected the saved password. Type the current one; update it in that jump host's session.",
+                false,
+            );
+            Some(Rejected::Hop)
+        }
+        Some(_) => None,
+        None if target.uses_saved() => {
+            target.reveal_input(REJECTED_NOTE, true);
+            Some(Rejected::Target)
+        }
+        None => None,
     }
+}
+
+/// After a rejected saved password: remember it for the next dialog and,
+/// when the connect dialog is already gone (a host-key approval closed it),
+/// say what to do in the toast instead of the row.
+fn remember_rejection(
+    rejected: Rejected,
+    id: SshSessionId,
+    session: &SshSession,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let (Rejected::Target, Some(sealed)) = (rejected, session.saved_password()) {
+        cx.default_global::<RejectedSavedPasswords>()
+            .0
+            .insert(id, sealed.clone());
+    }
+    if window.has_active_dialog(cx) {
+        return;
+    }
+    let message = match rejected {
+        Rejected::Target => format!(
+            "The saved password for \"{}\" was rejected. Open the session to type the current one.",
+            session.label
+        ),
+        Rejected::Hop => format!(
+            "A jump host's saved password for \"{}\" was rejected. Update it in that jump host's session.",
+            session.label
+        ),
+    };
+    window.push_notification(notify(NotificationType::Warning, message, cx), cx);
 }
 
 /// Seal the password the server just accepted and store it on session `id`
@@ -486,17 +556,22 @@ fn on_connect_click(
         (true, SshAuthMethod::Password { password }) => Some(password.clone()),
         _ => None,
     };
-    let on_connected = to_save.map(|password| {
+    let on_connected = {
         let (host, username) = (host.clone(), username.clone());
         Rc::new(move |window: &mut Window, cx: &mut App| {
-            let context = SealContext {
-                host: &host,
-                port,
-                username: &username,
-            };
-            save_connected_password(id, &password, &context, window, cx);
+            if cx.has_global::<RejectedSavedPasswords>() {
+                cx.global_mut::<RejectedSavedPasswords>().0.remove(&id);
+            }
+            if let Some(password) = &to_save {
+                let context = SealContext {
+                    host: &host,
+                    port,
+                    username: &username,
+                };
+                save_connected_password(id, password, &context, window, cx);
+            }
         }) as Rc<dyn Fn(&mut Window, &mut App)>
-    });
+    };
     let cfg = SshConfig {
         host,
         port,
@@ -515,13 +590,18 @@ fn on_connect_click(
         cfg,
         SshConnectRequest {
             logging_override: session.logging,
-            on_connected,
+            on_connected: Some(on_connected),
             on_failed: Some({
                 let auth_form = auth_form.clone();
                 let hop_forms = hop_forms.clone();
-                Rc::new(move |error, message, _cx| {
+                let session = session.clone();
+                Rc::new(move |error, message, window, cx| {
                     inline_error.set(message);
-                    reveal_rejected_saved_password(error, &auth_form, &hop_forms);
+                    if let Some(rejected) =
+                        reveal_rejected_saved_password(error, &auth_form, &hop_forms)
+                    {
+                        remember_rejection(rejected, id, &session, window, cx);
+                    }
                 })
             }),
             ..SshConnectRequest::new(session.label.clone())
@@ -618,32 +698,82 @@ mod tests {
             phase: ConnectPhase::Transport,
             message: "timed out".into(),
         };
-        reveal_rejected_saved_password(&transport, &target, &hops);
+        assert_eq!(
+            reveal_rejected_saved_password(&transport, &target, &hops),
+            None
+        );
         assert!(target.uses_saved() && hop.uses_saved());
 
         // The hop's own address picks the hop; the target keeps its row.
-        reveal_rejected_saved_password(
-            &auth_error("jump host ops@10.0.0.2:22: the server rejected the password"),
-            &target,
-            &hops,
+        assert_eq!(
+            reveal_rejected_saved_password(
+                &auth_error("jump host ops@10.0.0.2:22: the server rejected the password"),
+                &target,
+                &hops,
+            ),
+            Some(Rejected::Hop)
         );
         assert!(!hop.uses_saved() && !hop.save_ticked());
         assert!(target.uses_saved());
 
         // Otherwise it is the target's, with "Update saved password" ticked.
-        reveal_rejected_saved_password(
-            &auth_error("the server rejected the password"),
-            &target,
-            &hops,
+        assert_eq!(
+            reveal_rejected_saved_password(
+                &auth_error("the server rejected the password"),
+                &target,
+                &hops,
+            ),
+            Some(Rejected::Target)
         );
         assert!(!target.uses_saved());
         assert!(target.save_ticked());
+        // A row already revealed is not reported twice.
+        assert_eq!(
+            reveal_rejected_saved_password(
+                &auth_error("the server rejected the password"),
+                &target,
+                &hops,
+            ),
+            None
+        );
 
         // With no unlocked vault the saved row opens nothing.
         target.use_saved(true);
         let auth = cx.update(|_, cx| target.take_auth(cx));
         assert!(auth.unwrap_err().contains("locked"));
         assert!(!target.uses_saved(), "the input is revealed instead");
+    }
+
+    /// Rework D2: a rejection remembered for a session opens its next connect
+    /// dialog with the input revealed, but only while the session still holds
+    /// the envelope that was rejected (a new one saved meanwhile clears it).
+    #[gpui::test]
+    fn a_remembered_rejection_follows_the_envelope_it_was_for(cx: &mut TestAppContext) {
+        let envelope = |text: &str| -> SealedSecret {
+            serde_json::from_value(serde_json::Value::String(text.into())).unwrap()
+        };
+        let id = SshSessionId::parse("4").unwrap();
+        let mut session: SshSession = serde_json::from_str(
+            r#"{ "label": "prod", "host": "10.0.0.1", "username": "deploy", "group": null,
+                 "sealed_password": "otv1:AAAA" }"#,
+        )
+        .unwrap();
+        cx.update(|cx| {
+            assert!(!was_rejected(id, &session, cx), "nothing remembered yet");
+            cx.default_global::<RejectedSavedPasswords>()
+                .0
+                .insert(id, envelope("otv1:AAAA"));
+            assert!(was_rejected(id, &session, cx));
+            assert!(!was_rejected(
+                SshSessionId::parse("5").unwrap(),
+                &session,
+                cx
+            ));
+            session.sealed_password = Some(envelope("otv1:BBBB"));
+            assert!(!was_rejected(id, &session, cx), "a new password was saved");
+            session.sealed_password = None;
+            assert!(!was_rejected(id, &session, cx), "the password was removed");
+        });
     }
 
     #[gpui::test]

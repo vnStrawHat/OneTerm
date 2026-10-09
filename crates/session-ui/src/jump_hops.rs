@@ -117,13 +117,23 @@ impl JumpHopForms {
         self.hops.iter().map(|(_, form)| form)
     }
 
-    /// The hop whose connect error this is: the backend prefixes a hop's
+    /// The hop whose connect error this is: the backend starts a hop's
     /// failure with `jump host user@host:port:` (`oneterm-ssh` `hop_error`).
+    ///
+    /// The **longest** matching prefix wins: an IPv6 address can be another
+    /// hop's address followed by `:<group>` (`2001:db8::1` and
+    /// `2001:db8::1:22`), so the shorter hop's prefix also matches the longer
+    /// hop's message. Of equal prefixes (the same address twice) the first
+    /// hop is taken.
     pub(crate) fn form_for_error(&self, message: &str) -> Option<&SshAuthForm> {
-        self.hops
-            .iter()
-            .find(|(spec, _)| message.contains(&format!("jump host {}:", spec.address())))
-            .map(|(_, form)| form)
+        let mut best: Option<(usize, &SshAuthForm)> = None;
+        for (spec, form) in &self.hops {
+            let prefix = format!("jump host {}:", spec.address());
+            if message.starts_with(&prefix) && best.is_none_or(|(len, _)| prefix.len() > len) {
+                best = Some((prefix.len(), form));
+            }
+        }
+        best.map(|(_, form)| form)
     }
 
     /// Every credential input of every hop, so a caller can clear an inline

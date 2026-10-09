@@ -83,7 +83,10 @@ impl russh::server::Handler for ClientHandler {
     }
 
     /// Relay a `direct-tcpip` channel to a loopback address, so this server
-    /// can be the jump host of another one on the same machine.
+    /// can be the jump host of another one on the same machine. A name is
+    /// resolved first and only a loopback address it resolves to is used, so
+    /// a hosts file mapping `localhost` elsewhere cannot make it relay off the
+    /// machine.
     async fn channel_open_direct_tcpip(
         &mut self,
         channel: Channel<Msg>,
@@ -95,16 +98,23 @@ impl russh::server::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         let target = format!("{host_to_connect}:{port_to_connect}");
-        let loopback = matches!(host_to_connect, "127.0.0.1" | "localhost" | "::1");
         let Ok(port) = u16::try_from(port_to_connect) else {
             println!("direct-tcpip to {target}: refused (port)");
             return Ok(());
         };
-        if !loopback {
+        let resolved: Vec<SocketAddr> = match tokio::net::lookup_host((host_to_connect, port)).await
+        {
+            Ok(addresses) => addresses.collect(),
+            Err(error) => {
+                println!("direct-tcpip to {target}: {error}");
+                return Ok(());
+            }
+        };
+        let Some(address) = loopback_address(&resolved) else {
             println!("direct-tcpip to {target}: refused (not loopback)");
             return Ok(());
-        }
-        match tokio::net::TcpStream::connect((host_to_connect, port)).await {
+        };
+        match tokio::net::TcpStream::connect(address).await {
             Ok(mut tcp) => {
                 println!("direct-tcpip to {target}: relaying");
                 reply.accept().await;
@@ -569,6 +579,14 @@ fn seed_sample_root() -> io::Result<PathBuf> {
     Ok(root)
 }
 
+/// The first loopback address among `resolved`; `None` refuses the relay.
+fn loopback_address(resolved: &[SocketAddr]) -> Option<SocketAddr> {
+    resolved
+        .iter()
+        .copied()
+        .find(|address| address.ip().is_loopback())
+}
+
 /// `--password`: only `expected` is accepted; without it, any password.
 fn password_accepted(expected: Option<&str>, given: &str) -> bool {
     expected.is_none_or(|expected| expected == given)
@@ -645,7 +663,30 @@ async fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::password_accepted;
+    use std::net::SocketAddr;
+
+    use super::{loopback_address, password_accepted};
+
+    #[test]
+    fn the_relay_uses_only_a_loopback_resolution() {
+        let addr = |text: &str| text.parse::<SocketAddr>().unwrap();
+        assert_eq!(
+            loopback_address(&[addr("127.0.0.1:2223")]),
+            Some(addr("127.0.0.1:2223"))
+        );
+        assert_eq!(
+            loopback_address(&[addr("[::1]:22")]),
+            Some(addr("[::1]:22"))
+        );
+        // A name that resolves off the machine (a hosts-file `localhost`
+        // pointed elsewhere) is refused; a mixed answer uses the loopback one.
+        assert_eq!(loopback_address(&[addr("10.0.0.5:22")]), None);
+        assert_eq!(
+            loopback_address(&[addr("192.168.1.2:22"), addr("127.0.0.1:22")]),
+            Some(addr("127.0.0.1:22"))
+        );
+        assert_eq!(loopback_address(&[]), None);
+    }
 
     #[test]
     fn password_flag_accepts_only_its_value() {

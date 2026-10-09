@@ -139,8 +139,9 @@ impl PasswordPlan {
 }
 
 /// Decide what Save does with the password. `keep_saved`: the saved password
-/// is still in place (not replaced or removed); `save_typed`: "Save password"
-/// is ticked under a typed password.
+/// stays ([`SshAuthForm::keeps_saved`]: not removed and not replaced by a typed
+/// one, so Replace then unticking keeps it); `save_typed`: "Save password" /
+/// "Update saved password" is ticked under a typed password.
 fn password_plan(
     saved: Option<&SavedPassword>,
     session: &SshSession,
@@ -680,7 +681,7 @@ pub(crate) fn open_session_dialog(
                 password_plan(
                     original_saved.as_ref(),
                     &session,
-                    auth_form.uses_saved(),
+                    auth_form.keeps_saved(),
                     auth_form.save_ticked(),
                     auth_form.typed_is_empty(cx),
                 )
@@ -1069,7 +1070,9 @@ mod tests {
             password_plan(Some(&saved), &agent, true, false, true),
             Ok(PasswordPlan::Store(None))
         );
-        // Remove clicked (not kept, box unticked): removed.
+        // Remove clicked (not kept, box unticked): removed. Only Remove maps
+        // here; Replace followed by unticking keeps the saved password
+        // (`SshAuthForm::keeps_saved`, rework D3).
         assert_eq!(
             password_plan(Some(&saved), &same, false, false, true),
             Ok(PasswordPlan::Store(None))
@@ -1086,6 +1089,65 @@ mod tests {
             password_plan(None, &same, false, false, true),
             Ok(PasswordPlan::Store(None))
         );
+    }
+
+    struct EmptyView;
+
+    impl gpui::Render for EmptyView {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    /// Rework D3: **Replace** then unticking "Update saved password" keeps the
+    /// envelope byte for byte (no removal, so no `.bak` scrub); only
+    /// **Remove** drops it, and Remove then ticking the box seals the typed one.
+    #[gpui::test]
+    fn replace_then_untick_keeps_the_envelope_and_only_remove_drops_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let saved = saved_for("10.0.0.1", envelope());
+        let session = password_session("10.0.0.1", Some("deploy"));
+        let probe = Rc::new(std::cell::RefCell::new(None));
+        let probe_in = probe.clone();
+        let saved_in = saved.clone();
+        let (_view, cx) = cx.add_window_view(move |window, cx| {
+            let form = SshAuthForm::new(SshAuthPreference::Password, None, window, cx);
+            form.set_saved(Some(saved_in));
+            form.use_saved(true);
+            *probe_in.borrow_mut() = Some(form);
+            EmptyView
+        });
+        let form = probe.borrow().clone().unwrap();
+        let plan = |form: &SshAuthForm, cx: &mut gpui::VisualTestContext| {
+            let typed_empty = cx.update(|_, cx| form.typed_is_empty(cx));
+            password_plan(
+                Some(&saved),
+                &session,
+                form.keeps_saved(),
+                form.save_ticked(),
+                typed_empty,
+            )
+        };
+        let unchanged = Ok(PasswordPlan::Store(Some(envelope())));
+
+        assert_eq!(plan(&form, cx), unchanged, "untouched");
+        form.begin_replace();
+        assert!(!form.keeps_saved(), "Replace with the box ticked replaces");
+        form.set_save_ticked(false);
+        assert_eq!(plan(&form, cx), unchanged, "Replace, then untick: kept");
+
+        form.remove_saved();
+        assert_eq!(plan(&form, cx), Ok(PasswordPlan::Store(None)), "Remove");
+        form.set_save_ticked(true);
+        assert!(
+            plan(&form, cx).is_err(),
+            "Remove, then tick: needs a password"
+        );
+        form.begin_replace();
+        form.set_save_ticked(false);
+        assert_eq!(plan(&form, cx), unchanged, "Replace after Remove: kept");
     }
 
     /// Reseal opens under the old address and seals for the new one; an

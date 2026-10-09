@@ -389,7 +389,7 @@ pub(crate) struct SshConnectRequest {
     /// drift. The error itself rides along, so a dialog can tell a rejected
     /// password (`ConnectPhase::Authentication`) from any other failure
     /// (`US-0158`).
-    pub on_failed: Option<Rc<dyn Fn(&AppError, SharedString, &mut App)>>,
+    pub on_failed: Option<Rc<dyn Fn(&AppError, SharedString, &mut Window, &mut App)>>,
     /// Saved-session automatic logging override.
     pub logging_override: SshLoggingOverride,
 }
@@ -532,7 +532,7 @@ pub(crate) fn connect_ssh_session(
                     // press Connect again without re-typing the password.
                     let message = SharedString::from(connect_failure_message(&error));
                     if let Some(on_failed) = &request.on_failed {
-                        on_failed(&error, message.clone(), cx);
+                        on_failed(&error, message.clone(), window, cx);
                     }
                     window.refresh();
                     window.push_notification(notify(NotificationType::Error, message, cx), cx);

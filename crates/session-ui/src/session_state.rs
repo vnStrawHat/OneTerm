@@ -858,17 +858,25 @@ impl SshSessionStore {
             log::info!("{DOCUMENT_NAME}: migrated to schema v{CURRENT_SCHEMA_VERSION}; re-saving");
             entity.update(cx, |store, cx| store.save(cx));
         }
-        // A reset wipes every saved password before `vault.json` goes (DEC-0021).
-        if let Some(vault) = VaultState::try_global(cx) {
-            let store = entity.downgrade();
-            cx.subscribe(&vault, move |_, event: &VaultEvent, cx| {
-                if *event == VaultEvent::Reset {
-                    _ = store.update(cx, |store, cx| store.clear_sealed_passwords(cx));
-                }
-            })
-            .detach();
-        }
+        Self::wipe_on_vault_reset(&entity, cx);
         cx.set_global(SshSessionStoreGlobal(entity));
+    }
+
+    /// A reset wipes every saved password before `vault.json` goes
+    /// (`DEC-0021`). `VaultState` must already be installed (`app::init` runs
+    /// `VaultState::init` first): without it a reset would silently leave every
+    /// envelope in `ssh_session.json`, so this fails loudly instead.
+    fn wipe_on_vault_reset(store: &Entity<Self>, cx: &mut App) {
+        let vault = VaultState::try_global(cx).expect(
+            "VaultState::init must run before SshSessionStore::init: a vault reset wipes saved passwords (US-0158)",
+        );
+        let store = store.downgrade();
+        cx.subscribe(&vault, move |_, event: &VaultEvent, cx| {
+            if *event == VaultEvent::Reset {
+                _ = store.update(cx, |store, cx| store.clear_sealed_passwords(cx));
+            }
+        })
+        .detach();
     }
 }
 
@@ -1963,5 +1971,52 @@ mod persistence_tests {
         session.auth_method = SshAuthPreference::Password;
         session.username = Some(String::new());
         assert!(session.seal_context().is_none());
+    }
+
+    /// A store that never writes, so the tests below touch no config file.
+    fn unpersisted(entries: Vec<(u64, SshSession)>) -> SshSessionStore {
+        SshSessionStore {
+            persist_blocked: true,
+            ..SshSessionStore::with_document(document(entries, 9))
+        }
+    }
+
+    /// Rework D4: without `VaultState` the reset wipe would be skipped
+    /// silently; the store refuses to start instead.
+    #[gpui::test]
+    #[should_panic(expected = "VaultState::init must run before SshSessionStore::init")]
+    fn the_reset_wipe_refuses_to_start_without_the_vault_state(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let store = cx.new(|_| unpersisted(Vec::new()));
+            SshSessionStore::wipe_on_vault_reset(&store, cx);
+        });
+    }
+
+    /// Rework D4: initialised in order, a `VaultEvent::Reset` reaches the
+    /// store and wipes every saved password.
+    #[gpui::test]
+    fn a_vault_reset_reaches_the_store_when_initialised_in_order(cx: &mut gpui::TestAppContext) {
+        let directory = temporary_dir("reset-wiring");
+        let vault = cx.new(|_| VaultState::load(directory.to_path_buf(), false));
+        cx.update(|cx| cx.set_global(oneterm_state::vault_state::VaultStateGlobal(vault.clone())));
+        let store = cx.new(|_| {
+            unpersisted(vec![
+                (1, with_password("a", OTV1)),
+                (2, with_password("b", OTV2)),
+            ])
+        });
+        cx.update(|cx| SshSessionStore::wipe_on_vault_reset(&store, cx));
+
+        vault.update(cx, |_, cx| cx.emit(VaultEvent::Reset));
+        cx.run_until_parked();
+        store.read_with(cx, |store, _| {
+            assert_eq!(store.sessions().len(), 2, "sessions are kept");
+            assert!(
+                store
+                    .sessions()
+                    .iter()
+                    .all(|entry| entry.session.sealed_password.is_none())
+            );
+        });
     }
 }

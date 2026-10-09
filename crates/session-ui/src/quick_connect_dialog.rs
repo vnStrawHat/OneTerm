@@ -401,7 +401,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 on_connected,
                 on_failed: Some({
                     let inline_error = inline_error.clone();
-                    Rc::new(move |_, message, _cx| inline_error.set(message))
+                    Rc::new(move |_, message, _window, _cx| inline_error.set(message))
                 }),
                 logging_override: SshLoggingOverride::Inherit,
             };

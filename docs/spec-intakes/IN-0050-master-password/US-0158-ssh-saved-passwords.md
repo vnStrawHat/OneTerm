@@ -13,7 +13,7 @@ Created: 2026-10-09
 - [x] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -169,6 +169,42 @@ Quick Connect uses a hop's saved password only while already unlocked; a passwor
 a connect is stored only if the session still has that address and method; the dev server's
 `direct-tcpip` relay is loopback-only and only shell channels echo.
 
+### Rework after independent verification (2026-10-09)
+
+[`evidence/US-0158-verify.md`](evidence/US-0158-verify.md): PASS with four Low defects, fixed
+before merge on top of the verifier's commit (`1c0473c9`, 7 tests).
+
+| Defect | Fix |
+| --- | --- |
+| D1: a hop failure matched by `contains`, first match wins, so an IPv6 hop whose address extends another's (`2001:db8::1` / `2001:db8::1:22`) pinned the wrong row | `crates/session-ui/src/jump_hops.rs` `form_for_error`: the message must **start** with `jump host user@host:port:` and the **longest** matching prefix wins (the first of equal ones). No core or backend change; user-visible messages unchanged. The verifier's pinned test is flipped and renamed `d1_an_ipv6_hop_whose_address_extends_another_picks_the_longest_prefix` (both list orders). |
+| D2: after a first-use host-key approval the connect dialog is already closed, so a rejected saved password only toasted, and the next dialog showed "Using saved password" again | `crates/session-ui/src/connect_dialog.rs`: `reveal_rejected_saved_password` reports which row was rejected; `remember_rejection` keeps an in-memory `RejectedSavedPasswords` (session id -> the rejected envelope, a gpui global, never persisted) and, when no dialog is open (`has_active_dialog`), pushes "The saved password for "<label>" was rejected. Open the session to type the current one." (a hop: "Update it in that jump host's session."). The next connect dialog opens the target row as an input with "Update saved password" ticked while the session still holds that envelope (`was_rejected`); any successful connect forgets it. `SshConnectRequest::on_failed` also receives the window (`common.rs`). Hops get the toast only (their password is updated in the hop's session). Test `a_remembered_rejection_follows_the_envelope_it_was_for`; the rejected-row test now checks the reported row. |
+| D3: in the session dialog, Replace then unticking "Update saved password" removed the saved password on Save (and scrubbed `.bak`) | `crates/session-ui/src/auth_form.rs`: a `removed` flag set **only** by Remove (`remove_saved`); Replace is `begin_replace`; `keeps_saved()` = saved, not removed, no typed replacement. `session_dialog.rs` passes `keeps_saved()` to `password_plan`, so Replace -> untick -> Save stores the envelope byte for byte (no removal, no scrub). Test `replace_then_untick_keeps_the_envelope_and_only_remove_drops_it`; the decision-table comment says only Remove maps to removal. |
+| D4: the reset-wipe subscription was skipped silently without `VaultState` | `crates/session-ui/src/session_state.rs` `SshSessionStore::wipe_on_vault_reset` panics with "VaultState::init must run before SshSessionStore::init ..."; `crates/app/src/init.rs` states the order at `VaultState::init`. Tests `the_reset_wipe_refuses_to_start_without_the_vault_state` (should panic) and `a_vault_reset_reaches_the_store_when_initialised_in_order`. |
+| Lesser (I6): the dev server's `direct-tcpip` trusted the literal name `localhost` | `crates/tools/src/bin/sftp-dev-server.rs`: the target is resolved first and only a loopback address it resolves to is connected (`loopback_address`); a name resolving off the machine is refused. Test `the_relay_uses_only_a_loopback_resolution`. |
+
+### Known limits (from the verification, not fixed)
+
+- **I1:** when `ssh_session.json` went missing (deleted or quarantined), the first write treats
+  it as new and leaves the old `.bak` (envelopes included) until the second write. After a
+  reset those envelopes cannot be opened.
+- **I2:** a reset in another process between `VaultState::seal`'s re-read and the background
+  write leaves an envelope under a dead vault; it reads as `OtherVault` at the next Connect
+  (the persistence LLD § 8 "last writer wins" limit).
+- **I3:** a transient read error of `vault.json` during a seal counts as a reset (one unlock).
+- **I4:** `close_dialog` closes the top-most dialog; a dialog pushed on top while Argon2id runs
+  would be closed instead (pre-existing pattern).
+- **I5:** Quick Connect uses a hop's saved password only while unlocked, and does not reveal a
+  rejected one (follow-up surface, LLD § 7).
+
+### Notes for `US-0159`
+
+- `VaultEvent::Locked` is now also emitted by a **refused seal** (`VaultState::seal`,
+  `ResetElsewhere`), which also switches the state to the vault now on disk. The lock screen
+  must not treat every `Locked` as "the user locked".
+- When the vault locks while a connect dialog shows saved rows, `take_auth` turns a saved row
+  into an input ("Saved passwords are locked."). The LLD wants the rows to stay saved after
+  re-unlock: the dialog would have to re-run `use_saved(true)` on `VaultEvent::Unlocked`.
+
 ## Decisions
 
 - [`DEC-0021`](../../decisions/DEC-0021-secrets-at-rest-are-sealed-by-a-master-password-vault.md)
@@ -267,6 +303,24 @@ Gaps:
   `gpui_component::menu::popup_menu::PopupMenu` prepaint, `gpui-pre 0.3.7 a11y.rs:533`); release
   builds only warn. Not in code this packet touches; the walk continued after a restart.
 - `check-ignored-tests.py` skipped for disk space (see the table).
+
+**Rework gate** (worktree, `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, 12 GB free):
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo test -p oneterm-session-ui` | 98 passed, 1 ignored (94 after the verifier + 4 new; D1 test flipped) |
+| `cargo test -p oneterm-state` / `-p oneterm-core` / `-p oneterm-ssh` | 75 / 92 / 109 passed |
+| `cargo test -p oneterm-tools` | pass (`sftp-dev-server` 2: `--password`, loopback-only relay) |
+| `python scripts/verify-dependency-graph.py` | pass |
+| `python scripts/check-doc-paths.py` | pass (223 paths) |
+| `python scripts/check-english.py` | pass (1116 files) |
+| `python scripts/check-ignored-tests.py` | pass, 19 ignored tests, all recorded |
+
+The rework changes no visible layout except the D2 toast and the D3 untick behaviour, both
+covered by tests; the GUI walk was not repeated. The six `oneterm-sftp-dev-<pid>` temp roots of
+the first walk were removed.
 
 ## Handoff
 
