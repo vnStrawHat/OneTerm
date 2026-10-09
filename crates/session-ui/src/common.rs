@@ -380,14 +380,16 @@ pub(crate) struct SshConnectRequest {
     pub completion: Option<SshDuplicateCompletion>,
     /// Runs once the session is authenticated, before the tab opens — e.g. the
     /// quick-connect "save this session" option (CORR-54: never saved on failure).
-    pub on_connected: Option<Rc<dyn Fn(&mut App)>>,
+    pub on_connected: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     /// Runs when the attempt failed, with the same text the notification shows.
     ///
     /// The dialog stays open on failure, so it echoes the message inline where
     /// the user is looking; the toast is in the opposite corner and dismisses
     /// itself (`US-0118`). Both strings come from this one value, so they cannot
-    /// drift.
-    pub on_failed: Option<Rc<dyn Fn(SharedString, &mut App)>>,
+    /// drift. The error itself rides along, so a dialog can tell a rejected
+    /// password (`ConnectPhase::Authentication`) from any other failure
+    /// (`US-0158`).
+    pub on_failed: Option<Rc<dyn Fn(&AppError, SharedString, &mut Window, &mut App)>>,
     /// Saved-session automatic logging override.
     pub logging_override: SshLoggingOverride,
 }
@@ -475,7 +477,7 @@ pub(crate) fn connect_ssh_session(
                     connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
                     window.close_dialog(cx);
                     if let Some(on_connected) = on_connected {
-                        on_connected(cx);
+                        on_connected(window, cx);
                     }
                     if let Some(cwd) = initial_cwd.as_deref() {
                         ssh_session.send_text(&remote_cd_command(cwd));
@@ -530,7 +532,7 @@ pub(crate) fn connect_ssh_session(
                     // press Connect again without re-typing the password.
                     let message = SharedString::from(connect_failure_message(&error));
                     if let Some(on_failed) = &request.on_failed {
-                        on_failed(message.clone(), cx);
+                        on_failed(&error, message.clone(), window, cx);
                     }
                     window.refresh();
                     window.push_notification(notify(NotificationType::Error, message, cx), cx);

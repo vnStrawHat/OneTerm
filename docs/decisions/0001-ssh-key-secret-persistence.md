@@ -6,7 +6,7 @@ Date: 2026-08-11
 
 Accepted
 
-Superseded in part by [`DEC-0021`](DEC-0021-secrets-at-rest-are-sealed-by-a-master-password-vault.md) (2026-10-09): passwords may be persisted when sealed by the master-password vault; passphrases and key contents stay forbidden.
+Superseded in part by [`DEC-0021`](DEC-0021-secrets-at-rest-are-sealed-by-a-master-password-vault.md) (2026-10-09): passwords may be persisted when sealed by the master-password vault; passphrases and key contents stay forbidden. Implemented for SSH login passwords by `US-0158` (`ssh_session.json` `sealed_password`, an `otv1:` envelope bound to host, port and user).
 
 ## Context
 

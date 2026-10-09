@@ -23,7 +23,8 @@ pub use editor_launcher::{EditorChoice, launch_editor};
 pub use error::{AppError, ConnectPhase, SftpStatus};
 pub use input_channel::InputChannel;
 pub use persistence::{
-    atomic_write, quarantine_file, remove_document, update_json_file, update_secret_json_file,
+    atomic_write, atomic_write_sealed, quarantine_file, remove_document, update_json_file,
+    update_secret_json_file,
 };
 pub use port_forward::{PortForward, PortForwardError, loopback};
 pub use schema::{

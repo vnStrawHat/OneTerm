@@ -75,12 +75,40 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     atomic_write_unlocked(path, bytes, Sensitivity::Ordinary)
 }
 
+/// [`atomic_write`] for a document that holds sealed secrets (`DEC-0021`;
+/// `ssh_session.json` since `US-0158`).
+///
+/// On Unix the document and its backup are owner-only (`0600`) on **every**
+/// write. Under the document's lock, `retires_secret` is shown the document
+/// being replaced, when there is one: when it answers `true` (the new bytes
+/// drop or replace a sealed value) `.bak` becomes a copy of the new document,
+/// so the retired value does not outlive this write; otherwise `.bak` keeps
+/// the previous generation like any other document's.
+pub fn atomic_write_sealed(
+    path: &Path,
+    bytes: &[u8],
+    retires_secret: impl FnOnce(&[u8]) -> bool,
+) -> io::Result<()> {
+    let _lock = InterProcessLock::acquire(path)?;
+    let sensitivity = match fs::read(path) {
+        Ok(previous) if retires_secret(&previous) => Sensitivity::Secret,
+        Ok(_) => Sensitivity::Private,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Sensitivity::Private,
+        Err(error) => return Err(error),
+    };
+    atomic_write_unlocked(path, bytes, sensitivity)
+}
+
 /// Whether a document holds secret material (`DEC-0021`), which changes how
 /// its files are written.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Sensitivity {
     /// `.bak` keeps the previous generation; files get the process umask.
     Ordinary,
+    /// Holds sealed secrets but this write retires none: `.bak` keeps the
+    /// previous generation; on Unix every file the write creates is
+    /// owner-only (`0600`).
+    Private,
     /// `.bak` becomes a copy of the new document, so an old wrapped key or
     /// ciphertext does not outlive the write that replaced it; on Unix every
     /// file the write creates is owner-only (`0600`).
@@ -97,7 +125,7 @@ fn atomic_write_unlocked(path: &Path, bytes: &[u8], sensitivity: Sensitivity) ->
         let mut options = OpenOptions::new();
         options.create_new(true).write(true);
         #[cfg(unix)]
-        if sensitivity == Sensitivity::Secret {
+        if sensitivity != Sensitivity::Ordinary {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
@@ -109,10 +137,16 @@ fn atomic_write_unlocked(path: &Path, bytes: &[u8], sensitivity: Sensitivity) ->
         // `fs::copy` carries the source's permission bits, so a scrubbed
         // backup is owner-only too.
         match sensitivity {
-            Sensitivity::Ordinary if path.exists() => {
+            Sensitivity::Ordinary | Sensitivity::Private if path.exists() => {
                 fs::copy(path, backup_path(path))?;
+                // The previous generation may predate the owner-only rule.
+                #[cfg(unix)]
+                if sensitivity == Sensitivity::Private {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(backup_path(path), fs::Permissions::from_mode(0o600))?;
+                }
             }
-            Sensitivity::Ordinary => {}
+            Sensitivity::Ordinary | Sensitivity::Private => {}
             Sensitivity::Secret => {
                 fs::copy(&temporary, backup_path(path))?;
             }
@@ -431,6 +465,45 @@ mod tests {
             Ok(())
         })
         .unwrap();
+
+        for file in [path.clone(), backup_path(&path)] {
+            let mode = fs::metadata(&file).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{}", file.display());
+        }
+    }
+
+    /// `US-0158`: a sealed document keeps the previous generation in `.bak`
+    /// unless the write retires a secret, and the decision sees the document
+    /// being replaced.
+    #[test]
+    fn sealed_writes_scrub_the_backup_only_when_they_retire_a_secret() {
+        let dir = test_dir();
+        let path = dir.join("sealed.json");
+        let never = |_: &[u8]| -> bool { unreachable!("no previous document") };
+        atomic_write_sealed(&path, b"one", never).unwrap();
+        assert!(!backup_path(&path).exists());
+
+        atomic_write_sealed(&path, b"two", |previous| {
+            assert_eq!(previous, b"one");
+            false
+        })
+        .unwrap();
+        assert_eq!(fs::read(backup_path(&path)).unwrap(), b"one");
+
+        atomic_write_sealed(&path, b"three", |_| true).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"three");
+        assert_eq!(fs::read(backup_path(&path)).unwrap(), b"three");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sealed_documents_and_their_backups_are_owner_only_on_every_write() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = test_dir();
+        let path = dir.join("sealed.json");
+        atomic_write(&path, b"umask").unwrap();
+        atomic_write_sealed(&path, b"kept", |_| false).unwrap();
 
         for file in [path.clone(), backup_path(&path)] {
             let mode = fs::metadata(&file).unwrap().permissions().mode();

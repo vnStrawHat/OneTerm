@@ -141,7 +141,7 @@ both surfaces.
 
 | # | Decision | Rationale |
 |---|---|---|
-| 1 | **Password is NOT persisted** to `ssh_session.json` | Security — the password lives only in RAM during the session, never written to disk. Since `US-0118` it also survives a failed connect **in the open dialog's own state**, so a retry costs no re-typing; closing the dialog drops it, and it still reaches no store, no config file and no log ([`DEC-0001`](decisions/0001-ssh-key-secret-persistence.md)). |
+| 1 | **Password is NOT persisted** to `ssh_session.json` | Security — the password lives only in RAM during the session, never written to disk. Since `US-0118` it also survives a failed connect **in the open dialog's own state**, so a retry costs no re-typing; closing the dialog drops it, and it still reaches no store, no config file and no log ([`DEC-0001`](decisions/0001-ssh-key-secret-persistence.md)). Since `US-0158` the user may **save** it, sealed by the master-password vault ([`DEC-0021`](decisions/DEC-0021-secrets-at-rest-are-sealed-by-a-master-password-vault.md), §4.8); plain text is still never written. |
 | 2 | **Username is persisted** to `ssh_session.json` (the field already exists) | Convenience — the user only enters a password next time. The username is less sensitive than the password. |
 | 3 | **Use `LocalTerminalView`** for SSH too (via `dyn TerminalSession`) | The view is already backend-agnostic — it only needs `Entity<Box<dyn TerminalSession>>`. No separate `SshTerminalView` needed. |
 | 4 | **Dialog uses `window.open_dialog`** (gpui-component Dialog) | Matches the pattern already used for the "New/Edit SSH Session" dialog in `session_tabs/tabs.rs`. |
@@ -437,6 +437,42 @@ because all three share `SshAuthForm` and `connect_ssh_session`.
   The no-match area names the group it would create instead of showing a bare icon, and it
   distinguishes "no groups exist" from "none match what you typed"
   (`group_combo::empty_message`).
+
+### 4.8. Saved passwords (`US-0158`)
+
+The UX contract is
+[`ssh-password-save-flow.md`](spec-intakes/IN-0050-master-password/low-level-design/ssh-password-save-flow.md);
+as built in `connect_dialog.rs` and `auth_form.rs`:
+
+- **Saved rows.** For the target and every jump hop whose session uses the Password method and
+  has a `sealed_password`, the password input is replaced by "Using saved password" and a
+  **Use a different one** button. With the vault unlocked the dialog opens that way; locked,
+  the dialog opens with ordinary inputs and the Unlock dialog is stacked on it (one unlock
+  for the whole chain; Cancel means "type the passwords instead"); with no vault or an
+  unavailable one the rows stay ordinary inputs with a muted reason.
+- **Enter connects.** When nothing is left to type, the initial focus is the saved row itself
+  (a focusable element inside the dialog), so Enter submits; after an unlock the focus is
+  applied again.
+- **Opened at Connect.** `SshAuthForm::take_auth` opens the envelope at that moment, with the
+  row's own host, port and username, into a fresh `SecretString`; nothing decrypted is kept in
+  a widget. A failure to open (locked meanwhile, reset vault, other address) turns the row
+  into an empty input with the reason and sends nothing.
+- **Saving from here.** A typed target password offers **Save password** (**Update saved
+  password** when the session has one). Ticking it while the username is asked also ticks and
+  locks "Save username to session". The vault is set up or unlocked **before** the attempt; the
+  password is sealed in `on_connected`, so a wrong password is never saved
+  (`SshConnectRequest::on_connected` now receives the window to report the outcome).
+- **Rejected saved password.** `SshConnectRequest::on_failed` now receives the `AppError`.
+  An `Authentication` failure turns the row that used a saved password back into an input:
+  the target's with "Update saved password" ticked, a hop's (matched by the longest
+  `jump host user@host:port:` prefix `oneterm-ssh` puts at the start of hop errors) with a note
+  to update it in that hop's session. The sealed value is kept until a new password connects
+  with the box ticked. When the dialog is already closed (a first-use host-key approval closes
+  it before the retry), the toast says to open the session, and the next connect dialog opens
+  that row as an input with the box ticked (remembered in memory for the rejected envelope;
+  a successful connect forgets it).
+- **Quick Connect** uses a picked jump host's saved password only when the vault is already
+  unlocked; it never prompts and never saves one (follow-up).
 
 ---
 

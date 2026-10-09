@@ -6,15 +6,21 @@
 //! be pointed at `127.0.0.1:<port>` without a real host.
 //!
 //! ```text
-//! cargo run -p oneterm-tools --bin sftp-dev-server -- [--port 2222] [--root DIR] [--max-open-handles N]
+//! cargo run -p oneterm-tools --bin sftp-dev-server -- [--port 2222] [--root DIR] [--max-open-handles N] [--password PW]
 //! ```
+//!
+//! `--password PW` accepts only that password, so a rejected (saved) password
+//! can be walked on loopback (`US-0158`). A `direct-tcpip` channel to a
+//! loopback address is relayed, so two servers make a two-hop jump chain
+//! (`127.0.0.1:2222` as the jump host for `127.0.0.1:2223`); any other
+//! destination is refused.
 //!
 //! Without `--root` a fresh temp directory with a few sample files is served.
 //! `--max-open-handles N` advertises `limits@openssh.com` like OpenSSH does, so
 //! the client's own open-handle limit is live (BUG-0076).
 //! The host key is random per run, so the client sees an unknown host each time.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::{Metadata, OpenOptions};
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
 use std::net::SocketAddr;
@@ -36,6 +42,7 @@ use russh_sftp::server::StatusReply;
 struct DevServer {
     root: PathBuf,
     max_open_handles: Option<u64>,
+    password: Option<Arc<str>>,
 }
 
 impl Server for DevServer {
@@ -46,8 +53,8 @@ impl Server for DevServer {
         ClientHandler {
             root: self.root.clone(),
             max_open_handles: self.max_open_handles,
+            password: self.password.clone(),
             channels: HashMap::new(),
-            sftp_channels: HashSet::new(),
         }
     }
 }
@@ -55,19 +62,71 @@ impl Server for DevServer {
 struct ClientHandler {
     root: PathBuf,
     max_open_handles: Option<u64>,
-    /// Session channels by id; the SFTP subsystem takes its channel out.
+    /// `--password`: the only password accepted; `None` accepts any.
+    password: Option<Arc<str>>,
+    /// Session channels by id; the SFTP subsystem takes its channel out, so
+    /// only a shell's channel is left here (and echoed).
     channels: HashMap<ChannelId, Channel<Msg>>,
-    /// Channels running the SFTP subsystem: their bytes belong to the SFTP
-    /// stream and must never be echoed back.
-    sftp_channels: HashSet<ChannelId>,
 }
 
 impl russh::server::Handler for ClientHandler {
     type Error = russh::Error;
 
-    async fn auth_password(&mut self, user: &str, _password: &str) -> Result<Auth, Self::Error> {
-        println!("password auth for {user:?}: accepted");
-        Ok(Auth::Accept)
+    async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
+        if password_accepted(self.password.as_deref(), password) {
+            println!("password auth for {user:?}: accepted");
+            Ok(Auth::Accept)
+        } else {
+            println!("password auth for {user:?}: rejected");
+            Ok(Auth::reject())
+        }
+    }
+
+    /// Relay a `direct-tcpip` channel to a loopback address, so this server
+    /// can be the jump host of another one on the same machine. A name is
+    /// resolved first and only a loopback address it resolves to is used, so
+    /// a hosts file mapping `localhost` elsewhere cannot make it relay off the
+    /// machine.
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let target = format!("{host_to_connect}:{port_to_connect}");
+        let Ok(port) = u16::try_from(port_to_connect) else {
+            println!("direct-tcpip to {target}: refused (port)");
+            return Ok(());
+        };
+        let resolved: Vec<SocketAddr> = match tokio::net::lookup_host((host_to_connect, port)).await
+        {
+            Ok(addresses) => addresses.collect(),
+            Err(error) => {
+                println!("direct-tcpip to {target}: {error}");
+                return Ok(());
+            }
+        };
+        let Some(address) = loopback_address(&resolved) else {
+            println!("direct-tcpip to {target}: refused (not loopback)");
+            return Ok(());
+        };
+        match tokio::net::TcpStream::connect(address).await {
+            Ok(mut tcp) => {
+                println!("direct-tcpip to {target}: relaying");
+                reply.accept().await;
+                tokio::spawn(async move {
+                    let mut stream = channel.into_stream();
+                    _ = tokio::io::copy_bidirectional(&mut stream, &mut tcp).await;
+                });
+            }
+            // Dropping `reply` refuses the channel.
+            Err(error) => println!("direct-tcpip to {target}: {error}"),
+        }
+        Ok(())
     }
 
     async fn channel_open_session(
@@ -126,9 +185,11 @@ impl russh::server::Handler for ClientHandler {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // Echo typed bytes so the terminal shows something. SFTP channel
-        // bytes are protocol packets consumed by the SFTP stream, not input.
-        if self.sftp_channels.contains(&channel) {
+        // Echo typed bytes so the terminal shows something. Only a shell's
+        // session channel echoes: SFTP channel bytes are protocol packets
+        // consumed by the SFTP stream, and a relayed direct-tcpip channel
+        // carries another server's SSH stream (neither is in `channels`).
+        if !self.channels.contains_key(&channel) {
             return Ok(());
         }
         let echoed: Vec<u8> = data
@@ -160,7 +221,6 @@ impl russh::server::Handler for ClientHandler {
             return Ok(());
         };
         session.channel_success(channel_id)?;
-        self.sftp_channels.insert(channel_id);
         println!("sftp subsystem started");
         let handler = SftpHandler {
             root: self.root.clone(),
@@ -519,8 +579,23 @@ fn seed_sample_root() -> io::Result<PathBuf> {
     Ok(root)
 }
 
+/// The first loopback address among `resolved`; `None` refuses the relay.
+fn loopback_address(resolved: &[SocketAddr]) -> Option<SocketAddr> {
+    resolved
+        .iter()
+        .copied()
+        .find(|address| address.ip().is_loopback())
+}
+
+/// `--password`: only `expected` is accepted; without it, any password.
+fn password_accepted(expected: Option<&str>, given: &str) -> bool {
+    expected.is_none_or(|expected| expected == given)
+}
+
 fn usage() -> ! {
-    eprintln!("usage: sftp-dev-server [--port PORT] [--root DIR] [--max-open-handles N]");
+    eprintln!(
+        "usage: sftp-dev-server [--port PORT] [--root DIR] [--max-open-handles N] [--password PW]"
+    );
     std::process::exit(2)
 }
 
@@ -529,6 +604,7 @@ async fn main() -> io::Result<()> {
     let mut port: u16 = 2222;
     let mut root: Option<PathBuf> = None;
     let mut max_open_handles: Option<u64> = None;
+    let mut password: Option<Arc<str>> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -539,6 +615,7 @@ async fn main() -> io::Result<()> {
                     .unwrap_or_else(|| usage())
             }
             "--root" => root = Some(PathBuf::from(args.next().unwrap_or_else(|| usage()))),
+            "--password" => password = Some(args.next().unwrap_or_else(|| usage()).into()),
             "--max-open-handles" => {
                 max_open_handles = Some(
                     args.next()
@@ -568,12 +645,54 @@ async fn main() -> io::Result<()> {
         ..Default::default()
     });
     println!(
-        "serving {} on 127.0.0.1:{port} (any user / any password)",
-        root.display()
+        "serving {} on 127.0.0.1:{port} (any user / {})",
+        root.display(),
+        if password.is_some() {
+            "one password"
+        } else {
+            "any password"
+        }
     );
     let mut server = DevServer {
         root,
         max_open_handles,
+        password,
     };
     server.run_on_address(config, ("127.0.0.1", port)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+
+    use super::{loopback_address, password_accepted};
+
+    #[test]
+    fn the_relay_uses_only_a_loopback_resolution() {
+        let addr = |text: &str| text.parse::<SocketAddr>().unwrap();
+        assert_eq!(
+            loopback_address(&[addr("127.0.0.1:2223")]),
+            Some(addr("127.0.0.1:2223"))
+        );
+        assert_eq!(
+            loopback_address(&[addr("[::1]:22")]),
+            Some(addr("[::1]:22"))
+        );
+        // A name that resolves off the machine (a hosts-file `localhost`
+        // pointed elsewhere) is refused; a mixed answer uses the loopback one.
+        assert_eq!(loopback_address(&[addr("10.0.0.5:22")]), None);
+        assert_eq!(
+            loopback_address(&[addr("192.168.1.2:22"), addr("127.0.0.1:22")]),
+            Some(addr("127.0.0.1:22"))
+        );
+        assert_eq!(loopback_address(&[]), None);
+    }
+
+    #[test]
+    fn password_flag_accepts_only_its_value() {
+        assert!(password_accepted(None, "anything"));
+        assert!(password_accepted(Some("s3cret"), "s3cret"));
+        assert!(!password_accepted(Some("s3cret"), "S3cret"));
+        assert!(!password_accepted(Some("s3cret"), ""));
+    }
 }

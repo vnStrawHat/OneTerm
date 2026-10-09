@@ -762,3 +762,88 @@ async fn verifier_r_a_change_from_locked_locked_meanwhile_stays_locked(cx: &mut 
     unlock(&state, V1_PASSWORD, cx).await.unwrap_err();
     unlock(&state, "new master password", cx).await.unwrap();
 }
+
+fn ssh_context() -> oneterm_vault::SealContext<'static> {
+    oneterm_vault::SealContext {
+        host: "10.0.0.1",
+        port: 22,
+        username: "deploy",
+    }
+}
+
+fn seal(
+    state: &Entity<VaultState>,
+    cx: &mut TestAppContext,
+) -> Result<oneterm_vault::SealedSecret, VaultActionError> {
+    state.update(cx, |state, cx| {
+        state.seal(
+            oneterm_vault::SecretPurpose::SshPassword,
+            &ssh_context(),
+            &secret("ssh password"),
+            cx,
+        )
+    })
+}
+
+/// `US-0158`: a seal re-reads `vault.json` and seals only under the vault on
+/// disk; the sealed value opens with the same context.
+#[gpui::test]
+async fn a_seal_under_the_vault_on_disk_opens_again(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    assert!(matches!(
+        seal(&state, cx),
+        Err(VaultActionError::WrongPhase)
+    ));
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+
+    let sealed = seal(&state, cx).unwrap();
+    assert!(!format!("{sealed:?}").contains("ssh password"));
+    state.read_with(cx, |state, _| {
+        let opened = state
+            .unlocked()
+            .unwrap()
+            .open(
+                oneterm_vault::SecretPurpose::SshPassword,
+                &ssh_context(),
+                &sealed,
+            )
+            .unwrap();
+        assert_eq!(opened.expose_secret(), "ssh password");
+    });
+}
+
+/// `US-0158` (`persistence-and-migration.md` § 8): another process reset the
+/// vault and set up a new one, or only reset it. The seal is refused, the key
+/// is dropped, and the phase follows the file.
+#[gpui::test]
+async fn a_seal_after_a_reset_elsewhere_is_refused_and_drops_the_key(cx: &mut TestAppContext) {
+    for replaced in [true, false] {
+        let dir = fixture_dir();
+        let state = state_in(&dir, false, cx);
+        unlock(&state, V1_PASSWORD, cx).await.unwrap();
+        let events = record_events(&state, cx);
+
+        std::fs::remove_file(dir.join("vault.json")).unwrap();
+        if replaced {
+            let other = test_dir();
+            drop(
+                oneterm_vault::init_with_params(&other, &secret("other one"), KdfParams::FLOOR)
+                    .unwrap(),
+            );
+            std::fs::copy(other.join("vault.json"), dir.join("vault.json")).unwrap();
+        }
+        assert!(matches!(
+            seal(&state, cx),
+            Err(VaultActionError::ResetElsewhere)
+        ));
+        let expected = if replaced {
+            VaultPhase::Locked
+        } else {
+            VaultPhase::Uninitialised
+        };
+        assert_eq!(phase(&state, cx), expected);
+        assert!(state.read_with(cx, |state, _| state.unlocked().is_none()));
+        assert_eq!(*events.borrow(), [VaultEvent::Locked]);
+    }
+}

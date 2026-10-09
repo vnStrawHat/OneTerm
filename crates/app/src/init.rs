@@ -34,6 +34,8 @@ pub(crate) fn init(cx: &mut App) {
     // Broadcast input channel membership (in-memory, per Space — DEC-0009).
     InputChannelRegistry::init(cx);
     // Master-password vault phase (IN-0050): reads vault.json once, never writes.
+    // Must run before `oneterm_session_ui::init`: the session store subscribes
+    // to its Reset event to wipe saved passwords, and panics without it (US-0158).
     VaultState::init(cx);
 
     // Feature inits — each registers its dock panel(s) + feature globals.

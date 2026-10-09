@@ -245,3 +245,55 @@ pub fn ensure_unlocked(reason: UnlockReason, window: &mut Window, cx: &mut App,
   survives until replaced; a host edit while locked asks to unlock or remove.
 - [ ] `ssh_session.json` after the E2E: only `otv1:` values; a search for the plain password in
   the config directory (including `.bak` files) finds nothing.
+
+## As built (`US-0158`, 2026-10-09)
+
+The design above holds; where the build differs or chose among open options:
+
+- **State on the form, not a `PasswordSource` enum.** `SshAuthForm` (`auth_form.rs`) carries
+  the saved password with its address (`SavedPassword`), "saved row in use", the save box, and
+  a note line, all `Rc` cells shared by its clones. `take_auth` opens the envelope at Connect
+  through `VaultState::unlocked()`; a failure turns the row into an input with the reason.
+- **One Unlock dialog, unchanged.** The connect dialog stacks the `US-0157` Unlock dialog
+  ("Unlock saved passwords"); its Cancel is "type the passwords instead". The sketch's line
+  naming the sessions ("prod (and 1 jump host) ...") is not shown.
+- **Messages are toasts in the session dialog.** It has no inline-error area: "needs a
+  username", "needs a password", "unavailable: <why>", "Unlock to keep the saved password for
+  the new address, or click Remove." and the removal notes are notifications. A cancelled Set
+  up / Unlock leaves the dialog open with the box ticked and says nothing (`ensure_unlocked`
+  reports no cancel).
+- **Reseal without a vault.** Uninitialised: the old envelope cannot open, so it is dropped
+  with a note (no set-up offered for it). Unavailable: Save is refused with the reason (the user
+  can Remove). A typed Seal with Uninitialised runs Set up first.
+- **Failure routing.** `SshConnectRequest::on_failed` receives the `AppError` and the window;
+  a hop is found by the `jump host user@host:port:` prefix `oneterm-ssh` already puts on hop
+  errors (the message must start with it, and the longest matching prefix wins, so an IPv6
+  address extending another hop's is attributed correctly), not by a structured hop index (no
+  core or backend change). `on_connected` also receives the window, to report "Password
+  saved." or why not.
+- **Rejected after a host-key approval.** That approval closes the connect dialog, so the row
+  cannot be revealed: the toast says to open the session, and an in-memory map (session id ->
+  rejected envelope) makes the next connect dialog open the target row as an input with
+  "Update saved password" ticked while the session still holds that envelope. A successful
+  connect forgets it.
+- **Replace and Remove.** Only **Remove** drops the saved password on Save. **Replace** shows
+  the input with "Update saved password" ticked; unticking it keeps the saved password.
+- **Seal path.** `VaultState::seal` (`oneterm-state`) re-reads `vault.json` and compares
+  `vault_id()` first; a mismatch or a missing file drops the key, moves the phase to what the
+  file says, emits `VaultEvent::Locked` and refuses with `VaultActionError::ResetElsewhere`.
+  It runs on the UI thread (a small file read and one AES-GCM seal, no Argon2id).
+- **`.bak` scrub.** `oneterm_core::atomic_write_sealed(path, bytes, retires_secret)` decides
+  under the document's lock, against the document being replaced: the write scrubs when any
+  `sealed_password` there is missing from the new document. This covers Remove, Replace,
+  reseal, method change, a deleted session and the reset wipe, and survives the store's
+  coalescing queue; every write is owner-only on Unix.
+- **`lenient_sealed`** warns without the session id (a field deserializer cannot see it).
+- **Connect-dialog save with an unavailable vault** is refused until the box is unticked,
+  like the session dialog.
+- **Quick Connect** uses a picked jump host's saved password only while the vault is already
+  unlocked (no prompt) and never saves one.
+- **`SshSessionStore::set_sealed_password`** refuses when the session's address or method
+  changed while the connection was being made.
+- **Dev server.** `sftp-dev-server --password PW` rejects every other password, and relays a
+  `direct-tcpip` channel to a loopback address, so the rejection and a two-hop chain are walked
+  on loopback (a shell channel is the only one it echoes).

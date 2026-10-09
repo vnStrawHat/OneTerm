@@ -9,6 +9,11 @@
 //!
 //! Form fields: Label, Host, Port, Username, authentication preference, and Group.
 //!
+//! With the Password method the dialog also takes a password and a "Save
+//! password" box (`US-0158`, `ssh-password-save-flow.md` § 2-3): saving seals it
+//! under the master password (set up or unlocked first). A saved password is
+//! never shown; it is kept, resealed for a new address, or removed on Save.
+//!
 //! The Group field uses a [`Combobox`] with `searchable(true)` + a "Create" footer —
 //! the user can **pick an existing group** or **type a new one**.
 
@@ -34,18 +39,21 @@ use gpui_component::{
     radio::Radio,
 };
 
-use oneterm_core::PortForward;
+use oneterm_core::{PortForward, SecretString};
 use oneterm_state::form_dialog::{FieldRequirement, FormDialog, control_label, labelled_field};
+use oneterm_state::vault_dialogs::ensure_unlocked;
+use oneterm_state::{VaultPhase, VaultState};
 use oneterm_theme::notif_ext::notify;
+use oneterm_vault::{OpenError, SealContext, SealedSecret, SecretPurpose};
 
-use super::auth_form::SshAuthForm;
+use super::auth_form::{SavedPassword, SshAuthForm, open_failure};
 use super::common::{defer_initial_focus_once, parse_port};
 use super::forward_rows::PortForwardRows;
 use super::group_combo::{GroupComboDelegate, MatchCount, SharedCell, group_combobox};
 use super::jump_hops::JumpHostPicker;
 use crate::session_state::{
     SshAuthPreference, SshLoggingOverride, SshSession, SshSessionEntry, SshSessionId,
-    SshSessionStore,
+    SshSessionStore, same_address,
 };
 
 /// The raw field values of the session form, as typed by the user.
@@ -103,7 +111,155 @@ impl SessionForm {
             jump_host: self.jump_host,
             port_forwards: self.port_forwards,
             agent_forwarding: self.agent_forwarding,
+            sealed_password: None,
         })
+    }
+}
+
+/// What Save does with the session's saved password
+/// (`ssh-password-save-flow.md` § 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PasswordPlan {
+    /// Store this value as it is: none, or the unchanged envelope.
+    Store(Option<SealedSecret>),
+    /// Drop the saved password and say why.
+    Drop(&'static str),
+    /// Seal the typed password for the session's address.
+    Seal,
+    /// Open the saved password under its old address and seal it for the new
+    /// one (host, port or username changed).
+    Reseal(SavedPassword),
+}
+
+impl PasswordPlan {
+    /// Whether the plan needs the vault unlocked.
+    fn needs_vault(&self) -> bool {
+        matches!(self, Self::Seal | Self::Reseal(_))
+    }
+}
+
+/// Decide what Save does with the password. `keep_saved`: the saved password
+/// stays ([`SshAuthForm::keeps_saved`]: not removed and not replaced by a typed
+/// one, so Replace then unticking keeps it); `save_typed`: "Save password" /
+/// "Update saved password" is ticked under a typed password.
+fn password_plan(
+    saved: Option<&SavedPassword>,
+    session: &SshSession,
+    keep_saved: bool,
+    save_typed: bool,
+    typed_empty: bool,
+) -> Result<PasswordPlan, String> {
+    if session.auth_method != SshAuthPreference::Password {
+        return Ok(PasswordPlan::Store(None));
+    }
+    let context = session.seal_context();
+    if save_typed {
+        if context.is_none() {
+            return Err("Enter a username to save a password.".to_owned());
+        }
+        if typed_empty {
+            return Err("Enter the password to save, or untick Save password.".to_owned());
+        }
+        return Ok(PasswordPlan::Seal);
+    }
+    match (saved, keep_saved) {
+        (Some(_), true) if context.is_none() => Ok(PasswordPlan::Drop(
+            "The saved password was removed: a saved password needs a username.",
+        )),
+        (Some(saved), true) if same_address(session, &saved.context()) => {
+            Ok(PasswordPlan::Store(Some(saved.sealed.clone())))
+        }
+        (Some(saved), true) => Ok(PasswordPlan::Reseal(saved.clone())),
+        _ => Ok(PasswordPlan::Store(None)),
+    }
+}
+
+/// Carry out `plan` for a session at `context`. `open` and `seal` reach the
+/// unlocked vault through `cx`; a saved password that does not open under its
+/// old address is dropped with a note, never carried forward unverified.
+/// Returns the value to store and a note for the user.
+fn run_password_plan<C>(
+    plan: PasswordPlan,
+    typed: Option<&SecretString>,
+    context: &SealContext<'_>,
+    cx: &mut C,
+    open: impl FnOnce(&mut C, &SavedPassword) -> Result<SecretString, OpenError>,
+    seal: impl FnOnce(&mut C, &SealContext<'_>, &SecretString) -> Result<SealedSecret, String>,
+) -> Result<(Option<SealedSecret>, Option<String>), String> {
+    match plan {
+        PasswordPlan::Store(value) => Ok((value, None)),
+        PasswordPlan::Drop(note) => Ok((None, Some(note.to_owned()))),
+        PasswordPlan::Seal => {
+            let typed = typed.ok_or_else(|| "Enter the password to save.".to_owned())?;
+            Ok((Some(seal(cx, context, typed)?), None))
+        }
+        PasswordPlan::Reseal(old) => match open(cx, &old) {
+            Ok(password) => Ok((Some(seal(cx, context, &password)?), None)),
+            Err(error) => Ok((
+                None,
+                Some(format!("{} It was removed.", open_failure(error))),
+            )),
+        },
+    }
+}
+
+/// [`run_password_plan`] against the global vault.
+fn seal_with_vault(
+    plan: PasswordPlan,
+    typed: Option<&SecretString>,
+    session: &SshSession,
+    cx: &mut App,
+) -> Result<(Option<SealedSecret>, Option<String>), String> {
+    let Some(context) = session.seal_context() else {
+        return Ok((None, None));
+    };
+    let Some(vault) = VaultState::try_global(cx) else {
+        return Err("Saved passwords are unavailable.".to_owned());
+    };
+    run_password_plan(
+        plan,
+        typed,
+        &context,
+        cx,
+        |cx, old| match vault.read(cx).unlocked() {
+            Some(unlocked) => {
+                unlocked.open(SecretPurpose::SshPassword, &old.context(), &old.sealed)
+            }
+            None => Err(OpenError::OtherVault),
+        },
+        |cx, context, password| {
+            vault
+                .update(cx, |state, cx| {
+                    state.seal(SecretPurpose::SshPassword, context, password, cx)
+                })
+                .map_err(|error| error.message())
+        },
+    )
+}
+
+/// Add or update the session in the store and say so.
+fn commit_session(
+    edit_id: Option<SshSessionId>,
+    session: SshSession,
+    note: Option<String>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let store = SshSessionStore::global(cx);
+    match edit_id {
+        Some(id) => store.update(cx, |s, cx| s.update(id, session, cx)),
+        None => {
+            store.update(cx, |s, cx| s.add(session, cx));
+        }
+    }
+    let saved = if edit_id.is_some() {
+        "SSH session updated."
+    } else {
+        "SSH session saved."
+    };
+    window.push_notification(notify(NotificationType::Success, saved, cx), cx);
+    if let Some(note) = note {
+        window.push_notification(notify(NotificationType::Info, note, cx), cx);
     }
 }
 
@@ -432,6 +588,10 @@ pub(crate) fn open_session_dialog(
         st
     });
     let auth_form = SshAuthForm::new(auth_method, key_path.as_deref(), window, cx);
+    let original_saved: Option<SavedPassword> =
+        edit.as_ref().and_then(|(_, s)| SavedPassword::of(s));
+    auth_form.set_saved(original_saved.clone());
+    auth_form.use_saved(true);
     let logging = Rc::new(Cell::new(logging_val));
 
     // ── ColorPickerState ────────────────────────────────────────
@@ -517,8 +677,18 @@ pub(crate) fn open_session_dialog(
                 port_forwards,
                 agent_forwarding: agent_forwarding.get(),
             };
-            let session = match form.into_session() {
-                Ok(session) => session,
+            let plan = form.into_session().and_then(|session| {
+                password_plan(
+                    original_saved.as_ref(),
+                    &session,
+                    auth_form.keeps_saved(),
+                    auth_form.save_ticked(),
+                    auth_form.typed_is_empty(cx),
+                )
+                .map(|plan| (session, plan))
+            });
+            let (mut session, plan) = match plan {
+                Ok(planned) => planned,
                 Err(message) => {
                     // A basic field is already on screen; the form must not jump.
                     reveal(InvalidField::Basic);
@@ -526,25 +696,76 @@ pub(crate) fn open_session_dialog(
                     return false;
                 }
             };
-            match edit_id {
-                Some(id) => store.update(cx, |s, cx| s.update(id, session, cx)),
-                None => {
-                    store.update(cx, |s, cx| s.add(session, cx));
+            if !plan.needs_vault() {
+                let (value, note) = match plan {
+                    PasswordPlan::Store(value) => (value, None),
+                    PasswordPlan::Drop(note) => (None, Some(note.to_owned())),
+                    PasswordPlan::Seal | PasswordPlan::Reseal(_) => unreachable!("needs the vault"),
+                };
+                session.sealed_password = value;
+                commit_session(edit_id, session, note, window, cx);
+                return true;
+            }
+            // The typed password, copied once; the dialog (and its input)
+            // is dropped when it closes.
+            let typed = (plan == PasswordPlan::Seal).then(|| auth_form.typed_password(cx));
+            let reseal = matches!(plan, PasswordPlan::Reseal(_));
+            let finish = move |window: &mut Window, cx: &mut App| -> bool {
+                match seal_with_vault(plan, typed.as_ref(), &session, cx) {
+                    Ok((value, note)) => {
+                        session.sealed_password = value;
+                        commit_session(edit_id, session, note, window, cx);
+                        true
+                    }
+                    Err(message) => {
+                        window
+                            .push_notification(notify(NotificationType::Warning, message, cx), cx);
+                        false
+                    }
+                }
+            };
+            let vault = VaultState::try_global(cx);
+            let phase = vault.as_ref().map(|vault| vault.read(cx).phase());
+            match phase {
+                // Without a vault an old envelope cannot open: `finish` drops
+                // it with a note instead of offering a set-up.
+                Some(VaultPhase::Unlocked) => finish(window, cx),
+                Some(VaultPhase::Uninitialised) if reseal => finish(window, cx),
+                Some(VaultPhase::Locked | VaultPhase::Uninitialised) => {
+                    if reseal {
+                        window.push_notification(
+                            notify(
+                                NotificationType::Info,
+                                "Unlock to keep the saved password for the new address, or click Remove.",
+                                cx,
+                            ),
+                            cx,
+                        );
+                    }
+                    ensure_unlocked(window, cx, move |window, cx| {
+                        if finish(window, cx) {
+                            window.close_dialog(cx);
+                        }
+                    });
+                    false
+                }
+                Some(VaultPhase::Unavailable) | None => {
+                    let reason = vault
+                        .and_then(|vault| vault.read(cx).unavailable_reason().map(str::to_owned))
+                        .unwrap_or_else(|| "no master password store.".to_owned());
+                    window.push_notification(
+                        notify(
+                            NotificationType::Warning,
+                            format!(
+                                "Saved passwords are unavailable: {reason} Untick Save password or remove the saved one."
+                            ),
+                            cx,
+                        ),
+                        cx,
+                    );
+                    false
                 }
             }
-            window.push_notification(
-                notify(
-                    NotificationType::Success,
-                    if is_edit {
-                        "SSH session updated."
-                    } else {
-                        "SSH session saved."
-                    },
-                    cx,
-                ),
-                cx,
-            );
-            true
         }
     };
 
@@ -586,6 +807,7 @@ pub(crate) fn open_session_dialog(
                     cx,
                 ))
                 .child(auth_form.render(false, cx))
+                .child(auth_form.render_saved_password_editor(cx))
                 // Jump host, agent forwarding and port forwards fold away: most
                 // sessions use none of them, and the three of them are most of
                 // the form's height (`US-0120`).
@@ -793,6 +1015,219 @@ mod tests {
         assert!(!reveals_advanced(InvalidField::Basic));
     }
 
+    const OTV1: &str = "otv1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4v";
+
+    fn saved_for(host: &str, envelope: SealedSecret) -> SavedPassword {
+        SavedPassword {
+            sealed: envelope,
+            host: host.into(),
+            port: 22,
+            username: "deploy".into(),
+        }
+    }
+
+    fn envelope() -> SealedSecret {
+        serde_json::from_value(serde_json::Value::String(OTV1.into())).unwrap()
+    }
+
+    fn password_session(host: &str, username: Option<&str>) -> SshSession {
+        let mut form = filled_form();
+        form.host = host.into();
+        form.username = username.unwrap_or_default().into();
+        form.into_session().unwrap()
+    }
+
+    /// `ssh-password-save-flow.md` § 3: the reseal decision table.
+    #[test]
+    fn the_password_plan_follows_the_decision_table() {
+        let saved = saved_for("10.0.0.1", envelope());
+        let same = password_session("10.0.0.1", Some("deploy"));
+        let moved = password_session("10.0.0.9", Some("deploy"));
+        let renamed_user = password_session("10.0.0.1", Some("root"));
+        let no_user = password_session("10.0.0.1", None);
+
+        // Unchanged address: keep the envelope as it is.
+        assert_eq!(
+            password_plan(Some(&saved), &same, true, false, true),
+            Ok(PasswordPlan::Store(Some(envelope())))
+        );
+        // Host or username changed: reseal for the new address.
+        for edited in [&moved, &renamed_user] {
+            assert_eq!(
+                password_plan(Some(&saved), edited, true, false, true),
+                Ok(PasswordPlan::Reseal(saved.clone()))
+            );
+        }
+        // Username cleared: removed with a note.
+        assert!(matches!(
+            password_plan(Some(&saved), &no_user, true, false, true),
+            Ok(PasswordPlan::Drop(_))
+        ));
+        // Method changed: removed.
+        let mut agent = same.clone();
+        agent.auth_method = SshAuthPreference::Agent;
+        assert_eq!(
+            password_plan(Some(&saved), &agent, true, false, true),
+            Ok(PasswordPlan::Store(None))
+        );
+        // Remove clicked (not kept, box unticked): removed. Only Remove maps
+        // here; Replace followed by unticking keeps the saved password
+        // (`SshAuthForm::keeps_saved`, rework D3).
+        assert_eq!(
+            password_plan(Some(&saved), &same, false, false, true),
+            Ok(PasswordPlan::Store(None))
+        );
+        // Save password: needs a username and a typed password.
+        assert_eq!(
+            password_plan(None, &same, false, true, false),
+            Ok(PasswordPlan::Seal)
+        );
+        assert!(password_plan(None, &no_user, false, true, false).is_err());
+        assert!(password_plan(None, &same, false, true, true).is_err());
+        // Nothing saved, nothing ticked: nothing stored.
+        assert_eq!(
+            password_plan(None, &same, false, false, true),
+            Ok(PasswordPlan::Store(None))
+        );
+    }
+
+    struct EmptyView;
+
+    impl gpui::Render for EmptyView {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    /// Rework D3: **Replace** then unticking "Update saved password" keeps the
+    /// envelope byte for byte (no removal, so no `.bak` scrub); only
+    /// **Remove** drops it, and Remove then ticking the box seals the typed one.
+    #[gpui::test]
+    fn replace_then_untick_keeps_the_envelope_and_only_remove_drops_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let saved = saved_for("10.0.0.1", envelope());
+        let session = password_session("10.0.0.1", Some("deploy"));
+        let probe = Rc::new(std::cell::RefCell::new(None));
+        let probe_in = probe.clone();
+        let saved_in = saved.clone();
+        let (_view, cx) = cx.add_window_view(move |window, cx| {
+            let form = SshAuthForm::new(SshAuthPreference::Password, None, window, cx);
+            form.set_saved(Some(saved_in));
+            form.use_saved(true);
+            *probe_in.borrow_mut() = Some(form);
+            EmptyView
+        });
+        let form = probe.borrow().clone().unwrap();
+        let plan = |form: &SshAuthForm, cx: &mut gpui::VisualTestContext| {
+            let typed_empty = cx.update(|_, cx| form.typed_is_empty(cx));
+            password_plan(
+                Some(&saved),
+                &session,
+                form.keeps_saved(),
+                form.save_ticked(),
+                typed_empty,
+            )
+        };
+        let unchanged = Ok(PasswordPlan::Store(Some(envelope())));
+
+        assert_eq!(plan(&form, cx), unchanged, "untouched");
+        form.begin_replace();
+        assert!(!form.keeps_saved(), "Replace with the box ticked replaces");
+        form.set_save_ticked(false);
+        assert_eq!(plan(&form, cx), unchanged, "Replace, then untick: kept");
+
+        form.remove_saved();
+        assert_eq!(plan(&form, cx), Ok(PasswordPlan::Store(None)), "Remove");
+        form.set_save_ticked(true);
+        assert!(
+            plan(&form, cx).is_err(),
+            "Remove, then tick: needs a password"
+        );
+        form.begin_replace();
+        form.set_save_ticked(false);
+        assert_eq!(plan(&form, cx), unchanged, "Replace after Remove: kept");
+    }
+
+    /// Reseal opens under the old address and seals for the new one; an
+    /// envelope that does not open is dropped with a note, never carried
+    /// forward. Argon2id at the floor parameters (`test-support`).
+    #[test]
+    fn a_reseal_moves_the_password_to_the_new_address_or_drops_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "oneterm-session-dialog-vault-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cleanup = Cleanup(dir.clone());
+        let vault = oneterm_vault::init_with_params(
+            &dir,
+            &SecretString::new("master password"),
+            oneterm_vault::KdfParams::FLOOR,
+        )
+        .unwrap();
+        let old = saved_for("10.0.0.1", envelope());
+        let old_sealed = vault
+            .seal(
+                SecretPurpose::SshPassword,
+                &old.context(),
+                &SecretString::new("ssh password"),
+            )
+            .unwrap();
+        let old = saved_for("10.0.0.1", old_sealed);
+        let new_context = SealContext {
+            host: "10.0.0.9",
+            port: 22,
+            username: "deploy",
+        };
+        let run = |plan: PasswordPlan| {
+            run_password_plan(
+                plan,
+                None,
+                &new_context,
+                &mut (),
+                |_, old| vault.open(SecretPurpose::SshPassword, &old.context(), &old.sealed),
+                |_, context, password| {
+                    vault
+                        .seal(SecretPurpose::SshPassword, context, password)
+                        .map_err(|error| error.to_string())
+                },
+            )
+        };
+
+        let (resealed, note) = run(PasswordPlan::Reseal(old.clone())).unwrap();
+        assert_eq!(note, None);
+        let resealed = resealed.unwrap();
+        let opened = vault
+            .open(SecretPurpose::SshPassword, &new_context, &resealed)
+            .unwrap();
+        assert_eq!(opened.expose_secret(), "ssh password");
+        // The new envelope is bound to the new address only.
+        assert!(
+            vault
+                .open(SecretPurpose::SshPassword, &old.context(), &resealed)
+                .is_err()
+        );
+
+        // An envelope from elsewhere (here: bound to another address) cannot
+        // be verified: dropped, with a note.
+        let foreign = saved_for("10.0.0.5", old.sealed.clone());
+        let (dropped, note) = run(PasswordPlan::Reseal(foreign)).unwrap();
+        assert_eq!(dropped, None);
+        assert!(note.unwrap().contains("It was removed"));
+    }
+
     #[test]
     fn existing_group_names_are_trimmed_sorted_and_unique() {
         let entry = |id: u64, group: Option<&str>| SshSessionEntry {
@@ -810,6 +1245,7 @@ mod tests {
                 jump_host: None,
                 port_forwards: Vec::new(),
                 agent_forwarding: false,
+                sealed_password: None,
             },
         };
         let sessions = [

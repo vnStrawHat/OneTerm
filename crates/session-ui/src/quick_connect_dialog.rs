@@ -28,6 +28,7 @@ use oneterm_core::{
 };
 use oneterm_state::commands::SshDuplicateCompletion;
 use oneterm_state::form_dialog::{FieldRequirement, FormDialog, control_label, labelled_field};
+use oneterm_state::{VaultPhase, VaultState};
 use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
@@ -88,6 +89,13 @@ impl QuickConnectHops {
             let forms = specs.map(|specs| JumpHopForms::new(specs, window, cx));
             if let Ok(forms) = &forms {
                 inline_error.watch(&forms.secret_inputs(), cx);
+                // A hop's saved password (`US-0158`) is used while the vault is
+                // already unlocked; Quick Connect never asks to unlock it.
+                let unlocked = VaultState::try_global(cx)
+                    .is_some_and(|state| state.read(cx).phase() == VaultPhase::Unlocked);
+                for form in forms.forms() {
+                    form.use_saved(unlocked);
+                }
             }
             *self.built.borrow_mut() = (selected, forms);
         }
@@ -357,31 +365,33 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
             // Optionally save non-secret connection metadata to the SSH session
             // store — only once the connection succeeded (CORR-54), so a typo
             // never becomes a saved session.
-            let on_connected: Option<Rc<dyn Fn(&mut App)>> = save_session.get().then(|| {
-                let session = SshSession {
-                    label: target.label(),
-                    host: target.host.clone(),
-                    port: target.port,
-                    username: Some(target.username.clone()),
-                    auth_method: auth_form.method(),
-                    key_path: if auth_form.method() == SshAuthPreference::PrivateKey {
-                        auth_form.key_path_value(cx)
-                    } else {
-                        None
-                    },
-                    color: None,
-                    group: None,
-                    logging: SshLoggingOverride::Inherit,
-                    jump_host: hops.selected(cx),
-                    port_forwards: Vec::new(),
-                    agent_forwarding: false,
-                };
-                Rc::new(move |cx: &mut App| {
-                    SshSessionStore::global(cx).update(cx, |s, cx| {
-                        s.add(session.clone(), cx);
-                    });
-                }) as Rc<dyn Fn(&mut App)>
-            });
+            let on_connected: Option<Rc<dyn Fn(&mut Window, &mut App)>> =
+                save_session.get().then(|| {
+                    let session = SshSession {
+                        label: target.label(),
+                        host: target.host.clone(),
+                        port: target.port,
+                        username: Some(target.username.clone()),
+                        auth_method: auth_form.method(),
+                        key_path: if auth_form.method() == SshAuthPreference::PrivateKey {
+                            auth_form.key_path_value(cx)
+                        } else {
+                            None
+                        },
+                        color: None,
+                        group: None,
+                        logging: SshLoggingOverride::Inherit,
+                        jump_host: hops.selected(cx),
+                        port_forwards: Vec::new(),
+                        agent_forwarding: false,
+                        sealed_password: None,
+                    };
+                    Rc::new(move |_: &mut Window, cx: &mut App| {
+                        SshSessionStore::global(cx).update(cx, |s, cx| {
+                            s.add(session.clone(), cx);
+                        });
+                    }) as Rc<dyn Fn(&mut Window, &mut App)>
+                });
 
             // Build the connection config and connect off-thread.
             let request = SshConnectRequest {
@@ -391,7 +401,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 on_connected,
                 on_failed: Some({
                     let inline_error = inline_error.clone();
-                    Rc::new(move |message, _cx| inline_error.set(message))
+                    Rc::new(move |_, message, _window, _cx| inline_error.set(message))
                 }),
                 logging_override: SshLoggingOverride::Inherit,
             };

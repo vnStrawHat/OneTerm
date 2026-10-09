@@ -165,6 +165,7 @@ OneTerm/
 │   │   └── src/                    # lib.rs init() (SshSessionStore::init + register "session" panel);
 │   │                               #   panel, connect_dialog, quick_connect_dialog, session_state.rs,
 │   │                               #   jump_hops.rs (jump-host picker + per-hop credential blocks),
+│   │                               #   auth_form.rs (auth fields; saved-password rows, US-0158),
 │   │                               #   forward_rows.rs (port-forward rows of the session dialog) …
 │   │
 │   ├── settings-ui/                # `oneterm-settings-ui` — General Settings window
@@ -262,7 +263,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, gpui-component | shell | Feature-agnostic app shell. Maps domain placement types to the UI dock and drives features through `WorkspaceCommands`. |
 | `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight`, `completion`, gpui-component | feature | Terminal panel, rendering/input, split spaces, the terminal settings panel, and the auto-completion overlay + controller. |
 | `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions`, gpui-component | feature | SFTP file browser and transfer queue. |
-| `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `settings`, `state`, `theme`, `actions`, gpui-component | feature | Session tree, connect dialogs, and `SshSessionStore`. |
+| `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `settings`, `state`, `theme`, `actions`, `vault`, gpui-component | feature | Session tree, connect dialogs, and `SshSessionStore` (including each session's sealed password, `US-0158`; the `vault` edge is for the `SealedSecret` / `SealContext` types, the crypto stays in `oneterm-vault`). |
 | `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `state`, `update`, `theme`, `actions`, gpui-component | feature | General Settings window, update status/actions, and key-binding setup. |
 | `agent-ui` (`oneterm-agent-ui`) | `terminal`, `settings`, `state`, gpui-component | feature | Agent Panel fleet view. |
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |

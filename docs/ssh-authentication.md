@@ -32,9 +32,12 @@ When the server rejects every attempted method, the error names the methods the 
 `ssh_session.json` may contain:
 
 - the selected authentication method;
-- the private-key filesystem path.
+- the private-key filesystem path;
+- a password sealed by the master-password vault (`sealed_password`, an `otv1:` envelope,
+  `US-0158`), only when the user ticked **Save password**.
 
-It must never contain a password, private-key contents, or private-key passphrase. A jump-host route (`docs/ssh-client-connect.md` §9.8) applies this policy per hop: the connect dialog collects one credential per hop, each is zeroized after its own hop authenticates, and Duplicate Session prompts for every hop again. The SSH agent method persists nothing but the method name: identities stay in the agent, and OneTerm only relays public keys and signature requests. Passwords and passphrases are wrapped in `SecretString`, omitted from debug output, cleared from the corresponding UI field after submission, and dropped after authentication. The existing explicit unknown-host-key confirmation may retain one short-lived zeroizing config clone for the approved retry.
+It must never contain a password in plain text, private-key contents, or a private-key
+passphrase. A jump-host route (`docs/ssh-client-connect.md` §9.8) applies this policy per hop: the connect dialog collects one credential per hop, each is zeroized after its own hop authenticates, and Duplicate Session prompts for every hop again. The SSH agent method persists nothing but the method name: identities stay in the agent, and OneTerm only relays public keys and signature requests. Passwords and passphrases are wrapped in `SecretString`, omitted from debug output, cleared from the corresponding UI field after submission, and dropped after authentication. The existing explicit unknown-host-key confirmation may retain one short-lived zeroizing config clone for the approved retry.
 
 `auth_method` is `password` (the default, omitted when serialized), `private_key`, or `agent`; `key_path` only accompanies `private_key`. Existing session documents with no authentication metadata load as Password. The added fields are backward-compatible; the document schema itself is versioned separately (v2 adds a stable `id` per session, see `crates/session-ui/src/session_state.rs`).
 
@@ -48,9 +51,29 @@ data key into an `otv1:` envelope whose associated data binds the vault id, the 
 `ssh-password` and the session's host, port and username, so a hand-edited `host` makes the
 saved password fail to open instead of sending it elsewhere; the session id is not bound, so a
 duplicated session keeps a working copy. Forgetting the master password means Reset, which
-deletes every saved password and keeps the sessions. Until `US-0158` adds the
-`sealed_password` field and the save flow, `ssh_session.json` holds no password at all; the
-policy above is the one in force.
+deletes every saved password and keeps the sessions.
+
+**Saving and using a password (`US-0158`, `ssh-password-save-flow.md`).** The session dialog
+shows, for the Password method, a password input and **Save password (encrypted with your
+master password)**, unticked by default. Saving with it ticked needs a username and a non-empty
+password, sets up or unlocks the master password first, and seals the password into the
+session's optional `sealed_password` field; cancelling the master-password dialog saves
+nothing and leaves the session dialog open. A saved password is never shown: the dialog says
+"Saved password" with **Replace** and **Remove**. Editing host, port or username reseals it
+for the new address (unlocking first when locked, or **Remove** instead); switching to Private
+Key or SSH Agent, clearing the username or **Remove** drops it. Duplicate keeps it. Before every
+seal `VaultState` re-reads `vault.json` and refuses when the vault was reset or replaced in
+another OneTerm process. A reset wipes every `sealed_password` before `vault.json` goes.
+
+The connect dialog shows "Using saved password" for the target and for every jump hop that
+has one, after **one** unlock for the whole chain, and Enter connects; **Use a different one**
+swaps a row back to an input. Each envelope is opened only when Connect is pressed, into a
+fresh `SecretString`, and reaches `oneterm-ssh` as the same `SshAuthMethod::Password` a typed
+password does: the backend is unchanged. A typed target password can be saved from the connect
+dialog too; it is sealed only after the server accepted it. A rejected saved password turns its
+row back into an input with **Update saved password** ticked and keeps the sealed value until a
+new password connects. Quick Connect uses a picked jump host's saved password only while the
+vault is already unlocked and never saves one.
 
 ## Architecture
 
@@ -67,4 +90,4 @@ No UI crate depends directly on `oneterm-ssh`.
 - Interactive keyboard-interactive dialogs (multi-round prompts, one-time codes, prompts that are not password prompts).
 - Automatic discovery or fallback across `~/.ssh/id_*` identities.
 - Key generation, conversion, or import.
-- Persisting passphrases, or a platform keychain. Passwords may be persisted only sealed by the master-password vault (`DEC-0021`, `IN-0050`); the save flow arrives with `US-0158`.
+- Persisting passphrases, or a platform keychain. Passwords may be persisted only sealed by the master-password vault (`DEC-0021`, `IN-0050`, saved since `US-0158`).
