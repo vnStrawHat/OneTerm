@@ -260,3 +260,112 @@ items 4, 6 and 8 above; the re-read of `vault.json` before each seal (`persisten
   census built every test target and all of them listed.
 - No frame-time measurement during Argon2id. In this debug build the default parameters finished
   in under 0.3 s, too fast to catch the spinner. The implementer's capture `us0157-11a` shows it.
+
+## Re-verification of 6db052a4
+
+Rework head `6db052a4` (built on `8033a6f0`), checked out as `verify/US-0157` in the same
+worktree, starting from a clean status. Same settings: `CARGO_INCREMENTAL=0`,
+`CARGO_BUILD_JOBS=2`, about 14 GB free.
+
+### Verdict: PASS
+
+D1, D2, D3 and D4 are fixed, and each fix holds under the attacks below. Two Low items remain
+(R1, R2). Neither blocks the merge.
+
+| # | Severity | Where | What |
+| --- | --- | --- | --- |
+| R1 | Low (docs) | root `Cargo.toml:102` comment; `docs/agents/dependencies.md` § allowed crates, "Build / development" row | Both still describe `futures` as test-only / dev-only, but `oneterm-state` now uses it as a normal dependency (`futures::channel::oneshot`). There is no new package: `gpui-pre` already depends on `futures`, and `third-party-notices.py --check` passes. Fix: move it to the async row ("`futures` (`oneterm-state`: `channel::oneshot` for `VaultState` answers; tests: the SSH agent server)") and update the comment. |
+| R2 | Low (for US-0159) | `crates/state/src/vault_dialogs.rs:356` | After `LockedMeanwhile` the Unlock dialog stays open with the **right** password still in its input (only `WrongPassword` clears it), so pressing Enter again unlocks without retyping. US-0157's UI cannot reach this: Lock Now is shown only while Unlocked, and the dialog is modal. US-0159's idle lock and shortcut can. Fix there: clear every input on `LockedMeanwhile`, or close the dialog. |
+
+### Attacks
+
+**D1, `run` (`vault_state.rs:419`).** The apply step is spawned and detached inside the state.
+The caller's task only awaits a `oneshot` receiver; a sender dropped without a send reads as
+`WrongPhase`.
+- **What clears `busy` on every exit path:** `begin` (`:442`) sets it. Every `finish_*` calls
+  `end` (`:448`) as its first statement (`:473, :505, :531, :548-553, :584`), before any `?`
+  or early return. `finish_unlock`'s `WrongPhase` return comes after `end`, and so do
+  `finish_change`'s and `finish_reset`'s `result?`.
+- **When the apply step never runs:**
+  - The entity is gone: `update` fails; there is no state left to be busy, and the receiver
+    gets `WrongPhase`.
+  - The background work panics: the app is on its crash path anyway (`panic = "unwind"`,
+    background thread). Argon2id and AES-GCM do not panic on these inputs.
+  - A panic inside `apply` runs on the UI thread, which is the same crash path.
+- **Tests:**
+  - `verifier_d1_a_dropped_operation_task_still_applies` (inverted by the implementer).
+  - New `verifier_r_dropped_tasks_in_a_row_all_apply`: a dropped set-up, then a dropped
+    unlock. Both apply, `busy` is clear after each, and the events are exactly
+    `[Initialised, Locked, Unlocked]`.
+  - Two callers in a row while one runs: the second is `Busy` (existing
+    `verifier_a_second_set_up_is_busy_then_wrong_phase`).
+- **Dependency:** `futures` is an existing workspace dependency, and `Cargo.lock` gains no
+  package. `verify-dependency-graph.py` passes: its policy restricts only workspace edges and
+  `argon2` / `aes-gcm`. The stale docs are R1.
+
+**D2, "the lock wins" (`lock` `:351`, flag reset in `begin` `:444`, taken in `end` `:451`).**
+- **Lock during a change** started Unlocked: the phase stays Locked on the new header, and only
+  `Locked` is emitted (`verifier_d2_a_lock_during_a_change_wins`, inverted).
+- **Lock during a change** started Locked: the file changes, the process stays Locked, no
+  event is emitted, and only the new password unlocks (new
+  `verifier_r_a_change_from_locked_locked_meanwhile_stays_locked`).
+- **Lock during a rehash:** the process stays Locked on the rewritten header, then unlocks, and
+  a later change is accepted (`verifier_lock_during_a_rehash_keeps_the_new_header`). The
+  rehash keeps the password, so the "new" credential here is the new header.
+- **Lock during an unlock:**
+  - Right password: `LockedMeanwhile`. No key is kept (`unlocked()` is `None`), `busy` is
+    clear, the failure count resets (the password was right), there are no events and no
+    rehash (`a_lock_during_an_unlock_wins`).
+  - Wrong password: still `WrongPassword`, and the count rises to 1 (new
+    `verifier_r_a_wrong_password_locked_meanwhile_still_counts`).
+  - The key and the typed `SecretString` drop (zeroized) at the `LockedMeanwhile` return.
+- **Lock during a set-up:** events exactly `[Initialised, Locked]`, phase Locked, and the
+  password unlocks afterwards (`a_lock_during_a_set_up_wins`).
+- **An idle lock**, in Unlocked or in Locked, sets no flag, and the next unlock succeeds (new
+  `verifier_r_an_idle_lock_does_not_carry_over`).
+- **Back to back:** an unlock answered `LockedMeanwhile`, then a plain unlock, which succeeds
+  (new `verifier_r_the_operation_after_a_locked_one_is_not_refused`).
+
+**D3 (`vault_dialogs.rs`).** `submit` makes one `SecretString::new(input.text().to_string())`
+per field (`:290-297`) and moves each one out with `swap_remove`. The Change order is correct:
+removing index 1 then index 0 yields new and old, and the leftover confirmation drops zeroized.
+Validation and the `RESET` check go through `expose_secret()`. The strength hint uses
+`text().len_chars()` (`:437`) and copies nothing. A grep of the file finds no `value()`,
+`unmask_value()` or `selected_value()` call. For passwords shorter than ropey's chunk size, the
+rope's `to_string()` writes one chunk, so a single allocation, with no growth reallocations left
+behind. The module doc now states the limit accurately.
+
+**D4 (docs).** These now match the code:
+- `persistence-and-migration.md` § 8: no unlock re-reads, the cost is stated, and the one
+  re-read is on `AlreadyInitialised`.
+- `idle-lock-overlay.md` § 5: `min(2^(n-4), 30)`, which gives 2, 4, 8, 16, 30 for n = 5..9.
+- `idle-lock-overlay.md` § Interfaces: `unlock` uses the in-memory header only.
+- The HLD's as-built note: the lock wins, and a dropped task never leaves the state busy.
+
+**Elevated `ensure_unlocked`.** With no vault (`vault_dialogs.rs:89`), it pushes a Warning
+notification: "No master password is set up. Managed from the normal OneTerm window." No Set up
+dialog opens. `security.rs:23` reuses `vault_dialogs::READ_ONLY_NOTE`, so the two cannot drift.
+This was checked by inspection only: a unit test would need a `Root` window with notifications.
+The call is a `WindowExt` call, like `open_dialog` on the other branches, so callers have the
+same "not inside a `Root` update" constraint as before (US-0149 lesson).
+
+### Gate (command log)
+
+| Command | Result |
+| --- | --- |
+| `git status`; `git checkout -B verify/US-0157 6db052a4` | clean; ok |
+| `cargo fmt --all -- --check` | pass (also after the new tests) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass (also after the new tests) |
+| `cargo test -p oneterm-state -p oneterm-settings-ui -p oneterm-vault -p oneterm-actions` | pass: state 68, settings-ui 58 + 1 ignored, vault 50, actions 4 |
+| `cargo test -p oneterm-state` (with the 5 new `verifier_r_*` tests) | pass: 73 |
+| `cargo test -p oneterm-settings-ui --lib -- --ignored --test-threads=1` | pass: 1 |
+| `python scripts/verify-dependency-graph.py` | pass |
+| `python scripts/check-doc-paths.py` | pass |
+| `python scripts/check-english.py` | pass |
+| `python scripts/third-party-notices.py --check` | pass |
+| `python scripts/check-ignored-tests.py` | pass, 19 ignored tests, all recorded (none added) |
+| `git diff main..HEAD -- Cargo.lock` | `oneterm-state` gains `futures`, `log` and `oneterm-vault` as dependencies; **no new package** |
+| `%TEMP%` `oneterm*` entries before / after | 42 / 42; no `oneterm-vault-state-*` or `oneterm-security-page-*` |
+
+No GUI walk this round. The rework changes no layout, and its behaviour is covered by the
+tests above.

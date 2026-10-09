@@ -648,3 +648,117 @@ async fn verifier_a_failed_reset_has_already_announced_itself(cx: &mut TestAppCo
     assert!(!dir.join("vault.json").exists());
     assert!(!dir.join("vault.bak").exists());
 }
+
+// Re-verification of the `US-0157` rework (`6db052a4`).
+
+/// Dropped set-up and unlock tasks, one after the other: each still applies
+/// and clears `busy`, and the events are the ones an awaited run emits.
+#[gpui::test]
+async fn verifier_r_dropped_tasks_in_a_row_all_apply(cx: &mut TestAppContext) {
+    let dir = test_dir();
+    let state = state_in(&dir, false, cx);
+    let events = record_events(&state, cx);
+    drop(state.update(cx, |state, cx| {
+        state.set_up(secret("first master password"), cx)
+    }));
+    cx.run_until_parked();
+    state.update(cx, |state, cx| {
+        assert!(!state.is_busy());
+        assert_eq!(state.phase(), VaultPhase::Unlocked);
+        state.lock(cx);
+    });
+    drop(state.update(cx, |state, cx| {
+        state.unlock(secret("first master password"), cx)
+    }));
+    cx.run_until_parked();
+    state.read_with(cx, |state, _| {
+        assert!(!state.is_busy());
+        assert_eq!(state.phase(), VaultPhase::Unlocked);
+    });
+    assert_eq!(
+        *events.borrow(),
+        [
+            VaultEvent::Initialised,
+            VaultEvent::Locked,
+            VaultEvent::Unlocked
+        ]
+    );
+}
+
+/// A lock with nothing running sets no flag, so the next operation is not
+/// treated as "locked meanwhile".
+#[gpui::test]
+async fn verifier_r_an_idle_lock_does_not_carry_over(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    state.update(cx, |state, cx| {
+        state.lock(cx);
+        assert!(!state.locked_meanwhile);
+    });
+    // Also a lock while Locked and idle.
+    state.update(cx, |state, cx| state.lock(cx));
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+}
+
+/// Back to back: an unlock locked meanwhile, then a plain unlock, which
+/// succeeds (`begin` clears the flag).
+#[gpui::test]
+async fn verifier_r_the_operation_after_a_locked_one_is_not_refused(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    let task = state.update(cx, |state, cx| {
+        let task = state.unlock(secret(V1_PASSWORD), cx);
+        state.lock(cx);
+        task
+    });
+    assert!(matches!(task.await, Err(VaultActionError::LockedMeanwhile)));
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+}
+
+/// A wrong password during an unlock that was locked meanwhile still counts
+/// as a failure and answers `WrongPassword`, not `LockedMeanwhile`.
+#[gpui::test]
+async fn verifier_r_a_wrong_password_locked_meanwhile_still_counts(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    let task = state.update(cx, |state, cx| {
+        let task = state.unlock(secret("wrong"), cx);
+        state.lock(cx);
+        task
+    });
+    assert!(matches!(
+        task.await,
+        Err(VaultActionError::Vault(VaultError::WrongPassword))
+    ));
+    state.read_with(cx, |state, _| {
+        assert_eq!(state.failures, 1);
+        assert!(!state.is_busy());
+        assert_eq!(state.phase(), VaultPhase::Locked);
+    });
+}
+
+/// A change started from Locked and locked meanwhile: the file changes, the
+/// process stays Locked on the new header, and no event is emitted.
+#[gpui::test]
+async fn verifier_r_a_change_from_locked_locked_meanwhile_stays_locked(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    let events = record_events(&state, cx);
+    let task = state.update(cx, |state, cx| {
+        let task = state.change_password(secret(V1_PASSWORD), secret("new master password"), cx);
+        state.lock(cx);
+        task
+    });
+    task.await.unwrap();
+    state.read_with(cx, |state, _| {
+        assert_eq!(state.phase(), VaultPhase::Locked);
+        assert!(state.unlocked().is_none());
+    });
+    assert!(events.borrow().is_empty());
+    assert_ne!(read(&dir, "vault.json").unwrap(), V1);
+    unlock(&state, V1_PASSWORD, cx).await.unwrap_err();
+    unlock(&state, "new master password", cx).await.unwrap();
+}
