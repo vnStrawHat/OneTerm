@@ -19,7 +19,7 @@
 use gpui::{Action, KeyBinding, Keystroke};
 
 use oneterm_actions::{
-    About, AddPanel, NewSession, OpenSettings, Quit, ToggleFpsMonitor, ToggleGutter,
+    About, AddPanel, LockOneTerm, NewSession, OpenSettings, Quit, ToggleFpsMonitor, ToggleGutter,
 };
 use oneterm_core::InputChannel;
 
@@ -144,6 +144,16 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         context: None,
         make: |ks, ctx| make_binding(ks, Quit, ctx),
         name_fn: <Quit as Action>::name_for_type,
+    },
+    BindableAction {
+        id: "lock_oneterm",
+        label: "Lock OneTerm",
+        group: "App Menu",
+        // `US-0159`. Shift keeps it off `^L` (form feed, the shells' clear-screen).
+        default: Some("ctrl-shift-l"),
+        context: None,
+        make: |ks, ctx| make_binding(ks, LockOneTerm, ctx),
+        name_fn: <LockOneTerm as Action>::name_for_type,
     },
     BindableAction {
         id: "open_settings",

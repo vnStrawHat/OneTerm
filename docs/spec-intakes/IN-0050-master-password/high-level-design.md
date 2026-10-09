@@ -106,6 +106,16 @@ busy.
 
 - `Locked -> IdleLocked` on idle too: screen protection does not depend on the user ever having
   unlocked.
+- As built by `US-0159`: `IdleLocked` is the two facts made explicit, not a fifth `VaultPhase`
+  value. `VaultPhase` stays Locked (the key is not in memory) and `VaultState::is_screen_locked()`
+  says the screen is covered; it is true only beside a held header. `lock_screen()` drops the key
+  (emitting `Locked` when one was held), sets the screen lock and emits `ScreenLocked`; it does
+  nothing without a vault (Uninitialised or Unavailable) and, while an operation runs, sets the
+  same `locked_meanwhile` flag `lock()` does, so the operation's result neither puts a key back
+  nor lifts the screen lock. `unlock_screen(password)` is the only way out: it verifies against
+  the in-memory header, shares the back-off count with the dialogs, and ends Unlocked. While the
+  screen is locked, the dialog `unlock`, set-up, change and reset are refused (`WrongPhase`); a
+  reset that started before the lock still lands and clears the lock with the vault.
 - "Lock now" from the Settings page before `US-0159` drops the key only (`Unlocked -> Locked`);
   from `US-0159` on, the Lock action goes to `IdleLocked`.
 - Reset can be done from `Locked` (a forgotten password cannot be proved) but not from

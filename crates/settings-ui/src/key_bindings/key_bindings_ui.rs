@@ -270,11 +270,7 @@ fn dash_label(cx: &App) -> AnyElement {
 fn on_edit(id: &'static str, window: &mut Window, cx: &mut App) {
     let handle = KeyBindingsState::global(cx).read(cx).capture_focus.clone();
     let interceptor = cx.intercept_keystrokes(move |event, window, cx| {
-        let armed = {
-            let state = KeyBindingsState::global(cx).read(cx);
-            state.capturing.as_deref() == Some(id) && state.capture_focus.is_focused(window)
-        };
-        if !armed {
+        if !recorder_armed(id, window, cx) {
             return;
         }
         on_capture_key(id, &event.keystroke, cx);
@@ -288,6 +284,18 @@ fn on_edit(id: &'static str, window: &mut Window, cx: &mut App) {
         cx.notify();
     });
     handle.focus(window, cx);
+}
+
+/// Whether the recorder for `id` takes this keystroke. Never while the screen is
+/// locked: gpui runs every interceptor whatever an earlier one did, and the key
+/// that locks (input after the idle timeout) arrives with the capture element
+/// still focused (`US-0159` verify D1).
+fn recorder_armed(id: &str, window: &Window, cx: &App) -> bool {
+    if oneterm_state::VaultState::screen_locked(cx) {
+        return false;
+    }
+    let state = KeyBindingsState::global(cx).read(cx);
+    state.capturing.as_deref() == Some(id) && state.capture_focus.is_focused(window)
 }
 
 /// Leave capture mode (drops the interceptor).
@@ -425,6 +433,36 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    /// `US-0159` verify D1: the key that locks the screen (input after the idle
+    /// timeout) reaches every interceptor; the recorder takes none while locked.
+    #[gpui::test]
+    fn the_recorder_takes_no_key_while_the_screen_is_locked(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                // Best effort: nothing in a destructor can report a failed cleanup.
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = Directory(
+            std::env::temp_dir().join(format!("oneterm-recorder-lock-{}", std::process::id())),
+        );
+        std::fs::create_dir_all(&dir.0).unwrap();
+        std::fs::write(
+            dir.0.join("vault.json"),
+            include_str!("../../../vault/tests/fixtures/persistence/vault-v1.json"),
+        )
+        .unwrap();
+        let vault = cx.new(|_| oneterm_state::VaultState::load(dir.0.clone(), false));
+        cx.update(|cx| cx.set_global(oneterm_state::vault_state::VaultStateGlobal(vault.clone())));
+        vault.update(cx, |state, cx| state.lock_screen(cx));
+        let window = cx.add_empty_window();
+        // Locked, the recorder answers before it even looks at its own state
+        // (no `KeyBindingsState` exists here).
+        assert!(!window.update(|window, cx| recorder_armed("quit", window, cx)));
+    }
 
     #[test]
     fn key_binding_pages_cover_every_group_exactly_once() {

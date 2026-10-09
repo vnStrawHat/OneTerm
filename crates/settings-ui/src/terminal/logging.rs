@@ -189,6 +189,11 @@ fn open_log_folder_picker(input: Entity<InputState>, window: &mut Window, cx: &m
             };
             if let Some(path) = selected {
                 _ = cx.update(|window, cx| {
+                    // The OS dialog stays usable over the lock screen (US-0159).
+                    if oneterm_state::VaultState::screen_locked(cx) {
+                        log::debug!("log folder picker answered while locked; ignored");
+                        return;
+                    }
                     input.update(cx, |input, cx| {
                         input.set_value(path.to_string_lossy().to_string(), window, cx);
                     });

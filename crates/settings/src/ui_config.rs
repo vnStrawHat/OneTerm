@@ -68,6 +68,20 @@ pub struct UiConfig {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub show_fps: bool,
 
+    /// Minutes without keyboard or mouse input before every window shows the lock
+    /// screen (`US-0159`; only once a master password exists). `None` = the default,
+    /// [`Self::DEFAULT_LOCK_AFTER_IDLE_MINUTES`]. Read through
+    /// [`Self::lock_timeout_minutes`], which clamps it to [`Self::LOCK_AFTER_IDLE_RANGE`];
+    /// a value that is not a non-negative integer loads as `None` instead of
+    /// quarantining the whole file. Written only through
+    /// [`Self::set_lock_after_idle_minutes`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_minutes"
+    )]
+    pub lock_after_idle_minutes: Option<u64>,
+
     /// `ui_config.json` existed but could not be read at startup (e.g.
     /// permission denied), so this is the built-in default and must not be
     /// written back over a possibly valid file (CORR-61). Never persisted.
@@ -76,6 +90,22 @@ pub struct UiConfig {
 }
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// `lock_after_idle_minutes` as written by hand: a non-negative integer, or absent. Anything
+/// else (a string, a fraction, a negative number) reads as absent, so one bad value costs the
+/// default timeout rather than the whole file's quarantine.
+fn lenient_minutes<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let minutes = value.as_u64();
+    if minutes.is_none() && !value.is_null() {
+        log::warn!(
+            "ui_config.json: lock_after_idle_minutes {value} is not a whole number of minutes; using the default"
+        );
+    }
+    Ok(minutes)
+}
 const DOCUMENT_NAME: &str = "ui_config.json";
 
 impl UiConfig {
@@ -84,6 +114,21 @@ impl UiConfig {
     }
     /// Built-in default for [`UiConfig::agent_stale_threshold_ms`] — 5 minutes.
     pub const DEFAULT_AGENT_STALE_THRESHOLD_MS: u64 = 300_000;
+
+    /// The idle lock's default timeout (intake `IN-0050` Q2).
+    pub const DEFAULT_LOCK_AFTER_IDLE_MINUTES: u64 = 15;
+    /// The idle lock's timeout range: no "Never" (intake Q2), at most a working day.
+    pub const LOCK_AFTER_IDLE_RANGE: std::ops::RangeInclusive<u64> = 1..=480;
+
+    /// The idle lock's timeout in minutes, clamped to [`Self::LOCK_AFTER_IDLE_RANGE`].
+    pub fn lock_timeout_minutes(&self) -> u64 {
+        self.lock_after_idle_minutes
+            .unwrap_or(Self::DEFAULT_LOCK_AFTER_IDLE_MINUTES)
+            .clamp(
+                *Self::LOCK_AFTER_IDLE_RANGE.start(),
+                *Self::LOCK_AFTER_IDLE_RANGE.end(),
+            )
+    }
 
     /// The effective agent-panel staleness threshold in ms (config value or the
     /// built-in default). A value of `0` disables staleness marking.
@@ -266,6 +311,18 @@ impl UiConfig {
         cx.refresh_windows();
     }
 
+    /// Set the idle lock's timeout (clamped to [`Self::LOCK_AFTER_IDLE_RANGE`]): the one
+    /// writer of `lock_after_idle_minutes`, used by Settings > Security. Persists; the
+    /// lock timer observes the config and restarts with the new value.
+    pub fn set_lock_after_idle_minutes(minutes: u64, cx: &mut App) {
+        Self::global(cx).update(cx, |cfg, cx| {
+            cfg.lock_after_idle_minutes = Some(minutes);
+            cfg.lock_after_idle_minutes = Some(cfg.lock_timeout_minutes());
+            cx.notify();
+        });
+        Self::persist(cx);
+    }
+
     /// Schedule persistence of a snapshot of the global config off the UI thread.
     /// Does nothing (with a warning) while [`Self::persist_blocked`] is set.
     pub fn persist(cx: &App) {
@@ -334,11 +391,13 @@ mod tests {
             right_dock_mode: RightDockMode::Agent,
             agent_stale_threshold_ms: Some(42),
             show_fps: true,
+            lock_after_idle_minutes: Some(30),
             persist_blocked: false,
         };
         config.save_to(&path).unwrap();
         let restored = UiConfig::load_from(&path).unwrap();
         assert!(restored.show_fps);
+        assert_eq!(restored.lock_timeout_minutes(), 30);
         assert_eq!(restored.ui_font_size, Some(18.0));
         assert_eq!(restored.theme_name.as_deref(), Some("Test Theme"));
         assert_eq!(
@@ -377,6 +436,34 @@ mod tests {
             config.agent_stale_threshold_ms(),
             UiConfig::DEFAULT_AGENT_STALE_THRESHOLD_MS
         );
+    }
+
+    /// `US-0159`: 15 minutes unless the file says otherwise, clamped to 1..=480 (no
+    /// "Never", intake Q2), and a hand-edited value of the wrong type loads as the
+    /// default instead of quarantining the whole document.
+    #[test]
+    fn the_idle_lock_timeout_defaults_clamps_and_parses_leniently() {
+        let parse = |raw: &str| UiConfig::parse_document(raw).unwrap();
+        let absent = parse(r#"{"schema_version":1}"#);
+        assert_eq!(absent.lock_timeout_minutes(), 15);
+        assert!(
+            !serde_json::to_string(&absent)
+                .unwrap()
+                .contains("lock_after_idle")
+        );
+        let minutes = |value: &str| {
+            parse(&format!(
+                r#"{{"theme_name":"T","lock_after_idle_minutes":{value}}}"#
+            ))
+        };
+        assert_eq!(minutes("60").lock_timeout_minutes(), 60);
+        assert_eq!(minutes("0").lock_timeout_minutes(), 1);
+        assert_eq!(minutes("100000").lock_timeout_minutes(), 480);
+        for wrong in [r#""ten""#, "-5", "2.5", "true", "null"] {
+            let config = minutes(wrong);
+            assert_eq!(config.lock_timeout_minutes(), 15, "{wrong}");
+            assert_eq!(config.theme_name.as_deref(), Some("T"), "{wrong}");
+        }
     }
 
     #[test]

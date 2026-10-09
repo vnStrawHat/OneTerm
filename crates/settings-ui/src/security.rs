@@ -9,13 +9,21 @@
 //! The elevated window shows the page read-only: the status, a note, and the
 //! two actions that write nothing, Unlock and Lock Now (`DEC-0019` M4, intake
 //! Q5). `VaultState` refuses the writes there as well.
+//!
+//! A second group, Screen Lock (`US-0159`), holds the idle timeout
+//! (`UiConfig::lock_after_idle_minutes`, 1-480 minutes). Lock Now covers every
+//! window with the lock screen (`VaultState::lock_screen`), which also drops the
+//! key.
 
 use gpui::{App, ParentElement as _, prelude::FluentBuilder as _};
 use gpui_component::{
     Disableable as _, Icon,
     button::{Button, ButtonVariants as _},
-    setting::{RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage},
+    setting::{
+        NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
+    },
 };
+use oneterm_settings::UiConfig;
 use oneterm_state::{VaultPhase, VaultState, vault_dialogs};
 use oneterm_theme::icon::AppIcon;
 
@@ -29,6 +37,34 @@ pub(crate) fn page(cx: &App) -> SettingPage {
         // Nothing here has a default to reset to.
         .resettable(false)
         .group(master_password_group(cx))
+        .group(screen_lock_group())
+}
+
+/// "Screen Lock" — the idle timeout (`US-0159`; intake Q2: no "Never").
+fn screen_lock_group() -> SettingGroup {
+    let range = UiConfig::LOCK_AFTER_IDLE_RANGE;
+    SettingGroup::new().title("Screen Lock").item(
+        SettingItem::new(
+            "Lock After Idle (minutes)",
+            SettingField::number_input(
+                NumberFieldOptions {
+                    min: *range.start() as f64,
+                    max: *range.end() as f64,
+                    ..Default::default()
+                },
+                |cx: &App| UiConfig::global(cx).read(cx).lock_timeout_minutes() as f64,
+                |minutes: f64, cx: &mut App| {
+                    UiConfig::set_lock_after_idle_minutes(minutes.round() as u64, cx)
+                },
+            )
+            .default_value(UiConfig::DEFAULT_LOCK_AFTER_IDLE_MINUTES as f64),
+        )
+        .description(format!(
+            "With a master password set up, every OneTerm window is covered after this long without keyboard or mouse input ({} to {} minutes). Terminal output does not count as input.",
+            range.start(),
+            range.end()
+        )),
+    )
 }
 
 /// What the page shows for one state of the vault.
@@ -74,7 +110,7 @@ fn rows(state: &VaultState) -> Rows {
         status,
         primary,
         change: state.can_change(),
-        lock: phase == VaultPhase::Unlocked,
+        lock: state.can_lock_screen(),
         reset: state.can_reset(),
     }
 }
@@ -138,12 +174,14 @@ fn master_password_group(cx: &App) -> SettingGroup {
                         .label("Lock Now")
                         .on_click(|_, _, cx| {
                             if let Some(state) = VaultState::try_global(cx) {
-                                state.update(cx, |state, cx| state.lock(cx));
+                                state.update(cx, |state, cx| state.lock_screen(cx));
                             }
                         })
                 }),
             )
-            .description("Forget the master password until it is typed again."),
+            .description(
+                "Cover every OneTerm window until the master password is typed (also Lock OneTerm in the app menu, Ctrl+Shift+L by default).",
+            ),
         );
     }
     if rows.reset {

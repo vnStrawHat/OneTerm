@@ -357,6 +357,13 @@ impl VaultForm {
                     // The rejected text leaves the input (and its undo history).
                     self.inputs[0].update(cx, |input, cx| input.set_value("", window, cx));
                 }
+                if matches!(error, VaultActionError::LockedMeanwhile) {
+                    // The password was right, but a lock won: it must be typed
+                    // again, not resubmitted with Enter (`US-0157` verify R2).
+                    for input in &self.inputs {
+                        input.update(cx, |input, cx| input.set_value("", window, cx));
+                    }
+                }
                 // The back-off line already says when to try again.
                 self.error = match error {
                     VaultActionError::RetryIn(_) => None,

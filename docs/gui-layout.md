@@ -59,11 +59,11 @@ The pages, in sidebar order:
 | Terminal Logging | Logging |
 | Completion | Completion |
 | SSH | Connection, SFTP Editor, SFTP Edit Limit |
-| Security | Master Password |
+| Security | Master Password, Screen Lock |
 | Network | GitHub Connection |
 | About | Application, Links, Updates |
 
-`General` is the page the window opens on and carries what a new user reaches Settings for first — the theme, the UI font size, and the shell new local terminals start. There is no separate Appearance page: two controls did not earn one, and the theme was the thing hardest to find (`US-0122`). `Network` holds the updater's proxy and TLS-verification settings (`docs/auto-update.md`); `About` holds the application identity, the repository link and the update preferences together with the **Check Now** action that the About dialog also offers. `Security` (`IN-0050`, `US-0157`) shows the master password's status (Not set up / Set, locked / Set, unlocked / why it is unavailable) and only the actions that apply: **Set Up...**, **Unlock...**, **Change...**, **Lock Now** (drops the key from memory) and **Reset...** (type `RESET`; deletes `vault.json` and every saved password, keeps sessions). Each opens one of the shared master-password dialogs in `oneterm-state` (`vault_dialogs.rs`); Argon2id runs off the UI thread while the confirm button spins, a wrong password is shown under the field, and from the fifth wrong one in a row the button waits 2, 4, 8, 16, then 30 seconds with a countdown. In an elevated window the page is read-only: the status ends with "Managed from the normal OneTerm window." and only Unlock and Lock Now remain (`DEC-0019` M4, intake Q5). The page has no resettable fields, so it shows no Reset All.
+`General` is the page the window opens on and carries what a new user reaches Settings for first — the theme, the UI font size, and the shell new local terminals start. There is no separate Appearance page: two controls did not earn one, and the theme was the thing hardest to find (`US-0122`). `Network` holds the updater's proxy and TLS-verification settings (`docs/auto-update.md`); `About` holds the application identity, the repository link and the update preferences together with the **Check Now** action that the About dialog also offers. `Security` (`IN-0050`, `US-0157`) shows the master password's status (Not set up / Set, locked / Set, unlocked / why it is unavailable) and only the actions that apply: **Set Up...**, **Unlock...**, **Change...**, **Lock Now** (shown whenever a vault exists: covers every window with the lock screen and drops the key, see § Lock screen) and **Reset...** (type `RESET`; deletes `vault.json` and every saved password, keeps sessions). Each opens one of the shared master-password dialogs in `oneterm-state` (`vault_dialogs.rs`); Argon2id runs off the UI thread while the confirm button spins, a wrong password is shown under the field, and from the fifth wrong one in a row the button waits 2, 4, 8, 16, then 30 seconds with a countdown. A second group, **Screen Lock**, holds Lock After Idle (minutes, 1-480, default 15; `US-0159`). In an elevated window the page is read-only: the status ends with "Managed from the normal OneTerm window." and only Unlock and Lock Now remain (`DEC-0019` M4, intake Q5). The page has no resettable fields, so it shows no Reset All.
 
 **Pages are short on purpose.** Terminal's nine groups and Key Bindings' six were one page each until `US-0122`, and neither could be navigated by its own sidebar: the kit scrolls a sub-item into view using the group heights it has *measured*, and it measures only what has been laid out, so anything below the fold of a freshly opened page is invisible to the calculation (§"Sidebar navigation" below). Page **selection** has no such problem — it swaps an index and scrolls nothing — so splitting a long page into pages that each fit the window is what makes the sidebar work, and it costs nothing the kit gives a page: sub-items still appear on any page with more than one group (`settings.rs:209`), search is per `SettingItem` and page-independent (`settings.rs:112-140`), and `Reset All` is per page (`page.rs:111-119`). The budget is the default 708 px window, which leaves about 610 px of page body; three groups is the most any page carries today. **Adding a group to a full page moves the fold and breaks navigation for everything below it — add a page instead.** `terminal/mod.rs`'s `TERMINAL_PAGES` and `key_bindings_ui.rs`'s `KEY_BINDING_PAGES` are the two tables that hold the split, and each is asserted against its own group source in tests.
 
@@ -189,6 +189,49 @@ the UI thread, and about 4-5 MB for PDH's counter data. The first show in a proc
 PDH's one-time initialisation, off the UI thread: ~100-165 ms on a background thread and
 ~4 MB that Windows keeps for the life of the process (no growth on later shows).
 Measurements: `US-0151`.
+
+## Lock screen
+
+Once a master password exists (`IN-0050`, `US-0159`), every OneTerm window — main, Settings,
+and any later `Root` — shows only the lock screen after **Lock After Idle** minutes without
+keyboard or mouse input (Settings > Security > Screen Lock; 15 by default, 1-480, no "Never"),
+or at once on **Lock OneTerm** (app menu; Settings > Security > Lock Now; the `LockOneTerm`
+action, `ctrl-shift-l` by default and rebindable under Key Bindings > App Menu). Without a
+vault (not set up, or `vault.json` unusable) nothing locks and the action says why. The lock
+drops the vault key; the master password lifts it and unlocks the vault. Terminal output,
+timers and notifications are not input; a key, a mouse move, click or scroll, or switching to a
+OneTerm window is. Input that arrives later than the timeout (the machine slept, measured on
+the wall clock as well as the monotonic one) locks before it is delivered.
+
+`crates/workspace/src/lock_screen.rs` registers `LockScreen`, a `gpui_base::RootPlugin`, after
+`gpui_component::init`, so its `decorate` runs last in every window. While locked it returns
+`window_border()` around the lock view **in place of** the window's surface: the workspace (or
+the Settings panel), its dialogs, toasts, tooltips and the FPS HUD are not rendered, laid out
+or painted, so no frame and no screenshot holds a terminal pixel and a hidden terminal's output
+asks for no frame (gpui invalidates only windows whose last frame rendered the notifying view).
+Sessions keep running underneath; open dialogs, inputs, terminals and the dock come back
+unchanged after the unlock, and each window gets its previous focus back. Element-keyed state
+does not survive a lock: the Settings window comes back on General, whatever page it showed
+(known limit, the kit keeps the page in element state). A native OS dialog (file picker, Save
+dialog) is not covered by the lock and stays usable over it; whatever is picked in it while
+locked is dropped.
+
+The lock view has its own title bar (drag, minimise, maximise, close; the elevated window's
+`(Administrator)` marker), the lock icon, "OneTerm is locked", a masked password input focused
+on show (Enter submits), the error line ("Wrong master password.", cleared input) and the
+back-off countdown shared with the master-password dialogs (2, 4, 8, 16, then 30 s from the
+fifth wrong password in a row), an Unlock button that spins while Argon2id runs off the UI
+thread, a paragraph on how to reset (the lock screen cannot; quitting and restarting opens
+OneTerm unlocked, where Settings > Security > Reset is), and **Quit OneTerm**. It names no
+host, tab, session or notification. While locked, one app-wide keystroke interceptor stops
+every keystroke except text and the password input's own editing keys (a keystroke passes only
+inside the lock view, and only when every binding it resolves to there is `input::*` or
+`root::*`), so no workspace or global shortcut fires, `ctrl-shift-q` included; an empty Enter
+is not an attempt. Closing a window with its close button still works, and closing the main
+window quits (Alt+F4 passes through the same keystroke filter as an unbound key and was not
+walked). The lock screen checks the password against the vault header held in memory (read at
+start, replaced by a set-up, change or rehash in this process), never against `vault.json` on
+disk, so a vault reset or replaced by another OneTerm cannot open it.
 
 ## Text contrast floor and hierarchy
 

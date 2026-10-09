@@ -617,6 +617,11 @@ impl SftpPanel {
 
             // The panel may be gone before the picker closes; nothing to upload then.
             _ = cx.update(|window, cx| {
+                // The OS dialog stays usable over the lock screen (US-0159).
+                if oneterm_state::VaultState::screen_locked(cx) {
+                    log::debug!("SftpPanel: upload picker answered while locked; ignored");
+                    return;
+                }
                 panel.update(cx, |this, cx| {
                     this.do_upload_paths(paths, window, cx);
                 });
@@ -709,6 +714,16 @@ impl SftpPanel {
                     return;
                 }
             };
+
+            // The OS dialog stays usable over the lock screen (US-0159); a window
+            // that is gone has nothing to download into either.
+            if cx
+                .update(|_, cx| oneterm_state::VaultState::screen_locked(cx))
+                .unwrap_or(true)
+            {
+                log::debug!("SftpPanel: download Save dialog answered while locked; ignored");
+                return;
+            }
 
             log::info!(
                 "SftpPanel: download \"{remote_path}\" → \"{}\"",
@@ -1692,5 +1707,87 @@ mod tests {
         cx.run_until_parked();
 
         assert_eq!(harness.statuses(cx), vec![TransferStatus::Cancelled]);
+    }
+
+    // ── US-0159 re-verification (`evidence/US-0159-verify.md`) ──────────
+
+    /// A `VaultState` global over the floor fixture, screen-locked.
+    fn locked_vault(
+        cx: &mut VisualTestContext,
+    ) -> (gpui::Entity<oneterm_state::VaultState>, TempDir) {
+        let dir = TempDir::new();
+        std::fs::write(
+            dir.0.join("vault.json"),
+            include_str!("../../vault/tests/fixtures/persistence/vault-v1.json"),
+        )
+        .unwrap();
+        let vault = cx.update(|_, cx| {
+            let vault = cx.new(|_| oneterm_state::VaultState::load(dir.0.clone(), false));
+            cx.set_global(oneterm_state::vault_state::VaultStateGlobal(vault.clone()));
+            vault
+        });
+        vault.update(cx, |state, cx| state.lock_screen(cx));
+        (vault, dir)
+    }
+
+    /// D2 re-verify: the Save dialog opened unlocked, the path was picked, and
+    /// the lock fired before the continuation ran on the UI thread. Nothing is
+    /// downloaded and no queue item appears.
+    #[gpui::test]
+    fn reverify_a_save_path_answered_into_a_lock_downloads_nothing(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        let _transfer = backend.arm_transfer();
+        harness.list_and_select(
+            vec![dir_entry(&RemotePath::new("/home/u"), "example.txt", false)],
+            Some(0),
+            cx,
+        );
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_download(window, cx);
+        });
+        cx.simulate_new_path_selection(|_| Some(PathBuf::from("picked/example.txt")));
+        let (_vault, _dir) = locked_vault(cx);
+        cx.run_until_parked();
+
+        assert!(backend.transfer_requests().is_empty());
+        assert!(harness.statuses(cx).is_empty());
+    }
+
+    /// D2 re-verify: files picked in the upload dialog while locked start no
+    /// upload (no collision listing either); the same pick unlocked uploads.
+    #[gpui::test]
+    fn reverify_an_upload_picked_under_the_lock_uploads_nothing(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        let _transfer = backend.arm_transfer();
+        backend.arm_read_dir().try_send(Ok(Vec::new())).unwrap();
+        let (vault, _dir) = locked_vault(cx);
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_upload(false, window, cx);
+        });
+        cx.simulate_path_prompt_response(|_| Some(vec![PathBuf::from("a.txt")]));
+        cx.run_until_parked();
+        assert!(backend.transfer_requests().is_empty());
+        assert!(harness.statuses(cx).is_empty());
+        assert!(!harness.has_dialog(cx));
+
+        let task = vault.update(cx, |state, cx| {
+            state.unlock_screen(
+                oneterm_core::SecretString::new("correct horse battery staple"),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        drop(task);
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_upload(false, window, cx);
+        });
+        cx.simulate_path_prompt_response(|_| Some(vec![PathBuf::from("a.txt")]));
+        cx.run_until_parked();
+        let requests = backend.transfer_requests();
+        assert_eq!(requests.len(), 1, "the control upload did not start");
+        assert_eq!(requests[0].remote.as_str(), "/home/u/a.txt");
     }
 }

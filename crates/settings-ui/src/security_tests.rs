@@ -59,12 +59,13 @@ fn without_a_vault_the_page_offers_set_up_only() {
 }
 
 #[test]
-fn a_locked_vault_offers_unlock_change_and_reset() {
+fn a_locked_vault_offers_unlock_change_lock_and_reset() {
     let rows = rows_for(Some(V1), false);
     assert!(rows.status.starts_with("Set, locked."));
     assert_eq!(rows.primary, Some(Primary::Unlock));
     assert!(rows.change && rows.reset);
-    assert!(!rows.lock, "nothing to lock while locked");
+    // `US-0159`: Lock Now covers the screen, which does not need the key.
+    assert!(rows.lock);
 }
 
 #[test]
@@ -89,6 +90,7 @@ fn the_elevated_page_is_read_only_but_unlocks() {
     assert!(rows.status.ends_with(ELEVATED_NOTE));
     assert_eq!(rows.primary, Some(Primary::Unlock));
     assert!(!rows.change && !rows.reset);
+    assert!(rows.lock, "the elevated window locks too (intake Q5)");
 
     let rows = rows_for(Some("not json"), true);
     assert!(!rows.reset);

@@ -141,9 +141,12 @@ The `IdleClock` is stamped.
    Tab, Escape, and paste for password managers); stop everything else, which removes the
    context-free global bindings (`ctrl-shift-q` Quit, theme switch, FPS toggle ...).
 3. **Mouse:** only the lock view's elements exist to receive clicks.
-4. **Window close and Alt+F4** are OS events, not keystrokes. Closing the main window quits the
-   app (its existing `on_release` hook), which the design allows (intake Q6); closing the
-   Settings window just closes it.
+4. **Window close** (the caption button) is an OS event, not a keystroke. Closing the main
+   window quits the app (its existing `on_release` hook), which the design allows (intake Q6);
+   closing the Settings window just closes it. **Alt+F4 is not an OS-level bypass** (`US-0159`
+   verify D4): on Windows `WM_SYSKEYDOWN` goes through gpui's keystroke dispatch first, so the
+   interceptor sees it; it closes the window only because an unbound key passes inside the lock
+   view. A physical Alt+F4 was not walked (a posted one closes nothing, locked or not).
 
 ### 7. Interactions
 
@@ -155,10 +158,13 @@ The `IdleClock` is stamped.
 | Toasts / notifications | The notification layer is inside the surface: nothing shows while locked. Toasts raised meanwhile may expire unseen; failures that matter are also shown in place (connect dialog inline error, tab disconnect state). |
 | Open dialogs (connect, host key, session edit) | Hidden, not closed; back unchanged after unlock. A typed but unsent SSH password stays in that dialog's memory (accepted). |
 | App menus | Windows and Linux draw them in-window (title bar): gone with the surface. macOS native menu items dispatch to the focused window; workspace handlers are unreachable; the few global handlers are harmless. Swapping the macOS menu while locked is a follow-up (untested platform). |
+| Native OS dialogs (file picker, Save dialog) | **Not covered by the lock**: a dialog open when the lock comes is a window of its own and stays usable over the lock screen. **Rule:** a continuation that applies a native dialog's result checks `VaultState::screen_locked(cx)` first and drops the result while locked (`US-0159` verify D2: the SSH key picker, the log-folder picker, SFTP upload and download Save). There is no shared picker wrapper; every new `prompt_for_paths` / `prompt_for_new_path` caller must follow the rule. |
+| Other keystroke interceptors | gpui runs every interceptor whatever an earlier one did, so the key that locks (late input) still reaches them. **Rule:** an interceptor that acts on a key returns early when `VaultState::screen_locked(cx)` (the Key Bindings recorder does, `US-0159` verify D1). |
+| Element-keyed UI state | gpui keeps keyed element state only for elements rendered in the last frame, so a lock drops it: the Settings window comes back on its first page (General), because the kit's `Settings` keeps the selected page in element state with no way to set it from outside. Entity state (dialogs, inputs, terminals, the dock) survives. Known limit (`US-0159` verify D3). |
 | Clipboard | A remote OSC 52 write still reaches the system clipboard (terminal policy unchanged); nothing is read from it. |
 | Screenshots, screen sharing, Alt+Tab, taskbar hover | Live captures show only the lock screen. **Open risk:** a window minimised before the lock may keep a stale DWM thumbnail; `US-0159` checks it and, if so, forces a repaint or an iconic thumbnail. |
 | FPS HUD | Part of the workspace: not drawn while locked. |
-| OS session lock or sleep | Not hooked (gpui exposes no session-change event); sleep is partly covered by the wall-clock term. Follow-up. |
+| OS session lock or sleep | Not hooked (gpui exposes no session-change event); sleep is covered by the wall-clock term, the late-input rule and the one-minute recheck (As built). Follow-up. |
 | No vault | No timer, no plugin effect, Lock action shows "Set up a master password first" with a button to Settings > Security. |
 
 ### 8. Lock on demand
@@ -224,6 +230,56 @@ before `open_window`.
   the file therefore cannot unlock a locked window; only the password current for the
   in-memory header does. Cost: after a legitimate password change in *another* process, a
   window that was already locked still wants the previous password (rare; documented).
+
+## As built (`US-0159`)
+
+Where the build differs from, or settles, the design above (`US-0159-idle-lock-screen.md`):
+
+- **Phase.** No fifth `VaultPhase`: `VaultPhase` stays `Locked` while the screen is locked and
+  `VaultState::is_screen_locked()` carries the second fact (HLD § Lifecycle, as built).
+  `lock_screen` drops the key (emits `Locked` if one was held), sets the lock and emits
+  `ScreenLocked`; it records `locked_meanwhile` while an operation runs. `unlock_screen` ends
+  Unlocked. Set-up, the dialog `unlock`, change and reset are refused while the screen is locked.
+  The plugins follow `is_screen_locked()` on every `VaultState` notification, never the
+  `Locked` event (a refused seal emits it too).
+- **Interceptor rule (§ 6.2).** Computed from the keymap rather than a key list: a keystroke
+  passes only when the context stack holds `OneTermLock` and every binding
+  `Keymap::bindings_for_input` resolves for it there is `input::*` or `root::*`, with no pending
+  chord. Text with no binding passes (input handler, so AltGr and IME work). `ctrl-shift-left`
+  (the input's word selection and Split Left) is therefore stopped, which a password field does
+  not miss.
+- **Late input locks first (§ 2, new).** Every stamp first checks the idle time: input that
+  arrives after more than the timeout (the timer was late, the machine slept) locks and is
+  stopped (keys in the interceptor, mouse in the capture phase), so the first key or click after
+  a resume never reaches the terminal and never re-arms the clock.
+- **Timer (§ 3).** It sleeps `min(remaining, 60 s)`: one wake a minute at most, no frame, so a
+  deadline passed during a sleep is noticed within a minute of the resume even without input
+  (Windows relative timers may not count the time asleep). The task is restarted on every
+  `VaultState` and `UiConfig` notification.
+- **Timeout.** `lock_after_idle_minutes` is clamped to 1..=480 on read and parsed leniently (a
+  non-integer loads as the default 15); the file is not rewritten for it.
+- **No-vault notice.** A plain Info notification naming Settings > Security; no button.
+- **Lock view text.** The reset explanation is always shown (no disclosure): the lock screen
+  cannot reset; quit and restart opens OneTerm unlocked (Q1), where Settings > Security > Reset
+  is. No eye toggle on the password input.
+- **Empty Enter** on the lock input is ignored: no Argon2id run, no failure counted (verify I4).
+- **Rework after verification** (`evidence/US-0159-verify.md`): the native-dialog and
+  interceptor rules in § 7 (D1, D2); the Settings page reset recorded as a known limit (D3);
+  § 6.4 corrected (D4).
+- **Diagnostics.** At each unlock every window logs `lock screen: N frames in S s` at debug
+  level (the lock view renders on every frame its window draws).
+
+Spike (`US-0159` Evidence): the `decorate` replacement keeps focus (restored to the terminal on
+unlock) and keyboard input in the lock input (posted `WM_CHAR`); the own `TitleBar` draws its
+caption buttons, and closing the window (`WM_CLOSE`) quits. Dragging and the caption buttons
+are hit-tested by Windows (`WM_NCHITTEST`) and were not exercised: the walk drives the window
+with posted messages only, never the owner's real mouse. Live captures by another process show only the lock.
+A hidden terminal's output costs no frame (gpui test; GUI frame counts with and without a
+flooding tab). **Not settled:** the DWM thumbnail of a window minimised before the lock (no
+capture of it was possible here; a minimised window's DWM thumbnail is the frame from before the
+minimise, so the risk stands); the follow-up is `DWMWA_FORCE_ICONIC_REPRESENTATION` while locked,
+which needs the raw `HWND`. `Instant` across a real sleep was not walked: the wall-clock term and
+the late-input rule cover it by construction and are unit-tested.
 
 ## Verification
 
