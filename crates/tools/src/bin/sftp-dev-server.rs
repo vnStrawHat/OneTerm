@@ -6,8 +6,14 @@
 //! be pointed at `127.0.0.1:<port>` without a real host.
 //!
 //! ```text
-//! cargo run -p oneterm-tools --bin sftp-dev-server -- [--port 2222] [--root DIR] [--max-open-handles N]
+//! cargo run -p oneterm-tools --bin sftp-dev-server -- [--port 2222] [--root DIR] [--max-open-handles N] [--password PW]
 //! ```
+//!
+//! `--password PW` accepts only that password, so a rejected (saved) password
+//! can be walked on loopback (`US-0158`). A `direct-tcpip` channel to a
+//! loopback address is relayed, so two servers make a two-hop jump chain
+//! (`127.0.0.1:2222` as the jump host for `127.0.0.1:2223`); any other
+//! destination is refused.
 //!
 //! Without `--root` a fresh temp directory with a few sample files is served.
 //! `--max-open-handles N` advertises `limits@openssh.com` like OpenSSH does, so
@@ -36,6 +42,7 @@ use russh_sftp::server::StatusReply;
 struct DevServer {
     root: PathBuf,
     max_open_handles: Option<u64>,
+    password: Option<Arc<str>>,
 }
 
 impl Server for DevServer {
@@ -46,6 +53,7 @@ impl Server for DevServer {
         ClientHandler {
             root: self.root.clone(),
             max_open_handles: self.max_open_handles,
+            password: self.password.clone(),
             channels: HashMap::new(),
             sftp_channels: HashSet::new(),
         }
@@ -55,6 +63,8 @@ impl Server for DevServer {
 struct ClientHandler {
     root: PathBuf,
     max_open_handles: Option<u64>,
+    /// `--password`: the only password accepted; `None` accepts any.
+    password: Option<Arc<str>>,
     /// Session channels by id; the SFTP subsystem takes its channel out.
     channels: HashMap<ChannelId, Channel<Msg>>,
     /// Channels running the SFTP subsystem: their bytes belong to the SFTP
@@ -65,9 +75,51 @@ struct ClientHandler {
 impl russh::server::Handler for ClientHandler {
     type Error = russh::Error;
 
-    async fn auth_password(&mut self, user: &str, _password: &str) -> Result<Auth, Self::Error> {
-        println!("password auth for {user:?}: accepted");
-        Ok(Auth::Accept)
+    async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
+        if password_accepted(self.password.as_deref(), password) {
+            println!("password auth for {user:?}: accepted");
+            Ok(Auth::Accept)
+        } else {
+            println!("password auth for {user:?}: rejected");
+            Ok(Auth::reject())
+        }
+    }
+
+    /// Relay a `direct-tcpip` channel to a loopback address, so this server
+    /// can be the jump host of another one on the same machine.
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let target = format!("{host_to_connect}:{port_to_connect}");
+        let loopback = matches!(host_to_connect, "127.0.0.1" | "localhost" | "::1");
+        let Ok(port) = u16::try_from(port_to_connect) else {
+            println!("direct-tcpip to {target}: refused (port)");
+            return Ok(());
+        };
+        if !loopback {
+            println!("direct-tcpip to {target}: refused (not loopback)");
+            return Ok(());
+        }
+        match tokio::net::TcpStream::connect((host_to_connect, port)).await {
+            Ok(mut tcp) => {
+                println!("direct-tcpip to {target}: relaying");
+                reply.accept().await;
+                tokio::spawn(async move {
+                    let mut stream = channel.into_stream();
+                    _ = tokio::io::copy_bidirectional(&mut stream, &mut tcp).await;
+                });
+            }
+            // Dropping `reply` refuses the channel.
+            Err(error) => println!("direct-tcpip to {target}: {error}"),
+        }
+        Ok(())
     }
 
     async fn channel_open_session(
@@ -519,8 +571,15 @@ fn seed_sample_root() -> io::Result<PathBuf> {
     Ok(root)
 }
 
+/// `--password`: only `expected` is accepted; without it, any password.
+fn password_accepted(expected: Option<&str>, given: &str) -> bool {
+    expected.is_none_or(|expected| expected == given)
+}
+
 fn usage() -> ! {
-    eprintln!("usage: sftp-dev-server [--port PORT] [--root DIR] [--max-open-handles N]");
+    eprintln!(
+        "usage: sftp-dev-server [--port PORT] [--root DIR] [--max-open-handles N] [--password PW]"
+    );
     std::process::exit(2)
 }
 
@@ -529,6 +588,7 @@ async fn main() -> io::Result<()> {
     let mut port: u16 = 2222;
     let mut root: Option<PathBuf> = None;
     let mut max_open_handles: Option<u64> = None;
+    let mut password: Option<Arc<str>> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -539,6 +599,7 @@ async fn main() -> io::Result<()> {
                     .unwrap_or_else(|| usage())
             }
             "--root" => root = Some(PathBuf::from(args.next().unwrap_or_else(|| usage()))),
+            "--password" => password = Some(args.next().unwrap_or_else(|| usage()).into()),
             "--max-open-handles" => {
                 max_open_handles = Some(
                     args.next()
@@ -568,12 +629,31 @@ async fn main() -> io::Result<()> {
         ..Default::default()
     });
     println!(
-        "serving {} on 127.0.0.1:{port} (any user / any password)",
-        root.display()
+        "serving {} on 127.0.0.1:{port} (any user / {})",
+        root.display(),
+        if password.is_some() {
+            "one password"
+        } else {
+            "any password"
+        }
     );
     let mut server = DevServer {
         root,
         max_open_handles,
+        password,
     };
     server.run_on_address(config, ("127.0.0.1", port)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::password_accepted;
+
+    #[test]
+    fn password_flag_accepts_only_its_value() {
+        assert!(password_accepted(None, "anything"));
+        assert!(password_accepted(Some("s3cret"), "s3cret"));
+        assert!(!password_accepted(Some("s3cret"), "S3cret"));
+        assert!(!password_accepted(Some("s3cret"), ""));
+    }
 }
