@@ -396,4 +396,36 @@ mod hop_attribution {
             Some(1)
         );
     }
+
+    /// Re-verification of the D1 rework: two hops with the same address tie
+    /// and the first is taken; hop text that is not at the start of the
+    /// message (a target error quoting it) matches no hop; and the prefix is
+    /// exactly what `oneterm-ssh` builds from `SshHop::label()`.
+    #[gpui::test]
+    fn ties_take_the_first_hop_and_only_a_leading_prefix_counts(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let forms = hops(vec![spec("10.0.0.2", 22), spec("10.0.0.2", 22)], cx);
+        assert_eq!(index_of(&forms, &rejected("ops@10.0.0.2:22")), Some(0));
+        assert_eq!(
+            index_of(
+                &forms,
+                "rejected by the server; banner: jump host ops@10.0.0.2:22: x"
+            ),
+            None
+        );
+
+        let hop = oneterm_core::SshHop {
+            host: "2001:db8::1:22".into(),
+            port: 22,
+            username: "ops".into(),
+            auth: oneterm_core::SshAuthMethod::None,
+            host_key_policy: oneterm_core::HostKeyPolicy::Strict,
+        };
+        let forms = hops(
+            vec![spec("2001:db8::1", 22), spec("2001:db8::1:22", 22)],
+            cx,
+        );
+        let emitted = format!("jump host {}: rejected by the server", hop.label());
+        assert_eq!(index_of(&forms, &emitted), Some(1));
+    }
 }

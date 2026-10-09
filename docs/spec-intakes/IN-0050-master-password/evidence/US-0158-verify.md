@@ -259,3 +259,143 @@ All in `crates/session-ui/src/us0158_verify_tests.rs` (a child of `session_state
   Connect `take_auth` turns a saved row into an input when the vault is locked ("Saved
   passwords are locked."). The LLD wants the rows to stay saved after re-unlock, which needs
   the dialog to re-run `use_saved(true)` on `Unlocked`.
+
+## Re-verification of 73da1722
+
+Rework head `73da1722` on `feat/us-0158-ssh-saved-passwords`, built on the verifier's
+`1c0473c9`. It was checked out as `verify/US-0158` in the same worktree on 2026-10-09 (12 GB free
+before and after).
+
+### Verdict: PASS, no remaining defects
+
+D1-D4 are fixed, and each fix is tested. The dev-server loopback check (I6) is fixed too. Four
+small notes follow under "Notes"; none is a defect.
+
+### Command log
+
+| Command | Result |
+| --- | --- |
+| `git status` / `git checkout -B verify/US-0158 73da1722` | clean; branch reset to the rework head |
+| `cargo fmt --all -- --check` | pass (rework, and again with the test added below) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass (both runs) |
+| `cargo test -p oneterm-session-ui -p oneterm-state -p oneterm-core -p oneterm-ssh -p oneterm-tools` | pass: session-ui 98 + 1 ignored, state 75, core 92, ssh 109, tools 14 + bins (sftp-dev-server 2, highlight-bench 2, corpus_check 2) |
+| `cargo test -p oneterm-session-ui` with the added test | 99 passed, 1 ignored |
+| `python scripts/verify-dependency-graph.py` | pass |
+| `python scripts/check-doc-paths.py` | pass (223 paths) |
+| `python scripts/check-english.py` | pass |
+| `python scripts/third-party-notices.py --check` | pass |
+| `python scripts/check-ignored-tests.py` | pass: 19 ignored tests, all recorded |
+| `git diff 1c0473c9..HEAD -- Cargo.lock` | empty (since `main`: still only the `oneterm-vault` dependency line, no new package) |
+| new `#[ignore]` in `git diff 1c0473c9..HEAD` | none (the D4 test is `#[should_panic]`, which the census does not count) |
+| `%TEMP%` `oneterm-*` before / after | 42 / 42; none newer than the run |
+
+### Attacks and results
+
+**D1, `jump_hops.rs:128` `form_for_error`.** It now requires
+`message.starts_with("jump host {user}@{host}:{port}:")`; the longest prefix wins, and on a tie
+the first hop wins.
+
+- The IPv6 pair `2001:db8::1` / `2001:db8::1:22` resolves to the right hop in both list orders
+  (the implementer's flipped test).
+- The prefix is still what the backend emits. `crates/ssh/src/route.rs:211` builds
+  `jump host {label}: {message}`, and `SshHop::label()` (`crates/core/src/ssh_config.rs:184`) is
+  `{username}@{host}:{port}`. `take_hops` copies `host`, `port` and `username` from the same
+  `HopSpec` that `form_for_error` formats. Nothing else in `crates/` rewrites a `Connect`
+  message after `hop_error`, and the dialog matches on the `AppError::Connect` message field,
+  not on `Display`, which adds "SSH authentication failed: ".
+- A new test builds the message from a real `SshHop::label()` and gets the right hop. In the
+  same test, a target error that quotes hop text anywhere but at the start matches no hop.
+- Identical hops: the first is taken (same test). The message cannot tell them apart, so the
+  first is as good as any. If the first hop had already authenticated, the failure belongs to
+  the second, but two hops with one address in a chain is a degenerate case. Revealing both
+  rows would be the alternative.
+- A user name containing `@` makes the address string itself ambiguous (`a@b@c`), not the
+  matcher. It ties and takes the first.
+
+**D2, `connect_dialog.rs:368-440`.** A rejected target password is remembered in the
+`RejectedSavedPasswords` global, keyed by session id and holding the envelope that was
+rejected. When no dialog is open (a host-key approval closed it), a toast explains what to do.
+
+- The global is created lazily with `default_global` on the first `remember_rejection`, and
+  `was_rejected` reads it with `try_global`. So there is no init order to get wrong.
+- It derives only `Default`, has no serde, and is never written.
+- Keying by id means two sessions with the same label are separate (only the toast text names
+  the label).
+- The next dialog pre-reveals the row only while `session.saved_password()` equals the
+  remembered envelope. Saving a new password (a new envelope), removing it, a method change
+  (`saved_password()` is `None` behind another method) and a reset (the wipe sets every field to
+  `None`; a new vault gives new envelopes) all stop the pre-reveal. The implementer's test
+  `a_remembered_rejection_follows_the_envelope_it_was_for` checks "replaced" and "removed".
+- Every successful connect from the connect dialog clears the entry: `on_connected` is now
+  always set and does the removal first.
+- A hop gets the toast only: `remember_rejection` stores `Target` only. The next dialog keeps
+  the hop's saved row, as documented.
+- `on_failed` now receives the window (`common.rs:392`, called at `:535`). Quick Connect's
+  closure matches the new signature (`quick_connect_dialog.rs:404`).
+
+**D3, `auth_form.rs:201-222`.** Two new rules:
+
+- `keeps_saved()` = has a saved password, not removed, and the box unticked.
+- `begin_replace` clears `removed`; `remove_saved` sets it.
+
+The session dialog passes `keeps_saved()` to `password_plan` (`session_dialog.rs:684`). The
+implementer's test drives the real form:
+
+- Untouched: kept.
+- Replace with the box ticked: not kept.
+- Replace, then untick: `Store(Some(<same envelope>))`.
+- Remove: `Store(None)`.
+- Remove, then tick: refused without a password.
+- Replace after Remove, then untick: kept.
+
+The same envelope is serialized to the same bytes, so `retires_secret` is false and `.bak`
+keeps the previous generation. The verifier's
+`the_scrub_is_decided_against_the_replaced_file_not_the_last_snapshot` (swap case) and the
+implementer's rename case cover that write. Remove retires the value and scrubs (the earlier
+tests). A method change still gives `Store(None)` (the unchanged table test).
+
+**D4, `session_state.rs:869` and `init.rs:37`.**
+
+- `wipe_on_vault_reset` now `expect`s `VaultState`, and `init.rs` says why it runs first.
+  `app::init` is the only caller of `SshSessionStore::init` in the workspace, so no other
+  crate's tests can hit the panic.
+- The `should_panic` test passes.
+- The in-order test emits `VaultEvent::Reset` and sees every envelope wiped and both sessions
+  kept. It writes no config file: its store is `persist_blocked`, so `save` returns before any
+  write. Its `VaultState::load` only reads a fresh RAII temporary directory, and no temporary
+  directory was left behind (count above).
+
+**Dev server, `sftp-dev-server.rs:583` `loopback_address`.**
+
+- It resolves with `lookup_host` first and connects only to the first loopback address among
+  the results.
+- A name that resolves only off the machine is refused.
+- `localhost` (which Windows resolves to `::1` and `127.0.0.1`) and the two literals still work.
+- `0.0.0.0` and IPv4-mapped `::ffff:127.0.0.1` are not `is_loopback`, so they are refused. That
+  is conservative and acceptable for a dev tool.
+- The new unit test covers loopback v4 / v6, off-machine, a mixed answer and an empty answer.
+
+### GUI spot check: not run
+
+The worktree's `target/debug/oneterm.exe` was built at 16:26. The rework commit is 17:19, and
+it changes `session-ui` and `app`. The build is therefore stale and, as instructed, was not
+rebuilt. D2 and D3 are checked by the tests above and by reading the code only. The D2 path
+(host-key approval, then rejection, then toast, then the next dialog pre-revealed) and the D3
+path (Replace, untick, Save, `.bak` unchanged) remain worth one manual walk with a fresh build
+before release.
+
+### Test added (passing)
+
+- `hop_attribution::ties_take_the_first_hop_and_only_a_leading_prefix_counts`, in
+  `crates/session-ui/src/us0158_verify_tests.rs`.
+
+### Notes (not defects)
+
+- A remembered rejection is cleared only by a successful connect from the connect dialog. If
+  the server's password comes back, the row stays an input until one connect succeeds (typing
+  the same password with the box unticked is enough).
+- The rejection is also remembered in the normal in-dialog path. Cancelling and reopening shows
+  the input again, which is consistent.
+- `remember_rejection` skips its toast whenever any dialog is open, not only the connect
+  dialog. The connect error toast is still shown in every case.
+- Ties in `form_for_error`: see D1 above.
