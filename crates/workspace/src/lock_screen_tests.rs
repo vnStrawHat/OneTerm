@@ -373,3 +373,279 @@ fn without_a_vault_nothing_locks(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("x");
     assert!(!vault.read_with(cx, |state, _| state.is_screen_locked()));
 }
+
+// ── Independent verification (`evidence/US-0159-verify.md`) ─────────
+
+/// A terminal-shaped view: raw key and mouse listeners, the way
+/// `TerminalView` takes typing and clicks (no actions).
+struct Probe {
+    focus: FocusHandle,
+    captured_keys: Rc<Cell<usize>>,
+    keys: Rc<Cell<usize>>,
+    mouse_downs: Rc<Cell<usize>>,
+}
+
+impl Focusable for Probe {
+    fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+impl Render for Probe {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        let (captured, keys, downs) = (
+            self.captured_keys.clone(),
+            self.keys.clone(),
+            self.mouse_downs.clone(),
+        );
+        div()
+            .key_context("TestTerminal")
+            .track_focus(&self.focus)
+            .size_full()
+            // First listener on the node: gpui runs it even after an
+            // interceptor stopped the keystroke (`finish_dispatch_key_event`).
+            .capture_key_down(move |_, _, _| captured.set(captured.get() + 1))
+            .on_key_down(move |_, _, _| keys.set(keys.get() + 1))
+            .on_mouse_down(gpui::MouseButton::Left, move |_, _, _| {
+                downs.set(downs.get() + 1)
+            })
+            .child("terminal text")
+    }
+}
+
+struct ProbeCounters {
+    captured_keys: Rc<Cell<usize>>,
+    keys: Rc<Cell<usize>>,
+    mouse_downs: Rc<Cell<usize>>,
+}
+
+/// `fixture`'s window with its `Root` rebuilt around a focused [`Probe`].
+fn probe_fixture(f: &mut Fixture<'_>) -> ProbeCounters {
+    let counters = ProbeCounters {
+        captured_keys: Rc::new(Cell::new(0)),
+        keys: Rc::new(Cell::new(0)),
+        mouse_downs: Rc::new(Cell::new(0)),
+    };
+    f.cx.update(|window, cx| {
+        let probe = cx.new(|cx| Probe {
+            focus: cx.focus_handle(),
+            captured_keys: counters.captured_keys.clone(),
+            keys: counters.keys.clone(),
+            mouse_downs: counters.mouse_downs.clone(),
+        });
+        let root = window.root::<Root>().flatten().unwrap();
+        let view = probe.clone();
+        root.update(cx, |root, cx| *root = Root::new(view, window, cx));
+        let focus = probe.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    f.cx.run_until_parked();
+    f.cx.update(|window, _| window.refresh());
+    f.cx.run_until_parked();
+    counters
+}
+
+fn idle_for(idle: Duration, cx: &mut VisualTestContext) {
+    cx.update(|_, cx| {
+        let clock = cx.global::<IdleClock>();
+        let now = IdleClock::now();
+        clock.last.set(moment(now.monotonic, now.wall - idle));
+    })
+}
+
+fn is_locked(vault: &Entity<VaultState>, cx: &mut VisualTestContext) -> bool {
+    vault.read_with(cx, |state, _| state.is_screen_locked())
+}
+
+/// Attack 2(a)/(e): the key that arrives after the timeout locks and must not
+/// reach a terminal's raw key listener; once locked nothing reaches it.
+#[gpui::test]
+async fn verifier_a_late_key_reaches_no_terminal_key_listener(cx: &mut TestAppContext) {
+    let mut f = fixture(cx);
+    let probe = probe_fixture(&mut f);
+    let cx = f.cx;
+    cx.simulate_keystrokes("q");
+    assert_eq!(probe.keys.get(), 1, "the probe takes keys while unlocked");
+    let captured_before = probe.captured_keys.get();
+
+    idle_for(Duration::from_secs(16 * 60), cx);
+    cx.simulate_keystrokes("x");
+    assert!(is_locked(&f.vault, cx));
+    assert_eq!(
+        probe.keys.get(),
+        1,
+        "the key that locked reached the terminal"
+    );
+    // gpui quirk: the stopped keystroke is still offered to the first
+    // capture-phase key listener on the old focus path. `TerminalView`
+    // registers none (`on_key_down` only), so a terminal never sees it.
+    let quirk = probe.captured_keys.get() - captured_before;
+
+    cx.simulate_keystrokes("y ctrl-v enter");
+    cx.simulate_input("typed");
+    assert_eq!(
+        probe.keys.get(),
+        1,
+        "a key reached the terminal while locked"
+    );
+    assert_eq!(
+        probe.captured_keys.get() - captured_before,
+        quirk,
+        "a capture listener of the hidden view ran while locked"
+    );
+    assert_eq!(quirk, 1, "the gpui quirk this test documents changed");
+    let _ = (f.content, f.renders, f.quits);
+}
+
+/// Attack 2(b)/(e): the click that arrives after the timeout locks in the
+/// capture phase and reaches no element; once locked the application view is
+/// not hit-tested at all.
+#[gpui::test]
+async fn verifier_a_late_click_reaches_no_terminal_mouse_listener(cx: &mut TestAppContext) {
+    let mut f = fixture(cx);
+    let probe = probe_fixture(&mut f);
+    let cx = f.cx;
+    let at = gpui::point(gpui::px(200.), gpui::px(200.));
+    let none = gpui::Modifiers::none();
+    cx.simulate_mouse_down(at, gpui::MouseButton::Left, none);
+    cx.simulate_mouse_up(at, gpui::MouseButton::Left, none);
+    assert_eq!(
+        probe.mouse_downs.get(),
+        1,
+        "the probe takes clicks unlocked"
+    );
+
+    idle_for(Duration::from_secs(16 * 60), cx);
+    cx.simulate_mouse_down(at, gpui::MouseButton::Left, none);
+    assert!(is_locked(&f.vault, cx));
+    assert_eq!(
+        probe.mouse_downs.get(),
+        1,
+        "the click that locked was delivered"
+    );
+    cx.simulate_mouse_up(at, gpui::MouseButton::Left, none);
+    cx.simulate_click(at, none);
+    assert_eq!(
+        probe.mouse_downs.get(),
+        1,
+        "a click was delivered while locked"
+    );
+    let _ = (f.content, f.renders, f.quits);
+}
+
+/// Attack: the lock view's input lives across locks. Its undo history must not
+/// hand the last right password to the next person at the keyboard.
+#[gpui::test]
+async fn verifier_undo_in_the_lock_input_never_returns_a_password(cx: &mut TestAppContext) {
+    let f = fixture(cx);
+    let cx = f.cx;
+    cx.simulate_keystrokes("ctrl-shift-l");
+    cx.run_until_parked();
+    cx.simulate_input(V1_PASSWORD);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(!is_locked(&f.vault, cx));
+
+    cx.update(|window, cx| {
+        let focus = f.content.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-shift-l");
+    cx.run_until_parked();
+    assert!(is_locked(&f.vault, cx));
+    cx.simulate_keystrokes("ctrl-z ctrl-z ctrl-shift-z ctrl-y");
+    assert_eq!(typed(cx), "", "undo brought text back into the lock input");
+    cx.simulate_input("wrong");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-z ctrl-z");
+    assert_eq!(typed(cx), "");
+    let _ = (f.renders, f.quits);
+}
+
+/// Attack 2(c): the timer replaces its own task from inside `cx.update`
+/// (lock -> notify -> `restart_timer`). After an unlock it must be armed
+/// again, not lost.
+#[gpui::test]
+async fn verifier_after_an_unlock_the_timer_locks_again(cx: &mut TestAppContext) {
+    let f = fixture(cx);
+    let cx = f.cx;
+    idle_for(Duration::from_secs(20 * 60), cx);
+    cx.update(|_, cx| restart_timer(cx));
+    cx.run_until_parked();
+    assert!(is_locked(&f.vault, cx));
+    for _ in 0..2 {
+        f.vault
+            .update(cx, |state, cx| {
+                state.unlock_screen(SecretString::new(V1_PASSWORD), cx)
+            })
+            .await
+            .unwrap();
+        cx.run_until_parked();
+        assert!(!is_locked(&f.vault, cx));
+        // No restart by hand: only the task the unlock re-armed can lock.
+        idle_for(Duration::from_secs(20 * 60), cx);
+        cx.executor()
+            .advance_clock(RECHECK + Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(
+            is_locked(&f.vault, cx),
+            "the timer was lost after the unlock"
+        );
+    }
+    let _ = (f.content, f.renders, f.quits);
+}
+
+/// Defect D1 (Low): "input after the timeout is not delivered" holds for
+/// bindings and listeners, but gpui runs every keystroke interceptor whatever
+/// an earlier one did. The Key Bindings page's recorder is one (armed while
+/// its capture element has focus), so the late key is still recorded as a
+/// binding there. Inverted by a fix.
+#[gpui::test]
+async fn verifier_d1_a_later_interceptor_still_sees_the_key_that_locked(cx: &mut TestAppContext) {
+    let f = fixture(cx);
+    let cx = f.cx;
+    let seen = Rc::new(Cell::new(0));
+    let counter = seen.clone();
+    let _recorder = cx.update(|_, cx| {
+        cx.intercept_keystrokes(move |_, _, cx| {
+            counter.set(counter.get() + 1);
+            cx.stop_propagation();
+        })
+    });
+    idle_for(Duration::from_secs(16 * 60), cx);
+    cx.simulate_keystrokes("k");
+    assert!(is_locked(&f.vault, cx));
+    assert_eq!(seen.get(), 1, "D1: the later interceptor saw the late key");
+    let _ = (f.content, f.renders, f.quits);
+}
+
+/// Attack 2(a): a global chord (`ctrl-k ctrl-q`) never completes while locked,
+/// neither from the lock input nor from a prefix typed before the lock; paste
+/// into the password field works (password managers).
+#[gpui::test]
+async fn verifier_chords_never_complete_and_paste_reaches_only_the_input(cx: &mut TestAppContext) {
+    let f = fixture(cx);
+    let cx = f.cx;
+    cx.update(|_, cx| cx.bind_keys([KeyBinding::new("ctrl-k ctrl-q", TestQuit, None)]));
+    cx.update(|window, cx| {
+        let focus = f.content.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    cx.run_until_parked();
+    // A prefix pending in the terminal when the lock comes.
+    cx.simulate_keystrokes("ctrl-k");
+    f.vault.update(cx, |state, cx| state.lock_screen(cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-q");
+    cx.simulate_keystrokes("ctrl-k ctrl-q");
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert_eq!(f.quits.get(), 0, "a chord completed while locked");
+
+    cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("pasted".into())));
+    cx.simulate_keystrokes("ctrl-v");
+    assert_eq!(typed(cx), "pasted");
+    let _ = f.renders;
+}

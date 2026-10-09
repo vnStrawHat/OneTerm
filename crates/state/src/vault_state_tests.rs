@@ -1071,3 +1071,47 @@ async fn a_reset_that_lands_after_a_screen_lock_lifts_it(cx: &mut TestAppContext
     assert_eq!(phase(&state, cx), VaultPhase::Uninitialised);
     assert!(!screen_locked(&state, cx));
 }
+
+// ── Independent verification of `US-0159` (`evidence/US-0159-verify.md`) ──
+
+/// Implementer's question 7: a screen lock taken while the post-unlock rehash
+/// runs. The lock wins (the rehashed header is kept, no key), `unlock_screen`
+/// answers Busy without counting a failure until the rehash lands, and then
+/// the right password opens the screen. No refused seal or rehash ever covers
+/// the screen on its own.
+#[gpui::test]
+async fn verifier_a_screen_lock_during_the_rehash_holds_and_unlocks_after(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    let VaultStatus::Ready(header) = oneterm_vault::load(&dir).unwrap() else {
+        panic!("fixture must load");
+    };
+    let vault = oneterm_vault::unlock(&header, &secret(V1_PASSWORD)).unwrap();
+    state.update(cx, |state, cx| {
+        state.phase = Phase::Unlocked(Box::new(vault));
+        state.rehash(secret(V1_PASSWORD), cx);
+        assert!(state.is_busy());
+        state.lock_screen(cx);
+        assert!(state.is_screen_locked());
+    });
+    let early = state.update(cx, |state, cx| state.unlock_screen(secret(V1_PASSWORD), cx));
+    assert!(matches!(early.await, Err(VaultActionError::Busy)));
+    state.read_with(cx, |state, _| assert_eq!(state.failures, 0));
+
+    cx.run_until_parked();
+    state.read_with(cx, |state, _| {
+        assert!(!state.is_busy());
+        assert!(
+            state.is_screen_locked(),
+            "the rehash lifted the screen lock"
+        );
+        assert!(state.unlocked().is_none(), "the rehash put the key back");
+    });
+    assert_ne!(
+        read(&dir, "vault.json").unwrap(),
+        V1,
+        "the rehash was written"
+    );
+    unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
+    assert!(!screen_locked(&state, cx));
+}
