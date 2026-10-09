@@ -1323,6 +1323,11 @@ mod tests {
     }
 }
 
+// Independent verification of US-0158 (sibling file, see code-style.md).
+#[cfg(test)]
+#[path = "us0158_verify_tests.rs"]
+mod us0158_verify_tests;
+
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
