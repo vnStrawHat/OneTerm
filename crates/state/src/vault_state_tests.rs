@@ -400,3 +400,201 @@ fn damaged_and_newer_files_are_unavailable_and_only_damaged_resets(cx: &mut Test
     assert_eq!(read(&damaged, "vault.json").unwrap(), "not json");
     assert_eq!(read(&newer, "vault.json").unwrap(), V9);
 }
+
+// Independent verification of `US-0157` (`evidence/US-0157-verify.md`). Tests
+// named `verifier_d<N>_...` pin the behaviour of a reported defect as it is
+// today; invert them when the defect is fixed.
+
+/// Compile-time proof that `VaultState`, which holds the data key while
+/// unlocked, is neither `Debug` nor `Clone` (the `assert_not_impl_any`
+/// technique `crates/vault/src/vault_tests.rs` uses for `UnlockedVault`).
+const _: fn() = || {
+    trait AmbiguousIfImpl<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+    struct IfClone;
+    impl<T: Clone> AmbiguousIfImpl<IfClone> for T {}
+    struct IfDebug;
+    impl<T: ?Sized + std::fmt::Debug> AmbiguousIfImpl<IfDebug> for T {}
+    let _ = <VaultState as AmbiguousIfImpl<_>>::some_item;
+};
+
+/// Defect D1: an operation's `Task` dropped before it completes cancels the
+/// step that clears `busy`, so every later set-up, unlock, change and reset of
+/// this process answers `Busy` until restart.
+#[gpui::test]
+async fn verifier_d1_a_dropped_operation_task_leaves_the_state_busy(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    let task = state.update(cx, |state, cx| state.unlock(secret(V1_PASSWORD), cx));
+    drop(task);
+    cx.run_until_parked();
+    state.read_with(cx, |state, _| {
+        assert!(state.is_busy(), "busy is never cleared");
+        assert_eq!(state.phase(), VaultPhase::Locked);
+    });
+    let error = unlock(&state, V1_PASSWORD, cx).await.unwrap_err();
+    assert!(matches!(error, VaultActionError::Busy));
+}
+
+/// Lock while a rehash runs: allowed; set-up, unlock, change and reset are
+/// `Busy`; the finishing rehash leaves the process locked on the new header.
+#[gpui::test]
+async fn verifier_lock_during_a_rehash_keeps_the_new_header(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    let VaultStatus::Ready(header) = oneterm_vault::load(&dir).unwrap() else {
+        panic!("fixture must load");
+    };
+    let vault = oneterm_vault::unlock(&header, &secret(V1_PASSWORD)).unwrap();
+    state.update(cx, |state, cx| {
+        state.phase = Phase::Unlocked(Box::new(vault));
+        state.rehash(secret(V1_PASSWORD), cx);
+        assert!(state.is_busy());
+        state.lock(cx);
+        assert_eq!(state.phase(), VaultPhase::Locked);
+    });
+    let change = state.update(cx, |state, cx| {
+        state.change_password(secret(V1_PASSWORD), secret("another password"), cx)
+    });
+    assert!(matches!(change.await, Err(VaultActionError::Busy)));
+    let reset = state.update(cx, |state, cx| state.reset(cx));
+    assert!(matches!(reset.await, Err(VaultActionError::Busy)));
+    let again = state.update(cx, |state, cx| state.unlock(secret(V1_PASSWORD), cx));
+    assert!(matches!(again.await, Err(VaultActionError::Busy)));
+
+    cx.run_until_parked();
+    state.read_with(cx, |state, _| {
+        assert!(!state.is_busy());
+        assert_eq!(state.phase(), VaultPhase::Locked);
+    });
+    assert_ne!(
+        read(&dir, "vault.json").unwrap(),
+        V1,
+        "the rehash was written"
+    );
+    // The held header is the rewritten one: unlock works and a change is not
+    // refused as "changed elsewhere".
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    let change = state.update(cx, |state, cx| {
+        state.change_password(secret(V1_PASSWORD), secret("another password"), cx)
+    });
+    change.await.unwrap();
+}
+
+/// Defect D2: "Lock now" while a change runs is undone when the change
+/// finishes: the key is back in memory and `Unlocked` is emitted, with no
+/// password typed after the lock. `US-0159`'s idle lock calls the same path.
+#[gpui::test]
+async fn verifier_d2_a_lock_during_a_change_is_undone(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    let events = record_events(&state, cx);
+    let task = state.update(cx, |state, cx| {
+        let task = state.change_password(secret(V1_PASSWORD), secret("new master password"), cx);
+        state.lock(cx);
+        assert_eq!(state.phase(), VaultPhase::Locked);
+        task
+    });
+    task.await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+    assert_eq!(*events.borrow(), [VaultEvent::Locked, VaultEvent::Unlocked]);
+}
+
+/// Another process set up first: the state leaves Uninitialised for what the
+/// file now says (Locked) and unlocks with that process's password.
+#[gpui::test]
+async fn verifier_set_up_after_another_process_recovers_to_locked(cx: &mut TestAppContext) {
+    let dir = test_dir();
+    let state = state_in(&dir, false, cx);
+    oneterm_vault::init_with_params(&dir, &secret("other process password"), KdfParams::FLOOR)
+        .unwrap();
+    let task = state.update(cx, |state, cx| state.set_up(secret("my own password"), cx));
+    assert!(matches!(
+        task.await.unwrap_err(),
+        VaultActionError::Vault(VaultError::AlreadyInitialised)
+    ));
+    state.read_with(cx, |state, _| {
+        assert_eq!(state.phase(), VaultPhase::Locked);
+        assert!(!state.is_busy());
+    });
+    unlock(&state, "other process password", cx).await.unwrap();
+}
+
+/// A set-up whose dialog was cancelled still completes; a second set-up while
+/// it runs is `Busy`, and one after it is `WrongPhase`.
+#[gpui::test]
+async fn verifier_a_second_set_up_is_busy_then_wrong_phase(cx: &mut TestAppContext) {
+    let dir = test_dir();
+    let state = state_in(&dir, false, cx);
+    let first = state.update(cx, |state, cx| state.set_up(secret("first password"), cx));
+    let second = state.update(cx, |state, cx| state.set_up(secret("second password"), cx));
+    assert!(matches!(second.await, Err(VaultActionError::Busy)));
+    first.await.unwrap();
+    let third = state.update(cx, |state, cx| state.set_up(secret("third password"), cx));
+    assert!(matches!(third.await, Err(VaultActionError::WrongPhase)));
+    state.update(cx, |state, cx| state.lock(cx));
+    unlock(&state, "second password", cx).await.unwrap_err();
+    unlock(&state, "first password", cx).await.unwrap();
+}
+
+/// Wrong old passwords in Change and wrong unlocks share one count.
+#[gpui::test]
+async fn verifier_change_and_unlock_share_the_failure_count(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    for _ in 0..4 {
+        unlock(&state, "wrong", cx).await.unwrap_err();
+    }
+    let task = state.update(cx, |state, cx| {
+        state.change_password(secret("wrong"), secret("new master password"), cx)
+    });
+    task.await.unwrap_err();
+    assert!(
+        state
+            .read_with(cx, |state, _| state.retry_after())
+            .is_some()
+    );
+    let task = state.update(cx, |state, cx| {
+        state.change_password(secret(V1_PASSWORD), secret("new master password"), cx)
+    });
+    assert!(matches!(task.await, Err(VaultActionError::RetryIn(_))));
+    assert_eq!(read(&dir, "vault.json").unwrap(), V1);
+}
+
+/// A reset whose removal fails has already announced `Reset` (owners wiped
+/// their sealed values) and dropped the key; `vault.json` stays, the state is
+/// Locked, and a retry completes the reset.
+#[cfg(windows)]
+#[gpui::test]
+async fn verifier_a_failed_reset_has_already_announced_itself(cx: &mut TestAppContext) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    let events = record_events(&state, cx);
+    // No sharing: the removal fails with a sharing violation.
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(dir.join("vault.json"))
+        .unwrap();
+    let task = state.update(cx, |state, cx| state.reset(cx));
+    assert!(matches!(
+        task.await.unwrap_err(),
+        VaultActionError::Vault(VaultError::Io(_))
+    ));
+    assert_eq!(*events.borrow(), [VaultEvent::Reset]);
+    assert_eq!(phase(&state, cx), VaultPhase::Locked);
+    drop(held);
+    assert!(dir.join("vault.json").exists());
+
+    let task = state.update(cx, |state, cx| state.reset(cx));
+    task.await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Uninitialised);
+    assert!(!dir.join("vault.json").exists());
+    assert!(!dir.join("vault.bak").exists());
+}
