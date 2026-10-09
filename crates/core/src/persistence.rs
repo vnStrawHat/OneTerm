@@ -172,6 +172,16 @@ fn update_json_file_as(
 /// Either file being absent already is not an error. The lock file itself
 /// stays, like every lock file (`docs/agents/persistence.md`).
 pub fn remove_document(path: &Path) -> io::Result<()> {
+    // M4 (`DEC-0019`), guarded here like `quarantine_file`: a removal is a
+    // write, and this function is the deepest point every caller passes
+    // through. Unlike a quarantine it is refused loudly, so a caller never
+    // believes a document is gone when it is not.
+    if crate::config::elevation::is_restricted() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "an elevated OneTerm window writes no configuration",
+        ));
+    }
     let _lock = InterProcessLock::acquire(path)?;
     for file in [path.to_path_buf(), backup_path(path)] {
         match fs::remove_file(&file) {

@@ -7,13 +7,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::KdfParams;
 
-/// Below the floor on purpose: unit tests derive many keys, and the floor
-/// only guards headers read from disk.
-pub(crate) const FAST_PARAMS: KdfParams = KdfParams {
-    memory_kib: 64,
-    iterations: 1,
-    parallelism: 1,
-};
+/// The cheapest parameters a header may carry. Not lower: a password change
+/// re-reads the file through the load rules and refuses a header below the
+/// floor. With `argon2` optimized in the `dev` profile this costs a few tens
+/// of milliseconds per derivation.
+pub(crate) const FAST_PARAMS: KdfParams = KdfParams::FLOOR;
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 

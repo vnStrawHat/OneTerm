@@ -21,6 +21,10 @@ pub enum VaultError {
     /// reset or replaced elsewhere.
     #[error("the master password was reset or replaced in another OneTerm window")]
     VaultReplaced,
+    /// `vault.json` is still this vault, but its password was changed (or the
+    /// header rehashed) by another process since this one unlocked it.
+    #[error("the master password was changed in another OneTerm window")]
+    ChangedElsewhere,
     /// This is an elevated window, which writes no configuration (`DEC-0019`
     /// M4).
     #[error("an elevated OneTerm window cannot change the master password")]

@@ -119,11 +119,18 @@ struct KdfFields {
 }
 
 fn parse(raw: &str) -> VaultStatus {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(value) => parse_value(value),
+        Err(_) => VaultStatus::Damaged("not JSON".to_owned()),
+    }
+}
+
+/// The load rules on an already parsed document; also what a rewrap checks the
+/// file against, inside the lock, so it never writes over anything `load`
+/// would not call `Ready`.
+fn parse_value(value: Value) -> VaultStatus {
     let damaged = |reason: &str| VaultStatus::Damaged(reason.to_owned());
 
-    let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return damaged("not JSON");
-    };
     match schema_version(&value) {
         Ok(SCHEMA_VERSION) => {}
         Ok(0) => return damaged("no schema_version"),
@@ -187,12 +194,20 @@ fn parse(raw: &str) -> VaultStatus {
 
 /// The changes a process can make to `vault.json`.
 pub(crate) enum DocumentChange<'a> {
-    /// Set-up: create the document; refused when one exists already.
+    /// Set-up: create the document; refused when any file is there already,
+    /// whatever it holds.
     Create(&'a VaultHeader),
-    /// Change password or rehash: replace the KDF fields and the wrapped key of
-    /// the document whose `vault_id` matches; refused otherwise.
-    Rewrap(&'a VaultHeader),
-    /// Reset: remove `vault.json` and `vault.bak`.
+    /// Change password or rehash: replace the KDF fields and the wrapped key.
+    /// Refused unless the file loads as `Ready` and is still exactly the
+    /// header this process unlocked from (`from`): same id, same salt, same
+    /// wrapped key.
+    Rewrap {
+        from: &'a VaultHeader,
+        to: &'a VaultHeader,
+    },
+    /// Reset: remove `vault.json` and `vault.bak`. Refused when the file loads
+    /// as `Unsupported` (written by a newer OneTerm); `Ready` and `Damaged`
+    /// files may be reset.
     Remove,
 }
 
@@ -216,19 +231,44 @@ pub(crate) fn write(
     let path = dir.join(DOCUMENT_NAME);
     let mut refusal = None;
     let result = match change {
-        DocumentChange::Remove => remove_document(&path),
-        DocumentChange::Create(header) => update_secret_json_file(&path, |document| {
-            if *document != json!({}) {
-                return refuse(&mut refusal, VaultError::AlreadyInitialised);
+        DocumentChange::Remove => {
+            // The status is read outside the lock `remove_document` takes: a file
+            // turning Unsupported in between would be a newer OneTerm's set-up
+            // racing this reset, and only a remove that takes a check inside the
+            // lock would close that window.
+            match load(dir) {
+                Ok(VaultStatus::Unsupported(reason)) => {
+                    return Err(VaultError::Unsupported(reason));
+                }
+                Err(error) => return Err(VaultError::Io(error)),
+                Ok(_) => remove_document(&path),
             }
-            *document = header.to_document();
-            Ok(())
-        }),
-        DocumentChange::Rewrap(header) => update_secret_json_file(&path, |document| {
-            if schema_version(document).ok() != Some(SCHEMA_VERSION)
-                || document.get("vault_id") != Some(&json!(hex(&header.vault_id)))
-            {
-                return refuse(&mut refusal, VaultError::VaultReplaced);
+        }
+        DocumentChange::Create(header) => {
+            // A file that is there already is refused before anything parses it
+            // (an unreadable one would otherwise surface as a JSON error), and
+            // again inside the lock, where the transaction sees a `{}` file and a
+            // missing one alike. A directory in its place is an I/O failure.
+            if path.is_file() {
+                return Err(VaultError::AlreadyInitialised);
+            }
+            update_secret_json_file(&path, |document| {
+                if path.is_file() {
+                    return refuse(&mut refusal, VaultError::AlreadyInitialised);
+                }
+                *document = header.to_document();
+                Ok(())
+            })
+        }
+        DocumentChange::Rewrap { from, to: header } => update_secret_json_file(&path, |document| {
+            let on_disk = match parse_value(document.clone()) {
+                VaultStatus::Ready(on_disk) if on_disk.vault_id == from.vault_id => on_disk,
+                // Missing (reads as `{}`), another vault, or anything this binary
+                // cannot read: not the vault this process unlocked, never touched.
+                _ => return refuse(&mut refusal, VaultError::VaultReplaced),
+            };
+            if on_disk.salt != from.salt || on_disk.wrapped_key != from.wrapped_key {
+                return refuse(&mut refusal, VaultError::ChangedElsewhere);
             }
             let fields = header.kdf_fields();
             match document.get_mut("kdf").and_then(Value::as_object_mut) {

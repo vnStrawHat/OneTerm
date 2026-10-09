@@ -1,6 +1,6 @@
 //! Argon2id: the master password to the key-encryption key (`crypto-and-format.md` § 3).
 
-use argon2::{Algorithm, Argon2, Params, Version};
+use argon2::{Algorithm, Argon2, Block, Params, Version};
 use oneterm_core::SecretString;
 use zeroize::Zeroizing;
 
@@ -79,9 +79,22 @@ pub(crate) fn derive_kek(
         Some(KEY_LEN),
     )
     .map_err(|error| VaultError::Unsupported(format!("Argon2id parameters: {error}")))?;
+    // The working memory (64 MiB at the defaults) holds everything the key is
+    // computed from, so it is cleared on drop like the key itself; argon2's own
+    // allocation (`hash_password_into`) is freed without being cleared.
+    let mut blocks: Zeroizing<Vec<Block>> = Zeroizing::new(Vec::new());
+    blocks
+        .try_reserve_exact(params.block_count())
+        .map_err(|_| VaultError::Unsupported("Argon2id: not enough memory".to_owned()))?;
+    blocks.resize(params.block_count(), Block::default());
     let mut kek = Zeroizing::new([0u8; KEY_LEN]);
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-        .hash_password_into(password.expose_secret().as_bytes(), salt, kek.as_mut())
+        .hash_password_into_with_memory(
+            password.expose_secret().as_bytes(),
+            salt,
+            kek.as_mut(),
+            blocks.as_mut_slice(),
+        )
         .map_err(|error| VaultError::Unsupported(format!("Argon2id: {error}")))?;
     Ok(kek)
 }

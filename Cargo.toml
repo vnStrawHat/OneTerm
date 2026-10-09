@@ -207,6 +207,11 @@ split-debuginfo = "unpacked"
 gpui-pre = { opt-level = 3 }
 gpui-pre-platform = { opt-level = 3 }
 smol = { opt-level = 3 }
+# The vault's Argon2id (IN-0050 US-0156): at opt-level 0 one unlock at the default
+# 64 MiB / 3 passes takes 1.4-3.7 s in a debug build against about 80 ms in release.
+# `blake2` is Argon2's inner hash. Applies to `test` as well, which inherits `dev`.
+argon2 = { opt-level = 3 }
+blake2 = { opt-level = 3 }
 
 # `fast-dev` — dev profile with OneTerm's own hot-path crates optimized too
 # (`cargo run -p oneterm-app --profile fast-dev`). Use it to run DOOM-fire and
@@ -234,6 +239,8 @@ inherits = "dev"
 gpui-pre = { opt-level = 3 }
 gpui-pre-platform = { opt-level = 3 }
 smol = { opt-level = 3 }
+argon2 = { opt-level = 3 }
+blake2 = { opt-level = 3 }
 # The VT engine (IN-0029 `US-0081`): the hot path runs through it, so it is
 # optimized here rather than left at `dev`'s opt-level = 0.
 oneterm-vt = { opt-level = 3 }

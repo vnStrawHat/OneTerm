@@ -114,8 +114,9 @@ pub fn unlock(header: &VaultHeader, password: &SecretString) -> Result<UnlockedV
     })
 }
 
-/// Remove `dir/vault.json` and its backup. Works whatever state the file is
-/// in, including damaged.
+/// Remove `dir/vault.json` and its backup. A ready or damaged file (or none)
+/// is reset; one written by a newer OneTerm ([`crate::VaultStatus::Unsupported`]) is
+/// refused with [`VaultError::Unsupported`] and left in place.
 ///
 /// Every owner of sealed values must wipe them **before** this runs
 /// (`crypto-and-format.md` § 8); envelopes left behind afterwards read as
@@ -241,7 +242,14 @@ impl UnlockedVault {
         }
         let data_key = unwrap_data_key(&self.header, old_password)?;
         let header = wrap_data_key(self.header.vault_id, &data_key[..], new_password, params)?;
-        document::write(dir, DocumentChange::Rewrap(&header), elevated)?;
+        document::write(
+            dir,
+            DocumentChange::Rewrap {
+                from: &self.header,
+                to: &header,
+            },
+            elevated,
+        )?;
         self.header = header;
         Ok(())
     }

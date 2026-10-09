@@ -13,7 +13,7 @@ Created: 2026-10-09
 - [x] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -79,7 +79,15 @@ page, no saved SSH password, no lock screen (`US-0157`..`US-0159`).
   disk is another vault.
 - [x] `reset` removes `vault.json` and `vault.bak`, works on a damaged or absent file.
 - [x] Set-up is create-only: a second set-up or two concurrent ones give exactly one vault and
-  `AlreadyInitialised`; a damaged file is never overwritten.
+  `AlreadyInitialised`; any existing file (even `{}` or not JSON) is refused with
+  `AlreadyInitialised` and never overwritten (rework D1, N1).
+- [x] A password change or rehash writes only over a file that loads as `Ready` and is still
+  exactly the header this process unlocked from: `Damaged` / `Unsupported` / missing / other
+  vault -> `VaultReplaced`; same vault rewrapped elsewhere -> `ChangedElsewhere`; file and
+  `vault.bak` untouched (rework D2, O1).
+- [x] Reset refuses an `Unsupported` file (`VaultError::Unsupported`); `Ready` and `Damaged`
+  files are reset (rework D3).
+- [x] The Argon2id working memory is cleared on drop (rework D4).
 - [x] Load: missing -> `Uninitialised`; read error -> `AppError::ConfigLoad`; every field rule of
   `persistence-and-migration.md` § 2-3 gives its `Damaged` / `Unsupported` outcome, including
   parameters below the floor (19 MiB / 2 passes) or above the ceiling; unknown fields are
@@ -160,6 +168,17 @@ the LLD interfaces stay as designed; the deviations are listed under Plan.
   `ssh-authentication.md`, `IN-0050.md` rulings, this packet.
 - [x] Crate, core helpers, policy, tests, fixtures, docs (commit 2).
 - [x] Gate; record evidence and the Argon2id timing here.
+
+### Carry-forwards to later packets (from the independent verification)
+
+- **`US-0157`:** the silent rehash after an unlock is `change_password(dir, pw, pw)`, which
+  needs the typed password: keep the `SecretString` until the background rehash finishes,
+  and treat `ReadOnly` (elevated window), `VaultReplaced` and `ChangedElsewhere` as "skip the
+  rehash" (the latter two: re-read the vault).
+- **`US-0158`:** `Sensitivity::Secret` couples "backup = new document" with "`0600` on Unix".
+  If `ssh_session.json` is to be `0600`, **every** write of it must create the temporary file
+  `0600`, and the scrub must stay limited to the writes that retire a secret (ordinary session
+  edits keep the previous generation in `.bak`): separate the two properties there.
 
 ### Choices the LLDs left open (simplest taken)
 
@@ -254,6 +273,56 @@ defaults are **unchanged** and this is an **open owner question**. Parameters ar
 format change. Separately, the 1.4-1.7 s debug unlock makes `US-0157`'s dev loop slow. Adding
 `argon2` and `blake2` to `[profile.dev.package]` with opt-level 3, as `gpui-pre` already is,
 would fix that. It is not done here.
+
+### Rework after independent verification (2026-10-09)
+
+[`evidence/US-0156-verify.md`](evidence/US-0156-verify.md) returned FAIL on `e61ac466` (D2
+blocking; D1, D3, D4, N1 low). Its commit was cherry-picked, including its 12 tests. Fixes:
+
+| Defect | Fix |
+| --- | --- |
+| D2 (Medium, blocking) and O1 | `crates/vault/src/document.rs` `write`, `DocumentChange::Rewrap { from, to }` arm: inside the lock, the document goes through `parse_value`, the same rules `load` uses. It is written only when the result is `Ready` with `from`'s vault id, salt and wrapped key. Otherwise the change is refused with `VaultReplaced` or `ChangedElsewhere` (new `VaultError` variant, `crates/vault/src/error.rs`). Caller: `crates/vault/src/vault.rs` `change_password_with` |
+| D1 and N1 | `document.rs` `write`, `Create` arm: an existing `vault.json` is refused with `AlreadyInitialised` before anything parses it, and again inside the lock. A directory in its place is still an I/O error |
+| D3 | `document.rs` `write`, `Remove` arm: an `Unsupported` load is refused with `VaultError::Unsupported`, and a load error is returned as `Io`. `Ready` and `Damaged` files are reset |
+| D4 | `crates/vault/src/kdf.rs` `derive_kek`: the working memory is a `Zeroizing<Vec<argon2::Block>>`, reserved fallibly and passed to `hash_password_into_with_memory` |
+| O2 | `crates/core/src/persistence.rs` `remove_document`: refuses with `PermissionDenied` when `elevation::is_restricted()`, the same guard `quarantine_file` has (not unit-tested: the switch is process-global) |
+| O8 | Root `Cargo.toml`: `argon2` and `blake2` at `opt-level = 3` in `[profile.dev.package]` and `[profile.fast-dev.package]`; noted in `docs/agents/dependencies.md` |
+| N1 doc | `docs/agents/persistence.md`, `vault.json` row, rewritten for the fixed behaviour |
+
+Test changes:
+
+- The verifier's `..._current_behaviour_d1` / `_d2` tests are flipped and renamed
+  `set_up_refuses_an_empty_object_file_d1` and
+  `rewrap_refuses_a_damaged_or_unsupported_file_of_the_same_vault_d2`.
+- `set_up_never_overwrites_a_damaged_or_unsupported_file` now expects `AlreadyInitialised` for
+  non-JSON files too.
+- New tests: `rewrap_refuses_a_header_rewrapped_by_another_process` (salt / wrapped-key mismatch)
+  and `reset_refuses_an_unsupported_file_and_resets_a_damaged_one_d3`.
+- The test `FAST_PARAMS` are now `KdfParams::FLOOR`. A rewrap re-reads the file through the load
+  rules, so a test header below the floor would be refused. With `argon2` optimized, the suite
+  got faster anyway.
+
+Rework gate (worktree, `CARGO_BUILD_JOBS=6`):
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy -p oneterm-vault -p oneterm-core --all-targets -- -D warnings` | pass |
+| `cargo test -p oneterm-vault` | **48 passed** (34 original + 12 verifier + 2 new), 4.5 s |
+| `cargo test -p oneterm-core` | 91 passed |
+| `RUSTDOCFLAGS='-D warnings' cargo doc -p oneterm-vault --no-deps` | pass |
+| `python scripts/verify-dependency-graph.py` | pass |
+| `python scripts/check-doc-paths.py` | pass |
+| `python scripts/check-english.py` | pass |
+| `python scripts/third-party-notices.py --check` | pass, unchanged |
+| `python scripts/check-ignored-tests.py` (`CARGO_BUILD_JOBS=2`) | pass, 19 ignored tests, all recorded |
+| `git diff main -- Cargo.lock` | unchanged from `e61ac466` (`oneterm-vault` package and the `argon2 -> zeroize` edge) |
+
+Unlock time after the rework (`unlock_cost_contract`, fastest of 3):
+
+- release: defaults 125 ms, floor 25 ms. The cleared working memory adds the allocation fill and
+  the drop-time zeroing; the figure is also within the run-to-run spread seen under load.
+- debug with optimized `argon2`: defaults 471 ms, floor 130 ms.
 
 Gaps:
 

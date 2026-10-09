@@ -300,9 +300,11 @@ fn set_up_writes_a_header_that_loads_and_never_holds_the_password() {
             .unwrap()
             .starts_with("otv1:")
     );
-    // The fast test parameters are below the floor, so this header reads as
-    // unsupported; the floor itself is covered by `document_tests`.
-    assert!(matches!(load(&dir).unwrap(), VaultStatus::Unsupported(_)));
+    let VaultStatus::Ready(loaded) = load(&dir).unwrap() else {
+        panic!("a freshly set-up header must load as Ready");
+    };
+    assert_eq!(loaded.vault_id(), vault.vault_id());
+    assert!(unlock(&loaded, &secret("master password")).is_ok());
 }
 
 #[test]
@@ -320,7 +322,7 @@ fn set_up_is_create_only_and_leaves_an_existing_or_damaged_file_alone() {
     fs::write(damaged_dir.join(DOCUMENT_NAME), b"{ not json").unwrap();
     assert!(matches!(
         init_with(&damaged_dir, &secret("second"), FAST_PARAMS, false),
-        Err(VaultError::Io(_))
+        Err(VaultError::AlreadyInitialised)
     ));
     assert_eq!(
         fs::read(damaged_dir.join(DOCUMENT_NAME)).unwrap(),

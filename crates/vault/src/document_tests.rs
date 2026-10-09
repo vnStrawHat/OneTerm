@@ -208,8 +208,8 @@ fn hex_ids_round_trip() {
 }
 
 // Independent verification of US-0156 (`evidence/US-0156-verify.md`): attacks on
-// the one write function. Tests named `..._current_behaviour_dN` pin a defect
-// recorded there; flip the assertion when the defect is fixed.
+// the one write function. D1-D3 recorded there are fixed; their tests assert
+// the fixed behaviour.
 mod verify {
     use super::*;
     use crate::UnlockedVault;
@@ -230,10 +230,9 @@ mod verify {
         )
     }
 
-    /// Every file `load` reports as `Damaged` or `Unsupported` (except the
-    /// literal `{}`, see d1) survives a set-up byte for byte, gains no
-    /// `vault.bak`, and the refusal is typed: `AlreadyInitialised` when the
-    /// file is JSON, `Io` when it is not.
+    /// Every file `load` reports as `Damaged` or `Unsupported` survives a
+    /// set-up byte for byte, gains no `vault.bak`, and is refused with
+    /// `AlreadyInitialised`, JSON or not (N1).
     #[test]
     fn set_up_never_overwrites_a_damaged_or_unsupported_file() {
         let other_id = v1_with(|d| d["vault_id"] = json!("00000000000000000000000000000000"));
@@ -265,9 +264,8 @@ mod verify {
                 "{case}"
             );
             match init_with(&dir, &SecretString::new("pw"), FAST_PARAMS, false) {
-                Err(VaultError::AlreadyInitialised) if is_json => {}
-                Err(VaultError::Io(_)) if !is_json => {}
-                Err(other) => panic!("{case}: unexpected {other:?}"),
+                Err(VaultError::AlreadyInitialised) => {}
+                Err(other) => panic!("{case} (JSON: {is_json}): unexpected {other:?}"),
                 Ok(_) => panic!("{case}: set-up overwrote the file"),
             }
             assert_eq!(
@@ -279,17 +277,19 @@ mod verify {
         }
     }
 
-    /// d1: a `vault.json` holding exactly `{}` loads as `Damaged("no
-    /// schema_version")`, yet set-up treats it like a missing file and replaces
-    /// it. Nothing is lost (the file holds no key), but the contract says a
-    /// damaged file is never overwritten.
+    /// D1 (fixed): a `vault.json` holding exactly `{}` loads as `Damaged("no
+    /// schema_version")`, and set-up no longer mistakes it for a missing file.
     #[test]
-    fn set_up_over_an_empty_object_file_current_behaviour_d1() {
+    fn set_up_refuses_an_empty_object_file_d1() {
         let dir = test_dir();
         fs::write(dir.join(DOCUMENT_NAME), "{ }").unwrap();
         assert!(matches!(load(&dir).unwrap(), VaultStatus::Damaged(_)));
-        assert!(init_with(&dir, &SecretString::new("pw"), FAST_PARAMS, false).is_ok());
-        assert_ne!(fs::read_to_string(dir.join(DOCUMENT_NAME)).unwrap(), "{ }");
+        assert!(matches!(
+            init_with(&dir, &SecretString::new("pw"), FAST_PARAMS, false),
+            Err(VaultError::AlreadyInitialised)
+        ));
+        assert_eq!(fs::read_to_string(dir.join(DOCUMENT_NAME)).unwrap(), "{ }");
+        assert!(!backup(&dir).exists());
     }
 
     /// The rewrap refuses, writes nothing and leaves `vault.bak` alone when the
@@ -327,13 +327,12 @@ mod verify {
         assert!(unlock(vault.header(), &SecretString::new("pw")).is_ok());
     }
 
-    /// d2: the rewrap checks only `schema_version == 1` and the `vault_id`, so
-    /// a file with this vault's id that `load` reports as `Damaged` or
-    /// `Unsupported` (another envelope version, parameters above the ceiling,
-    /// another algorithm, a mangled `kdf`) is overwritten by a password change
-    /// or rehash, and `vault.bak` is scrubbed with it.
+    /// D2 (fixed): a file with this vault's id that `load` reports as
+    /// `Damaged` or `Unsupported` (another envelope version, parameters above
+    /// the ceiling, another algorithm, a mangled `kdf`) is refused by a password
+    /// change or rehash: the file and `vault.bak` stay as they are.
     #[test]
-    fn rewrap_over_a_damaged_or_unsupported_file_of_the_same_vault_current_behaviour_d2() {
+    fn rewrap_refuses_a_damaged_or_unsupported_file_of_the_same_vault_d2() {
         let edits: [(&str, fn(&mut Value)); 4] = [
             ("kdf not an object", |d| d["kdf"] = json!("garbage")),
             ("wrapped_key otv2", |d| {
@@ -355,6 +354,7 @@ mod verify {
             edit(&mut document);
             let raw = document.to_string();
             fs::write(&path, &raw).unwrap();
+            let bak = fs::read(backup(&dir)).unwrap();
             assert!(
                 matches!(
                     load(&dir).unwrap(),
@@ -363,9 +363,50 @@ mod verify {
                 "{case}"
             );
 
-            change(&mut vault, &dir).unwrap_or_else(|error| panic!("{case}: {error:?}"));
-            assert_ne!(fs::read_to_string(&path).unwrap(), raw, "{case}");
+            match change(&mut vault, &dir) {
+                Err(VaultError::VaultReplaced) => {}
+                other => panic!("{case}: unexpected {other:?}"),
+            }
+            assert_eq!(fs::read_to_string(&path).unwrap(), raw, "{case}");
+            assert_eq!(fs::read(backup(&dir)).unwrap(), bak, "{case}");
         }
+    }
+
+    /// O1 / D2 (fixed): a process still unlocked from an older header cannot
+    /// override a password another process set since. Its rewrap is refused
+    /// with `ChangedElsewhere`, and the newer header stays.
+    #[test]
+    fn rewrap_refuses_a_header_rewrapped_by_another_process() {
+        let dir = test_dir();
+        let mut first = init_with(&dir, &SecretString::new("pw"), FAST_PARAMS, false).unwrap();
+        let mut second = unlock(first.header(), &SecretString::new("pw")).unwrap();
+        change(&mut first, &dir).unwrap();
+        let after_first = fs::read(dir.join(DOCUMENT_NAME)).unwrap();
+
+        assert!(matches!(
+            change(&mut second, &dir),
+            Err(VaultError::ChangedElsewhere)
+        ));
+        assert_eq!(fs::read(dir.join(DOCUMENT_NAME)).unwrap(), after_first);
+        assert_eq!(fs::read(backup(&dir)).unwrap(), after_first);
+        assert!(unlock(first.header(), &SecretString::new("new")).is_ok());
+    }
+
+    /// D3 (fixed): a file written by a newer OneTerm is not reset by this one;
+    /// a damaged file still is.
+    #[test]
+    fn reset_refuses_an_unsupported_file_and_resets_a_damaged_one_d3() {
+        let dir = test_dir();
+        fs::write(dir.join(DOCUMENT_NAME), V9).unwrap();
+        assert!(matches!(
+            crate::vault::reset_with(&dir, false),
+            Err(VaultError::Unsupported(_))
+        ));
+        assert_eq!(fs::read_to_string(dir.join(DOCUMENT_NAME)).unwrap(), V9);
+
+        fs::write(dir.join(DOCUMENT_NAME), INVALID_JSON).unwrap();
+        crate::vault::reset_with(&dir, false).unwrap();
+        assert!(!dir.join(DOCUMENT_NAME).exists());
     }
 
     /// A refusal is never confused with an I/O failure: `vault.json` being a
