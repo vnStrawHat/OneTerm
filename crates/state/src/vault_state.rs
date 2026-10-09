@@ -15,6 +15,12 @@
 //! detaches itself; the `Task` a caller receives only carries the answer, so
 //! dropping it never leaves the state busy. A lock asked for while an
 //! operation runs wins: the operation's result never puts a key back.
+//!
+//! **Screen lock (`US-0159`).** Two facts make the state: whether the key is in
+//! memory ([`VaultPhase`]) and whether every window is covered by the lock
+//! screen ([`VaultState::is_screen_locked`]). A screen lock always drops the key
+//! too, so it sits beside Locked only; [`VaultState::unlock_screen`] is the one
+//! way out, and it too verifies against the header held in memory.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -56,8 +62,11 @@ pub enum VaultEvent {
     Initialised,
     /// The key was loaded into memory.
     Unlocked,
-    /// The key was dropped.
+    /// The key was dropped. Not only a user's lock: a refused seal emits it
+    /// too (`US-0158`), so the lock screen never reacts to it.
     Locked,
+    /// Every window is now covered by the lock screen (`US-0159`).
+    ScreenLocked,
     /// A reset has started. Emitted **before** `vault.json` is removed: every
     /// owner of sealed values wipes them on it (`oneterm_vault::reset`).
     Reset,
@@ -174,6 +183,9 @@ pub struct VaultState {
     busy: bool,
     /// A lock was asked for while the running operation ran.
     locked_meanwhile: bool,
+    /// Every window shows the lock screen (`US-0159`). Only ever true beside
+    /// [`Phase::Locked`]: the key is dropped first.
+    screen_locked: bool,
 }
 
 impl EventEmitter<VaultEvent> for VaultState {}
@@ -222,6 +234,7 @@ impl VaultState {
             retry_at: None,
             busy: false,
             locked_meanwhile: false,
+            screen_locked: false,
         }
     }
 
@@ -233,6 +246,18 @@ impl VaultState {
             Phase::Unlocked(_) => VaultPhase::Unlocked,
             Phase::Unavailable { .. } => VaultPhase::Unavailable,
         }
+    }
+
+    /// Whether every window shows the lock screen (`US-0159`). The phase is
+    /// then [`VaultPhase::Locked`]: the key is not in memory.
+    pub fn is_screen_locked(&self) -> bool {
+        self.screen_locked && matches!(self.phase, Phase::Locked(_))
+    }
+
+    /// Whether a vault exists that a screen lock can be lifted with: no vault
+    /// (or an unusable one) means no lock (`idle-lock-overlay.md` § 7).
+    pub fn can_lock_screen(&self) -> bool {
+        matches!(self.phase, Phase::Locked(_) | Phase::Unlocked(_))
     }
 
     /// Why the vault is [`VaultPhase::Unavailable`].
@@ -255,7 +280,9 @@ impl VaultState {
 
     /// Whether Change applies: a vault exists and this window may write it.
     pub fn can_change(&self) -> bool {
-        !self.read_only && matches!(self.phase, Phase::Locked(_) | Phase::Unlocked(_))
+        !self.read_only
+            && !self.screen_locked
+            && matches!(self.phase, Phase::Locked(_) | Phase::Unlocked(_))
     }
 
     /// Whether Reset applies: a vault exists (or a damaged file waits for it)
@@ -263,6 +290,7 @@ impl VaultState {
     /// Locked qualifies (intake Q7).
     pub fn can_reset(&self) -> bool {
         !self.read_only
+            && !self.screen_locked
             && match self.phase {
                 Phase::Locked(_) | Phase::Unlocked(_) => true,
                 Phase::Unavailable { resettable, .. } => resettable,
@@ -347,17 +375,62 @@ impl VaultState {
         let Phase::Locked(header) = &self.phase else {
             return Task::ready(Err(VaultActionError::WrongPhase));
         };
+        // The lock screen has its own way out, `unlock_screen`.
+        if self.screen_locked {
+            return Task::ready(Err(VaultActionError::WrongPhase));
+        }
+        let header = header.clone();
+        if let Err(error) = self.check_attempt() {
+            return Task::ready(Err(error));
+        }
+        self.run(cx, unlock_work(header, password), Self::finish_unlock)
+    }
+
+    /// Cover every window: drop the key (Unlocked -> Locked) and set the screen
+    /// lock (`US-0159`). Does nothing without a vault. While an operation runs
+    /// the request is remembered, as [`Self::lock`] does, so the operation's
+    /// result never puts a key back or lifts the screen lock.
+    pub fn lock_screen(&mut self, cx: &mut Context<Self>) {
+        if !self.can_lock_screen() {
+            return;
+        }
+        if self.busy {
+            self.locked_meanwhile = true;
+        }
+        if let Phase::Unlocked(vault) = &self.phase {
+            self.phase = Phase::Locked(vault.header().clone());
+            cx.emit(VaultEvent::Locked);
+        }
+        if !self.screen_locked {
+            self.screen_locked = true;
+            cx.emit(VaultEvent::ScreenLocked);
+        }
+        cx.notify();
+    }
+
+    /// Lift the screen lock with `password`, verified against the header held
+    /// in memory (never a fresh read of `vault.json`, so replacing the file
+    /// cannot open a locked window): the screen opens and the vault is
+    /// Unlocked. Wrong passwords count toward the dialogs' back-off.
+    pub fn unlock_screen(
+        &mut self,
+        password: SecretString,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), VaultActionError>> {
+        let Phase::Locked(header) = &self.phase else {
+            return Task::ready(Err(VaultActionError::WrongPhase));
+        };
+        if !self.screen_locked {
+            return Task::ready(Err(VaultActionError::WrongPhase));
+        }
         let header = header.clone();
         if let Err(error) = self.check_attempt() {
             return Task::ready(Err(error));
         }
         self.run(
             cx,
-            async move {
-                // The password goes back with the vault: the rehash needs it.
-                oneterm_vault::unlock(&header, &password).map(|vault| (vault, password))
-            },
-            Self::finish_unlock,
+            unlock_work(header, password),
+            Self::finish_unlock_screen,
         )
     }
 
@@ -438,7 +511,7 @@ impl VaultState {
         if self.busy {
             return Err(VaultActionError::Busy);
         }
-        if !applies {
+        if !applies || self.screen_locked {
             return Err(VaultActionError::WrongPhase);
         }
         Ok(())
@@ -556,13 +629,44 @@ impl VaultState {
             // is dropped here and the header stays as it was.
             return Err(VaultActionError::LockedMeanwhile);
         }
+        self.keep_unlocked(vault, password, cx);
+        Ok(())
+    }
+
+    fn finish_unlock_screen(
+        &mut self,
+        result: Result<(UnlockedVault, SecretString), VaultError>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), VaultActionError> {
+        let locked_meanwhile = self.end(cx);
+        if !self.is_screen_locked() {
+            return Err(VaultActionError::WrongPhase);
+        }
+        let result = result.map_err(VaultActionError::Vault);
+        self.record_attempt(&result);
+        let (vault, password) = result?;
+        if locked_meanwhile {
+            return Err(VaultActionError::LockedMeanwhile);
+        }
+        self.screen_locked = false;
+        self.keep_unlocked(vault, password, cx);
+        Ok(())
+    }
+
+    /// Hold `vault`'s key (-> Unlocked); a header below the default parameters
+    /// is then rehashed with the password just typed.
+    fn keep_unlocked(
+        &mut self,
+        vault: UnlockedVault,
+        password: SecretString,
+        cx: &mut Context<Self>,
+    ) {
         let needs_rehash = vault.needs_rehash();
         self.phase = Phase::Unlocked(Box::new(vault));
         cx.emit(VaultEvent::Unlocked);
         if needs_rehash && !self.read_only {
             self.rehash(password, cx);
         }
-        Ok(())
     }
 
     fn finish_change(
@@ -597,6 +701,9 @@ impl VaultState {
         self.end(cx);
         result.map_err(VaultActionError::Vault)?;
         self.phase = Phase::Uninitialised;
+        // No vault, no lock: a reset is refused while the screen is locked, but
+        // one started just before a lock still lands here.
+        self.screen_locked = false;
         self.failures = 0;
         self.retry_at = None;
         Ok(())
@@ -670,6 +777,15 @@ fn read_phase(dir: &Path) -> Phase {
             }
         }
     }
+}
+
+/// One Argon2id run against `header`. The password goes back with the vault:
+/// the rehash after an unlock needs it.
+async fn unlock_work(
+    header: VaultHeader,
+    password: SecretString,
+) -> Result<(UnlockedVault, SecretString), VaultError> {
+    oneterm_vault::unlock(&header, &password).map(|vault| (vault, password))
 }
 
 /// Set up a vault in `dir`. Tests derive at `KdfParams::FLOOR`.

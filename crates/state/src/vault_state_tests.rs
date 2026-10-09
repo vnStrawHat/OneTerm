@@ -847,3 +847,227 @@ async fn a_seal_after_a_reset_elsewhere_is_refused_and_drops_the_key(cx: &mut Te
         assert_eq!(*events.borrow(), [VaultEvent::Locked]);
     }
 }
+
+// ── Screen lock (`US-0159`) ─────────────────────────────────────────
+
+async fn unlock_screen(
+    state: &Entity<VaultState>,
+    password: &str,
+    cx: &mut TestAppContext,
+) -> Result<(), VaultActionError> {
+    let task = state.update(cx, |state, cx| state.unlock_screen(secret(password), cx));
+    let result = task.await;
+    cx.run_until_parked();
+    result
+}
+
+fn screen_locked(state: &Entity<VaultState>, cx: &mut TestAppContext) -> bool {
+    state.read_with(cx, |state, _| state.is_screen_locked())
+}
+
+#[gpui::test]
+async fn a_screen_lock_drops_the_key_and_only_the_lock_screen_lifts_it(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    let events = record_events(&state, cx);
+
+    state.update(cx, |state, cx| state.lock_screen(cx));
+    assert!(screen_locked(&state, cx));
+    assert_eq!(phase(&state, cx), VaultPhase::Locked);
+    assert!(state.read_with(cx, |state, _| state.unlocked().is_none()));
+    assert_eq!(
+        *events.borrow(),
+        [VaultEvent::Locked, VaultEvent::ScreenLocked]
+    );
+    // Nothing else opens or changes the vault while the screen is locked.
+    state.read_with(cx, |state, _| {
+        assert!(!state.can_change());
+        assert!(!state.can_reset());
+    });
+    assert!(matches!(
+        unlock(&state, V1_PASSWORD, cx).await.unwrap_err(),
+        VaultActionError::WrongPhase
+    ));
+    let task = state.update(cx, |state, cx| state.reset(cx));
+    assert!(matches!(
+        task.await.unwrap_err(),
+        VaultActionError::WrongPhase
+    ));
+    let task = state.update(cx, |state, cx| {
+        state.change_password(secret(V1_PASSWORD), secret("another password"), cx)
+    });
+    assert!(matches!(
+        task.await.unwrap_err(),
+        VaultActionError::WrongPhase
+    ));
+    assert!(dir.join("vault.json").exists());
+
+    // A second lock is a no-op; a wrong password counts and changes nothing.
+    state.update(cx, |state, cx| state.lock_screen(cx));
+    assert!(matches!(
+        unlock_screen(&state, "wrong", cx).await.unwrap_err(),
+        VaultActionError::Vault(VaultError::WrongPassword)
+    ));
+    assert!(screen_locked(&state, cx));
+    assert_eq!(state.read_with(cx, |state, _| state.failures), 1);
+
+    unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
+    assert!(!screen_locked(&state, cx));
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+    assert_eq!(state.read_with(cx, |state, _| state.failures), 0);
+    assert_eq!(
+        *events.borrow(),
+        [
+            VaultEvent::Locked,
+            VaultEvent::ScreenLocked,
+            VaultEvent::Unlocked
+        ]
+    );
+    // Not screen-locked any more: the lock screen's way out is refused.
+    assert!(matches!(
+        unlock_screen(&state, V1_PASSWORD, cx).await.unwrap_err(),
+        VaultActionError::WrongPhase
+    ));
+}
+
+/// Screen protection does not depend on the user ever having unlocked (HLD).
+#[gpui::test]
+async fn a_screen_lock_from_locked_unlocks_the_vault_on_the_way_out(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    let events = record_events(&state, cx);
+    state.update(cx, |state, cx| state.lock_screen(cx));
+    assert!(screen_locked(&state, cx));
+    assert_eq!(*events.borrow(), [VaultEvent::ScreenLocked]);
+    unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+}
+
+#[gpui::test]
+fn no_vault_means_no_screen_lock(cx: &mut TestAppContext) {
+    let empty = test_dir();
+    let state = state_in(&empty, false, cx);
+    state.update(cx, |state, cx| state.lock_screen(cx));
+    assert!(!screen_locked(&state, cx));
+
+    let damaged = test_dir();
+    std::fs::write(damaged.join("vault.json"), "not json").unwrap();
+    let state = state_in(&damaged, false, cx);
+    assert_eq!(phase(&state, cx), VaultPhase::Unavailable);
+    state.update(cx, |state, cx| state.lock_screen(cx));
+    assert!(!screen_locked(&state, cx));
+}
+
+#[gpui::test]
+async fn a_screen_lock_during_a_dialog_unlock_wins(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    let task = state.update(cx, |state, cx| {
+        let task = state.unlock(secret(V1_PASSWORD), cx);
+        state.lock_screen(cx);
+        task
+    });
+    assert!(matches!(
+        task.await.unwrap_err(),
+        VaultActionError::LockedMeanwhile
+    ));
+    cx.run_until_parked();
+    assert!(screen_locked(&state, cx));
+    assert!(state.read_with(cx, |state, _| state.unlocked().is_none()));
+}
+
+#[gpui::test]
+async fn a_screen_lock_during_a_change_keeps_only_the_new_header(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    unlock(&state, V1_PASSWORD, cx).await.unwrap();
+    let task = state.update(cx, |state, cx| {
+        let task = state.change_password(secret(V1_PASSWORD), secret("new master password"), cx);
+        state.lock_screen(cx);
+        task
+    });
+    task.await.unwrap();
+    assert!(screen_locked(&state, cx));
+    assert!(state.read_with(cx, |state, _| state.unlocked().is_none()));
+    // The held header is the new one.
+    assert!(unlock_screen(&state, V1_PASSWORD, cx).await.is_err());
+    unlock_screen(&state, "new master password", cx)
+        .await
+        .unwrap();
+}
+
+/// The lock screen never re-reads `vault.json` (`idle-lock-overlay.md`, edge
+/// cases): a passer-by who resets and sets up a vault of their own in another
+/// OneTerm cannot open this one.
+#[gpui::test]
+async fn the_lock_screen_ignores_a_vault_replaced_on_disk(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    state.update(cx, |state, cx| state.lock_screen(cx));
+    std::fs::remove_file(dir.join("vault.json")).unwrap();
+    oneterm_vault::init_with_params(&dir, &secret("passer-by password"), KdfParams::FLOOR).unwrap();
+
+    assert!(matches!(
+        unlock_screen(&state, "passer-by password", cx)
+            .await
+            .unwrap_err(),
+        VaultActionError::Vault(VaultError::WrongPassword)
+    ));
+    assert!(screen_locked(&state, cx));
+    unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
+    assert!(!screen_locked(&state, cx));
+}
+
+/// Intake Q5: the elevated window locks and unlocks with the same password,
+/// and writes nothing (no rehash of the below-default fixture).
+#[gpui::test]
+async fn the_elevated_window_locks_and_unlocks_read_only(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, true, cx);
+    state.update(cx, |state, cx| state.lock_screen(cx));
+    assert!(screen_locked(&state, cx));
+    unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+    assert_eq!(read(&dir, "vault.json").unwrap(), V1);
+    assert!(!dir.join("vault.bak").exists());
+}
+
+/// One failure count for the dialogs and the lock screen (LLD § 5).
+#[gpui::test]
+async fn the_lock_screen_shares_the_dialogs_back_off(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    for _ in 0..4 {
+        unlock(&state, "wrong", cx).await.unwrap_err();
+    }
+    state.update(cx, |state, cx| state.lock_screen(cx));
+    unlock_screen(&state, "wrong", cx).await.unwrap_err();
+    assert!(
+        state
+            .read_with(cx, |state, _| state.retry_after())
+            .is_some()
+    );
+    assert!(matches!(
+        unlock_screen(&state, V1_PASSWORD, cx).await.unwrap_err(),
+        VaultActionError::RetryIn(_)
+    ));
+    state.update(cx, |state, _| state.retry_at = Some(Instant::now()));
+    unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
+}
+
+/// A reset started just before the lock removes the vault, and with it the
+/// lock: there is nothing left to unlock with.
+#[gpui::test]
+async fn a_reset_that_lands_after_a_screen_lock_lifts_it(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_in(&dir, false, cx);
+    let task = state.update(cx, |state, cx| {
+        let task = state.reset(cx);
+        state.lock_screen(cx);
+        task
+    });
+    task.await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Uninitialised);
+    assert!(!screen_locked(&state, cx));
+}

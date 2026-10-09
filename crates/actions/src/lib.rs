@@ -50,6 +50,9 @@ actions!(
         ToggleGutter,
         /// Show or hide the FPS HUD (`US-0151`); flips `UiConfig::show_fps`.
         ToggleFpsMonitor,
+        /// Cover every OneTerm window with the lock screen now (`US-0159`); needs a
+        /// master password.
+        LockOneTerm,
         /// Open the dialog to create a new SSH session (saved to `ssh_session.json`).
         NewSession,
         /// Open the General Settings panel (font, theme, key bindings).

@@ -8,6 +8,7 @@
 //! them by name via the gpui-component `PanelRegistry`.
 
 pub mod layout;
+pub mod lock_screen;
 pub mod widgets;
 
 pub use layout::OneTermWorkspace;

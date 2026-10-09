@@ -1,14 +1,16 @@
 //! App menu bar — builds the native menu (OneTerm).
 //!
 //! Mirrors `reference/.../story/src/app_menus.rs`, keeping Appearance (Light/Dark)
-//! and the Theme submenu, plus the checked Show FPS Monitor item (`US-0151`). The Edit / View / Help menus were removed; their
+//! and the Theme submenu, plus the checked Show FPS Monitor item (`US-0151`) and Lock OneTerm
+//! (`US-0159`, handled in `crate::lock_screen`). The Edit / View / Help menus were removed; their
 //! actions remain reachable via key bindings and the in-app UI.
 
 use gpui::{App, Entity, Menu, MenuItem, OwnedMenu, SharedString};
 use gpui_component::{ActiveTheme as _, GlobalState, Theme, ThemeRegistry, menu::AppMenuBar};
 
 use oneterm_actions::{
-    About, OpenSettings, Quit, SwitchTheme, SwitchThemeMode, ToggleFpsMonitor, ToggleGutter,
+    About, LockOneTerm, OpenSettings, Quit, SwitchTheme, SwitchThemeMode, ToggleFpsMonitor,
+    ToggleGutter,
 };
 use oneterm_settings::{TerminalSettings, UiConfig};
 
@@ -138,6 +140,7 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
                 .checked(UiConfig::global(cx).read(cx).show_fps),
             MenuItem::Separator,
             MenuItem::action("Settings...", OpenSettings),
+            MenuItem::action("Lock OneTerm", LockOneTerm),
             MenuItem::Separator,
             MenuItem::action("Quit", Quit),
         ],

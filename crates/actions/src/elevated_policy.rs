@@ -64,6 +64,8 @@ const ALLOWED_WHEN_ELEVATED: &[&str] = &[
     "join_input_channel_d",
     "join_input_channel_e",
     "leave_input_channel",
+    // The idle lock applies to the elevated window too (intake Q5); it writes nothing.
+    "lock_oneterm",
     "new_terminal_tab",
     "open_settings",
     "quit",

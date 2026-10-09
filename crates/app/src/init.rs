@@ -85,4 +85,10 @@ pub(crate) fn init(cx: &mut App) {
         oneterm_terminal_view::agent_focuser(),
     )
     .expect("application services must be registered exactly once");
+
+    // The idle lock screen (IN-0050, US-0159). Last: its `Root` plugin must be
+    // registered after `gpui_component::init`'s so it decorates every window
+    // last, and before the first window opens; it reads `VaultState` and
+    // `UiConfig`, installed above.
+    oneterm_workspace::lock_screen::init(cx);
 }
