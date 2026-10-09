@@ -20,7 +20,7 @@
 //! the client's own open-handle limit is live (BUG-0076).
 //! The host key is random per run, so the client sees an unknown host each time.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::{Metadata, OpenOptions};
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
 use std::net::SocketAddr;
@@ -55,7 +55,6 @@ impl Server for DevServer {
             max_open_handles: self.max_open_handles,
             password: self.password.clone(),
             channels: HashMap::new(),
-            sftp_channels: HashSet::new(),
         }
     }
 }
@@ -65,11 +64,9 @@ struct ClientHandler {
     max_open_handles: Option<u64>,
     /// `--password`: the only password accepted; `None` accepts any.
     password: Option<Arc<str>>,
-    /// Session channels by id; the SFTP subsystem takes its channel out.
+    /// Session channels by id; the SFTP subsystem takes its channel out, so
+    /// only a shell's channel is left here (and echoed).
     channels: HashMap<ChannelId, Channel<Msg>>,
-    /// Channels running the SFTP subsystem: their bytes belong to the SFTP
-    /// stream and must never be echoed back.
-    sftp_channels: HashSet<ChannelId>,
 }
 
 impl russh::server::Handler for ClientHandler {
@@ -178,9 +175,11 @@ impl russh::server::Handler for ClientHandler {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // Echo typed bytes so the terminal shows something. SFTP channel
-        // bytes are protocol packets consumed by the SFTP stream, not input.
-        if self.sftp_channels.contains(&channel) {
+        // Echo typed bytes so the terminal shows something. Only a shell's
+        // session channel echoes: SFTP channel bytes are protocol packets
+        // consumed by the SFTP stream, and a relayed direct-tcpip channel
+        // carries another server's SSH stream (neither is in `channels`).
+        if !self.channels.contains_key(&channel) {
             return Ok(());
         }
         let echoed: Vec<u8> = data
@@ -212,7 +211,6 @@ impl russh::server::Handler for ClientHandler {
             return Ok(());
         };
         session.channel_success(channel_id)?;
-        self.sftp_channels.insert(channel_id);
         println!("sftp subsystem started");
         let handler = SftpHandler {
             root: self.root.clone(),
