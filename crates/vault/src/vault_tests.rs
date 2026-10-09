@@ -640,3 +640,150 @@ fn the_header_is_owner_only() {
         .mode();
     assert_eq!(mode & 0o777, 0o600);
 }
+
+// Independent verification of US-0156 (`evidence/US-0156-verify.md`): the
+// envelope parser, the secret-bearing types and the nonce source, attacked.
+mod verify {
+    use std::collections::HashSet;
+
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+
+    use super::*;
+
+    /// Compile-time proof that `UnlockedVault` is neither `Clone`, `Debug` nor
+    /// `Serialize`: if it were any of them, the last line would be ambiguous and
+    /// the crate would not compile (the `static_assertions::assert_not_impl_any`
+    /// technique).
+    const _: fn() = || {
+        trait AmbiguousIfImpl<A> {
+            fn some_item() {}
+        }
+        impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+        struct IfClone;
+        impl<T: Clone> AmbiguousIfImpl<IfClone> for T {}
+        struct IfDebug;
+        impl<T: ?Sized + std::fmt::Debug> AmbiguousIfImpl<IfDebug> for T {}
+        struct IfSerialize;
+        impl<T: ?Sized + serde::Serialize> AmbiguousIfImpl<IfSerialize> for T {}
+        let _ = <UnlockedVault as AmbiguousIfImpl<_>>::some_item;
+    };
+
+    /// The unlocked vault crosses back from the KDF's background task
+    /// (`crypto-and-format.md` § 7).
+    #[test]
+    fn an_unlocked_vault_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<UnlockedVault>();
+    }
+
+    fn value(text: &str) -> SealedSecret {
+        serde_json::from_value(text.into()).unwrap()
+    }
+
+    /// Every way to spell a v1 envelope other than the one canonical spelling
+    /// is refused, and nothing but `otvN:` with N > 1 reads as newer.
+    #[test]
+    fn the_envelope_parser_accepts_only_the_canonical_spelling() {
+        let vault = fixed_vault(&[0x11; 32], [0x22; 16], KdfParams::DEFAULT);
+        let canonical = FROZEN_ENVELOPE_JSON.trim_matches('"');
+        let open = |text: &str| vault.open(SecretPurpose::SshPassword, &CONTEXT, &value(text));
+        assert_eq!(open(canonical).unwrap().expose_secret(), "hunter2");
+
+        let payload = &canonical["otv1:".len()..];
+        assert!(payload.contains('+') && payload.contains('/') && payload.ends_with("=="));
+        // The same bytes with non-zero trailing bits in the last quantum: a
+        // lenient decoder would accept this alias.
+        let alias = {
+            const ALPHABET: &[u8] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut bytes = payload.as_bytes().to_vec();
+            let last = bytes.len() - 3;
+            let index = ALPHABET.iter().position(|&c| c == bytes[last]).unwrap();
+            bytes[last] = ALPHABET[index ^ 1];
+            String::from_utf8(bytes).unwrap()
+        };
+        assert_ne!(alias, payload);
+        let huge = format!("otv1:{}", "A".repeat(4 << 20));
+        let malformed = [
+            format!("otv1:{payload}="),
+            format!("otv1:{}", payload.trim_end_matches('=')),
+            format!("otv1:{alias}"),
+            format!("otv1:{payload}\n"),
+            format!("otv1: {payload}"),
+            format!(" otv1:{payload}"),
+            format!("otv1:{}\r\n{}", &payload[..8], &payload[8..]),
+            format!("otv1:{}", payload.replace('+', "-").replace('/', "_")),
+            format!("OTV1:{payload}"),
+            format!("Otv1:{payload}"),
+            format!("otv01:{payload}"),
+            format!("otv1x:{payload}"),
+            format!("otv1{payload}"),
+            "otv1:".to_owned(),
+            "otv1:====".to_owned(),
+            huge,
+        ];
+        for text in &malformed {
+            let shown: String = text.chars().take(40).collect();
+            assert_eq!(open(text).err(), Some(OpenError::Malformed), "{shown:?}");
+        }
+        for newer in [format!("otv2:{payload}"), format!("otv10:{payload}")] {
+            assert_eq!(open(&newer).err(), Some(OpenError::NewerFormat), "{newer}");
+        }
+    }
+
+    /// The shortest payload the parser takes (kid, nonce, no ciphertext, a
+    /// tag) decodes, and only the tag check stops it.
+    #[test]
+    fn an_empty_ciphertext_is_rejected_at_the_tag() {
+        let vault = fixed_vault(&[0x11; 32], [0x22; 16], KdfParams::DEFAULT);
+        let mut payload = vec![0x22; KID_LEN];
+        payload.extend_from_slice(&[0; NONCE_LEN + envelope::TAG_LEN]);
+        let text = format!("otv1:{}", STANDARD.encode(payload));
+        assert_eq!(
+            vault
+                .open(SecretPurpose::SshPassword, &CONTEXT, &value(&text))
+                .err(),
+            Some(OpenError::Rejected)
+        );
+    }
+
+    /// The wrapped data key never opens as an SSH password, even though its
+    /// kid is this vault's: other key, other purpose.
+    #[test]
+    fn the_wrapped_key_never_opens_as_an_item() {
+        let dir = test_dir();
+        let vault = fast_vault(&dir, "master password");
+        let wrapped = vault.header().wrapped_key.clone();
+        assert_eq!(
+            vault
+                .open(SecretPurpose::SshPassword, &CONTEXT, &wrapped)
+                .err(),
+            Some(OpenError::Rejected)
+        );
+    }
+
+    /// Nonces come from the OS generator: no repeat in a few thousand seals,
+    /// and the kid is always this vault's.
+    #[test]
+    fn nonces_never_repeat_and_an_empty_secret_round_trips() {
+        let dir = test_dir();
+        let vault = fast_vault(&dir, "master password");
+        let mut nonces = HashSet::new();
+        for _ in 0..4096 {
+            let sealed = vault
+                .seal(SecretPurpose::SshPassword, &CONTEXT, &secret("pw"))
+                .unwrap();
+            let envelope = Envelope::decode(&sealed, 1024).unwrap();
+            assert_eq!(envelope.kid, vault.vault_id()[..KID_LEN]);
+            assert!(nonces.insert(envelope.nonce));
+        }
+        let empty = vault
+            .seal(SecretPurpose::SshPassword, &CONTEXT, &secret(""))
+            .unwrap();
+        let opened = vault
+            .open(SecretPurpose::SshPassword, &CONTEXT, &empty)
+            .unwrap();
+        assert_eq!(opened.expose_secret(), "");
+    }
+}

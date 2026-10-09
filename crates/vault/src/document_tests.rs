@@ -206,3 +206,240 @@ fn hex_ids_round_trip() {
     assert_eq!(parse_hex_id(&hex(&id)), Some(id));
     assert_eq!(parse_hex_id("3f9c0a4e8b1d4c27a6e2f0b9c1d2e3fg"), None);
 }
+
+// Independent verification of US-0156 (`evidence/US-0156-verify.md`): attacks on
+// the one write function. Tests named `..._current_behaviour_dN` pin a defect
+// recorded there; flip the assertion when the defect is fixed.
+mod verify {
+    use super::*;
+    use crate::UnlockedVault;
+    use crate::test_support::FAST_PARAMS;
+    use crate::vault::init_with;
+
+    fn backup(dir: &Path) -> std::path::PathBuf {
+        dir.join("vault.bak")
+    }
+
+    fn change(vault: &mut UnlockedVault, dir: &Path) -> Result<(), VaultError> {
+        vault.change_password_with(
+            dir,
+            &SecretString::new("pw"),
+            &SecretString::new("new"),
+            FAST_PARAMS,
+            false,
+        )
+    }
+
+    /// Every file `load` reports as `Damaged` or `Unsupported` (except the
+    /// literal `{}`, see d1) survives a set-up byte for byte, gains no
+    /// `vault.bak`, and the refusal is typed: `AlreadyInitialised` when the
+    /// file is JSON, `Io` when it is not.
+    #[test]
+    fn set_up_never_overwrites_a_damaged_or_unsupported_file() {
+        let other_id = v1_with(|d| d["vault_id"] = json!("00000000000000000000000000000000"));
+        let argon2i = v1_with(|d| d["kdf"]["algorithm"] = json!("argon2i"));
+        let cases: Vec<(&str, String, bool)> = vec![
+            // (case, file, is JSON)
+            ("not JSON", INVALID_JSON.to_owned(), false),
+            ("empty file", String::new(), false),
+            ("array", "[1, 2]".to_owned(), true),
+            ("null", "null".to_owned(), true),
+            (
+                "text schema_version",
+                r#"{"schema_version":"1"}"#.to_owned(),
+                true,
+            ),
+            ("kid of another vault", other_id, true),
+            ("schema 9", V9.to_owned(), true),
+            ("memory above ceiling", INVALID_PARAMS.to_owned(), true),
+            ("argon2i", argon2i, true),
+        ];
+        for (case, raw, is_json) in cases {
+            let dir = test_dir();
+            fs::write(dir.join(DOCUMENT_NAME), &raw).unwrap();
+            assert!(
+                matches!(
+                    load(&dir).unwrap(),
+                    VaultStatus::Damaged(_) | VaultStatus::Unsupported(_)
+                ),
+                "{case}"
+            );
+            match init_with(&dir, &SecretString::new("pw"), FAST_PARAMS, false) {
+                Err(VaultError::AlreadyInitialised) if is_json => {}
+                Err(VaultError::Io(_)) if !is_json => {}
+                Err(other) => panic!("{case}: unexpected {other:?}"),
+                Ok(_) => panic!("{case}: set-up overwrote the file"),
+            }
+            assert_eq!(
+                fs::read_to_string(dir.join(DOCUMENT_NAME)).unwrap(),
+                raw,
+                "{case}"
+            );
+            assert!(!backup(&dir).exists(), "{case}");
+        }
+    }
+
+    /// d1: a `vault.json` holding exactly `{}` loads as `Damaged("no
+    /// schema_version")`, yet set-up treats it like a missing file and replaces
+    /// it. Nothing is lost (the file holds no key), but the contract says a
+    /// damaged file is never overwritten.
+    #[test]
+    fn set_up_over_an_empty_object_file_current_behaviour_d1() {
+        let dir = test_dir();
+        fs::write(dir.join(DOCUMENT_NAME), "{ }").unwrap();
+        assert!(matches!(load(&dir).unwrap(), VaultStatus::Damaged(_)));
+        assert!(init_with(&dir, &SecretString::new("pw"), FAST_PARAMS, false).is_ok());
+        assert_ne!(fs::read_to_string(dir.join(DOCUMENT_NAME)).unwrap(), "{ }");
+    }
+
+    /// The rewrap refuses, writes nothing and leaves `vault.bak` alone when the
+    /// file is gone (no file is created), not JSON (`Io`), or from a newer
+    /// schema with the same id (`VaultReplaced`).
+    #[test]
+    fn rewrap_refuses_a_missing_non_json_or_newer_schema_file() {
+        let dir = test_dir();
+        let mut vault = init_with(&dir, &SecretString::new("pw"), FAST_PARAMS, false).unwrap();
+        let path = dir.join(DOCUMENT_NAME);
+        let bak = fs::read(backup(&dir)).unwrap();
+
+        fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            change(&mut vault, &dir),
+            Err(VaultError::VaultReplaced)
+        ));
+        assert!(!path.exists());
+
+        fs::write(&path, INVALID_JSON).unwrap();
+        assert!(matches!(change(&mut vault, &dir), Err(VaultError::Io(_))));
+        assert_eq!(fs::read_to_string(&path).unwrap(), INVALID_JSON);
+
+        let newer = json!({"schema_version": 2, "vault_id": hex(&vault.vault_id()), "kdf": {}});
+        let newer = newer.to_string();
+        fs::write(&path, &newer).unwrap();
+        assert!(matches!(
+            change(&mut vault, &dir),
+            Err(VaultError::VaultReplaced)
+        ));
+        assert_eq!(fs::read_to_string(&path).unwrap(), newer);
+
+        assert_eq!(fs::read(backup(&dir)).unwrap(), bak);
+        // Every refusal left the in-memory vault on the old password.
+        assert!(unlock(vault.header(), &SecretString::new("pw")).is_ok());
+    }
+
+    /// d2: the rewrap checks only `schema_version == 1` and the `vault_id`, so
+    /// a file with this vault's id that `load` reports as `Damaged` or
+    /// `Unsupported` (another envelope version, parameters above the ceiling,
+    /// another algorithm, a mangled `kdf`) is overwritten by a password change
+    /// or rehash, and `vault.bak` is scrubbed with it.
+    #[test]
+    fn rewrap_over_a_damaged_or_unsupported_file_of_the_same_vault_current_behaviour_d2() {
+        let edits: [(&str, fn(&mut Value)); 4] = [
+            ("kdf not an object", |d| d["kdf"] = json!("garbage")),
+            ("wrapped_key otv2", |d| {
+                d["wrapped_key"] = json!("otv2:AAAA")
+            }),
+            ("memory above ceiling", |d| {
+                d["kdf"]["memory_kib"] = json!(KdfParams::CEILING.memory_kib + 1)
+            }),
+            ("argon2i", |d| d["kdf"]["algorithm"] = json!("argon2i")),
+        ];
+        for (case, edit) in edits {
+            let dir = test_dir();
+            let mut vault = init_with(&dir, &SecretString::new("pw"), FAST_PARAMS, false).unwrap();
+            let path = dir.join(DOCUMENT_NAME);
+            let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            // Floor parameters, so `load` judges only the edited field.
+            document["kdf"]["memory_kib"] = json!(KdfParams::FLOOR.memory_kib);
+            document["kdf"]["iterations"] = json!(KdfParams::FLOOR.iterations);
+            edit(&mut document);
+            let raw = document.to_string();
+            fs::write(&path, &raw).unwrap();
+            assert!(
+                matches!(
+                    load(&dir).unwrap(),
+                    VaultStatus::Damaged(_) | VaultStatus::Unsupported(_)
+                ),
+                "{case}"
+            );
+
+            change(&mut vault, &dir).unwrap_or_else(|error| panic!("{case}: {error:?}"));
+            assert_ne!(fs::read_to_string(&path).unwrap(), raw, "{case}");
+        }
+    }
+
+    /// A refusal is never confused with an I/O failure: `vault.json` being a
+    /// directory is an `Io` error for set-up, not `AlreadyInitialised`.
+    #[test]
+    fn an_io_failure_is_not_reported_as_a_refusal() {
+        let dir = test_dir();
+        fs::create_dir(dir.join(DOCUMENT_NAME)).unwrap();
+        assert!(matches!(
+            init_with(&dir, &SecretString::new("pw"), FAST_PARAMS, false),
+            Err(VaultError::Io(_))
+        ));
+        assert!(dir.join(DOCUMENT_NAME).is_dir());
+    }
+
+    /// `Debug` of a whole load outcome carries neither the wrapped key nor the
+    /// salt.
+    #[test]
+    fn debug_of_a_ready_status_carries_no_wrapped_key_or_salt() {
+        let status = status_of(V1);
+        assert!(matches!(status, VaultStatus::Ready(_)));
+        let shown = format!("{status:?}");
+        let document: Value = serde_json::from_str(V1).unwrap();
+        let wrapped = document["wrapped_key"].as_str().unwrap();
+        assert!(!shown.contains(&wrapped["otv1:".len()..]));
+        assert!(!shown.contains(document["kdf"]["salt"].as_str().unwrap()));
+    }
+
+    /// The whole path through `load`: a password change at the floor is
+    /// written to disk, the reloaded header refuses the old password, accepts
+    /// the new one and still opens items sealed before.
+    #[test]
+    fn change_password_survives_a_reload_from_disk() {
+        let dir = test_dir();
+        let mut vault =
+            init_with(&dir, &SecretString::new("old"), KdfParams::FLOOR, false).unwrap();
+        let context = SealContext {
+            host: "h",
+            port: 22,
+            username: "u",
+        };
+        let sealed = vault
+            .seal(
+                SecretPurpose::SshPassword,
+                &context,
+                &SecretString::new("pw"),
+            )
+            .unwrap();
+        vault
+            .change_password_with(
+                &dir,
+                &SecretString::new("old"),
+                &SecretString::new("new"),
+                KdfParams::FLOOR,
+                false,
+            )
+            .unwrap();
+        drop(vault);
+
+        let VaultStatus::Ready(header) = load(&dir).unwrap() else {
+            panic!("the rewrapped header must load as Ready");
+        };
+        assert!(matches!(
+            unlock(&header, &SecretString::new("old")),
+            Err(VaultError::WrongPassword)
+        ));
+        let reopened = unlock(&header, &SecretString::new("new")).unwrap();
+        let opened = reopened
+            .open(SecretPurpose::SshPassword, &context, &sealed)
+            .unwrap();
+        assert_eq!(opened.expose_secret(), "pw");
+        assert_eq!(
+            fs::read(backup(&dir)).unwrap(),
+            fs::read(dir.join(DOCUMENT_NAME)).unwrap()
+        );
+    }
+}
