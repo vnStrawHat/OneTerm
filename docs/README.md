@@ -26,6 +26,7 @@ navigation set free of dead paths).
 | [`agents/crate-dependency-rules.md`](agents/crate-dependency-rules.md) | Hard crate & dependency rules R1–R12 and their verification commands. |
 | [`agents/code-style.md`](agents/code-style.md) | Rust conventions (mandatory). |
 | [`agents/dependencies.md`](agents/dependencies.md) | Dependency version policy, allowed auxiliary crates, reference-first research. |
+| [`agents/subagent-workflow.md`](agents/subagent-workflow.md) | Subagent roster (model + effort per role) and the per-intake workflow between coordinator, designer, implementer and verifier. |
 | [`agents/error-policy.md`](agents/error-policy.md) | Runtime error handling and recovery rules. |
 | [`agents/persistence.md`](agents/persistence.md) | Persisted files (`terminal.json`, `ui_config.json`, `docks.json`, `ssh_session.json`, …): schema owners and storage mechanics. |
 
