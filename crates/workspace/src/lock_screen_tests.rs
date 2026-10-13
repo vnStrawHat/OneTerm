@@ -1011,3 +1011,108 @@ async fn verifier_startup_the_first_key_after_a_long_startup_lock_does_not_reloc
     );
     let _ = (f.content, f.renders, f.quits);
 }
+
+// ── Re-verification of 86af2afb (`evidence/US-0159-verify.md`, round 2) ──
+
+fn unlock_now(
+    vault: &Entity<VaultState>,
+    cx: &mut VisualTestContext,
+) -> impl std::future::Future<Output = ()> {
+    let task = vault.update(cx, |state, cx| {
+        state.unlock_screen(SecretString::new(V1_PASSWORD), cx)
+    });
+    async move { task.await.unwrap() }
+}
+
+/// Round 2, attack (2): two dialogs opened under the lock. The unlock focuses
+/// the last one, which is the one on top. When it closes it restores the focus
+/// it saw when it opened (the hidden lock input), and the plugin hands that to
+/// the focus from before the lock, behind the dialog still open below.
+#[gpui::test]
+async fn verifier_r2_two_dialogs_under_the_lock(cx: &mut TestAppContext) {
+    let f = startup_fixture(cx);
+    let content_focus = f.cx.update(|_, cx| f.content.read(cx).focus.clone());
+    let first = f.cx.update(|window, cx| {
+        window.open_dialog(cx, |dialog, _, _| dialog);
+        window.focused(cx).unwrap().downgrade()
+    });
+    f.cx.run_until_parked();
+    let second = f.cx.update(|window, cx| {
+        window.open_dialog(cx, |dialog, _, _| dialog);
+        window.focused(cx).unwrap().downgrade()
+    });
+    f.cx.run_until_parked();
+    let unlocked = unlock_now(&f.vault, f.cx);
+    unlocked.await;
+    let cx = f.cx;
+    cx.run_until_parked();
+    let focused = |handle: &WeakFocusHandle, cx: &mut VisualTestContext| {
+        let handle = handle.upgrade();
+        cx.update(|window, _| handle.is_some_and(|handle| handle.is_focused(window)))
+    };
+    assert!(focused(&second, cx), "the dialog on top has no focus");
+    cx.update(|window, cx| window.close_dialog(cx));
+    cx.run_until_parked();
+    let (open, on_first, behind) = (
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        focused(&first, cx),
+        cx.update(|window, _| content_focus.is_focused(window)),
+    );
+    eprintln!("after closing the top dialog: open={open} first={on_first} behind={behind}");
+    assert!(open, "the first dialog closed too");
+    // Pins V3 as it behaves today: the remaining dialog has no focus, the
+    // application behind it has. Flip when fixed.
+    assert!(!on_first && behind, "V3 fixed? flip this test");
+    assert!(!is_locked(&f.vault, cx));
+    let _ = (f.renders, f.quits);
+}
+
+/// Round 2, attack (4)/(5): a dialog opened and closed while locked. Its focus
+/// handle is gone by the unlock: nothing panics, and the keyboard goes to the
+/// focus from before the lock.
+#[gpui::test]
+async fn verifier_r2_a_dialog_closed_under_the_lock_strands_nothing(cx: &mut TestAppContext) {
+    let f = startup_fixture(cx);
+    let content_focus = f.cx.update(|_, cx| f.content.read(cx).focus.clone());
+    let dialog = f.cx.update(|window, cx| {
+        window.open_dialog(cx, |dialog, _, _| dialog);
+        window.focused(cx).unwrap().downgrade()
+    });
+    f.cx.run_until_parked();
+    f.cx.update(|window, cx| window.close_dialog(cx));
+    f.cx.run_until_parked();
+    assert!(
+        dialog.upgrade().is_none(),
+        "the closed dialog's focus is still alive"
+    );
+    let view = lock_view(f.cx);
+    let input = f.cx.update(|_, cx| view.read(cx).input_focus(cx));
+    f.cx.update(|window, _| assert!(input.is_focused(window), "the lock input lost the keyboard"));
+    let unlocked = unlock_now(&f.vault, f.cx);
+    unlocked.await;
+    let cx = f.cx;
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(content_focus.is_focused(window), "the keyboard is stranded"));
+    let _ = (f.renders, f.quits);
+}
+
+/// Round 2: a dialog left open before an idle lock (the user walked away from a
+/// connect dialog) has the keyboard again after the unlock.
+#[gpui::test]
+async fn verifier_r2_a_dialog_open_before_an_idle_lock_keeps_the_keyboard(cx: &mut TestAppContext) {
+    let f = fixture(cx);
+    let dialog = f.cx.update(|window, cx| {
+        window.open_dialog(cx, |dialog, _, _| dialog);
+        window.focused(cx).unwrap()
+    });
+    f.cx.run_until_parked();
+    f.vault.update(f.cx, |state, cx| state.lock_screen(cx));
+    f.cx.run_until_parked();
+    f.cx.update(|window, _| assert!(!dialog.is_focused(window)));
+    let unlocked = unlock_now(&f.vault, f.cx);
+    unlocked.await;
+    let cx = f.cx;
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(dialog.is_focused(window), "the dialog lost the keyboard"));
+    let _ = (f.content, f.renders, f.quits);
+}

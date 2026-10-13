@@ -483,3 +483,99 @@ so `config_dir()` = `<scratch>\us0159rv-cwd-a\target`); floor fixture `vault-v1.
 | `verify-dependency-graph.py`, `check-doc-paths.py`, `check-english.py`, `check-theme-contrast.py`, `third-party-notices.py --check` | pass |
 | `Cargo.lock` | unchanged since `b97196e1` |
 | `%TEMP%` | 36 directories before, 40 after: the 4 new ones are Edge/BITS, none ours; no `oneterm-*` directory left |
+
+## Re-verification of 86af2afb (round 2)
+
+Independent verifier, 2026-10-13. Branch `verify/US-0159-startup` reset to `86af2afb`
+(contains the round-1 verification as `cbc860ed`); own `target`, debug, `CARGO_BUILD_JOBS=2`,
+one crate per test command (one out-of-memory retry on `oneterm-app`, no test failure). Disk:
+28.6 GB free at start.
+
+### Verdict: PASS — V1 and V2 fixed; one new Low defect (V3) and two notes
+
+### Fixes checked
+
+- **V1** (`lock_screen.rs:605`): while locked the input takes the focus back whenever it lacks
+  it. Walked: type `xy`, click the background, type `abc` -> 5 dots (`us0159rv2-01`). The
+  pinned test is flipped and passes. Mouse-down on Unlock focuses the button and the next
+  frame gives the input the focus back. That does not break the click: walked with the mouse
+  held 1.5 s on Unlock, then released -> unlocked (`02`, `03`). Quit OneTerm clicked on the
+  startup lock -> the process exits (`10`). No loop: 375 ms CPU in 10 s startup-locked (round
+  1: 312 ms); each window reclaims only its own focus, so two windows cannot ping-pong.
+- **V2** (`:380`, `:397`): the unlock focuses `taken` (the dialog opened under the lock), else
+  the saved focus. `LockScreen::render`, which runs only while unlocked, hands a focus left
+  on the hidden lock view back to the saved one. Walked with a **host-key prompt arriving under
+  an idle lock**: `sftp-dev-server` (random host key per run) behind a loopback proxy that holds
+  the TCP connection 4 s (`us0159rv2-delay-proxy.py`). Connect, then `ctrl-shift-l` at once.
+  The prompt arrived under the lock, and the lock input kept the keyboard (`05`, `06`). After
+  the unlock the prompt is on top with the keyboard (`07`). Typing `echo leak` + Enter reached
+  the prompt (Enter = Trust and Connect), not the local shell, whose prompt stayed empty
+  (`08`). Later typing went to the new SSH tab (`09`).
+- **Path quoting** (`:77`): `in the folder "<path>".`, no trailing colon (`01`).
+
+### Attacks (the implementer's list)
+
+| # | Attack | Result |
+| --- | --- | --- |
+| 1 | Anything but a dialog landing focus on the hidden lock view while unlocked | Only a view that saved the lock input as its "focus to restore" can put it there: a dialog or popover opened under the lock. Popovers and menus cannot open under the lock (the surface is dropped, input is stopped); notifications take no focus. `LockScreen::render` hands any such focus back. Residual, by code reading only: if the saved handle has died meanwhile (its tab closed), `upgrade()` is `None`, the focus stays on the hidden view, and keys go nowhere until a click. That needs a tab closed under the lock, which no input can do. |
+| 2 | Two dialogs opened under the lock | The unlock focuses the last one, which is the one on top. **V3:** closing it restores the lock input it saw when it opened, and the plugin hands that to the pre-lock focus, *behind* the first dialog, which is still open. Without the lock, closing B would focus A. Test `verifier_r2_two_dialogs_under_the_lock` pins it. |
+| 3 | Host-key prompt during an idle lock | Walked (above): the prompt has the keyboard, Enter does not reach the shell. |
+| 4 | Dialog closed while locked | No dialog in the app closes itself while locked that I could stage; tested with `close_dialog` under the lock instead. The lock input keeps the keyboard. |
+| 5 | `taken` outliving its dialog | Same test: the closed dialog's handle is dead at the unlock (`upgrade()` -> `None`), no panic, and the focus goes to the pre-lock view (`verifier_r2_a_dialog_closed_under_the_lock_strands_nothing`). |
+| - | Dialog open *before* an idle lock (user walked away from a connect dialog) | Keeps the keyboard after the unlock (`verifier_r2_a_dialog_open_before_an_idle_lock_keeps_the_keyboard`). |
+
+### Defects and notes
+
+| # | Severity | Where | What |
+| --- | --- | --- | --- |
+| V3 | Low (needs two dialogs opened under one lock; the startup crash reports open one at a time) | `crates/workspace/src/lock_screen.rs:397` | After the unlock, closing the top dialog of two opened under the lock gives the keyboard to the application behind the remaining dialog (keys go to the shell under a modal, the V2 symptom one level down). A fix could remember every `taken` handle, or hand the focus back to the active dialog when one is open. |
+| N1 | Info | V2 design, `ssh` host-key prompt | The unlock now focuses a host-key prompt the user has not seen yet. Its Enter is "Trust and Connect" (walked), so an Enter typed ahead after the unlock trusts an unseen key. The unlock's own Enter is consumed while the lock is busy; the risk is a deliberate second Enter after the screen changed. The prompt's default action is `US-0158` / SSH territory, not this packet's. |
+| N2 | Info | `:397` | Residual stranding when the saved focus died under the lock (attack 1). Not reachable with the input blocked. |
+
+### Mutation checks (each reverted)
+
+| Mutation | Tests that failed |
+| --- | --- |
+| R1 the unlock ignores `taken` | `verifier_startup_after_the_unlock_a_dialog_opened_under_the_lock_has_no_focus`, `verifier_r2_two_dialogs_under_the_lock` |
+| R2 no hand-back in `LockScreen::render` | the same two (the closed dialog leaves the focus on the hidden lock view) |
+| R3 the old V1 condition (reclaim only when the focus is outside the view) | `verifier_startup_a_background_click_takes_the_keyboard_from_the_input` |
+
+### Tests added (`crates/workspace/src/lock_screen_tests.rs`, all pass)
+
+- `verifier_r2_two_dialogs_under_the_lock`: pins V3; flip when fixed.
+- `verifier_r2_a_dialog_closed_under_the_lock_strands_nothing`
+- `verifier_r2_a_dialog_open_before_an_idle_lock_keeps_the_keyboard`
+
+### GUI walk
+
+Debug build from this worktree; private profiles `us0159rv-cwd-c` / `-d`; own pids only; the
+dev server and the proxy were started and stopped by pid, and the dev server's
+`oneterm-sftp-dev-*` temp directory was removed. Screenshots: `us0159rv2-*.png` in the session
+scratchpad.
+
+| Step | Result |
+| --- | --- |
+| Startup lock, `xy`, background click, `abc` | 5 dots, input focused (`01`) |
+| Password, mouse held 1.5 s on Unlock, release | unlocked (`02`, `03`) |
+| Connect `loop` (127.0.0.1:2299, 4 s proxy delay), `ctrl-shift-l` at once | locked; the prompt arrives under the lock; the lock input stays empty and focused (`05`, `06`) |
+| Unlock | "Unknown SSH Host Key" on top with the keyboard (`07`) |
+| `echo leak` + Enter | Trust and Connect; the local shell's prompt is unchanged (`08`) |
+| Typing afterwards | reaches the new SSH tab (`09`) |
+| Relaunch, Quit OneTerm on the startup lock | exits (`10`) |
+
+### Gate (head `86af2afb` plus the three tests)
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo test -p oneterm-workspace` | 76 passed, 3 ignored |
+| `cargo test -p oneterm-state` | 90 passed |
+| `cargo test -p oneterm-session-ui` | 101 passed, 1 ignored |
+| `cargo test -p oneterm-settings-ui` | 59 passed, 1 ignored |
+| `cargo test -p oneterm-app` | 26 passed |
+| `--ignored --test-threads=1` workspace / session-ui / settings-ui | 3 / 1 / 1 passed |
+| `verify-dependency-graph.py`, `check-doc-paths.py`, `check-english.py` | pass |
+| `check-ignored-tests.py` | pass (19 recorded) |
+| `Cargo.lock` | unchanged since `b97196e1` |
+| `%TEMP%` | 41 directories before, 42 after: the new one is Edge/BITS; no `oneterm-*` left |
