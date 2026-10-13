@@ -90,6 +90,9 @@ Two facts make the state: is the data key in memory, and is the screen covered.
                   |  only the lock      |---- Quit: process ends
                   +---------------------+
    Unlocked --- idle timeout / Lock action ---> IdleLocked   (key dropped first, then screen)
+   start (vault.json ok) ======================> IdleLocked   (Q1 re-ruled 2026-10-13: from
+                                                              the first frame; replaces the
+                                                              "start -> Locked" edge above)
 
    start (vault.json damaged or newer) --> Unavailable: no saving, no lock; Settings explains
 ```
@@ -120,6 +123,19 @@ busy.
   from `US-0159` on, the Lock action goes to `IdleLocked`.
 - Reset can be done from `Locked` (a forgotten password cannot be proved) but not from
   `IdleLocked` (the lock screen offers no reset; Q7).
+- **Lock at startup** (`US-0159` acceptance rework; owner re-ruled Q1 on 2026-10-13): a process
+  that reads a usable `vault.json` (Ready) starts in `IdleLocked`, not `Locked`
+  (`VaultState::load_at_start`, used by `VaultState::init`): every window is born covered, its
+  first frame is the lock screen, and the application view is not rendered before the first
+  unlock. No vault (Uninitialised) and an unusable one (Unavailable: damaged, newer, unreadable)
+  start unlocked as before; the elevated instance follows the same rule read-only (Q5). No
+  setting turns it off. The idle timer does not run until the first unlock, which starts the
+  idle clock. With a vault, `Locked` with an open screen is therefore left only to a refused
+  seal (`US-0158`, a vault reset or replaced by another process); Lock Now locks the screen
+  since `US-0159`, and no caller drops the key alone any more. Because `IdleLocked` has no Reset (Q7), a forgotten master password is recovered by quitting
+  and deleting `vault.json` by hand (the lock screen names the folder), which loses every saved
+  password (`DEC-0021` rule 2); envelopes left in `ssh_session.json` then ask for the password
+  ("the master password was reset", `US-0158`).
 
 ### Persisted format (details in the LLDs)
 
@@ -231,8 +247,8 @@ busy.
 |                (error / back-off line)                                   |
 |                                              [ Unlock ]                  |
 |                                                                          |
-|                Forgot it?  (disclosure: quit, restart, Settings >        |
-|                Security > Reset; deletes saved passwords)   [ Quit ]     |
+|                Forgot it?  quit, delete vault.json in <config folder,    |
+|                absolute path>; every saved password is lost [ Quit ]     |
 |                                                                          |
 +--------------------------------------------------------------------------+
    no host names, no tab titles, no counts, no notifications
@@ -326,6 +342,10 @@ The design sketch it refines:
 5. **Unlock.** Lock screen password -> background `unlock` against the header held in memory
    (never a fresh read of `vault.json`, so replacing the file cannot unlock a locked window) ->
    `Unlocked`; the plugins render the surface again and restore each window's previous focus.
+   **At start** (Q1 re-ruled 2026-10-13) the process begins here: `app::init` ->
+   `VaultState::init` reads `vault.json` once and, when it is Ready, sets the screen lock before
+   `lock_screen::init` and before the main window opens, so the window's `LockScreen` plugin is
+   born locked and its first frame is the lock screen; the unlock starts the idle clock.
 6. **Change / Reset.** Settings dialogs -> `change_password` (one file, `.bak` scrubbed) or
    `reset` -> `VaultEvent::Reset` -> `SshSessionStore` removes every `sealed_password` and
    writes with the backup scrubbed -> `Uninitialised`; the lock timer stops.

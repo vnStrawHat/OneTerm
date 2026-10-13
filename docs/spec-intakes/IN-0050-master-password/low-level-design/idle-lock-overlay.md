@@ -119,6 +119,19 @@ edge cases), runs the KDF on the background executor and, on success, stores the
 focus (if the handle is still alive) and notifies; the surface comes back on the next frame.
 The `IdleClock` is stamped.
 
+**At start** (`US-0159` acceptance rework; intake Q1 re-ruled 2026-10-13). `VaultState::init`
+reads `vault.json` with `VaultState::load_at_start`, which sets the screen lock when the file is
+Ready (no event: nothing subscribes yet). `app::init` runs it before `lock_screen::init`, and
+both before the main window opens, so the window's `LockScreen` is **born locked** (the plugin
+is built in `Root::new`, after the workspace) and the first frame `Root` renders is the lock
+view: the application view is never rendered before the first unlock. The focus the workspace
+gave its first terminal while it was built is the focus the unlock restores. No timer runs
+while the startup lock is up (`restart_timer` finds the screen locked); the unlock stamps the
+`IdleClock` before the re-armed timer first reads it, however long the lock screen was up.
+Uninitialised and Unavailable (damaged, newer, unreadable) start unlocked: there is nothing to
+unlock with. The elevated instance follows the same rule read-only (Q5). No setting turns it
+off.
+
 ### 5. Wrong passwords
 
 - Inline "Wrong master password." under the input; the input is cleared.
@@ -153,10 +166,10 @@ The `IdleClock` is stamped.
 | With | Behaviour |
 | --- | --- |
 | Several windows | One `VaultState` per process; every `Root` has its own `LockScreen`; all lock and unlock together. A Settings window opened while locked is born locked. |
-| Elevated window (`IN-0043`) | Own process: reads `vault.json` (Q5) and locks on its own timer; unlock verifies the password read-only (`persistence-and-migration.md` § 7). Keeps its Administrator marker on the lock screen (M5). No vault in its profile means no lock. |
+| Elevated window (`IN-0043`) | Own process: reads `vault.json` (Q5), starts locked when it is usable, and locks on its own timer; unlock verifies the password read-only (`persistence-and-migration.md` § 7). Keeps its Administrator marker on the lock screen (M5). No vault in its profile means no lock. |
 | "Run as administrator" / UAC | The "+" menu is part of the dropped surface, so no elevation can start from a locked window. The UAC prompt itself is on the secure desktop and is not OneTerm's. |
 | Toasts / notifications | The notification layer is inside the surface: nothing shows while locked. Toasts raised meanwhile may expire unseen; failures that matter are also shown in place (connect dialog inline error, tab disconnect state). |
-| Open dialogs (connect, host key, session edit) | Hidden, not closed; back unchanged after unlock. A typed but unsent SSH password stays in that dialog's memory (accepted). |
+| Open dialogs (connect, host key, session edit) | Hidden, not closed; back unchanged after unlock. A typed but unsent SSH password stays in that dialog's memory (accepted). A dialog opened while locked does not keep the focus while locked and gets it at the unlock (As built, lock at startup). |
 | App menus | Windows and Linux draw them in-window (title bar): gone with the surface. macOS native menu items dispatch to the focused window; workspace handlers are unreachable; the few global handlers are harmless. Swapping the macOS menu while locked is a follow-up (untested platform). |
 | Native OS dialogs (file picker, Save dialog) | **Not covered by the lock**: a dialog open when the lock comes is a window of its own and stays usable over the lock screen. **Rule:** a continuation that applies a native dialog's result checks `VaultState::screen_locked(cx)` first and drops the result while locked (`US-0159` verify D2: the SSH key picker, the log-folder picker, SFTP upload and download Save). There is no shared picker wrapper; every new `prompt_for_paths` / `prompt_for_new_path` caller must follow the rule. |
 | Other keystroke interceptors | gpui runs every interceptor whatever an earlier one did, so the key that locks (late input) still reaches them. **Rule:** an interceptor that acts on a key returns early when `VaultState::screen_locked(cx)` (the Key Bindings recorder does, `US-0159` verify D1). |
@@ -259,9 +272,41 @@ Where the build differs from, or settles, the design above (`US-0159-idle-lock-s
 - **Timeout.** `lock_after_idle_minutes` is clamped to 1..=480 on read and parsed leniently (a
   non-integer loads as the default 15); the file is not rewritten for it.
 - **No-vault notice.** A plain Info notification naming Settings > Security; no button.
-- **Lock view text.** The reset explanation is always shown (no disclosure): the lock screen
-  cannot reset; quit and restart opens OneTerm unlocked (Q1), where Settings > Security > Reset
-  is. No eye toggle on the password input.
+- **Lock view text.** The reset explanation is always shown (no disclosure). Since the Q1
+  re-ruling it reads: the lock screen cannot reset the master password; quit OneTerm, then
+  delete `vault.json` in `<config folder>` (the absolute `config_dir()`, printed in full: a path
+  is not a secret, and the debug build's `config_dir()` is relative); OneTerm then starts
+  without a lock and every saved password is lost (`DEC-0021` rule 2); saved sessions are kept,
+  their passwords typed again. (Before the re-ruling it said that a restart opens OneTerm
+  unlocked, where Settings > Security > Reset is; with the startup lock that is no longer
+  true.) No eye toggle on the password input.
+- **Lock at startup** (acceptance rework 2026-10-13, § 4 "At start"):
+  `VaultState::load_at_start`. Two rules came with it, both general:
+  - **The lock screen is the only unlock surface while it is up.** `ensure_unlocked` (the
+    "unlock first" entry point of `US-0158`) opens nothing while the screen is locked; an Unlock
+    dialog under the lock would be refused (`WrongPhase`) and would pop up after the screen
+    unlock for a vault already open. No caller fires at startup today (the center always resets
+    to a local shell; connect dialogs are user-initiated); the guard makes it structural.
+  - **The lock keeps the keyboard.** A dialog opened under the lock (the crash-report dialog the
+    app opens at start, a host-key prompt from a connection started before an idle lock) moves
+    the focus to a view that is not drawn, where the interceptor stops every key, so typing on
+    the lock screen did nothing until the user clicked the input. On each render while locked,
+    `LockView` gives the input the focus back whenever the input does not have it (rework 2,
+    verify V1: the first version reclaimed only when the focus was outside the whole view, so a
+    click on the lock background, which focuses the view's own tracked handle, took the keyboard
+    away). A focus taken from outside the view (the dialog) is remembered.
+  - **The unlock focuses what took the focus under the lock** (rework 2, verify V2). The dialog
+    is hidden, not closed, and is on top after the unlock, so the remembered handle gets the
+    focus rather than the one saved when the lock came (otherwise keys typed "into the dialog"
+    reached the shell behind it). The dialog saved the lock input as the focus to restore when
+    it closes; that view is not drawn any more, so `LockScreen::render` (unlocked only) hands
+    the focus from the hidden lock view back to the one saved when the lock came.
+  - **Stale envelopes.** Deleting `vault.json` by hand leaves `sealed_password` envelopes in
+    `ssh_session.json`. `US-0158` already treats them cleanly with no vault: the connect dialog
+    shows the input with "Saved password unavailable: the master password was reset. Type the
+    password." and keeps the envelope until a new one replaces it; under a new vault the
+    envelope fails to open as `OtherVault` with the same kind of note. No code change; a test
+    pins it (`connect_dialog.rs`).
 - **Empty Enter** on the lock input is ignored: no Argon2id run, no failure counted (verify I4).
 - **Rework after verification** (`evidence/US-0159-verify.md`): the native-dialog and
   interceptor rules in § 7 (D1, D2); the Settings page reset recorded as a known limit (D3);

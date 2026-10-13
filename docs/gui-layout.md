@@ -196,8 +196,12 @@ Once a master password exists (`IN-0050`, `US-0159`), every OneTerm window — m
 and any later `Root` — shows only the lock screen after **Lock After Idle** minutes without
 keyboard or mouse input (Settings > Security > Screen Lock; 15 by default, 1-480, no "Never"),
 or at once on **Lock OneTerm** (app menu; Settings > Security > Lock Now; the `LockOneTerm`
-action, `ctrl-shift-l` by default and rebindable under Key Bindings > App Menu). Without a
-vault (not set up, or `vault.json` unusable) nothing locks and the action says why. The lock
+action, `ctrl-shift-l` by default and rebindable under Key Bindings > App Menu). It also
+starts locked: whenever OneTerm starts with a usable vault, every window's first frame is the
+lock screen and the application is not drawn before the master password is typed (intake Q1
+re-ruled 2026-10-13; always on, no setting); the idle timer starts at that unlock. Without a
+vault (not set up, or `vault.json` unusable) nothing locks, at start or later, and the action
+says why. The lock
 drops the vault key; the master password lifts it and unlocks the vault. Terminal output,
 timers and notifications are not input; a key, a mouse move, click or scroll, or switching to a
 OneTerm window is. Input that arrives later than the timeout (the machine slept, measured on
@@ -221,8 +225,13 @@ The lock view has its own title bar (drag, minimise, maximise, close; the elevat
 on show (Enter submits), the error line ("Wrong master password.", cleared input) and the
 back-off countdown shared with the master-password dialogs (2, 4, 8, 16, then 30 s from the
 fifth wrong password in a row), an Unlock button that spins while Argon2id runs off the UI
-thread, a paragraph on how to reset (the lock screen cannot; quitting and restarting opens
-OneTerm unlocked, where Settings > Security > Reset is), and **Quit OneTerm**. It names no
+thread, a paragraph on how to recover a forgotten master password (the lock screen cannot reset
+it: quit OneTerm and delete `vault.json` in the config folder, whose absolute path the
+paragraph prints; OneTerm then starts without a lock and every saved password is lost, while
+saved sessions are kept and ask for their passwords again), and **Quit OneTerm**. The password
+input keeps the keyboard while locked, whatever is clicked or opened under the lock; a dialog
+opened under it (a crash report at start) gets the focus at the unlock, and no Unlock dialog is
+ever stacked under the lock screen. It names no
 host, tab, session or notification. While locked, one app-wide keystroke interceptor stops
 every keystroke except text and the password input's own editing keys (a keystroke passes only
 inside the lock view, and only when every binding it resolves to there is `input::*` or

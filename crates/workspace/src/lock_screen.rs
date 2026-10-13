@@ -24,6 +24,10 @@
 //!   terminal pixel and a hidden terminal's output asks for no frame.
 //! - **input blocking**: while locked the interceptor stops every keystroke except
 //!   text and the lock input's own editing keys (see [`allowed_while_locked`]).
+//! - **startup** (`US-0159` rework, intake Q1 re-ruled 2026-10-13): a process that
+//!   starts with a usable vault starts screen-locked (`VaultState::load_at_start`),
+//!   so each window's plugin is born locked and its first frame is the lock view.
+//!   No timer runs until the first unlock, which stamps the idle clock.
 
 use std::cell::Cell;
 use std::time::{Duration, Instant, SystemTime};
@@ -61,9 +65,19 @@ const LOCK_VIEW_ACTIONS: [&str; 2] = ["input::", "root::"];
 /// machine slept is noticed soon after the resume even without input.
 const RECHECK: Duration = Duration::from_secs(60);
 
-/// Shown on the lock screen (intake Q7: no reset here; Q1: a restarted OneTerm
-/// opens unlocked).
-const FORGOT_TEXT: &str = "Forgot it? The lock screen cannot reset the master password. Quit OneTerm and start it again: it opens unlocked, and Settings > Security > Reset deletes the master password and every saved password. Your saved sessions are kept; the sessions open now end when OneTerm quits.";
+/// How to recover a forgotten master password, shown on the lock screen. Intake
+/// Q7: no reset here; Q1 (re-ruled 2026-10-13): a restarted OneTerm is locked
+/// too while `vault.json` exists, so the way back is deleting it by hand, which
+/// loses every saved password (`DEC-0021` rule 2). The folder is printed in full:
+/// a path is not a secret, and the debug build's `config_dir()` is relative.
+fn forgot_text() -> String {
+    let folder = oneterm_core::config_dir();
+    let folder = std::path::absolute(&folder).unwrap_or(folder);
+    format!(
+        "Forgot it? The lock screen cannot reset the master password. Quit OneTerm, then delete vault.json in the folder \"{}\". OneTerm then starts without a lock, and every saved password is lost. Your saved sessions are kept; type their passwords again.",
+        folder.display()
+    )
+}
 
 /// Install the idle clock, the keystroke interceptor, the deadline timer, the
 /// [`LockOneTerm`] handler and the [`LockScreen`] plugin. Call from `app::init`
@@ -305,7 +319,9 @@ fn allowed_while_locked(
 pub struct LockScreen {
     lock_view: Entity<LockView>,
     locked: bool,
-    /// The focus to give back on unlock.
+    /// The focus the window had when the lock came: given back on unlock
+    /// unless something took the focus under the lock, and again whenever the
+    /// focus lands on the hidden lock view afterwards.
     previous_focus: Option<WeakFocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
@@ -358,7 +374,14 @@ impl LockScreen {
                 view.frames,
                 view.since.elapsed().as_secs_f32()
             );
-            if let Some(focus) = self.previous_focus.take().and_then(|focus| focus.upgrade()) {
+            // A view that took the focus under the lock (a dialog opened then:
+            // the crash report at start, a host-key prompt) is on top now, so
+            // it gets the keyboard; otherwise the focus from before the lock.
+            let taken = self.lock_view.update(cx, |view, _| view.taken.take());
+            let focus = taken
+                .and_then(|focus| focus.upgrade())
+                .or_else(|| self.previous_focus.as_ref().and_then(|f| f.upgrade()));
+            if let Some(focus) = focus {
                 window.defer(cx, move |window, cx| focus.focus(window, cx));
             }
         }
@@ -367,7 +390,15 @@ impl LockScreen {
 }
 
 impl Render for LockScreen {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Rendered only while unlocked. A dialog opened under the lock saved the
+        // lock input as the focus to restore when it closes; that view is not
+        // drawn any more, so hand the keyboard back to the window's own focus.
+        if self.lock_view.read(cx).holds_focus(window, cx)
+            && let Some(focus) = self.previous_focus.as_ref().and_then(|f| f.upgrade())
+        {
+            focus.focus(window, cx);
+        }
         // Raw window listeners see every mouse event in both phases, whatever is
         // on top (an open dialog included); they are re-registered each frame
         // the root paints. Capture phase, so input that locks (it came after the
@@ -418,6 +449,12 @@ impl gpui_base::RootPlugin for LockScreen {
 /// sessions underneath.
 struct LockView {
     input: Entity<InputState>,
+    /// The whole view's focus: a click on the lock background lands on it.
+    focus: FocusHandle,
+    /// What took the focus away from the lock view while locked (a dialog
+    /// opened under it), given the focus on unlock.
+    taken: Option<WeakFocusHandle>,
+    forgot: SharedString,
     error: Option<SharedString>,
     busy: bool,
     /// A countdown task is repainting the back-off line.
@@ -449,6 +486,9 @@ impl LockView {
         }
         Self {
             input,
+            focus: cx.focus_handle(),
+            taken: None,
+            forgot: forgot_text().into(),
             error: None,
             busy: false,
             ticking: false,
@@ -462,9 +502,16 @@ impl LockView {
         self.input.read(cx).focus_handle(cx)
     }
 
+    /// Whether the focus is on this view or its input (both hidden while
+    /// unlocked).
+    fn holds_focus(&self, window: &Window, cx: &App) -> bool {
+        self.focus.is_focused(window) || self.input_focus(cx).is_focused(window)
+    }
+
     /// Start a lock with an empty input and no message.
     fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.error = None;
+        self.taken = None;
         self.frames = 0;
         self.since = Instant::now();
         self.input
@@ -547,8 +594,22 @@ impl LockView {
 }
 
 impl Render for LockView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frames += 1;
+        // Rendered only while locked: the password input always has the
+        // keyboard. A click on the background focuses the view itself; a dialog
+        // opened under the lock (a crash report at start, a host-key prompt)
+        // focuses a view that is not drawn, where the interceptor stops every
+        // key. The latter is remembered and gets the focus on unlock.
+        let input = self.input_focus(cx);
+        if !input.is_focused(window) {
+            if !self.focus.contains_focused(window, cx)
+                && let Some(focus) = window.focused(cx)
+            {
+                self.taken = Some(focus.downgrade());
+            }
+            input.focus(window, cx);
+        }
         let wait = self.retry_after(cx);
         if wait.is_some() {
             self.start_countdown(cx);
@@ -562,6 +623,7 @@ impl Render for LockView {
         v_flex()
             .id("lock-screen")
             .key_context(LOCK_CONTEXT)
+            .track_focus(&self.focus)
             .size_full()
             .font_family(theme.font_family.clone())
             .bg(theme.background)
@@ -622,7 +684,13 @@ impl Render for LockView {
                                         }),
                                 ),
                             )
-                            .child(div().pt_4().text_xs().text_color(muted).child(FORGOT_TEXT))
+                            .child(
+                                div()
+                                    .pt_4()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(self.forgot.clone()),
+                            )
                             .child(
                                 h_flex().justify_end().child(
                                     Button::new("lock-screen-quit")
