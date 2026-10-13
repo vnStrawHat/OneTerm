@@ -41,18 +41,20 @@ Facts that drive the design below:
 
 ## 2. Roster
 
-Five project subagents, defined in `.claude/agents/<name>.md` (owner simplification,
-2026-10-13). "Effort" is the thinking budget in the definition's frontmatter. The coordinator
-still names the agent, its model and its effort in the report of every dispatch (owner rule,
-2026-09-28).
+Five project subagents, defined in `.claude/agents/<name>.md` (owner rulings 2026-10-13).
+"Effort" is the thinking budget in the definition's frontmatter. The coordinator still names
+the agent, its model and its effort in the report of every dispatch (owner rule, 2026-09-28).
 
 | Agent | Model | Effort | Does | Resumed for |
 | --- | --- | --- | --- | --- |
-| **advisor** | opus | high | research, assessment of issues and proposals, records consistency review; writes reports and intake Source sections only; no cargo | follow-up questions |
-| **architect** | opus | high | Spec Intake, HLD, LLDs for the high-risk lane, DEC candidates, packet list, numbered owner questions, scenario walkthrough; no cargo | reconciling records after an owner ruling |
-| **coder** | opus | high | one packet end to end: records-first commit, code, tests, in-worktree gate, GUI walk | **rework** (same worktree, cherry-picks the verifier's tests) |
-| **coder-lite** | sonnet | medium | tiny-lane packets, doc reconciliation, mechanical scripted fixes; stops when a design choice appears | — |
-| **ui-verifier** | opus | xhigh | independent adversarial verification of code and UI: gate rerun, attacks, independent reproduction, mutation checks, pinned tests, evidence file, PASS/FAIL | **targeted re-verify** |
+| **advisor** | opus | high | review (a spec on the architect's request; a packet's code diff and tests, with pinned tests and an evidence file), risk analysis, research | follow-up questions, targeted re-review |
+| **architect** | opus | high | the spec: Spec Intake, HLD, LLDs for the high-risk lane, DEC candidates, packet list, numbered owner questions, scenario walkthrough; may request an advisor spec review; no cargo | reconciling records after an owner ruling |
+| **coder** | sonnet | high | one packet from its spec: records-first commit, code, unit tests, the in-worktree quality gate, evidence; reports whether the change is UI-visible | **rework** after a review (same worktree, cherry-picks the reviewer's tests) |
+| **coder-lite** | sonnet | low | small tasks: configuration, formatting, environment setup, running the quality gate or a build and reporting its evidence, doc reconciliation, mechanical fixes | — |
+| **ui-verifier** | opus | xhigh | UI only: launches the build with a private profile, walks the acceptance list, screenshots from another process, reviews layout / text / focus / keyboard / theme, verdict on whether the UI meets the requirements; never reviews code | targeted re-walk after a UI fix |
+
+Every change that touches the UI goes to ui-verifier after the coder's gate. Code review is
+the advisor's job, requested by the coordinator for normal and high-risk packets.
 
 Not a subagent: the coordinator (this session: classification, briefs, merges, `harness.db`,
 the gate on `main`, memory) and the owner (rulings, pushes, the manual walks no agent can do:
@@ -60,14 +62,13 @@ UAC elevation, real SSH hosts, physical keys, sleep/resume, taskbar).
 
 ### Why these models
 
-- **opus/high for advisor, architect, coder**: every brief in IN-0050 needed 10-20 documents
-  plus code and judgement calls the LLD left open; a wrong design choice in a secrets feature
-  costs more than the model saving.
-- **opus/xhigh for ui-verifier**: its job is to find what the architect and the coder both
-  missed; extra budget here is the cheapest insurance in the pipeline (a found Medium costs an
-  8-minute rework, a shipped one costs a BUG packet).
-- **sonnet/medium for coder-lite**: the shape of the change is already decided; it needs
-  care, not depth.
+- **opus/high for advisor and architect**: judgement over 10-20 documents plus code, and a
+  wrong design or a missed risk in a secrets feature costs more than the model saving.
+- **sonnet/high for coder**: the spec and the LLD already decide the shape; the coder needs
+  care and a full gate, and the advisor's code review plus the ui-verifier catch what it misses.
+- **sonnet/low for coder-lite**: scripted, mechanical tasks.
+- **opus/xhigh for ui-verifier**: it is the last eye on what the user sees; a UI defect that
+  ships costs a reopened packet.
 
 ## 3. Workflow
 
@@ -77,33 +78,33 @@ owner request
   ▼
 Coordinator: classify (tiny / normal / high-risk), check main vs origin, disk, RAM
   │
-  ├─ unknown subject or an issue to assess? ──► advisor ──► (merged docs-only) ──┐
-  │                                                                               ▼
-  └───────────────────────────────────────────────────────────────────────► architect
+  ├─ unknown subject or an issue to assess? ──► advisor (research / risk analysis)
+  │                                              └► merged docs-only ──┐
+  │                                                                     ▼
+  └──────────────────────────────────────────────────────────────► architect (the spec)
                                                               │ intake + HLD (+ LLDs if high-risk)
+                                                              ├─ asks for a spec review? ──► advisor ──► architect fixes (resume)
                                                               ▼
-                                                     advisor (records consistency pass)
-                                                              │ findings → architect fixes (resume)
-                                                              ▼
-Coordinator: merge records (docs-only, no cargo gate), harness `intake` row,
-             report to the owner: numbered questions + a SCENARIO WALKTHROUGH
-             ("app starts → ...", "you save a password → ...") in the owner's language
+Coordinator: merge records (docs-only), harness `intake` row, report to the owner:
+             numbered questions + a SCENARIO WALKTHROUGH in the owner's language
   │
   ▼
 Owner ruling ("as recommended" or per question)
   │
   ▼  per packet, smallest viable first, serial unless disk ≥ 20 GB per builder and RAM allows two
-coder ── records-first commit → code → tests → in-worktree gate → GUI walk → report
-  │
+coder ── records-first commit → code → unit tests → in-worktree gate → evidence → report
+  │        (coder-lite for config / format / env / gate runs / builds / small mechanical tasks)
   ▼
-ui-verifier (never the coder) ── own branch verify/<id> on the implementer's head
+advisor (code review, never the coder) ── branch verify/<id> on the coder's head, pinned tests, evidence
   │
-  ├─ FAIL or PASS-with-defects ──► resume coder (rework on its branch, cherry-picks the
-  │                                 verifier's tests) ──► resume ui-verifier (targeted re-verify)
-  │                                 (repeat until PASS; two cycles were enough every time)
+  ├─ FAIL or PASS-with-defects ──► resume coder (rework, cherry-picks the advisor's tests)
+  │                                 ──► resume advisor (targeted re-review)
   ▼
-Coordinator: `git merge --no-ff <verify head> -F <msg file>` into main
-             → full gate on main (background, CARGO_BUILD_JOBS=3)
+UI-visible change? ──► ui-verifier (walks the acceptance list on the coder's build, screenshots,
+  │                     UI verdict) ──► UI defects → resume coder → resume ui-verifier
+  ▼
+Coordinator: `git merge --no-ff <reviewed head> -F <msg file>` into main
+             → full gate on main (background; CARGO_BUILD_JOBS=3, drop to 2 or 1 on rustc 0xc0000409)
              → harness `story` row (+ `decision` row when a DEC was accepted)
              → delete target/debug/incremental and target/fast-dev
              → remove the finished worktrees
@@ -141,25 +142,26 @@ next packet … → intake close → owner manual walks → platform proof from 
 
 ## 4. Brief templates (what every brief of that role must contain)
 
-- **advisor (research)**: the question; where to look first in the repo; which web sources count;
+- **advisor (research / risk)**: the question; where to look first in the repo; which web sources count;
   "if nothing defines it, say so and list the nearest matches"; the records to write; the
   15-line executive summary format.
 - **architect**: the request verbatim; the facts already verified by the coordinator; the
   mandatory reading list; the file set to write (intake, HLD, LLD per concern for high-risk);
   packet ids to use (check reservations by other intakes); the DEC candidates to propose;
   "numbered owner questions with a recommendation each".
-- **advisor (records review)**: the file set; the checklist (template sections, formula vs list,
+- **advisor (spec review)**: the file set; the checklist (template sections, formula vs list,
   dropped choices still described elsewhere, every Q numbered, security section, the two
   python checks); "findings only, no rewrites".
 - **coder**: the ruling ("all Q as recommended" or per item); the carry-forwards from
   earlier packets' evidence; the exact gate commands for the worktree; the GUI walk steps;
   "record every choice the LLD leaves open in the packet Plan"; "what the verifier should
   attack first".
-- **ui-verifier**: the coder's head and worktree; the implementer's own weakest-points
+- **advisor (code review)**: the coder's head and worktree; the implementer's own weakest-points
   list first; attack list by concern; "independent reproduction where possible" (a second
   implementation of a format, a GUI walk of a boundary); "add tests that pin defects; do not
   fix code"; the evidence file path and commit message; verdict format.
-- **Rework (resume)**: the verifier's head to cherry-pick; each defect with file:line and the
+- **ui-verifier**: the worktree path, the built binary, the acceptance list and wireframes, the earlier GUI driver scripts; "UI only, no code review"; the evidence section format.
+- **Rework (resume)**: the reviewer's head to cherry-pick; each defect with file:line and the
   required fix shape; "flip the pinned tests"; the gate; the commit message.
 - **Re-verify (resume)**: the rework head; "attack each fix" with the specific adversarial
   cases; the gate; the evidence section title.
@@ -169,8 +171,8 @@ next packet … → intake close → owner manual walks → platform proof from 
 1. Add a **records consistency pass** (advisor) between design and the owner ruling.
 2. Add the **scenario walkthrough** to the owner report before the first packet of any
    UX-visible intake, so re-rulings happen on paper.
-3. The **ui-verifier** runs at xhigh effort.
+3. Code review is the **advisor**'s job; the **ui-verifier** (xhigh) walks the UI only, and every UI-visible change goes through it.
 4. Keep the resume-based rework loop; it is the main reason four high-risk packets shipped
    in two working days.
-5. Collapse the roster to five project subagents (`.claude/agents/`): advisor, architect,
-   coder, coder-lite, ui-verifier.
+5. Collapse the roster to five project subagents (`.claude/agents/`, committed): advisor,
+   architect, coder (sonnet/high), coder-lite (sonnet/low), ui-verifier (UI only).

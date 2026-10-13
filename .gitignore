@@ -18,7 +18,8 @@ harness.db*
 # Local tooling / scratch that must never be committed (HYG-20: no one-off entries — use
 # generic patterns).
 .pi/
-.claude/
+.claude/*
+!.claude/agents/
 .cargo/
 .exe/
 /*.exe
