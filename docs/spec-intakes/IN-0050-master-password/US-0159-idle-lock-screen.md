@@ -25,7 +25,8 @@ Created: 2026-10-09
 - Spec Intake, when required: [`IN-0050`](IN-0050.md); owner rulings Q1-Q10 accepted as
   recommended (2026-10-09; Q1: no lock at startup; Q2: 15 minutes, 1-480, no "Never"; Q5: the
   elevated window applies the lock read-only; Q6: quit allowed while locked; Q7: no reset on the
-  lock screen, which explains how to reset);
+  lock screen, which explains how to reset); **Q1 re-ruled 2026-10-13 (owner): lock at startup
+  = yes** when a usable vault exists (acceptance rework below);
   [`DEC-0021`](../../decisions/DEC-0021-secrets-at-rest-are-sealed-by-a-master-password-vault.md).
   Depends on `US-0157` (merged, main @ce80f17c); independent of `US-0158` (merged).
 
@@ -38,6 +39,8 @@ application content is not built, laid out or painted while locked, so no termin
 name, dialog or toast is on screen and terminal output costs no frames. Only the master password
 (checked against the header held in memory) brings the windows back, with focus where it was.
 Quit stays possible. Terminal output never counts as activity. No vault means no lock.
+Since the acceptance rework (2026-10-13), whenever OneTerm starts with a usable vault every
+window starts covered by the same lock screen, from its first frame.
 
 ## Scope
 
@@ -94,6 +97,24 @@ From the `IN-0050` US-0159 candidate, made concrete:
   read-only (elevated: unit test only).
 - [x] Unit tests leave no temporary directory behind and assert timing only as ratios.
 
+Acceptance rework 2026-10-13 (owner re-ruled Q1: lock at startup):
+
+- [ ] With a usable vault (Ready), every window starts locked: the first frame of the main
+  window is the lock screen, the application view is never rendered before the first unlock.
+  Elevated instance: the same, read-only.
+- [ ] No vault (Uninitialised) or an unusable one (Damaged / newer / unreadable): no startup
+  lock; Settings > Security shows the state as before.
+- [ ] The lock screen names the config folder and says how to recover a forgotten password
+  (quit, delete `vault.json`, every saved password lost); no Reset on it (Q7); Quit works.
+- [ ] The idle clock starts at the first unlock (no timer while the startup lock is up); the
+  back-off applies at startup as after an idle lock.
+- [ ] Nothing stacks a second unlock surface on the lock screen (`ensure_unlocked` while the
+  screen is locked opens nothing), and a dialog opened under the lock (a crash report at start)
+  does not take the keyboard away from the lock input.
+- [ ] A session whose `sealed_password` outlived a deleted `vault.json` asks for the password
+  ("the master password was reset"), keeps the envelope until replaced, never panics.
+- [ ] Correct password at startup: the application appears with the focus in the terminal.
+
 ## Documentation
 
 ### Owning Docs Reviewed
@@ -121,6 +142,12 @@ From the `IN-0050` US-0159 candidate, made concrete:
   `docs/agents/structure.md` (workspace file list), `IN-0050.md` (US-0159 created).
 
 Reason: a new window-level surface, a new persisted field and a new action.
+
+Acceptance rework 2026-10-13: `IN-0050.md` (Q1 re-ruled, Q7 note, threat-model bullet, US-0159
+candidate), `high-level-design.md` (state machine: start -> IdleLocked when Ready; wireframe
+reset text), `low-level-design/idle-lock-overlay.md` (§ startup, the reset paragraph, as built),
+`docs/gui-layout.md` (lock section). No persisted field changes (no new setting); `DEC-0021`
+unchanged (its rule 2, reset loses every saved password, is what the lock screen now cites).
 
 ### Reconciliation
 
@@ -225,6 +252,51 @@ The verifier's other notes, recorded (not defects):
 - **I9:** OSC 9;4 taskbar progress and OSC 52 clipboard writes still leave a locked OneTerm.
 - **Follow-up:** the minimised-window DWM thumbnail stays an open, unverified risk; the fix is
   `DWMWA_FORCE_ICONIC_REPRESENTATION` while locked (needs the raw `HWND`).
+
+### Acceptance rework 2026-10-13: lock at startup
+
+**What changed and why.** The owner re-ruled intake Q1 (2026-10-13): whenever OneTerm starts and
+a master-password vault exists, the app must ask for the master password first. Every window
+starts covered by this packet's lock screen, exactly as after an idle lock. No new setting: it
+is always on while a vault exists. Reopened as acceptance rework of this packet (not a new BUG:
+the lock screen was built but not yet accepted by the owner).
+
+Coordinator rulings recorded here:
+
+- `VaultStatus::Ready` at start -> screen locked from the first frame (no flash of the
+  application). Uninitialised -> no lock (unchanged). Unavailable (Damaged / newer /
+  unreadable) -> no startup lock (nothing to unlock with); the UI opens and Settings > Security
+  shows the state as today. Elevated instance: the same rule, read-only (Q5); an elevated
+  profile without a vault does not lock.
+- Q7 stays: no Reset on the lock screen. Its paragraph is rewritten for the new rule: unlocking
+  needs the master password; if it is forgotten, quit, delete `vault.json` in the OneTerm config
+  folder (the lock screen prints the absolute path: a path is not a secret), and every saved
+  password is lost (`DEC-0021` rule 2). Quit stays (Q6).
+- Stale envelopes after a manual `vault.json` deletion are made clean (or recorded as a
+  follow-up BUG candidate if the fix exceeds about 60 lines).
+- The idle clock starts at the first unlock; no timer while the startup lock is up.
+- The lock screen is the only unlock surface while it is up: no `ensure_unlocked` caller may
+  stack an Unlock dialog on it.
+
+Plan:
+
+- [ ] `VaultState::load_at_start` (`init` uses it): `load` plus the screen lock when a usable
+  vault was read; no event (nothing subscribes yet). Tests: Ready -> locked, Uninitialised and
+  Unavailable -> not, elevated Ready -> locked and unlocks read-only, back-off at startup.
+- [ ] `ensure_unlocked` opens nothing while the screen is locked (one guard in the shared
+  function, every caller covered).
+- [ ] Lock view: keep the keyboard on the lock view while locked (a dialog opened under the
+  lock, such as a crash report at start, focuses a view that is not drawn); the reset paragraph
+  rewritten with the config folder path.
+- [ ] Workspace tests: a window built over a startup-locked vault never renders the application,
+  the lock input has the focus and takes typing, the correct password brings the application
+  and the focus that the application set at construction; the idle timer starts at that unlock
+  even when the lock screen was up longer than the timeout.
+- [ ] Stale envelope: check `US-0158`'s connect and session dialogs with a vault deleted by hand;
+  add the test.
+- [ ] Docs as built: HLD state machine, `idle-lock-overlay.md` (startup, reset paragraph),
+  `docs/gui-layout.md` lock section.
+- [ ] Gate and GUI walk (first frame captured from another process).
 
 ## Decisions
 
