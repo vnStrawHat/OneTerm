@@ -801,3 +801,205 @@ async fn nothing_under_the_startup_lock_takes_the_keyboard(cx: &mut TestAppConte
     assert_eq!(ready.get(), 1);
     let _ = (f.content, f.renders, f.quits);
 }
+
+// ── Verification of 6be2402a (`evidence/US-0159-verify.md`, lock at startup) ──
+
+/// A point on the lock view's own background: left of the centred card, below
+/// the title bar.
+fn lock_background(cx: &mut VisualTestContext) -> gpui::Point<gpui::Pixels> {
+    let size = cx.update(|window, _| window.viewport_size());
+    gpui::point(gpui::px(8.), size.height / 2.)
+}
+
+/// Attack (b): a click on the lock screen's background. gpui moves the focus to
+/// a `track_focus` element on mouse down, and the rework tracks a handle on the
+/// whole lock view; the render-time reclaim only fires when the focus is
+/// outside that view, so after the click the input has lost the keyboard.
+/// Pins defect V1 (what happens today); flip the marked assertions once fixed.
+#[gpui::test]
+async fn verifier_startup_a_background_click_takes_the_keyboard_from_the_input(
+    cx: &mut TestAppContext,
+) {
+    let f = startup_fixture(cx);
+    let cx = f.cx;
+    let view = lock_view(cx);
+    let (input, whole) = cx.update(|_, cx| {
+        let view = view.read(cx);
+        (view.input_focus(cx), view.focus.clone())
+    });
+    cx.simulate_input("ab");
+    assert_eq!(typed(cx), "ab");
+    let at = lock_background(cx);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let (on_input, on_whole) =
+        cx.update(|window, _| (input.is_focused(window), whole.is_focused(window)));
+    cx.simulate_input("c");
+    cx.run_until_parked();
+    let after = typed(cx);
+    // V1: today the click leaves the focus on the view, not the input.
+    assert!(on_whole, "the click did not focus the whole lock view");
+    assert!(
+        !on_input,
+        "V1 fixed? the input kept the keyboard: flip this test"
+    );
+    assert_eq!(
+        after, "ab",
+        "V1 fixed? typing reached the input: flip this test"
+    );
+    // Nothing else leaks: still locked, the application never drawn.
+    assert!(is_locked(&f.vault, cx));
+    assert_eq!(f.renders.get(), 0);
+    let _ = (f.content, f.quits);
+}
+
+/// Attack (b): Tab on the lock screen. `Root`'s Tab handler (focus next) is not
+/// on the dispatch path while the surface is replaced, so Tab never leaves the
+/// password input: Unlock and Quit are reached with Enter, the mouse, or a
+/// window close (Q6). The gpui test platform then delivers the unhandled tab as
+/// text; Windows filters control characters (walked: Tab, then the right
+/// password, unlocks), so no text is asserted here.
+#[gpui::test]
+async fn verifier_startup_tab_does_not_leave_the_lock_input(cx: &mut TestAppContext) {
+    let f = startup_fixture(cx);
+    let cx = f.cx;
+    let view = lock_view(cx);
+    let input = cx.update(|_, cx| view.read(cx).input_focus(cx));
+    for keys in ["tab", "shift-tab", "tab tab"] {
+        cx.simulate_keystrokes(keys);
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(input.is_focused(window), "{keys} moved the focus"));
+    }
+    assert!(is_locked(&f.vault, cx));
+    assert_eq!(f.quits.get(), 0);
+    let _ = (f.content, f.renders);
+}
+
+/// Attack (b): the render-time reclaim must not turn into a frame loop, with
+/// or without a dialog fighting for the focus under the lock. 10 s of fake
+/// time: a blinking cursor costs about 20 frames; a loop would cost thousands
+/// (or never park).
+#[gpui::test]
+async fn verifier_startup_an_idle_lock_screen_draws_no_frame_loop(cx: &mut TestAppContext) {
+    let f = startup_fixture(cx);
+    let cx = f.cx;
+    let view = lock_view(cx);
+    let frames = |cx: &mut VisualTestContext| cx.update(|_, cx| view.read(cx).frames);
+    let ten_seconds = |cx: &mut VisualTestContext| {
+        let start = frames(cx);
+        for _ in 0..20 {
+            cx.executor().advance_clock(Duration::from_millis(500));
+            cx.run_until_parked();
+        }
+        frames(cx) - start
+    };
+    let idle = ten_seconds(cx);
+    cx.update(|window, cx| window.open_dialog(cx, |dialog, _, _| dialog));
+    cx.run_until_parked();
+    let with_dialog = ten_seconds(cx);
+    eprintln!("startup lock frames in 10 s: idle {idle}, with a dialog under it {with_dialog}");
+    assert!(idle <= 30, "{idle} frames in 10 s idle");
+    assert!(
+        with_dialog <= 30,
+        "{with_dialog} frames in 10 s with a dialog"
+    );
+    let _ = (f.content, f.renders, f.quits);
+}
+
+/// Attack (a): a window opened while the startup lock is up (a second window,
+/// Settings) is born locked and never renders its application view.
+#[gpui::test]
+async fn verifier_startup_a_window_opened_under_the_startup_lock_never_renders(
+    cx: &mut TestAppContext,
+) {
+    let f = startup_fixture(cx);
+    let cx = f.cx;
+    let renders = Rc::new(Cell::new(0));
+    let counted = renders.clone();
+    let second = cx.update(|_, cx| {
+        cx.open_window(gpui::WindowOptions::default(), |window, cx| {
+            let view = cx.new(|cx| Content {
+                focus: cx.focus_handle(),
+                renders: counted,
+            });
+            cx.new(|cx| Root::new(view, window, cx))
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    assert_eq!(renders.get(), 0, "the second window drew its application");
+    let born_locked = cx.update(|_, cx| {
+        second
+            .update(cx, |root, _, cx| {
+                root.plugin::<LockScreen>().unwrap().read(cx).locked
+            })
+            .unwrap()
+    });
+    assert!(born_locked);
+    f.vault
+        .update(cx, |state, cx| {
+            state.unlock_screen(SecretString::new(V1_PASSWORD), cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+    assert!(renders.get() > 0, "the second window stayed covered");
+    assert!(f.renders.get() > 0);
+    let _ = (f.content, f.quits);
+}
+
+/// Attack (b): a dialog opened under the startup lock (the crash report). After
+/// the unlock the plugin gives the focus back to what the application focused
+/// while it was built, not to the dialog on top. Pins what happens today (V2):
+/// the dialog is open, the focus is behind it.
+#[gpui::test]
+async fn verifier_startup_after_the_unlock_a_dialog_opened_under_the_lock_has_no_focus(
+    cx: &mut TestAppContext,
+) {
+    let f = startup_fixture(cx);
+    let cx = f.cx;
+    cx.update(|window, cx| window.open_dialog(cx, |dialog, _, _| dialog));
+    cx.run_until_parked();
+    f.vault
+        .update(cx, |state, cx| {
+            state.unlock_screen(SecretString::new(V1_PASSWORD), cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+    let content_focus = cx.update(|_, cx| f.content.read(cx).focus.clone());
+    let (dialog_open, behind) = cx.update(|window, cx| {
+        (
+            window.has_active_dialog(cx),
+            content_focus.is_focused(window),
+        )
+    });
+    assert!(dialog_open);
+    assert!(
+        behind,
+        "V2 fixed? the focus left the view behind the dialog: flip this test"
+    );
+    let _ = (f.renders, f.quits);
+}
+
+/// Attack (e): the first key after a startup lock left up for hours is not
+/// "late input" (the unlock stamped the clock), and it reaches the application.
+#[gpui::test]
+async fn verifier_startup_the_first_key_after_a_long_startup_lock_does_not_relock(
+    cx: &mut TestAppContext,
+) {
+    let f = startup_fixture(cx);
+    let cx = f.cx;
+    idle_for(Duration::from_secs(9 * 60 * 60), cx);
+    cx.simulate_input(V1_PASSWORD);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(!is_locked(&f.vault, cx));
+    cx.simulate_keystrokes("x");
+    cx.run_until_parked();
+    assert!(
+        !is_locked(&f.vault, cx),
+        "the first key after the unlock locked"
+    );
+    let _ = (f.content, f.renders, f.quits);
+}
