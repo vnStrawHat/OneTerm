@@ -1130,3 +1130,102 @@ async fn the_app_wide_screen_lock_check_follows_the_global(cx: &mut TestAppConte
     unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
     assert!(!cx.update(|cx| VaultState::screen_locked(cx)));
 }
+
+// ── Lock at startup (`US-0159` acceptance rework, Q1 re-ruled 2026-10-13) ──
+
+fn state_at_start(dir: &Path, read_only: bool, cx: &mut TestAppContext) -> Entity<VaultState> {
+    cx.new(|_| VaultState::load_at_start(dir.to_path_buf(), read_only))
+}
+
+/// A usable vault covers the screen before any input; only the lock screen's
+/// own unlock lifts it, and no operation is running that a lock could fight.
+#[gpui::test]
+async fn a_usable_vault_at_start_locks_the_screen_before_any_input(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_at_start(&dir, false, cx);
+    let events = record_events(&state, cx);
+    state.read_with(cx, |state, _| {
+        assert!(state.is_screen_locked());
+        assert_eq!(state.phase(), VaultPhase::Locked);
+        assert!(!state.is_busy() && !state.locked_meanwhile);
+        assert!(!state.can_change() && !state.can_reset());
+    });
+    assert!(matches!(
+        unlock(&state, V1_PASSWORD, cx).await.unwrap_err(),
+        VaultActionError::WrongPhase
+    ));
+    unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
+    assert!(!screen_locked(&state, cx));
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+    assert_eq!(*events.borrow(), [VaultEvent::Unlocked]);
+}
+
+/// No vault, or one that cannot be unlocked (damaged, newer, unreadable): no
+/// startup lock, nothing to unlock with. The elevated instance follows the
+/// same rule.
+#[gpui::test]
+fn no_or_an_unusable_vault_at_start_does_not_lock(cx: &mut TestAppContext) {
+    let empty = test_dir();
+    let damaged = test_dir();
+    std::fs::write(damaged.join("vault.json"), "not json").unwrap();
+    let newer = test_dir();
+    std::fs::write(newer.join("vault.json"), V9).unwrap();
+    // A directory where the file should be: present but unreadable.
+    let unreadable = test_dir();
+    std::fs::create_dir(unreadable.join("vault.json")).unwrap();
+    for (dir, expected) in [
+        (&empty, VaultPhase::Uninitialised),
+        (&damaged, VaultPhase::Unavailable),
+        (&newer, VaultPhase::Unavailable),
+        (&unreadable, VaultPhase::Unavailable),
+    ] {
+        for read_only in [false, true] {
+            let state = state_at_start(dir, read_only, cx);
+            assert_eq!(phase(&state, cx), expected);
+            assert!(!screen_locked(&state, cx), "{expected:?} locked at start");
+        }
+    }
+}
+
+/// Q5: the elevated instance starts locked too and unlocks read-only (the
+/// below-default fixture is not rehashed).
+#[gpui::test]
+async fn the_elevated_window_starts_locked_and_unlocks_read_only(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_at_start(&dir, true, cx);
+    assert!(screen_locked(&state, cx));
+    unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
+    assert_eq!(phase(&state, cx), VaultPhase::Unlocked);
+    assert_eq!(read(&dir, "vault.json").unwrap(), V1);
+    assert!(!dir.join("vault.bak").exists());
+}
+
+/// The back-off applies to the startup lock as to an idle one.
+#[gpui::test]
+async fn wrong_passwords_at_start_back_off(cx: &mut TestAppContext) {
+    let dir = fixture_dir();
+    let state = state_at_start(&dir, false, cx);
+    for _ in 0..4 {
+        unlock_screen(&state, "wrong", cx).await.unwrap_err();
+        assert!(
+            state
+                .read_with(cx, |state, _| state.retry_after())
+                .is_none()
+        );
+    }
+    unlock_screen(&state, "wrong", cx).await.unwrap_err();
+    assert!(
+        state
+            .read_with(cx, |state, _| state.retry_after())
+            .is_some()
+    );
+    assert!(matches!(
+        unlock_screen(&state, V1_PASSWORD, cx).await.unwrap_err(),
+        VaultActionError::RetryIn(_)
+    ));
+    assert!(screen_locked(&state, cx));
+    state.update(cx, |state, _| state.retry_at = Some(Instant::now()));
+    unlock_screen(&state, V1_PASSWORD, cx).await.unwrap();
+    assert!(!screen_locked(&state, cx));
+    assert_eq!(state.read_with(cx, |state, _| state.failures), 0);
+}

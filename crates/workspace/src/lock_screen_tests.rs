@@ -102,6 +102,17 @@ struct Fixture<'a> {
 /// from the floor-parameter fixture, with a few global bindings shaped like
 /// OneTerm's (one shares its keys with the input's word selection).
 fn fixture(cx: &mut TestAppContext) -> Fixture<'_> {
+    build_fixture(cx, false)
+}
+
+/// [`fixture`] as OneTerm starts (`US-0159` rework): the vault is read with
+/// `load_at_start`, and the application view focuses itself while it is built,
+/// as the workspace focuses its first terminal before `Root` builds the plugins.
+fn startup_fixture(cx: &mut TestAppContext) -> Fixture<'_> {
+    build_fixture(cx, true)
+}
+
+fn build_fixture(cx: &mut TestAppContext, at_start: bool) -> Fixture<'_> {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -121,7 +132,13 @@ fn fixture(cx: &mut TestAppContext) -> Fixture<'_> {
             ..UiConfig::default()
         });
         cx.set_global(UiConfigGlobal(config));
-        let vault = cx.new(|_| VaultState::load(dir.0.clone(), false));
+        let vault = cx.new(|_| {
+            if at_start {
+                VaultState::load_at_start(dir.0.clone(), false)
+            } else {
+                VaultState::load(dir.0.clone(), false)
+            }
+        });
         cx.set_global(VaultStateGlobal(vault.clone()));
         init(cx);
         cx.bind_keys([
@@ -146,6 +163,10 @@ fn fixture(cx: &mut TestAppContext) -> Fixture<'_> {
             renders: counted,
         });
         content = Some(view.clone());
+        if at_start {
+            let focus = view.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        }
         Root::new(view, window, cx)
     });
     let content = content.unwrap();
@@ -249,11 +270,20 @@ async fn while_locked_no_binding_fires_and_only_the_input_takes_keys(cx: &mut Te
     cx.simulate_keystrokes("backspace");
     assert_eq!(typed(cx), "ab");
     // Outside the lock view (no focus at all) nothing passes, text included.
+    let keymap = cx.update(|_, cx| cx.key_bindings());
+    for key in ["q", "ctrl-shift-q", "backspace"] {
+        let keystroke = Keystroke::parse(key).unwrap();
+        assert!(!allowed_while_locked(&keystroke, &[], &keymap.borrow()));
+    }
+    // And no focus does not last (`US-0159` rework): the next frame gives
+    // the lock input its keyboard back, so typing goes on there.
     cx.update(|window, cx| window.blur(cx));
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(focus.is_focused(window), "the lock took no focus back"));
     cx.simulate_input("q");
     cx.simulate_keystrokes("ctrl-shift-q");
     assert_eq!(f.quits.get(), 0);
-    assert_eq!(typed(cx), "ab");
+    assert_eq!(typed(cx), "abq");
     let _ = &f.content;
 }
 
@@ -660,4 +690,114 @@ async fn verifier_chords_never_complete_and_paste_reaches_only_the_input(cx: &mu
     cx.simulate_keystrokes("ctrl-v");
     assert_eq!(typed(cx), "pasted");
     let _ = f.renders;
+}
+
+// ── Lock at startup (`US-0159` acceptance rework, Q1 re-ruled 2026-10-13) ──
+
+/// A usable vault at start: the window is born locked, the application view is
+/// never rendered before the first unlock, the lock input has the keyboard,
+/// and the right password brings the application with the focus it gave
+/// itself while it was built.
+#[gpui::test]
+async fn a_vault_at_start_locks_the_window_before_its_first_frame(cx: &mut TestAppContext) {
+    let f = startup_fixture(cx);
+    let cx = f.cx;
+    assert!(is_locked(&f.vault, cx));
+    assert_eq!(f.renders.get(), 0, "the application was rendered at start");
+    let view = lock_view(cx);
+    let focus = cx.update(|_, cx| view.read(cx).input_focus(cx));
+    cx.update(|window, _| assert!(focus.is_focused(window), "the lock input has focus"));
+    cx.simulate_keystrokes("ctrl-shift-q z");
+    assert_eq!(f.quits.get(), 0);
+    assert_eq!(typed(cx), "", "a bound key reached the input");
+
+    cx.simulate_input("wrong");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(is_locked(&f.vault, cx));
+    assert_eq!(f.renders.get(), 0);
+
+    cx.simulate_input(V1_PASSWORD);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(!is_locked(&f.vault, cx));
+    assert!(f.renders.get() > 0);
+    let content_focus = cx.update(|_, cx| f.content.read(cx).focus.clone());
+    cx.update(|window, _| assert!(content_focus.is_focused(window)));
+}
+
+/// No timer while the startup lock is up; the unlock starts the idle clock, so
+/// a lock screen left up longer than the timeout does not lock again at once,
+/// and the timer it arms locks after the timeout.
+#[gpui::test]
+async fn the_idle_clock_starts_at_the_first_unlock(cx: &mut TestAppContext) {
+    let f = startup_fixture(cx);
+    let cx = f.cx;
+    idle_for(Duration::from_secs(20 * 60), cx);
+    f.vault
+        .update(cx, |state, cx| {
+            state.unlock_screen(SecretString::new(V1_PASSWORD), cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+    assert!(!is_locked(&f.vault, cx), "locked again at once");
+    cx.update(|_, cx| {
+        let idle = idle_time(cx.global::<IdleClock>().last.get(), IdleClock::now());
+        assert!(idle < Duration::from_secs(60), "the unlock did not stamp");
+    });
+    idle_for(Duration::from_secs(20 * 60), cx);
+    cx.executor()
+        .advance_clock(RECHECK + Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(is_locked(&f.vault, cx), "no timer after the startup unlock");
+    let _ = (f.content, f.quits);
+}
+
+/// The lock screen is the only unlock surface while it is up, and a dialog
+/// opened under it (a crash report at start) does not take the keyboard away
+/// from the lock input.
+#[gpui::test]
+async fn nothing_under_the_startup_lock_takes_the_keyboard(cx: &mut TestAppContext) {
+    let f = startup_fixture(cx);
+    let cx = f.cx;
+    let ready = Rc::new(Cell::new(0));
+    let counter = ready.clone();
+    cx.update(|window, cx| {
+        oneterm_state::vault_dialogs::ensure_unlocked(window, cx, move |_, _| {
+            counter.set(counter.get() + 1)
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(ready.get(), 0);
+    assert!(
+        !cx.update(|window, cx| window.has_active_dialog(cx)),
+        "an Unlock dialog was stacked under the lock screen"
+    );
+
+    cx.update(|window, cx| window.open_dialog(cx, |dialog, _, _| dialog));
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    let view = lock_view(cx);
+    let focus = cx.update(|_, cx| view.read(cx).input_focus(cx));
+    cx.update(|window, _| assert!(focus.is_focused(window), "the dialog kept the focus"));
+    cx.simulate_input("abc");
+    assert_eq!(typed(cx), "abc");
+
+    // Unlocked, `ensure_unlocked` runs its continuation at once.
+    f.vault
+        .update(cx, |state, cx| {
+            state.unlock_screen(SecretString::new(V1_PASSWORD), cx)
+        })
+        .await
+        .unwrap();
+    cx.run_until_parked();
+    let counter = ready.clone();
+    cx.update(|window, cx| {
+        oneterm_state::vault_dialogs::ensure_unlocked(window, cx, move |_, _| {
+            counter.set(counter.get() + 1)
+        });
+    });
+    assert_eq!(ready.get(), 1);
+    let _ = (f.content, f.renders, f.quits);
 }

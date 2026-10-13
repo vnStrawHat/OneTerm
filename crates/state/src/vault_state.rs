@@ -20,7 +20,9 @@
 //! memory ([`VaultPhase`]) and whether every window is covered by the lock
 //! screen ([`VaultState::is_screen_locked`]). A screen lock always drops the key
 //! too, so it sits beside Locked only; [`VaultState::unlock_screen`] is the one
-//! way out, and it too verifies against the header held in memory.
+//! way out, and it too verifies against the header held in memory. A process
+//! that starts with a usable vault starts screen-locked
+//! ([`VaultState::load_at_start`]).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -202,7 +204,7 @@ impl VaultState {
         if cx.has_global::<VaultStateGlobal>() {
             return;
         }
-        let state = Self::load(
+        let state = Self::load_at_start(
             oneterm_core::config_dir(),
             oneterm_core::elevation::is_restricted(),
         );
@@ -236,6 +238,18 @@ impl VaultState {
             locked_meanwhile: false,
             screen_locked: false,
         }
+    }
+
+    /// [`Self::load`] as the process starts: a usable vault (Ready) covers
+    /// every window until its master password is typed (`US-0159` rework,
+    /// intake Q1 re-ruled 2026-10-13). No vault, or an unusable one, means no
+    /// lock. No event is emitted: nothing subscribes before the global exists,
+    /// and each window's lock plugin reads [`Self::is_screen_locked`] when it
+    /// is built.
+    pub fn load_at_start(dir: PathBuf, read_only: bool) -> Self {
+        let mut state = Self::load(dir, read_only);
+        state.screen_locked = state.can_lock_screen();
+        state
     }
 
     /// The phase as the UI sees it.

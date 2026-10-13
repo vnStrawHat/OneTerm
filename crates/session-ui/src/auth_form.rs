@@ -187,6 +187,11 @@ impl SshAuthForm {
         *self.note.borrow_mut() = Some(note.into());
     }
 
+    #[cfg(test)]
+    pub(crate) fn note(&self) -> Option<SharedString> {
+        self.note.borrow().clone()
+    }
+
     /// Swap the saved row back to an empty input, saying why; `tick` also
     /// ticks "Update saved password" (a rejected saved password).
     pub(crate) fn reveal_input(&self, note: impl Into<SharedString>, tick: bool) {

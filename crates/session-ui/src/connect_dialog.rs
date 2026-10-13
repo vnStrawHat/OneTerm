@@ -744,6 +744,55 @@ mod tests {
         assert!(!target.uses_saved(), "the input is revealed instead");
     }
 
+    /// `US-0159` rework: deleting `vault.json` by hand (the lock screen's
+    /// recovery path) leaves envelopes in `ssh_session.json`. With no vault a
+    /// saved row asks for the password and says why, keeps its envelope until
+    /// a new one replaces it, and asks for no unlock.
+    #[gpui::test]
+    fn a_saved_password_outliving_its_vault_asks_for_the_password(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        // Never created: `vault.json` is missing, so the vault is Uninitialised.
+        let gone = std::env::temp_dir().join(format!(
+            "oneterm-deleted-vault-{}-never-created",
+            std::process::id()
+        ));
+        cx.update(|cx| {
+            let vault = cx.new(|_| VaultState::load_at_start(gone, false));
+            cx.set_global(oneterm_state::vault_state::VaultStateGlobal(vault));
+        });
+        let probe = Rc::new(RefCell::new(None));
+        let probe_for_window = probe.clone();
+        let (_view, cx) = cx.add_window_view(move |window, cx| {
+            let form = SshAuthForm::new(SshAuthPreference::Password, None, window, cx);
+            form.set_saved(Some(saved("10.0.0.1")));
+            *probe_for_window.borrow_mut() = Some(form);
+            FocusTestView {
+                initial: cx.focus_handle(),
+                user_selected: cx.focus_handle(),
+            }
+        });
+        let cx: &mut VisualTestContext = cx;
+        let form = probe.borrow().clone().unwrap();
+        let unlock_first =
+            cx.update(|_, cx| activate_saved_passwords(std::slice::from_ref(&form), cx));
+        assert!(!unlock_first, "an unlock was asked for with no vault");
+        assert!(
+            !form.uses_saved(),
+            "the saved row stayed in place of the input"
+        );
+        assert!(form.has_saved(), "the envelope is kept until replaced");
+        assert!(
+            form.note()
+                .unwrap()
+                .contains("the master password was reset")
+        );
+        // Asked for anyway, it opens nothing and leaves the input.
+        form.use_saved(true);
+        let auth = cx.update(|_, cx| form.take_auth(cx));
+        assert!(auth.is_err());
+        assert!(!form.uses_saved());
+    }
+
     /// Rework D2: a rejection remembered for a session opens its next connect
     /// dialog with the input revealed, but only while the session still holds
     /// the envelope that was rejected (a new one saved meanwhile clears it).

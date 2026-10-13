@@ -83,6 +83,13 @@ pub fn ensure_unlocked(
         return;
     };
     let state = state.read(cx);
+    // The lock screen is the only unlock surface while it is up (`US-0159`):
+    // an Unlock dialog under it would be refused anyway, and would pop up
+    // after the screen unlock for a vault already open.
+    if state.is_screen_locked() {
+        log::debug!("ensure_unlocked: the screen is locked; nothing opened");
+        return;
+    }
     match state.phase() {
         VaultPhase::Unlocked => on_ready(window, cx),
         VaultPhase::Locked => open(DialogKind::Unlock, Some(Box::new(on_ready)), window, cx),

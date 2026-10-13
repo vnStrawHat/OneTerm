@@ -99,21 +99,21 @@ From the `IN-0050` US-0159 candidate, made concrete:
 
 Acceptance rework 2026-10-13 (owner re-ruled Q1: lock at startup):
 
-- [ ] With a usable vault (Ready), every window starts locked: the first frame of the main
+- [x] With a usable vault (Ready), every window starts locked: the first frame of the main
   window is the lock screen, the application view is never rendered before the first unlock.
   Elevated instance: the same, read-only.
-- [ ] No vault (Uninitialised) or an unusable one (Damaged / newer / unreadable): no startup
+- [x] No vault (Uninitialised) or an unusable one (Damaged / newer / unreadable): no startup
   lock; Settings > Security shows the state as before.
-- [ ] The lock screen names the config folder and says how to recover a forgotten password
+- [x] The lock screen names the config folder and says how to recover a forgotten password
   (quit, delete `vault.json`, every saved password lost); no Reset on it (Q7); Quit works.
-- [ ] The idle clock starts at the first unlock (no timer while the startup lock is up); the
+- [x] The idle clock starts at the first unlock (no timer while the startup lock is up); the
   back-off applies at startup as after an idle lock.
-- [ ] Nothing stacks a second unlock surface on the lock screen (`ensure_unlocked` while the
+- [x] Nothing stacks a second unlock surface on the lock screen (`ensure_unlocked` while the
   screen is locked opens nothing), and a dialog opened under the lock (a crash report at start)
   does not take the keyboard away from the lock input.
-- [ ] A session whose `sealed_password` outlived a deleted `vault.json` asks for the password
+- [x] A session whose `sealed_password` outlived a deleted `vault.json` asks for the password
   ("the master password was reset"), keeps the envelope until replaced, never panics.
-- [ ] Correct password at startup: the application appears with the focus in the terminal.
+- [x] Correct password at startup: the application appears with the focus in the terminal.
 
 ## Documentation
 
@@ -159,6 +159,12 @@ section with the spike result; § 7 sleep row), `high-level-design.md` (state ma
 Q11 findings). Not changed: `crate-dependency-rules.md` / `scripts/dependency-graph-policy.json`
 (no new edge: `workspace` already depends on `state`, `settings`, `actions`, `gpui-base`),
 `docs/PROJECT.md`, `DEC-0021` (nothing here is a rule future work inherits beyond the LLD).
+
+Acceptance rework 2026-10-13, as planned: `IN-0050.md`, `high-level-design.md` (state machine
+edge start -> IdleLocked, as-built paragraph, data flow 5, wireframe), `idle-lock-overlay.md`
+(§ 4 "At start", § 7 rows, As built: lock view text, lock at startup with its two general
+rules), `docs/gui-layout.md` (lock section). Not changed: `persistence.md` (no new field),
+`DEC-0021`, `structure.md` (no new file).
 
 ## Context
 
@@ -280,23 +286,23 @@ Coordinator rulings recorded here:
 
 Plan:
 
-- [ ] `VaultState::load_at_start` (`init` uses it): `load` plus the screen lock when a usable
+- [x] `VaultState::load_at_start` (`init` uses it): `load` plus the screen lock when a usable
   vault was read; no event (nothing subscribes yet). Tests: Ready -> locked, Uninitialised and
   Unavailable -> not, elevated Ready -> locked and unlocks read-only, back-off at startup.
-- [ ] `ensure_unlocked` opens nothing while the screen is locked (one guard in the shared
+- [x] `ensure_unlocked` opens nothing while the screen is locked (one guard in the shared
   function, every caller covered).
-- [ ] Lock view: keep the keyboard on the lock view while locked (a dialog opened under the
+- [x] Lock view: keep the keyboard on the lock view while locked (a dialog opened under the
   lock, such as a crash report at start, focuses a view that is not drawn); the reset paragraph
   rewritten with the config folder path.
-- [ ] Workspace tests: a window built over a startup-locked vault never renders the application,
+- [x] Workspace tests: a window built over a startup-locked vault never renders the application,
   the lock input has the focus and takes typing, the correct password brings the application
   and the focus that the application set at construction; the idle timer starts at that unlock
   even when the lock screen was up longer than the timeout.
-- [ ] Stale envelope: check `US-0158`'s connect and session dialogs with a vault deleted by hand;
+- [x] Stale envelope: check `US-0158`'s connect and session dialogs with a vault deleted by hand;
   add the test.
-- [ ] Docs as built: HLD state machine, `idle-lock-overlay.md` (startup, reset paragraph),
+- [x] Docs as built: HLD state machine, `idle-lock-overlay.md` (startup, reset paragraph),
   `docs/gui-layout.md` lock section.
-- [ ] Gate and GUI walk (first frame captured from another process).
+- [x] Gate and GUI walk (first frame captured from another process): Evidence.
 
 ## Decisions
 
@@ -424,6 +430,100 @@ Mutation: with the key-picker guard disabled, `a_key_picked_while_the_screen_is_
 fails ("a result applied under the lock"). The rework changes no visible layout (the native
 dialog itself was not re-walked); the GUI walk was not repeated. `%TEMP%`: no
 `oneterm-key-picker-lock-*` or `oneterm-recorder-lock-*` directory left.
+
+### Acceptance rework 2026-10-13: lock at startup (evidence)
+
+What was built (shortest form; the LLD's As built section has the detail):
+
+- `crates/state/src/vault_state.rs`: `VaultState::load_at_start` (= `load` + the screen lock
+  when the vault is Ready; no event), used by `VaultState::init`.
+- `crates/state/src/vault_dialogs.rs`: `ensure_unlocked` opens nothing while the screen is
+  locked (one guard; every caller covered).
+- `crates/workspace/src/lock_screen.rs`: the reset paragraph names the absolute config folder
+  (`forgot_text`); `LockView` tracks a focus handle on its whole view and gives the input the
+  focus back on render when the focus is outside it (a dialog opened under the lock).
+- `crates/settings-ui/src/security.rs`: the Screen Lock description says OneTerm starts locked.
+- Stale envelopes: no code change. `US-0158` already shows the input with "Saved password
+  unavailable: the master password was reset. Type the password." and keeps the envelope; a
+  test pins it (`connect_dialog.rs`, `#[cfg(test)] SshAuthForm::note`).
+- Startup callers of `ensure_unlocked`: none. The workspace always resets the center to one
+  local shell (`reset_center_only` / `reset_default_layout`); SSH tabs are never restored;
+  the connect and session dialogs are user-initiated. The guard makes the rule structural.
+- First-frame ordering (read, then walked): `app::init` runs `VaultState::init` before
+  `lock_screen::init`; `window::open_window` builds the workspace and then `Root::new`, which
+  builds the plugins, so `LockScreen::new` -> `follow_vault` sets `locked` before the first
+  `Root::render`. The workspace focused its terminal inside its constructor, so that focus is
+  what the plugin saves and the unlock restores.
+
+New tests (Argon2id at `KdfParams::FLOOR`, RAII temp dirs; the stale-envelope test uses a path
+that is never created):
+
+| Crate | Test | Pins |
+| --- | --- | --- |
+| state | `a_usable_vault_at_start_locks_the_screen_before_any_input` | Ready -> locked, not busy, `locked_meanwhile` false; dialog unlock / change / reset refused; `unlock_screen` -> Unlocked, events `[Unlocked]` |
+| state | `no_or_an_unusable_vault_at_start_does_not_lock` | Uninitialised, damaged, newer, unreadable (a directory named `vault.json`), each normal and elevated |
+| state | `the_elevated_window_starts_locked_and_unlocks_read_only` | Q5: no rehash, no `vault.bak` |
+| state | `wrong_passwords_at_start_back_off` | 4 free, 5th backs off, right password refused while waiting |
+| workspace | `a_vault_at_start_locks_the_window_before_its_first_frame` | the application view renders 0 times before the unlock; bound keys stopped; the input takes typing; unlock restores the focus the view gave itself while built |
+| workspace | `the_idle_clock_starts_at_the_first_unlock` | a lock screen up 20 min does not re-lock at the unlock; the timer armed by it locks after the timeout |
+| workspace | `nothing_under_the_startup_lock_takes_the_keyboard` | `ensure_unlocked` opens no dialog and runs nothing while locked, runs at once after; a dialog opened under the lock leaves the focus on the input |
+| session-ui | `a_saved_password_outliving_its_vault_asks_for_the_password` | no vault: no unlock asked, input shown with the reset note, envelope kept, `take_auth` errs without panicking |
+
+Changed test: `while_locked_no_binding_fires_and_only_the_input_takes_keys` blurred the window
+and expected typing to go nowhere; with the focus reclaim the next frame gives the input its
+focus back, so it now checks the out-of-view rule on `allowed_while_locked` directly and that a
+blur does not last.
+
+Mutation checks: with the render-time focus reclaim disabled,
+`nothing_under_the_startup_lock_takes_the_keyboard` and the changed test fail; with the
+`ensure_unlocked` guard disabled, `nothing_under_the_startup_lock_takes_the_keyboard` fails
+("an Unlock dialog was stacked under the lock screen").
+
+GUI walk (debug `oneterm.exe` from this worktree, `CARGO_BUILD_JOBS=1`; private profile:
+`USERPROFILE` and the working directory in scratch, so `config_dir()` = `<scratch>\us0159r-cwd-a\target`;
+`vault-v1.json` as `vault.json`, `ssh-session-v2-sealed.json` as `ssh_session.json`; posted
+window messages to the launched pid only; screenshots `us0159r-*.png` in the session
+scratchpad):
+
+| Step | Result |
+| --- | --- |
+| Launch with a vault; capture from another process the moment the window is visible (`01-launch-a`), then +100 ms (`01-launch-b`) and +500 ms | the first capture (taken 420 ms after the window appeared; `PrintWindow` was slow on its first call) is all black: nothing drawn yet. The next capture is the lock screen, the reset paragraph naming the absolute folder. No capture ever showed application content. On the relaunch the first capture was done 88 ms after the window appeared: black again, then the lock screen |
+| `ctrl-,` and `ctrl-shift-q` while locked (`02`) | still 1 top-level window, process alive; no Settings window |
+| Typing `abc` with no click (`02`) | 3 dots in the input: the input has the keyboard from start |
+| Enter (`03`) | "Wrong master password.", input cleared |
+| Right password (`04`), then `echo after-unlock` + Enter (`05`) | the application; the echo ran in the terminal (focus restored to the terminal); no stray characters from the keys typed while locked |
+| Close, relaunch (`06-relaunch-*`) | locked again from the first drawn frame |
+| Close, delete `vault.json`, relaunch (`07`) | no lock |
+| Connect to `prod` (stale envelope) (`08`) | Password input, "Update saved password" box, note "Saved password unavailable: the master password was reset. Type the password."; `ssh_session.json` still holds both envelopes |
+| Settings (`ctrl-,`) > Security (`09`, `10`) | "Not set up." with Set Up...; the Screen Lock description says OneTerm starts locked |
+| `vault.json` = `not json`, relaunch (`11`) | no lock (Unavailable); log: "vault.json is damaged and left in place" |
+| Fresh profile with a vault, Quit OneTerm on the startup lock (`12`) | process exits |
+| Logs | no panic, no ERROR; only the DirectX debug-layer warning |
+
+Rework gate (worktree, Windows 11, `CARGO_BUILD_JOBS=1`, `CARGO_INCREMENTAL=0`: the box was
+near its commit limit from other workloads, so rustc ran out of memory on `windows` and
+`gpui-component` at 2 jobs and sometimes at 1; each such step was retried, never a test failure):
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings` | pass |
+| `cargo test -p oneterm-state` | 90 passed (4 new) |
+| `cargo test -p oneterm-workspace` | 67 passed, 3 ignored (3 new, 1 changed) |
+| `cargo test -p oneterm-session-ui` | 101 passed, 1 ignored (1 new) |
+| `cargo test -p oneterm-settings-ui` | 59 passed, 1 ignored |
+| `cargo test -p oneterm-app` | 26 passed |
+| `--ignored --test-threads=1` for workspace / session-ui / settings-ui | 3 / 1 / 1 passed |
+| `python scripts/check-ignored-tests.py` | pass (19 ignored tests, all recorded) |
+| `python scripts/verify-dependency-graph.py` | pass (no new edge) |
+| `python scripts/check-doc-paths.py` / `check-english.py` | pass / pass |
+| `python scripts/check-theme-contrast.py` | pass (no new token) |
+
+Gaps: the elevated instance at startup is unit-tested only (UAC); a crash-report dialog at
+start was not staged in the walk (the gpui test opens a dialog under the lock instead);
+Linux / macOS not run. The full `cargo test --workspace` runs on `main` after independent
+verification.
 
 ## Handoff
 

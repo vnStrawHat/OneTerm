@@ -60,7 +60,7 @@ fn screen_lock_group() -> SettingGroup {
             .default_value(UiConfig::DEFAULT_LOCK_AFTER_IDLE_MINUTES as f64),
         )
         .description(format!(
-            "With a master password set up, every OneTerm window is covered after this long without keyboard or mouse input ({} to {} minutes). Terminal output does not count as input.",
+            "With a master password set up, OneTerm starts locked, and every OneTerm window is covered after this long without keyboard or mouse input ({} to {} minutes). Terminal output does not count as input.",
             range.start(),
             range.end()
         )),
