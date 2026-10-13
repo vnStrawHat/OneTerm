@@ -5425,7 +5425,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oneterm-actions"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "gpui-component",
  "gpui-pre",
@@ -5436,7 +5436,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-agent-ui"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "gpui-base",
  "gpui-component",
@@ -5448,7 +5448,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-app"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -5485,7 +5485,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-completion"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "log",
  "oneterm-core",
@@ -5495,7 +5495,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-core"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "async-channel",
  "log",
@@ -5509,7 +5509,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-highlight"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "aho-corasick",
  "hotpath",
@@ -5518,7 +5518,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-local-shell"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "async-channel",
  "hotpath",
@@ -5532,7 +5532,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-session-ui"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "gpui-base",
  "gpui-component",
@@ -5553,7 +5553,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-settings"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "gpui-component",
  "gpui-pre",
@@ -5565,7 +5565,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-settings-ui"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "anyhow",
  "gpui-component",
@@ -5581,7 +5581,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-sftp-ui"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -5603,7 +5603,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-ssh"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "async-channel",
  "futures",
@@ -5621,7 +5621,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-state"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "futures",
  "gpui-base",
@@ -5638,7 +5638,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-terminal"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "async-channel",
  "base64",
@@ -5654,7 +5654,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-terminal-view"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "async-channel",
  "chrono",
@@ -5678,7 +5678,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-theme"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "anyhow",
  "gpui-component",
@@ -5691,7 +5691,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-tools"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "anyhow",
  "libc",
@@ -5709,7 +5709,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-update"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "chrono",
  "flate2",
@@ -5727,7 +5727,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-vault"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -5741,7 +5741,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-vt"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "bitflags 2.13.2",
  "hotpath",
@@ -5759,7 +5759,7 @@ dependencies = [
 
 [[package]]
 name = "oneterm-workspace"
-version = "0.6.8"
+version = "0.6.9"
 dependencies = [
  "anyhow",
  "chrono",
