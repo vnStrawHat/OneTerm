@@ -228,9 +228,10 @@ fifth wrong password in a row), an Unlock button that spins while Argon2id runs 
 thread, a paragraph on how to recover a forgotten master password (the lock screen cannot reset
 it: quit OneTerm and delete `vault.json` in the config folder, whose absolute path the
 paragraph prints; OneTerm then starts without a lock and every saved password is lost, while
-saved sessions are kept and ask for their passwords again), and **Quit OneTerm**. A dialog
-opened under the lock (a crash report at start) does not take the keyboard from the password
-input, and no Unlock dialog is ever stacked under it. It names no
+saved sessions are kept and ask for their passwords again), and **Quit OneTerm**. The password
+input keeps the keyboard while locked, whatever is clicked or opened under the lock; a dialog
+opened under it (a crash report at start) gets the focus at the unlock, and no Unlock dialog is
+ever stacked under the lock screen. It names no
 host, tab, session or notification. While locked, one app-wide keystroke interceptor stops
 every keystroke except text and the password input's own editing keys (a keystroke passes only
 inside the lock view, and only when every binding it resolves to there is `input::*` or

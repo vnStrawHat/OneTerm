@@ -525,6 +525,62 @@ start was not staged in the walk (the gpui test opens a dialog under the lock in
 Linux / macOS not run. The full `cargo test --workspace` runs on `main` after independent
 verification.
 
+### Acceptance rework 2026-10-13, round 2 (after the verification of `6be2402a`)
+
+[`evidence/US-0159-verify.md`](evidence/US-0159-verify.md) § "Acceptance rework (lock at
+startup)": FAIL with two Medium defects, both fixed on top of the verifier's commit (its six
+tests cherry-picked; the two that pinned V1 and V2 are flipped).
+
+| Defect | Fix |
+| --- | --- |
+| V1 (Medium, regression of `6be2402a`): a click on the lock background focused the view's own tracked handle; the reclaim fired only when the focus was outside the view, so typing and Enter went nowhere until the field was clicked | `crates/workspace/src/lock_screen.rs:605`: while locked the input gets the focus back whenever it does not have it. A focus from outside the view (a dialog) is remembered (`LockView::taken`). Test `verifier_startup_a_background_click_takes_the_keyboard_from_the_input` now asserts the input keeps the keyboard ("abc" typed after the click) |
+| V2 (Medium): after the unlock, a dialog opened under the lock (the crash report at start, a host-key prompt under an idle lock) was on top with the focus restored behind it, so keys reached the shell | `lock_screen.rs:380`: the unlock focuses the remembered handle, else the focus saved when the lock came. `lock_screen.rs:397`: the dialog saved the lock input as the focus to restore when it closes; `LockScreen::render` (unlocked only) hands a focus left on the hidden lock view back to the saved one. gpui-component exposes no accessor for an active dialog's focus handle (`WindowState::active_dialogs` is `pub(crate)`), so the handle is captured when it takes the focus rather than looked up. Test `verifier_startup_after_the_unlock_a_dialog_opened_under_the_lock_has_no_focus` now asserts the dialog has the focus after the unlock and, once it closes, the application view |
+| Cosmetic: the colon after the printed path read as part of it | `lock_screen.rs:77`: `...delete vault.json in the folder "<path>". OneTerm then starts...` |
+
+Mutation checks (each reverted): the round-1 reclaim condition fails the V1 test; the unlock
+ignoring the remembered handle fails the V2 test; no hand-back after the dialog closes fails the
+V2 test (its second half).
+
+The verifier's notes, recorded (not defects):
+
+- Tab on the lock screen never leaves the password input: `root::Tab` is dropped with the
+  surface, so Unlock and Quit are reached by Enter, the mouse, or a window close (Q6).
+  Pre-existing since `US-0159`.
+- `vault.bak` is never read on load (`crates/vault/src/document.rs:94`); deleting
+  `vault.json` alone starts OneTerm without a lock. `vault.bak` keeps the old wrapped key under
+  the forgotten password until the next set-up overwrites it; it exposes nothing `vault.json`
+  did not.
+- `ensure_unlocked` while screen-locked returns silently (debug log) and runs no continuation;
+  every caller is user-initiated and unreachable under the lock.
+- A Quick Connect hop with a stale envelope shows a plain input with no "master password was
+  reset" note (`quick_connect_dialog.rs:97`); pre-existing `US-0158` behaviour, identical with
+  a Locked vault, no panic.
+
+Round-2 gate (worktree, `CARGO_BUILD_JOBS=2`, one crate per command; one out-of-memory
+compiler crash on `cargo test -p oneterm-workspace` was retried at 1 job):
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `cargo test -p oneterm-workspace` | 73 passed, 3 ignored (the verifier's 6 included, 2 flipped) |
+| `cargo test -p oneterm-state` | 90 passed |
+| `cargo test -p oneterm-session-ui` | 101 passed, 1 ignored |
+| `cargo test -p oneterm-settings-ui` | 59 passed, 1 ignored |
+| `cargo test -p oneterm-app` | 26 passed |
+| `--ignored --test-threads=1` for workspace / session-ui / settings-ui | 3 / 1 / 1 passed |
+| `verify-dependency-graph.py` / `check-doc-paths.py` / `check-english.py` | pass |
+| `check-ignored-tests.py` | pass (19 ignored tests, all recorded) |
+
+Round-2 walk (rebuilt debug binary, private profile, own pid; `us0159r-r2-*.png`):
+
+| Step | Result |
+| --- | --- |
+| Startup lock, type `xy`, click the empty background left of the card, type `abc` (`r2-01`) | 5 dots: the input kept the keyboard (V1 fixed); the paragraph prints the folder in quotes, the sentence ends after it |
+| Crash report staged in `target\crashes`, start, type `xy` (`r2-02`) | 2 dots: the dialog under the lock takes no key |
+| Clear, right password, Enter (`r2-03`), type `echo behind` (`r2-04`) | the crash dialog is on top and has the keyboard; nothing reached the shell (V2 fixed) |
+| Dismiss, type `echo after-dismiss` + Enter (`r2-05`, `r2-06`) | the shell shows only `echo after-dismiss` and its output: the keyboard went back to the terminal, `echo behind` never reached it |
+
 ## Handoff
 
 Implementer: a subagent in an isolated worktree; the integrating actor verifies independently

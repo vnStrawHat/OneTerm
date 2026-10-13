@@ -812,10 +812,10 @@ fn lock_background(cx: &mut VisualTestContext) -> gpui::Point<gpui::Pixels> {
 }
 
 /// Attack (b): a click on the lock screen's background. gpui moves the focus to
-/// a `track_focus` element on mouse down, and the rework tracks a handle on the
-/// whole lock view; the render-time reclaim only fires when the focus is
-/// outside that view, so after the click the input has lost the keyboard.
-/// Pins defect V1 (what happens today); flip the marked assertions once fixed.
+/// a `track_focus` element on mouse down, and the lock view tracks a handle on
+/// its whole view. Defect V1 (fixed in rework 2): the reclaim fired only when
+/// the focus was outside the view, so the click took the keyboard from the
+/// input. Now the input gets it back on the next frame.
 #[gpui::test]
 async fn verifier_startup_a_background_click_takes_the_keyboard_from_the_input(
     cx: &mut TestAppContext,
@@ -837,16 +837,10 @@ async fn verifier_startup_a_background_click_takes_the_keyboard_from_the_input(
     cx.simulate_input("c");
     cx.run_until_parked();
     let after = typed(cx);
-    // V1: today the click leaves the focus on the view, not the input.
-    assert!(on_whole, "the click did not focus the whole lock view");
-    assert!(
-        !on_input,
-        "V1 fixed? the input kept the keyboard: flip this test"
-    );
-    assert_eq!(
-        after, "ab",
-        "V1 fixed? typing reached the input: flip this test"
-    );
+    // V1 fixed: the input keeps the keyboard.
+    assert!(!on_whole, "the click left the focus on the whole lock view");
+    assert!(on_input, "V1: the click took the keyboard from the input");
+    assert_eq!(after, "abc", "V1: typing after the click went nowhere");
     // Nothing else leaks: still locked, the application never drawn.
     assert!(is_locked(&f.vault, cx));
     assert_eq!(f.renders.get(), 0);
@@ -948,17 +942,22 @@ async fn verifier_startup_a_window_opened_under_the_startup_lock_never_renders(
     let _ = (f.content, f.quits);
 }
 
-/// Attack (b): a dialog opened under the startup lock (the crash report). After
-/// the unlock the plugin gives the focus back to what the application focused
-/// while it was built, not to the dialog on top. Pins what happens today (V2):
-/// the dialog is open, the focus is behind it.
+/// Attack (b): a dialog opened under the startup lock (the crash report).
+/// Defect V2 (fixed in rework 2): the unlock gave the focus back to what the
+/// application focused while it was built, behind the dialog on top. Now the
+/// dialog gets it, and when the dialog closes (it restores the lock input it
+/// saw focused when it opened, a view no longer drawn) the keyboard goes back
+/// to the application.
 #[gpui::test]
 async fn verifier_startup_after_the_unlock_a_dialog_opened_under_the_lock_has_no_focus(
     cx: &mut TestAppContext,
 ) {
     let f = startup_fixture(cx);
     let cx = f.cx;
-    cx.update(|window, cx| window.open_dialog(cx, |dialog, _, _| dialog));
+    let dialog_focus = cx.update(|window, cx| {
+        window.open_dialog(cx, |dialog, _, _| dialog);
+        window.focused(cx).unwrap()
+    });
     cx.run_until_parked();
     f.vault
         .update(cx, |state, cx| {
@@ -968,17 +967,26 @@ async fn verifier_startup_after_the_unlock_a_dialog_opened_under_the_lock_has_no
         .unwrap();
     cx.run_until_parked();
     let content_focus = cx.update(|_, cx| f.content.read(cx).focus.clone());
-    let (dialog_open, behind) = cx.update(|window, cx| {
+    let (dialog_open, on_dialog, behind) = cx.update(|window, cx| {
         (
             window.has_active_dialog(cx),
+            dialog_focus.is_focused(window),
             content_focus.is_focused(window),
         )
     });
     assert!(dialog_open);
-    assert!(
-        behind,
-        "V2 fixed? the focus left the view behind the dialog: flip this test"
-    );
+    assert!(on_dialog, "V2: the dialog on top has no focus");
+    assert!(!behind, "V2: the focus is behind the dialog");
+
+    cx.update(|window, cx| window.close_dialog(cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!window.has_active_dialog(cx));
+        assert!(
+            content_focus.is_focused(window),
+            "the closed dialog left the focus on the hidden lock view"
+        );
+    });
     let _ = (f.renders, f.quits);
 }
 

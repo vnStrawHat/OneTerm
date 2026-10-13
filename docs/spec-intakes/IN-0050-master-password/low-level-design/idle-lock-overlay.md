@@ -169,7 +169,7 @@ off.
 | Elevated window (`IN-0043`) | Own process: reads `vault.json` (Q5), starts locked when it is usable, and locks on its own timer; unlock verifies the password read-only (`persistence-and-migration.md` § 7). Keeps its Administrator marker on the lock screen (M5). No vault in its profile means no lock. |
 | "Run as administrator" / UAC | The "+" menu is part of the dropped surface, so no elevation can start from a locked window. The UAC prompt itself is on the secure desktop and is not OneTerm's. |
 | Toasts / notifications | The notification layer is inside the surface: nothing shows while locked. Toasts raised meanwhile may expire unseen; failures that matter are also shown in place (connect dialog inline error, tab disconnect state). |
-| Open dialogs (connect, host key, session edit) | Hidden, not closed; back unchanged after unlock. A typed but unsent SSH password stays in that dialog's memory (accepted). A dialog opened while locked does not keep the focus (As built, lock at startup). |
+| Open dialogs (connect, host key, session edit) | Hidden, not closed; back unchanged after unlock. A typed but unsent SSH password stays in that dialog's memory (accepted). A dialog opened while locked does not keep the focus while locked and gets it at the unlock (As built, lock at startup). |
 | App menus | Windows and Linux draw them in-window (title bar): gone with the surface. macOS native menu items dispatch to the focused window; workspace handlers are unreachable; the few global handlers are harmless. Swapping the macOS menu while locked is a follow-up (untested platform). |
 | Native OS dialogs (file picker, Save dialog) | **Not covered by the lock**: a dialog open when the lock comes is a window of its own and stays usable over the lock screen. **Rule:** a continuation that applies a native dialog's result checks `VaultState::screen_locked(cx)` first and drops the result while locked (`US-0159` verify D2: the SSH key picker, the log-folder picker, SFTP upload and download Save). There is no shared picker wrapper; every new `prompt_for_paths` / `prompt_for_new_path` caller must follow the rule. |
 | Other keystroke interceptors | gpui runs every interceptor whatever an earlier one did, so the key that locks (late input) still reaches them. **Rule:** an interceptor that acts on a key returns early when `VaultState::screen_locked(cx)` (the Key Bindings recorder does, `US-0159` verify D1). |
@@ -290,9 +290,17 @@ Where the build differs from, or settles, the design above (`US-0159-idle-lock-s
   - **The lock keeps the keyboard.** A dialog opened under the lock (the crash-report dialog the
     app opens at start, a host-key prompt from a connection started before an idle lock) moves
     the focus to a view that is not drawn, where the interceptor stops every key, so typing on
-    the lock screen did nothing until the user clicked the input. `LockView` tracks a focus
-    handle on its whole view and, on each render, gives the input the focus back when the focus
-    is outside it. The dialog itself is hidden, not closed, and is there after the unlock.
+    the lock screen did nothing until the user clicked the input. On each render while locked,
+    `LockView` gives the input the focus back whenever the input does not have it (rework 2,
+    verify V1: the first version reclaimed only when the focus was outside the whole view, so a
+    click on the lock background, which focuses the view's own tracked handle, took the keyboard
+    away). A focus taken from outside the view (the dialog) is remembered.
+  - **The unlock focuses what took the focus under the lock** (rework 2, verify V2). The dialog
+    is hidden, not closed, and is on top after the unlock, so the remembered handle gets the
+    focus rather than the one saved when the lock came (otherwise keys typed "into the dialog"
+    reached the shell behind it). The dialog saved the lock input as the focus to restore when
+    it closes; that view is not drawn any more, so `LockScreen::render` (unlocked only) hands
+    the focus from the hidden lock view back to the one saved when the lock came.
   - **Stale envelopes.** Deleting `vault.json` by hand leaves `sealed_password` envelopes in
     `ssh_session.json`. `US-0158` already treats them cleanly with no vault: the connect dialog
     shows the input with "Saved password unavailable: the master password was reset. Type the
