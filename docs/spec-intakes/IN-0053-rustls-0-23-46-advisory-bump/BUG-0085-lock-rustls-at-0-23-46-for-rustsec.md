@@ -35,9 +35,9 @@ Created: 2026-10-15
 
 ## Acceptance
 
-- [ ] `cargo tree -i rustls` shows one version, >= 0.23.46.
-- [ ] `cargo deny check licenses bans advisories` passes.
-- [ ] `third-party-notices.py --check` passes; the crates that use TLS build and test (`oneterm-update`, `oneterm-settings-ui`).
+- [x] `cargo tree -i rustls` shows one version, >= 0.23.46.
+- [x] `cargo deny check licenses bans advisories` passes.
+- [x] `third-party-notices.py --check` passes; the crates that use TLS build and test (`oneterm-update`, `oneterm-settings-ui`).
 
 ## Documentation
 
@@ -64,8 +64,8 @@ Add only relevant code, decisions, dependencies, and invariants not already clea
 
 ## Plan
 
-- [ ] `cargo update -p rustls --precise <fixed version>`; `cargo tree -i rustls`.
-- [ ] `cargo deny`, notices, build/test the TLS users.
+- [x] `cargo update -p rustls --precise 0.23.46`; `cargo tree -i rustls`.
+- [x] `cargo deny`, notices, build/test the TLS users.
 
 ## Decisions
 
@@ -80,12 +80,16 @@ Link consequential decisions; do not repeat their rationale here.
 - [ ] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+- `cargo update -p rustls --precise 0.23.46`: `rustls v0.23.45 -> v0.23.46`, nothing else moved; `Cargo.lock` 2 lines, `THIRD-PARTY-NOTICES.md` 1 line (regenerated, `--check` ok).
+- `cargo tree -q -i rustls`: one version, 0.23.46.
+- `cargo deny check licenses bans advisories`: advisories ok, bans ok, licenses ok.
+- `cargo test -p oneterm-update -p oneterm-settings-ui`: 59 + 59 passed, 0 failed.
+- The full `ci-local.sh --full` ran green up to `cargo deny` on the US-0190 tree an hour earlier; this change moves only `rustls`, so it was not re-run in full. `platform_proof` waits for CI.
 
 ## Handoff
 
