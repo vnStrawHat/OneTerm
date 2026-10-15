@@ -395,7 +395,7 @@ impl AsciiGlyphs {
     }
 }
 
-/// GPUI's `apply_force_width_to_layout` (`gpui-pre` 0.3.7,
+/// GPUI's `apply_force_width_to_layout` (`gpui-pre` 0.3.9,
 /// `text_system/line_layout.rs`, private) line for line, so a hand-built
 /// layout lands where a shaped one does.
 fn apply_force_width(layout: &mut LineLayout, force_width: Pixels) {

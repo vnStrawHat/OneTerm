@@ -15,7 +15,7 @@ pub use workspace::OneTermWorkspace;
 /// Embed `view` as a cached view laid out at `style` (`US-0150`), or, while
 /// accessibility is active, uncached in a box of the same style.
 ///
-/// gpui-pre 0.3.7 builds AccessKit nodes during prepaint and does not replay
+/// gpui-pre 0.3.9 builds AccessKit nodes during prepaint and does not replay
 /// them for a reused view (`Window::reuse_prepaint`), so a cached view's menus
 /// and buttons would leave the accessibility tree on every frame that reuses
 /// it. AccessKit activation refreshes the window, so the switch applies from

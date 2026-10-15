@@ -232,7 +232,7 @@ OneTerm/
 │   └── agents/{code-style.md, dependencies.md, structure.md (this file)}
 │
 └── reference/                      # Pinned GPUI Kit checkout (gitignored, research only)
-    └── gpui-kit/                   # longbridge/gpui-kit tag v0.7.0
+    └── gpui-kit/                   # longbridge/gpui-kit tag v0.7.3
 ```
 
 ## 2. Structure conventions

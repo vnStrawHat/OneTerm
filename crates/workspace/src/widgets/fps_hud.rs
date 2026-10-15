@@ -31,7 +31,7 @@ const FPS_INTERVAL: Duration = Duration::from_secs(1);
 /// GPU usage is sampled every other tick, the cadence of the status bar's resource sampler.
 const GPU_EVERY_TICKS: u64 = 2;
 
-/// The renderer gpui-pre 0.3.7 compiles for this platform. A constant because gpui does not
+/// The renderer gpui-pre 0.3.9 compiles for this platform. A constant because gpui does not
 /// report it at run time: gpui-pre-windows creates only a Direct3D 11 device and logs, but
 /// does not expose, the feature level it got; gpui-pre-wgpu asks wgpu for Vulkan or GL and
 /// `GpuSpecs` does not say which; macOS has only Metal.
@@ -415,7 +415,7 @@ mod tests {
             device_name(Some(&specs("Microsoft Basic Render Driver", true))),
             "Microsoft Basic Render Driver (software)"
         );
-        // gpui-pre-macos 0.3.7 answers `None`; the row says so instead of vanishing.
+        // gpui-pre-macos 0.3.9 answers `None`; the row says so instead of vanishing.
         assert_eq!(device_name(None), "n/a");
         assert_eq!(device_name(Some(&specs("", false))), "n/a");
     }

@@ -172,8 +172,8 @@ has four rows, in theme tokens only (`popover` fill, `border`, `muted.foreground
 | Row | Value | Source |
 |---|---|---|
 | `FPS` | Frames the window actually drew in the last second | The HUD view is not cached, so it renders on every frame the window draws; it counts its renders and turns the count into a rate once a second on the `until_next_tick` grid. It never asks for a frame of its own beyond that once-a-second refresh, so an idle window reads about 2 and a window under output reads its real rate. It is not a refresh rate or a "max". |
-| `GPU` | The adapter gpui renders with, on one line (a long name widens the HUD leftwards from its 220 px minimum) | `Window::gpu_specs().device_name` (the DXGI adapter description on Windows), asked once when the HUD is shown; `(software)` for an emulated device, `n/a` where gpui returns none (macOS in gpui-pre 0.3.7). |
-| `API` | `Direct3D 11`, `Metal` or `Vulkan/GL (wgpu)` | A compile-time constant per platform: gpui-pre 0.3.7 reports neither the backend nor the Direct3D feature level at run time. |
+| `GPU` | The adapter gpui renders with, on one line (a long name widens the HUD leftwards from its 220 px minimum) | `Window::gpu_specs().device_name` (the DXGI adapter description on Windows), asked once when the HUD is shown; `(software)` for an emulated device, `n/a` where gpui returns none (macOS in gpui-pre 0.3.9). |
+| `API` | `Direct3D 11`, `Metal` or `Vulkan/GL (wgpu)` | A compile-time constant per platform: gpui-pre 0.3.9 reports neither the backend nor the Direct3D feature level at run time. |
 | `GPU usage` | This process' GPU share | Windows: PDH `\GPU Engine(*)\Utilization Percentage`, this pid's busiest single engine across all GPUs, clamped to 100 % — how Task Manager defines its GPU column. The query is opened on the background executor when the HUD is shown (the row reads `-` until the first sample) and closed when it is hidden, and sampled every 2 s on the background executor. `n/a` on Linux and macOS. |
 
 The HUD is opaque to the mouse except for the wheel (`block_mouse_except_scroll`): a click or
@@ -337,7 +337,7 @@ The rules that follow from it:
   `status_bar_height_matches_the_kit_layout`, so a kit change that resizes the bar fails
   the test instead of shifting pixels. Caching the tab bar's `+` button was measured and
   dropped (no gain above noise); the rest of the tab-bar chrome is the kit's.
-- **A cached view falls back to uncached while accessibility is active.** gpui-pre 0.3.7
+- **A cached view falls back to uncached while accessibility is active.** gpui-pre 0.3.9
   builds AccessKit nodes during prepaint and does not replay them for a reused view, so a
   cached view's menus and buttons leave the UI Automation tree on every frame that reuses
   it. Embed through `crate::layout::cached_unless_a11y` (`crates/workspace/src/layout/mod.rs`),
