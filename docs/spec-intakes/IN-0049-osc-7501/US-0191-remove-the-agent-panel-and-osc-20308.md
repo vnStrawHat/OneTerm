@@ -86,7 +86,7 @@ Compat unit tests in `oneterm-settings` / `oneterm-workspace`; `oneterm-terminal
 - [ ] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
