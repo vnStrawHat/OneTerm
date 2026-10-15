@@ -323,6 +323,119 @@ fn color_queries_are_queued_with_their_typed_key() {
     assert!(!f.router.has_color_queries());
 }
 
+// ── OSC 7501: program status (`IN-0049`, `US-0192`) ─────────────────────
+
+/// [`feed`] on a terminal the caller keeps, so one test can span batches.
+fn feed_on(term: &SharedTerminal, router: &Router, bytes: &[u8]) -> Vec<SessionEvent> {
+    let mut batch = EventBatch::new();
+    let mut out = Vec::new();
+    let mut guard = term.lock();
+    guard.feed(bytes, &mut batch, std::time::Instant::now());
+    router.drain(&batch, &mut out);
+    out
+}
+
+fn status(summary: Option<crate::ProgramState>) -> SessionEvent {
+    SessionEvent::ProgramStatus(summary)
+}
+
+/// The detection idiom: probe, then DA1. The program reads "supported" only if
+/// the 7501 reply arrives first, so replies leave in byte order whichever side
+/// produced them, with the probe's own terminator.
+#[test]
+fn the_7501_probe_is_answered_in_byte_order_with_its_terminator() {
+    let f = local(16);
+    assert!(feed(&f.router, b"\x1b]7501;?\x1b\\\x1b[c").is_empty());
+    let writes = f.transport.take_writes();
+    assert_eq!(writes.len(), 2, "{writes:?}");
+    assert_eq!(writes[0], b"\x1b]7501;?\x1b\\");
+    assert!(writes[1].starts_with(b"\x1b[?"), "then DA1: {writes:?}");
+
+    let f = local(16);
+    feed(&f.router, b"\x1b[c\x1b]7501;?\x07");
+    let writes = f.transport.take_writes();
+    assert!(
+        writes[0].starts_with(b"\x1b[?"),
+        "DA1 asked first: {writes:?}"
+    );
+    assert_eq!(writes[1], b"\x1b]7501;?\x07");
+}
+
+#[test]
+fn a_report_storm_is_one_event_and_an_unchanged_summary_is_none() {
+    let f = local(16);
+    let term = new_term();
+    let storm = "\x1b]7501;state=working\x07".repeat(1000);
+    assert_eq!(
+        feed_on(&term, &f.router, storm.as_bytes()),
+        vec![status(Some(crate::ProgramState::Working))]
+    );
+    // Same summary again: nothing new to say.
+    assert!(feed_on(&term, &f.router, b"\x1b]7501;state=working:app=x\x07").is_empty());
+    // A subagent blocks: the summary moves up.
+    assert_eq!(
+        feed_on(
+            &term,
+            &f.router,
+            b"\x1b]7501;state=blocked:id=sub:kind=permission\x07"
+        ),
+        vec![status(Some(crate::ProgramState::Blocked))]
+    );
+    // A malformed report changes nothing and sends nothing.
+    assert!(feed_on(&term, &f.router, b"\x1b]7501;state=bogus\x07").is_empty());
+    // A bare clear empties the table.
+    assert_eq!(
+        feed_on(&term, &f.router, b"\x1b]7501;state=clear\x07"),
+        vec![status(None)]
+    );
+    assert!(
+        f.transport.take_writes().is_empty(),
+        "reports are never answered"
+    );
+}
+
+/// Lifetime: a new prompt ends `working`, keeps `done`.
+#[test]
+fn a_prompt_start_drops_working_and_keeps_done() {
+    let f = local(16);
+    let term = new_term();
+    feed_on(&term, &f.router, b"\x1b]7501;state=working\x07");
+    let events = feed_on(&term, &f.router, b"\x1b]133;A\x07");
+    assert_eq!(events.last(), Some(&status(None)), "{events:?}");
+
+    feed_on(&term, &f.router, b"\x1b]7501;state=done\x07");
+    let events = feed_on(&term, &f.router, b"\x1b]133;A\x07");
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::ProgramStatus(_))),
+        "done survives the prompt: {events:?}"
+    );
+}
+
+/// The spec allows a 4096-byte sequence; the inline OSC bound is 2 KiB, so the
+/// route's `large` ceiling is what lets a long `msg` through. Past 4096 the
+/// report is dropped.
+#[test]
+fn a_report_up_to_4096_bytes_crosses_the_engine_and_a_longer_one_does_not() {
+    let msg = b64("m".repeat(2048).as_bytes()); // 2732 bytes encoded
+    let report = format!("\x1b]7501;state=working:msg={msg}\x1b\\");
+    assert!(
+        report.len() > 2048 && report.len() <= 4096,
+        "{}",
+        report.len()
+    );
+    let f = local(16);
+    assert_eq!(
+        feed(&f.router, report.as_bytes()),
+        vec![status(Some(crate::ProgramState::Working))]
+    );
+
+    let long = format!("\x1b]7501;state=working:zz={}\x1b\\", "a".repeat(4100));
+    let f = local(16);
+    assert!(feed(&f.router, long.as_bytes()).is_empty());
+}
+
 // ── Event sink: delivery policy ──────────────────────────────────────────
 
 #[test]
@@ -765,11 +878,10 @@ fn osc_9_is_a_notification_or_progress() {
         vec![SessionEvent::Progress(crate::TerminalProgress::Set(50))]
     );
 
-    // A message that merely starts with `7` is a message, not the alias.
     let f = local(16);
     assert_eq!(
-        feed(&f.router, b"\x1b]9;71 bottles\x07"),
-        vec![SessionEvent::Notification("71 bottles".into())]
+        feed(&f.router, b"\x1b]9;7;payload\x07"),
+        vec![SessionEvent::Notification("7;payload".into())]
     );
 }
 

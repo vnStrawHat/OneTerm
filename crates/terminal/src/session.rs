@@ -155,6 +155,9 @@ pub enum SessionEvent {
     Notification(String),
     /// Taskbar progress (OSC 9;4) — the UI shows a progress indicator.
     Progress(TerminalProgress),
+    /// The summary of this terminal's OSC 7501 program-status records changed
+    /// (`None` = no record). At most one per parse batch.
+    ProgramStatus(Option<crate::program_status::ProgramState>),
     /// Process exited (`None` = no exit code).
     Exited(Option<i32>),
     /// Session closed (PTY/SSH channel ended).

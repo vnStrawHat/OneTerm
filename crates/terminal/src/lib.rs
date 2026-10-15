@@ -23,6 +23,7 @@ pub(crate) mod osc;
 pub(crate) mod osc_color;
 pub(crate) mod palette;
 pub(crate) mod paste;
+pub(crate) mod program_status;
 pub mod security_policy;
 pub mod session;
 #[cfg(test)]
@@ -65,6 +66,7 @@ pub use oneterm_vt::{
 pub use osc::encode_osc52;
 pub use osc_color::DynamicColors;
 pub use palette::{TerminalPalette, resolve_color};
+pub use program_status::ProgramState;
 pub use security_policy::{ClipboardOrigin, TerminalSecurityPolicy};
 pub use session::{
     NetStats, PtyOwner, PtySession, SessionEvent, SessionKind, TerminalCapabilities, TerminalError,

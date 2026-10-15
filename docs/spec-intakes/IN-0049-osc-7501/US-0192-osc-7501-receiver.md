@@ -9,8 +9,8 @@ Created: 2026-10-15
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
-- [ ] In progress
+- [ ] Planned
+- [x] In progress
 - [ ] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
@@ -35,9 +35,9 @@ OneTerm answers `OSC 7501 ; ?`, keeps the rev 0.3 record table per session, drop
 
 ## Acceptance
 
-- [ ] Every edge case in the receiver LLD has a passing test.
-- [ ] The probe reply precedes DA1 in one batch.
-- [ ] No `oneterm-vt` public-API diff (`vt-public-api.py --check`).
+- [x] Every edge case in the receiver LLD has a passing test.
+- [x] The probe reply precedes DA1 in one batch.
+- [x] No `oneterm-vt` public-API diff (`vt-public-api.py --check`).
 - [ ] E2E: Claude Code >= 2.1.295 reports in a local tab and in an SSH tab (Q8 settled and recorded).
 - [ ] Full `scripts/ci-local.sh` passes.
 
@@ -68,8 +68,8 @@ Add only relevant code, decisions, dependencies, and invariants not already clea
 
 ## Plan
 
-- [ ] `program_status.rs` + tests (parser, table).
-- [ ] Route + router wiring + event; backend tests.
+- [x] `program_status.rs` + tests (parser, table).
+- [x] Route + router wiring + event; backend tests.
 - [ ] Docs; E2E with Claude Code.
 
 ## Decisions
@@ -90,7 +90,12 @@ Link consequential decisions; do not repeat their rationale here.
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+- `crates/terminal/src/program_status.rs`: parser (rev 0.3 grammar, id rules, base64 + control-character refusal for `title` / `msg`, 4096-byte ceiling), `RecordTable` (replace, subtree / bare `clear`, LRU at 64, prompt start), summary by `ProgramState` order. `program_status_tests.rs`: 12 tests, one per LLD edge case.
+- Router: 7501 arm (truncated dropped, probe answered in the same pass, report applied), `PromptStart` drops transient records, summary published once per batch and only for batches that carried a 7501 report or a prompt start (no extra lock otherwise). `adapter_config`: `route(7501, Forward).large(7501, true)`; the route test pins it as the only override.
+- Backend tests through the real engine: probe-then-DA1 and DA1-then-probe leave in byte order with the probe's terminator; 1000 reports in one batch give one event, an unchanged summary none, a malformed report none, bare `clear` gives `None`; prompt start drops `working` and keeps `done`; a 2.7 KB report crosses the engine, a 4.1 KB one is dropped.
+- `cargo test -p oneterm-terminal -p oneterm-terminal-view`: 183 + 397 passed. Workspace clippy clean. `vt-public-api.py --check --no-doc`: unchanged. `cargo test -p oneterm-vt --doc guide`: 34 passed (the guide's forwarding example now uses 7501; the `9;7` wrap example is reframed as a hypothetical private sub-code).
+- Docs: `osc-sequences-checklist.md` (7501 rows, policy paragraph, status summary, engine note), `terminal-backend.md` (router and state rows, tree), `structure.md`.
+- Gaps: E2E (Claude Code, and Q8 ConPTY ordering) runs with `US-0193`'s manual walk and is recorded there and here when done. The view ignores `ProgramStatus` until `US-0193`.
 
 ## Handoff
 

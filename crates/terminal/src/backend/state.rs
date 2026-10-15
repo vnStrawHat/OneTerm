@@ -58,6 +58,10 @@ pub struct SessionState {
     pub last_exit_code: Option<i32>,
     /// Theme defaults for colour queries.
     pub default_colors: DefaultColors,
+    /// OSC 7501 records (`crate::program_status`).
+    pub(crate) program_status: crate::program_status::RecordTable,
+    /// The last summary sent as `SessionEvent::ProgramStatus`.
+    pub(crate) last_program_status: Option<crate::program_status::ProgramState>,
 }
 
 /// Arc-shared session state: atomics for the pump hot path, a mutex for the rest.

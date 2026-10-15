@@ -30,6 +30,7 @@ use oneterm_vt::{ColorKey, EventBatch, ShellMark, StringTerm, VtEvent};
 
 use crate::logging::TerminalLogController;
 use crate::osc_color::{ColorFormatter, PendingColorQuery};
+use crate::program_status::{self, Osc7501};
 use crate::security_policy::{ClipboardOrigin, NotificationRateLimiter, TerminalSecurityPolicy};
 use crate::session::SessionEvent;
 
@@ -146,9 +147,40 @@ impl<T: PtyTransport> OscRouter<T> {
     /// produced and one the embedder produced, and programs depend on it: a
     /// support probe followed by `ESC [ c` reads "not supported" when DA1 comes
     /// back first. Byte order in, byte order out.
+    ///
+    /// The OSC 7501 summary is computed once, after the batch, and only when
+    /// the batch carried a 7501 report or a prompt start: a report storm costs
+    /// one `SessionEvent::ProgramStatus` at most, and a batch without either
+    /// does not take the state lock for it.
     pub fn drain(&self, batch: &EventBatch, out: &mut Vec<SessionEvent>) {
+        let mut program_status_touched = false;
         for event in batch.iter() {
+            program_status_touched |= matches!(
+                event,
+                VtEvent::Osc {
+                    code: program_status::OSC,
+                    ..
+                } | VtEvent::ShellMark(ShellMark::PromptStart)
+            );
             self.handle(batch, event, out);
+        }
+        if program_status_touched {
+            self.publish_program_status(out);
+        }
+    }
+
+    /// Push `SessionEvent::ProgramStatus` when the summary changed.
+    fn publish_program_status(&self, out: &mut Vec<SessionEvent>) {
+        let changed = {
+            let mut st = self.state.lock();
+            let summary = st.program_status.summary();
+            (summary != st.last_program_status).then(|| {
+                st.last_program_status = summary;
+                summary
+            })
+        };
+        if let Some(summary) = changed {
+            out.push(SessionEvent::ProgramStatus(summary));
         }
     }
 
@@ -225,6 +257,9 @@ impl<T: PtyTransport> OscRouter<T> {
                     match mark {
                         ShellMark::PromptStart => {
                             st.prompt_count = st.prompt_count.saturating_add(1);
+                            // OSC 7501 lifetime: a new prompt ends whatever was
+                            // working, blocked or idle.
+                            st.program_status.prompt_started();
                         }
                         ShellMark::OutputEnd { exit_code } => st.last_exit_code = *exit_code,
                         _ => {}
@@ -232,7 +267,30 @@ impl<T: PtyTransport> OscRouter<T> {
                 }
                 out.push(SessionEvent::ShellIntegration(*mark));
             }
-            // ── A forwarded OSC: no number is routed out of the engine ──
+            // ── OSC 7501: program status (`crate::program_status`) ──────
+            VtEvent::Osc {
+                code: program_status::OSC,
+                params,
+                terminator,
+                truncated,
+            } => {
+                // A cut report is corrupt, not short: drop it.
+                if *truncated {
+                    log::debug!("OscRouter: OSC 7501 dropped, truncated by the parser's cap");
+                    return;
+                }
+                let params: Vec<&[u8]> = batch.params(*params).collect();
+                match program_status::parse(&params) {
+                    // Answered in this pass, so a program that sends the probe
+                    // and then `CSI c` sees this reply before DA1's.
+                    Some(Osc7501::Probe) => self.reply(&program_status::probe_reply(*terminator)),
+                    Some(Osc7501::Report { id, state }) => {
+                        self.state.lock().program_status.apply(id, state);
+                    }
+                    None => log::debug!("OscRouter: malformed OSC 7501 report dropped"),
+                }
+            }
+            // ── Any other forwarded OSC: none is routed ──────────────────
             VtEvent::Osc { code, .. } => {
                 log::debug!("OscRouter: forwarded OSC {code} has no handler");
             }

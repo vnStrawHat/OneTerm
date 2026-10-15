@@ -72,7 +72,7 @@ OneTerm/
 │   │       │                       #   PtyTransport trait, OscRouter<T> (the EventBatch drain),
 │   │       │                       #   SessionState (title/cwd/clipboard/exit), event_sink, pump
 │   │       ├── content.rs / model.rs / palette.rs
-│   │       ├── osc.rs / osc_color.rs / url_policy.rs / paste.rs / security_policy.rs …
+│   │       ├── osc.rs / osc_color.rs / program_status.rs / url_policy.rs / paste.rs / security_policy.rs …
 │   │       └── test_support.rs     # FakeTerminalSession + FakePtyTransport (feature "test-support")
 │   │
 │   ├── highlight/                  # `oneterm-highlight` — semantic syntax highlighting engine

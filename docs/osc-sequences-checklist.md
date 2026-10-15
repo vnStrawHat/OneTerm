@@ -178,6 +178,8 @@ ESC ] 8 ; ; ST               ← close link
 |:-----:|-----|----------|--------|---------|
 | ☑ | **9** | Desktop notification | `ESC]9;msg ST` | ✅ → toast. |
 | ☑ | **9;4** | Progress bar | `ESC]9;4;state;pct ST` | ✅ — state 0–4. |
+| ☑ | **7501** | Program status (Program Status Protocol rev 0.3) | `ESC]7501;state=working:id=..:app=.. ST` | ✅ → tab title icon. |
+| ☑ | **7501;?** | Program-status support probe | `ESC]7501;? ST` → `ESC]7501;? ST` | ✅ |
 | ☐ | **9;1/2/3** | ConEmu misc (sleep/msgbox/tabtitle) | `ESC]9;1;ms ST` etc. | ❌ |
 | ☐ | **99** | Extended notification protocol | `ESC]99;i=ID;payload ST` | ❌ |
 | ☐ | **777** | urxvt notification | `ESC]777;notify;title;body ST` | ❌ |
@@ -186,6 +188,16 @@ ESC ] 8 ; ; ST               ← close link
 > `VtEvent::Progress(Progress)`. `OscRouter` applies the policy — the 8 KiB notification cap and the
 > ten-per-second rate limit — and emits `SessionEvent::Notification` (toast via
 > `window.push_notification`) or `SessionEvent::Progress` (a thin bar at the top edge, states 0–4).
+>
+> **OSC 7501** (Program Status Protocol, rev 0.3) is a cross-vendor proposal, so its route is
+> **`Forward`** + `large` (a sequence may be 4096 bytes): the engine never parses it, and
+> `oneterm-terminal`'s `program_status` applies the grammar, the record table (64 per session, the
+> least recently updated evicted), the lifetime rules (OSC 133 `A` drops `working` / `blocked` /
+> `idle`) and the security rules (a report with bad base64 or a control character in `title` /
+> `msg` is dropped whole; the text is never shown). The probe is answered in byte order with the
+> probe's terminator. The summary (`blocked > error > working > done > idle`) is the tab title's
+> icon. Deviation: `RIS` does not clear records (the engine reports it as a plain screen clear).
+> Design: `docs/spec-intakes/IN-0049-osc-7501/`.
 >
 > **OSC 20308** (OneTerm's own agent channel) and its `9;7` alias were withdrawn by `DEC-0022`
 > (spec archived at [`archive/osc-agent-status.md`](archive/osc-agent-status.md)). 20308 is the
@@ -277,6 +289,7 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 | 17/19 selection colors | ✅ | OK (set + query; no 117/119 reset) |
 | 5/13–16/18/105/113–119 colors | ❌ | **Gap** — special/pointer/Tektronix not mapped |
 | 9 + 9;4 notification/progress | ✅ | OK (toast + progress bar) |
+| 7501 program status | ✅ | OK (tab title icon; no 9;4 mapping, `RIS` does not clear) |
 | 99/777 notifications | ❌ | **Gap** |
 | 633 shell integration | ❌ | **Gap** (133 only) |
 | 1337 image | ❌ | **Gap** (Sixel via DCS is supported instead) |
@@ -314,8 +327,8 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 8. **Do not nest OSC**: close one OSC before opening another.
 9. **OneTerm** (VT engine = `oneterm-vt`): the engine implements **OSC 0, 1, 2, 4, 7, 8, 9 (and
    `9;4`), 10/11/12, 22, 50, 52, 104, 110/111/112 and 133** — the set `OscRoutes::BUILTIN`
-   publishes — each parsed once and reported as a typed `VtEvent`. OneTerm routes nothing else
-   out of the engine through `Config::osc_routes`.
+   publishes — each parsed once and reported as a typed `VtEvent`. OneTerm adds **OSC 7501**
+   (program status) through `Config::osc_routes`, with no engine change.
    - There is no second parser anywhere. Events arrive in the `feed` batch in byte order, and that
      batch is a `Vec` — the ordering promise is a property of the batch, not of a queue.
    - OSC 8 is stored on the cell; OSC 52 is decoded by the engine and the **policy** — clipboard,

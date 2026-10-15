@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oneterm_vt::grid::{DEFAULT_SCROLLBACK, SCROLLBACK_MAX};
-use oneterm_vt::{Config, OscRoutes, Size, Terminal};
+use oneterm_vt::{Config, OscRoute, OscRoutes, Size, Terminal};
 use parking_lot::{FairMutex, FairMutexGuard};
 
 use crate::backend::GridSize;
@@ -164,13 +164,23 @@ pub fn new_shared_terminal(size: GridSize, scrollback: usize) -> SharedTerminal 
 /// The engine configuration the adapter needs.
 ///
 /// Every standard OSC number is the engine's, parsed once and delivered as a
-/// typed event. What is left here is the ceilings. A ceiling is a memory
-/// question and not a policy one: who may write the clipboard stays in
-/// `security_policy.rs`. Without it a legitimate large OSC 52 write is
-/// truncated at the 2 KiB inline cap. The spill is transient (the parser
-/// doubles into it and shrinks back after each OSC).
+/// typed event. What is left here:
+///
+/// * OSC 7501, the Program Status Protocol, is routed out unparsed (`Forward`)
+///   and handled in [`crate::program_status`]: a cross-vendor proposal at
+///   revision 0.3, not something the engine should freeze into its API
+///   (`DEC-0022`). It sits above the route table's 2048-bit bitmap and lands in
+///   its sorted spill list;
+/// * the ceilings. A ceiling is a memory question and not a policy one: who may
+///   write the clipboard stays in `security_policy.rs`. Without them a
+///   legitimate large OSC 52 write, and any 7501 report past 2 KiB (the spec
+///   allows 4096 bytes), is truncated at the inline cap. The spill is transient
+///   (the parser doubles into it and shrinks back after each OSC).
 fn adapter_config(scrollback: usize) -> Config {
     let mut routes = OscRoutes::new();
+    routes
+        .route(crate::program_status::OSC, OscRoute::Forward)
+        .large(crate::program_status::OSC, true);
     routes.large(52, true);
     Config {
         scrollback_limit: scrollback.min(SCROLLBACK_MAX as usize) as u32,
@@ -199,7 +209,6 @@ pub const DEFAULT_SCROLLBACK_LINES: usize = DEFAULT_SCROLLBACK as usize;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oneterm_vt::OscRoute;
 
     fn handle() -> TerminalHandle {
         TerminalHandle::new(GridSize { cols: 20, lines: 4 }, DEFAULT_SCROLLBACK_LINES)
@@ -513,8 +522,8 @@ mod tests {
         assert!(handle.try_lock().is_some());
     }
 
-    /// The adapter routes nothing out of the engine: every standard number stays
-    /// the engine's.
+    /// The adapter routes out only OSC 7501: every standard number stays the
+    /// engine's.
     #[test]
     fn the_adapter_routes_only_the_osc_numbers_that_are_its_own() {
         let config = adapter_config(DEFAULT_SCROLLBACK_LINES);
@@ -526,8 +535,12 @@ mod tests {
         }
         assert_eq!(
             routes.overrides().collect::<Vec<_>>(),
-            Vec::new(),
-            "nothing was taken away from the engine"
+            vec![(7501, OscRoute::Forward)],
+            "nothing else was taken away from the engine"
+        );
+        assert!(
+            routes.allows_large(7501),
+            "a 7501 report may be 4096 bytes; the inline bound is 2 KiB"
         );
         // The withdrawn agent channel (`DEC-0022`) is the engine's default
         // again: dropped.

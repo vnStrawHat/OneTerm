@@ -408,6 +408,8 @@ impl TerminalView {
             }
             SessionEvent::Progress(p) => self.set_progress(p),
             SessionEvent::Exited(_) => {}
+            // Shown by the tab title (`US-0193`).
+            SessionEvent::ProgramStatus(_) => {}
             SessionEvent::Closed => {
                 let kind = self.session.read(cx).kind();
                 self.handle_session_closed(kind);
