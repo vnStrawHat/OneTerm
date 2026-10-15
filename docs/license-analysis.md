@@ -10,6 +10,8 @@
 > `ztracing` / `ztracing_macro` GPL exceptions of §2 are crate-scoped so any other GPL
 > crate fails the check. The project itself is licensed **Apache-2.0** (root `LICENSE`,
 > `[workspace.package] license`), not the dual grant discussed in §4.
+> `bzip2-1.0.6` (`libbz2-rs-sys`) left the graph with gpui-pre 0.3.9 (`IN-0052`) and is no
+> longer on the allow-list.
 
 ---
 

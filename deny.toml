@@ -35,7 +35,6 @@ allow = [
     "Unlicense",
     "BSL-1.0",
     "MPL-2.0",
-    "bzip2-1.0.6",
 ]
 confidence-threshold = 0.8
 

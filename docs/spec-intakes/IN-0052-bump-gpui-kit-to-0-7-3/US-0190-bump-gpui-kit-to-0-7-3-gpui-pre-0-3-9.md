@@ -94,6 +94,7 @@ Link consequential decisions; do not repeat their rationale here.
 - `cargo clippy --workspace --all-targets -D warnings`: clean with no source change.
 - `apply_force_width` copy: gpui-pre 0.3.7 and 0.3.9 `text_system/line_layout.rs` are identical (`diff` exit 0); the gate's `force_width_copy_matches_gpui` passes.
 - `CARGO_BUILD_JOBS=4 bash scripts/ci-local.sh --full` (2026-10-15): every step up to and including `third-party-notices.py --check` passed; `cargo deny` bans ok, licenses ok, advisories FAILED on RUSTSEC-2026-0346/0347/0348/0349 in `rustls` 0.23.45 (via `reqwest` in `oneterm-update`). `rustls` is unchanged by this bump (0.23.45 before and after); the advisories are new and fail on the base commit too. Fixed in a separate intake, as IN-0034 did.
+- `deny.toml`: the `bzip2-1.0.6` allowance is dropped because the bump removed its only user (`libbz2-rs-sys`); `docs/license-analysis.md` status note says so. The `zlog` / `ztracing` / `ztracing_macro` exceptions were already unmatched before this bump (none of the three is in the old or the new lock) and are left for whoever owns that analysis.
 - Gaps: the app was not launched (owner asked for shorter runs); `platform_proof` waits for CI.
 
 ## Handoff
