@@ -23,8 +23,8 @@ use oneterm_state::{
 };
 use oneterm_terminal::security_policy::MAX_QUEUED_NOTIFICATIONS;
 use oneterm_terminal::{
-    KeySpec, SessionEvent, SessionKind, TerminalPalette, TerminalProgress, TerminalSession,
-    encode_osc52,
+    KeySpec, ProgramState, SessionEvent, SessionKind, TerminalPalette, TerminalProgress,
+    TerminalSession, encode_osc52,
 };
 
 use super::completion::CompletionState;
@@ -117,6 +117,8 @@ pub(crate) enum TerminalViewEvent {
     /// The OSC 0/2 window title changed (or was reset). The panel re-reads
     /// the live title via `TerminalSession::title()`.
     TitleChanged,
+    /// [`TerminalView::program_status`] changed; the tab's status icon follows.
+    StatusChanged,
 }
 
 /// View that renders one terminal session (local or ssh — via `dyn TerminalSession`).
@@ -170,6 +172,10 @@ pub(crate) struct TerminalView {
     pub(super) blink_visible: bool,
     /// Bell indicator — set on `\x07`, cleared when the user presses a key.
     pub(super) has_bell: bool,
+    /// What the tab title's status icon shows: this terminal's OSC 7501
+    /// summary, minus `Idle` (which draws nothing), with `Done` / `Error`
+    /// cleared once the user has seen them (`IN-0049` tab-icon LLD).
+    program_status: Option<ProgramState>,
     /// Pending OSC 9 desktop notifications — drained in `render` via
     /// `window.push_notification` (which needs a `Window`, unavailable in the
     /// events task).
@@ -296,6 +302,7 @@ impl TerminalView {
             completion: CompletionState::default(),
             blink_visible: true,
             has_bell: false,
+            program_status: None,
             pending_notifications: VecDeque::new(),
             dropped_notifications: 0,
             progress: None,
@@ -407,9 +414,19 @@ impl TerminalView {
                 cx.emit(TerminalViewEvent::TitleChanged);
             }
             SessionEvent::Progress(p) => self.set_progress(p),
-            SessionEvent::Exited(_) => {}
-            // Shown by the tab title (`US-0193`).
-            SessionEvent::ProgramStatus(_) => {}
+            // The spec: process exit ends whatever was working or blocked;
+            // a result (`Done` / `Error`) waits to be seen.
+            SessionEvent::Exited(_) => {
+                if matches!(
+                    self.program_status,
+                    Some(ProgramState::Working | ProgramState::Blocked)
+                ) {
+                    self.set_program_status(None, cx);
+                }
+            }
+            SessionEvent::ProgramStatus(summary) => {
+                self.set_program_status(summary.filter(|s| *s != ProgramState::Idle), cx);
+            }
             SessionEvent::Closed => {
                 let kind = self.session.read(cx).kind();
                 self.handle_session_closed(kind);
@@ -467,6 +484,29 @@ impl TerminalView {
         });
         // A closed Space is no longer a broadcast target.
         self.leave_channel(cx);
+    }
+
+    /// The state the tab title's status icon shows (`None`: no icon).
+    pub(crate) fn program_status(&self) -> Option<ProgramState> {
+        self.program_status
+    }
+
+    fn set_program_status(&mut self, status: Option<ProgramState>, cx: &mut Context<Self>) {
+        if self.program_status != status {
+            self.program_status = status;
+            cx.emit(TerminalViewEvent::StatusChanged);
+        }
+    }
+
+    /// The user has seen this terminal: a finished result (`Done` / `Error`)
+    /// stops being news. `Working` and `Blocked` are live and stay.
+    pub(crate) fn acknowledge_program_status(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.program_status,
+            Some(ProgramState::Done | ProgramState::Error)
+        ) {
+            self.set_program_status(None, cx);
+        }
     }
 
     /// Join `channel`, leaving whichever channel this Space was in.

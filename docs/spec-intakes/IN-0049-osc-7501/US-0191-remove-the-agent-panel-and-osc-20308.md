@@ -21,12 +21,12 @@ Created: 2026-10-15
 
 - Change type: new capability | existing-contract change | bug | maintenance | acceptance rework
 - Change type: removal (feature withdrawal)
-- Risk lane: high-risk — changes how saved `config.json` / `docks.json` are read; withdraws a published protocol.
+- Risk lane: high-risk — changes how saved `ui_config.json` / `docks.json` are read; withdraws a published protocol.
 - Spec Intake, when required: IN-0049
 
 ## Outcome
 
-The Agent Panel, `AgentRegistry`, the agent focuser, OSC 20308 with its `9;7` alias, the right dock's Agent mode, the stale-threshold setting and the demo emitters are gone. Old `config.json` and `docks.json` load with no quarantine, prompt or placeholder (`right_dock_mode: "agent"` reads as `none`).
+The Agent Panel, `AgentRegistry`, the agent focuser, OSC 20308 with its `9;7` alias, the right dock's Agent mode, the stale-threshold setting and the demo emitters are gone. Old `ui_config.json` and `docks.json` load with no quarantine, prompt or placeholder (`right_dock_mode: "agent"` reads as `none`).
 
 ## Scope
 
@@ -40,7 +40,7 @@ The Agent Panel, `AgentRegistry`, the agent focuser, OSC 20308 with its `9;7` al
 - [x] `agent_stale_threshold_ms` in `ui_config.json` loads without quarantine (test).
 - [x] A `docks.json` with an `agent_panel` right dock loads with no `agent_panel` left in the dock area (test).
 - [x] `OSC 20308;0` gets no reply (test: the route is the engine's `Drop`, `handle.rs`).
-- [ ] Full `scripts/ci-local.sh` passes.
+- [x] Full `scripts/ci-local.sh` passes.
 
 ## Documentation
 
@@ -96,7 +96,9 @@ Compat unit tests in `oneterm-settings` / `oneterm-workspace`; `oneterm-terminal
 - `cargo clippy --workspace --all-targets -D warnings`: clean. `cargo test --workspace`: 75 suites ok, 0 failed. `check-ignored-tests.py`, `verify-dependency-graph.py`, `third-party-notices.py --check`, `check-doc-paths.py`, `check-english.py`, `check-theme-contrast.py`: pass.
 - Docs: the two specs moved to `docs/archive/` with a withdrawn banner; README, AGENTS.md, PROJECT.md, docs/README.md, structure.md, persistence.md (alias + dropped field + `agent_panel` replacement), architecture.md, gui-layout.md, terminal-backend.md, osc-sequences-checklist.md updated.
 - Removed test: the CORR-02 regression (`exited_behind_output_batch_marks_agent_ended`) asserted through the Agent registry, the only thing exit changed. `US-0193` re-adds it against the tab status (exit drops `working`).
-- Gaps: `crates/vt/docs/guide/05-osc.md` still uses 20308 as its `Forward` example and calls it OneTerm's agent channel; `US-0192` rewrites it around 7501. The full `scripts/ci-local.sh` runs once at the end of the intake. The engine's own verification tests (`crates/vt/tests/us0098_*.rs`) keep 20308 as an arbitrary unknown number; they test the route table, not OneTerm.
+- `CARGO_BUILD_JOBS=6 bash scripts/ci-local.sh --full` on Windows, 2026-10-15, after all three packets: all 32 checks passed, 141 test suites / 5045 passed / 0 failed; `cargo deny`: advisories, bans, licenses ok.
+- Walk (debug build, scratch working directory): the title bar shows `SSH Client | None` only (`us0193-title-bar-and-tab.png`).
+- Closed gap: `crates/vt/docs/guide/05-osc.md` was rewritten around 7501 in `US-0192`. Former gap: `crates/vt/docs/guide/05-osc.md` still uses 20308 as its `Forward` example and calls it OneTerm's agent channel; `US-0192` rewrites it around 7501. The full `scripts/ci-local.sh` runs once at the end of the intake. The engine's own verification tests (`crates/vt/tests/us0098_*.rs`) keep 20308 as an arbitrary unknown number; they test the route table, not OneTerm.
 
 ## Handoff
 

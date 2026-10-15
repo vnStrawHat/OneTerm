@@ -38,8 +38,8 @@ OneTerm answers `OSC 7501 ; ?`, keeps the rev 0.3 record table per session, drop
 - [x] Every edge case in the receiver LLD has a passing test.
 - [x] The probe reply precedes DA1 in one batch.
 - [x] No `oneterm-vt` public-API diff (`vt-public-api.py --check`).
-- [ ] E2E: Claude Code >= 2.1.295 reports in a local tab and in an SSH tab (Q8 settled and recorded).
-- [ ] Full `scripts/ci-local.sh` passes.
+- [ ] E2E: Claude Code >= 2.1.295 reports in a local tab and in an SSH tab (Q8 settled and recorded). Partial: Q8 settled (below); the Claude Code run itself is left to the owner.
+- [x] Full `scripts/ci-local.sh` passes.
 
 ## Documentation
 
@@ -70,7 +70,7 @@ Add only relevant code, decisions, dependencies, and invariants not already clea
 
 - [x] `program_status.rs` + tests (parser, table).
 - [x] Route + router wiring + event; backend tests.
-- [ ] Docs; E2E with Claude Code.
+- [x] Docs. E2E: ConPTY probe ordering done; Claude Code run left to the owner.
 
 ## Decisions
 
@@ -95,7 +95,10 @@ Link consequential decisions; do not repeat their rationale here.
 - Backend tests through the real engine: probe-then-DA1 and DA1-then-probe leave in byte order with the probe's terminator; 1000 reports in one batch give one event, an unchanged summary none, a malformed report none, bare `clear` gives `None`; prompt start drops `working` and keeps `done`; a 2.7 KB report crosses the engine, a 4.1 KB one is dropped.
 - `cargo test -p oneterm-terminal -p oneterm-terminal-view`: 183 + 397 passed. Workspace clippy clean. `vt-public-api.py --check --no-doc`: unchanged. `cargo test -p oneterm-vt --doc guide`: 34 passed (the guide's forwarding example now uses 7501; the `9;7` wrap example is reframed as a hypothetical private sub-code).
 - Docs: `osc-sequences-checklist.md` (7501 rows, policy paragraph, status summary, engine note), `terminal-backend.md` (router and state rows, tree), `structure.md`.
-- Gaps: E2E (Claude Code, and Q8 ConPTY ordering) runs with `US-0193`'s manual walk and is recorded there and here when done. The view ignores `ProgramStatus` until `US-0193`.
+- **Q8 settled (2026-10-15):** `target/walk-0193/probe.py`, run inside a OneTerm Command Prompt tab (real ConPTY), switches the console to VT input, writes `ESC ] 7501 ; ? ESC \` then `CSI c`, and records what comes back in order: `'\x1b]7501;?\x1b\\\x1b[?62;4;22c'`. OneTerm's 7501 answer reaches the program **before** the DA1 answer, so a program using the probe-then-DA1 idiom (Claude Code) detects support on local Windows tabs.
+- A real report crosses ConPTY: `emit.ps1 state=working` in the same tab lit the tab icon (`US-0193`), and the next cmd prompt (OSC 133 `A`) cleared it.
+- `CARGO_BUILD_JOBS=6 bash scripts/ci-local.sh --full` on Windows, 2026-10-15, after all three packets: all 32 checks passed, 141 test suites / 5045 passed / 0 failed; `cargo deny`: advisories, bans, licenses ok.
+- Gaps: Claude Code itself (2.1.299 is installed here) was not run: a `working` state needs a prompt sent to the owner's account. SSH E2E not run. The view ignored `ProgramStatus` until `US-0193`. The view ignores `ProgramStatus` until `US-0193`.
 
 ## Handoff
 

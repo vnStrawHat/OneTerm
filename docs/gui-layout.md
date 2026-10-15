@@ -129,6 +129,22 @@ with a `* ` prefix), then `Leave Channel` and `Close Channel <X>` for a member, 
 than one Space. The five joins, the leave, and the close are also actions in
 Settings > Key Bindings (group "Input Channel"), shipped unbound.
 
+### Program status icon (OSC 7501)
+
+A Terminal Tab with a single Space shows its terminal's OSC 7501 program status as an icon
+after the channel chips and the recording dot, before the label (`IN-0049`, `DEC-0022`): a
+rotating `loader-circle` in `primary` while **working**, a `bell` pulsing between 35 % and full
+opacity in `warning` while **blocked** (waiting on the user), a `circle-check` in `success` when
+**done**, a `circle-x` in `danger` on **error**, and nothing for **idle** or no report. Several
+records (subagents) show the highest of `blocked > error > working > done > idle`. A **split
+tab shows no icon** (owner ruling): it has no room to say which Space reports. The icon is on
+the selected tab too; **done** and **error** clear once seen — when the tab is selected, or
+when the user types into a terminal whose tab is already selected — and **working** /
+**blocked** end when the process exits or the next shell prompt starts (OSC 133 `A`). The
+tooltip says `Working`, `Waiting for you`, `Done` or `Error`; the program's own `title` /
+`msg` text is never shown. Under reduced motion both animations stand still. The bell's
+`warning` is held to 4.5:1 on the tab surfaces by `check-theme-contrast.py`.
+
 Membership is painted in two places. The tab strip shows one chip per distinct channel of
 the tab's Spaces, in A..E order, before the recording dot; the chip is a 16 px square with
 square corners holding the channel letter in the theme's `chart_1..chart_5`, centred by the

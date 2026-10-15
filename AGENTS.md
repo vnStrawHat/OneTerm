@@ -19,6 +19,7 @@ Guide for AI agents (and contributors) when working with the **OneTerm** project
 - Connect to remote shells over SSH
 - Browse and transfer files over SFTP
 - Open local shells
+- Show program status (OSC 7501: working / waiting / done) in the tab title
 - Powered by `Rust`, `gpui`, `gpui-component` and OneTerm's own VT engine `oneterm-vt`
 
 ---

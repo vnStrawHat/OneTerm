@@ -224,6 +224,9 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #                         (`crates/terminal-view/src/terminal_view/render.rs:510,603`)
     #   popover.background    a `Warning` notification's whole body
     #                         (`crates/theme/src/notif_ext.rs:86`), which is popover-backed
+    #   tab_bar.background,   the tab title's "waiting for you" bell (OSC 7501 `blocked`,
+    #   tab.background,       `crates/terminal-view/src/panel/tab_title.rs`), a glyph read as
+    #   tab.active.background a marker on an inactive or the selected tab
     #
     # **The name is the trap this entry exists to close.** `ThemeConfigColors` renames the
     # field to `warning.background` (`gpui-component/src/theme/schema.rs:617`) while
@@ -239,7 +242,14 @@ SURFACES: dict[str, tuple[str, ...]] = {
     # the floor as rendered and took a lightness-only correction of their own hue; the other
     # 23 have their existing colour written out verbatim, which changes nothing on screen
     # and everything about what this gate can prove.
-    "warning.background": ("title_bar.background", "background", "popover.background"),
+    "warning.background": (
+        "title_bar.background",
+        "background",
+        "popover.background",
+        "tab_bar.background",
+        "tab.background",
+        "tab.active.background",
+    ),
 }
 
 # The hierarchy rule, as (primary, secondary) pairs. On every surface both tokens are drawn

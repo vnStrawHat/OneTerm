@@ -1,15 +1,17 @@
 //! Everything about a Terminal Tab's label: resolving it from the live OSC 0/2
 //! title, the manual rename override and its dialog, and the tab-strip element
-//! (recording dot, active bar, drag source, middle-click / × close,
-//! double-click rename).
+//! (recording dot, OSC 7501 status icon, active bar, drag source, middle-click /
+//! × close, double-click rename).
 
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::{
-    App, AppContext as _, ClickEvent, Context, Div, Entity, EntityId, Focusable as _,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    Animation, AnimationExt as _, App, AppContext as _, ClickEvent, Context, Div, Entity, EntityId,
+    Focusable as _, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Transformation, Window, div,
+    percentage, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
@@ -18,9 +20,10 @@ use gpui_component::{
     input::{Input, InputState},
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     notification::NotificationType,
+    tooltip::Tooltip,
 };
 use oneterm_core::ShellKind;
-use oneterm_terminal::TerminalLogState;
+use oneterm_terminal::{ProgramState, TerminalLogState};
 use oneterm_theme::notif_ext::notify;
 
 use super::TerminalPanel;
@@ -41,6 +44,18 @@ impl TerminalPanel {
     fn set_custom_tab_title(&mut self, title: String, cx: &mut Context<Self>) {
         self.tab_title_override = Some(title);
         cx.notify();
+    }
+
+    /// The OSC 7501 state the tab's status icon shows: only for an unsplit tab
+    /// (a split tab has no room to say which Space reports it, owner ruling
+    /// `IN-0049`), and `None` when its terminal reports nothing to show.
+    pub(super) fn tab_status(&self, cx: &App) -> Option<ProgramState> {
+        if !self.tree.is_single() {
+            return None;
+        }
+        self.tree
+            .active_terminal()
+            .and_then(|view| view.read(cx).program_status())
     }
 
     /// Whether the tab shows the recording dot: only an unsplit tab whose
@@ -133,6 +148,53 @@ pub(crate) fn trim_path_title(title: &str) -> &str {
     }
 }
 
+/// The tab's OSC 7501 status icon (owner's icon set, `IN-0049`): a rotating
+/// loader while working, a pulsing bell while waiting on the user, a check or a
+/// cross for a result. Colours are theme tokens. The animations are gpui's, so a
+/// reduced-motion setting draws them still and asks for no frames.
+pub(super) fn tab_status_icon(status: ProgramState, panel: EntityId, cx: &App) -> gpui::AnyElement {
+    let theme = cx.theme();
+    let (icon, color, label) = match status {
+        ProgramState::Working => (IconName::LoaderCircle, theme.primary, "Working"),
+        ProgramState::Blocked => (IconName::Bell, theme.warning, "Waiting for you"),
+        ProgramState::Done => (IconName::CircleCheck, theme.success, "Done"),
+        ProgramState::Error => (IconName::CircleX, theme.danger, "Error"),
+        // Never stored by the view; nothing to draw.
+        ProgramState::Idle => return div().into_any_element(),
+    };
+    let icon = Icon::new(icon).xsmall().text_color(color);
+    let icon = match status {
+        ProgramState::Working => icon
+            .with_animation(
+                ("tab-status-working", panel.as_u64()),
+                Animation::new(Duration::from_secs(1)).repeat(),
+                |icon, delta| icon.transform(Transformation::rotate(percentage(delta))),
+            )
+            .into_any_element(),
+        ProgramState::Blocked => div()
+            .child(icon)
+            .with_animation(
+                ("tab-status-blocked", panel.as_u64()),
+                Animation::new(Duration::from_millis(1200)).repeat(),
+                |this, delta| {
+                    // 1 -> 0.35 -> 1 over one period.
+                    let wave = (delta * std::f32::consts::TAU).cos() * 0.5 + 0.5;
+                    this.opacity(0.35 + 0.65 * wave)
+                },
+            )
+            .into_any_element(),
+        _ => icon.into_any_element(),
+    };
+    div()
+        .id(("tab-status", panel.as_u64()))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .child(icon)
+        .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+        .into_any_element()
+}
+
 fn tab_title_label() -> Div {
     // GPUI creates a rectangular content mask when either overflow axis is
     // hidden, which clips glyph descenders to this label's line box.
@@ -140,7 +202,8 @@ fn tab_title_label() -> Div {
 }
 
 /// Build the tab-strip row for `panel`: active bar, drag source, middle-click
-/// close, recording dot, the (double-click to rename) label, and the × button.
+/// close, recording dot, status icon, the (double-click to rename) label, and
+/// the × button.
 pub(super) fn render_tab_strip(
     panel: &mut TerminalPanel,
     _window: &mut Window,
@@ -154,6 +217,9 @@ pub(super) fn render_tab_strip(
     let recording_color = cx.theme().danger;
     let is_active = panel.is_active;
     let show_recording = panel.shows_recording_dot(cx);
+    let status_icon = panel
+        .tab_status(cx)
+        .map(|status| tab_status_icon(status, panel_entity.entity_id(), cx));
     // One chip per distinct channel of this tab's Spaces, in A..E order.
     let chips: Vec<_> = panel
         .tab_channels(cx)
@@ -233,6 +299,7 @@ pub(super) fn render_tab_strip(
                     .child("●"),
             )
         })
+        .children(status_icon)
         .child(
             tab_title_label()
                 .id(title_label_id)

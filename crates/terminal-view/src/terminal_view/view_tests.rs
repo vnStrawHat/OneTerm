@@ -14,7 +14,7 @@ use oneterm_state::InputChannelRegistry;
 use oneterm_terminal::security_policy::MAX_QUEUED_NOTIFICATIONS;
 use oneterm_terminal::test_support::FakeTerminalSession;
 use oneterm_terminal::{
-    KeySpec, KeyboardFlags, NamedKey, SessionEvent, SessionKind, TerminalError,
+    KeySpec, KeyboardFlags, NamedKey, ProgramState, SessionEvent, SessionKind, TerminalError,
 };
 
 use super::TerminalViewEvent;
@@ -208,8 +208,9 @@ fn title_event_emits_title_changed(cx: &mut TestAppContext) {
     let _subscription = cx.update(|_, cx| {
         let seen = seen.clone();
         cx.subscribe(&view, move |_, event: &TerminalViewEvent, _| {
-            assert_eq!(*event, TerminalViewEvent::TitleChanged);
-            seen.set(seen.get() + 1);
+            if *event == TerminalViewEvent::TitleChanged {
+                seen.set(seen.get() + 1);
+            }
         })
     });
 
@@ -219,6 +220,119 @@ fn title_event_emits_title_changed(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     assert_eq!(seen.get(), 1, "only the title event notifies the panel");
+}
+
+// ── OSC 7501 status for the tab icon (`IN-0049`, `US-0193`) ──────────────
+
+fn status(summary: Option<ProgramState>) -> SessionEvent {
+    SessionEvent::ProgramStatus(summary)
+}
+
+/// The view keeps what the icon shows: `Idle` draws nothing, and only a change
+/// tells the panel to repaint.
+#[gpui::test]
+fn the_program_status_is_stored_without_idle_and_changes_are_announced(cx: &mut TestAppContext) {
+    let (session, _) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+    let changes = Rc::new(Cell::new(0));
+    let _subscription = cx.update(|_, cx| {
+        let changes = changes.clone();
+        cx.subscribe(&view, move |_, event: &TerminalViewEvent, _| {
+            if *event == TerminalViewEvent::StatusChanged {
+                changes.set(changes.get() + 1);
+            }
+        })
+    });
+
+    let read = |view: &gpui::Entity<super::TerminalView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.program_status())
+    };
+    view.update(cx, |view, cx| {
+        view.handle_event(status(Some(ProgramState::Working)), cx)
+    });
+    assert_eq!(read(&view, cx), Some(ProgramState::Working));
+    view.update(cx, |view, cx| {
+        view.handle_event(status(Some(ProgramState::Idle)), cx)
+    });
+    assert_eq!(read(&view, cx), None, "idle draws no icon");
+    view.update(cx, |view, cx| view.handle_event(status(None), cx));
+    cx.run_until_parked();
+    assert_eq!(
+        changes.get(),
+        2,
+        "working, then none; the second none is no change"
+    );
+}
+
+/// Exit ends `Working` / `Blocked`; a result stays until it is seen.
+#[gpui::test]
+fn exit_drops_a_live_status_and_keeps_a_result(cx: &mut TestAppContext) {
+    for (before, after) in [
+        (ProgramState::Working, None),
+        (ProgramState::Blocked, None),
+        (ProgramState::Done, Some(ProgramState::Done)),
+        (ProgramState::Error, Some(ProgramState::Error)),
+    ] {
+        let (session, _) = FakeTerminalSession::boxed(24, 80, "");
+        let (view, cx) = open_view(cx, session);
+        let got = view.update(cx, |view, cx| {
+            view.handle_event(status(Some(before)), cx);
+            view.handle_event(SessionEvent::Exited(Some(0)), cx);
+            view.program_status()
+        });
+        assert_eq!(got, after, "{before:?}");
+    }
+}
+
+/// Typing into the terminal is seeing it: a result clears, a live state does not.
+#[gpui::test]
+fn typing_acknowledges_a_result_but_not_a_live_state(cx: &mut TestAppContext) {
+    let (session, _) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+    let got = view.update_in(cx, |view, window, cx| {
+        view.handle_event(status(Some(ProgramState::Blocked)), cx);
+        view.replace_text_in_range(None, "y", window, cx);
+        let blocked = view.program_status();
+        view.handle_event(status(Some(ProgramState::Done)), cx);
+        view.replace_text_in_range(None, "\r", window, cx);
+        (blocked, view.program_status())
+    });
+    assert_eq!(got, (Some(ProgramState::Blocked), None));
+
+    let got = view.update_in(cx, |view, window, cx| {
+        view.handle_event(status(Some(ProgramState::Error)), cx);
+        view.on_key_down(&key_down("enter", Modifiers::default()), window, cx);
+        view.program_status()
+    });
+    assert_eq!(got, None, "a key acknowledges too");
+}
+
+/// Regression (CORR-02): a process that prints and exits in the same batch
+/// delivers `Output` followed by `Exited` on the event channel. The coalescing
+/// drain must run the same exit handling as the main loop — here, the status
+/// rule that ends `Working` on exit.
+#[gpui::test]
+fn exited_behind_an_output_batch_still_ends_the_status(cx: &mut TestAppContext) {
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+    probe
+        .emit(status(Some(ProgramState::Working)))
+        .expect("event channel must accept the status");
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.program_status()),
+        Some(ProgramState::Working)
+    );
+    // Queue both before the subscriber task runs, so `Exited` is picked up by
+    // the coalescing drain behind `Output`.
+    probe
+        .emit(SessionEvent::Output)
+        .expect("event channel must accept output");
+    probe
+        .emit(SessionEvent::Exited(Some(0)))
+        .expect("event channel must accept exit");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.program_status()), None);
 }
 
 #[gpui::test]

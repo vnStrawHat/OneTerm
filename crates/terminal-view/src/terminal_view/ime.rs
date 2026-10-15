@@ -71,6 +71,7 @@ impl EntityInputHandler for TerminalView {
         self.deps
             .fan_out(cx.entity_id(), BroadcastInput::Text(text), cx);
         self.has_bell = false;
+        self.acknowledge_program_status(cx);
         cx.notify();
     }
 

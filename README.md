@@ -75,6 +75,13 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 - Grouped session tree with connect, rename, color, and search
 - Persisted to `ssh_session.json` (passwords never stored)
 
+### 🚦 Program status in the tab title
+
+- Programs that speak the Program Status Protocol (OSC 7501) — Claude Code 2.1.295+, pi 1.1.0+ —
+  report to OneTerm with no setup, locally and over SSH
+- The tab title shows a spinner while working, a bell while the program waits for you, and a
+  check or a cross when it finishes (single-Space tabs)
+
 ### 🧩 Layout & UI
 
 - Zed-style workspace with a flexible DockArea, left / right / bottom docks, and center tabs

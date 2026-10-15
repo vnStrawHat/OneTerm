@@ -378,12 +378,14 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// The user typed: the bell indicator has been seen.
+    /// The user typed: the bell indicator, and a finished program status, have
+    /// been seen.
     fn clear_bell(&mut self, cx: &mut Context<Self>) {
         if self.has_bell {
             self.has_bell = false;
             cx.notify();
         }
+        self.acknowledge_program_status(cx);
     }
 }
 

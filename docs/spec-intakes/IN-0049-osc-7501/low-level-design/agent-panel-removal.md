@@ -8,7 +8,7 @@ Date: 2026-10-15
 ## Concern
 
 Delete the Agent Panel feature and OneTerm's own agent channel with no user-visible residue,
-while every `config.json` and `docks.json` an older OneTerm wrote keeps loading without a
+while every `ui_config.json` and `docks.json` an older OneTerm wrote keeps loading without a
 quarantine, a prompt, or a "unknown panel" placeholder.
 
 ## Design
@@ -32,7 +32,7 @@ quarantine, a prompt, or a "unknown panel" placeholder.
   so a saved `"right_dock_mode": "agent"` deserializes as `None` (owner ruling) and is
   written back as `"none"` on the next save. No schema version bump: the document's shape is
   unchanged, and an older OneTerm reading `"none"` already understands it.
-- **`agent_stale_threshold_ms`** in an old `config.json` is an unknown field. `UiConfig` has no
+- **`agent_stale_threshold_ms`** in an old `ui_config.json` is an unknown field. `UiConfig` has no
   `deny_unknown_fields`, so it is ignored on read and dropped on the next write. Confirmed by
   a test, not assumed.
 - **`docks.json`**: a right dock saved as `agent_panel` is replaced at start-up, because
@@ -82,9 +82,9 @@ impl AppServices {
 
 ## Edge Cases and Failure Modes
 
-- [ ] `config.json` with `"right_dock_mode": "agent"` loads, the dock is hidden, and the next
+- [x] `ui_config.json` with `"right_dock_mode": "agent"` loads, the dock is hidden, and the next
   save writes `"none"`.
-- [ ] `config.json` with `"agent_stale_threshold_ms": 42` loads without quarantine.
+- [x] `ui_config.json` with `"agent_stale_threshold_ms": 42` loads without quarantine.
 - [ ] `docks.json` whose right dock is `agent_panel` loads; the right dock holds the SSH Client
   panel (collapsed under the persisted mode) and no `InvalidPanel` placeholder survives the
   next save.
@@ -93,7 +93,7 @@ impl AppServices {
 
 ## Verification
 
-- [ ] `oneterm-settings` tests: the two `config.json` cases above.
+- [x] `oneterm-settings` tests: the two `ui_config.json` cases above.
 - [ ] `oneterm-workspace` test: loading a `docks.json` fixture with an `agent_panel` right dock
   leaves no panel named `agent_panel` in the dock area.
 - [ ] `oneterm-terminal` test: a 20308 probe yields no transport write.

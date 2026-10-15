@@ -672,6 +672,110 @@ fn tab_drop_onto_occupied_space_keeps_source_terminal(cx: &mut TestAppContext) {
     assert!(still_in_source, "source terminal must stay in its Space");
 }
 
+/// The tab icon reads the sole terminal's status, and a split tab shows none
+/// (owner ruling, `IN-0049`). Selecting the tab acknowledges a result.
+#[gpui::test]
+fn the_tab_status_follows_a_single_space_and_selection_acknowledges(cx: &mut TestAppContext) {
+    use oneterm_terminal::ProgramState;
+
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AppState::init);
+
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_spec(session_spec(session, "Status"), window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+
+    probe
+        .emit(oneterm_terminal::SessionEvent::ProgramStatus(Some(
+            ProgramState::Done,
+        )))
+        .expect("event channel must accept the status");
+    cx.run_until_parked();
+    assert_eq!(
+        panel.read_with(cx, |panel, cx| panel.tab_status(cx)),
+        Some(ProgramState::Done)
+    );
+
+    // Split: the icon goes, the terminal keeps its status.
+    let space = panel.read_with(cx, |panel, _| panel.tree.active());
+    panel.update_in(cx, |panel, window, cx| {
+        panel.split_active_at(space, SplitDir::Right, window, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(panel.read_with(cx, |panel, cx| panel.tab_status(cx)), None);
+    let kept = panel.read_with(cx, |panel, cx| {
+        panel
+            .tree
+            .terminal_views()
+            .into_iter()
+            .find_map(|view| view.read(cx).program_status())
+    });
+    assert_eq!(kept, Some(ProgramState::Done));
+
+    // Selecting the tab acknowledges the result on its terminals.
+    panel.update_in(cx, |panel, window, cx| {
+        <TerminalPanel as gpui_base::dock::Panel>::set_active(panel, false, window, cx);
+        <TerminalPanel as gpui_base::dock::Panel>::set_active(panel, true, window, cx);
+    });
+    cx.run_until_parked();
+    let after = panel.read_with(cx, |panel, cx| {
+        panel
+            .tree
+            .terminal_views()
+            .into_iter()
+            .find_map(|view| view.read(cx).program_status())
+    });
+    assert_eq!(after, None);
+}
+
+struct StatusIconHost(oneterm_terminal::ProgramState);
+
+impl gpui::Render for StatusIconHost {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        super::tab_title::tab_status_icon(self.0, cx.entity_id(), cx)
+    }
+}
+
+/// Working and blocked animate — they ask for the next frame — and a result
+/// does not; under reduced motion nothing does (the walk machine runs with
+/// Windows animations off, so this is where the motion itself is proven).
+#[gpui::test]
+fn the_live_status_icons_animate_unless_motion_is_reduced(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    use oneterm_terminal::ProgramState;
+
+    cx.update(gpui_component::init);
+    for (state, animates) in [
+        (ProgramState::Working, true),
+        (ProgramState::Blocked, true),
+        (ProgramState::Done, false),
+        (ProgramState::Error, false),
+    ] {
+        for reduce in [false, true] {
+            cx.update(|cx| cx.set_reduce_motion(reduce));
+            let window = cx.open_window(size(px(120.), px(40.)), |_, _| StatusIconHost(state));
+            cx.run_until_parked();
+            let frames = window
+                .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+                .unwrap();
+            assert_eq!(
+                frames > 0,
+                animates && !reduce,
+                "{state:?}, reduced motion {reduce}: {frames} frame request(s)"
+            );
+        }
+    }
+}
+
 /// The tab chips read `tab_channels`, and the two tab-wide menu items write
 /// through `join_tab_to_channel` / `leave_tab_channels` (US-0056).
 #[gpui::test]

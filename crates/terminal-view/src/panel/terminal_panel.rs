@@ -401,8 +401,9 @@ impl TerminalPanel {
         });
     }
 
-    /// (Re)subscribe to `TitleChanged` on every terminal leaf so the tab strip
-    /// refreshes on OSC 0/2 title changes regardless of which leaf changed.
+    /// (Re)subscribe to every terminal leaf's `TerminalViewEvent` (the OSC 0/2
+    /// title, the program status) so the tab strip refreshes whichever leaf
+    /// changed.
     pub(super) fn rebuild_title_subs(&mut self, cx: &mut Context<Self>) {
         self._title_subs = self
             .tree
@@ -675,6 +676,10 @@ impl gpui_base::dock::Panel for TerminalPanel {
         // Space did not change: another tab published over this state.
         if active {
             self.publish_active_session(cx);
+            // Selecting the tab is seeing it: a finished status is acknowledged.
+            for view in self.tree.terminal_views() {
+                view.update(cx, |view, cx| view.acknowledge_program_status(cx));
+            }
         }
     }
 }
