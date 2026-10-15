@@ -7,9 +7,9 @@
 //! browser's UI state, keyed by the backend's stable per-session id.
 //!
 //! The store is a gpui `Global`, created once by [`crate::init`], so it
-//! outlives any one `SftpPanel` (e.g. when the right dock is swapped via the
-//! mode toggle: SSH Client → Agent → SSH Client creates a *new* `SftpPanel` —
-//! the store preserves each backend's cwd + transfers across that swap). It is
+//! outlives any one `SftpPanel` (a layout reset rebuilds the right dock and so
+//! creates a *new* `SftpPanel` — the store preserves each backend's cwd +
+//! transfers across that rebuild). It is
 //! only touched from the UI thread, so a `RefCell` guards it; callers must not
 //! re-enter the store from inside a `with_mut` closure.
 //!

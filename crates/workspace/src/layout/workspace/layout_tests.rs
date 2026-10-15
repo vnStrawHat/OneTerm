@@ -1,5 +1,5 @@
-//! Layout-level tests for the workspace shell (TEST-20): right-dock mode
-//! switching and the load → reset-center → save round trip against an
+//! Layout-level tests for the workspace shell (TEST-20): the right dock
+//! following the tab kind and the load → reset-center → save round trip against an
 //! isolated `docks.json`.
 
 use std::cell::Cell;
@@ -10,16 +10,15 @@ use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext, px};
 use gpui_component::dock::{
     DockArea, DockAreaState, DockLayout, DockPlacement, PanelHandle, panel_handle, register_panel,
 };
-use oneterm_actions::RightDockMode;
 use oneterm_core::SftpTableState;
 use oneterm_state::dock_persistence::{read_dock_document_from, update_dock_document_at};
 use oneterm_state::panel_names;
 
-use super::actions::{DockModeAction, reopen_or_rebuild};
 use super::test_panels::{NamedPanel, register_test_panels};
 use super::{
     DEFAULT_RIGHT_DOCK_WIDTH, MAIN_DOCK_VERSION, OneTermWorkspace, clamp_right_dock_width, layout,
-    persistence, restore_zoom_in_dock, right_dock_mode_for, startup_dock_document,
+    persistence, restore_zoom_in_dock, right_dock_open_on_kind_change,
+    right_dock_prefs_after_toggle, set_right_dock_open, startup_dock_document,
 };
 
 /// Removes the per-test directory when the test ends — on failure too.
@@ -122,8 +121,6 @@ fn right_dock(dock_area: &Entity<DockArea>, cx: &mut VisualTestContext) -> (f32,
     })
 }
 
-/// TEST-20: switching the right-dock mode swaps the panel, keeps the dock
-/// width, forces the dock open for SSH Client, and only hides it for None.
 #[gpui::test]
 fn every_persisted_panel_name_resolves_with_its_presentation_handle(cx: &mut TestAppContext) {
     let (dock_area, cx) = dock_area(cx);
@@ -146,38 +143,25 @@ fn every_persisted_panel_name_resolves_with_its_presentation_handle(cx: &mut Tes
     }
 }
 
+/// `IN-0054`: following the tab kind only opens and closes the dock; the one
+/// panel and its width stay.
 #[gpui::test]
-fn switch_right_dock_mode_swaps_panel_and_keeps_width(cx: &mut TestAppContext) {
+fn opening_and_closing_the_right_dock_keeps_its_panel_and_width(cx: &mut TestAppContext) {
     let (dock_area, cx) = dock_area(cx);
     set_right_dock(&dock_area, panel_names::SSH_CLIENT, px(333.), false, cx);
+    let panel_before = right_dock_panel_id(&dock_area, cx);
+    for open in [true, false, true] {
+        cx.update(|window, cx| set_right_dock_open(&dock_area, open, window, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            right_dock(&dock_area, cx),
+            (333., open, panel_names::SSH_CLIENT.to_string())
+        );
+    }
     assert_eq!(
-        right_dock(&dock_area, cx),
-        (333., false, panel_names::SSH_CLIENT.to_string())
-    );
-
-    cx.update(|window, cx| {
-        OneTermWorkspace::switch_right_dock_mode(&dock_area, RightDockMode::SshClient, window, cx)
-    });
-    assert_eq!(
-        right_dock(&dock_area, cx),
-        (333., true, panel_names::SSH_CLIENT.to_string())
-    );
-
-    cx.update(|window, cx| {
-        OneTermWorkspace::switch_right_dock_mode(&dock_area, RightDockMode::None, window, cx)
-    });
-    cx.run_until_parked();
-    assert_eq!(
-        right_dock(&dock_area, cx),
-        (333., false, panel_names::SSH_CLIENT.to_string())
-    );
-
-    cx.update(|window, cx| {
-        OneTermWorkspace::switch_right_dock_mode(&dock_area, RightDockMode::SshClient, window, cx)
-    });
-    assert_eq!(
-        right_dock(&dock_area, cx),
-        (333., true, panel_names::SSH_CLIENT.to_string())
+        right_dock_panel_id(&dock_area, cx),
+        panel_before,
+        "no rebuild: an SFTP connection survives"
     );
 }
 
@@ -205,84 +189,70 @@ fn the_right_dock_width_is_clamped_to_a_share_of_the_window() {
     assert_eq!(clamp_right_dock_width(px(490.), px(0.)), px(490.));
 }
 
-/// BUG-0067: the persisted mode follows the dock's open state, so the title
-/// bar's segmented control can never claim a mode over a collapsed dock.
+/// `IN-0054`: the dock moves only when the active tab's kind changes, to the
+/// choice remembered for the new kind (defaults: local closed, SSH open).
 #[test]
-fn right_dock_mode_follows_the_dock_state() {
-    // Collapsed by a dock button: whatever was persisted, the truth is None.
+fn the_right_dock_moves_only_when_the_tab_kind_changes() {
+    let defaults = oneterm_settings::RightDockPrefs::default();
+    // Start-up: nothing applied yet, so the active kind is applied.
     assert_eq!(
-        right_dock_mode_for(false, RightDockMode::SshClient),
-        RightDockMode::None
+        right_dock_open_on_kind_change(None, true, defaults),
+        Some(false)
     );
-    // Reopened by the same button: the mode names the panel that came back.
     assert_eq!(
-        right_dock_mode_for(true, RightDockMode::None),
-        RightDockMode::SshClient
+        right_dock_open_on_kind_change(None, false, defaults),
+        Some(true)
     );
-    // An open dock showing the mode it says it shows is left alone.
+    // local -> SSH opens, SSH -> local closes.
     assert_eq!(
-        right_dock_mode_for(true, RightDockMode::SshClient),
-        RightDockMode::SshClient
+        right_dock_open_on_kind_change(Some(true), false, defaults),
+        Some(true)
+    );
+    assert_eq!(
+        right_dock_open_on_kind_change(Some(false), true, defaults),
+        Some(false)
+    );
+    // Same kind (another local tab, a Space change): leave the user's choice.
+    assert_eq!(
+        right_dock_open_on_kind_change(Some(true), true, defaults),
+        None
+    );
+    assert_eq!(
+        right_dock_open_on_kind_change(Some(false), false, defaults),
+        None
+    );
+    // A remembered choice wins over the default.
+    let mut prefs = defaults;
+    prefs.set(true, true);
+    assert_eq!(
+        right_dock_open_on_kind_change(Some(false), true, prefs),
+        Some(true)
     );
 }
 
-/// BUG-0067: an explicit mode click decides against what the dock *contains*,
-/// not against the persisted mode, so reopening never rebuilds.
+/// `IN-0054`: a dock button records the choice for the kind the dock was last
+/// set for, and only when it differs from what is remembered — so the
+/// workspace's own open / close is never mistaken for the user's.
 #[test]
-fn a_mode_click_only_rebuilds_a_panel_the_dock_does_not_have() {
-    // Collapsed by a dock button: the dock still holds the SSH Client panel, so
-    // clicking SSH Client shows it — the persisted mode is None by then.
+fn a_dock_toggle_is_remembered_for_the_kind_it_was_made_on() {
+    let defaults = oneterm_settings::RightDockPrefs::default();
+    // Opening on a local tab: local becomes open, SSH untouched.
+    let next = right_dock_prefs_after_toggle(Some(true), true, defaults).expect("a change");
+    assert!(next.local && next.ssh);
+    // Closing on an SSH tab: SSH becomes closed, local untouched.
+    let next = right_dock_prefs_after_toggle(Some(false), false, defaults).expect("a change");
+    assert!(!next.local && !next.ssh);
+    // The state the workspace just applied: nothing to record.
     assert_eq!(
-        reopen_or_rebuild(Some(RightDockMode::SshClient), RightDockMode::SshClient),
-        DockModeAction::Show
-    );
-    // A dock without the panel is the only thing that builds one.
-    assert_eq!(
-        reopen_or_rebuild(None, RightDockMode::SshClient),
-        DockModeAction::Rebuild
-    );
-    // None always hides, whatever is in there — an explicit click never toggles.
-    assert_eq!(
-        reopen_or_rebuild(Some(RightDockMode::SshClient), RightDockMode::None),
-        DockModeAction::Hide
+        right_dock_prefs_after_toggle(Some(true), false, defaults),
+        None
     );
     assert_eq!(
-        reopen_or_rebuild(None, RightDockMode::None),
-        DockModeAction::Hide
+        right_dock_prefs_after_toggle(Some(false), true, defaults),
+        None
     );
-}
-
-/// BUG-0067: a dock collapsed by the tab bar's dock button reopens with the
-/// *same panel instance* and the same width — a rebuild would drop the SFTP
-/// connection and the session list's state.
-#[gpui::test]
-fn reopening_a_collapsed_right_dock_keeps_its_panel_instance(cx: &mut TestAppContext) {
-    let (dock_area, cx) = dock_area(cx);
-    set_right_dock(&dock_area, panel_names::SSH_CLIENT, px(333.), true, cx);
-    let panel_before = right_dock_panel_id(&dock_area, cx);
-
-    // The tab bar's dock button toggles the dock without touching the mode.
-    dock_area.update_in(cx, |dock_area, window, cx| {
-        dock_area.toggle_dock(DockPlacement::Right, window, cx)
-    });
-    assert_eq!(
-        right_dock(&dock_area, cx),
-        (333., false, panel_names::SSH_CLIENT.to_string())
-    );
-
-    let action = cx.update(|window, cx| {
-        OneTermWorkspace::apply_right_dock_mode(&dock_area, RightDockMode::SshClient, window, cx)
-    });
-    assert_eq!(action, DockModeAction::Show);
-    assert_eq!(
-        right_dock(&dock_area, cx),
-        (333., true, panel_names::SSH_CLIENT.to_string())
-    );
-    assert_eq!(
-        right_dock_panel_id(&dock_area, cx),
-        panel_before,
-        "reopening must not rebuild the panel"
-    );
+    // Before the dock was ever set for a kind: nothing to record against.
+    assert_eq!(right_dock_prefs_after_toggle(None, true, defaults), None);
 }
 
 /// US-0113: a drag inside the allowed range is left alone and remembered; one

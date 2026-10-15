@@ -9,9 +9,9 @@ Created: 2026-10-15
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -35,12 +35,12 @@ The title bar has no right-dock mode control. The right dock opens or closes whe
 
 ## Acceptance
 
-- [ ] Switching local -> SSH tab opens the dock, SSH -> local closes it (defaults).
-- [ ] Toggling the dock on a tab changes only that kind's remembered choice, and it survives a restart (`ui_config.json`).
-- [ ] Switching between two tabs of the same kind never moves the dock.
-- [ ] `Ctrl+Shift+B` toggles the dock; it is listed in Settings > Key Bindings and denied in an elevated window.
-- [ ] An old `ui_config.json` with `right_dock_mode` loads without quarantine and drops the field on write.
-- [ ] Full `scripts/ci-local.sh` passes.
+- [ ] Switching local -> SSH tab opens the dock, SSH -> local closes it (defaults). Decision unit-tested; not yet seen in a running window (see Gaps).
+- [x] Toggling the dock on a tab changes only that kind's remembered choice, and it survives a restart (`ui_config.json`).
+- [x] Switching between two tabs of the same kind never moves the dock.
+- [x] `Ctrl+Shift+B` toggles the dock; it is listed in Settings > Key Bindings and denied in an elevated window.
+- [x] An old `ui_config.json` with `right_dock_mode` loads without quarantine and drops the field on write.
+- [x] Full `scripts/ci-local.sh` passes.
 
 ## Documentation
 
@@ -70,9 +70,9 @@ Add only relevant code, decisions, dependencies, and invariants not already clea
 
 ## Plan
 
-- [ ] Settings field + removal of `RightDockMode` / `SetRightDockMode` / mode logic / title-bar control.
-- [ ] Workspace observers (kind change -> apply; dock change -> record) + start-up apply + `ToggleRightDock`.
-- [ ] Key binding row + elevated policy; tests; docs; gate.
+- [x] Settings field + removal of `RightDockMode` / `SetRightDockMode` / mode logic / title-bar control.
+- [x] Workspace observers (kind change -> apply; dock change -> record) + start-up apply + `ToggleRightDock`.
+- [x] Key binding row + elevated policy; tests; docs; gate.
 
 ## Decisions
 
@@ -87,12 +87,17 @@ Unit tests for the pure decision (kind change / same kind / record) and the sett
 - [ ] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+- Removed: the title bar's segmented control and its `UiConfig` observer, `SetRightDockMode`, `oneterm_core::RightDockMode`, `panel_names::right_dock_panel_name`, and the workspace's `switch_right_dock_mode` / `apply_right_dock_mode` / `reopen_or_rebuild` / `right_dock_mode_for` / `sync_right_dock_mode` / `right_dock_panel_mode`.
+- Added: `UiConfig.right_dock: RightDockPrefs { local, ssh }` (default false / true, omitted while default); `ToggleRightDock` (bindable "Toggle Right Dock", `ctrl-shift-b`, classified denied for an elevated window); the workspace observes `AppState` and opens / closes the dock only when the active tab's kind changes (`right_dock_open_on_kind_change`), and records a dock-area open state that differs from the remembered choice for the kind the dock was last set for (`right_dock_prefs_after_toggle`); start-up applies the active kind.
+- Tests: `the_right_dock_moves_only_when_the_tab_kind_changes`, `a_dock_toggle_is_remembered_for_the_kind_it_was_made_on`, `opening_and_closing_the_right_dock_keeps_its_panel_and_width` (replaces the mode-switch and reopen tests); `oneterm-settings` round trip of `right_dock`, default not written, old `right_dock_mode` / `agent_stale_threshold_ms` ignored and dropped; the elevated-policy exhaustiveness test covers the new action.
+- Docs: `gui-layout.md` (right dock behaviour, title bar, elevated window, caching note; also the `agent_panel` / `AgentListView` sentence US-0191 missed), `persistence.md`, `architecture.md`, README.
+- `CARGO_BUILD_JOBS=6 bash scripts/ci-local.sh --full` (2026-10-15): all checks passed, 141 suites / 5040 passed / 0 failed (five fewer than before: the mode-toggle tests went, three tests came).
+- Gaps: not walked in a running window — the workstation is locked. The observer wiring (AppState -> dock, dock -> `ui_config.json`) is proven by the decision tests and the compile, not by a GUI run; no test constructs a whole `OneTermWorkspace` (it reads and writes the real `docks.json`).
 
 ## Handoff
 

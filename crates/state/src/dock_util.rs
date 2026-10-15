@@ -13,7 +13,7 @@ use gpui_component::dock::{BasePanelView, DockArea, DockPlacement, NodeId, PaneN
 /// Set the Right Dock open/closed (no-op if there is no right dock).
 ///
 /// Used by action handlers that reveal the right dock (Add Session, Add SFTP
-/// Browser, mode toggle). Generic over [`gpui::AppContext`] so it works from a
+/// Browser, the right dock following the tab kind). Generic over [`gpui::AppContext`] so it works from a
 /// `Context<T>` or an `App`.
 pub fn set_right_dock_open<C: gpui::AppContext>(
     dock_area: &Entity<DockArea>,

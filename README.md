@@ -126,7 +126,7 @@ The elevated window is deliberately a smaller application, and it says what it i
 - **It has**: local Windows shells, your theme, font and key bindings, and everything the
   terminal itself does.
 - **It does not have**: SSH, SFTP, saved sessions, Quick Connect, the right
-  dock or its mode toggles, updates (those are done from the normal window), or its own
+  dock, updates (those are done from the normal window), or its own
   "Run as administrator" entries.
 - **It writes no settings.** `ui_config.json`, `terminal.json`, `ssh_session.json` and
   `update_config.json` are read and never written, so an elevated session cannot change

@@ -1,75 +1,54 @@
 //! [`AppTitleBar`] — OneTerm's title bar.
 //!
-//! Mirrors `reference/.../story/src/title_bar.rs`, keeping `AppMenuBar` + the
-//! right-dock mode toggle group (SSH Client / Agent / None).
+//! Mirrors `reference/.../story/src/title_bar.rs`, keeping `AppMenuBar`. The
+//! right-dock mode toggles it used to carry are gone: the right dock follows
+//! the active tab's kind (`IN-0054`).
 //!
 //! Drops GitHub / Bell (not used in a terminal app).
 //!
 //! ## What is cached (`US-0150`)
 //!
-//! Everything OneTerm puts in the bar — the icon, the app menu, the elevation
-//! suffix and the toggles — is one [`TitleBarContent`] view embedded with
-//! `.cached(..)`, so a frame that some other view asked for (a cursor blink, a
-//! status-bar tick, terminal output) reuses it instead of rebuilding and laying
-//! out the toggle group again. The kit's `TitleBar` around it is **not**
+//! Everything OneTerm puts in the bar — the icon, the app menu and the elevation
+//! suffix — is one [`TitleBarContent`] view embedded with `.cached(..)`, so a
+//! frame that some other view asked for (a cursor blink, a status-bar tick,
+//! terminal output) reuses it instead of rebuilding it. The kit's `TitleBar` around it is **not**
 //! cached: its drag region and min/max/close buttons register window-control
 //! hitboxes, which gpui does not replay for a reused view
 //! (`docs/gui-layout.md` § Frames and re-rendering).
 //!
 //! While accessibility is active the content is embedded uncached
 //! ([`crate::layout::cached_unless_a11y`]): gpui does not replay a reused
-//! view's accessibility nodes, and the menu and toggles must stay in the tree.
+//! view's accessibility nodes, and the menu must stay in the tree.
 //!
 //! The content re-renders when it, or a view inside it (the app menu), is
-//! notified, and when the window is refreshed (a theme switch, a resize). The
-//! toggles read `UiConfig::right_dock_mode`, so the content observes `UiConfig`:
-//! anything that changes the mode must go through `UiConfig::update` + notify.
+//! notified, and when the window is refreshed (a theme switch, a resize).
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, Pixels, Render, StyleRefinement, Styled as _, Subscription,
-    Window, div, px, svg,
+    ParentElement as _, Render, StyleRefinement, Styled as _, Window, div, svg,
 };
-use gpui_component::{
-    ActiveTheme as _, Sizable as _, TitleBar,
-    button::{Toggle, ToggleGroup, ToggleVariants as _},
-    h_flex,
-    menu::AppMenuBar,
-};
+use gpui_component::{ActiveTheme as _, TitleBar, h_flex, menu::AppMenuBar};
 
-use oneterm_actions::{RightDockMode, SetRightDockMode};
 use oneterm_theme::brand_accent;
 
 use crate::layout::app_menus;
-
-/// Width of the "SSH Client" / "Agent" segments of the mode toggle group.
-const MODE_TOGGLE_WIDE: Pixels = px(70.);
-/// Width of the shorter "None" segment.
-const MODE_TOGGLE_NARROW: Pixels = px(50.);
 
 pub struct AppTitleBar {
     content: Entity<TitleBarContent>,
 }
 
 impl AppTitleBar {
-    /// Create a new title bar. `mode_toggles` adds the right-dock mode toggle
-    /// group; an elevated window has no right dock and passes `false`.
+    /// Create a new title bar.
     pub fn new(
         title: impl Into<gpui::SharedString>,
-        mode_toggles: bool,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let app_menu_bar = app_menus::init(title, cx);
-        let content = cx.new(|cx| {
-            let config = oneterm_settings::UiConfig::global(cx);
-            TitleBarContent {
-                app_menu_bar,
-                mode_toggles,
-                _config: cx.observe(&config, |_, _, cx| cx.notify()),
-                #[cfg(test)]
-                renders: 0,
-            }
+        let content = cx.new(|_| TitleBarContent {
+            app_menu_bar,
+            #[cfg(test)]
+            renders: 0,
         });
         Self { content }
     }
@@ -107,11 +86,9 @@ fn content_style() -> StyleRefinement {
 }
 
 /// What OneTerm draws inside the kit's title bar: the icon, the app menu and
-/// the elevation suffix on the left, the mode toggles on the right.
+/// the elevation suffix.
 struct TitleBarContent {
     app_menu_bar: Entity<AppMenuBar>,
-    mode_toggles: bool,
-    _config: Subscription,
     #[cfg(test)]
     renders: usize,
 }
@@ -148,16 +125,6 @@ impl Render for TitleBarContent {
                     .child(self.app_menu_bar.clone())
                     .children(elevation_suffix(cx)),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .px_2()
-                    .gap_2()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .children(self.mode_toggles.then(|| mode_toggle_group(cx))),
-            )
     }
 }
 
@@ -190,102 +157,16 @@ fn elevation_suffix(cx: &App) -> Option<AnyElement> {
     )
 }
 
-/// Build the right-dock mode toggle group used in the title bar.
-///
-/// Two segmented toggles — "SSH Client" and "None" — that switch the right
-/// dock content (see [`RightDockMode`]). "None" hides the right dock entirely;
-/// "SSH Client" rebuilds and force-opens the dock. The active
-/// one mirrors the mode persisted in `ui_config.json`; clicking dispatches
-/// [`SetRightDockMode`], which the workspace turns into a live right-dock swap.
-///
-/// This replaces the former `add_terminal_button` dropdown. The "New Terminal
-/// Tab" action it used to host is still reachable via its key binding
-/// (`Ctrl-T`) and the terminal context menu.
-///
-/// The toggles act as a single-select segmented control: clicking any of
-/// them — including the one already selected — dispatches `SetRightDockMode`
-/// for that mode, which is what reopens a dock the tab bar's dock button
-/// collapsed (`BUG-0067`). (`ToggleGroup` is multi-select by nature, so the
-/// clicked segment is recovered from the check vector by
-/// [`clicked_mode_index`].)
-pub fn mode_toggle_group(cx: &App) -> AnyElement {
-    let current = oneterm_settings::UiConfig::global(cx)
-        .read(cx)
-        .right_dock_mode;
-    // Index 0 = SshClient, 1 = None — kept in sync with the `child` order below.
-    let modes = [RightDockMode::SshClient, RightDockMode::None];
-    let current_ix = modes.iter().position(|m| *m == current).unwrap_or(0);
-    ToggleGroup::new("right-dock-mode")
-        .xsmall()
-        .outline()
-        .segmented()
-        .child(
-            Toggle::new("ssh-client-mode")
-                .label("SSH Client")
-                .w(MODE_TOGGLE_WIDE)
-                .checked(current_ix == 0),
-        )
-        .child(
-            Toggle::new("none-mode")
-                .label("None")
-                .w(MODE_TOGGLE_NARROW)
-                .checked(current_ix == 1),
-        )
-        .on_click(move |checks, window, cx| {
-            let Some(mode) = clicked_mode_index(checks, current_ix).and_then(|ix| modes.get(ix))
-            else {
-                return;
-            };
-            window.dispatch_action(Box::new(SetRightDockMode(*mode)), cx);
-        })
-        .into_any_element()
-}
-
-/// Which segment the user clicked, from the group's post-click check vector.
-///
-/// `ToggleGroup` is multi-select: it inverts exactly the clicked toggle and
-/// hands the result over. The group was rendered single-select — only
-/// `current_ix` checked — so the clicked segment is the one whose post-click
-/// state differs from that. Reading it this way (rather than looking for a
-/// newly checked toggle) is what lets a click on the already-selected segment
-/// dispatch at all: that click arrives as *every* toggle unchecked.
-fn clicked_mode_index(checks: &[bool], current_ix: usize) -> Option<usize> {
-    (0..checks.len()).find(|&ix| checks[ix] != (ix == current_ix))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::clicked_mode_index;
-
-    #[test]
-    fn clicking_another_segment_reports_that_segment() {
-        // "None" clicked while "SSH Client" was selected.
-        assert_eq!(clicked_mode_index(&[true, true], 0), Some(1));
-    }
-
-    #[test]
-    fn clicking_the_selected_segment_reports_it_too() {
-        // The bug: the group unchecks the selected segment, so nothing is
-        // checked — the click must still resolve to that segment.
-        assert_eq!(clicked_mode_index(&[false, false], 0), Some(0));
-        assert_eq!(clicked_mode_index(&[false, false], 1), Some(1));
-    }
-
-    #[test]
-    fn an_unchanged_vector_reports_no_click() {
-        assert_eq!(clicked_mode_index(&[true, false], 0), None);
-        assert_eq!(clicked_mode_index(&[], 0), None);
-    }
-
     /// `US-0150`: the content is a cached view — a frame another view asked for
-    /// reuses it, and a right-dock mode change re-renders it.
+    /// reuses it.
     mod caching {
         use gpui::{
             AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
             TestAppContext, VisualTestContext, Window, div, px, size,
         };
         use gpui_component::TitleBar;
-        use oneterm_actions::RightDockMode;
         use oneterm_settings::terminal_settings::{TerminalSettings, TerminalSettingsGlobal};
         use oneterm_settings::ui_config::{UiConfig, UiConfigGlobal};
 
@@ -330,9 +211,7 @@ mod tests {
         }
 
         #[gpui::test]
-        fn another_views_frame_reuses_the_content_and_a_mode_change_does_not(
-            cx: &mut TestAppContext,
-        ) {
+        fn another_views_frame_reuses_the_content(cx: &mut TestAppContext) {
             cx.update(|cx| {
                 gpui_component::init(cx);
                 let config = cx.new(|_| UiConfig::default());
@@ -341,7 +220,7 @@ mod tests {
                 cx.set_global(TerminalSettingsGlobal(settings));
             });
             let (host, cx) = cx.add_window_view(|window, cx| Host {
-                title_bar: cx.new(|cx| AppTitleBar::new("OneTerm", true, window, cx)),
+                title_bar: cx.new(|cx| AppTitleBar::new("OneTerm", window, cx)),
                 ticker: cx.new(|_| Ticker { renders: 0 }),
             });
             cx.run_until_parked();
@@ -355,16 +234,6 @@ mod tests {
                 cx.run_until_parked();
             }
             assert_eq!(counts(&host, cx), (content, ticker + 3));
-
-            // The toggles read the right-dock mode: changing it re-renders them.
-            cx.update(|_, cx| {
-                UiConfig::global(cx).update(cx, |config, cx| {
-                    config.right_dock_mode = RightDockMode::None;
-                    cx.notify();
-                });
-            });
-            cx.run_until_parked();
-            assert_eq!(counts(&host, cx).0, content + 1);
         }
 
         /// A kit title bar around the real content, embedded cached or not.
@@ -396,7 +265,7 @@ mod tests {
                 cx.set_global(TerminalSettingsGlobal(settings));
             });
             let (frame, cx) = cx.add_window_view(|window, cx| {
-                let title_bar = cx.new(|cx| AppTitleBar::new("OneTerm", true, window, cx));
+                let title_bar = cx.new(|cx| AppTitleBar::new("OneTerm", window, cx));
                 Frame {
                     content: title_bar.read(cx).content.clone(),
                     cached: true,

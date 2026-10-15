@@ -168,6 +168,10 @@ pub struct OneTermWorkspace {
     /// The FPS HUD while `UiConfig::show_fps` is on; `None` (and so no ticker, no PDH query,
     /// no per-frame count) while it is off (`US-0151`).
     fps_hud: Option<Entity<crate::widgets::FpsHud>>,
+    /// The tab kind (`true` = local shell) the right dock was last set for
+    /// (`IN-0054`). A user's open / close is recorded against this kind, never
+    /// against a kind the dock has not been set for yet.
+    right_dock_kind: Option<bool>,
 }
 
 impl OneTermWorkspace {
@@ -237,20 +241,6 @@ impl OneTermWorkspace {
             layout::reset_default_layout(weak_dock_area, window, cx);
         }
 
-        // Apply the persisted right-dock mode. Both layout builders above set the
-        // right dock to the SSH Client `ssh_client_panel`, which also replaces a
-        // right dock saved as the withdrawn `agent_panel` (`DEC-0022`); if the
-        // user last chose None (or the withdrawn Agent mode, which reads as
-        // None), collapse the dock now. Preserves the dock width. An elevated window has no
-        // right dock to apply a mode to, and `switch_right_dock_mode` refuses
-        // there anyway (M1).
-        let saved_mode = oneterm_settings::UiConfig::global(cx)
-            .read(cx)
-            .right_dock_mode;
-        if saved_mode != oneterm_actions::RightDockMode::SshClient {
-            Self::switch_right_dock_mode(&dock_area, saved_mode, window, cx);
-        }
-
         cx.observe_in(&dock_area, window, move |this, dock_area, window, cx| {
             let zoomed_panel = dock_area
                 .read(cx)
@@ -262,7 +252,7 @@ impl OneTermWorkspace {
             if this.zoomed_panel != zoomed_panel {
                 this.zoomed_panel = zoomed_panel;
             }
-            this.sync_right_dock_mode(&dock_area, cx);
+            this.record_right_dock_choice(&dock_area, cx);
             this.track_preferred_right_dock_width(&dock_area, window, cx);
             this.save_layout(&dock_area, window, cx);
         })
@@ -303,13 +293,8 @@ impl OneTermWorkspace {
             // the kit gives a menu name no place for a second colour. The
             // elevation suffix is drawn beside it by `AppTitleBar::render`, which
             // is ours to colour (`DEC-0019` M5 as amended).
-            //
-            // M1: an elevated window has no right dock, so there is nothing to
-            // switch between — the three segments are absent rather than
-            // disabled.
             AppTitleBar::new(
                 oneterm_core::elevation::window_title_parts(oneterm_core::elevation::elevation()).0,
-                !elevated,
                 window,
                 cx,
             )
@@ -317,7 +302,7 @@ impl OneTermWorkspace {
 
         let status_bar = cx.new(|cx| StatusBarView::new(dock_area.clone(), window, cx));
 
-        let me = Self {
+        let mut me = Self {
             title_bar,
             dock_area: dock_area.clone(),
             _dock_skin: dock_skin,
@@ -328,6 +313,7 @@ impl OneTermWorkspace {
             zoomed_panel: None,
             layout_saved_on_exit: false,
             fps_hud: None,
+            right_dock_kind: None,
         };
 
         // Restore zoom (fullscreen) for the panel matching the saved name.
@@ -335,33 +321,58 @@ impl OneTermWorkspace {
             me.restore_zoom(&name, window, cx);
         }
 
+        // The right dock follows the active tab's kind (`IN-0054`): set it now
+        // for whatever the workspace shows, then whenever the kind changes.
+        cx.observe_in(&AppState::global(cx), window, |this, _, window, cx| {
+            this.apply_right_dock_for_active_tab(window, cx);
+        })
+        .detach();
+        me.apply_right_dock_for_active_tab(window, cx);
+
         me
     }
 
-    /// Keep `UiConfig.right_dock_mode` telling the truth about the right dock.
-    ///
-    /// The tab bar's dock button and the status bar's dock button toggle the
-    /// dock through the kit, without going through `SetRightDockMode`. Without
-    /// this the title bar's segmented control kept claiming "SSH Client" over a
-    /// collapsed dock (`BUG-0067`).
-    fn sync_right_dock_mode(&mut self, dock_area: &Entity<DockArea>, cx: &mut Context<Self>) {
-        let state = {
+    /// Whether the active Terminal Tab of this workspace is a local shell.
+    fn active_tab_is_local(&self, cx: &App) -> bool {
+        AppState::global(cx)
+            .read(cx)
+            .active_workspace(Some(self.dock_area.entity_id()))
+            .active_is_local
+    }
+
+    /// Open or close the right dock to the choice remembered for the active
+    /// tab's kind — only when the kind changed, so a choice the user just made
+    /// on this kind of tab stays put.
+    fn apply_right_dock_for_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let is_local = self.active_tab_is_local(cx);
+        let prefs = oneterm_settings::UiConfig::global(cx).read(cx).right_dock;
+        let Some(open) = right_dock_open_on_kind_change(self.right_dock_kind, is_local, prefs)
+        else {
+            return;
+        };
+        self.right_dock_kind = Some(is_local);
+        set_right_dock_open(&self.dock_area, open, window, cx);
+    }
+
+    /// Record a dock button / `Ctrl+Shift+B` as the user's choice for the kind
+    /// of tab the dock was last set for, and persist it (`IN-0054`). A change
+    /// the workspace made itself already equals the remembered choice, so it is
+    /// never recorded.
+    fn record_right_dock_choice(&mut self, dock_area: &Entity<DockArea>, cx: &mut Context<Self>) {
+        let open = {
             let area = dock_area.read(cx);
             if !area.has_dock(gpui_component::dock::DockPlacement::Right) {
                 return;
             }
             area.is_dock_open(gpui_component::dock::DockPlacement::Right)
         };
-        let current = oneterm_settings::UiConfig::global(cx)
-            .read(cx)
-            .right_dock_mode;
-        let next = right_dock_mode_for(state, current);
-        if next == current {
+        let config = oneterm_settings::UiConfig::global(cx);
+        let prefs = config.read(cx).right_dock;
+        let Some(next) = right_dock_prefs_after_toggle(self.right_dock_kind, open, prefs) else {
             return;
-        }
-        // The title bar's toggles observe `UiConfig`, so this notify repaints them.
-        oneterm_settings::UiConfig::global(cx).update(cx, |config, cx| {
-            config.right_dock_mode = next;
+        };
+        config.update(cx, |config, cx| {
+            config.right_dock = next;
             cx.notify();
         });
         oneterm_settings::UiConfig::persist(cx);
@@ -504,42 +515,30 @@ impl OneTermWorkspace {
     }
 }
 
-/// The mode the right dock's panel currently **is**, whatever `UiConfig` says.
-///
-/// Scoped to the right dock on purpose: a whole-tree search answers for the
-/// centre first, and would name SSH Client mode for an SSH Client panel that
-/// had been dragged out of the dock.
-pub(crate) fn right_dock_panel_mode(
-    dock_area: &DockArea,
-    cx: &App,
-) -> Option<oneterm_actions::RightDockMode> {
-    use oneterm_actions::RightDockMode;
-    use oneterm_state::panel_names;
-
-    let tree = dock_area.layout(gpui_component::dock::DockPlacement::Right)?;
-    let panel = tree.panels().next().and_then(|id| dock_area.panel(id))?;
-    match panel.panel_name(cx) {
-        panel_names::SSH_CLIENT => Some(RightDockMode::SshClient),
-        _ => None,
-    }
+/// The open state the right dock takes when the active tab is `is_local`,
+/// or `None` when the kind is the one the dock was last set for (`IN-0054`).
+pub(crate) fn right_dock_open_on_kind_change(
+    last_kind: Option<bool>,
+    is_local: bool,
+    prefs: oneterm_settings::RightDockPrefs,
+) -> Option<bool> {
+    (last_kind != Some(is_local)).then(|| prefs.open_for(is_local))
 }
 
-/// The mode the title bar must show for a right dock in this state.
-///
-/// The dock's open state wins: a collapsed dock is `None` whatever was
-/// persisted, and a dock the user reopened with a dock button takes the mode of
-/// the panel that came back. A dock that is open while a real mode is persisted
-/// keeps it — this never rebuilds a panel, it only renames what is on screen.
-pub(crate) fn right_dock_mode_for(
+/// The remembered choices after the dock was seen `open`, or `None` when that
+/// is already what is remembered for the kind the dock was last set for (or it
+/// was never set for one).
+pub(crate) fn right_dock_prefs_after_toggle(
+    last_kind: Option<bool>,
     open: bool,
-    current: oneterm_actions::RightDockMode,
-) -> oneterm_actions::RightDockMode {
-    use oneterm_actions::RightDockMode;
-    match (open, current) {
-        (false, _) => RightDockMode::None,
-        (true, RightDockMode::None) => RightDockMode::SshClient,
-        (true, mode) => mode,
-    }
+    prefs: oneterm_settings::RightDockPrefs,
+) -> Option<oneterm_settings::RightDockPrefs> {
+    let is_local = last_kind?;
+    (prefs.open_for(is_local) != open).then(|| {
+        let mut next = prefs;
+        next.set(is_local, open);
+        next
+    })
 }
 
 /// Restore zoom for the tab group whose active panel matches `name`.
@@ -575,7 +574,7 @@ impl Render for OneTermWorkspace {
         div()
             .id("oneterm-workspace")
             .on_action(cx.listener(Self::on_action_add_panel))
-            .on_action(cx.listener(Self::on_action_set_right_dock_mode))
+            .on_action(cx.listener(Self::on_action_toggle_right_dock))
             .on_action(cx.listener(Self::on_action_add_panel_with_shell))
             .on_action(cx.listener(Self::on_action_new_session))
             .on_action(cx.listener(Self::on_action_quit))

@@ -79,8 +79,7 @@ Dock panels are registered with the gpui-component `PanelRegistry` by their owni
 feature's `init()` (R12) and built by the shell *by name* (R4). The registered
 names are string constants in `crates/state/src/panel_names.rs`
 (`oneterm_state::panel_names::{TERMINAL, SFTP, SESSION,
-SSH_CLIENT}`, plus `ALL`); the mapping from `oneterm_core::RightDockMode`
-to a panel name is `panel_names::right_dock_panel_name` so `core` stays panel-agnostic.
+SSH_CLIENT}`, plus `ALL`).
 Saved layouts deserialize by these names, so the string values are a persisted
 contract. `oneterm_workspace`'s `build_named_panel` logs an error (with the known
 name list) whenever a requested name is not registered instead of silently rendering

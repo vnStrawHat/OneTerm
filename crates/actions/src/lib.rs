@@ -10,12 +10,6 @@ use gpui::{SharedString, actions};
 use gpui_component::ThemeMode;
 use serde::Deserialize;
 
-// Re-exported so call-sites can use `oneterm_actions::RightDockMode` without
-// reaching into `oneterm_core` directly. Defined in `oneterm_core` (the lowest
-// crate that needs it) so the settings crate can persist it without a
-// same-layer dependency on `oneterm_actions`.
-pub use oneterm_core::RightDockMode;
-
 /// Add a new TerminalPanel to the center dock.
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
 #[action(namespace = oneterm, no_json)]
@@ -25,14 +19,6 @@ pub struct AddPanel;
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
 #[action(namespace = oneterm, no_json)]
 pub struct AddPanelWithShell(pub oneterm_core::ShellKind);
-
-/// Swap the right dock to show the panels for the given [`RightDockMode`].
-///
-/// Dispatched by the title bar mode toggle group; handled by the workspace,
-/// which rebuilds the right-dock layout and persists the choice.
-#[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
-#[action(namespace = oneterm, no_json)]
-pub struct SetRightDockMode(pub RightDockMode);
 
 /// Join the active terminal Space to a broadcast input channel.
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
@@ -57,6 +43,9 @@ actions!(
         NewSession,
         /// Open the General Settings panel (font, theme, key bindings).
         OpenSettings,
+        /// Open or close the right dock (Session + SFTP). The choice is
+        /// remembered for the active tab's kind, local or SSH (`IN-0054`).
+        ToggleRightDock,
         /// Activate the in-terminal search bar (Find).
         Find,
         // ── Terminal context-menu actions ───────────────────────────

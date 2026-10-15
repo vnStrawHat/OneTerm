@@ -20,6 +20,7 @@ use gpui::{Action, KeyBinding, Keystroke};
 
 use oneterm_actions::{
     About, AddPanel, LockOneTerm, NewSession, OpenSettings, Quit, ToggleFpsMonitor, ToggleGutter,
+    ToggleRightDock,
 };
 use oneterm_core::InputChannel;
 
@@ -95,6 +96,18 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         context: None,
         make: |ks, ctx| make_binding(ks, NewSession, ctx),
         name_fn: <NewSession as Action>::name_for_type,
+    },
+    BindableAction {
+        id: "toggle_right_dock",
+        label: "Toggle Right Dock",
+        group: "App Menu",
+        // Ctrl+Shift, not a bare Ctrl key, so `DEC-0018` is untouched. The dock
+        // also follows the active tab's kind; this records a choice for it
+        // (`IN-0054`).
+        default: Some("ctrl-shift-b"),
+        context: None,
+        make: |ks, ctx| make_binding(ks, ToggleRightDock, ctx),
+        name_fn: <ToggleRightDock as Action>::name_for_type,
     },
     BindableAction {
         id: "toggle_gutter",

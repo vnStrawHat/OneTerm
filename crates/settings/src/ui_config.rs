@@ -20,7 +20,7 @@ use std::path::Path;
 use gpui::{App, AppContext, Entity, Global};
 use gpui_component::{ActiveTheme as _, Theme};
 use oneterm_core::{
-    AppError, RightDockMode, atomic_write, config_dir, parse_versioned_document, quarantine_file,
+    AppError, atomic_write, config_dir, parse_versioned_document, quarantine_file,
     set_schema_version,
 };
 use serde::{Deserialize, Serialize};
@@ -48,13 +48,12 @@ pub struct UiConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub key_bindings: HashMap<String, String>,
 
-    /// Which set of panels the right dock displays (SSH Client or None).
-    /// Defaults to [`RightDockMode::SshClient`] when absent in an old config file;
-    /// the withdrawn `"agent"` reads as `None` (`DEC-0022`).
-    /// Written by the title bar mode toggle group, read at startup by
-    /// `OneTermWorkspace::new`.
-    #[serde(default)]
-    pub right_dock_mode: RightDockMode,
+    /// Whether the right dock is open, remembered per kind of active tab
+    /// (`IN-0054`): it follows the tab, and a dock button records the user's
+    /// choice for the current kind. Omitted while it is the default. The
+    /// former `right_dock_mode` field is ignored on read and dropped on write.
+    #[serde(default, skip_serializing_if = "RightDockPrefs::is_default")]
+    pub right_dock: RightDockPrefs,
 
     /// Show the FPS HUD (`US-0151`). Off by default; omitted from the file while off.
     /// Written only through [`UiConfig::set_show_fps`].
@@ -100,6 +99,45 @@ fn lenient_minutes<'de, D: serde::Deserializer<'de>>(
     Ok(minutes)
 }
 const DOCUMENT_NAME: &str = "ui_config.json";
+
+/// The right dock's open state per kind of active Terminal Tab (`IN-0054`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RightDockPrefs {
+    /// Open while a local-shell tab is active. Default: closed.
+    pub local: bool,
+    /// Open while an SSH tab is active. Default: open.
+    pub ssh: bool,
+}
+
+impl Default for RightDockPrefs {
+    fn default() -> Self {
+        Self {
+            local: false,
+            ssh: true,
+        }
+    }
+}
+
+impl RightDockPrefs {
+    /// The remembered open state for a tab of this kind.
+    pub fn open_for(self, is_local: bool) -> bool {
+        if is_local { self.local } else { self.ssh }
+    }
+
+    /// Remember `open` for a tab of this kind.
+    pub fn set(&mut self, is_local: bool, open: bool) {
+        if is_local {
+            self.local = open;
+        } else {
+            self.ssh = open;
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
 
 impl UiConfig {
     fn parse_document(raw: &str) -> Result<Self, AppError> {
@@ -363,7 +401,7 @@ mod tests {
         std::fs::create_dir_all(&*directory).unwrap();
         let path = directory.join("ui_config.json");
         let missing = UiConfig::load_from(&path).unwrap();
-        assert_eq!(missing.right_dock_mode, RightDockMode::SshClient);
+        assert_eq!(missing.right_dock, RightDockPrefs::default());
         assert!(path.exists());
         let config = UiConfig {
             ui_font_size: Some(18.0),
@@ -371,7 +409,10 @@ mod tests {
             key_bindings: [("open_settings".into(), "ctrl-,".into())]
                 .into_iter()
                 .collect(),
-            right_dock_mode: RightDockMode::None,
+            right_dock: RightDockPrefs {
+                local: true,
+                ssh: false,
+            },
             show_fps: true,
             lock_after_idle_minutes: Some(30),
             persist_blocked: false,
@@ -389,7 +430,13 @@ mod tests {
                 .map(String::as_str),
             Some("ctrl-,")
         );
-        assert_eq!(restored.right_dock_mode, RightDockMode::None);
+        assert_eq!(
+            restored.right_dock,
+            RightDockPrefs {
+                local: true,
+                ssh: false
+            }
+        );
         std::fs::write(&path, b"not-json").unwrap();
         let fallback = UiConfig::load_from(&path).unwrap();
         assert!(fallback.theme_name.is_none());
@@ -409,17 +456,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.ui_font_size, Some(14.0));
-        assert_eq!(config.right_dock_mode, RightDockMode::SshClient);
+        assert_eq!(config.right_dock, RightDockPrefs::default());
+        // The default is not written back, so an untouched file keeps its shape.
+        assert!(
+            !serde_json::to_string(&config)
+                .unwrap()
+                .contains("right_dock")
+        );
         // The FPS HUD is off unless the file says otherwise (`US-0151`), and "off" is not
         // written back, so an untouched file keeps its shape.
         assert!(!config.show_fps);
         assert!(!serde_json::to_string(&config).unwrap().contains("show_fps"));
     }
 
-    /// `DEC-0022`: a file written while the Agent Panel existed still loads. The
-    /// withdrawn `"agent"` mode reads as `None` and is written back as `"none"`,
-    /// and the stale-threshold field is ignored on read and dropped on write —
-    /// no quarantine, no lost settings.
+    /// `DEC-0022` / `IN-0054`: a file written before the right dock followed the
+    /// tab kind still loads. `right_dock_mode` (any value, including the
+    /// withdrawn `"agent"`) and `agent_stale_threshold_ms` are ignored on read
+    /// and dropped on write; the new defaults apply (owner ruling) — no
+    /// quarantine, no lost settings.
     #[test]
     fn a_config_from_the_agent_panel_era_loads_and_heals() {
         let directory = TemporaryDirectory(std::env::temp_dir().join(format!(
@@ -445,14 +499,14 @@ mod tests {
         std::fs::write(&path, document.to_string()).unwrap();
 
         let loaded = UiConfig::load_from(&path).unwrap();
-        assert_eq!(loaded.right_dock_mode, RightDockMode::None);
+        assert_eq!(loaded.right_dock, RightDockPrefs::default());
         assert_eq!(loaded.theme_name.as_deref(), Some("Kept"));
         assert!(path.exists(), "the document was not quarantined");
 
         loaded.save_to(&path).unwrap();
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(written["right_dock_mode"], "none");
+        assert!(written.get("right_dock_mode").is_none());
         assert!(written.get("agent_stale_threshold_ms").is_none());
     }
 

@@ -73,7 +73,7 @@ pub(crate) fn apply_center_reset(
 /// name before either builder runs, so the dock existed before anyone declined
 /// to create it (`IN-0043` MAJ-2). An elevated window now also never reads
 /// `docks.json` at all (`OneTermWorkspace::new`), which is the primary fix; this
-/// is the second lock on the same door. `sync_right_dock_mode` and
+/// is the second lock on the same door. `record_right_dock_choice` and
 /// `apply_right_dock_width` both early-return on `!has_dock(Right)`.
 ///
 /// The outer `Option` is the caller's existing "the dock area is gone" signal;

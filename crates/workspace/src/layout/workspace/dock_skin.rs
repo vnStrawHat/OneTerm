@@ -1,7 +1,7 @@
 //! OneTerm's dock skin wrapper.
 //!
-//! The center uses GPUI Kit's tab chrome. The right-dock mode panels render
-//! their own headers, so their single-panel tab group intentionally omits the
+//! The center uses GPUI Kit's tab chrome. The right dock's SSH Client panel
+//! renders its own headers, so their single-panel tab group intentionally omits the
 //! extra outer title bar.
 
 use std::rc::Rc;

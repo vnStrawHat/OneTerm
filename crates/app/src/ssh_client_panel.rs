@@ -1,4 +1,4 @@
-//! SSH Client right-dock panel for [`oneterm_core::RightDockMode::SshClient`].
+//! SSH Client right-dock panel: the right dock's only content (`IN-0054`).
 //!
 //! The right dock contains one tab-group leaf wrapping this [`SshClientPanel`].
 //! The workspace [`gpui_component::dock::DockSkin`] suppresses that group's

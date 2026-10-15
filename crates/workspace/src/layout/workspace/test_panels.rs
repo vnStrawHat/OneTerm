@@ -2,7 +2,7 @@
 //!
 //! The shell never depends on a feature crate, so tests register these blank
 //! panels under the real [`oneterm_state::panel_names`] to exercise layout
-//! code (`build_named_panel`, dock resets, right-dock mode switches).
+//! code (`build_named_panel`, dock resets, the right dock opening and closing).
 
 use std::sync::Arc;
 

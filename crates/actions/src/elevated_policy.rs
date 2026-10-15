@@ -41,6 +41,8 @@ const DENIED_WHEN_ELEVATED: &[&str] = &[
     "sftp_rename",
     "sftp_upload_files",
     "sftp_upload_folder",
+    // The right dock is the SSH Client panel, and an elevated window has none.
+    "toggle_right_dock",
 ];
 
 /// Action ids an elevated window may run: the terminal, the window chrome and
