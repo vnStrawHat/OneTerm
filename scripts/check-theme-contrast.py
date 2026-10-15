@@ -221,9 +221,7 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #                         the port-forwarding row's warning
     #                         (`crates/session-ui/src/forward_rows.rs:292`), the terminal's
     #                         own warning line and `Alert::warning`
-    #                         (`crates/terminal-view/src/terminal_view/render.rs:510,603`),
-    #                         and the Agent card's Blocked/Stale colour
-    #                         (`crates/agent-ui/src/card.rs:65,75`)
+    #                         (`crates/terminal-view/src/terminal_view/render.rs:510,603`)
     #   popover.background    a `Warning` notification's whole body
     #                         (`crates/theme/src/notif_ext.rs:86`), which is popover-backed
     #

@@ -2,8 +2,8 @@
 //!
 //! The `memory` completion source must be shared across every Terminal Tab but
 //! reset when OneTerm exits — exactly the lifetime of a process-global GPUI
-//! entity (docs/auto-completion/01 §4). This mirrors the [`crate::AgentRegistry`]
-//! global pattern: a thin `Entity<CompletionHistory>` wrapper registered once at
+//! entity (docs/auto-completion/01 §4). This is the usual global
+//! pattern: a thin `Entity<CompletionHistory>` wrapper registered once at
 //! startup. Nothing here is persisted — the store lives only in RAM.
 
 use gpui::{App, AppContext, Entity, Global};

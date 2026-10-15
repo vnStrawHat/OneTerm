@@ -1,7 +1,7 @@
 //! Application-scoped services installed by the composition root.
 //!
 //! Feature crates receive session creation, workspace commands and the
-//! cross-feature hooks (active-terminal metrics, agent focus) through this one
+//! cross-feature hook (active-terminal metrics) through this one
 //! bundle rather than independent process-global registries. The composition
 //! root installs it once with every feature's contribution. Test application
 //! contexts can install different bundles without sharing process state.
@@ -12,7 +12,6 @@ use gpui::{App, Global};
 use oneterm_terminal::SessionFactory;
 
 use crate::active_terminal::ActiveTerminalMetricsProvider;
-use crate::agent_focus::AgentFocuser;
 use crate::commands::WorkspaceCommands;
 
 /// Immutable service handles owned by one GPUI application context.
@@ -20,7 +19,6 @@ pub struct AppServices {
     session_factory: Arc<dyn SessionFactory>,
     workspace_commands: WorkspaceCommands,
     active_terminal_metrics: ActiveTerminalMetricsProvider,
-    agent_focuser: AgentFocuser,
 }
 
 impl Global for AppServices {}
@@ -34,7 +32,6 @@ impl AppServices {
         session_factory: Arc<dyn SessionFactory>,
         workspace_commands: WorkspaceCommands,
         active_terminal_metrics: ActiveTerminalMetricsProvider,
-        agent_focuser: AgentFocuser,
     ) -> Result<(), &'static str> {
         if cx.has_global::<Self>() {
             return Err("application services are already registered");
@@ -43,7 +40,6 @@ impl AppServices {
             session_factory,
             workspace_commands,
             active_terminal_metrics,
-            agent_focuser,
         });
         Ok(())
     }
@@ -74,11 +70,6 @@ impl AppServices {
     /// Return the active-terminal metric extractors for the status bar widgets.
     pub fn active_terminal_metrics(cx: &App) -> ActiveTerminalMetricsProvider {
         Self::global(cx).active_terminal_metrics
-    }
-
-    /// Return the agent focuser for the Agent Panel.
-    pub fn agent_focuser(cx: &App) -> AgentFocuser {
-        Self::global(cx).agent_focuser
     }
 }
 
@@ -185,13 +176,8 @@ mod tests {
         }
     }
 
-    fn focuser() -> AgentFocuser {
-        fn focus(_: gpui::EntityId, _: &mut gpui::Window, _: &mut gpui::App) {}
-        AgentFocuser { focus }
-    }
-
     fn install(cx: &mut App) -> std::result::Result<(), &'static str> {
-        AppServices::install(cx, Arc::new(TestFactory), commands(), metrics(), focuser())
+        AppServices::install(cx, Arc::new(TestFactory), commands(), metrics())
     }
 
     #[gpui::test]
@@ -200,10 +186,6 @@ mod tests {
             install(cx).unwrap();
             let provider = AppServices::active_terminal_metrics(cx);
             assert_eq!(provider.breadcrumb as usize, metrics().breadcrumb as usize);
-            assert_eq!(
-                AppServices::agent_focuser(cx).focus as usize,
-                focuser().focus as usize
-            );
         });
     }
 

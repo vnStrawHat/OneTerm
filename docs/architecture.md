@@ -14,7 +14,7 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | PTY transport | `oneterm_vt::pty` (default-on `pty` feature) | Pseudo-console transport with no grid: ConPTY (bundled `conpty.dll` first, `kernel32` as the fallback) or `openpty`, behind `PseudoConsole` / `EventedPty` / `OnResize` | `crates/vt/src/pty/mod.rs`, `crates/vt/src/pty/windows.rs`, `crates/vt/src/pty/unix.rs` |
 | Completion engine | `oneterm-completion` | Auto-completion engine (gpui-free): embedded command catalogs, line parsing + subcommand resolution, matching/ranking, in-session history, secret redaction | `crates/completion/src/lib.rs`, `crates/completion/src/engine.rs`, `crates/completion/src/catalog.rs`, `crates/completion/src/history.rs`, `crates/completion/src/redact.rs` |
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
-| Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, registered dock panel names, Agent folded model, process-global completion history, broadcast input channel membership, the master-password vault phase and dialogs | `crates/state/src/lib.rs`, `crates/state/src/vault_state.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/panel_names.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/completion_history.rs`, `crates/state/src/input_channel_registry.rs` |
+| Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, registered dock panel names, process-global completion history, broadcast input channel membership, the master-password vault phase and dialogs | `crates/state/src/lib.rs`, `crates/state/src/vault_state.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/panel_names.rs`, `crates/state/src/completion_history.rs`, `crates/state/src/input_channel_registry.rs` |
 | Shared services | `oneterm-update` | GitHub Releases auto-update service, release selection, download, verification, staging, and install orchestration | `crates/update/src/lib.rs`, `crates/update/src/config.rs`, `crates/update/src/github.rs`, `crates/update/src/archive.rs`, `crates/update/src/install.rs` |
 | Shared services | `oneterm-vault` | Master-password vault (`IN-0050`, `DEC-0021`): Argon2id key derivation, the wrapped data key, AES-256-GCM `otv1:` envelopes, the `vault.json` header. gpui-free; the only crate that depends on the crypto crates | `crates/vault/src/lib.rs`, `crates/vault/src/vault.rs`, `crates/vault/src/document.rs`, `crates/vault/src/envelope.rs`, `crates/vault/src/kdf.rs` |
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
@@ -24,7 +24,6 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Feature | `oneterm-sftp-ui` | SFTP browser, transfer queue, persistence UI | `crates/sftp-ui/src/lib.rs`, `crates/sftp-ui/src/panel.rs` |
 | Feature | `oneterm-session-ui` | Session tree and SSH connection dialogs | `crates/session-ui/src/lib.rs`, `crates/session-ui/src/connect_dialog.rs` |
 | Feature | `oneterm-settings-ui` | General Settings window | `crates/settings-ui/src/lib.rs` |
-| Feature | `oneterm-agent-ui` | Agent fleet view and cards | `crates/agent-ui/src/lib.rs` |
 | Shared services | `oneterm-actions` | GPUI-free action contracts shared by the shell and the feature crates | `crates/actions/src/lib.rs` |
 | Shared services | `oneterm-theme` | Theme definitions, the built-in theme list, and the generated `AppIcon` set | `crates/theme/src/lib.rs`, `crates/theme/src/theme.rs`, `crates/theme/src/icon.rs` |
 | Shared services | `oneterm-highlight` | Semantic syntax highlighting engine (gpui-free) | `crates/highlight/src/lib.rs` |
@@ -55,20 +54,18 @@ the only injection registry. The composition root (`crates/app/src/init.rs`)
 constructs the backend-neutral `SessionFactory` and the `WorkspaceCommands`
 callbacks, collects the cross-feature hooks each feature exposes
 (`oneterm_terminal_view::status_metrics` — the `ActiveTerminalMetricsProvider`
-read by the status-bar widgets — and `oneterm_terminal_view::agent_focuser`, the
-`AgentFocuser` used by the Agent Panel), and installs them all with
+read by the status-bar widgets), and installs them all with
 `AppServices::install`, which rejects duplicate registration.
 
 Consumers read handles through `AppServices::global(cx)` (or the typed accessors
-`session_factory` / `workspace_commands` / `active_terminal::breadcrumb` /
-`agent_focus::focus_terminal`). Presence is a startup invariant: a missing bundle
+`session_factory` / `workspace_commands` / `active_terminal::breadcrumb`). Presence is a startup invariant: a missing bundle
 panics with a precise message per the error policy, so shell handlers carry no
 `Option` fallbacks. Feature crates do not own registries or backend construction.
 Workspace active terminal and SFTP state remains keyed by DockArea (`AppState`),
 while durable settings and persistence policy remain process-wide where documented.
 
 Shared globals follow one init contract: `AppState::init`, `UiConfig::init`,
-`TerminalSettings::init`, `AgentRegistry::init`, `GlobalCompletionHistory::init` and
+`TerminalSettings::init`, `GlobalCompletionHistory::init` and
 `InputChannelRegistry::init` are idempotent — the first call installs, later calls
 are no-ops. Only the composition root calls them; the shell assumes they exist.
 
@@ -82,7 +79,7 @@ Dock panels are registered with the gpui-component `PanelRegistry` by their owni
 feature's `init()` (R12) and built by the shell *by name* (R4). The registered
 names are string constants in `crates/state/src/panel_names.rs`
 (`oneterm_state::panel_names::{TERMINAL, SFTP, SESSION,
-SSH_CLIENT, AGENT}`, plus `ALL`); the mapping from `oneterm_core::RightDockMode`
+SSH_CLIENT}`, plus `ALL`); the mapping from `oneterm_core::RightDockMode`
 to a panel name is `panel_names::right_dock_panel_name` so `core` stays panel-agnostic.
 Saved layouts deserialize by these names, so the string values are a persisted
 contract. `oneterm_workspace`'s `build_named_panel` logs an error (with the known

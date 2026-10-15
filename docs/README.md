@@ -51,8 +51,8 @@ Status is stated in each file's header. "Current" = kept in step with the code;
 | [`sftp-follow-terminal-cwd/`](sftp-follow-terminal-cwd/) | SFTP browser follows the terminal CWD (OSC 7) | historical (shipped state summarised in the header) |
 | [`auto-update.md`](auto-update.md) | GitHub Releases auto-update: check, download, verify, install, rollback | current (implemented; gaps listed) |
 | [`crash-reporting.md`](crash-reporting.md) | Panic / native crash capture and recovery | current |
-| [`osc-agent-status.md`](osc-agent-status.md) | OSC 20308 agent-status proposal (the wire spec) | current |
-| [`agent-panel-display.md`](agent-panel-display.md) | Agent Panel model, folding, display rules | current |
+| [`archive/osc-agent-status.md`](archive/osc-agent-status.md) | OSC 20308 agent-status proposal | withdrawn (`DEC-0022`) |
+| [`archive/agent-panel-display.md`](archive/agent-panel-display.md) | Agent Panel model, folding, display rules | withdrawn (`DEC-0022`) |
 | [`osc-sequences-checklist.md`](osc-sequences-checklist.md) | Which OSC sequences OneTerm handles and where | current |
 | [`gui-layout.md`](gui-layout.md) | Original workspace layout design (docks, persistence) | historical |
 | [`terminal-semantic-highlighting.md`](terminal-semantic-highlighting.md) | Semantic highlight engine design | historical |

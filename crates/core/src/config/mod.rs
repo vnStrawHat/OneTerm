@@ -27,10 +27,12 @@ pub enum RightDockMode {
     /// Right dock hosts the combined Session + SFTP browser side panel.
     #[default]
     SshClient,
-    /// Right dock hosts the Agent Mode panels (placeholder for now).
-    Agent,
     /// Hide the right dock entirely. The dock is kept collapsed and no panel
-    /// is built for it; switching back to `SshClient`/`Agent` reveals it.
+    /// is built for it; switching back to `SshClient` reveals it.
+    ///
+    /// `"agent"` is the withdrawn Agent mode (`DEC-0022`); a config that saved
+    /// it reads as `None` and is written back as `"none"`.
+    #[serde(alias = "agent")]
     None,
 }
 

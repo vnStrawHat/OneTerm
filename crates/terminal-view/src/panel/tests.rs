@@ -134,7 +134,8 @@ fn closing_only_terminal_tab_keeps_empty_panel_for_new_tabs(cx: &mut TestAppCont
         });
         let tab_panel = panel
             .read(cx)
-            .tab_panel_weak()
+            .tab_panel
+            .clone()
             .and_then(|group| group.upgrade())
             .expect("panel must belong to a tab group");
         *panel_for_window.borrow_mut() = Some(panel.clone());
@@ -235,7 +236,8 @@ fn closing_terminal_tab_with_sibling_removes_it(cx: &mut TestAppContext) {
         });
         let tab_panel = first
             .read(cx)
-            .tab_panel_weak()
+            .tab_panel
+            .clone()
             .and_then(|group| group.upgrade())
             .expect("panel must belong to a tab group");
         *first_for_window.borrow_mut() = Some(first.clone());
@@ -516,7 +518,6 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
             }),
             duplicate_test_commands(),
             crate::status_metrics(),
-            crate::agent_focuser(),
         )
         .expect("test services must install once");
     });
@@ -573,7 +574,8 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
         });
         let tab_panel = panel
             .read(cx)
-            .tab_panel_weak()
+            .tab_panel
+            .clone()
             .and_then(|group| group.upgrade())
             .expect("panel must belong to a tab group");
         *panel_for_window.borrow_mut() = Some(panel.clone());
@@ -668,86 +670,6 @@ fn tab_drop_onto_occupied_space_keeps_source_terminal(cx: &mut TestAppContext) {
         panel.tree.active_terminal().as_ref() == Some(&source_view)
     });
     assert!(still_in_source, "source terminal must stay in its Space");
-}
-
-fn agent_state_event(seq: u64) -> oneterm_terminal::AgentStatusEvent {
-    oneterm_terminal::AgentStatusEvent {
-        agent: "pi".into(),
-        seq,
-        ts: seq * 1000,
-        payload: oneterm_terminal::AgentPayload::State(oneterm_terminal::StateEvent {
-            state: oneterm_terminal::AgentState::Working,
-            message: None,
-            session_id: None,
-        }),
-    }
-}
-
-fn agent_lifecycle(
-    registry: &gpui::Entity<oneterm_state::AgentRegistry>,
-    terminal_key: gpui::EntityId,
-    cx: &mut VisualTestContext,
-) -> Option<oneterm_state::Lifecycle> {
-    registry.read_with(cx, |reg, _| {
-        reg.cards()
-            .iter()
-            .find(|c| c.terminal_key == terminal_key)
-            .map(|c| c.lifecycle)
-    })
-}
-
-#[gpui::test]
-fn exited_behind_output_batch_marks_agent_ended(cx: &mut TestAppContext) {
-    // Regression (CORR-02): a process that prints and exits in the same batch
-    // delivers `Output` followed by `Exited` on the event channel. The
-    // coalescing drain must run the same exit handling as the main loop.
-    cx.update(gpui_component::init);
-    cx.update(crate::init);
-    cx.update(oneterm_settings::TerminalSettings::init);
-    cx.update(oneterm_state::AgentRegistry::init);
-
-    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
-    let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_spec(session_spec(session, "Agent"), window, cx)
-    });
-    let cx: &mut VisualTestContext = cx;
-    cx.run_until_parked();
-
-    let terminal_key = panel.read_with(cx, |panel, _| {
-        panel
-            .tree
-            .active_terminal()
-            .expect("panel must own a terminal")
-            .entity_id()
-    });
-
-    probe
-        .emit(oneterm_terminal::SessionEvent::AgentStatus(Arc::new(
-            agent_state_event(1),
-        )))
-        .expect("event channel must accept the agent event");
-    cx.run_until_parked();
-
-    let registry = cx.update(|_, cx| oneterm_state::AgentRegistry::global(cx));
-    assert_eq!(
-        agent_lifecycle(&registry, terminal_key, cx),
-        Some(oneterm_state::Lifecycle::Live)
-    );
-
-    // Queue both events before the subscriber task gets to run so `Exited`
-    // is picked up by the coalescing drain behind `Output`.
-    probe
-        .emit(oneterm_terminal::SessionEvent::Output)
-        .expect("event channel must accept output");
-    probe
-        .emit(oneterm_terminal::SessionEvent::Exited(Some(0)))
-        .expect("event channel must accept exit");
-    cx.run_until_parked();
-
-    assert_eq!(
-        agent_lifecycle(&registry, terminal_key, cx),
-        Some(oneterm_state::Lifecycle::Ended { exit_code: Some(0) })
-    );
 }
 
 /// The tab chips read `tab_channels`, and the two tab-wide menu items write

@@ -192,9 +192,9 @@ fn elevation_suffix(cx: &App) -> Option<AnyElement> {
 
 /// Build the right-dock mode toggle group used in the title bar.
 ///
-/// Three segmented toggles — "SSH Client", "Agent", and "None" — that switch
-/// the right dock content (see [`RightDockMode`]). "None" hides the right dock
-/// entirely; "SSH Client"/"Agent" rebuild and force-open the dock. The active
+/// Two segmented toggles — "SSH Client" and "None" — that switch the right
+/// dock content (see [`RightDockMode`]). "None" hides the right dock entirely;
+/// "SSH Client" rebuilds and force-opens the dock. The active
 /// one mirrors the mode persisted in `ui_config.json`; clicking dispatches
 /// [`SetRightDockMode`], which the workspace turns into a live right-dock swap.
 ///
@@ -202,7 +202,7 @@ fn elevation_suffix(cx: &App) -> Option<AnyElement> {
 /// Tab" action it used to host is still reachable via its key binding
 /// (`Ctrl-T`) and the terminal context menu.
 ///
-/// The three toggles act as a single-select segmented control: clicking any of
+/// The toggles act as a single-select segmented control: clicking any of
 /// them — including the one already selected — dispatches `SetRightDockMode`
 /// for that mode, which is what reopens a dock the tab bar's dock button
 /// collapsed (`BUG-0067`). (`ToggleGroup` is multi-select by nature, so the
@@ -212,13 +212,8 @@ pub fn mode_toggle_group(cx: &App) -> AnyElement {
     let current = oneterm_settings::UiConfig::global(cx)
         .read(cx)
         .right_dock_mode;
-    // Index 0 = SshClient, 1 = Agent, 2 = None — kept in sync with the `child`
-    // order below.
-    let modes = [
-        RightDockMode::SshClient,
-        RightDockMode::Agent,
-        RightDockMode::None,
-    ];
+    // Index 0 = SshClient, 1 = None — kept in sync with the `child` order below.
+    let modes = [RightDockMode::SshClient, RightDockMode::None];
     let current_ix = modes.iter().position(|m| *m == current).unwrap_or(0);
     ToggleGroup::new("right-dock-mode")
         .xsmall()
@@ -231,16 +226,10 @@ pub fn mode_toggle_group(cx: &App) -> AnyElement {
                 .checked(current_ix == 0),
         )
         .child(
-            Toggle::new("agent-mode")
-                .label("Agent")
-                .w(MODE_TOGGLE_WIDE)
-                .checked(current_ix == 1),
-        )
-        .child(
             Toggle::new("none-mode")
                 .label("None")
                 .w(MODE_TOGGLE_NARROW)
-                .checked(current_ix == 2),
+                .checked(current_ix == 1),
         )
         .on_click(move |checks, window, cx| {
             let Some(mode) = clicked_mode_index(checks, current_ix).and_then(|ix| modes.get(ix))
@@ -270,21 +259,21 @@ mod tests {
 
     #[test]
     fn clicking_another_segment_reports_that_segment() {
-        // "Agent" clicked while "SSH Client" was selected.
-        assert_eq!(clicked_mode_index(&[true, true, false], 0), Some(1));
+        // "None" clicked while "SSH Client" was selected.
+        assert_eq!(clicked_mode_index(&[true, true], 0), Some(1));
     }
 
     #[test]
     fn clicking_the_selected_segment_reports_it_too() {
         // The bug: the group unchecks the selected segment, so nothing is
         // checked — the click must still resolve to that segment.
-        assert_eq!(clicked_mode_index(&[false, false, false], 0), Some(0));
-        assert_eq!(clicked_mode_index(&[false, false, false], 2), Some(2));
+        assert_eq!(clicked_mode_index(&[false, false], 0), Some(0));
+        assert_eq!(clicked_mode_index(&[false, false], 1), Some(1));
     }
 
     #[test]
     fn an_unchanged_vector_reports_no_click() {
-        assert_eq!(clicked_mode_index(&[true, false, false], 0), None);
+        assert_eq!(clicked_mode_index(&[true, false], 0), None);
         assert_eq!(clicked_mode_index(&[], 0), None);
     }
 
@@ -370,7 +359,7 @@ mod tests {
             // The toggles read the right-dock mode: changing it re-renders them.
             cx.update(|_, cx| {
                 UiConfig::global(cx).update(cx, |config, cx| {
-                    config.right_dock_mode = RightDockMode::Agent;
+                    config.right_dock_mode = RightDockMode::None;
                     cx.notify();
                 });
             });

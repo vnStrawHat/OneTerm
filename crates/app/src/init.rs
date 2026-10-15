@@ -45,9 +45,6 @@ pub(crate) fn init(cx: &mut App) {
     oneterm_sftp_ui::init(cx);
     // Session: SSH session store global + "session" panel.
     oneterm_session_ui::init(cx);
-    // Agent: the global AgentRegistry (folded OSC 20308 model behind the Agent
-    // Panel) + the "agent" right-dock panel.
-    oneterm_agent_ui::init(cx);
     // Settings/About update controls and release-build startup update checks.
     oneterm_settings_ui::init(cx);
 
@@ -57,7 +54,7 @@ pub(crate) fn init(cx: &mut App) {
     crate::ssh_client_panel::init(cx);
 
     // Seal all cross-feature services into one composition-root bundle. Each
-    // hook (active-terminal metrics, agent focuser) and command callback belongs
+    // hook (active-terminal metrics) and command callback belongs
     // to its feature, while the shell consumes only this state API.
     //
     // ORDER MATTERS: every feature `init` above must run first. A command
@@ -82,7 +79,6 @@ pub(crate) fn init(cx: &mut App) {
             launch_elevated_shell: crate::elevation::launch_elevated_shell,
         },
         oneterm_terminal_view::status_metrics(),
-        oneterm_terminal_view::agent_focuser(),
     )
     .expect("application services must be registered exactly once");
 

@@ -72,7 +72,7 @@ OneTerm/
 │   │       │                       #   PtyTransport trait, OscRouter<T> (the EventBatch drain),
 │   │       │                       #   SessionState (title/cwd/clipboard/exit), event_sink, pump
 │   │       ├── content.rs / model.rs / palette.rs
-│   │       ├── osc.rs / osc_color.rs / osc_agent/ / url_policy.rs / paste.rs / security_policy.rs …
+│   │       ├── osc.rs / osc_color.rs / url_policy.rs / paste.rs / security_policy.rs …
 │   │       └── test_support.rs     # FakeTerminalSession + FakePtyTransport (feature "test-support")
 │   │
 │   ├── highlight/                  # `oneterm-highlight` — semantic syntax highlighting engine
@@ -108,9 +108,6 @@ OneTerm/
 │   │       ├── services.rs         # AppServices (single injection bundle)
 │   │       ├── commands.rs         # WorkspaceCommands fn-pointer struct (shell → feature inversion, read via AppServices)
 │   │       ├── active_terminal.rs  # ActiveTerminalMetricsProvider (breadcrumb/net stats/local cwd hook, contributed by terminal-view)
-│   │       ├── agent_focus.rs      # AgentFocuser (agent-ui → terminal focus hook, contributed by terminal-view)
-│   │       ├── agent_model.rs      # Folded OSC 20308 agent card model (+ agent_model_tests.rs)
-│   │       ├── agent_registry.rs   # AgentRegistry (global Entity): fold/lifecycle/stale/summary behind the Agent Panel
 │   │       ├── completion_history.rs # Process-global CompletionHistory entity (memory completion source)
 │   │       ├── input_channel_registry.rs # InputChannelRegistry (global Entity): per-Space channel membership + input fan-out
 │   │       ├── dock_persistence.rs # docks.json path + DockDocument schema owner (read/update transaction, quarantine)
@@ -148,14 +145,14 @@ OneTerm/
 │   │
 │   ├── terminal-view/              # `oneterm-terminal-view` — TERMINAL feature (has terminal-diagnostics feat)
 │   │   ├── assets/highlight/       # default.json semantic style asset (include_str!)
-│   │   └── src/                    # lib.rs init() (register the terminal panel; status metrics + agent
-│   │                               #   focuser are handed to AppServices by crates/app);
+│   │   └── src/                    # lib.rs init() (register the terminal panel; status metrics
+│   │                               #   are handed to AppServices by crates/app);
 │   │                               #   render/ (frame, metrics, glyphs, row_plan, plan_cache, element,
 │   │                               #   shapes, cursor, overlay, diagnostics), input/ (keys, mouse, menu,
 │   │                               #   edit), terminal_view/ (view, render, input, ime, search, scrollbar,
-│   │                               #   gutter_timestamps, completion, agent_status), space/ (tree, render),
+│   │                               #   gutter_timestamps, completion), space/ (tree, render),
 │   │                               #   panel/ (terminal_panel, spaces, duplicate, tab_title), theme/,
-│   │                               #   highlight/, url/, completion/, agent.rs, security.rs, status.rs
+│   │                               #   highlight/, url/, completion/, security.rs, status.rs
 │   │
 │   ├── sftp-ui/                    # `oneterm-sftp-ui` — SFTP feature (file browser + transfer queue)
 │   │   └── src/                    # lib.rs init() (register "sftp" panel); panel + browser_view
@@ -174,9 +171,6 @@ OneTerm/
 │   │   └── src/                    # lib.rs: open_settings + setup_key_bindings commands;
 │   │                               #   panel/window/general/terminal/appearance/security/about/key_bindings …
 │   │                               #   update_controls/updates state
-│   │
-│   ├── agent-ui/                   # `oneterm-agent-ui` — AGENT feature (right-dock fleet view + compact cards)
-│   │   └── src/                    # lib.rs init() (AgentRegistry::init); view/card render helpers
 │   │
 │   ├── tools/                      # `oneterm-tools` — developer diagnostics, never shipped, no OneTerm dep
 │   │   ├── corpus/                 # the parity corpus (US-0093, next to its only reader):
@@ -258,7 +252,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `terminal` (`oneterm-terminal`) | `core`, `vt` | engine | The adapter over `oneterm-vt` (no gpui): `TerminalSession`, `TerminalModel`, the `TerminalHandle` lock plus the render-demand handshake, the `EventBatch` drain and its delivery policy, the `TerminalContent` frame, palette/OSC helpers, and `SessionFactory`. Key and mouse encoding moved to `oneterm_vt::input` at `US-0099`; this crate re-exports the names so a consumer keeps one `use`. |
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
 | `settings` (`oneterm-settings`) | `core`, gpui, gpui-component | shared | `TerminalConfig`, live `TerminalSettings` (defaults single-sourced from the config), and `UiConfig` including the `Theme` observer that persists `ui_config.json`. |
-| `state` (`oneterm-state`) | `core`, `terminal`, `completion`, `vault`, gpui, gpui-component | shared | Cross-feature runtime state (`AppState`, `AgentRegistry`, `CompletionHistory`, the master-password `VaultState` and its dialogs, `IN-0050`) + injection (`AppServices` bundle: session factory, `WorkspaceCommands`, active-terminal metrics, agent focuser) + shared shell contracts (`docks.json` document owner, panel names, dock helpers). |
+| `state` (`oneterm-state`) | `core`, `terminal`, `completion`, `vault`, gpui, gpui-component | shared | Cross-feature runtime state (`AppState`, `CompletionHistory`, the master-password `VaultState` and its dialogs, `IN-0050`) + injection (`AppServices` bundle: session factory, `WorkspaceCommands`, active-terminal metrics, agent focuser) + shared shell contracts (`docks.json` document owner, panel names, dock helpers). |
 | `update` (`oneterm-update`) | `core`, `chrono`, `reqwest`, `semver`, `sha2`, `tar`, `flate2`, `zip` | shared | GitHub Releases auto-update checks, asset selection, download verification, staging, and installer orchestration. |
 | `vault` (`oneterm-vault`) | `core`, `argon2`, `aes-gcm`, `base64`, `serde`, `serde_json`, `thiserror`, `zeroize` | shared (L1) | Master-password vault (`IN-0050`, `DEC-0021`): Argon2id key-encryption key, the wrapped random data key, AES-256-GCM `otv1:` envelopes bound to a purpose and context, and the `vault.json` header (load, create-only set-up, vault-id-checked rewrap, reset; elevated writes refused in one function). gpui-free, and the **only** crate allowed to depend on `argon2` / `aes-gcm` (`scripts/dependency-graph-policy.json`). |
 | `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, generated `AppIcon`, brand accent, and theme-tinted notification builders (`notif_ext`). |
@@ -267,7 +261,6 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions`, gpui-component | feature | SFTP file browser and transfer queue. |
 | `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `settings`, `state`, `theme`, `actions`, `vault`, gpui-component | feature | Session tree, connect dialogs, and `SshSessionStore` (including each session's sealed password, `US-0158`; the `vault` edge is for the `SealedSecret` / `SealContext` types, the crypto stays in `oneterm-vault`). |
 | `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `state`, `update`, `theme`, `actions`, gpui-component | feature | General Settings window, update status/actions, and key-binding setup. |
-| `agent-ui` (`oneterm-agent-ui`) | `terminal`, `settings`, `state`, gpui-component | feature | Agent Panel fleet view. |
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal`, `vt` | backend | Local PTY; implements `TerminalSession` and owns the poll loop over `oneterm_vt::pty`. |
 | `app` (`oneterm-app`) | shell + all five features + shared layers (incl. `update`) + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |

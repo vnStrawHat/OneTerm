@@ -9,8 +9,8 @@ Created: 2026-10-15
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
-- [ ] In progress
+- [ ] Planned
+- [x] In progress
 - [ ] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
@@ -35,11 +35,11 @@ The Agent Panel, `AgentRegistry`, the agent focuser, OSC 20308 with its `9;7` al
 
 ## Acceptance
 
-- [ ] `crates/agent-ui` is gone and no crate references 20308, `AgentRegistry`, `agent_panel` or `RightDockMode::Agent`.
-- [ ] `right_dock_mode: "agent"` loads as `None` and saves as `"none"` (test).
-- [ ] `agent_stale_threshold_ms` in `config.json` loads without quarantine (test).
-- [ ] A `docks.json` with an `agent_panel` right dock loads with no `agent_panel` left in the dock area (test).
-- [ ] `OSC 20308;0` gets no reply (test).
+- [x] `crates/agent-ui` is gone and no crate references 20308, `AgentRegistry`, `agent_panel` or `RightDockMode::Agent`.
+- [x] `right_dock_mode: "agent"` loads as `None` and saves as `"none"` (test).
+- [x] `agent_stale_threshold_ms` in `ui_config.json` loads without quarantine (test).
+- [x] A `docks.json` with an `agent_panel` right dock loads with no `agent_panel` left in the dock area (test).
+- [x] `OSC 20308;0` gets no reply (test: the route is the engine's `Drop`, `handle.rs`).
 - [ ] Full `scripts/ci-local.sh` passes.
 
 ## Documentation
@@ -69,9 +69,9 @@ Add only relevant code, decisions, dependencies, and invariants not already clea
 
 ## Plan
 
-- [ ] Delete code bottom-up (terminal, state, terminal-view, workspace, settings, app, crate), compile after each layer.
-- [ ] Compat tests for the two documents.
-- [ ] Docs, scripts, dependency policy; gate.
+- [x] Delete code bottom-up (terminal, state, terminal-view, workspace, settings, app, crate), compile after each layer.
+- [x] Compat tests for the two documents.
+- [x] Docs, scripts, dependency policy; gate (full `ci-local` deferred to the end of the intake, see Evidence).
 
 ## Decisions
 
@@ -91,7 +91,12 @@ Compat unit tests in `oneterm-settings` / `oneterm-workspace`; `oneterm-terminal
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+- Removed: `crates/agent-ui`; `oneterm-state` `agent_registry` / `agent_model` / `agent_focus` and the focuser in `AppServices`; `oneterm-terminal` `osc_agent/`, the 20308 / `9;7` routes, `SessionEvent::AgentStatus`, the agent counters and the now-unused `serde` / `serde_json` dependencies; `oneterm-terminal-view` `agent.rs`, `agent_status.rs`, the registry dependency and the dead tab-ordering helpers; the Agent segment of the title bar; `UiConfig::agent_stale_threshold_ms`; the demo scripts and `screenshots/agents-panel.png`. `RightDockMode::None` carries `#[serde(alias = "agent")]`.
+- Compat tests: `oneterm-settings` `a_config_from_the_agent_panel_era_loads_and_heals` (`"agent"` -> `None` -> written `"none"`, stale field dropped, no quarantine); `oneterm-workspace` `a_saved_agent_panel_right_dock_is_replaced_by_the_ssh_client_panel`. Both pass.
+- `cargo clippy --workspace --all-targets -D warnings`: clean. `cargo test --workspace`: 75 suites ok, 0 failed. `check-ignored-tests.py`, `verify-dependency-graph.py`, `third-party-notices.py --check`, `check-doc-paths.py`, `check-english.py`, `check-theme-contrast.py`: pass.
+- Docs: the two specs moved to `docs/archive/` with a withdrawn banner; README, AGENTS.md, PROJECT.md, docs/README.md, structure.md, persistence.md (alias + dropped field + `agent_panel` replacement), architecture.md, gui-layout.md, terminal-backend.md, osc-sequences-checklist.md updated.
+- Removed test: the CORR-02 regression (`exited_behind_output_batch_marks_agent_ended`) asserted through the Agent registry, the only thing exit changed. `US-0193` re-adds it against the tab status (exit drops `working`).
+- Gaps: `crates/vt/docs/guide/05-osc.md` still uses 20308 as its `Forward` example and calls it OneTerm's agent channel; `US-0192` rewrites it around 7501. The full `scripts/ci-local.sh` runs once at the end of the intake. The engine's own verification tests (`crates/vt/tests/us0098_*.rs`) keep 20308 as an arbitrary unknown number; they test the route table, not OneTerm.
 
 ## Handoff
 

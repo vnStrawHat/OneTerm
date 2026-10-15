@@ -1,5 +1,9 @@
 # OSC 20308 — Agent Status Event
 
+> **Status: Withdrawn (2026-10-15, `DEC-0022`).** OneTerm no longer implements this. The Agent
+> Panel and OSC 20308 were removed in favour of OSC 7501 program status shown in the tab title
+> (`docs/spec-intakes/IN-0049-osc-7501/`). Kept as a historical record only.
+
 > Protocol specification for a coding-agent status channel carried over an
 > OSC (Operating System Command) escape sequence. Any terminal that parses OSC
 > and any agent that can write bytes to its own stdout can implement it.

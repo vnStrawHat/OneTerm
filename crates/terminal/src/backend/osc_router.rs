@@ -29,8 +29,6 @@ use log::warn;
 use oneterm_vt::{ColorKey, EventBatch, ShellMark, StringTerm, VtEvent};
 
 use crate::logging::TerminalLogController;
-use crate::osc::{AgentOsc, agent_support_reply, is_legacy_agent_notification, parse_agent_osc};
-use crate::osc_agent::{AGENT_OSC, LEGACY_AGENT_OSC, LEGACY_AGENT_OSC_SUB, should_apply};
 use crate::osc_color::{ColorFormatter, PendingColorQuery};
 use crate::security_policy::{ClipboardOrigin, NotificationRateLimiter, TerminalSecurityPolicy};
 use crate::session::SessionEvent;
@@ -145,12 +143,9 @@ impl<T: PtyTransport> OscRouter<T> {
     /// blocks and never leaves this function. Nothing here can wait.
     ///
     /// What two passes broke is *relative* order between a reply the engine
-    /// produced and one the embedder produced, and that is a published contract:
-    /// `docs/osc-agent-status.md` § 3.2 tells an agent to write
-    /// `ESC ] 20308 ; 0 ST` followed by `ESC [ c` and to conclude "not
-    /// supported" if DA1 comes back first. Hoisting DA1 out of the second pass
-    /// made OneTerm fail its own detection idiom on the terminal that
-    /// implements it. Byte order in, byte order out.
+    /// produced and one the embedder produced, and programs depend on it: a
+    /// support probe followed by `ESC [ c` reads "not supported" when DA1 comes
+    /// back first. Byte order in, byte order out.
     pub fn drain(&self, batch: &EventBatch, out: &mut Vec<SessionEvent>) {
         for event in batch.iter() {
             self.handle(batch, event, out);
@@ -166,7 +161,7 @@ impl<T: PtyTransport> OscRouter<T> {
             // that dispatched anything, but the repaint hint has exactly one
             // owner and always has: `TerminalPump::finish_batch*`, which posts
             // it **after** the deferred reliable events so a frame never shows
-            // content before that batch's title, cwd or agent event. Forwarding
+            // content before that batch's title or cwd event. Forwarding
             // it here too would double the hints and put the first one first.
             VtEvent::Repaint => {}
             // ── Title (OSC 0/2) ─────────────────────────────────────────
@@ -204,13 +199,6 @@ impl<T: PtyTransport> OscRouter<T> {
             // ── OSC 9: desktop notification ────────────────────────────
             VtEvent::Notification { body, .. } => {
                 let body = batch.str(*body);
-                // `OSC 9;7` is the agent channel's deprecated alias, and the
-                // engine routes per number, so it arrives here looking like a
-                // notification. The raw sequence arrives too; that is where it
-                // is handled.
-                if is_legacy_agent_notification(body) {
-                    return;
-                }
                 let Some(sanitized) = self.security.sanitize_notification(body) else {
                     return;
                 };
@@ -244,58 +232,9 @@ impl<T: PtyTransport> OscRouter<T> {
                 }
                 out.push(SessionEvent::ShellIntegration(*mark));
             }
-            // ── OSC 20308, and OSC 9;7 wearing OSC 9's clothes ─────────
-            VtEvent::Osc {
-                code,
-                params,
-                terminator,
-                truncated,
-            } => {
-                let params: Vec<&[u8]> = batch.params(*params).collect();
-                // Bookkeeping first, and *before* the truncation guard below:
-                // § 3.1 says the alias is "parsed identically, counted, and
-                // logged once per session", and an event that arrived on `9;7`
-                // arrived on `9;7` whether or not the parser could hold all of
-                // it. Counting it only when it survives would under-report
-                // exactly the agent whose payloads are too big — the one most
-                // worth telling the operator about.
-                self.note_agent_osc(*code, &params);
-                // A truncated payload is not a short payload, it is a corrupt
-                // one: the base64 was cut mid-stream, so decoding it yields
-                // either an error or — worse — a shorter valid event that the
-                // agent never sent. Drop it before anything parses it, and
-                // count it, so the loss is visible instead of arriving as
-                // "malformed JSON" from a payload that was never malformed.
-                //
-                // Deliberately the agent channel only. Free-form text degrades
-                // gracefully when it is cut (a truncated OSC 9 toast is still a
-                // toast) and OSC 133's markers are far too short to truncate;
-                // structured data does not degrade, it lies.
-                if *truncated && is_agent_osc(*code, &params) {
-                    let count = self.state.count_truncated_agent_osc();
-                    log::debug!(
-                        "OscRouter: agent status dropped, payload truncated by the \
-                         parser's cap ({count} so far)"
-                    );
-                    return;
-                }
-                match parse_agent_osc(*code, &params) {
-                    Some(AgentOsc::Status(ev)) => self.apply_agent_status(*ev, out),
-                    // `OSC 20308;0` — the support query (spec §3.2). Answered
-                    // here rather than in the engine because the engine only
-                    // routes numbers: the protocol, its version and the
-                    // terminal's name are the embedder's, exactly as the OSC 52
-                    // and colour replies are. It still leaves under the engine
-                    // guard, before the pump's yield check and before any UI
-                    // event is flushed (R-37).
-                    Some(AgentOsc::SupportQuery) => {
-                        self.reply(agent_support_reply(*terminator).as_bytes())
-                    }
-                    None => log::debug!(
-                        "OscRouter: forwarded OSC {code} is not the agent channel ({} params)",
-                        params.len()
-                    ),
-                }
+            // ── A forwarded OSC: no number is routed out of the engine ──
+            VtEvent::Osc { code, .. } => {
+                log::debug!("OscRouter: forwarded OSC {code} has no handler");
             }
             // ── Screen cleared (CSI 2J/3J, RIS) ─────────────────────────
             VtEvent::ScreenCleared => self.state.bump_clear_epoch(),
@@ -313,35 +252,6 @@ impl<T: PtyTransport> OscRouter<T> {
             //    OSC 22 (pointer shape) and OSC 50 (the engine already
             //    applied the new cursor shape to its own state) ───────────
             _ => {}
-        }
-    }
-
-    /// The agent channel's bookkeeping, which `parse_osc` cannot do because it
-    /// is a pure function and both facts are per-session
-    /// (`docs/osc-agent-status.md` §3 and §3.1):
-    ///
-    /// * an `OSC 20308` sub-code the receiver does not implement is ignored and
-    ///   **counted** — `2` and above are reserved, so this is how a future
-    ///   extension aimed at an older OneTerm shows up instead of vanishing;
-    /// * `OSC 9;7` is deprecated. It is counted, and logged **once**, not once
-    ///   per event: a still-unported agent emits thousands, and the point is to
-    ///   make it diagnosable, not to drown the log.
-    fn note_agent_osc(&self, code: u32, params: &[&[u8]]) {
-        let sub = params.get(1).copied();
-        if code == AGENT_OSC && !matches!(sub, Some(b"0" | b"1")) {
-            let count = self.state.count_unknown_agent_subcode();
-            log::debug!(
-                "OscRouter: OSC 20308 ignored, unrecognised sub-code {:?} ({count} so far)",
-                sub.map(String::from_utf8_lossy)
-            );
-        } else if code == LEGACY_AGENT_OSC
-            && sub == Some(LEGACY_AGENT_OSC_SUB)
-            && self.state.count_legacy_agent_osc() == 1
-        {
-            log::debug!(
-                "OscRouter: OSC 9;7 is deprecated and is dropped in the next release — \
-                 the agent should emit OSC 20308;1 instead (docs/osc-agent-status.md §3.1)"
-            );
         }
     }
 
@@ -369,45 +279,6 @@ impl<T: PtyTransport> OscRouter<T> {
         self.state.lock().clipboard = Some(validated.clone());
         out.push(SessionEvent::Clipboard(Some(validated)));
     }
-
-    /// Apply one agent-status event, or drop it as a replay.
-    ///
-    /// `seq` dedup (spec §4.1 / §8.3): an event whose `seq` is at or below the
-    /// last applied `seq` for the same agent id is a repeat, not news.
-    fn apply_agent_status(
-        &self,
-        ev: crate::osc_agent::AgentStatusEvent,
-        out: &mut Vec<SessionEvent>,
-    ) {
-        let apply = should_apply(&mut self.state.lock().last_agent_seq, &ev);
-        if apply {
-            log::debug!(
-                "agent status applied & forwarded: agent={} type={} seq={}",
-                ev.agent(),
-                ev.type_name(),
-                ev.seq()
-            );
-            out.push(SessionEvent::AgentStatus(Arc::new(ev)));
-        } else {
-            log::debug!(
-                "agent status dropped by dedup: agent={} type={} seq={}",
-                ev.agent(),
-                ev.type_name(),
-                ev.seq()
-            );
-        }
-    }
-}
-
-/// Whether this OSC carries an agent-status payload, under either spelling.
-///
-/// The support query and the reserved sub-codes are excluded: they carry no
-/// payload worth truncating, and a truncated `20308;<n>` should still be
-/// counted as the unknown sub-code it is.
-fn is_agent_osc(code: u32, params: &[&[u8]]) -> bool {
-    let sub = params.get(1).copied();
-    (code == AGENT_OSC && sub == Some(b"1"))
-        || (code == LEGACY_AGENT_OSC && sub == Some(LEGACY_AGENT_OSC_SUB))
 }
 
 /// The reply the reference formatted inside the engine.

@@ -134,7 +134,7 @@ impl super::OneTermWorkspace {
     }
 
     /// Action handler: switch the right dock to the panels for the given
-    /// [`RightDockMode`] (SSH Client = Session + SFTP, Agent = Agent panels).
+    /// [`RightDockMode`] (SSH Client = Session + SFTP).
     ///
     /// Dispatched by the title bar mode toggle group, for every click including
     /// one on the segment already selected. Persists the choice to
@@ -189,7 +189,7 @@ impl super::OneTermWorkspace {
 
     /// Apply `mode` to the right dock. For `None` the dock is hidden (collapsed)
     /// without rebuilding its panel, so the previous content is restored when the
-    /// user switches back. For `SshClient`/`Agent` the dock is rebuilt as a
+    /// user switches back. For `SshClient` the dock is rebuilt as a
     /// single-tab `DockLayout` of the mode's registered panel, preserving the dock
     /// width and forcing the dock open. Used by the action handler above and by
     /// the startup apply in `OneTermWorkspace::new`.
@@ -207,7 +207,7 @@ impl super::OneTermWorkspace {
         }
         let Some(panel_name) = panel_names::right_dock_panel_name(mode) else {
             // None mode — hide the right dock without rebuilding its panel, so
-            // switching back to SSH Client / Agent restores the previous content.
+            // switching back to SSH Client restores the previous content.
             super::set_right_dock_open(dock_area, false, window, cx);
             return;
         };
@@ -218,8 +218,8 @@ impl super::OneTermWorkspace {
         let right = DockLayout::tabs().panel_view(panel, cx);
         dock_area.update(cx, |view, cx| {
             // Snapshot the current right dock's size so the swap preserves the
-            // user's last dock width. Force the dock open — selecting SSH Client /
-            // Agent is an explicit request to show the right dock.
+            // user's last dock width. Force the dock open — selecting SSH Client
+            // is an explicit request to show the right dock.
             let right_size = super::clamp_right_dock_width(
                 view.dock_size(UiDockPlacement::Right)
                     .unwrap_or(super::DEFAULT_RIGHT_DOCK_WIDTH),

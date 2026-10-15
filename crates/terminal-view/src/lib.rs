@@ -1,6 +1,5 @@
 //! Terminal panel — each tab is one Terminal.
 
-pub(crate) mod agent;
 pub(crate) mod completion;
 pub(crate) mod highlight;
 pub(crate) mod input;
@@ -13,7 +12,6 @@ pub(crate) mod terminal_view;
 pub(crate) mod theme;
 pub(crate) mod url;
 
-pub use agent::agent_focuser;
 pub use panel::{PanelSpec, TerminalPanel};
 pub use security::terminal_security_policy;
 pub use status::{find_in_active_terminal, new_terminal_with_shell_cmd, status_metrics};
@@ -25,8 +23,8 @@ use oneterm_state::panel_names;
 /// Initialize the terminal feature.
 ///
 /// Registers the terminal dock panel so saved layouts deserialize. Called by
-/// the app aggregator, which also passes [`status_metrics`] and
-/// [`agent_focuser`] to `AppServices::install`.
+/// the app aggregator, which also passes [`status_metrics`] to
+/// `AppServices::install`.
 pub fn init(cx: &mut App) {
     register_panel(cx, panel_names::TERMINAL, |context, window, cx| {
         panel_handle(TerminalPanel::open(

@@ -20,7 +20,6 @@ pub mod handle;
 pub mod logging;
 pub mod model;
 pub(crate) mod osc;
-pub mod osc_agent;
 pub(crate) mod osc_color;
 pub(crate) mod palette;
 pub(crate) mod paste;
@@ -64,11 +63,6 @@ pub use oneterm_vt::{
     SnapshotPlacement, SnapshotRow, SnapshotUpdate, Style, StyleRun, Terminal,
 };
 pub use osc::encode_osc52;
-pub use osc_agent::{
-    AgentPayload, AgentState, AgentStatusEvent, ApprovalChoice, ApprovalEvent, ApprovalKind,
-    ApprovalRisk, FileAction, FileEvent, HeartbeatEvent, ModelEvent, StateEvent, ToolCallEvent,
-    ToolCallPhase, should_apply,
-};
 pub use osc_color::DynamicColors;
 pub use palette::{TerminalPalette, resolve_color};
 pub use security_policy::{ClipboardOrigin, TerminalSecurityPolicy};

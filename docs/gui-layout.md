@@ -24,9 +24,7 @@ DockArea (id = "main-dock", version = 3)
 │   └── DockLayout::tabs
 │       └── one or more TerminalPanel values
 └── Right: DockLayout::tabs
-    └── exactly one mode panel
-        ├── SshClientPanel (SSH Client mode), or
-        └── AgentListView (Agent mode)
+    └── exactly one mode panel: SshClientPanel (SSH Client mode)
 ```
 
 A mode click decides against the panel the right dock **contains**, never against the persisted mode: `None` hides the dock, a mode whose panel is already there is shown (opened if it was collapsed, with the same panel instance and the same width), and only a mode the dock does not have is built. So an SFTP connection and the session list survive every reopen, and an explicit click always means "show me this", never "hide this".
@@ -93,7 +91,6 @@ The persisted panel-name contract is:
 | `session` | `oneterm-session-ui` | `SessionPanel` |
 | `sftp` | `oneterm-sftp-ui` | `SftpPanel` |
 | `ssh_client_panel` | `oneterm-app` | `SshClientPanel` |
-| `agent_panel` | `oneterm-agent-ui` | `AgentListView` |
 
 Each registration returns a `panel_handle(...)`, preserving the component-layer `Panel` implementation and tab presentation across the `gpui-base` seam. A bare base panel can compile but would lose its title and controls, so `workspace/layout_tests.rs` verifies all persisted names resolve with their presentation handle.
 
@@ -310,18 +307,16 @@ The rules that follow from it:
   shown terminal instead, which refreshes more often (smoother, lower latency) at no CPU
   saving (`US-0145`: two-tab TUI, -51 % UI cycles uncapped, +39 % with twice the shown-tab
   refreshes when capped).
-- **Repainting timers share one grid.** The cursor blink, every status-bar indicator and
-  the Agent panel's relative-time refresh sleep with `oneterm_state::until_next_tick`,
-  which wakes on a multiple of the interval on the wall clock, so the blink (500 ms), the
-  clock (1 s), the Agent panel (1 s) and the resource indicator (2 s) land in one frame:
-  an idle, focused window draws about 2 frames a second, an unfocused one about 1.25
-  (measured 2.04-2.11 and 1.23-1.25). Animations keep their own cadence (the Agent
-  panel's spinner, 120 ms, only while a card works); an Agent panel with no cards does not
-  tick.
+- **Repainting timers share one grid.** The cursor blink and every status-bar indicator
+  sleep with `oneterm_state::until_next_tick`, which wakes on a multiple of the interval on
+  the wall clock, so the blink (500 ms), the clock (1 s) and the resource indicator (2 s)
+  land in one frame: an idle, focused window draws about 2 frames a second, an unfocused
+  one about 1.25 (measured 2.04-2.11 and 1.23-1.25, before the Agent panel was withdrawn
+  by `DEC-0022`). Animations keep their own cadence.
 - **What OneTerm caches (`US-0150`).** Two views are embedded with `.cached(style)`, so
   a frame another view asked for (a blink, a status tick, terminal output) reuses them:
   - the title bar's content (`TitleBarContent` in `crates/workspace/src/layout/title_bar.rs`:
-    icon, app menu, elevation suffix, SSH Client / Agent / None toggles), laid out to fill
+    icon, app menu, elevation suffix, SSH Client / None toggles), laid out to fill
     the kit's `bar` row (`flex_1`, `h_full`);
   - the status bar (`StatusBarView` in `crates/workspace/src/layout/statusbar.rs`), at
     `status_bar_height(rem)` = 1.75 rem + 1 px.

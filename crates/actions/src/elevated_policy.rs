@@ -1,6 +1,6 @@
 //! Which actions an elevated OneTerm window may run (`DEC-0019` M1, `IN-0043`).
 //!
-//! M1 removes SSH, SFTP, saved sessions and the Agent panel from the elevated
+//! M1 removes SSH, SFTP and saved sessions from the elevated
 //! instance. Removing the *rows* that reach them is not the same as removing the
 //! *actions*: a key binding dispatches straight to the handler, and
 //! `new_ssh_session` ships bound to `ctrl-shift-n` as a global binding, so the
@@ -18,7 +18,7 @@
 //! and `sftp-ui` are all on layer 3 and may not name each other (R2/R5).
 
 /// Action ids an elevated window must not run: everything that reaches SSH,
-/// SFTP, the saved-session store or the Agent panel.
+/// SFTP or the saved-session store.
 ///
 /// Keep sorted, and keep the reason obvious from the id.
 const DENIED_WHEN_ELEVATED: &[&str] = &[

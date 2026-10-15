@@ -48,20 +48,13 @@ pub struct UiConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub key_bindings: HashMap<String, String>,
 
-    /// Which set of panels the right dock displays (SSH Client vs Agent vs None).
-    /// Defaults to [`RightDockMode::SshClient`] when absent in an old config file.
+    /// Which set of panels the right dock displays (SSH Client or None).
+    /// Defaults to [`RightDockMode::SshClient`] when absent in an old config file;
+    /// the withdrawn `"agent"` reads as `None` (`DEC-0022`).
     /// Written by the title bar mode toggle group, read at startup by
     /// `OneTermWorkspace::new`.
     #[serde(default)]
     pub right_dock_mode: RightDockMode,
-
-    /// Agent Panel staleness threshold in milliseconds. An agent card with no
-    /// agent-status event within `max(this, 3 × heartbeat_interval)` (while its
-    /// terminal process is alive) is marked "stale" (see
-    /// `docs/agent-panel-display.md` §9, `docs/osc-agent-status.md` §5.3).
-    /// `None` = the built-in default ([`UiConfig::DEFAULT_AGENT_STALE_THRESHOLD_MS`], 5 min).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub agent_stale_threshold_ms: Option<u64>,
 
     /// Show the FPS HUD (`US-0151`). Off by default; omitted from the file while off.
     /// Written only through [`UiConfig::set_show_fps`].
@@ -112,9 +105,6 @@ impl UiConfig {
     fn parse_document(raw: &str) -> Result<Self, AppError> {
         parse_versioned_document(raw, CURRENT_SCHEMA_VERSION, DOCUMENT_NAME)
     }
-    /// Built-in default for [`UiConfig::agent_stale_threshold_ms`] — 5 minutes.
-    pub const DEFAULT_AGENT_STALE_THRESHOLD_MS: u64 = 300_000;
-
     /// The idle lock's default timeout (intake `IN-0050` Q2).
     pub const DEFAULT_LOCK_AFTER_IDLE_MINUTES: u64 = 15;
     /// The idle lock's timeout range: no "Never" (intake Q2), at most a working day.
@@ -128,13 +118,6 @@ impl UiConfig {
                 *Self::LOCK_AFTER_IDLE_RANGE.start(),
                 *Self::LOCK_AFTER_IDLE_RANGE.end(),
             )
-    }
-
-    /// The effective agent-panel staleness threshold in ms (config value or the
-    /// built-in default). A value of `0` disables staleness marking.
-    pub fn agent_stale_threshold_ms(&self) -> u64 {
-        self.agent_stale_threshold_ms
-            .unwrap_or(Self::DEFAULT_AGENT_STALE_THRESHOLD_MS)
     }
 
     /// Load the config from `ui_config.json`. See [`Self::load_from`] for the
@@ -388,8 +371,7 @@ mod tests {
             key_bindings: [("open_settings".into(), "ctrl-,".into())]
                 .into_iter()
                 .collect(),
-            right_dock_mode: RightDockMode::Agent,
-            agent_stale_threshold_ms: Some(42),
+            right_dock_mode: RightDockMode::None,
             show_fps: true,
             lock_after_idle_minutes: Some(30),
             persist_blocked: false,
@@ -407,7 +389,7 @@ mod tests {
                 .map(String::as_str),
             Some("ctrl-,")
         );
-        assert_eq!(restored.agent_stale_threshold_ms, Some(42));
+        assert_eq!(restored.right_dock_mode, RightDockMode::None);
         std::fs::write(&path, b"not-json").unwrap();
         let fallback = UiConfig::load_from(&path).unwrap();
         assert!(fallback.theme_name.is_none());
@@ -432,10 +414,46 @@ mod tests {
         // written back, so an untouched file keeps its shape.
         assert!(!config.show_fps);
         assert!(!serde_json::to_string(&config).unwrap().contains("show_fps"));
-        assert_eq!(
-            config.agent_stale_threshold_ms(),
-            UiConfig::DEFAULT_AGENT_STALE_THRESHOLD_MS
-        );
+    }
+
+    /// `DEC-0022`: a file written while the Agent Panel existed still loads. The
+    /// withdrawn `"agent"` mode reads as `None` and is written back as `"none"`,
+    /// and the stale-threshold field is ignored on read and dropped on write —
+    /// no quarantine, no lost settings.
+    #[test]
+    fn a_config_from_the_agent_panel_era_loads_and_heals() {
+        let directory = TemporaryDirectory(std::env::temp_dir().join(format!(
+            "oneterm-ui-config-agent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        )));
+        std::fs::create_dir_all(&*directory).unwrap();
+        let path = directory.join("ui_config.json");
+        UiConfig {
+            theme_name: Some("Kept".into()),
+            ..UiConfig::default()
+        }
+        .save_to(&path)
+        .unwrap();
+        let mut document: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        document["right_dock_mode"] = "agent".into();
+        document["agent_stale_threshold_ms"] = 42.into();
+        std::fs::write(&path, document.to_string()).unwrap();
+
+        let loaded = UiConfig::load_from(&path).unwrap();
+        assert_eq!(loaded.right_dock_mode, RightDockMode::None);
+        assert_eq!(loaded.theme_name.as_deref(), Some("Kept"));
+        assert!(path.exists(), "the document was not quarantined");
+
+        loaded.save_to(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["right_dock_mode"], "none");
+        assert!(written.get("agent_stale_threshold_ms").is_none());
     }
 
     /// `US-0159`: 15 minutes unless the file says otherwise, clamped to 1..=480 (no

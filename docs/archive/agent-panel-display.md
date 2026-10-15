@@ -1,5 +1,9 @@
 # Agent Panel — current display implementation
 
+> **Status: Withdrawn (2026-10-15, `DEC-0022`).** OneTerm no longer implements this. The Agent
+> Panel and OSC 20308 were removed in favour of OSC 7501 program status shown in the tab title
+> (`docs/spec-intakes/IN-0049-osc-7501/`). Kept as a historical record only.
+
 > Companion to [`docs/osc-agent-status.md`](osc-agent-status.md).
 > That document defines the OSC 20308 wire protocol and typed payloads. This
 > document describes what OneTerm currently stores and renders for the Agent

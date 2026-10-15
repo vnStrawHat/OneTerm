@@ -160,10 +160,7 @@ fn persistence_compatible_state(state: &DockAreaState) -> DockAreaState {
     };
     if panel.panel_name != "TabPanel"
         || !matches!(child.info, PanelInfo::Panel(_))
-        || !matches!(
-            child.panel_name.as_str(),
-            panel_names::SSH_CLIENT | panel_names::AGENT
-        )
+        || !matches!(child.panel_name.as_str(), panel_names::SSH_CLIENT)
     {
         return state;
     }

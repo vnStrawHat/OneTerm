@@ -1,6 +1,6 @@
 //! The [`TerminalPanel`] type: [`PanelSpec`], the [`TerminalPanel::open`]
 //! constructor, the session-spawn helpers, the read-only accessors used by the
-//! status bar / Agent Panel, and the dock trait implementations (including the
+//! status bar, and the dock trait implementations (including the
 //! [`Render`] impl with the panel's action handlers).
 //!
 //! Space operations live in [`super::spaces`], the duplicate-session flows in
@@ -166,8 +166,7 @@ pub struct TerminalPanel {
     pub(super) workspace_id: Option<EntityId>,
     /// The pane tree — leaves are terminals or empty placeholders.
     pub(super) tree: SpaceTree,
-    /// Reference to the containing `TabGroup`, used by terminal-tab close policy
-    /// and Agent Panel navigation.
+    /// Reference to the containing `TabGroup`, used by terminal-tab close policy.
     pub(super) tab_panel: Option<WeakEntity<TabGroup>>,
     /// Whether this panel is the currently selected tab in the `TabGroup`.
     pub(super) is_active: bool,
@@ -470,51 +469,22 @@ impl TerminalPanel {
     }
 
     /// The resolved tab label (manual override, live OSC 0/2 title, or static
-    /// fallback), respecting the `tab_title_mode` setting. Used as the Agent
-    /// Panel tab-group title (`docs/agent-panel-display.md` §2.1).
+    /// fallback), respecting the `tab_title_mode` setting.
     ///
     /// Reads the active terminal's session title via `v.read(cx)`. Do **not**
     /// call this from inside a `TerminalView::update` closure on the active
     /// terminal — it would re-enter the view's lease and panic
-    /// (`entity_map::read` double-lease). Use [`Self::tab_label_with_title`]
-    /// instead, passing the title fetched from the already-leased view's own
-    /// `session.read(cx).title()`.
+    /// (`entity_map::read` double-lease).
     pub(crate) fn tab_label(&self, cx: &App) -> String {
         let session_title = self
             .tree
             .active_terminal()
             .and_then(|v| v.read(cx).session.read(cx).title());
-        self.tab_label_with_title(session_title.as_deref(), cx)
-    }
-
-    /// Same as [`Self::tab_label`] but takes the live session title as a
-    /// parameter instead of reading the active terminal view. Use this from
-    /// contexts where the active `TerminalView` is already being updated
-    /// (e.g. `push_agent_status` inside the view's `update` closure) — reading
-    /// it again would re-enter the view's lease and panic.
-    ///
-    /// `live_title` is the OSC 0/2 title of the terminal the event came from
-    /// (the caller already has the view and can read its own session). It is
-    /// only used when `tab_title_mode == Osc` and no manual override exists; in
-    /// `Default` mode the static `tab_title` fallback is returned.
-    pub(crate) fn tab_label_with_title(&self, live_title: Option<&str>, cx: &App) -> String {
         let live = match self.deps.settings.read(cx).tab_title_mode {
-            TabTitleMode::Osc => live_title,
+            TabTitleMode::Osc => session_title.as_deref(),
             TabTitleMode::Default => None,
         };
         self.effective_tab_label(live)
-    }
-
-    /// The Agent Panel ordering key for `space_id`: its 0-based depth-first
-    /// (left-to-right) position in the current tree. User-facing labels use the
-    /// stable `SpaceId` instead.
-    pub(crate) fn space_order(&self, space_id: SpaceId) -> usize {
-        self.tree.leaf_index(space_id).unwrap_or(0)
-    }
-
-    /// A weak handle to the containing `TabGroup` (for Agent Panel click-to-focus).
-    pub(crate) fn tab_panel_weak(&self) -> Option<WeakEntity<TabGroup>> {
-        self.tab_panel.clone()
     }
 
     /// Whether this tab has no terminal Spaces left (all empty).

@@ -46,7 +46,7 @@ const MIN_RIGHT_DOCK_WIDTH: gpui::Pixels = gpui::px(240.);
 ///
 /// M1 (`DEC-0019`, `IN-0043` MAJ-2): an elevated window **does not read
 /// `docks.json` at all**. `load_layout` restores the side docks *by name*, so a
-/// saved `ssh_client` or `agent` dock would be built before any gate on the
+/// saved `ssh_client` dock would be built before any gate on the
 /// layout builders could decline to build one — and declining to call
 /// `set_dock` does not remove a dock that already exists. Gating the builders
 /// was necessary and not sufficient: the restore is the path every user who has
@@ -203,7 +203,7 @@ impl OneTermWorkspace {
         //
         // M1 (`DEC-0019`, `IN-0043` MAJ-2): an elevated window does not read it
         // at all. `load_layout` restores the **side docks by name**, so a saved
-        // `ssh_client` or `agent` dock would be built here — before any gate on
+        // `ssh_client` dock would be built here — before any gate on
         // the layout builders can decline to build one — and then left in place,
         // because declining to call `set_dock(Right, ..)` does not remove a dock
         // that is already there. Gating the builders was necessary and not
@@ -238,10 +238,10 @@ impl OneTermWorkspace {
         }
 
         // Apply the persisted right-dock mode. Both layout builders above set the
-        // right dock to the SSH Client `ssh_client_panel`; if the user last chose
-        // Agent Mode or None, apply that now (Agent swaps the panel, None hides
-        // the dock). Preserves the dock width; for Agent it keeps the open state
-        // just loaded, for None it collapses the dock. An elevated window has no
+        // right dock to the SSH Client `ssh_client_panel`, which also replaces a
+        // right dock saved as the withdrawn `agent_panel` (`DEC-0022`); if the
+        // user last chose None (or the withdrawn Agent mode, which reads as
+        // None), collapse the dock now. Preserves the dock width. An elevated window has no
         // right dock to apply a mode to, and `switch_right_dock_mode` refuses
         // there anyway (M1).
         let saved_mode = oneterm_settings::UiConfig::global(cx)
@@ -350,15 +350,12 @@ impl OneTermWorkspace {
             if !area.has_dock(gpui_component::dock::DockPlacement::Right) {
                 return;
             }
-            let open = area.is_dock_open(gpui_component::dock::DockPlacement::Right);
-            let shows_agent =
-                right_dock_panel_mode(area, cx) == Some(oneterm_actions::RightDockMode::Agent);
-            (open, shows_agent)
+            area.is_dock_open(gpui_component::dock::DockPlacement::Right)
         };
         let current = oneterm_settings::UiConfig::global(cx)
             .read(cx)
             .right_dock_mode;
-        let next = right_dock_mode_for(state.0, current, state.1);
+        let next = right_dock_mode_for(state, current);
         if next == current {
             return;
         }
@@ -510,8 +507,8 @@ impl OneTermWorkspace {
 /// The mode the right dock's panel currently **is**, whatever `UiConfig` says.
 ///
 /// Scoped to the right dock on purpose: a whole-tree search answers for the
-/// centre first, and would name Agent mode for an Agent panel that had been
-/// dragged out of the dock.
+/// centre first, and would name SSH Client mode for an SSH Client panel that
+/// had been dragged out of the dock.
 pub(crate) fn right_dock_panel_mode(
     dock_area: &DockArea,
     cx: &App,
@@ -523,7 +520,6 @@ pub(crate) fn right_dock_panel_mode(
     let panel = tree.panels().next().and_then(|id| dock_area.panel(id))?;
     match panel.panel_name(cx) {
         panel_names::SSH_CLIENT => Some(RightDockMode::SshClient),
-        panel_names::AGENT => Some(RightDockMode::Agent),
         _ => None,
     }
 }
@@ -537,12 +533,10 @@ pub(crate) fn right_dock_panel_mode(
 pub(crate) fn right_dock_mode_for(
     open: bool,
     current: oneterm_actions::RightDockMode,
-    shows_agent: bool,
 ) -> oneterm_actions::RightDockMode {
     use oneterm_actions::RightDockMode;
     match (open, current) {
         (false, _) => RightDockMode::None,
-        (true, RightDockMode::None) if shows_agent => RightDockMode::Agent,
         (true, RightDockMode::None) => RightDockMode::SshClient,
         (true, mode) => mode,
     }

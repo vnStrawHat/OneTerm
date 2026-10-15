@@ -104,12 +104,9 @@ struct OneTermTabGroupSkin {
 impl OneTermTabGroupSkin {
     fn owns_header(group: &TabGroupContext, cx: &App) -> bool {
         group.panels().len() == 1
-            && group.active_panel().is_some_and(|panel| {
-                matches!(
-                    panel.panel_name(cx),
-                    panel_names::SSH_CLIENT | panel_names::AGENT
-                )
-            })
+            && group
+                .active_panel()
+                .is_some_and(|panel| matches!(panel.panel_name(cx), panel_names::SSH_CLIENT))
     }
 }
 

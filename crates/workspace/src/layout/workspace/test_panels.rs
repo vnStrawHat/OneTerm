@@ -62,7 +62,6 @@ pub(crate) fn register_test_panels(cx: &mut App) {
         panel_names::SFTP,
         panel_names::SESSION,
         panel_names::SSH_CLIENT,
-        panel_names::AGENT,
     ] {
         register_panel(cx, name, move |_, _, cx| {
             panel_handle(cx.new(|cx| NamedPanel::new(name, cx)))

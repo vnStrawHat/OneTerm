@@ -37,16 +37,9 @@ impl TerminalPanel {
         resolve_tab_label(live_title, &self.tab_title)
     }
 
-    /// Update the manual tab-title override and mirror the change to the agent
-    /// registry so tab groups refresh immediately.
+    /// Update the manual tab-title override.
     fn set_custom_tab_title(&mut self, title: String, cx: &mut Context<Self>) {
-        self.tab_title_override = Some(title.clone());
-        let tab_key = cx.entity_id();
-        if let Some(registry) = self.deps.agent_registry.clone() {
-            registry.update(cx, |reg, cx| {
-                reg.rename_tab_title(tab_key, title.clone(), cx)
-            });
-        }
+        self.tab_title_override = Some(title);
         cx.notify();
     }
 

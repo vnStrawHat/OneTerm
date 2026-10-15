@@ -178,9 +178,6 @@ ESC ] 8 ; ; ST               ← close link
 |:-----:|-----|----------|--------|---------|
 | ☑ | **9** | Desktop notification | `ESC]9;msg ST` | ✅ → toast. |
 | ☑ | **9;4** | Progress bar | `ESC]9;4;state;pct ST` | ✅ — state 0–4. |
-| ☑ | **20308;1** | Agent status | see [`osc-agent-status.md`](osc-agent-status.md) | ✅ — OneTerm proposal. |
-| ☑ | **20308;0** | Agent-protocol support query | `ESC]20308;0 ST` → `ESC]20308;0;1;OneTerm;<ver> ST` | ✅ |
-| ☑ | **9;7** | Agent status — **deprecated alias** | see [`osc-agent-status.md`](osc-agent-status.md) § 3.1 | ⚠️ — accepted for one release, then dropped. |
 | ☐ | **9;1/2/3** | ConEmu misc (sleep/msgbox/tabtitle) | `ESC]9;1;ms ST` etc. | ❌ |
 | ☐ | **99** | Extended notification protocol | `ESC]99;i=ID;payload ST` | ❌ |
 | ☐ | **777** | urxvt notification | `ESC]777;notify;title;body ST` | ❌ |
@@ -190,21 +187,9 @@ ESC ] 8 ; ; ST               ← close link
 > ten-per-second rate limit — and emits `SessionEvent::Notification` (toast via
 > `window.push_notification`) or `SessionEvent::Progress` (a thin bar at the top edge, states 0–4).
 >
-> **OSC 20308** is the agent channel — see [`osc-agent-status.md`](osc-agent-status.md) — and is
-> OneTerm's own proposal rather than a terminal standard, so its route is **`Forward`**: the engine
-> never parses it and contains no mention of the number. Sub-code `1` is the status event and `0`
-> the support query, answered on the transport; `2` and above are reserved, and an unrecognised
-> sub-code is ignored and counted. `OscRoutes::large(20308, true)` raises its payload ceiling to the
-> 8 KiB §3.4 publishes.
->
-> ⚠️ **OSC 9;7** carried the agent channel until `US-0088` and is kept as a deprecated alias for
-> **one release** — parsed identically, counted, and logged once per session. Routing is per number
-> and sub-codes are payload, so OSC 9 carries the route **`BuiltinAndForward`**: the engine keeps
-> parsing notifications and `9;4` progress *and* hands over the raw sequence, and OneTerm discards
-> the notification whose first forwarded parameter is `7` and parses the alias itself. The engine
-> has never heard of the sub-code. `9;7` is ConEmu's "run some process with arguments" (§ 2.1),
-> which is why it is going away: an agent emitting it under ConEmu or cmder asks that terminal to
-> spawn a process. Agents should emit `20308;1` only.
+> **OSC 20308** (OneTerm's own agent channel) and its `9;7` alias were withdrawn by `DEC-0022`
+> (spec archived at [`archive/osc-agent-status.md`](archive/osc-agent-status.md)). 20308 is the
+> engine's default `Drop` again, and `9;7;...` is an ordinary OSC 9 notification.
 >
 > Still ❌: 9;1/2/3, 99, 777.
 
@@ -329,9 +314,8 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 8. **Do not nest OSC**: close one OSC before opening another.
 9. **OneTerm** (VT engine = `oneterm-vt`): the engine implements **OSC 0, 1, 2, 4, 7, 8, 9 (and
    `9;4`), 10/11/12, 22, 50, 52, 104, 110/111/112 and 133** — the set `OscRoutes::BUILTIN`
-   publishes — each parsed once and reported as a typed `VtEvent`. OneTerm adds **OSC 20308** (the
-   agent channel) and its deprecated `9;7` alias through `Config::osc_routes`, with no engine
-   change.
+   publishes — each parsed once and reported as a typed `VtEvent`. OneTerm routes nothing else
+   out of the engine through `Config::osc_routes`.
    - There is no second parser anywhere. Events arrive in the `feed` batch in byte order, and that
      batch is a `Vec` — the ordering promise is a property of the batch, not of a queue.
    - OSC 8 is stored on the cell; OSC 52 is decoded by the engine and the **policy** — clipboard,

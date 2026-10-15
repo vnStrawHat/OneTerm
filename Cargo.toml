@@ -12,7 +12,6 @@ members = [
     "crates/sftp-ui",
     "crates/session-ui",
     "crates/settings-ui",
-    "crates/agent-ui",
     "crates/highlight",
     "crates/update",
     "crates/local-shell",
@@ -57,7 +56,6 @@ oneterm-terminal-view = { path = "crates/terminal-view" }
 oneterm-sftp-ui = { path = "crates/sftp-ui" }
 oneterm-session-ui = { path = "crates/session-ui" }
 oneterm-settings-ui = { path = "crates/settings-ui" }
-oneterm-agent-ui = { path = "crates/agent-ui" }
 oneterm-highlight = { path = "crates/highlight" }
 oneterm-local-shell = { path = "crates/local-shell" }
 oneterm-update = { path = "crates/update" }

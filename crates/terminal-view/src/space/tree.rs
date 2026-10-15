@@ -174,13 +174,6 @@ impl SpaceTree {
         self.root.first_leaf_id()
     }
 
-    /// The 0-based depth-first index of leaf `id` (for the Agent Panel `#N`
-    /// Space label). `None` if `id` is not a leaf.
-    pub(crate) fn leaf_index(&self, id: SpaceId) -> Option<usize> {
-        let mut index = 0;
-        self.root.leaf_index(id, &mut index)
-    }
-
     /// The active leaf id.
     pub(crate) fn active(&self) -> SpaceId {
         self.active
@@ -365,23 +358,6 @@ impl SpaceNode {
                     child.collect_leaves(visit);
                 }
             }
-        }
-    }
-
-    /// The 0-based depth-first index of leaf `id`, counting leaves into
-    /// `index`. Used for the Agent Panel's stable `#N` Space ordering
-    /// (`docs/agent-panel-display.md` §5.1 / §14.1).
-    fn leaf_index(&self, id: SpaceId, index: &mut usize) -> Option<usize> {
-        match self {
-            SpaceNode::Leaf(leaf) if leaf.id == id => Some(*index),
-            SpaceNode::Leaf(_) => {
-                *index += 1;
-                None
-            }
-            SpaceNode::Split(split) => split
-                .children
-                .iter()
-                .find_map(|child| child.leaf_index(id, index)),
         }
     }
 }

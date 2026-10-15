@@ -4,9 +4,8 @@
 //! Design: `docs/spec-intakes/IN-0022-broadcast-input-channels/` (HLD +
 //! `low-level-design/registry-and-fan-out.md`). A member is one Space — one
 //! `TerminalView` and its session, keyed by the view's `EntityId` (DEC-0009).
-//! The registry lives here, below the feature crates, for the same reason
-//! [`crate::AgentRegistry`] does: `oneterm-state` already depends on
-//! `oneterm-terminal`, so it can hold the session entity directly and no
+//! The registry lives here, below the feature crates, because
+//! `oneterm-state` already depends on `oneterm-terminal`, so it can hold the session entity directly and no
 //! feature crate has to learn about another.
 //!
 //! Membership is in-memory only; nothing about channels reaches `docks.json`.

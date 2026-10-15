@@ -5185,18 +5185,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oneterm-agent-ui"
-version = "0.6.9"
-dependencies = [
- "gpui-base",
- "gpui-component",
- "gpui-pre",
- "oneterm-settings",
- "oneterm-state",
- "oneterm-terminal",
-]
-
-[[package]]
 name = "oneterm-app"
 version = "0.6.9"
 dependencies = [
@@ -5213,7 +5201,6 @@ dependencies = [
  "gpui-pre-platform",
  "hotpath",
  "log",
- "oneterm-agent-ui",
  "oneterm-core",
  "oneterm-local-shell",
  "oneterm-session-ui",
@@ -5398,8 +5385,6 @@ dependencies = [
  "oneterm-core",
  "oneterm-vt",
  "parking_lot",
- "serde",
- "serde_json",
 ]
 
 [[package]]

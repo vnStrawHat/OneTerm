@@ -4,7 +4,9 @@
 //! under a string name (R12: in the owning feature's `init()`), and the
 //! feature-agnostic shell builds panels *by name* (R4). Saved layouts also
 //! deserialize by name, so **these string values are a persisted contract —
-//! never change them**; only add new constants.
+//! never change them**; only add new constants. Retired names are listed
+//! below so they are never reused: `agent_panel` (the Agent Panel, withdrawn by
+//! `DEC-0022`; an old `docks.json` may still name it).
 //!
 //! Sits in `state` because it is the lowest crate shared by the shell, every
 //! feature crate, and `app` (R10). `core` stays a pure domain crate and knows
@@ -21,8 +23,6 @@ pub const SFTP: &str = "sftp";
 pub const SESSION: &str = "session";
 /// Right-dock SSH Client Mode panel: Session + SFTP split (`app`).
 pub const SSH_CLIENT: &str = "ssh_client_panel";
-/// Right-dock Agent Mode panel (`app`).
-pub const AGENT: &str = "agent_panel";
 
 /// The registered panel name the right dock shows for `mode`.
 ///
@@ -31,7 +31,6 @@ pub const AGENT: &str = "agent_panel";
 pub fn right_dock_panel_name(mode: RightDockMode) -> Option<&'static str> {
     match mode {
         RightDockMode::SshClient => Some(SSH_CLIENT),
-        RightDockMode::Agent => Some(AGENT),
         RightDockMode::None => None,
     }
 }
@@ -46,7 +45,6 @@ mod tests {
             right_dock_panel_name(RightDockMode::SshClient),
             Some(SSH_CLIENT)
         );
-        assert_eq!(right_dock_panel_name(RightDockMode::Agent), Some(AGENT));
         assert_eq!(right_dock_panel_name(RightDockMode::None), None);
     }
 }

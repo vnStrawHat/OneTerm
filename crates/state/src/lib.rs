@@ -4,22 +4,18 @@
 //! keeps the dependency graph acyclic. It owns:
 //!
 //! - **runtime state** shared across features: [`AppState`] (active SFTP
-//!   backend / cwd source per workspace), [`AgentRegistry`] (the folded agent-status
-//!   agent model behind the Agent Panel), [`CompletionHistory`],
+//!   backend / cwd source per workspace), [`CompletionHistory`],
 //!   [`InputChannelRegistry`] (broadcast input channel membership + fan-out),
 //!   [`VaultState`] (the master-password vault's phase, `IN-0050`) and its
 //!   dialogs ([`vault_dialogs`]);
 //! - **injection**: [`AppServices`] — the single composition-root bundle through
 //!   which features receive the session factory and contribute the workspace
-//!   commands / active-terminal metrics / agent focuser the shell and other
+//!   commands / active-terminal metrics the shell and other
 //!   features call without depending on them;
 //! - **shared shell contracts**: `docks.json` document ownership
 //!   ([`dock_persistence`]), panel names and dock traversal helpers.
 
 pub mod active_terminal;
-pub mod agent_focus;
-mod agent_model;
-pub mod agent_registry;
 pub mod app_state;
 pub mod commands;
 pub mod completion_history;
@@ -33,10 +29,6 @@ pub mod services;
 pub mod vault_dialogs;
 pub mod vault_state;
 
-pub use agent_registry::{
-    AgentCard, AgentNav, AgentRegistry, AgentStateCounts, ApprovalInfo, FileEntry, Grouping,
-    Lifecycle, ModelInfo, ToolRun,
-};
 pub use app_state::AppState;
 pub use completion_history::{CompletionHistory, GlobalCompletionHistory};
 pub use input_channel_registry::{BroadcastInput, InputChannelRegistry};
@@ -48,10 +40,10 @@ pub use vault_state::{VaultEvent, VaultPhase, VaultState};
 /// `interval` since the Unix epoch.
 ///
 /// Every timer that repaints an idle window (the cursor blink, the status-bar
-/// indicators, the Agent panel's relative times) sleeps with this, so timers
+/// indicators) sleeps with this, so timers
 /// whose intervals divide each other wake together and gpui draws one frame for
-/// all of them instead of one each (`US-0145`). Animations (the Agent panel's
-/// spinner) keep their own cadence. A plain `timer(interval)` loop starts
+/// all of them instead of one each (`US-0145`). Animations keep their own
+/// cadence. A plain `timer(interval)` loop starts
 /// wherever its entity was created and drifts by its own work every lap, so the
 /// blink and the clock used to land in different frames.
 ///

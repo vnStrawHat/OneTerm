@@ -5,10 +5,9 @@
 //! - [`render`] — `Render`/`Focusable`: inputs refresh, wrapper div, overlays
 //! - [`input`] — the wrapper's key / mouse / wheel listeners
 //! - [`ime`] — `EntityInputHandler`
-//! - [`search`], [`scrollbar`], [`gutter_timestamps`], [`completion`],
-//!   [`agent_status`] — the sub-states the view owns
+//! - [`search`], [`scrollbar`], [`gutter_timestamps`], [`completion`] — the
+//!   sub-states the view owns
 
-mod agent_status;
 mod completion;
 mod gutter_timestamps;
 mod ime;

@@ -12,7 +12,6 @@
     "crates/sftp-ui",
     "crates/session-ui",
     "crates/settings-ui",
-    "crates/agent-ui",
     "crates/highlight",
     "crates/update",
     "crates/local-shell",
@@ -26,13 +25,7 @@
     "oneterm-actions": [
       "oneterm-core"
     ],
-    "oneterm-agent-ui": [
-      "oneterm-settings",
-      "oneterm-state",
-      "oneterm-terminal"
-    ],
     "oneterm-app": [
-      "oneterm-agent-ui",
       "oneterm-core",
       "oneterm-local-shell",
       "oneterm-session-ui",
@@ -144,8 +137,7 @@
     "oneterm-terminal-view",
     "oneterm-sftp-ui",
     "oneterm-session-ui",
-    "oneterm-settings-ui",
-    "oneterm-agent-ui"
+    "oneterm-settings-ui"
   ],
   "allowed_feature_dependencies": {
     "oneterm-session-ui": [

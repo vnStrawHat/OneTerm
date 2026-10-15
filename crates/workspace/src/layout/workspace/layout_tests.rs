@@ -123,7 +123,7 @@ fn right_dock(dock_area: &Entity<DockArea>, cx: &mut VisualTestContext) -> (f32,
 }
 
 /// TEST-20: switching the right-dock mode swaps the panel, keeps the dock
-/// width, forces the dock open for SSH Client / Agent, and only hides it for None.
+/// width, forces the dock open for SSH Client, and only hides it for None.
 #[gpui::test]
 fn every_persisted_panel_name_resolves_with_its_presentation_handle(cx: &mut TestAppContext) {
     let (dock_area, cx) = dock_area(cx);
@@ -132,7 +132,6 @@ fn every_persisted_panel_name_resolves_with_its_presentation_handle(cx: &mut Tes
         panel_names::SFTP,
         panel_names::SESSION,
         panel_names::SSH_CLIENT,
-        panel_names::AGENT,
     ] {
         let panel = cx.update(|window, cx| {
             super::build_named_panel(name, &dock_area.downgrade(), window, cx)
@@ -157,11 +156,11 @@ fn switch_right_dock_mode_swaps_panel_and_keeps_width(cx: &mut TestAppContext) {
     );
 
     cx.update(|window, cx| {
-        OneTermWorkspace::switch_right_dock_mode(&dock_area, RightDockMode::Agent, window, cx)
+        OneTermWorkspace::switch_right_dock_mode(&dock_area, RightDockMode::SshClient, window, cx)
     });
     assert_eq!(
         right_dock(&dock_area, cx),
-        (333., true, panel_names::AGENT.to_string())
+        (333., true, panel_names::SSH_CLIENT.to_string())
     );
 
     cx.update(|window, cx| {
@@ -170,7 +169,7 @@ fn switch_right_dock_mode_swaps_panel_and_keeps_width(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(
         right_dock(&dock_area, cx),
-        (333., false, panel_names::AGENT.to_string())
+        (333., false, panel_names::SSH_CLIENT.to_string())
     );
 
     cx.update(|window, cx| {
@@ -212,26 +211,18 @@ fn the_right_dock_width_is_clamped_to_a_share_of_the_window() {
 fn right_dock_mode_follows_the_dock_state() {
     // Collapsed by a dock button: whatever was persisted, the truth is None.
     assert_eq!(
-        right_dock_mode_for(false, RightDockMode::SshClient, false),
-        RightDockMode::None
-    );
-    assert_eq!(
-        right_dock_mode_for(false, RightDockMode::Agent, true),
+        right_dock_mode_for(false, RightDockMode::SshClient),
         RightDockMode::None
     );
     // Reopened by the same button: the mode names the panel that came back.
     assert_eq!(
-        right_dock_mode_for(true, RightDockMode::None, false),
+        right_dock_mode_for(true, RightDockMode::None),
         RightDockMode::SshClient
-    );
-    assert_eq!(
-        right_dock_mode_for(true, RightDockMode::None, true),
-        RightDockMode::Agent
     );
     // An open dock showing the mode it says it shows is left alone.
     assert_eq!(
-        right_dock_mode_for(true, RightDockMode::Agent, true),
-        RightDockMode::Agent
+        right_dock_mode_for(true, RightDockMode::SshClient),
+        RightDockMode::SshClient
     );
 }
 
@@ -245,15 +236,7 @@ fn a_mode_click_only_rebuilds_a_panel_the_dock_does_not_have() {
         reopen_or_rebuild(Some(RightDockMode::SshClient), RightDockMode::SshClient),
         DockModeAction::Show
     );
-    assert_eq!(
-        reopen_or_rebuild(Some(RightDockMode::Agent), RightDockMode::Agent),
-        DockModeAction::Show
-    );
-    // A different mode is the only thing that builds a panel.
-    assert_eq!(
-        reopen_or_rebuild(Some(RightDockMode::SshClient), RightDockMode::Agent),
-        DockModeAction::Rebuild
-    );
+    // A dock without the panel is the only thing that builds one.
     assert_eq!(
         reopen_or_rebuild(None, RightDockMode::SshClient),
         DockModeAction::Rebuild
@@ -300,13 +283,6 @@ fn reopening_a_collapsed_right_dock_keeps_its_panel_instance(cx: &mut TestAppCon
         panel_before,
         "reopening must not rebuild the panel"
     );
-
-    // Switching to another mode is what builds a new panel.
-    let action = cx.update(|window, cx| {
-        OneTermWorkspace::apply_right_dock_mode(&dock_area, RightDockMode::Agent, window, cx)
-    });
-    assert_eq!(action, DockModeAction::Rebuild);
-    assert_ne!(right_dock_panel_id(&dock_area, cx), panel_before);
 }
 
 /// US-0113: a drag inside the allowed range is left alone and remembered; one
@@ -621,7 +597,7 @@ fn load_layout_drops_a_split_centre_and_still_restores_zoom_after_the_reset(
                 Some(px(400.)),
             );
         dock_area.set_center(centre, window, cx);
-        let right = DockLayout::tabs().panel_view(NamedPanel::view(panel_names::AGENT, cx), cx);
+        let right = DockLayout::tabs().panel_view(NamedPanel::view(panel_names::SESSION, cx), cx);
         dock_area.set_dock(DockPlacement::Right, right, window, cx);
         dock_area.set_dock_size(DockPlacement::Right, px(464.), window, cx);
         dock_area.dump(cx)
@@ -665,7 +641,7 @@ fn load_layout_drops_a_split_centre_and_still_restores_zoom_after_the_reset(
     // The right dock is untouched by the centre drop.
     assert_eq!(
         right_dock(&target, cx),
-        (464., true, panel_names::AGENT.to_string())
+        (464., true, panel_names::SESSION.to_string())
     );
 
     // Nothing to zoom into yet, and asking must not panic.
@@ -683,6 +659,50 @@ fn load_layout_drops_a_split_centre_and_still_restores_zoom_after_the_reset(
         zoomed_after,
         "the saved zoom name must resolve against the reset centre"
     );
+}
+
+/// `DEC-0022`: a `docks.json` saved while the Agent Panel existed names
+/// `agent_panel` in the right dock. Nothing registers that name any more, so the
+/// load builds the kit's placeholder; the start-up centre reset installs the
+/// SSH Client panel over it, and the next save no longer names `agent_panel`.
+#[gpui::test]
+fn a_saved_agent_panel_right_dock_is_replaced_by_the_ssh_client_panel(cx: &mut TestAppContext) {
+    let dir = temp_dir("agent-panel");
+    let path = dir.0.join("docks.json");
+
+    let (source, cx) = dock_area(cx);
+    let saved: DockAreaState = source.update_in(cx, |dock_area, window, cx| {
+        dock_area.set_center(
+            DockLayout::tabs().panel_view(NamedPanel::view(panel_names::TERMINAL, cx), cx),
+            window,
+            cx,
+        );
+        let right = DockLayout::tabs().panel_view(NamedPanel::view("agent_panel", cx), cx);
+        dock_area.set_dock(DockPlacement::Right, right, window, cx);
+        dock_area.dump(cx)
+    });
+    persistence::save_state_to(&path, &saved, Some("agent_panel"), "test-agent-panel").unwrap();
+    let document = read_dock_document_from(&path)
+        .unwrap()
+        .expect("document exists");
+
+    let (target, cx) = cx.add_window_view(|window, cx| {
+        DockArea::new("layout-test-agent", Some(MAIN_DOCK_VERSION), window, cx)
+    });
+    cx.update(|window, cx| persistence::load_layout(&target, &document, window, cx).unwrap());
+    cx.update(|window, cx| layout::apply_center_reset(target.downgrade(), window, cx))
+        .expect("dock area alive");
+
+    assert_eq!(right_dock(&target, cx).2, panel_names::SSH_CLIENT);
+    let after = target.read_with(cx, |dock_area, cx| dock_area.dump(cx));
+    assert!(
+        !serde_json::to_string(&after)
+            .unwrap()
+            .contains("agent_panel"),
+        "the next save must not carry the withdrawn panel"
+    );
+    // The saved zoom names a panel that no longer exists: nothing to zoom.
+    assert!(!cx.update(|window, cx| restore_zoom_in_dock(&target, "agent_panel", window, cx)));
 }
 
 // ── The elevated window's layout (`IN-0043` M1) ──────────────────────────

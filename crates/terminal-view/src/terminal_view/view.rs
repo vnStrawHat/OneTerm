@@ -3,7 +3,7 @@
 //!
 //! Per-frame work lives in [`super::render`], the wrapper's listeners in
 //! [`super::input`]; the sibling modules hold the cohesive sub-states the view
-//! owns (search, scrollbar, gutter timestamps, completion, agent status).
+//! owns (search, scrollbar, gutter timestamps, completion).
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -19,7 +19,7 @@ use gpui_component::ActiveTheme as _;
 use oneterm_core::{InputChannel, SessionDuplicateConfig};
 use oneterm_settings::{TerminalBlink, TerminalSettings};
 use oneterm_state::{
-    AgentRegistry, BroadcastInput, CompletionHistory, GlobalCompletionHistory, InputChannelRegistry,
+    BroadcastInput, CompletionHistory, GlobalCompletionHistory, InputChannelRegistry,
 };
 use oneterm_terminal::security_policy::MAX_QUEUED_NOTIFICATIONS;
 use oneterm_terminal::{
@@ -52,9 +52,6 @@ pub(super) const OUTPUT_CATCH_UP: Duration = Duration::from_millis(16);
 pub(crate) struct TerminalDeps {
     /// Live terminal settings (font, colours, scrollback, security…).
     pub(crate) settings: Entity<TerminalSettings>,
-    /// The Agent Panel model this terminal feeds; `None` when the agent
-    /// feature is not initialised (tests, tools).
-    pub(crate) agent_registry: Option<Entity<AgentRegistry>>,
     /// The cross-tab completion history; `None` when completion is not
     /// initialised.
     pub(crate) completion_history: Option<Entity<CompletionHistory>>,
@@ -70,7 +67,6 @@ impl TerminalDeps {
     pub(crate) fn from_globals(cx: &App) -> Self {
         Self {
             settings: TerminalSettings::global(cx),
-            agent_registry: AgentRegistry::try_global(cx),
             completion_history: GlobalCompletionHistory::try_global(cx),
             input_channels: InputChannelRegistry::try_global(cx),
         }
@@ -411,10 +407,8 @@ impl TerminalView {
                 cx.emit(TerminalViewEvent::TitleChanged);
             }
             SessionEvent::Progress(p) => self.set_progress(p),
-            SessionEvent::AgentStatus(ev) => self.push_agent_status(&ev, cx),
-            SessionEvent::Exited(code) => self.mark_agent_ended(code, cx),
+            SessionEvent::Exited(_) => {}
             SessionEvent::Closed => {
-                self.mark_agent_ended(None, cx);
                 let kind = self.session.read(cx).kind();
                 self.handle_session_closed(kind);
             }
@@ -469,12 +463,6 @@ impl TerminalView {
                 log::warn!("terminal close failed: {error}");
             }
         });
-        // A true close removes this terminal's Agent Panel cards + navigation
-        // entry, unlike process exit which only marks them Ended.
-        let key = cx.entity_id();
-        if let Some(registry) = self.deps.agent_registry.clone() {
-            registry.update(cx, |reg, cx| reg.remove_terminal(key, cx));
-        }
         // A closed Space is no longer a broadcast target.
         self.leave_channel(cx);
     }
