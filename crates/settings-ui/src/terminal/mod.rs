@@ -3,14 +3,11 @@
 //! Each terminal settings group lives in its own sibling module so each file owns
 //! one cohesive group and stays easy to review.
 //!
-//! The groups are spread over several pages rather than stacked on one, because
-//! the kit can only scroll a sidebar sub-item into view when the target group has
-//! already been laid out — see `docs/gui-layout.md` §"Sidebar navigation" and
-//! `US-0122`. A page that fits the window is measured in full, so every one of
-//! its sub-items lands exactly; a nine-group page is not, and its later sub-items
-//! do not. Keeping each page short is therefore a navigation requirement, not a
-//! matter of taste. Adding a group to a page that is already full moves the fold
-//! and breaks navigation for everything below it: add a page instead.
+//! Every terminal group is on one **Terminal** page except Completion (`US-0195`).
+//! `US-0122` had spread them over four pages because the kit scrolled a sidebar
+//! sub-item by measured height and under-shot below the fold; the 0.7.3 kit
+//! scrolls by index, so a long page navigates exactly (`docs/gui-layout.md`
+//! §"Sidebar navigation").
 
 mod bell;
 mod completion;
@@ -38,13 +35,6 @@ pub(super) fn shell_group() -> SettingGroup {
     shell::group()
 }
 
-/// The terminal pages, in sidebar order: title, sidebar icon, and the groups
-/// each one carries.
-///
-/// A page with more than one group gets sidebar sub-items; a page with one gets
-/// none and is reached by its own row, which needs no scroll and is always
-/// exact. Both are fine — what is not fine is a page so long that a sub-item
-/// cannot be scrolled to, which is what this table exists to prevent.
 /// A terminal page: title, sidebar icon, the description shown under the page
 /// header, and the groups it carries.
 ///
@@ -63,25 +53,16 @@ const TERMINAL_PAGES: &[TerminalPage] = &[
         "Terminal",
         IconName::SquareTerminal,
         None,
-        &[font::group, cursor::group],
-    ),
-    (
-        "Terminal Display",
-        IconName::LayoutDashboard,
-        None,
-        &[layout::group, scroll::group, bell::group],
-    ),
-    (
-        "Mouse & Clipboard",
-        IconName::Copy,
-        None,
-        &[mouse::group, security::group],
-    ),
-    (
-        "Terminal Logging",
-        IconName::FileText,
-        Some("Write printable terminal output to timestamped log files."),
-        &[logging::group],
+        &[
+            font::group,
+            cursor::group,
+            layout::group,
+            scroll::group,
+            bell::group,
+            mouse::group,
+            security::group,
+            logging::group,
+        ],
     ),
     (
         "Completion",
@@ -130,20 +111,12 @@ mod tests {
     }
 
     #[test]
-    fn no_terminal_page_carries_more_groups_than_have_been_walked() {
-        // Nine groups on one page is what `F14` measured as unnavigable. Three
-        // is the most that has been walked and shown to keep every sub-item
-        // landing at 1016x708 (`US-0122` Evidence), so three is the cap.
-        assert_eq!(TERMINAL_PAGES.len(), 5);
+    fn no_terminal_page_is_empty() {
+        assert_eq!(TERMINAL_PAGES.len(), 2);
         for (title, _, _, groups) in TERMINAL_PAGES {
             assert!(
                 !groups.is_empty(),
                 "{title} carries no groups and would render an empty page"
-            );
-            assert!(
-                groups.len() <= 3,
-                "{title} carries {} groups; add a page rather than a fourth group",
-                groups.len()
             );
         }
     }

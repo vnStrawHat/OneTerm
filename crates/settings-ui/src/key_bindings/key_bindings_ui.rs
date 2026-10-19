@@ -27,32 +27,32 @@ const KEY_CAPTURE_ROLE: Role = Role::TextInput;
 
 // ── Page builder ─────────────────────────────────────────────────────
 
-/// The key-binding groups, packed into pages that fit the Settings window.
+/// The key-binding groups and the page that shows them.
 ///
-/// Thirty-seven rows in six groups do not fit one page, and a page that does not
-/// fit cannot be navigated by its own sidebar: the kit scrolls a sub-item into
-/// view from the heights it has measured, and it measures only what has been laid
-/// out (`docs/gui-layout.md` §"Sidebar navigation", `US-0122`). Splitting by
-/// origin keeps every page short enough that every sub-item lands.
+/// One page since `US-0195`: `US-0122` split it in three because the kit scrolled
+/// a sub-item by *measured* height and under-shot below the fold; the 0.7.3 kit
+/// scrolls by index (`setting/page.rs`), so every sub-item lands on a long page
+/// too (`docs/gui-layout.md` §"Sidebar navigation"). Kept as a table so each
+/// page's `Reset All` stays scoped to the groups it shows.
 ///
 /// `key_binding_pages_cover_every_group_exactly_once` asserts this table against
 /// `BINDABLE_ACTIONS` itself, so a group cannot be added to the registry and
 /// silently left off every page.
-const KEY_BINDING_PAGES: &[(&str, &[&str])] = &[
-    ("Key Bindings", &["App Menu", "Edit Menu"]),
-    (
-        "Key Bindings: Terminal",
-        &["Terminal Context Menu", "Input Channel"],
-    ),
-    (
-        "Key Bindings: Sessions",
-        &["Session Tabs Context Menu", "SFTP Context Menu"],
-    ),
-];
+const KEY_BINDING_PAGES: &[(&str, &[&str])] = &[(
+    "Key Bindings",
+    &[
+        "App Menu",
+        "Edit Menu",
+        "Terminal Context Menu",
+        "Input Channel",
+        "Session Tabs Context Menu",
+        "SFTP Context Menu",
+    ],
+)];
 
-/// Build the Key Bindings settings pages — actions grouped by their origin
+/// Build the Key Bindings settings page — actions grouped by their origin
 /// (App Menu, Edit Menu, Terminal Context Menu, Input Channel, Session Tabs
-/// Context Menu, SFTP Context Menu), spread over [`KEY_BINDING_PAGES`].
+/// Context Menu, SFTP Context Menu), as [`KEY_BINDING_PAGES`] places them.
 pub(crate) fn pages() -> Vec<SettingPage> {
     KEY_BINDING_PAGES
         .iter()
@@ -67,8 +67,7 @@ pub(crate) fn pages() -> Vec<SettingPage> {
                     // (`setting/page.rs:111-119`), so one handler per page is
                     // enough and one is all we want: it is scoped to the groups
                     // *that* page shows. Putting it on the first item of the
-                    // page's first group means each of the three pages has its
-                    // own button, and none of them reaches the other two.
+                    // page's first group gives each page its own button.
                     let reset_scope = (group_ix == 0).then_some(*group_titles);
                     page.group(binding_group(group_title, reset_scope))
                 },
@@ -506,7 +505,7 @@ mod tests {
             reset_by_some_page.extend(reset);
         }
 
-        // The three pages partition the registry: every action is reset by
+        // The pages partition the registry: every action is reset by
         // exactly one page, so no row is unreachable and none is reset twice.
         let mut unique = reset_by_some_page.clone();
         unique.sort_unstable();
@@ -517,24 +516,6 @@ mod tests {
             "an action is reset by two pages"
         );
         assert_eq!(unique.len(), BINDABLE_ACTIONS.len());
-    }
-
-    #[test]
-    fn a_pages_reset_all_does_not_reach_another_pages_bindings() {
-        // The `F-R2` regression, named: Reset All on "Key Bindings" used to
-        // revert Split Right, which is on "Key Bindings: Terminal", and the
-        // SFTP rows, which are on "Key Bindings: Sessions".
-        let first_page = actions_reset_by(KEY_BINDING_PAGES[0].1);
-        assert!(first_page.contains(&"new_ssh_session"));
-        assert!(first_page.contains(&"terminal_copy"));
-        assert!(!first_page.contains(&"split_right"));
-        assert!(!first_page.contains(&"join_input_channel_a"));
-        assert!(!first_page.contains(&"sftp_open"));
-
-        // ...and the page that does show Split Right is the one that resets it.
-        let terminal_page = actions_reset_by(KEY_BINDING_PAGES[1].1);
-        assert!(terminal_page.contains(&"split_right"));
-        assert!(!terminal_page.contains(&"new_ssh_session"));
     }
 
     #[test]

@@ -2,18 +2,12 @@
 //!
 //! Wraps the gpui-component [`Settings`] widget (a sidebar + page layout).
 //!
-//! Pages are short by design, not by taste. The kit scrolls a sidebar sub-item
-//! into view from the group heights it has measured, and it measures only what
-//! has been laid out, so a group below the fold of a freshly opened page cannot
-//! be scrolled to (`docs/gui-layout.md` §"Sidebar navigation", `US-0122`).
-//! Page *selection*, by contrast, is exact: it swaps an index and scrolls
-//! nothing. Splitting the two long pages into pages that each fit the window is
-//! therefore what makes the sidebar work, and it keeps everything the kit gives
-//! a page — sub-items, per-item search, and a page-level Reset All.
+//! A page may be longer than the window: the 0.7.3 kit scrolls a sidebar
+//! sub-item into view by index, so it lands below the fold too
+//! (`docs/gui-layout.md` §"Sidebar navigation", `US-0195`).
 //!
-//! The pages, in sidebar order: General; Key Bindings, Key Bindings: Terminal,
-//! Key Bindings: Sessions; Terminal, Terminal Display, Mouse & Clipboard,
-//! Terminal Logging, Completion; SSH; Security; Network; About. Each owning module builds
+//! The pages, in sidebar order: General; Key Bindings; Terminal, Completion;
+//! SSH; Security; Network; About. Each owning module builds
 //! its own and `docs/gui-layout.md` §Settings window is the list's home. The
 //! Terminal pages read/write the global [`TerminalSettings`] and persist changes
 //! to `terminal.json`; General's theme group drives the gpui-component [`Theme`]
