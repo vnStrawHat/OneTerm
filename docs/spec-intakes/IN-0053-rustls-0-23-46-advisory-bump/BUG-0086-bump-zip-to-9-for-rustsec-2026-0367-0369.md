@@ -9,9 +9,9 @@ Created: 2026-10-19
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -31,13 +31,13 @@ Created: 2026-10-19
 ## Scope
 
 - [x] In scope: workspace `zip` requirement, `Cargo.lock`, any API adaptation in `crates/update`, `THIRD-PARTY-NOTICES.md`.
-- [x] Out of scope: changing the extraction rules.
+- [x] Out of scope: loosening the extraction rules.
 
 ## Acceptance
 
-- [ ] `cargo tree -i zip` shows one version, >= 9.0.0.
-- [ ] `cargo deny check licenses bans advisories` passes.
-- [ ] `oneterm-update` archive tests (zip traversal, symlink, budget) pass unchanged; full gate passes.
+- [x] `cargo tree -i zip` shows one version, >= 9.0.0.
+- [x] `cargo deny check licenses bans advisories` passes.
+- [x] `oneterm-update` archive tests (zip traversal, symlink, budget) pass unchanged; full gate passes.
 
 ## Documentation
 
@@ -64,7 +64,7 @@ Add only relevant code, decisions, dependencies, and invariants not already clea
 
 ## Plan
 
-- [ ] Bump the requirement, `cargo update -p zip`, adapt the API if needed, regenerate notices, gate with `--full`.
+- [x] Bump the requirement, `cargo update -p zip`, adapt the API if needed, regenerate notices, gate with `--full`.
 
 ## Decisions
 
@@ -79,12 +79,17 @@ Link consequential decisions; do not repeat their rationale here.
 - [ ] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+- `Cargo.toml` `zip = "9"`; `cargo update -p zip`: zip 2.4.2 -> 9.0.5, adds `typed-path` 0.12.3 and `zlib-rs` 0.6.8 (Zlib licence, allowed by `deny.toml`), drops `derive_arbitrary`. `cargo tree -i zip`: one version, 9.0.5.
+- API: `ZipFile::name()` now returns a `Result`; the two error messages use `name_raw()` (lossy UTF-8).
+- Behaviour change caught by `zip_absolute_entry_is_rejected`: zip 9's `enclosed_name` strips a leading root or drive instead of refusing it, so `/etc/evil.txt` extracted as `etc/evil.txt` inside the staging directory (confined, but no longer refused). `extract_zip` now refuses an entry whose raw name starts with `/`, `\` or a drive letter, keeping the old contract. New test `zip_drive_and_backslash_rooted_entries_are_rejected`; the absolute test also asserts nothing was written. `cargo test -p oneterm-update`: 60 passed.
+- Not exposed to the advisories either way: `extract_zip` never calls `ZipArchive::extract`, refuses symlinks, and sets no Unix permissions.
+- `python scripts/third-party-notices.py` regenerated (863 packages).
+- `CARGO_BUILD_JOBS=6 bash scripts/ci-local.sh --full`: all checks passed, `cargo deny`: advisories ok, bans ok, licenses ok; 141 suites / 5040 passed / 0 failed.
 
 ## Handoff
 

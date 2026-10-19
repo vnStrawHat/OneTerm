@@ -222,10 +222,14 @@ fn extract_zip(
         let mut entry = archive
             .by_index(index)
             .map_err(|error| AppError::msg(format!("invalid zip entry: {error}")))?;
-        let Some(relative) = entry.enclosed_name() else {
+        let raw_name = String::from_utf8_lossy(entry.name_raw()).into_owned();
+        // `enclosed_name` (zip >= 9) strips a leading root or drive instead of
+        // refusing it, so `/etc/x` would land inside the staging directory as
+        // `etc/x`. An update archive never carries one: refuse it, as before.
+        let rooted = raw_name.starts_with(['/', '\\']) || raw_name.get(1..2) == Some(":");
+        let Some(relative) = entry.enclosed_name().filter(|_| !rooted) else {
             return Err(AppError::msg(format!(
-                "unsafe path in zip archive: {}",
-                entry.name()
+                "unsafe path in zip archive: {raw_name}"
             )));
         };
         reject_unsafe_path(&relative)?;
@@ -233,8 +237,7 @@ fn extract_zip(
         // validation or install copy outside the staging directory (SEC-21).
         if entry.is_symlink() {
             return Err(AppError::msg(format!(
-                "update archive contains a symlink, which is not allowed: {}",
-                entry.name()
+                "update archive contains a symlink, which is not allowed: {raw_name}"
             )));
         }
         let output = destination.join(relative);

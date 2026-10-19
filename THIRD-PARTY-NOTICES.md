@@ -795,6 +795,7 @@ package in the Cargo registry / git checkout.
 | `triomphe` | 0.1.15 | MIT OR Apache-2.0 | crates.io |
 | `try-lock` | 0.2.5 | MIT | crates.io |
 | `ttf-parser` | 0.25.1 | MIT OR Apache-2.0 | crates.io |
+| `typed-path` | 0.12.3 | MIT OR Apache-2.0 | crates.io |
 | `typenum` | 1.20.1 | MIT OR Apache-2.0 | crates.io |
 | `uds_windows` | 1.2.1 | MIT | crates.io |
 | `unarray` | 0.1.4 | MIT OR Apache-2.0 | crates.io |
@@ -944,7 +945,8 @@ package in the Cargo registry / git checkout.
 | `zerotrie` | 0.2.4 | Unicode-3.0 | crates.io |
 | `zerovec` | 0.11.6 | Unicode-3.0 | crates.io |
 | `zerovec-derive` | 0.11.3 | Unicode-3.0 | crates.io |
-| `zip` | 2.4.2 | MIT | crates.io |
+| `zip` | 9.0.5 | MIT | crates.io |
+| `zlib-rs` | 0.6.8 | Zlib | crates.io |
 | `zmij` | 1.0.21 | MIT | crates.io |
 | `zopfli` | 0.8.3 | Apache-2.0 | crates.io |
 | `zune-core` | 0.4.12 | MIT OR Apache-2.0 OR Zlib | crates.io |
@@ -956,4 +958,4 @@ package in the Cargo registry / git checkout.
 | `zvariant_derive` | 5.12.0 | MIT | crates.io |
 | `zvariant_utils` | 3.4.0 | MIT | crates.io |
 
-_861 third-party packages._
+_863 third-party packages._

@@ -170,6 +170,20 @@ fn zip_absolute_entry_is_rejected() {
     });
 
     assert_extraction_fails(&archive, &fixture.out, "unsafe path");
+    // zip >= 9 would have rewritten it to `etc/evil.txt`; nothing is written.
+    assert!(!fixture.out.join("etc").exists());
+}
+
+#[test]
+fn zip_drive_and_backslash_rooted_entries_are_rejected() {
+    for name in ["C:/evil.txt", "\\evil.txt"] {
+        let fixture = Fixture::new("zip-rooted");
+        let archive = fixture.zip(|writer| {
+            zip_file(writer, name, b"owned");
+        });
+        assert_extraction_fails(&archive, &fixture.out, "unsafe path");
+        assert!(!fixture.out.join("evil.txt").exists(), "{name}");
+    }
 }
 
 #[test]
