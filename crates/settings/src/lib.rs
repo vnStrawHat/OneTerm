@@ -16,4 +16,4 @@ pub use terminal_config::{
 pub use terminal_settings::{
     ColorOverrides, TerminalBlink, TerminalCursorShape, TerminalPadding, TerminalSettings,
 };
-pub use ui_config::{RightDockPrefs, UiConfig};
+pub use ui_config::{RightDockPrefs, UiConfig, VerticalTabs};

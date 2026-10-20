@@ -26,6 +26,7 @@ pub mod input_channel_registry;
 pub mod panel_names;
 pub mod persist_queue;
 pub mod services;
+pub mod tab_row_layout;
 pub mod vault_dialogs;
 pub mod vault_state;
 
@@ -34,6 +35,7 @@ pub use completion_history::{CompletionHistory, GlobalCompletionHistory};
 pub use input_channel_registry::{BroadcastInput, InputChannelRegistry};
 pub use persist_queue::PersistQueue;
 pub use services::AppServices;
+pub use tab_row_layout::TabRowLayout;
 pub use vault_state::{VaultEvent, VaultPhase, VaultState};
 
 /// How long a repeating UI timer should sleep to wake on the next multiple of

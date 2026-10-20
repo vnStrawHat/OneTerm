@@ -125,8 +125,15 @@ SURFACES: dict[str, tuple[str, ...]] = {
     "sidebar.foreground": ("sidebar.background",),
     # `tab.active.foreground` -- the active tab's label, the strip's primary text (kit
     # `tab/tab.rs:175`, labelled by `crates/terminal-view/src/panel/tab_title.rs:244`).
-    # Falls back to `foreground` (kit `theme/schema.rs:997`).
-    "tab.active.foreground": ("tab.active.background",),
+    # Falls back to `foreground` (kit `theme/schema.rs:997`). Two surfaces:
+    #   tab.active.background  the selected tab or rail row
+    #   tab_bar.background     a *hovered* inactive tab or rail row, which swaps only the
+    #                          text colour over the bar's own fill (kit `tab/tab.rs:172-184`;
+    #                          the vertical rail, `crates/workspace/src/layout/workspace/
+    #                          tab_rail.rs`, draws the same pair). Added by `IN-0055`; it also
+    #                          turns on the `HIERARCHY` comparison against `muted.foreground`
+    #                          on that fill, because `muted.foreground` is listed there too.
+    "tab.active.foreground": ("tab.active.background", "tab_bar.background"),
     # `accent.foreground` -- the label of a hovered or selected menu row, which swaps both
     # fill and text (kit `menu/menu_item.rs:115-120`): every OneTerm popup menu -- the tab
     # strip's `+` menu, the terminal and session context menus, the app menu's dropdowns.
@@ -182,7 +189,9 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #                         `crates/sftp-ui/src/local_pane.rs:236`)
     #   tab_bar.background / tab.active.background  the tab strip's subtitle and channel
     #                         chips, on an inactive and on the active tab
-    #                         (`crates/terminal-view/src/panel/tab_title.rs:110`)
+    #                         (`crates/terminal-view/src/panel/tab_title.rs:110`), the `x`
+    #                         close button, and the vertical rail's reorder grip
+    #                         (`crates/workspace/src/layout/workspace/tab_rail.rs`)
     "muted.foreground": (
         "background",
         "popover.background",

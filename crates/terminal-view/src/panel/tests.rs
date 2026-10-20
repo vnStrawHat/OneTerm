@@ -994,3 +994,175 @@ fn the_catch_up_in_a_hidden_tab_releases_without_notifying(cx: &mut TestAppConte
         "the catch-up notified a hidden tab's view"
     );
 }
+
+/// The menu row that closes the tabs after this one reads for the layout it is in (`IN-0055`).
+#[test]
+fn the_close_following_row_names_the_direction_of_the_layout() {
+    use oneterm_state::TabRowLayout;
+
+    use crate::panel::tab_title::close_following_label;
+
+    assert_eq!(
+        close_following_label(TabRowLayout::Horizontal),
+        "Close to the Right"
+    );
+    assert_eq!(
+        close_following_label(TabRowLayout::Vertical),
+        "Close Tabs Below"
+    );
+}
+
+/// A tab row drawn by hand beside a drop target for `DragTerminalTab`, to see which gestures
+/// on the row start that drag.
+struct TabRowHost {
+    _dock_area: gpui::Entity<DockArea>,
+    panel: gpui::Entity<TerminalPanel>,
+    layout: oneterm_state::TabRowLayout,
+    dropped: Rc<std::cell::Cell<usize>>,
+}
+
+impl gpui::Render for TabRowHost {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+        let panel = self.panel.clone();
+        let row = self.layout.draw(cx, |cx| {
+            panel.update(cx, |panel, cx| {
+                gpui::IntoElement::into_any_element(
+                    <TerminalPanel as gpui_component::dock::Panel>::title(panel, window, cx),
+                )
+            })
+        });
+        let dropped = self.dropped.clone();
+        gpui::div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                gpui::div()
+                    .id("row-slot")
+                    .flex()
+                    .w(gpui::px(220.))
+                    .h(gpui::px(32.))
+                    .child(row),
+            )
+            .child(gpui::div().id("space-drop").flex_1().on_drop(
+                move |_: &crate::space::DragTerminalTab, _, _| dropped.set(dropped.get() + 1),
+            ))
+    }
+}
+
+fn tab_row_window(
+    cx: &mut TestAppContext,
+    layout: oneterm_state::TabRowLayout,
+) -> (Rc<std::cell::Cell<usize>>, &mut VisualTestContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AppState::init);
+    let dropped = Rc::new(std::cell::Cell::new(0));
+    let counted = dropped.clone();
+    let (first_session, _) = FakeTerminalSession::boxed(24, 80, "first");
+    let (second_session, _) = FakeTerminalSession::boxed(24, 80, "second");
+    let (_host, cx) = cx.add_window_view(move |window, cx| {
+        let dock_area = cx.new(|cx| DockArea::new("tab-row-test", None, window, cx));
+        let first =
+            cx.new(|cx| TerminalPanel::from_spec(session_spec(first_session, "First"), window, cx));
+        let second = cx
+            .new(|cx| TerminalPanel::from_spec(session_spec(second_session, "Second"), window, cx));
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.set_center(
+                DockLayout::tabs()
+                    .panel_view(panel_handle(first.clone()), cx)
+                    .panel_view(panel_handle(second), cx),
+                window,
+                cx,
+            );
+        });
+        TabRowHost {
+            _dock_area: dock_area,
+            panel: first,
+            layout,
+            dropped: counted,
+        }
+    });
+    (dropped, cx)
+}
+
+/// In the vertical rail the row fills the width it is given, and the gestures that start a
+/// drag are the same as on the strip: the row's content drags the tab (landing on an empty
+/// Space), the `x` starts nothing (`IN-0055` drag priority).
+#[gpui::test]
+fn the_vertical_row_fills_its_width_and_only_its_content_drags_the_tab(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    use oneterm_state::TabRowLayout;
+
+    let (dropped, cx) = tab_row_window(cx, TabRowLayout::Vertical);
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let row = cx
+        .debug_bounds(crate::panel::tab_title::TAB_ROW_SELECTOR)
+        .expect("the tab row is drawn");
+    assert_eq!(
+        row.size.width,
+        px(220.),
+        "the vertical row fills the rail's width"
+    );
+    let space = point(px(300.), px(200.));
+
+    // The row's content starts the tab drag, and dropping it on a Space lands it.
+    let content = point(row.left() + px(60.), row.center().y);
+    cx.simulate_mouse_down(content, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        content + point(px(0.), px(6.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(space, MouseButton::Left, Modifiers::none());
+    assert!(
+        cx.update(|_, cx| cx.has_active_drag()),
+        "the row's content starts a drag"
+    );
+    cx.simulate_mouse_up(space, MouseButton::Left, Modifiers::none());
+    assert_eq!(dropped.get(), 1, "it is the tab drag a Space accepts");
+
+    // The `x` (right end of the row, inside the 4 px the vertical row keeps clear) starts
+    // no drag.
+    let close = point(row.right() - px(4. + 8.), row.center().y);
+    cx.simulate_mouse_down(close, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        close + point(px(0.), px(6.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(space, MouseButton::Left, Modifiers::none());
+    assert!(
+        !cx.update(|_, cx| cx.has_active_drag()),
+        "the x starts neither drag"
+    );
+    cx.simulate_mouse_up(space, MouseButton::Left, Modifiers::none());
+    assert_eq!(dropped.get(), 1);
+}
+
+/// The strip's row keeps its content-sized shape: the vertical variant is opt-in.
+#[gpui::test]
+fn the_horizontal_row_is_content_sized_as_before(cx: &mut TestAppContext) {
+    use gpui::px;
+    use oneterm_state::TabRowLayout;
+
+    let (_, cx) = tab_row_window(cx, TabRowLayout::Horizontal);
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let row = cx
+        .debug_bounds(crate::panel::tab_title::TAB_ROW_SELECTOR)
+        .expect("the tab row is drawn");
+    assert!(
+        row.size.width >= px(100.) && row.size.width <= px(220.),
+        "the strip tab keeps its 100-220 px band, got {:?}",
+        row.size.width
+    );
+}
