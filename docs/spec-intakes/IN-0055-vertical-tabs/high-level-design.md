@@ -34,9 +34,18 @@ OneTermWorkspace (layout/workspace/mod.rs:562-594)        column: title bar / do
     └── Right: tabs → SshClientPanel (its group draws no tab bar: owns_header, dock_skin.rs:105-110)
 ```
 
-**What the vertical layout replaces:** only `render_tab_bar` of a group that draws a strip today,
-plus the content frame's left offset. The SSH Client group, the docks, the title bar, the status
-bar and the panels are untouched.
+**What the vertical layout replaces:** only `render_tab_bar` of a rail group, plus that group's
+content-frame offset. The SSH Client group, the docks, the title bar, the status bar and the
+panels are untouched.
+
+**Which groups draw a rail.** A group draws the rail only when it is in the **centre** and every
+panel in it is a `terminal` panel. Placement is read the way the kit's own dock toggle reads it
+(the group's node found in `DockArea::layout(DockPlacement::Center)`, `tab_panel.rs:229-241`);
+the panel check is `owns_header`'s `panel_name` test (`dock_skin.rs:105-110`). Every other group
+draws what it draws today: the SSH Client group nothing, and a group with a panel of any other
+kind the kit strip. The right dock is not locked, so a terminal tab can be dropped into it
+(`layout.rs:50-55`; `droppable` is `!locked`, `tab_group.rs:454-460`): that group keeps the kit
+strip inside the dock, as today.
 
 ## Diagram
 
@@ -46,14 +55,14 @@ UiConfig (oneterm-settings, global entity)
         │  read every render                              ▲ one setter per field
         │                                                 │
         ├──────────────► OneTermTabGroupSkin (oneterm-workspace)
-        │                  frame():          + relative()             (vertical, strip group)
+        │                  frame():          + relative()             (vertical, rail group)
         │                  render_tab_bar(): TabRail  (absolute, left, full height, width W)
         │                  content_frame():  + margin-left W
         │                        │
         │                        │ for each visible panel: PanelHandle::of(p).title(window, cx)
         │                        │ header: PanelHandle::of(active).title_suffix(..), zoom control
         │                        │ callbacks: TabGroupContext::{select_tab, toggle_zoom,
-        │                        │            drag_panel, drop_panel, drop_item}
+        │                        │            drag_panel, drop_panel}
         │                        ▼
         └──────────────► TerminalPanel::title() → render_tab_strip (oneterm-terminal-view)
                            vertical variant: fill row width, no top bar, no -5 px margin,
@@ -78,10 +87,22 @@ row, and the component `TabBar` has no vertical mode. The design works inside th
   - `content_frame`: the kit content frame plus `margin-left W`. Base still installs its drop
     handling and the active-panel slot on this element, so a dock drop is measured against the
     region beside the rail, never under it.
-  The SSH Client group (`owns_header`) is excluded before any of this and keeps drawing nothing.
+  A **margin**, not padding: padding would put the rail inside the content frame's bounds and
+  under its drop handling. Base's own test proves a drag is measured against wherever the skin
+  puts the content frame (`the_content_frame_is_what_a_drag_is_measured_against`,
+  `tab_group.rs:1764-1784`); while a drag hovers the rail, the content frame's move listener sees
+  the pointer outside its bounds and clears the indicator (`tab_group.rs:523-526`). The active
+  panel is `cached(absolute().size_full())` inside the content frame (`tab_panel.rs:785-791`),
+  so the terminal is laid out narrower, not overlapped: one resize per visible terminal.
+  Groups that draw no rail (§ Which groups draw a rail) are excluded before any of this.
 - **Option B2 (fallback if the Q8 spike fails):** `render_tab_bar` returns nothing and
-  `render_active_panel` returns a row of rail and panel. Weaker: base's content-frame drop
-  handlers then cover the rail too, and an empty group (`render_empty`) needs the rail drawn a
+  `render_active_panel` returns a row of rail and panel. Weaker, in three ways that B2 would have
+  to answer: (1) the rail sits inside the content frame, so a `DragPanel` released on any rail
+  pixel with no drop handler of its own (the header, the gaps between rows) falls through to the
+  content frame's `on_drop` and **splits the centre** with the placement resolved over the rail
+  (`tab_group.rs:626-669`, `:729-742`); every rail pixel would need its own handler (header =
+  append); (2) the split placeholder is painted over the rail while a tab is dragged, so the
+  indicator must be suppressed there; (3) an empty group (`render_empty`) needs the rail drawn a
   second way.
 - **Rejected:** (A) a sidebar outside the `DockArea`, owned by the workspace: it would have to
   re-implement selection, drop slots and per-group scope that `TabGroupContext` already hands a
@@ -98,11 +119,15 @@ change of active tab scrolls the row into view; a clicked row is not snapped.
 
 | Part | Content | Behaviour |
 | --- | --- | --- |
-| Header (32 px, the strip's height) | `+` = the active panel's `title_suffix` (OneTerm's New Terminal menu, `terminal_panel.rs:721`); zoom button | Zoom is drawn by the kit's rule (`panel.zoomable` and `zoom_control().toolbar_visible()`, `tab_panel.rs:140-146`), calls `group.toggle_zoom`; icon and tooltip as the strip ("Zoom In" / "Zoom Out"). No `...` menu (Q5), no right-dock toggle |
+| Header (32 px, the strip's height) | `+` = the active panel's `title_suffix` (OneTerm's New Terminal menu, `terminal_panel.rs:721`); zoom button | Zoom follows the kit's rule: Zoom Out whenever the group is zoomed, whatever the control says; otherwise Zoom In when `panel.zoomable` and `zoom_control().toolbar_visible()` (`tab_panel.rs:140-146`, `:305-307`); it calls `group.toggle_zoom`. Icons as the strip (maximize / minimize). The kit's tooltip strings are its private locale (`t!`), so the rail carries its own text, "Zoom In" / "Zoom Out", the same words. No `...` menu (Q5), no right-dock toggle |
 | Rows (32 px each) | base `Tab` wrapping `PanelHandle::of(panel).title(window, cx)` | click: `group.select_tab(ix)`; selected: `tab.active.background` + 2 px bar on the left edge in `table_active_border` (the token the strip's top bar uses) |
-| Row leading edge (the row's 8 px left padding) | — | starts `DragPanel` (`group.drag_panel(ix)`, guarded by `is_draggable`), the reorder and dock-move drag, as the kit tab's padding does today |
-| Row as drop target | top border 2 px in `drag_border` while a `DragPanel` hovers | drop: `group.drop_panel(drag, Some(ix), true)`; an `AnyDrag`: `group.drop_item(item, None)` (mirrors `tab_panel.rs:594-625`) |
-| Space below the last row | `drop_target` fill while dragged over | drop: append, or last slot for a panel from this group (mirrors `tab_panel.rs:630-661`) |
+| Row leading edge, the grip (12 px, the strip tab's padding, kit `tab/tab.rs:72-89`; Q9) | a `grip-vertical` glyph in `muted.foreground` and the `OpenHand` cursor while the row is hovered (a new `crates/theme/assets/icons/grip-vertical.svg`, so `AppIcon::GripVertical`; the kit's `IconName` has no grip) | starts `DragPanel` (`group.drag_panel(ix)`, guarded by `is_draggable`), the reorder and dock-move drag, as the kit tab's padding does today. The rest of the row is the title row, whose own drag (`DragTerminalTab`) wins, as on the strip |
+| Row as drop target | top border 2 px in `drag_border` while a `DragPanel` hovers | drop: `group.drop_panel(drag, Some(ix), true)` (mirrors `tab_panel.rs:594-612`) |
+| Space below the last row | `drop_target` fill while dragged over | drop: append, or last slot for a panel from this group (mirrors `tab_panel.rs:630-651`) |
+
+The kit's tab bar also accepts a host-owned `AnyDrag` on tabs and the empty space. The rail does
+not: no OneTerm crate creates an `AnyDrag` or handles `TabGroupEvent::DragDrop`, so such a handler
+could be neither used nor tested here. A future host drag adds it with its first user.
 | Right edge | 1 px `border` | `US-0197`: 4 px resize handle |
 
 ## UI Wireframe
@@ -133,7 +158,7 @@ Vertical (`US-0196`, rail 220 px):
 | [+]          [⛶] |                                       | Session    [+]|
 |------------------|  PS C:\> _                            |  ...          |
 |▌A ● PowerShell  x|                                       |               |
-|  ⟳ web-01       x|                                       |---------------|
+|⠿ ⟳ web-01       x|                                       |---------------|
 |  cmd            x|                                       | SFTP Browser  |
 |                  |                                       |               |
 |  (drop space)    |                                       |               |
@@ -141,6 +166,7 @@ Vertical (`US-0196`, rail 220 px):
 | 12:04  C:\work  main*                      ↓1 KB/s  CPU 1%  MEM 60 MB [▣]|
 +--------------------------------------------------------------------------+
   ▌ = selected row: tab.active.background + 2 px accent bar on its left edge
+  ⠿ = the reorder grip, shown on the hovered row (here web-01) with an open-hand cursor
   rows scroll vertically when they do not fit; the header stays
 ```
 
@@ -148,7 +174,7 @@ Vertical, resizing (`US-0197`):
 
 ```text
 +------------------++---------------------
-| [+]          [⛶] ||   drag the right edge: 140 px .. min(400 px, 25 % of window)
+| [+]          [⛶] ||   drag the right edge: 140 px .. min(400 px, 35 % of the tab group)
 |▌PowerShell      x||
 |  web-01         x||   the width the user sets is remembered and
 +------------------++   re-applied (clamped) when the window grows again
@@ -183,21 +209,22 @@ Interface
 | Area | Vertical layout behaviour | Why / source |
 | --- | --- | --- |
 | Spaces and splits (`docs/terminal-split.md`) | Unchanged. A Space tree lives inside the panel's content; the rail sits outside it | the rail replaces only the group's tab bar |
-| Drag a tab into an empty Space | Drag the row's **label**: it is the same `DragTerminalTab` source as on the strip (`tab_title.rs:271-281`) | the row content is the same element |
-| Reorder / move between groups | Drag the row's **leading edge** onto another row or the space below; `DragPanel` as on the strip | `TabGroupContext::drag_panel` / `drop_panel` |
-| Right dock, `IN-0054` | Unchanged: it follows the active tab's kind; the dock buttons in the status bar and `Ctrl+Shift+B` work. The strip's right-dock toggle has no counterpart in the rail (Q5) | `layout/workspace/mod.rs:346-379` reads `AppState`, not the strip |
-| Right dock width | Unchanged formula (35 % of the window, 240 px floor); the rail is taken from the terminal's share. At 900 px with the dock open: dock 315, rail 220, terminal 365 px | `clamp_right_dock_width`, `mod.rs:76-85` |
+| Drag a tab into an empty Space | Drag the row's content (chips, dot, status icon, label; anything but the grip and the `×`): the same `DragTerminalTab` source as on the strip (`tab_title.rs:271-281`) | the row content is the same element |
+| Reorder / move between groups | Drag the row's **grip** (its 12 px leading edge) onto another row or the space below; `DragPanel` as on the strip. **Dropping a row's content on another row does nothing**: that drag only lands on an empty Space, and the shell cannot accept its type (`pub(crate)` in `oneterm-terminal-view`, R4). Label-drag reorder is a follow-up (intake Q9) | `TabGroupContext::drag_panel` / `drop_panel` |
+| Right dock, `IN-0054` | Unchanged: it follows the active tab's kind; the dock buttons in the status bar and `Ctrl+Shift+B` work. The strip's right-dock toggle has no counterpart in the rail (Q5), so `docs/gui-layout.md`'s "dock buttons in the tab bar and the status bar" becomes a statement about the horizontal layout (amended by `US-0196`) | `layout/workspace/mod.rs:346-379` reads `AppState`, not the strip |
+| Right dock width | Unchanged formula (35 % of the window, 240 px floor); the rail is taken from the centre's share. At 900 px with the dock open: dock 315, rail 220 (`US-0196`) or 204.75 (`US-0197`), terminal 365 or 380.25 px | `clamp_right_dock_width`, `mod.rs:76-85` |
 | Title bar | Unchanged; nothing moves into it | `title_bar.rs` |
 | Status bar, FPS HUD | Unchanged. The HUD keeps its position (title bar + 32 + 12 px from the top, 12 px from the right), which in vertical mode lies over the terminal's top-right rows or, with the dock open, the right dock's session search field, as it does today | `widgets/fps_hud.rs:26-27`, `:159` |
-| Zoom | The zoomed group keeps its rail, as it keeps its strip today ("the whole TerminalPanel is zoomed, including its tab-group chrome"); the zoom button shows Zoom Out. Zoom persistence (`docks.json` `zoomed_panel`) is unchanged | `docs/gui-layout.md` § Zoom |
+| Zoom | The zoomed group keeps its rail, as it keeps its strip today ("the whole TerminalPanel is zoomed, including its tab-group chrome"); the zoom button shows Zoom Out. A zoomed group is neither draggable nor droppable (`tab_group.rs:441-460`), so reorder and drops are off while zoomed, as on the strip. Zoom persistence (`docks.json` `zoomed_panel`) is unchanged | `docs/gui-layout.md` § Zoom |
 | Lock screen | Covered like everything else (the lock replaces the window's whole element tree); after unlock the rail returns as it was, scroll position included | `docs/gui-layout.md` § Lock screen |
 | Broadcast channels | Chips stay in the row; the Space badge is unchanged | same row element |
-| OSC 7501 status icon (`US-0193`) | Same icon, same rules (single-Space tabs only, acknowledge on select); colours measured on the tab surfaces already | same row element |
+| OSC 7501 status icon (`US-0193`) | Same icon, same rules (single-Space tabs only, acknowledge on `set_active(true)`, which a row click reaches through `select_tab` like a strip click). Of its colours only the bell's `warning` is measured on the tab surfaces; `primary`, `success` and `danger` are not, as for the strip | same row element; `terminal_panel.rs:670-684` |
 | Tab context menu | Same rows; "Close to the Right" reads "Close Tabs Below" while vertical (Q6) | `tab_title.rs:469-507` |
 | `...` menu | Not drawn in vertical mode (Q5); its tab list is the rail itself | `tab_title.rs:520-548` |
 | Keyboard | No tab navigation exists in either layout; rows are not tab stops (like the strip's). Follow-up packet proposed in the intake | `crates/actions/src/lib.rs` |
 | Overflow | The rows scroll vertically under the header; the active row is scrolled into view when it changes. Rows are not virtualised, like the strip's tabs (every tab's row renders each frame in both layouts) | kit pattern `tab_panel.rs:464-470` |
-| Several centre groups (Q7) | Each group draws its own rail beside its own content | the renderer is per group |
+| Several centre groups (Q7) | Each all-terminal group draws its own rail beside its own content; from `US-0197` each rail is bounded by its own group's width (§ Width). In `US-0196` each rail is a fixed 220 px | the renderer is per group |
+| A terminal tab dropped into the right dock | That group keeps the kit strip, as today (§ Which groups draw a rail) | not a centre group |
 | Elevated window | Shows the saved layout; the switch works in memory, the write is refused (`DEC-0019` M4) | `ui_config.rs:239-247` |
 | Accessibility | Rail = base `Tabs` (`TabList`, vertical orientation, as `toggle_group.rs:60` sets one); row = base `Tab` with `aria_selected` and position `ix + 1` of `n`; header buttons carry tooltips. The group frame keeps its "Terminal tabs" pane label (`dock_skin.rs:114-119`) | `.../base/src/tabs.rs:149-234` |
 | Reduced motion | The status icon's animations already stop; the rail adds no animation | `US-0193` |
@@ -212,12 +239,18 @@ The rail draws only tokens the strip draws, on the surfaces the strip uses:
 | Inactive row label | `tab.foreground` | `tab_bar.background` | yes |
 | Hovered row label | `tab.active.foreground` | `tab_bar.background` | **no: added by `US-0196`** (the strip draws the same pair on hover, kit `tab.rs:172-184`, so the addition also covers the strip) |
 | Selected row | `tab.active.foreground` | `tab.active.background` | yes |
-| `×`, chips, recording dot, bell | `muted.foreground`, `chart_1..5`, `danger`, `warning` | `tab_bar.background`, `tab.active.background` | yes (as for the strip) |
+| `×`, grip | `muted.foreground` | `tab_bar.background`, `tab.active.background` | yes |
+| Bell (OSC 7501 blocked) | `warning` | `tab_bar.background`, `tab.background`, `tab.active.background` | yes (`US-0193`) |
+| Channel chips, recording dot, other status icons | `chart_1..5`, `danger`, `primary`, `success` | `tab_bar.background`, `tab.active.background` | no, as for the strip (no new gap: same pairs the strip draws) |
 | Accent bar, drop border, drop fill | `table_active_border`, `drag_border`, `drop_target` | non-text | n/a |
 
-No hover fill is added: a hovered row changes only its label colour, as a strip tab does. If the
-new surface fails a theme, its token is corrected by lightness only, as `US-0193` did. A new
-fill drawn later must be added to `SURFACES` with the line that draws it.
+No hover fill is added: a hovered row changes only its label colour, as a strip tab does.
+Adding `tab_bar.background` to `tab.active.foreground`'s surfaces also turns on the script's
+`HIERARCHY` comparison `("tab.active.foreground", "muted.foreground")` on that fill, because
+`muted.foreground` is already listed there (`check-theme-contrast.py:200`, `:264`). The advisor
+measured both on a scratch copy: every pairing and every hierarchy comparison passes in all
+built-in themes. If a later theme fails, its token is corrected by lightness only, as `US-0193`
+did. A new fill drawn later must be added to `SURFACES` with the line that draws it.
 
 ## Data Ownership and Interfaces
 
@@ -226,7 +259,7 @@ fill drawn later must be added to `SURFACES` with the line that draws it.
 | `UiConfig.vertical_tabs.enabled` | `oneterm-settings` (`ui_config.json`) | persisted | `UiConfig::set_vertical_tabs_enabled` (Settings switch) |
 | `UiConfig.vertical_tabs.width` (`US-0197`) | same | persisted; the user's preference, clamped only when applied | `UiConfig::set_vertical_tabs_width` (end of a rail drag) |
 | `UiConfig.vertical_tabs.collapsed` (`US-0198`) | same | persisted | `UiConfig::set_vertical_tabs_collapsed` (header button) |
-| Rail scroll position, last active index | `OneTermTabGroupSkin` instance (one per group) | memory | the renderer |
+| Rail scroll position, last active index, last painted group width (`US-0197`) | `OneTermTabGroupSkin` instance (one per group) | memory | the renderer (`on_prepaint` on its frame for the width) |
 | Tabs, selection, order | base `TabGroup` / `LayoutTree` | as today | as today |
 
 Readers: `OneTermTabGroupSkin` (`frame`, `render_tab_bar`, `content_frame`) and
@@ -266,32 +299,50 @@ it on again returns to the collapsed rail.
 ## Width (`US-0197`)
 
 ```text
-MIN = 140 px    MAX = 400 px    SHARE = 0.25    DEFAULT = 220 px    COLLAPSED = 44 px
+MIN = 140 px    MAX = 400 px    SHARE = 0.35    DEFAULT = 220 px    COLLAPSED = 44 px
 
 preference  = clamp(dragged width, MIN, MAX)                 (stored as vertical_tabs.width)
-applied     = clamp_tab_rail_width(preference, window width)
+applied     = clamp_tab_rail_width(preference, group width)
 
-clamp_tab_rail_width(w, window):
-    window <= 0 (before the first layout)  ->  clamp(w, MIN, MAX)
-    otherwise                              ->  clamp(w, MIN, ceiling)
-        where ceiling = max(MIN, min(MAX, window * SHARE))
+clamp_tab_rail_width(w, group):
+    group <= 0 (not painted yet)  ->  clamp(w, MIN, MAX)
+    otherwise                     ->  clamp(w, MIN, ceiling)
+        where ceiling = max(MIN, min(MAX, group * SHARE))
 ```
+
+`group` is the painted width of the rail's own tab group, rail included, so the rail's width does
+not feed back into its own bound. The renderer reads it through `on_prepaint` on its frame
+(`tab_group.rs:910-911`) and keeps it per group; when it differs from the last frame's, the
+renderer asks for one more frame, so a window resize, the right dock opening or a centre split
+re-clamps every rail on the next frame. `SHARE` is the right dock's share
+(`RIGHT_DOCK_MAX_SHARE`, `layout/workspace/mod.rs:37`). Bounding by the window instead would let
+two rails in a split centre take 2 x 250 px of a 1000 px window and leave the two terminals 150 px
+between them.
 
 Worked examples (each is a unit test in `US-0197`):
 
-| Window | Requested | Ceiling | Applied |
+| Group width | Requested | Ceiling | Applied |
 | --- | --- | --- | --- |
-| 1920 | 220 | max(140, min(400, 480)) = 400 | 220 |
+| 1920 | 220 | max(140, min(400, 672)) = 400 | 220 |
 | 1920 | 520 | 400 | 400 |
-| 1000 | 300 | max(140, min(400, 250)) = 250 | 250 |
-| 600 | 220 | max(140, min(400, 150)) = 150 | 150 |
-| 480 | 220 | max(140, min(400, 120)) = 140 | 140 |
-| 0 (unknown) | 100 | n/a | 140 |
+| 800 | 300 | max(140, min(400, 280)) = 280 | 280 |
+| 600 | 220 | max(140, min(400, 210)) = 210 | 210 |
+| 380 | 220 | max(140, min(400, 133)) = 140 | 140 |
+| 0 (not painted yet) | 100 | n/a | 140 |
 
-Together with the right dock at its own ceiling, the terminal keeps at least 40 % of a window of
-1000 px or more (1000: dock 350 + rail 250 leaves 400) and 210 px at 600 px (dock 240, the floor,
-plus rail 150). `US-0196` uses the fixed 220 px without this clamp, so on a 600 px window with the
-dock open the terminal has 140 px until `US-0197` lands.
+In a window (right dock at its own ceiling, 35 % of the window with a 240 px floor):
+
+| Window | Right dock | Centre groups | Rail per group | Terminal per group |
+| --- | --- | --- | --- | --- |
+| 1000 | 350 | one of 650 | 220 (ceiling 227.5) | 430 |
+| 1000 | 350 | two of 325 | 140 (floor) | 185 |
+| 900 | 315 | one of 585 | 204.75 (ceiling) | 380.25 |
+| 600 | 240 (floor) | one of 360 | 140 (floor) | 220 |
+
+A terminal keeps at least 65 % of its group whenever the group is 400 px or wider
+(140 / 0.35 = 400); below that the 140 px floor applies. `US-0196` uses the fixed 220 px without
+this clamp: on a 600 px window with the dock open the terminal has 140 px, and a split centre
+spends 440 px on rails, until `US-0197` lands.
 
 ## Data Flow
 
@@ -309,8 +360,9 @@ dock open the terminal has 140 px until `US-0197` lands.
 4. **Drops.** A `DragPanel` dropped on a row or the space below goes to `drop_panel`; on the
    content region beside the rail, base's own split-or-merge handling runs as today.
 5. **Width (`US-0197`).** Dragging the handle sets the applied width each frame (memory only);
-   mouse-up stores the preference through its setter (one write). A window resize re-applies the
-   clamp from the preference.
+   mouse-up stores the preference through its setter (one write). Any change of a group's painted
+   width (window resize, dock open or close, a split) re-applies the clamp from the preference on
+   the next frame.
 6. **Collapse (`US-0198`).** The header button flips `collapsed` through its setter; the row
    element renders its compact form when it reads `collapsed`.
 
@@ -319,5 +371,7 @@ dock open the terminal has 140 px until `US-0197` lands.
 - [x] Detail design: not needed
 - Reason: normal lane; the only seam is OneTerm's own `TabGroupRenderer`, specified above
   (Rendering seam, Rail anatomy, Interactions), and the only persisted change is one optional
-  lenient field following the `show_fps` / `lock_after_idle_minutes` precedents. The remaining
-  uncertainty is empirical and is settled by the `US-0196` spike (intake Q8), not by more design.
+  lenient field following the `show_fps` / `lock_after_idle_minutes` precedents. The advisor
+  review ([`evidence/IN-0055-spec-review.md`](evidence/IN-0055-spec-review.md)) settled the drag
+  order and the contrast pair; the remaining uncertainty is empirical and is settled by the
+  `US-0196` spike (intake Q8), not by more design.
