@@ -111,3 +111,53 @@ Build under test: scratchpad copy `us0196-bin\oneterm.exe` (head 75cf9cc1), priv
 - Sleep/resume, taskbar thumbnail, IME.
 - Flaky: twice a freshly opened window (first Settings window, one relaunched main window) painted black under PrintWindow and never recovered; a relaunch was fine. Not tied to the rail, but worth an owner eye.
 
+
+## Re-review (advisor): rework `a90f894f..36d2c8d9`
+
+- Reviewed: `5ba12664` (fix), `eee4817d` (UI evidence), `36d2c8d9` (gate evidence); sources as in the first review plus gpui 0.3.9 `window.rs:2376-2381` / `:3423-3470` / `:3669-3706`, `app.rs:1976-1992` / `:2140-2145` / `:2403-2405` / `:2450-2463`, kit `theme/mod.rs:285-400`, `theme/registry.rs:1-72`, `theme/schema.rs:682-700` / `:1000-1012`.
+- Gate re-run (one crate per command, `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`): `cargo clippy --all-targets -- -D warnings` green for `oneterm-theme`, `oneterm-state`, `oneterm-workspace`, `oneterm-terminal-view`; `cargo test` 6 / 75 / 90 / 406 passed, 0 failed; `python scripts/check-theme-contrast.py` 1638 pairings and 624 hierarchy comparisons pass; `cargo fmt --all -- --check` clean; `check-english` passes.
+- No code changed. A pinned test for finding R1 was written and withdrawn: the gpui test platform redraws a dirty window on its own after every update, so the one-frame lag cannot be isolated there (details under R1).
+
+### Verdict
+
+**PASS.** D1, D2, D4 and F1 are fixed at the right place; D3 works, but for a different reason than the code and the records say (R1, low). The launch-time colour the coder could not explain is not explained by the code either (R2, info): the one kit path that re-applies a theme after OneTerm's override is inert at start-up, so the owner's hand check below decides whether anything is left.
+
+### D1 - `oneterm_theme::selection_accent`
+
+- **Correct after a live switch to another theme.** Every switch path (`SwitchTheme` `theme.rs:222-234`, `SwitchThemeMode` `:237-242`, Settings mode `appearance.rs:85-88`, Settings theme `appearance.rs:158-163`) runs `Theme::apply_config` or `Theme::change` first and `apply_list_style_override` right after; `record_selection_accent` (`theme.rs:91-96`) reads the live token at the top of the override, which at that moment is the new theme's `table.active.border`, and only then blanks it. Nothing is stale.
+- **Mode switches and reloads.** `Theme::change` reloads the mode's registered file (`mod.rs:389-400`, `edit(reload_mode = true)`), so the live token is the new file's before the override records it. A kit-side re-application without the override (the registry observer, `registry.rs:45-72`) leaves the live token coloured, and `selection_accent` prefers the live token whenever its alpha is above zero (`theme.rs:100-107`), so that case reads the real colour, not the record.
+- **Stale case.** The record is used only while a theme's own token is transparent. The kit resolves an absent `table.active.border` to `list.active.border` and an absent one of those to the default theme's colour (`schema.rs:682-700`, `:1008`), never to transparent; a scan of `crates/theme/themes/*.json` finds one theme that names neither (Catppuccin Frappe), which therefore takes the kit default, a visible colour. No shipped theme can make the accent stale.
+- **Global lifetime.** `SelectionAccent` is an `App` global written only by the override and read only by `selection_accent`; it is never removed and never needs to be. Correct.
+- **Other readers of `table_active_border`.** `crates/sftp-ui/src/table_delegate.rs:341` (a comment relying on it being transparent, which still holds) and the kit's tables. The three OneTerm accent readers (rail row `tab_rail.rs:376`, strip top bar `tab_title.rs:223`, Space cue `space/render.rs:172`) now use `selection_accent`. Complete.
+- **Test.** `the_selection_accent_survives_the_list_style_override` covers two themes of both modes, before and after the override and after a second run. Sound.
+
+### D2 - drop line
+
+`drop_edge` (`tab_rail.rs:98-105`) matches base's rule: `drop_panel(Some(ix), ..)` removes the panel, then inserts at `ix`, so a tab from earlier in the same group lands after the hovered row and anything else before it; the dragged row itself draws no line. The unit test models the rule for every pair in groups of 1..=5 and the gpui test `a_forward_reorder_lands_after_the_hovered_row_and_a_backward_one_before_it` proves it on the real group. Correct.
+
+### D3 - scrollbar gutter
+
+- **No loop, no flicker.** `overflowing` flips only when `max_offset().y` crosses zero; reserving the gutter changes row widths, never row heights, so the content height and `max_offset` do not move and the flag cannot oscillate. The steady state draws nothing extra.
+- **R1 (low): the "one refresh" is not requested.** `TabRail::render` calls `window.refresh()` (`tab_rail.rs:194-197`) to draw the frame that applies the new gutter. A view renders inside the draw: `draw_roots` sets `DrawPhase::Prepaint` before the root's `request_layout` (gpui `window.rs:3670-3706`), and `Window::refresh` does nothing unless `not_drawing()` (`window.rs:2376-2381`). So the call is dropped every time; the gutter appears or disappears with the next frame anything else causes (in the app: cursor blink, output, hover; in the gpui test platform: the automatic redraw after any update, which is why the 40-tab and 3-tab tests pass and why a pinned test could not isolate it). The behaviour is right in practice, one frame late at worst; the code comment, the packet ("one refresh is requested") and `docs/gui-layout.md` describe a mechanism that is not there. Fix is one call: `window.request_animation_frame()` (`window.rs:2730-2733`, which schedules a `notify` of the current view for the next frame) in place of `window.refresh()`; the test platform's `simulate_next_frame` then delivers it in a test.
+
+### D4 - preview chip
+
+`tab.active.foreground` on `tab.active.background` is the measured pair; `min_w_24` / `max_w(240)` with `overflow_hidden` and `whitespace_nowrap` is content-sized. `DRAG_PREVIEW_SIZE` (140 x 30) is only base's placeholder hint. Fine.
+
+### F1 - `TabRowScope`
+
+`TabRowLayout::scope` (`tab_row_layout.rs:34-38`) sets the global and returns a guard that owns the `&mut App`; `Deref` / `DerefMut` hand it back (`:49-61`), so nothing can touch `cx` except through the guard while it lives, and `Drop` restores the previous layout (`:63-67`). Sound. The panic test (`the_layout_is_restored_when_the_drawing_unwinds`) is meaningful: the workspace profile is `panic = "unwind"` (root `Cargo.toml:288`), `catch_unwind` runs the guard's `Drop` during the unwind inside the same `cx.update`, and the assertion afterwards reads the restored global. The nested-scope test covers the stack order.
+
+### R2 (info) - why the accent showed at launch and vanished after a switch
+
+The code reads: at launch `init` applies the theme, then the override, then nothing re-applies the theme. The only kit path that re-applies one outside OneTerm's switch handlers is the `ThemeRegistry` observer (`registry.rs:45-72`, `Theme::change(mode)` on any registry mutation), and it is inert at start-up: gpui queues the registry notification when `registry::init` first calls `global_mut` (`app.rs:2403-2405`), drops every later one while that first is pending (`:1983-1986`), and the observer registered afterwards is activated by a deferred effect that runs after the queued notification (`:2450-2462`, `:2140-2145`); a probe test confirmed the observer fires zero times across `gpui_component::init` plus the `init` sequence, and no OneTerm code mutates the registry later. So the start-up state the code predicts is a blank token (no accent bar), which contradicts the walk's launch screenshot. The coder's fix is right either way (it reads the live colour when there is one and the record when there is not), so nothing in this packet depends on the answer, but one of two things is true and the owner can tell them apart on screen: either some start-up path still re-applies the theme after the override (then the data tables and the session list draw a selection border at launch that disappears after the first theme switch, i.e. `apply_list_style_override` is not in force at launch), or the walk's launch frame was taken after a theme change the driver made. Hand check: launch, select a row in the SFTP table or the session list, look for a selection border; switch theme; look again.
+
+### Findings
+
+1. **R1, Low** - `crates/workspace/src/layout/workspace/tab_rail.rs:194-197`: `window.refresh()` inside a render is a no-op (gpui `window.rs:2376-2381`, phase set at `:3670`); the gutter frame comes from whatever else redraws. Replace with `window.request_animation_frame()`; amend the comment, the packet's D3 line and `docs/gui-layout.md` ("one refresh is requested"). Reproduction: read the two gpui lines; or, in a `#[gpui::test]`, after a draw that flips `overflowing`, `window.simulate_next_frame(cx)` returns 0.
+2. **R2, Info** - the launch colour is not explained by the code (above). The owner's hand check decides whether a separate start-up-override defect exists; outside this packet.
+
+### Owner hand checks added by the re-review
+
+- Table / session-list selection border at launch versus after a theme switch (R2).
+- With 40 tabs, close tabs until they fit and watch the gutter leave within a moment (R1: it should follow on the next natural frame, not stick).
