@@ -161,3 +161,27 @@ The code reads: at launch `init` applies the theme, then the override, then noth
 
 - Table / session-list selection border at launch versus after a theme switch (R2).
 - With 40 tabs, close tabs until they fit and watch the gutter leave within a moment (R1: it should follow on the next natural frame, not stick).
+
+## UI re-walk (ui-verifier, head 36d2c8d9)
+
+### UI re-walk (US-0196 fixes, head 36d2c8d9)
+
+Build: scratchpad `us0196-bin2\oneterm.exe`, fresh private profile (label r1), 1280x800. Screenshots `scratchpad\us0196-shots\us0196r-*.png`. Pixel values are from PrintWindow captures (x = client+8).
+
+| Defect | Verdict | Evidence |
+|---|---|---|
+| D1 accent bar after live theme switch | PASS | Rail, selected row bar pixels (x=8..9) after live switches: Zed One Dark 82,139,255 at launch; Mocha 77,97,136; Latte 114,135,253 (`tv-modelight`, `tv-latte`); Zed One Light 82,111,255 (`tv-onelight`); Default Dark 29,78,216 (`tv-defaultdark`); every value is the new theme's accent, none the previous theme's. Horizontal strip top bar (y=35..36 at x=340): Default Dark 29,78,216, Latte 114,135,253, One Light 82,111,255, Default Dark again, Mocha 77,97,136 (`th-*`). Active Space border follows the theme in a split tab (`us0196r-12` Mocha grey-blue, `us0196r-13` Latte blue). One gap: the final "back to Zed One Dark" step was NOT WALKED, the theme list cannot be scrolled by posted input (Zed One Dark sits off screen once another dark theme is selected); One Dark at launch was the baseline. |
+| D3 scrollbar and gutter | PASS | 40 tabs: scrollbar shows (x~218-222), rows end before it, x buttons move from x=214 to x=198 and the selected fill stops at x=210 (`us0196r-23`). A renamed row's x next to the scrollbar closed it (`24`, `25`). 3 tabs: no scrollbar, x at x=214 (`us0196r-22`, `19-crop`). |
+| D2 drop line vs landing | PASS | Forward: pointer on row 2, line at the bottom of that row, tab landed after it (`18-crop`, `19-crop`). Backward: pointer on row 1, line at its top, tab landed first (`20-crop`, `21-crop`). |
+| D4 grip-drag preview text | PARTLY | Chip text is now full-contrast and larger, readable (`18-crop`, `20-crop`). A 46-character title is still truncated with an ellipsis ("build-server-with-a-very-l...") in the chip; if "not truncated" meant the full title, this fails. |
+
+### Quick regression
+- Switch on/off live, both ways (Default Dark horizontal and back, `10-horizontal-defaultdark`): PASS.
+- Click select, x close, rename through the context menu, Close Tabs Below not repeated, long name truncated with ellipsis in the row: PASS.
+- Lock (Ctrl+Shift+L) covers the rail (`27`), unlock returns the rail with scroll position kept (`28`): PASS.
+
+### Notes
+- Capture driver: with Windows PowerShell 5.1 the typed-int arguments silently failed; pwsh 7 works (`us0196r-do.ps1`, `us0196r-item.ps1`).
+- Mid-drag captures can show a blank frame right after a dialog closes; recaptured after a hover pause.
+
+Coordinator: D4 accepted as is; the chip is content-sized to at most 240 px, so a long title is ellipsised by design.
