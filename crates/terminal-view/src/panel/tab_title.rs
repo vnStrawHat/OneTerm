@@ -23,6 +23,7 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 use oneterm_core::ShellKind;
+use oneterm_state::TabRowLayout;
 use oneterm_terminal::{ProgramState, TerminalLogState};
 use oneterm_theme::notif_ext::notify;
 
@@ -195,6 +196,10 @@ pub(super) fn tab_status_icon(status: ProgramState, panel: EntityId, cx: &App) -
         .into_any_element()
 }
 
+/// Names the tab row in the debug-bounds map, so a test can ask a really drawn frame where it
+/// is. A no-op outside test builds.
+pub(super) const TAB_ROW_SELECTOR: &str = "oneterm-tab-row";
+
 fn tab_title_label() -> Div {
     // GPUI creates a rectangular content mask when either overflow axis is
     // hidden, which clips glyph descenders to this label's line box.
@@ -209,11 +214,13 @@ pub(super) fn render_tab_strip(
     _window: &mut Window,
     cx: &mut Context<TerminalPanel>,
 ) -> impl IntoElement {
+    let layout = TabRowLayout::current(cx);
+    let vertical = layout == TabRowLayout::Vertical;
     let tab_panel = panel.tab_panel.clone();
     let panel_entity = cx.entity().clone();
     let panel_weak = cx.entity().downgrade();
     let muted = cx.theme().muted_foreground;
-    let highlight = cx.theme().table_active_border;
+    let highlight = oneterm_theme::selection_accent(cx);
     let recording_color = cx.theme().danger;
     let is_active = panel.is_active;
     let show_recording = panel.shows_recording_dot(cx);
@@ -240,6 +247,7 @@ pub(super) fn render_tab_strip(
 
     gpui_component::h_flex()
         .id(title_row_id)
+        .debug_selector(|| TAB_ROW_SELECTOR.to_string())
         .relative()
         .h_full()
         // No `w_full()`: the kit's `Tab` is content-sized and `flex_shrink_0`
@@ -250,11 +258,18 @@ pub(super) fn render_tab_strip(
         // the strip (`US-0116`, `F11`). Sized by the label between a floor and
         // a ceiling instead: no tab loses its name, and one long OSC title
         // elides rather than eating the strip.
-        .min_w(px(100.))
-        .max_w(px(220.))
+        //
+        // A row in the vertical rail fills the width the rail gives it instead
+        // (`IN-0055`): the rail draws the selected row's accent bar and the
+        // reorder grip itself, so this row carries neither the top bar nor the
+        // strip's negative margin.
+        .when(!vertical, |this| {
+            this.min_w(px(100.)).max_w(px(220.)).mr(-px(5.))
+        })
+        .when(vertical, |this| this.flex_1().min_w_0().pr_1())
         .items_center()
         .gap_1()
-        .when(is_active, |this| {
+        .when(is_active && !vertical, |this| {
             this.child(
                 div()
                     .absolute()
@@ -265,7 +280,6 @@ pub(super) fn render_tab_strip(
                     .bg(highlight),
             )
         })
-        .mr(-px(5.))
         // Drag the tab into an empty Space with the terminal-specific
         // payload consumed by Space-tree drop targets.
         .when_some(tab_panel.clone(), |this, _| {
@@ -341,7 +355,7 @@ pub(super) fn render_tab_strip(
         // mouse-down (`base/src/tabs.rs:172`), so the tab's own menu lives here,
         // on the content OneTerm renders (`US-0116`, `F12`).
         .context_menu(move |menu, _window, cx| {
-            tab_context_menu(menu, menu_panel.clone(), menu_title.clone(), cx)
+            tab_context_menu(menu, menu_panel.clone(), menu_title.clone(), layout, cx)
         })
 }
 
@@ -470,6 +484,7 @@ fn tab_context_menu(
     menu: PopupMenu,
     panel: Entity<TerminalPanel>,
     label: String,
+    layout: TabRowLayout,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     menu.item(PopupMenuItem::new("Rename...").on_click({
@@ -499,11 +514,20 @@ fn tab_context_menu(
         cx,
     ))
     .item(close_scope_row(
-        "Close to the Right",
+        close_following_label(layout),
         panel,
         CloseScope::ToTheRight,
         cx,
     ))
+}
+
+/// The wording of the menu row that closes the tabs after this one: they are to the right in
+/// the strip and below in the vertical rail (same command, same tabs).
+pub(super) fn close_following_label(layout: TabRowLayout) -> &'static str {
+    match layout {
+        TabRowLayout::Horizontal => "Close to the Right",
+        TabRowLayout::Vertical => "Close Tabs Below",
+    }
 }
 
 /// The tab list the `...` menu opens with: one row per terminal tab, the active

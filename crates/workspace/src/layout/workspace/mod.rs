@@ -18,9 +18,12 @@ pub(crate) mod actions;
 mod dock_skin;
 pub(crate) mod layout;
 pub(crate) mod persistence;
+mod tab_rail;
 
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod tab_rail_tests;
 #[cfg(test)]
 pub(crate) mod test_panels;
 

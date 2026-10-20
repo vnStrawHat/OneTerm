@@ -120,9 +120,9 @@ change of active tab scrolls the row into view; a clicked row is not snapped.
 | Part | Content | Behaviour |
 | --- | --- | --- |
 | Header (32 px, the strip's height) | `+` = the active panel's `title_suffix` (OneTerm's New Terminal menu, `terminal_panel.rs:721`); zoom button | Zoom follows the kit's rule: Zoom Out whenever the group is zoomed, whatever the control says; otherwise Zoom In when `panel.zoomable` and `zoom_control().toolbar_visible()` (`tab_panel.rs:140-146`, `:305-307`); it calls `group.toggle_zoom`. Icons as the strip (maximize / minimize). The kit's tooltip strings are its private locale (`t!`), so the rail carries its own text, "Zoom In" / "Zoom Out", the same words. No `...` menu (Q5), no right-dock toggle |
-| Rows (32 px each) | base `Tab` wrapping `PanelHandle::of(panel).title(window, cx)` | click: `group.select_tab(ix)`; selected: `tab.active.background` + 2 px bar on the left edge in `table_active_border` (the token the strip's top bar uses) |
+| Rows (32 px each) | base `Tab` wrapping `PanelHandle::of(panel).title(window, cx)` | click: `group.select_tab(ix)`; selected: `tab.active.background` + 2 px bar on the left edge in `oneterm_theme::selection_accent` (the theme's `table.active.border`, kept past OneTerm's own blanking of `Theme::table_active_border`; the strip's top bar reads the same, amended at `US-0196`) |
 | Row leading edge, the grip (12 px, the strip tab's padding, kit `tab/tab.rs:72-89`; Q9) | a `grip-vertical` glyph in `muted.foreground` and the `OpenHand` cursor while the row is hovered (a new `crates/theme/assets/icons/grip-vertical.svg`, so `AppIcon::GripVertical`; the kit's `IconName` has no grip) | starts `DragPanel` (`group.drag_panel(ix)`, guarded by `is_draggable`), the reorder and dock-move drag, as the kit tab's padding does today. The rest of the row is the title row, whose own drag (`DragTerminalTab`) wins, as on the strip |
-| Row as drop target | top border 2 px in `drag_border` while a `DragPanel` hovers | drop: `group.drop_panel(drag, Some(ix), true)` (mirrors `tab_panel.rs:594-612`) |
+| Row as drop target | 2 px line in `drag_border` while a `DragPanel` hovers, on the edge where the tab will land: below the hovered row for a tab dragged forward within its own group, above it otherwise, none on the dragged row itself (amended at `US-0196`) | drop: `group.drop_panel(drag, Some(ix), true)` (mirrors `tab_panel.rs:594-612`) |
 | Space below the last row | `drop_target` fill while dragged over | drop: append, or last slot for a panel from this group (mirrors `tab_panel.rs:630-651`) |
 
 The kit's tab bar also accepts a host-owned `AnyDrag` on tabs and the empty space. The rail does
@@ -242,7 +242,7 @@ The rail draws only tokens the strip draws, on the surfaces the strip uses:
 | `×`, grip | `muted.foreground` | `tab_bar.background`, `tab.active.background` | yes |
 | Bell (OSC 7501 blocked) | `warning` | `tab_bar.background`, `tab.background`, `tab.active.background` | yes (`US-0193`) |
 | Channel chips, recording dot, other status icons | `chart_1..5`, `danger`, `primary`, `success` | `tab_bar.background`, `tab.active.background` | no, as for the strip (no new gap: same pairs the strip draws) |
-| Accent bar, drop border, drop fill | `table_active_border`, `drag_border`, `drop_target` | non-text | n/a |
+| Accent bar, drop border, drop fill | `selection_accent`, `drag_border`, `drop_target` | non-text | n/a |
 
 No hover fill is added: a hovered row changes only its label colour, as a strip tab does.
 Adding `tab_bar.background` to `tab.active.foreground`'s surfaces also turns on the script's
@@ -262,9 +262,13 @@ did. A new fill drawn later must be added to `SURFACES` with the line that draws
 | Rail scroll position, last active index, last painted group width (`US-0197`) | `OneTermTabGroupSkin` instance (one per group) | memory | the renderer (`on_prepaint` on its frame for the width) |
 | Tabs, selection, order | base `TabGroup` / `LayoutTree` | as today | as today |
 
-Readers: `OneTermTabGroupSkin` (`frame`, `render_tab_bar`, `content_frame`) and
-`render_tab_strip` read `UiConfig::global(cx)` on each render. Both crates already depend on
-`oneterm-settings` (L1), so no crate edge is added (R2, R4).
+Readers: `OneTermTabGroupSkin` (`frame`, `render_tab_bar`, `content_frame`) reads the flag on
+each render through `UiConfig::read_vertical_tabs`. `render_tab_strip` does **not** read it
+(amended at `US-0196`): a panel draws its row without knowing its group, and a terminal tab in
+the right dock must keep the horizontal row even with the switch on, so the rail wraps its own
+`title()` calls in `oneterm_state::TabRowLayout::scope` and the row reads
+`TabRowLayout::current`. `oneterm-state` is below both crates (L2), so no crate edge is added
+(R2, R4).
 
 Persisted shape (all fields optional, the object omitted while it equals the default):
 

@@ -2,21 +2,27 @@
 //!
 //! The center uses GPUI Kit's tab chrome. The right dock's SSH Client panel
 //! renders its own headers, so their single-panel tab group intentionally omits the
-//! extra outer title bar.
+//! extra outer title bar. With Vertical Tabs on (`IN-0055`), an all-terminal center
+//! group draws the [`tab_rail`](super::tab_rail) beside its content instead of the
+//! kit's strip above it.
 
 use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
     AnyElement, AnyView, App, AppContext as _, Axis, Div, Empty, IntoElement as _, Role,
-    SharedString, Stateful, StatefulInteractiveElement as _, Window,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, WeakEntity, Window,
+    prelude::FluentBuilder as _,
 };
 use gpui_base::ResizeHandleContext;
 use gpui_component::dock::{
-    BasePanelView, DockArea, DockAreaRenderer, DockContext, DockSkin, DropIndicator, NodeId,
-    PanelState, TabGroupContext, TabGroupRenderer,
+    BasePanelView, DockArea, DockAreaRenderer, DockContext, DockPlacement, DockSkin, DropIndicator,
+    NodeId, PanelState, TabGroupContext, TabGroupRenderer,
 };
+use oneterm_settings::UiConfig;
 use oneterm_state::panel_names;
+
+use super::tab_rail::{self, RAIL_WIDTH, TabRail};
 
 pub(super) fn dock_area(
     id: impl Into<SharedString>,
@@ -28,7 +34,9 @@ pub(super) fn dock_area(
     let area = cx.new(|cx| {
         let inner = DockSkin::new(cx);
         skin = Some(inner.clone());
-        DockArea::new(id, version, window, cx).with_renderer(Rc::new(OneTermDockSkin { inner }))
+        let area = cx.weak_entity();
+        DockArea::new(id, version, window, cx)
+            .with_renderer(Rc::new(OneTermDockSkin { inner, area }))
     });
     (
         area,
@@ -38,6 +46,8 @@ pub(super) fn dock_area(
 
 struct OneTermDockSkin {
     inner: Rc<DockSkin>,
+    /// The dock area this skin draws, so a tab group can tell whether it is in the center.
+    area: WeakEntity<DockArea>,
 }
 
 impl DockAreaRenderer for OneTermDockSkin {
@@ -93,12 +103,17 @@ impl DockAreaRenderer for OneTermDockSkin {
     fn tab_group_renderer(&self) -> Rc<dyn TabGroupRenderer> {
         Rc::new(OneTermTabGroupSkin {
             inner: self.inner.tab_group_renderer(),
+            area: self.area.clone(),
+            rail: TabRail::new(),
         })
     }
 }
 
 struct OneTermTabGroupSkin {
     inner: Rc<dyn TabGroupRenderer>,
+    area: WeakEntity<DockArea>,
+    /// The rail's scroll position and last displayed tab; unused while the strip is drawn.
+    rail: TabRail,
 }
 
 impl OneTermTabGroupSkin {
@@ -108,6 +123,25 @@ impl OneTermTabGroupSkin {
                 .active_panel()
                 .is_some_and(|panel| matches!(panel.panel_name(cx), panel_names::SSH_CLIENT))
     }
+
+    /// Whether this group draws the vertical rail now: the switch is on and the group is an
+    /// all-terminal group of the center. Read every frame, so the layout flips live.
+    fn draws_rail(&self, group: &TabGroupContext, cx: &App) -> bool {
+        let enabled = UiConfig::read_vertical_tabs(cx).enabled;
+        if !enabled || group.is_collapsed() {
+            return false;
+        }
+        let in_centre = self.area.upgrade().is_some_and(|area| {
+            area.read(cx)
+                .layout(DockPlacement::Center)
+                .is_some_and(|tree| tree.find_node(group.node()).is_some())
+        });
+        tab_rail::draws_rail(
+            enabled,
+            in_centre,
+            group.panels().iter().map(|panel| panel.panel_name(cx)),
+        )
+    }
 }
 
 impl TabGroupRenderer for OneTermTabGroupSkin {
@@ -116,6 +150,7 @@ impl TabGroupRenderer for OneTermTabGroupSkin {
             .frame(group, window, cx)
             .role(Role::Pane)
             .aria_label("Terminal tabs")
+            .when(self.draws_rail(group, cx), |this| this.relative())
     }
 
     fn content_frame(
@@ -124,7 +159,12 @@ impl TabGroupRenderer for OneTermTabGroupSkin {
         window: &mut Window,
         cx: &mut App,
     ) -> Stateful<Div> {
-        self.inner.content_frame(group, window, cx)
+        // A margin, not padding: the rail must stay outside the bounds base installs drop
+        // handling on, or a panel dragged over the rail would be measured as a split of the
+        // content region under it.
+        self.inner
+            .content_frame(group, window, cx)
+            .when(self.draws_rail(group, cx), |this| this.ml(RAIL_WIDTH))
     }
 
     fn render_tab_bar(
@@ -135,6 +175,8 @@ impl TabGroupRenderer for OneTermTabGroupSkin {
     ) -> AnyElement {
         if Self::owns_header(group, cx) {
             Empty.into_any_element()
+        } else if self.draws_rail(group, cx) {
+            self.rail.render(group, window, cx)
         } else {
             self.inner.render_tab_bar(group, window, cx)
         }

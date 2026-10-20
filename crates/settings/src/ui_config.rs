@@ -74,6 +74,18 @@ pub struct UiConfig {
     )]
     pub lock_after_idle_minutes: Option<u64>,
 
+    /// The vertical tab rail (`IN-0055`): `{ "enabled", "width", "collapsed" }`. Omitted while
+    /// every field is its default; a value of the wrong shape loads as the default instead of
+    /// quarantining the whole file. Written only through
+    /// [`UiConfig::set_vertical_tabs_enabled`] (`width` and `collapsed` get their writers
+    /// with the resize and collapse packets).
+    #[serde(
+        default,
+        skip_serializing_if = "VerticalTabs::is_default",
+        deserialize_with = "lenient_vertical_tabs"
+    )]
+    pub vertical_tabs: VerticalTabs,
+
     /// `ui_config.json` existed but could not be read at startup (e.g.
     /// permission denied), so this is the built-in default and must not be
     /// written back over a possibly valid file (CORR-61). Never persisted.
@@ -98,7 +110,101 @@ fn lenient_minutes<'de, D: serde::Deserializer<'de>>(
     }
     Ok(minutes)
 }
+
+/// `vertical_tabs` as written by hand. Anything that is not an object reads as the default
+/// (with a warning), and so does each field of the wrong type, so one bad value costs that
+/// setting rather than the document. `width` is clamped on read and never rewritten by it.
+fn lenient_vertical_tabs<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<VerticalTabs, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(VerticalTabs::from_value(&value))
+}
 const DOCUMENT_NAME: &str = "ui_config.json";
+
+/// The vertical tab rail's persisted state (`IN-0055`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct VerticalTabs {
+    /// Draw Terminal Tabs as a rail on the left instead of a strip above the terminal.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub enabled: bool,
+    /// The rail's width in px, within [`Self::WIDTH_RANGE`]: the user's preference, applied
+    /// clamped to the tab group's own width.
+    #[serde(skip_serializing_if = "VerticalTabs::is_default_width")]
+    pub width: u32,
+    /// The rail is shown as a narrow strip. Remembered while the rail is off.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub collapsed: bool,
+}
+
+impl Default for VerticalTabs {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            width: Self::DEFAULT_WIDTH,
+            collapsed: false,
+        }
+    }
+}
+
+impl VerticalTabs {
+    /// The rail's width until the user sets one.
+    pub const DEFAULT_WIDTH: u32 = 220;
+    /// The widths a stored preference may take.
+    pub const WIDTH_RANGE: std::ops::RangeInclusive<u32> = 140..=400;
+
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn is_default_width(width: &u32) -> bool {
+        *width == Self::DEFAULT_WIDTH
+    }
+
+    /// Read a `vertical_tabs` JSON value leniently: a field that is missing or of the wrong
+    /// type is that field's default.
+    fn from_value(value: &serde_json::Value) -> Self {
+        let defaults = Self::default();
+        let object = match value {
+            serde_json::Value::Object(object) => object,
+            serde_json::Value::Null => return defaults,
+            other => {
+                log::warn!(
+                    "ui_config.json: vertical_tabs {other} is not an object; using the default"
+                );
+                return defaults;
+            }
+        };
+        let flag = |key: &str| match object.get(key) {
+            None | Some(serde_json::Value::Null) => false,
+            Some(serde_json::Value::Bool(flag)) => *flag,
+            Some(other) => {
+                log::warn!(
+                    "ui_config.json: vertical_tabs.{key} {other} is not true or false; using the default"
+                );
+                false
+            }
+        };
+        let width = match object.get("width") {
+            None | Some(serde_json::Value::Null) => defaults.width,
+            Some(other) => match other.as_f64().filter(|width| width.is_finite()) {
+                Some(width) => (width.round().max(0.) as u32)
+                    .clamp(*Self::WIDTH_RANGE.start(), *Self::WIDTH_RANGE.end()),
+                None => {
+                    log::warn!(
+                        "ui_config.json: vertical_tabs.width {other} is not a number; using the default"
+                    );
+                    defaults.width
+                }
+            },
+        };
+        Self {
+            enabled: flag("enabled"),
+            width,
+            collapsed: flag("collapsed"),
+        }
+    }
+}
 
 /// The right dock's open state per kind of active Terminal Tab (`IN-0054`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,6 +438,27 @@ impl UiConfig {
         cx.refresh_windows();
     }
 
+    /// The vertical tab rail's settings, or the defaults before [`Self::init`] has run (the
+    /// shell's tests draw tab groups without a config).
+    pub fn read_vertical_tabs(cx: &App) -> VerticalTabs {
+        cx.try_global::<UiConfigGlobal>()
+            .map(|global| global.0.read(cx).vertical_tabs)
+            .unwrap_or_default()
+    }
+
+    /// Switch the vertical tab rail on or off: the one writer of `vertical_tabs.enabled`,
+    /// used by the Settings switch. The entity changes first, so the layout flips on the next
+    /// frame even where the write is refused (an elevated window). Persists and redraws every
+    /// window.
+    pub fn set_vertical_tabs_enabled(enabled: bool, cx: &mut App) {
+        Self::global(cx).update(cx, |cfg, cx| {
+            cfg.vertical_tabs.enabled = enabled;
+            cx.notify();
+        });
+        Self::persist(cx);
+        cx.refresh_windows();
+    }
+
     /// Set the idle lock's timeout (clamped to [`Self::LOCK_AFTER_IDLE_RANGE`]): the one
     /// writer of `lock_after_idle_minutes`, used by Settings > Security. Persists; the
     /// lock timer observes the config and restarts with the new value.
@@ -415,12 +542,18 @@ mod tests {
             },
             show_fps: true,
             lock_after_idle_minutes: Some(30),
+            vertical_tabs: VerticalTabs {
+                enabled: true,
+                width: 260,
+                collapsed: true,
+            },
             persist_blocked: false,
         };
         config.save_to(&path).unwrap();
         let restored = UiConfig::load_from(&path).unwrap();
         assert!(restored.show_fps);
         assert_eq!(restored.lock_timeout_minutes(), 30);
+        assert_eq!(restored.vertical_tabs, config.vertical_tabs);
         assert_eq!(restored.ui_font_size, Some(18.0));
         assert_eq!(restored.theme_name.as_deref(), Some("Test Theme"));
         assert_eq!(
@@ -536,6 +669,133 @@ mod tests {
             assert_eq!(config.lock_timeout_minutes(), 15, "{wrong}");
             assert_eq!(config.theme_name.as_deref(), Some("T"), "{wrong}");
         }
+    }
+
+    #[test]
+    fn the_vertical_tab_rail_is_off_by_default_and_the_default_is_not_written() {
+        let parse = |raw: &str| UiConfig::parse_document(raw).unwrap();
+        let absent = parse(r#"{"schema_version":1}"#);
+        assert_eq!(absent.vertical_tabs, VerticalTabs::default());
+        assert!(!absent.vertical_tabs.enabled);
+        assert!(
+            !serde_json::to_string(&absent)
+                .unwrap()
+                .contains("vertical_tabs")
+        );
+        // An object that spells out the defaults is still "default" and is not written back.
+        let spelled = parse(r#"{"vertical_tabs":{"enabled":false,"width":220,"collapsed":false}}"#);
+        assert_eq!(spelled.vertical_tabs, VerticalTabs::default());
+        assert!(
+            !serde_json::to_string(&spelled)
+                .unwrap()
+                .contains("vertical_tabs")
+        );
+
+        // Only the fields that differ are written; the shape round-trips.
+        let on = parse(r#"{"vertical_tabs":{"enabled":true}}"#);
+        assert!(on.vertical_tabs.enabled);
+        assert_eq!(on.vertical_tabs.width, VerticalTabs::DEFAULT_WIDTH);
+        let value = serde_json::to_value(&on).unwrap();
+        assert_eq!(value["vertical_tabs"], serde_json::json!({"enabled": true}));
+        let full = parse(r#"{"vertical_tabs":{"enabled":true,"width":260,"collapsed":true}}"#);
+        assert_eq!(
+            full.vertical_tabs,
+            VerticalTabs {
+                enabled: true,
+                width: 260,
+                collapsed: true
+            }
+        );
+        let again = parse(&serde_json::to_string(&full).unwrap());
+        assert_eq!(again.vertical_tabs, full.vertical_tabs);
+    }
+
+    /// A hand-edited `vertical_tabs` of the wrong shape costs that setting, never the document:
+    /// the rest of the file loads and nothing is quarantined (the parse is `parse_document`
+    /// itself, which `load_from` quarantines on failure).
+    #[test]
+    fn a_garbage_vertical_tabs_value_loads_as_the_default() {
+        let parse = |value: &str| {
+            UiConfig::parse_document(&format!(
+                r#"{{"theme_name":"Kept","vertical_tabs":{value}}}"#
+            ))
+            .expect("a bad vertical_tabs value must not fail the document")
+        };
+        for wrong in [
+            r#""on""#,
+            "5",
+            "true",
+            "[true]",
+            "null",
+            r#"{"enabled":"yes"}"#,
+            r#"{"enabled":1}"#,
+            r#"{"enabled":null}"#,
+        ] {
+            let config = parse(wrong);
+            assert_eq!(config.vertical_tabs, VerticalTabs::default(), "{wrong}");
+            assert_eq!(config.theme_name.as_deref(), Some("Kept"), "{wrong}");
+        }
+        // A bad field costs only that field.
+        let partial = parse(r#"{"enabled":true,"width":"wide","collapsed":"no"}"#);
+        assert_eq!(
+            partial.vertical_tabs,
+            VerticalTabs {
+                enabled: true,
+                ..VerticalTabs::default()
+            }
+        );
+    }
+
+    /// The stored width is a preference inside 140..=400: out-of-range numbers are clamped
+    /// where they are read, and the read itself writes nothing.
+    #[test]
+    fn the_vertical_tab_width_is_clamped_on_read() {
+        let width = |value: &str| {
+            UiConfig::parse_document(&format!(r#"{{"vertical_tabs":{{"width":{value}}}}}"#))
+                .unwrap()
+                .vertical_tabs
+                .width
+        };
+        assert_eq!(width("260"), 260);
+        assert_eq!(width("260.4"), 260);
+        assert_eq!(width("139"), 140);
+        assert_eq!(width("0"), 140);
+        assert_eq!(width("-30"), 140);
+        assert_eq!(width("401"), 400);
+        assert_eq!(width("100000"), 400);
+    }
+
+    /// The field is additive: a document with it survives a load and a save, and the rest of
+    /// the document is untouched.
+    #[test]
+    fn vertical_tabs_survive_a_load_and_a_save() {
+        let directory = TemporaryDirectory(std::env::temp_dir().join(format!(
+            "oneterm-ui-vertical-tabs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        )));
+        std::fs::create_dir_all(&*directory).unwrap();
+        let path = directory.join("ui_config.json");
+        std::fs::write(
+            &path,
+            r#"{"schema_version":1,"theme_name":"Kept","vertical_tabs":{"enabled":true,"width":300}}"#,
+        )
+        .unwrap();
+        let loaded = UiConfig::load_from(&path).unwrap();
+        assert!(path.exists(), "the document was not quarantined");
+        assert!(loaded.vertical_tabs.enabled);
+        assert_eq!(loaded.vertical_tabs.width, 300);
+        loaded.save_to(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            written["vertical_tabs"],
+            serde_json::json!({"enabled": true, "width": 300})
+        );
+        assert_eq!(written["theme_name"], "Kept");
     }
 
     #[test]

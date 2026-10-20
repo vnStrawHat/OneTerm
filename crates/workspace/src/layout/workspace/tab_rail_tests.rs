@@ -1,0 +1,752 @@
+//! The vertical tab rail drawn by the real `OneTermTabGroupSkin` (`IN-0055`, `US-0196`).
+
+use std::cell::Cell;
+use std::rc::Rc;
+
+use gpui::{
+    App, AppContext as _, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, Modifiers, MouseButton, ParentElement as _, Pixels,
+    Point, Render, SharedString, StatefulInteractiveElement as _, Styled as _, TestAppContext,
+    VisualTestContext, Window, div, point, px,
+};
+use gpui_component::dock::{
+    DockArea, DockLayout, DockPlacement, PaneRef, Panel, PanelControl, PanelEvent, PanelId,
+    panel_handle,
+};
+use gpui_component::h_flex;
+use oneterm_settings::{UiConfig, VerticalTabs, ui_config::UiConfigGlobal};
+use oneterm_state::{TabRowLayout, panel_names};
+
+use super::tab_rail::{
+    EMPTY_SELECTOR, GRIP_SELECTOR, LIST_SELECTOR, RAIL_SELECTOR, RAIL_WIDTH, ROW_SELECTOR,
+};
+use super::{MAIN_DOCK_VERSION, dock_skin};
+
+/// What a probe panel reports to the test.
+#[derive(Clone, Default)]
+struct Report {
+    /// The box its tab group gave the panel.
+    bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// How many times the panel was taken out of its group (a rebuild would do this).
+    removed: Rc<Cell<usize>>,
+    /// How many times its title row started its own drag.
+    title_drags: Rc<Cell<usize>>,
+    /// What the row layout was while its title was built.
+    title_layout: Rc<Cell<Option<TabRowLayout>>>,
+}
+
+/// A panel that records the box its tab group gave it, drawn under any registered name.
+struct Probe {
+    name: &'static str,
+    label: SharedString,
+    /// Draw a title element of its own (a draggable row holding a close button) instead of
+    /// offering a short name, the way the terminal panel's tab row is built.
+    title_row: bool,
+    report: Report,
+    focus_handle: FocusHandle,
+}
+
+/// The payload of the probe title row's own drag, standing in for `DragTerminalTab`.
+#[derive(Clone)]
+struct ProbeDrag;
+
+impl Render for ProbeDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_4()
+    }
+}
+
+impl Probe {
+    fn view(
+        name: &'static str,
+        label: &str,
+        title_row: bool,
+        report: &Report,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        let label = SharedString::from(label.to_owned());
+        let report = report.clone();
+        cx.new(|cx| Self {
+            name,
+            label,
+            title_row,
+            report,
+            focus_handle: cx.focus_handle(),
+        })
+    }
+}
+
+impl gpui_base::dock::Panel for Probe {
+    fn panel_name(&self) -> &'static str {
+        self.name
+    }
+
+    fn on_removed(&mut self, _: &mut Window, _: &mut Context<Self>) {
+        self.report.removed.set(self.report.removed.get() + 1);
+    }
+}
+
+impl Panel for Probe {
+    fn tab_name(&self, _: &App) -> Option<SharedString> {
+        (!self.title_row).then(|| self.label.clone())
+    }
+
+    fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.report
+            .title_layout
+            .set(Some(TabRowLayout::current(cx)));
+        let started = self.report.title_drags.clone();
+        let label = self.label.clone();
+        let selector = format!("probe-row-{label}");
+        let close = format!("probe-close-{label}");
+        h_flex()
+            .id(SharedString::from(selector.clone()))
+            .debug_selector(move || selector.clone())
+            .flex_1()
+            .h_full()
+            .items_center()
+            .on_drag(ProbeDrag, move |drag, _, _, cx| {
+                started.set(started.get() + 1);
+                cx.new(|_| drag.clone())
+            })
+            .child(div().flex_1().child(label))
+            .child(
+                div()
+                    .id("probe-close")
+                    .debug_selector(move || close.clone())
+                    .size_4()
+                    // Like the real `x`: it stops left mouse-down, so neither drag starts.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+            )
+    }
+
+    // Like the terminal panel: the toolbar offers zoom, and the content frame adds no top
+    // padding for several tabs.
+    fn zoom_control(&self, _: &App) -> Option<PanelControl> {
+        Some(PanelControl::Both)
+    }
+
+    fn inner_padding(&self, _: &App) -> bool {
+        false
+    }
+}
+
+impl EventEmitter<PanelEvent> for Probe {}
+
+impl Focusable for Probe {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for Probe {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use gpui_component::ElementExt as _;
+        let bounds = self.report.bounds.clone();
+        div()
+            .size_full()
+            .on_prepaint(move |measured, _, _| bounds.set(measured))
+    }
+}
+
+/// The window's root: just the dock area, drawn the way the workspace draws it.
+struct Host {
+    area: Entity<DockArea>,
+}
+
+impl Render for Host {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.area.clone())
+    }
+}
+
+struct RailWindow {
+    area: Entity<DockArea>,
+    config: Entity<UiConfig>,
+}
+
+/// A window with the OneTerm dock skin and a `UiConfig` (never written: `persist_blocked`).
+fn rail_window(cx: &mut TestAppContext, vertical: bool) -> (RailWindow, &mut VisualTestContext) {
+    cx.update(gpui_component::init);
+    let config = cx.update(|cx| {
+        let config = cx.new(|_| UiConfig {
+            persist_blocked: true,
+            vertical_tabs: VerticalTabs {
+                enabled: vertical,
+                ..VerticalTabs::default()
+            },
+            ..UiConfig::default()
+        });
+        cx.set_global(UiConfigGlobal(config.clone()));
+        config
+    });
+    let (host, cx) = cx.add_window_view(|window, cx| {
+        let (area, _skin) = dock_skin::dock_area("rail-test", Some(MAIN_DOCK_VERSION), window, cx);
+        Host { area }
+    });
+    let area = host.read_with(cx, |host, _| host.area.clone());
+    (RailWindow { area, config }, cx)
+}
+
+/// A tab group's panels as (registered name, label).
+type Tabs<'a> = &'a [(&'static str, &'a str)];
+
+fn tab_group(tabs: Tabs, title_row: bool, report: &Report, cx: &mut App) -> DockLayout {
+    let mut group = DockLayout::tabs();
+    for (name, label) in tabs {
+        let probe = Probe::view(name, label, title_row, report, cx);
+        group = group.panel_view(panel_handle(probe), cx);
+    }
+    group
+}
+
+/// Put `tabs` in one centre tab group, in order.
+fn set_centre(
+    area: &Entity<DockArea>,
+    tabs: Tabs,
+    title_row: bool,
+    report: &Report,
+    cx: &mut VisualTestContext,
+) {
+    cx.update(|window, cx| {
+        let layout = DockLayout::v_split().child(tab_group(tabs, title_row, report, cx), None);
+        area.update(cx, |area, cx| area.set_center(layout, window, cx));
+    });
+    settle(cx);
+}
+
+/// Put `tabs` in the right dock and open it.
+fn set_right_dock(
+    area: &Entity<DockArea>,
+    tabs: Tabs,
+    report: &Report,
+    cx: &mut VisualTestContext,
+) {
+    cx.update(|window, cx| {
+        let layout = tab_group(tabs, false, report, cx);
+        area.update(cx, |area, cx| {
+            area.set_dock(DockPlacement::Right, layout, window, cx);
+            area.set_dock_size(DockPlacement::Right, px(300.), window, cx);
+            if !area.is_dock_open(DockPlacement::Right) {
+                area.toggle_dock(DockPlacement::Right, window, cx);
+            }
+        });
+    });
+    settle(cx);
+}
+
+/// Draw twice: scrolling reads the previous frame's child bounds.
+fn settle(cx: &mut VisualTestContext) {
+    for _ in 0..2 {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+}
+
+/// Flip the switch the way `UiConfig::set_vertical_tabs_enabled` does, without the write.
+fn set_vertical(config: &Entity<UiConfig>, enabled: bool, cx: &mut VisualTestContext) {
+    config.update(cx, |config, cx| {
+        config.vertical_tabs.enabled = enabled;
+        cx.notify();
+    });
+    cx.update(|_, cx| cx.refresh_windows());
+    settle(cx);
+}
+
+/// `debug_bounds` takes a `'static` selector.
+fn bounds_of(selector: impl Into<String>, cx: &mut VisualTestContext) -> Option<Bounds<Pixels>> {
+    cx.debug_bounds(selector.into().leak())
+}
+
+fn row(ix: usize, cx: &mut VisualTestContext) -> Option<Bounds<Pixels>> {
+    bounds_of(format!("{ROW_SELECTOR}-{ix}"), cx)
+}
+
+/// The panel ids of the centre tab group in tab order, and its active index.
+fn centre_tabs(area: &Entity<DockArea>, cx: &mut VisualTestContext) -> (Vec<PanelId>, usize) {
+    area.read_with(cx, |area, _| {
+        let tree = area.layout(DockPlacement::Center).expect("centre layout");
+        let mut found = None;
+        tree.root().walk(&mut |node| {
+            if let PaneRef::Tabs { panels, active_ix } = node.kind() {
+                found.get_or_insert((panels.to_vec(), active_ix));
+            }
+        });
+        found.expect("a tab group in the centre")
+    })
+}
+
+fn centre_node(
+    area: &Entity<DockArea>,
+    cx: &mut VisualTestContext,
+) -> gpui_component::dock::NodeId {
+    area.read_with(cx, |area, _| {
+        let tree = area.layout(DockPlacement::Center).expect("centre layout");
+        let mut found = None;
+        tree.root().walk(&mut |node| {
+            if matches!(node.kind(), PaneRef::Tabs { .. }) {
+                found.get_or_insert(node.id());
+            }
+        });
+        found.expect("a tab group in the centre")
+    })
+}
+
+fn terminals(labels: &[&'static str]) -> Vec<(&'static str, &'static str)> {
+    labels
+        .iter()
+        .map(|label| (panel_names::TERMINAL, *label))
+        .collect()
+}
+
+/// A left press, a first move past the drag threshold, then the move onto `target`; the button
+/// stays down.
+fn drag_to(from: Point<Pixels>, target: Point<Pixels>, cx: &mut VisualTestContext) {
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        from + point(px(0.), px(6.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(target, MouseButton::Left, Modifiers::none());
+}
+
+fn release(at: Point<Pixels>, cx: &mut VisualTestContext) {
+    cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+    settle(cx);
+}
+
+fn has_active_drag(cx: &mut VisualTestContext) -> bool {
+    cx.update(|_, cx| cx.has_active_drag())
+}
+
+/// Q8 (`IN-0055`): a rail placed absolutely in the group frame, with the content frame pushed
+/// right by a margin of the rail's width, lays out inside base's forced column, and the
+/// terminal is resized rather than overlapped when the switch flips.
+#[gpui::test]
+fn the_rail_is_beside_the_content_and_the_terminal_is_resized_not_overlapped(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = rail_window(cx, false);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["one", "two"]),
+        false,
+        &report,
+        cx,
+    );
+
+    // Horizontal: the kit strip, no rail, the terminal spans the group. Everything below is
+    // measured against this, whatever the test window's size.
+    assert!(
+        bounds_of(RAIL_SELECTOR, cx).is_none(),
+        "no rail while the switch is off"
+    );
+    let strip = report.bounds.get();
+    assert!(strip.size.width > RAIL_WIDTH * 2., "{strip:?}");
+    assert_eq!(strip.origin.x, px(0.));
+
+    // Vertical: a 220 px rail on the left, the terminal laid out in what is left.
+    set_vertical(&window.config, true, cx);
+    let rail = bounds_of(RAIL_SELECTOR, cx).expect("the rail is drawn");
+    assert_eq!(rail.size.width, RAIL_WIDTH);
+    assert_eq!(rail.origin.x, px(0.));
+    let terminal = report.bounds.get();
+    assert_eq!(
+        terminal.origin.x, RAIL_WIDTH,
+        "the terminal starts where the rail ends"
+    );
+    assert_eq!(
+        terminal.size.width,
+        strip.size.width - RAIL_WIDTH,
+        "resized, not overlapped"
+    );
+    assert!(
+        rail.right() <= terminal.left(),
+        "the rail {rail:?} and the terminal {terminal:?} must not overlap"
+    );
+    // The rail is out of the column: it takes no height from the content, and the tab bar's
+    // height is gone from the terminal's.
+    assert_eq!(rail.size.height, terminal.size.height);
+
+    // And back: the strip returns and the terminal takes the whole group again.
+    set_vertical(&window.config, false, cx);
+    assert!(bounds_of(RAIL_SELECTOR, cx).is_none());
+    assert_eq!(report.bounds.get(), strip);
+}
+
+/// The Settings switch's setter is what flips the layout in the running app.
+#[gpui::test]
+fn the_settings_setter_flips_the_layout_on_the_next_frame(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, false);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["one", "two"]),
+        false,
+        &report,
+        cx,
+    );
+    assert!(bounds_of(RAIL_SELECTOR, cx).is_none());
+
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_enabled(true, cx));
+    settle(cx);
+    assert!(bounds_of(RAIL_SELECTOR, cx).is_some());
+    assert!(
+        window
+            .config
+            .read_with(cx, |config, _| config.vertical_tabs.enabled)
+    );
+
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_enabled(false, cx));
+    settle(cx);
+    assert!(bounds_of(RAIL_SELECTOR, cx).is_none());
+}
+
+/// Switching layout draws the same panels in a different chrome: nothing is rebuilt and no
+/// panel leaves its group (which is what ends a session).
+#[gpui::test]
+fn the_live_switch_keeps_every_panel_and_removes_none(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, false);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        false,
+        &report,
+        cx,
+    );
+    let before = centre_tabs(&window.area, cx);
+
+    for enabled in [true, false, true, false] {
+        set_vertical(&window.config, enabled, cx);
+        assert_eq!(centre_tabs(&window.area, cx), before, "vertical: {enabled}");
+        assert_eq!(report.removed.get(), 0, "vertical: {enabled}");
+    }
+}
+
+#[gpui::test]
+fn the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        false,
+        &report,
+        cx,
+    );
+
+    let rows: Vec<_> = (0..3)
+        .map(|ix| row(ix, cx).expect("a row per tab"))
+        .collect();
+    assert!(row(3, cx).is_none(), "no row beyond the tabs");
+    for pair in rows.windows(2) {
+        assert_eq!(pair[0].size.height, px(32.));
+        assert_eq!(pair[1].top(), pair[0].bottom(), "rows stack");
+    }
+    let rail = bounds_of(RAIL_SELECTOR, cx).unwrap();
+    assert!(
+        rows[0].top() > rail.top(),
+        "the header sits above the first row"
+    );
+    // Rows that fit leave no scrollbar gutter.
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+    assert_eq!(rows[0].right(), list.right());
+
+    assert_eq!(centre_tabs(&window.area, cx).1, 0);
+    cx.simulate_click(rows[2].center(), Modifiers::none());
+    settle(cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).1,
+        2,
+        "a click on a row selects its tab"
+    );
+}
+
+/// The rail rule: only a centre group of terminal panels.
+#[gpui::test]
+fn other_groups_keep_what_they_draw_today(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+
+    set_centre(
+        &window.area,
+        &[(panel_names::SSH_CLIENT, "ssh")],
+        false,
+        &report,
+        cx,
+    );
+    assert!(
+        bounds_of(RAIL_SELECTOR, cx).is_none(),
+        "the SSH Client group draws no rail"
+    );
+
+    set_centre(
+        &window.area,
+        &[
+            (panel_names::TERMINAL, "term"),
+            (panel_names::SFTP, "files"),
+        ],
+        false,
+        &report,
+        cx,
+    );
+    assert!(
+        bounds_of(RAIL_SELECTOR, cx).is_none(),
+        "a group holding another kind of panel keeps the strip"
+    );
+
+    // A terminal tab dropped into the right dock: the centre keeps its rail (one row), the
+    // dock's group of two terminal tabs keeps the strip (no second row 1 anywhere).
+    set_centre(&window.area, &terminals(&["centre"]), false, &report, cx);
+    set_right_dock(
+        &window.area,
+        &terminals(&["docked one", "docked two"]),
+        &report,
+        cx,
+    );
+    let rail = bounds_of(RAIL_SELECTOR, cx).expect("the centre group draws its rail");
+    assert_eq!(rail.origin.x, px(0.), "it is the centre's rail");
+    assert!(row(0, cx).is_some());
+    assert!(
+        row(1, cx).is_none(),
+        "the right dock's terminal group must not draw rows"
+    );
+}
+
+/// The row asks for its vertical layout around the rail's own `title()` call only.
+#[gpui::test]
+fn the_rail_draws_its_rows_in_the_vertical_layout_and_nothing_else_does(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, false);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), true, &report, cx);
+    // The kit strip builds the same title element in the default (horizontal) layout.
+    assert_eq!(report.title_layout.get(), Some(TabRowLayout::Horizontal));
+
+    set_vertical(&window.config, true, cx);
+    assert_eq!(report.title_layout.get(), Some(TabRowLayout::Vertical));
+    cx.update(|_, cx| {
+        assert_eq!(
+            TabRowLayout::current(cx),
+            TabRowLayout::Horizontal,
+            "the rail puts the layout back"
+        );
+    });
+}
+
+/// With 40 tabs the rows scroll under the header, and a tab that becomes active from
+/// elsewhere (a new tab from `+`) is scrolled into view.
+#[gpui::test]
+fn forty_tabs_scroll_and_the_active_one_is_brought_into_view(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    let labels: Vec<&'static str> = (0..40).map(|ix| &*format!("tab {ix}").leak()).collect();
+    set_centre(&window.area, &terminals(&labels), false, &report, cx);
+
+    let list = bounds_of(LIST_SELECTOR, cx).expect("the list is drawn");
+    let first = row(0, cx).unwrap();
+    let last = row(39, cx).unwrap();
+    // The overflowing list leaves the scrollbar's gutter free of rows (their close buttons
+    // would sit under it).
+    assert!(
+        first.right() <= list.right() - gpui_component::scroll::Scrollbar::width(),
+        "row {first:?} must clear the scrollbar gutter of the list {list:?}"
+    );
+    assert!(first.top() >= list.top() && first.bottom() <= list.bottom());
+    assert!(
+        last.bottom() > list.bottom(),
+        "40 rows of 32 px do not fit the list ({list:?}), so the last is out of view"
+    );
+
+    let (panels, _) = centre_tabs(&window.area, cx);
+    let newest = panels[39];
+    cx.update(|w, app| {
+        window
+            .area
+            .update(app, |area, cx| area.select_panel(newest, w, cx))
+    });
+    settle(cx);
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+    let last = row(39, cx).unwrap();
+    assert!(
+        last.top() >= list.top() && last.bottom() <= list.bottom(),
+        "the newly active row {last:?} must be inside the list {list:?}"
+    );
+    assert_eq!(centre_tabs(&window.area, cx).1, 39);
+}
+
+/// Zoom keeps the rail (it is the group's chrome); the button reads Zoom Out while zoomed.
+#[gpui::test]
+fn zoom_keeps_the_rail_and_its_button_restores(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+    assert!(bounds_of(format!("{RAIL_SELECTOR}-zoom-in"), cx).is_some());
+    assert!(bounds_of(format!("{RAIL_SELECTOR}-zoom-out"), cx).is_none());
+
+    let node = centre_node(&window.area, cx);
+    cx.update(|w, app| {
+        window
+            .area
+            .update(app, |area, cx| area.set_zoomed_in(node, w, cx))
+    });
+    settle(cx);
+    assert!(
+        bounds_of(RAIL_SELECTOR, cx).is_some(),
+        "the zoomed group keeps its rail"
+    );
+    assert!(bounds_of(format!("{RAIL_SELECTOR}-zoom-out"), cx).is_some());
+    assert!(bounds_of(format!("{RAIL_SELECTOR}-zoom-in"), cx).is_none());
+
+    let button = bounds_of(format!("{RAIL_SELECTOR}-zoom-out"), cx).unwrap();
+    cx.simulate_click(button.center(), Modifiers::none());
+    settle(cx);
+    assert!(window.area.read_with(cx, |area, _| !area.is_zoomed()));
+    assert!(bounds_of(format!("{RAIL_SELECTOR}-zoom-in"), cx).is_some());
+}
+
+/// Drag priority (`IN-0055` HLD § Interactions): the title row's own drag wins over the row's
+/// reorder drag, the grip starts the reorder, and the `x` starts neither.
+#[gpui::test]
+fn the_title_row_drags_into_a_space_the_grip_reorders_and_the_close_button_starts_neither(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        true,
+        &report,
+        cx,
+    );
+    let (original, _) = centre_tabs(&window.area, cx);
+    let target = row(2, cx).unwrap().center();
+
+    // The title row: its own drag starts, and dropping it on another row reorders nothing.
+    let title = bounds_of("probe-row-a", cx).expect("the title row is drawn in the rail");
+    drag_to(title.origin + point(px(20.), px(10.)), target, cx);
+    assert!(has_active_drag(cx), "the title row starts a drag");
+    assert_eq!(
+        report.title_drags.get(),
+        1,
+        "it is the title row's own drag"
+    );
+    release(target, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        original,
+        "no reorder from the title row"
+    );
+
+    // The close button starts no drag at all.
+    let close = bounds_of("probe-close-a", cx).unwrap();
+    drag_to(close.center(), target, cx);
+    assert!(!has_active_drag(cx), "the close button starts no drag");
+    assert_eq!(report.title_drags.get(), 1);
+    release(target, cx);
+    assert_eq!(centre_tabs(&window.area, cx).0, original);
+
+    // The grip starts the reorder drag, not the title row's, and dropping it on a row moves
+    // the tab to that slot.
+    let grip = bounds_of(format!("{GRIP_SELECTOR}-2"), cx).expect("a grip per row");
+    let first = row(0, cx).unwrap().center();
+    drag_to(grip.center(), first, cx);
+    assert!(has_active_drag(cx), "the grip starts a drag");
+    assert_eq!(report.title_drags.get(), 1, "not the title row's drag");
+    release(first, cx);
+    let (reordered, _) = centre_tabs(&window.area, cx);
+    assert_eq!(
+        reordered,
+        vec![original[2], original[0], original[1]],
+        "the dragged tab took the slot of the row it was dropped on"
+    );
+}
+
+/// A row dragged by its grip and dropped below the last row goes to the last slot.
+#[gpui::test]
+fn a_grip_drag_dropped_below_the_last_row_moves_the_tab_to_the_end(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        false,
+        &report,
+        cx,
+    );
+    let (original, _) = centre_tabs(&window.area, cx);
+
+    let grip = bounds_of(format!("{GRIP_SELECTOR}-0"), cx).unwrap();
+    let below = bounds_of(EMPTY_SELECTOR, cx)
+        .expect("room below the last row")
+        .center();
+    drag_to(grip.center(), below, cx);
+    assert!(has_active_drag(cx));
+    release(below, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[1], original[2], original[0]]
+    );
+}
+
+/// A zoomed group is neither draggable nor droppable, as on the strip; and a lone tab has
+/// nowhere to go.
+#[gpui::test]
+fn a_lone_tab_has_nothing_to_reorder(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["only"]), false, &report, cx);
+    let grip = bounds_of(format!("{GRIP_SELECTOR}-0"), cx).unwrap();
+    let below = bounds_of(EMPTY_SELECTOR, cx).unwrap().center();
+    drag_to(grip.center(), below, cx);
+    assert!(
+        !has_active_drag(cx),
+        "the last panel of the dock is not draggable"
+    );
+    release(below, cx);
+}
+
+/// The drop line sits where the tab will land (`drop_edge`): dragged forward it lands after the
+/// hovered row, dragged backward before it. Pins base's insert rule the line is drawn for.
+#[gpui::test]
+fn a_forward_reorder_lands_after_the_hovered_row_and_a_backward_one_before_it(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        false,
+        &report,
+        cx,
+    );
+    let (original, _) = centre_tabs(&window.area, cx);
+
+    // Forward: the first tab dropped on the second row ends up after it.
+    let from = bounds_of(format!("{GRIP_SELECTOR}-0"), cx)
+        .unwrap()
+        .center();
+    let onto = row(1, cx).unwrap().center();
+    drag_to(from, onto, cx);
+    release(onto, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[1], original[0], original[2]]
+    );
+
+    // Backward: the last tab dropped on the first row ends up before it.
+    let from = bounds_of(format!("{GRIP_SELECTOR}-2"), cx)
+        .unwrap()
+        .center();
+    let onto = row(0, cx).unwrap().center();
+    drag_to(from, onto, cx);
+    release(onto, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[2], original[1], original[0]]
+    );
+}

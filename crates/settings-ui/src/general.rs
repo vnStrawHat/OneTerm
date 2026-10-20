@@ -27,7 +27,8 @@ pub(crate) fn page(cx: &App) -> SettingPage {
         .group(super::terminal::shell_group())
 }
 
-/// "Interface" group — the UI (non-terminal) font size and the FPS HUD switch.
+/// "Interface" group — the UI (non-terminal) font size, the FPS HUD switch and the
+/// Vertical Tabs switch.
 fn interface_group() -> SettingGroup {
     SettingGroup::new()
         .title("Interface")
@@ -61,6 +62,21 @@ fn interface_group() -> SettingGroup {
             )
             .description(
                 "Frame times, dropped frames and GPU usage in the main window's top-right corner.",
+            ),
+        )
+        .item(
+            SettingItem::new(
+                "Vertical Tabs",
+                SettingField::switch(
+                    |cx: &App| oneterm_settings::UiConfig::read_vertical_tabs(cx).enabled,
+                    |val: bool, cx: &mut App| {
+                        oneterm_settings::UiConfig::set_vertical_tabs_enabled(val, cx)
+                    },
+                )
+                .default_value(false),
+            )
+            .description(
+                "Show terminal tabs in a list on the left of the terminal area instead of a strip above it.",
             ),
         )
 }

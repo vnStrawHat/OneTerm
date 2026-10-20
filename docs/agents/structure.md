@@ -98,7 +98,7 @@ OneTerm/
 │   │       ├── terminal_config/    # terminal.json load/save (font/cursor/layout/scroll/bell/colors/security)
 │   │       ├── terminal_settings/  # Live TerminalSettings (defaults = TerminalConfig::default() via from_config)
 │   │       │                       #   + persist (to_config) / mutators / color helpers
-│   │       └── ui_config.rs        # UiConfig (ui_font_size, theme_name, key_bindings) → ui_config.json;
+│   │       └── ui_config.rs        # UiConfig (ui_font_size, theme_name, key_bindings, vertical_tabs, …) → ui_config.json;
 │   │                               #   observe_theme(cx) persists the Theme choice (coalesced)
 │   │
 │   ├── state/                      # `oneterm-state` — cross-feature runtime state + injection
@@ -112,6 +112,7 @@ OneTerm/
 │   │       ├── input_channel_registry.rs # InputChannelRegistry (global Entity): per-Space channel membership + input fan-out
 │   │       ├── dock_persistence.rs # docks.json path + DockDocument schema owner (read/update transaction, quarantine)
 │   │       ├── dock_util.rs        # DockArea walking + set_right_dock_open (shared shell/feature helper)
+│   │       ├── tab_row_layout.rs   # TabRowLayout: horizontal strip vs vertical rail row, set by the rail around a panel's title() (IN-0055)
 │   │       ├── panel_names.rs      # Registered dock panel name constants (persisted contract)
 │   │       ├── vault_state.rs      # VaultState (global Entity): master-password phase, key, back-off (IN-0050)
 │   │       ├── vault_dialogs.rs    # Set up / Unlock / Change / Reset dialogs + ensure_unlocked
@@ -139,7 +140,7 @@ OneTerm/
 │   │       ├── lib.rs              # Re-export OneTermWorkspace
 │   │       ├── lock_screen.rs      # idle lock (US-0159): IdleClock, keystroke interceptor, deadline timer,
 │   │       │                       #   LockScreen RootPlugin (replaces every window's surface), LockOneTerm
-│   │       ├── layout/             # title_bar, app_menus, statusbar, workspace/{mod,actions,layout,persistence,zoom}
+│   │       ├── layout/             # title_bar, app_menus, statusbar, workspace/{mod,actions,layout,persistence,zoom,dock_skin,tab_rail}
 │   │       │                       #   builds feature panels by NAME via gpui-component PanelRegistry
 │   │       └── widgets/            # statusbar widgets (breadcrumb, git_status, net_speed, datetime_clock, resource)
 │   │
