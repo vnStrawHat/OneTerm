@@ -10,8 +10,8 @@ Created: 2026-10-20
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -34,19 +34,20 @@ With **Vertical Tabs** on (Settings > General > Interface, default off, applies 
 
 ## Acceptance
 
-- [ ] Q8 spike: in a gpui test, with the switch on the group's content region starts at the rail's width and the active terminal panel is laid out at (group width - 220 px) wide; flipping the switch changes its width in both directions (resized, not overlapped); the rail is absolutely placed and takes no space in base's column. If this fails: stop and report before any fallback.
-- [ ] The switch flips the layout on the next frame in both directions without rebuilding a panel or ending a session (test: same panel entity ids, panel count unchanged).
-- [ ] Rail rule: a centre group of terminal panels draws one rail row per tab; the SSH Client group draws no rail; a group holding any non-terminal panel, and any group outside the centre, keeps what it draws today (tests).
-- [ ] Row behaviour in the rail: click selects (and scrolls only when selection came from elsewhere); middle-click, `x`, double-click rename, the right-click menu, status icon, channel chips and recording dot all come from the shared row element (the same `render_tab_strip`).
-- [ ] Drag priority pinned by a gpui test: dragging the title row starts `DragTerminalTab`, the grip starts `DragPanel`, the `x` starts neither.
-- [ ] Reorder: dropping a `DragPanel` on a row inserts at that slot, below the last row appends (last slot for a panel of this group); drop slot logic unit tested.
-- [ ] 40 tabs: the rows scroll under the header; a tab that becomes active from elsewhere scrolls into view (test on the scroll offset).
-- [ ] Zoom keeps the rail; its button reads Zoom Out while zoomed, Zoom In otherwise; no `...` menu, no dock toggle.
-- [ ] "Close Tabs Below" while vertical, "Close to the Right" in the strip (test of the label rule).
-- [ ] `ui_config.json`: absent -> off; `{"vertical_tabs":{"enabled":true}}` -> on; garbage (`"x"`, `5`, wrong-typed fields) loads as default with no quarantine and the rest of the document intact; default omitted from the written file; width clamped to 140..=400 on read; an older document heals; an elevated window writes nothing (existing `write_refusal` test plus a setter-level assertion).
-- [ ] `scripts/check-theme-contrast.py` passes with `tab_bar.background` added to `tab.active.foreground`'s surfaces, both the floor and the `HIERARCHY` comparison.
-- [ ] `docs/gui-layout.md` documents the vertical layout and qualifies the "dock buttons in the tab bar" sentence as the horizontal layout's; `docs/agents/persistence.md` row amended.
-- [ ] Full `pwsh scripts/ci-local.ps1` passes; screenshots of both layouts in a light and a dark theme by `ui-verifier` (not this agent's verdict).
+- [x] Q8 spike: in a gpui test, with the switch on the group's content region starts at the rail's width and the active terminal panel is laid out at (group width - 220 px) wide; flipping the switch changes its width in both directions (resized, not overlapped); the rail is absolutely placed and takes no space in base's column. If this fails: stop and report before any fallback.
+- [x] The switch flips the layout on the next frame in both directions without rebuilding a panel or ending a session (test: same panel entity ids, panel count unchanged).
+- [x] Rail rule: a centre group of terminal panels draws one rail row per tab; the SSH Client group draws no rail; a group holding any non-terminal panel, and any group outside the centre, keeps what it draws today (tests).
+- [x] Row behaviour in the rail: click selects (and scrolls only when selection came from elsewhere); middle-click, `x`, double-click rename, the right-click menu, status icon, channel chips and recording dot all come from the shared row element (the same `render_tab_strip`). Proven here: click selects (gpui test), the real row fills the rail width and drags only by its content (terminal-view test); the rest is the unchanged element, walked on screen by `ui-verifier`.
+- [x] Drag priority pinned by a gpui test: dragging the title row starts `DragTerminalTab`, the grip starts `DragPanel`, the `x` starts neither.
+- [x] Reorder: dropping a `DragPanel` on a row inserts at that slot, below the last row appends (last slot for a panel of this group); drop slot logic unit tested.
+- [x] 40 tabs: the rows scroll under the header; a tab that becomes active from elsewhere scrolls into view (test on the scroll offset).
+- [x] Zoom keeps the rail; its button reads Zoom Out while zoomed, Zoom In otherwise; no `...` menu, no dock toggle.
+- [x] "Close Tabs Below" while vertical, "Close to the Right" in the strip (test of the label rule).
+- [x] `ui_config.json`: absent -> off; `{"vertical_tabs":{"enabled":true}}` -> on; garbage (`"x"`, `5`, wrong-typed fields) loads as default with no quarantine and the rest of the document intact; default omitted from the written file; width clamped to 140..=400 on read; an older document heals; an elevated window writes nothing (existing `write_refusal` test plus a setter-level assertion).
+- [x] `scripts/check-theme-contrast.py` passes with `tab_bar.background` added to `tab.active.foreground`'s surfaces, both the floor and the `HIERARCHY` comparison.
+- [x] `docs/gui-layout.md` documents the vertical layout and qualifies the "dock buttons in the tab bar" sentence as the horizontal layout's; `docs/agents/persistence.md` row amended.
+- [x] Full `pwsh scripts/ci-local.ps1` passes.
+- [ ] Screenshots of both layouts in a light and a dark theme, and the on-screen walk of every row behaviour, by `ui-verifier` (not the coder's verdict).
 
 ## Documentation
 
@@ -68,7 +69,7 @@ Reason: a new user-visible layout, one additive persisted field, one new measure
 
 ### Reconciliation
 
-Filled in at completion.
+Changed: `docs/gui-layout.md` (new "Vertical tabs" section; the dock-button sentence qualified; source map; the contrast paragraph names the hover pair), `docs/agents/persistence.md` (`ui_config.json` row), `docs/agents/structure.md` (tree entries), `scripts/check-theme-contrast.py` (SURFACES), the intake (owner ruling) and this packet. Unchanged and still valid: `docs/terminal-split.md`, `docs/ssh-client-connect.md`, `IN-0054`'s HLD (the right dock follows the tab kind through `AppState`; the strip's dock button is simply absent in the rail).
 
 ## Context
 
@@ -80,13 +81,13 @@ Filled in at completion.
 ## Plan
 
 - [x] Records commit: owner ruling in the intake, this packet.
-- [ ] Settings: `VerticalTabs` struct (`enabled`, `width`, `collapsed`), lenient parse, skip-while-default, `set_vertical_tabs_enabled`, `read_vertical_tabs(cx)`, tests.
-- [ ] Q8 spike: skeleton skin with absolute rail + margin; gpui test of widths. Stop and report on failure.
-- [ ] `oneterm_state::TabRowLayout`; vertical row variant in `render_tab_strip`; `Close Tabs Below`.
-- [ ] Rail: header, rows (base `Tabs`/`Tab`), grip, scroll, drop slots, accessibility, zoom button.
-- [ ] Settings > General switch; icon `grip-vertical.svg`.
-- [ ] Tests (rail rule, live switch keeps entities, drag priority, drop slots, scroll, label rule, settings).
-- [ ] Contrast script surface; docs; gate; debug binary for ui-verifier.
+- [x] Settings: `VerticalTabs` struct (`enabled`, `width`, `collapsed`), lenient parse, skip-while-default, `set_vertical_tabs_enabled`, `read_vertical_tabs(cx)`, tests.
+- [x] Q8 spike: skeleton skin with absolute rail + margin; gpui test of widths. Stop and report on failure.
+- [x] `oneterm_state::TabRowLayout`; vertical row variant in `render_tab_strip`; `Close Tabs Below`.
+- [x] Rail: header, rows (base `Tabs`/`Tab`), grip, scroll, drop slots, accessibility, zoom button.
+- [x] Settings > General switch; icon `grip-vertical.svg`.
+- [x] Tests (rail rule, live switch keeps entities, drag priority, drop slots, scroll, label rule, settings).
+- [x] Contrast script surface; docs; gate; debug binary for ui-verifier.
 
 ## Decisions
 
@@ -97,17 +98,35 @@ No decision record: the choices (left rail, one switch, rows drawn by the panel)
 `cargo test -p oneterm-settings`, `-p oneterm-state`, `-p oneterm-workspace`, `-p oneterm-terminal-view`, `-p oneterm-settings-ui`; `python scripts/check-theme-contrast.py`; full `pwsh scripts/ci-local.ps1`; a smoke launch of the debug build with a private profile for `ui-verifier`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Filled in at completion.
+- **Q8 spike: passed.** Test `the_rail_is_beside_the_content_and_the_terminal_is_resized_not_overlapped` (`crates/workspace/src/layout/workspace/tab_rail_tests.rs`) drives the real `OneTermTabGroupSkin` in a window: switch off, the terminal spans the group; switch on, the rail is 220 px wide at x = 0, the terminal starts at x = 220 and is exactly 220 px narrower (resized, not overlapped), the rail and the terminal have the same height; switch off again, the terminal's box is byte-for-byte the original. Option B1 (absolute rail + left margin on the content frame) is the built design; B2 was not needed.
+- **Gate:** `pwsh scripts/ci-local.ps1` on Windows (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree `target`): all checks passed, 141 suites, 5063 tests passed, 0 failed, 33 ignored (the ignored-test lines and `check-ignored-tests.py` included). `check-theme-contrast.py`: 1638 pairings all >= 4.5:1 and 624 hierarchy comparisons pass with the added surface (the numbers the advisor measured on a scratch copy).
+- **New tests:** `oneterm-settings` 4 (default off and not written, garbage value loads as default without quarantine, width clamp 140..=400, survives a load and a save); `oneterm-state` 1 (`TabRowLayout` scope restores); `oneterm-workspace` 15 in `tab_rail` / `tab_rail_tests` (rail rule, scroll-change, below-last slot, zoom-button rule; layout spike, setter flips live, live switch keeps every panel and removes none, stacked rows and click selects, other groups keep the strip, rows use the vertical layout only inside the rail, 40 tabs scroll and the active one comes into view, zoom keeps the rail, drag priority (title row / `x` / grip), grip drop below the last row, lone tab has no reorder); `oneterm-terminal-view` 3 (menu wording per layout, the real row fills the rail width and drags only by its content, the strip's row is unchanged).
+- **Smoke launch** of `target\debug\oneterm.exe` with a private profile (scratch cwd and `USERPROFILE`, `vertical_tabs.enabled` on): ran 10 s without a panic, the config file untouched; the pid was stopped. No UI verdict here.
+- **Elevation:** the existing `an_elevated_window_refuses_to_write_a_perfectly_readable_config` covers `write_refusal`, the one function `UiConfig::persist` asks; the setter has no write path of its own.
+
+### Deviations from the HLD (all recorded here, none changes behaviour the HLD promises)
+
+1. The vertical row is selected by a small scoped global, `oneterm_state::TabRowLayout`, set by the rail around its own `title()` calls, not by `render_tab_strip` reading `UiConfig`: the HLD's reading would have drawn a rail-shaped row inside the kit strip for a terminal tab dropped into the right dock. `UiConfig` is read only by the shell (`UiConfig::read_vertical_tabs`, which tolerates a missing global so tab-group tests need no config).
+2. `vertical_tabs.width` / `collapsed` are parsed, clamped and stored now, as ruled, but nothing applies them yet: the rail is a fixed 220 px (`tab_rail::RAIL_WIDTH`). A hand-edited width is therefore inert until `US-0197`.
+3. The drag-priority test is split across the two crates that own the halves (R4: the shell cannot name `DragTerminalTab`): the workspace test uses a probe panel whose title row has its own drag and an `x` that stops left mouse-down, and proves the grip starts the reorder, the title row's own drag starts and reorders nothing, and the `x` starts neither; the terminal-view test proves the real row starts `DragTerminalTab` (accepted by a drop target for that type) and its `x` starts nothing.
+4. The reorder `DragPanel` is attached to the grip only (not to the whole `Tab` as the kit does), so the title row and the reorder drag never share a hitbox; the visible effect is the HLD's.
+5. The rail's drag preview is its own small chip (the kit's `DragPanelPreview` has private fields).
+6. No accessibility label is set on rows beyond the base `Tab`'s role, `aria_selected` and position in set: a row's name comes from its text content (the terminal panel offers no `tab_name`). Whether the platform reads it is for the `ui-verifier` walk.
+
+### Gaps
+
+- Not walked on screen (the coder does not give the UI verdict): live switch in the real window, light and dark screenshots, 40-tab scroll, drag into a Space, reorder by grip, lock/unlock, elevated window, restart persistence.
+- Linux and macOS compile only in CI.
 
 ## Handoff
 
-Filled in at completion.
+Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0196` in the intake. `US-0197` (resize, `clamp_tab_rail_width`) and `US-0198` (collapse) build on `tab_rail.rs` and the stored `vertical_tabs` fields.
