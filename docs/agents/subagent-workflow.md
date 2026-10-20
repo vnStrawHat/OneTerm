@@ -51,7 +51,7 @@ the agent, its model and its effort in the report of every dispatch (owner rule,
 | **architect** | opus | high | the spec: Spec Intake, HLD, LLDs for the high-risk lane, DEC candidates, packet list, numbered owner questions, scenario walkthrough; may request an advisor spec review; no cargo | reconciling records after an owner ruling |
 | **coder** | sonnet | high | one packet from its spec: records-first commit, code, unit tests, the in-worktree quality gate, evidence; reports whether the change is UI-visible | **rework** after a review (same worktree, cherry-picks the reviewer's tests) |
 | **coder-lite** | sonnet | low | small tasks: configuration, formatting, environment setup, running the quality gate or a build and reporting its evidence, doc reconciliation, mechanical fixes | — |
-| **ui-verifier** | opus | xhigh | UI only: launches the build with a private profile, walks the acceptance list, screenshots from another process, reviews layout / text / focus / keyboard / theme, verdict on whether the UI meets the requirements; never reviews code | targeted re-walk after a UI fix |
+| **ui-verifier** | sonnet | medium | UI only: launches the build with a private profile, walks the acceptance list, screenshots from another process, reviews layout / text / focus / keyboard / theme, verdict on whether the UI meets the requirements; never reviews code | targeted re-walk after a UI fix |
 
 Every change that touches the UI goes to ui-verifier after the coder's gate. Code review is
 the advisor's job, requested by the coordinator for normal and high-risk packets.
@@ -67,8 +67,8 @@ UAC elevation, real SSH hosts, physical keys, sleep/resume, taskbar).
 - **sonnet/high for coder**: the spec and the LLD already decide the shape; the coder needs
   care and a full gate, and the advisor's code review plus the ui-verifier catch what it misses.
 - **sonnet/low for coder-lite**: scripted, mechanical tasks.
-- **opus/xhigh for ui-verifier**: it is the last eye on what the user sees; a UI defect that
-  ships costs a reopened packet.
+- **sonnet/medium for ui-verifier** (owner change, 2026-10-20): the walk follows the
+  acceptance list and wireframes, so it needs care more than deep judgement.
 
 ## 3. Workflow
 
@@ -171,8 +171,8 @@ next packet … → intake close → owner manual walks → platform proof from 
 1. Add a **records consistency pass** (advisor) between design and the owner ruling.
 2. Add the **scenario walkthrough** to the owner report before the first packet of any
    UX-visible intake, so re-rulings happen on paper.
-3. Code review is the **advisor**'s job; the **ui-verifier** (xhigh) walks the UI only, and every UI-visible change goes through it.
+3. Code review is the **advisor**'s job; the **ui-verifier** (sonnet/medium) walks the UI only, and every UI-visible change goes through it.
 4. Keep the resume-based rework loop; it is the main reason four high-risk packets shipped
    in two working days.
 5. Collapse the roster to five project subagents (`.claude/agents/`, committed): advisor,
-   architect, coder (sonnet/high), coder-lite (sonnet/low), ui-verifier (UI only).
+   architect, coder (sonnet/high), coder-lite (sonnet/low), ui-verifier (sonnet/medium, UI only).
