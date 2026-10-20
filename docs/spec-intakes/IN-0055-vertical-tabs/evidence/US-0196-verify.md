@@ -69,3 +69,45 @@ Not re-run: the full `ci-local.ps1` (the coder's run is recorded in the packet; 
 - Split centre: two rails, one per group; a terminal tab dropped into the right dock keeps the strip there.
 - Zoom and lock screen with the rail on; restart persistence; an elevated window (switch works, `ui_config.json` untouched).
 - Light and dark themes: hovered and selected row text readable.
+
+## UI verification (US-0196, vertical tab rail)
+
+Build under test: scratchpad copy `us0196-bin\oneterm.exe` (head 75cf9cc1), private profile (scratch cwd and USERPROFILE), Windows 11, 1280x800 window, posted-message driver + PrintWindow. Screenshots: `scratchpad\us0196-shots\us0196-NN-*.png`. Note: the shell prompt text never rendered in any pane, in the vertical or the horizontal layout (baseline `us0196-09`), so this environment cannot show terminal text; reflow is judged from the cursor position and pane edges.
+
+### Acceptance
+
+| # | Item | Verdict | Evidence |
+|---|------|---------|----------|
+| 1 | Settings > General > Interface > Vertical Tabs (default off), live flip both ways, shells/tabs kept, survives restart | PASS | `us0196-11`..`13c` (switch present, English label and help text, default off), `15` (off: strip, 3 tabs), `16` (on again: same 3 tabs, same selection), `ui_config.json` held `{"vertical_tabs":{"enabled":true}}`, restart `58` / `60` (rail still on). "Shells keep running" is judged by tabs, titles and selection surviving; no shell output is visible in this environment. |
+| 2 | 220 px rail, 32 px header (`+`, zoom only), 32 px rows, selected fill + 2 px accent bar, terminal narrower | PASS (bar: see D1) | `01`, `03`, `14`. Measured: rail x 8..228 (220 px), header and rows 32 px, bar 2 px (82,139,255) in Zed One Dark, no `...` menu, no dock toggle. Cursor starts at x=238 (vertical) vs x=18 (strip): resized, not overlapped. `+` opens the New Terminal menu (`02`). |
+| 3 | Click selects; middle-click and x close; double-click renames; context menu; chips, status icon, recording dot | PARTLY | PASS: click, middle-click (`19`), x (`20`), menu Rename.../Duplicate/Close/Close Others/Close Tabs Below (`04b`), Rename dialog and a long name truncated with an ellipsis (`05`, `06`), Close Tabs Below confirm "Close 37 terminal tabs? Their sessions end." and result (`25`..`27`), channel chip A in the row (`66`). NOT WALKED: double-click rename (the posted double-click does not rename on the horizontal strip either, `10`, so a driver limit), status icon (needs OSC 7501 output), recording dot. |
+| 4 | Drag row content to an empty Space; drop on a row does nothing; grip reorder; x starts no drag; lone tab no reorder | PASS | Content drag to a Space moved the tab out of the rail (`33`, `34`); content dropped on another row changed nothing (`30`); grip drag shows a drop line and a preview chip and reorders (`23`, `24`); grip drop below the last row appends (`29`); a drag started on x moves nothing and shows no preview (`35`, `36`); a lone tab shows no grip and no drag (`61`..`63`). 12 px grip on the hovered row (`03`, `22`). Open-hand cursor: NOT WALKED (not visible in PrintWindow). |
+| 5 | ~40 tabs scroll under the header; new tab scrolls into view | PASS | `21` (40 tabs, newest active row visible at the bottom, header fixed), `22` (wheel scrolls, header stays). No scrollbar or other overflow cue is drawn (D3). |
+| 6 | Zoom keeps the rail; tooltip Zoom In / Zoom Out | PASS | `17` ("Zoom In  Shift+Esc"), `18` (icon changes, "Zoom Out  Shift+Esc", rail kept). |
+| 7 | SSH Client group has no rail; terminal tab dropped in the right dock keeps the strip; split centre one rail per group | PASS for 3 of 4 | `39` (Session and SFTP groups: kit headers, no rail), `41` (terminal tab dropped into the right dock: kit strip with `+`, zoom, `...`), `38` (centre split by grip drag to the right edge: two groups, one rail each). An SSH tab opening the right dock: NOT WALKED (no sftp-dev-server copy in the scratchpad). |
+| 8 | Lock screen covers the rail; rail back after unlock; elevated window | PASS / NOT WALKED | `55` (locked: no rail, no terminal pixels), `56` (unlocked: rail and rows as before), `57` (locked at restart). Elevated window: NOT WALKED (owner only). |
+| 9 | Both layouts, a light and a dark theme: hover label, grip, x, selected text contrast | PARTLY | Dark: Zed One Dark `03`, Catppuccin Mocha `49`/`58`; light: Zed One Light `43`, `44` (strip), `60`; Catppuccin Latte `47`. Hovered label, grip, x and selected text are legible in all. The accent bar is missing after a live theme switch (D1). |
+
+### Defects
+
+**D1 (medium): the 2 px accent bar on the selected row is absent after a live theme change.**
+- Screen: rail, selected row. Expected: 2 px bar in `table_active_border` in every theme (HLD Rail anatomy). Observed: Zed One Dark at launch shows it (pixels x=8..9 = 82,139,255, `us0196-03`). After switching Settings > General from Dark to Light (Zed One Light, then Catppuccin Latte) and from One Dark to Catppuccin Mocha, the selected row has no bar (pixels x=8..11 equal the row fill: `43`, `47`, `49`, `59`). After a restart in the same theme the bar is back (Mocha `58`: 77,97,136; Light `60`: 82,111,255).
+- The horizontal strip loses its top accent bar the same way after the live light switch (`44`), so the cause is probably the shared token not refreshing on a live theme change, not the rail. It is still a missing selection cue for the user. In Mocha the restart colour is also low contrast against the fill.
+- Steps: launch with `vertical_tabs.enabled`, open Settings (Ctrl+,), General > Mode > Light; look at the selected row.
+
+**D2 (low, observation): a forward reorder lands after the hovered row while the drop line is drawn above it.** Dragging the first row's grip onto the 8th row (`23`) drew the line above that row, and the tab ended up at the 8th position (`24`), i.e. after it. This matches the kit's insert-at-slot rule but reads as "before this row". Not compared against the strip.
+
+**D3 (low): no scroll cue.** With 40 tabs the rows scroll by wheel with no scrollbar or fade (`21`, `22`).
+
+**D4 (low): drag preview chip is faint.** The grip-drag preview text is drawn grey on dark (`23`) and truncated ("Comman..." in `37`). Legible but dimmer than the row label.
+
+### Not walked / owner-only
+- Double-click rename (the driver cannot produce a double-click gpui accepts, on the strip either).
+- Status icon (OSC 7501) and recording dot in a rail row.
+- Open-hand cursor on the grip.
+- SSH tab opening the right dock (needs a server; none built in the scratchpad).
+- Elevated window (UAC).
+- Real terminal output, and "shells keep running" beyond tab/session survival (no prompt text renders in this environment, strip or rail).
+- Sleep/resume, taskbar thumbnail, IME.
+- Flaky: twice a freshly opened window (first Settings window, one relaunched main window) painted black under PrintWindow and never recovered; a relaunch was fine. Not tied to the rail, but worth an owner eye.
+
