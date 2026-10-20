@@ -189,11 +189,12 @@ impl TabRail {
         let border = cx.theme().border;
 
         // The scrollbar overlays the list's right edge, where each row's close button sits, so
-        // the rows leave its gutter free once they overflow. Known after the first paint; the
-        // frame after it changes is requested.
+        // the rows leave its gutter free once they overflow. Whether they do is only known after
+        // a paint, so it is read from the previous frame; when it changes, the next frame is
+        // requested with `request_animation_frame` (a `refresh` inside a draw is ignored).
         let overflowing = self.scroll_handle.max_offset().y > px(0.);
         if self.overflowing.replace(overflowing) != overflowing {
-            window.refresh();
+            window.request_animation_frame();
         }
         let order: Rc<Vec<PanelId>> = Rc::new(
             group
