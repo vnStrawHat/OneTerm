@@ -220,7 +220,7 @@ pub(super) fn render_tab_strip(
     let panel_entity = cx.entity().clone();
     let panel_weak = cx.entity().downgrade();
     let muted = cx.theme().muted_foreground;
-    let highlight = cx.theme().table_active_border;
+    let highlight = oneterm_theme::selection_accent(cx);
     let recording_color = cx.theme().danger;
     let is_active = panel.is_active;
     let show_recording = panel.shows_recording_dot(cx);

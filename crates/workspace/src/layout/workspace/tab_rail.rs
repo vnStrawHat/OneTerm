@@ -23,8 +23,9 @@ use gpui_base::{Tab, Tabs};
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
-    dock::{BasePanelView, DragPanel, PanelHandle, TabGroupContext, ToggleZoom},
+    dock::{BasePanelView, DragPanel, PanelHandle, PanelId, TabGroupContext, ToggleZoom},
     h_flex,
+    scroll::{ScrollableElement as _, Scrollbar},
 };
 use oneterm_state::{TabRowLayout, panel_names};
 use oneterm_theme::AppIcon;
@@ -48,8 +49,8 @@ const ROW_HEIGHT: Pixels = px(32.);
 const GRIP_WIDTH: Pixels = px(12.);
 const ACCENT_BAR_WIDTH: Pixels = px(2.);
 /// What the drag preview occupies, reported to base so a drop placeholder knows where to fly
-/// in from.
-const DRAG_PREVIEW_SIZE: Size<Pixels> = size(px(96.), px(30.));
+/// in from. The chip is content-sized between a floor and a ceiling; this is a typical size.
+const DRAG_PREVIEW_SIZE: Size<Pixels> = size(px(140.), px(30.));
 
 /// Whether a tab group draws the rail: the switch is on, the group is in the centre, and it
 /// holds at least one panel and nothing but terminal panels. Every other group (the SSH Client
@@ -79,6 +80,29 @@ fn slot_below_last_row<N: PartialEq>(source: N, group: N, tabs: usize) -> Option
     (source == group).then(|| tabs.saturating_sub(1))
 }
 
+/// Which edge of a hovered row the drop line is drawn on.
+///
+/// `drop_panel` puts a dropped tab *in the hovered row's slot*: a tab dragged from an earlier
+/// place in its own group lands after that row (the others shift up), and any other tab lands
+/// before it. The line shows where the tab will actually land.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DropEdge {
+    /// Dropping on the dragged row itself changes nothing.
+    Nowhere,
+    Above,
+    Below,
+}
+
+/// `from` is the dragged tab's place in this group (`None` for a tab from another group),
+/// `target` the hovered row's.
+fn drop_edge(from: Option<usize>, target: usize) -> DropEdge {
+    match from {
+        Some(from) if from == target => DropEdge::Nowhere,
+        Some(from) if from < target => DropEdge::Below,
+        _ => DropEdge::Above,
+    }
+}
+
 /// Which zoom button the header offers, if any: Zoom Out whenever the group is zoomed,
 /// whatever the panel's control says (a panel that stopped offering the control must not strand
 /// the user), Zoom In when the control puts it in the toolbar.
@@ -98,12 +122,14 @@ fn zoom_button(zoomed: bool, toolbar_zoom: bool) -> Option<ZoomButton> {
 
 /// Where one row sits: the panel's index in the group, its place among the visible rows, how
 /// many rows there are, and whether it is the displayed tab.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct RowPlace {
     ix: usize,
     position: usize,
     rows: usize,
     selected: bool,
+    /// Every panel of the group in tab order, to place a dragged tab among the rows.
+    order: Rc<Vec<PanelId>>,
 }
 
 /// One tab group's rail state: the list's scroll position and the displayed tab the last frame
@@ -112,6 +138,8 @@ struct RowPlace {
 pub(super) struct TabRail {
     scroll_handle: ScrollHandle,
     last_active_ix: Rc<Cell<Option<usize>>>,
+    /// Whether the rows overflowed the list last frame, so the scrollbar's gutter is reserved.
+    overflowing: Cell<bool>,
 }
 
 impl TabRail {
@@ -119,6 +147,7 @@ impl TabRail {
         Self {
             scroll_handle: ScrollHandle::default(),
             last_active_ix: Rc::new(Cell::new(None)),
+            overflowing: Cell::new(false),
         }
     }
 
@@ -159,15 +188,30 @@ impl TabRail {
         let tab_bar = cx.theme().tokens.tab_bar;
         let border = cx.theme().border;
 
+        // The scrollbar overlays the list's right edge, where each row's close button sits, so
+        // the rows leave its gutter free once they overflow. Known after the first paint; the
+        // frame after it changes is requested.
+        let overflowing = self.scroll_handle.max_offset().y > px(0.);
+        if self.overflowing.replace(overflowing) != overflowing {
+            window.refresh();
+        }
+        let order: Rc<Vec<PanelId>> = Rc::new(
+            group
+                .panels()
+                .iter()
+                .map(|panel| panel.panel_id(cx))
+                .collect(),
+        );
+
         let header = self.header(group, window, cx);
         let list = Tabs::new("tab-rail-list")
             .debug_selector(|| LIST_SELECTOR.to_string())
             .aria_orientation(accesskit::Orientation::Vertical)
-            .flex_1()
-            .min_h(px(0.))
+            .size_full()
             .flex()
             .flex_col()
             .overflow_y_scroll()
+            .when(overflowing, |this| this.pr(Scrollbar::width()))
             .track_scroll(&self.scroll_handle)
             .children(visible.into_iter().enumerate().map(|(position, ix)| {
                 let place = RowPlace {
@@ -175,6 +219,7 @@ impl TabRail {
                     position,
                     rows,
                     selected: displayed_ix == Some(ix),
+                    order: order.clone(),
                 };
                 self.row(group, place, window, cx)
             }))
@@ -215,7 +260,16 @@ impl TabRail {
             .border_r_1()
             .border_color(border)
             .child(header)
-            .child(list)
+            .child(
+                div()
+                    .id("tab-rail-scroll")
+                    .relative()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_hidden()
+                    .child(list)
+                    .vertical_scrollbar(&self.scroll_handle),
+            )
             .into_any_element()
     }
 
@@ -281,24 +335,29 @@ impl TabRail {
             position,
             rows,
             selected,
+            order,
         } = place;
         let panel = &group.panels()[ix];
         let handle = PanelHandle::of(panel);
         // The kit strip prefers a panel's short name over its title element; so does the rail.
-        let title = TabRowLayout::Vertical.draw(cx, |cx| match handle {
-            Some(handle) => match handle.tab_name(cx) {
-                Some(name) => div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .child(name)
-                    .into_any_element(),
-                None => handle.title(window, cx),
-            },
-            None => SharedString::from(panel.panel_name(cx)).into_any_element(),
-        });
+        // The vertical layout holds only while the title element is built.
+        let title = {
+            let mut scope = TabRowLayout::Vertical.scope(cx);
+            match handle {
+                Some(handle) => match handle.tab_name(&scope) {
+                    Some(name) => div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(name)
+                        .into_any_element(),
+                    None => handle.title(window, &mut scope),
+                },
+                None => SharedString::from(panel.panel_name(&scope)).into_any_element(),
+            }
+        };
 
         let droppable = group.is_droppable();
         let drag = group
@@ -311,7 +370,10 @@ impl TabRail {
             theme.tab_active_foreground,
             theme.tokens.tab_active,
         );
-        let (accent, muted) = (theme.table_active_border, theme.muted_foreground);
+        let muted = theme.muted_foreground;
+        // Not `table_active_border`: OneTerm blanks that for the data tables after every theme
+        // change, which made the bar vanish.
+        let accent = oneterm_theme::selection_accent(cx);
         let hover_group = SharedString::from(format!("tab-rail-row-{ix}"));
 
         let grip = div()
@@ -371,8 +433,19 @@ impl TabRail {
             .group(hover_group)
             .hover(move |style| style.text_color(active_foreground))
             .when(droppable, |this| {
-                this.drag_over::<DragPanel>(|this, _, _, cx| {
-                    this.border_t_2().border_color(cx.theme().drag_border)
+                this.drag_over::<DragPanel>({
+                    let node = group.node();
+                    move |this, drag, _, cx| {
+                        let from = (drag.source() == node)
+                            .then(|| order.iter().position(|id| *id == drag.panel()))
+                            .flatten();
+                        let line = cx.theme().drag_border;
+                        match drop_edge(from, ix) {
+                            DropEdge::Nowhere => this,
+                            DropEdge::Above => this.border_t_2().border_color(line),
+                            DropEdge::Below => this.border_b_2().border_color(line),
+                        }
+                    }
                 })
                 .on_drop({
                     let group = group.clone();
@@ -415,15 +488,17 @@ impl Render for RailDragPreview {
             .cursor_grab()
             .py_1()
             .px_3()
-            .w_24()
+            .min_w_24()
+            .max_w(px(240.))
             .overflow_hidden()
             .whitespace_nowrap()
             .border_1()
             .border_color(cx.theme().border)
             .rounded(cx.theme().radius)
-            .text_color(cx.theme().tab_foreground)
+            // The selected tab's text on its own fill: the pair the contrast check measures.
+            .text_color(cx.theme().tab_active_foreground)
             .bg(cx.theme().tokens.tab_active)
-            .opacity(0.75)
+            .opacity(0.95)
             .child(title)
     }
 }
@@ -469,6 +544,38 @@ mod tests {
         // From this group: moved to the last slot.
         assert_eq!(slot_below_last_row(1, 1, 4), Some(3));
         assert_eq!(slot_below_last_row(1, 1, 1), Some(0));
+    }
+
+    /// The drop line is where the tab lands under the insert rule `drop_panel` applies (take the
+    /// tab out, put it in the hovered row's slot), for every pair of places in a small group.
+    #[test]
+    fn the_drop_line_is_where_the_tab_lands() {
+        for len in 1..=5usize {
+            for target in 0..len {
+                // From another group: it lands before the hovered row.
+                let mut order: Vec<usize> = (0..len).collect();
+                order.insert(target, 99);
+                let landed = order.iter().position(|tab| *tab == 99).unwrap();
+                assert_eq!(drop_edge(None, target), DropEdge::Above);
+                assert_eq!(order[landed + 1], target);
+
+                for from in 0..len {
+                    let mut order: Vec<usize> = (0..len).collect();
+                    let moved = order.remove(from);
+                    order.insert(target, moved);
+                    let landed = order.iter().position(|tab| *tab == from).unwrap();
+                    match drop_edge(Some(from), target) {
+                        DropEdge::Nowhere => assert_eq!(from, target),
+                        DropEdge::Below => {
+                            assert_eq!(order[landed - 1], target, "{from}->{target}")
+                        }
+                        DropEdge::Above => {
+                            assert_eq!(order[landed + 1], target, "{from}->{target}")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

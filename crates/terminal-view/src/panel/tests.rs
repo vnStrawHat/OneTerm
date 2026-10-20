@@ -1030,13 +1030,14 @@ impl gpui::Render for TabRowHost {
         use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
 
         let panel = self.panel.clone();
-        let row = self.layout.draw(cx, |cx| {
-            panel.update(cx, |panel, cx| {
+        let row = {
+            let mut scope = self.layout.scope(cx);
+            panel.update(&mut *scope, |panel, cx| {
                 gpui::IntoElement::into_any_element(
                     <TerminalPanel as gpui_component::dock::Panel>::title(panel, window, cx),
                 )
             })
-        });
+        };
         let dropped = self.dropped.clone();
         gpui::div()
             .size_full()

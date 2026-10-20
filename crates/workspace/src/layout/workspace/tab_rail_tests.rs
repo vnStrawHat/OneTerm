@@ -451,6 +451,9 @@ fn the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it(cx: &mut TestAppC
         rows[0].top() > rail.top(),
         "the header sits above the first row"
     );
+    // Rows that fit leave no scrollbar gutter.
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+    assert_eq!(rows[0].right(), list.right());
 
     assert_eq!(centre_tabs(&window.area, cx).1, 0);
     cx.simulate_click(rows[2].center(), Modifiers::none());
@@ -545,6 +548,12 @@ fn forty_tabs_scroll_and_the_active_one_is_brought_into_view(cx: &mut TestAppCon
     let list = bounds_of(LIST_SELECTOR, cx).expect("the list is drawn");
     let first = row(0, cx).unwrap();
     let last = row(39, cx).unwrap();
+    // The overflowing list leaves the scrollbar's gutter free of rows (their close buttons
+    // would sit under it).
+    assert!(
+        first.right() <= list.right() - gpui_component::scroll::Scrollbar::width(),
+        "row {first:?} must clear the scrollbar gutter of the list {list:?}"
+    );
     assert!(first.top() >= list.top() && first.bottom() <= list.bottom());
     assert!(
         last.bottom() > list.bottom(),
@@ -698,4 +707,46 @@ fn a_lone_tab_has_nothing_to_reorder(cx: &mut TestAppContext) {
         "the last panel of the dock is not draggable"
     );
     release(below, cx);
+}
+
+/// The drop line sits where the tab will land (`drop_edge`): dragged forward it lands after the
+/// hovered row, dragged backward before it. Pins base's insert rule the line is drawn for.
+#[gpui::test]
+fn a_forward_reorder_lands_after_the_hovered_row_and_a_backward_one_before_it(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        false,
+        &report,
+        cx,
+    );
+    let (original, _) = centre_tabs(&window.area, cx);
+
+    // Forward: the first tab dropped on the second row ends up after it.
+    let from = bounds_of(format!("{GRIP_SELECTOR}-0"), cx)
+        .unwrap()
+        .center();
+    let onto = row(1, cx).unwrap().center();
+    drag_to(from, onto, cx);
+    release(onto, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[1], original[0], original[2]]
+    );
+
+    // Backward: the last tab dropped on the first row ends up before it.
+    let from = bounds_of(format!("{GRIP_SELECTOR}-2"), cx)
+        .unwrap()
+        .center();
+    let onto = row(0, cx).unwrap().center();
+    drag_to(from, onto, cx);
+    release(onto, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[2], original[1], original[0]]
+    );
 }

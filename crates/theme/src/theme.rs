@@ -13,7 +13,7 @@
 //! (usually = content background) and `tab_bar.background` (darker), giving the
 //! "active tab merges with content" effect used by code editors, with no override needed.
 
-use gpui::{Anchor, App, Hsla, Rgba, px, rgb};
+use gpui::{Anchor, App, Global, Hsla, Rgba, px, rgb};
 use gpui_component::{Theme, ThemeRegistry, scroll::ScrollbarMode};
 
 use oneterm_actions::{SwitchTheme, SwitchThemeMode};
@@ -67,6 +67,7 @@ const EMBEDDED_THEME_FILES: &[(&str, &str)] = &[
 /// from the theme JSON (or fallback), so this must be called again after each
 /// theme switch.
 pub fn apply_list_style_override(cx: &mut App) {
+    record_selection_accent(cx);
     let theme = Theme::global_mut(cx);
     theme.list_active = theme.list_hover;
     theme.list_active_border = gpui::transparent_black();
@@ -74,6 +75,37 @@ pub fn apply_list_style_override(cx: &mut App) {
     // is drawn by `render_tr` (= `table_hover`, like hover, no border).
     theme.table_active = gpui::transparent_black();
     theme.table_active_border = gpui::transparent_black();
+}
+
+/// The theme's own `table.active.border`, kept for the surfaces that mean "this one is
+/// selected" (the selected tab's accent bar, the active Space's cue).
+///
+/// [`apply_list_style_override`] blanks `Theme::table_active_border` so the data tables draw no
+/// selection border, and it runs after every theme application. Those other surfaces read the
+/// same token, so after a live theme change their accent was transparent.
+#[derive(Clone, Copy)]
+struct SelectionAccent(Hsla);
+
+impl Global for SelectionAccent {}
+
+/// Remember the theme's `table_active_border` before the override blanks it. An already
+/// blanked value is not remembered, so running the override twice keeps the real colour.
+fn record_selection_accent(cx: &mut App) {
+    let live = Theme::global(cx).table_active_border;
+    if live.a > 0. {
+        cx.set_global(SelectionAccent(live));
+    }
+}
+
+/// The colour of a "selected" cue that must survive [`apply_list_style_override`]: the theme's
+/// `table.active.border`, or the theme's `primary` before any theme was applied.
+pub fn selection_accent(cx: &App) -> Hsla {
+    let live = Theme::global(cx).table_active_border;
+    if live.a > 0. {
+        return live;
+    }
+    cx.try_global::<SelectionAccent>()
+        .map_or(Theme::global(cx).primary, |accent| accent.0)
 }
 
 /// WCAG 2.1 AA for body text, the floor `scripts/check-theme-contrast.py` holds
@@ -344,6 +376,43 @@ mod tests {
                     "{name}: the file names #{rgb:06x} but the kit renders {rendered:?} — \
                      the key in `colors` is not one `ThemeConfigColors` reads"
                 );
+            }
+        });
+    }
+
+    /// The selected tab's accent bar and the active Space's cue read `selection_accent`, which
+    /// must keep the theme's own `table.active.border` through every theme application:
+    /// `apply_list_style_override` blanks the live token for the data tables, and the bar used
+    /// to read the blanked token (it vanished after a live theme change, `US-0196`).
+    #[gpui::test]
+    fn the_selection_accent_survives_the_list_style_override(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let registry = ThemeRegistry::global_mut(cx);
+            for (_, content) in EMBEDDED_THEME_FILES {
+                registry.load_themes_from_str(content).unwrap();
+            }
+            // Two themes that name the border, one of each mode.
+            for (name, rgb) in [("Zed One Dark", 0x528bff), ("Zed One Light", 0x526fff)] {
+                let config = ThemeRegistry::global(cx)
+                    .themes()
+                    .get(name)
+                    .unwrap()
+                    .clone();
+                Theme::global_mut(cx).apply_config(&config);
+                let expected: gpui::Hsla = gpui::rgb(rgb).into();
+                // As the kit leaves it: the theme's colour, before the override.
+                assert!(hsla_close(selection_accent(cx), expected), "{name}");
+                apply_list_style_override(cx);
+                assert_eq!(
+                    Theme::global(cx).table_active_border.a,
+                    0.,
+                    "the data tables still get no selection border"
+                );
+                assert!(hsla_close(selection_accent(cx), expected), "{name}");
+                // Start-up applies the override more than once; the colour is not lost.
+                apply_list_style_override(cx);
+                assert!(hsla_close(selection_accent(cx), expected), "{name}");
             }
         });
     }

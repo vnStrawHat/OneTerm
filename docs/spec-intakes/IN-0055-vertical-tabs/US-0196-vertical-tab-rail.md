@@ -43,7 +43,7 @@ With **Vertical Tabs** on (Settings > General > Interface, default off, applies 
 - [x] 40 tabs: the rows scroll under the header; a tab that becomes active from elsewhere scrolls into view (test on the scroll offset).
 - [x] Zoom keeps the rail; its button reads Zoom Out while zoomed, Zoom In otherwise; no `...` menu, no dock toggle.
 - [x] "Close Tabs Below" while vertical, "Close to the Right" in the strip (test of the label rule).
-- [x] `ui_config.json`: absent -> off; `{"vertical_tabs":{"enabled":true}}` -> on; garbage (`"x"`, `5`, wrong-typed fields) loads as default with no quarantine and the rest of the document intact; default omitted from the written file; width clamped to 140..=400 on read; an older document heals; an elevated window writes nothing (existing `write_refusal` test plus a setter-level assertion).
+- [x] `ui_config.json`: absent -> off; `{"vertical_tabs":{"enabled":true}}` -> on; garbage (`"x"`, `5`, wrong-typed fields) loads as default with no quarantine and the rest of the document intact; default omitted from the written file; width clamped to 140..=400 on read; an older document heals; an elevated window writes nothing (the existing `write_refusal` test; the setter has no write path of its own, it only calls `persist`, which asks `write_refusal`).
 - [x] `scripts/check-theme-contrast.py` passes with `tab_bar.background` added to `tab.active.foreground`'s surfaces, both the floor and the `HIERARCHY` comparison.
 - [x] `docs/gui-layout.md` documents the vertical layout and qualifies the "dock buttons in the tab bar" sentence as the horizontal layout's; `docs/agents/persistence.md` row amended.
 - [x] Full `pwsh scripts/ci-local.ps1` passes.
@@ -74,7 +74,7 @@ Changed: `docs/gui-layout.md` (new "Vertical tabs" section; the dock-button sent
 ## Context
 
 - Base composes every group as a column and applies `.flex().flex_col()` after the skin's frame and content frame (`tab_group.rs:691-728`), so the rail is positioned absolutely and the content frame gets a left margin (not padding, which would put the rail inside the drop-handled bounds).
-- Panel code runs `title()` with no knowledge of its group, so the shell cannot tell a panel "you are in a rail" through the panel. Choice left open by the HLD (it said the row reads `UiConfig`, which would give a terminal tab dropped into the right dock a rail-shaped row inside the kit strip): a small `oneterm_state::TabRowLayout` global, set by the rail only around its own `title()` calls (RAII guard) and read by `render_tab_strip`. Everything that is not a rail row, including the kit's drag preview, keeps the horizontal row. The menu wording is captured at that time into the context-menu closure.
+- Panel code runs `title()` with no knowledge of its group, so the shell cannot tell a panel "you are in a rail" through the panel. Choice left open by the HLD (it said the row reads `UiConfig`, which would give a terminal tab dropped into the right dock a rail-shaped row inside the kit strip): a small `oneterm_state::TabRowLayout` global, set by the rail only around its own `title()` calls (`TabRowLayout::scope` returns a `Drop` guard that restores the previous layout on every exit) and read by `render_tab_strip`. Everything that is not a rail row, including the kit's drag preview, keeps the horizontal row. The menu wording is captured at that time into the context-menu closure.
 - The rail needs the dock area to know whether its group is in the centre: `OneTermDockSkin` captures the `DockArea`'s weak entity at construction and hands it to every group skin.
 - `DragPanelPreview` has private fields (the kit constructs it itself), so the rail draws a small preview of its own for the grip drag.
 
@@ -126,6 +126,19 @@ No decision record: the choices (left rail, one switch, rows drawn by the panel)
 
 - Not walked on screen (the coder does not give the UI verdict): live switch in the real window, light and dark screenshots, 40-tab scroll, drag into a Space, reorder by grip, lock/unlock, elevated window, restart persistence.
 - Linux and macOS compile only in CI.
+
+## Rework (ui-verifier D1-D4, advisor F1-F4)
+
+Done on branch `verify/US-0196` on top of the advisor evidence; the UI walk is appended to `evidence/US-0196-verify.md`.
+
+- **D1 (medium) root cause: shared code, fixed in OneTerm code.** The accent bar read `Theme::table_active_border`. `oneterm_theme::apply_list_style_override` sets that token to transparent (the data tables want no selection border) and runs after **every** theme application, so after a live theme change the token the bar reads is transparent. The horizontal strip's top bar and the active Space's cue (`terminal-view/src/space/render.rs`) read the same token and lose their colour the same way; the walk saw the strip lose its bar. Fix: `oneterm_theme::selection_accent(cx)` keeps the theme's own `table.active.border` (recorded by the override before it blanks the token, and not overwritten by a second run of the override), and the rail row, the strip's top bar and the Space cue read it. Nothing patched in gpui-component. Tests: `the_selection_accent_survives_the_list_style_override` (two themes of both modes: the accent equals the theme file's colour before the override, after it and after a second run, while the table token stays blanked).
+- **D2 fixed.** The drop line sits on the edge where the tab lands (`drop_edge`): below the hovered row for a tab dragged forward within its group, above it otherwise, none on the dragged row. Tests: `the_drop_line_is_where_the_tab_lands` (every pair in groups of 1-5 against a model of base's insert rule) and `a_forward_reorder_lands_after_the_hovered_row_and_a_backward_one_before_it` (the real group).
+- **D3 fixed.** The row list sits in a relative wrapper with the kit's vertical scrollbar (`ScrollableElement::vertical_scrollbar`). Rows overflowing the list reserve the scrollbar's gutter (`Scrollbar::width()`, 16 px) so the close buttons are not under it; the overflow is read from the previous frame and one refresh is requested when it changes. Tests: the 40-tab test asserts rows clear the gutter, the 3-tab test asserts they fill the list.
+- **D4 fixed.** The grip-drag preview draws `tab.active.foreground` (the pair the contrast check measures on `tab.active.background`) at 0.95 opacity, content-sized between 96 and 240 px instead of a fixed 96 px.
+- **F1.** `TabRowLayout::scope` returns a `Drop` guard (`TabRowScope`, derefs to `App`) that restores the previous layout on every exit; replaces `draw`. Tests include one that unwinds a panic through it.
+- **F2.** The elevated-write claim in the acceptance list no longer promises a setter-level assertion.
+- **F3.** The HLD "Readers" paragraph, the accent token and the drop-line rows are amended.
+- **F4 (info, for US-0197).** `draws_rail` is evaluated three times per group per frame (`frame`, `content_frame`, `render_tab_bar`); each upgrades the area and walks the centre tree. Negligible now; evaluate once per frame when `US-0197` adds per-frame work to it.
 
 ## Handoff
 

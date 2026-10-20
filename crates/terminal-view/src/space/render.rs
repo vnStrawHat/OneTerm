@@ -169,7 +169,7 @@ fn render_leaf(
     let cue = space_border_color(
         id == active,
         channel.map(|ch| channel_color(ch, cx)),
-        cx.theme().table_active_border,
+        oneterm_theme::selection_accent(cx),
         cx.theme().border,
     );
     div()
