@@ -138,6 +138,7 @@ Done on branch `verify/US-0196` on top of the advisor evidence; the UI walk is a
 - **F1.** `TabRowLayout::scope` returns a `Drop` guard (`TabRowScope`, derefs to `App`) that restores the previous layout on every exit; replaces `draw`. Tests include one that unwinds a panic through it.
 - **F2.** The elevated-write claim in the acceptance list no longer promises a setter-level assertion.
 - **F3.** The HLD "Readers" paragraph, the accent token and the drop-line rows are amended.
+- **Gate after the rework:** `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`): all checks passed, 141 suites, 5067 passed, 0 failed, 33 ignored; `check-theme-contrast` 1638 pairings and 624 hierarchy comparisons pass. Debug app rebuilt (`target\\debug\\oneterm.exe`). The UI fixes (D1 on a live theme switch, D3 scrollbar, D4 chip) are for `ui-verifier` to re-walk on screen.
 - **F4 (info, for US-0197).** `draws_rail` is evaluated three times per group per frame (`frame`, `content_frame`, `render_tab_bar`); each upgrades the area and walks the centre tree. Negligible now; evaluate once per frame when `US-0197` adds per-frame work to it.
 
 ## Handoff
