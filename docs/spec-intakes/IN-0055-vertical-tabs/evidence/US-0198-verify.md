@@ -137,3 +137,30 @@ Screenshots `uiv198b-*` in the scratchpad `uiv198-shots\`. Dark theme, 1280x800.
 - Because of D3 A1 was exercised by selecting in the expanded rail; selecting tab 39 by clicking in the collapsed rail (the owner's flow) is blocked by D3.
 
 Verdict: partly. U1 and U2 pass; D3 needs a fix and a re-walk.
+
+## Advisor re-review 2 (D3 narrow scrollbar, N1, N2; 2026-10-21)
+
+- Reviewed: `git diff 705db540..8da2c685` (`fd6fd8c1` UI re-walk evidence, `8da2c685` D3 fix + N1/N2) on `verify/in-0055-rework3-us-0198`. Worktree clean before and after the experiment below.
+- Gate re-run here (`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`): four-crate tests 56 + 77 + 415 + 109 passed, 0 failed; clippy on the four crates `--all-targets -- -D warnings` clean.
+- **Does the test fail without the fix?** Yes. With `tab_rail.rs:501-504` reverted locally to the plain `.vertical_scrollbar(&self.scroll_handle)` (not committed; file restored with `git checkout`, worktree clean), `a_click_on_a_cell_of_an_overflowing_collapsed_rail_selects_it` fails at `tab_rail_tests.rs:1299` with `click at 0.8: left 3, right 5`: the click at x = 34 of 43 px on cell 5 was swallowed by the 16 px track and the selection stayed on cell 3 (the 0.5 click had passed). With the fix the test passes.
+
+### Verdict
+
+**PASS.** The root cause is the kit's track hit area, `.styles(..)` narrows that hit area and not only the paint, the mount is the kit's own, the thumb still drags, and the one remaining overlap (the badge's right edge) is the accepted cost the records state.
+
+### Attack points
+
+- **Root cause (kit `reference/gpui-kit/crates/base/src/scrollbar.rs`).** `WIDTH = 16` (`:22`); per axis `track_width = styles.track.width.or(theme track width).unwrap_or(WIDTH)` (`:1376-1381`); the bar `bounds` for a vertical axis is the right `track_width` of the hitbox (`:1409-1413`); while `is_visible` the `MouseDownEvent` listener does `cx.stop_propagation()` for any press inside `bounds`, then either starts a thumb drag or jumps the offset to the click (`:1716-1745`). `is_visible = state.visibility_requested || visibility_opacity > 0.0` (`:1599`), and OneTerm sets `ScrollbarMode::Always` (`crates/theme/src/theme.rs:299`), so in OneTerm the track takes presses at all times, not only after a wheel scroll or while hovered as the packet's D3 text says (doc nit D3-N1 below; the test's preparatory mouse move is harmless). No theme override of the track width exists in `crates/theme`, so the strip's 6 px is the one in effect.
+- **Does `.styles(..)` shrink the hit track?** Yes: the same `track_width` value feeds the hit `bounds` (`:1409-1413`) that the mouse-down and mouse-move listeners test (`:1717`, `:1764`) and the painted bar; there is no second, wider hit rectangle. The thumb: `self.styles.thumb.width` wins over the theme's for the normal, hovered and active states (`:987-991`, state styles unset here), so the thumb is 4 px with a 1 px inset in every state and `thumb_bounds` is inside the 6 px track.
+- **Thumb drag.** Unchanged path: a press inside `thumb_bounds` calls `scroll_handle.start_drag()` and records the grab point (`:1719-1731`), the move listener drags while `dragged_axis == Some(axis)` (`:1790-1800`); nothing in the override touches it. On-screen feel of a 4 px thumb is the ui-verifier's.
+- **`viewport_from_layout` vs the expanded rail.** The kit's own `vertical_scrollbar` is `render_scrollbar` (`component/src/scroll/scrollable.rs:280-288`): `div().absolute().inset_0().child(Scrollbar::new(handle).id(..).axis(..).viewport_from_layout())`. `narrow_scrollbar` (`tab_rail.rs:291-306`) is the same mount with `Scrollbar::vertical` and the style override, so the collapsed and expanded rails resolve the same viewport (the `tab-rail-scroll` wrapper's layout bounds, `:1290`). The only differences are the kit's inspector-picking guard and its `scrollbar-overlay` debug selector, neither of which matters here.
+- **Other overlay hit areas.** The status badge sits at `right 3 px` of the 43 px cell with an `xsmall` icon, so roughly x = 26..40; the 6 px track covers x = 37..43: a press on the badge's rightmost 3-4 px pages the list instead of selecting (the recorded accepted cost). Hover is unaffected (the kit stops only presses and thumb-drag moves), so the badge's own tooltip still shows. The grip overlay is on the left edge and never meets the track. Expanded rows keep the 16 px gutter inside the row, so the track and content do not overlap there.
+- **N1, N2.** `border_b(px(TabRowLayout::VERTICAL_ROW_DIVIDER))` at `tab_rail.rs:736`; the tooltip comment at `tab_title.rs:477-479` now describes the clear-then-re-show. Both as recommended.
+
+### Notes (informational)
+
+- **D3-N1** — `US-0198-collapsible-rail.md` Rework 2 says the track takes presses "while the bar is shown (after a wheel scroll, or while hovered)"; with OneTerm's `ScrollbarMode::Always` (`theme.rs:299`) it is shown, and takes presses, always. One clause.
+
+### Still by hand (ui-verifier)
+
+- 40 collapsed tabs: click cells at their centre and right half, each selects; drag the 4 px thumb; a press on the badge's right edge pages the list (accepted).
