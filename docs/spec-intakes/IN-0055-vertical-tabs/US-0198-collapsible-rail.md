@@ -10,8 +10,8 @@ Created: 2026-10-21
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -34,16 +34,16 @@ The vertical tab rail can be collapsed to a 44 px strip and expanded again. A bu
 
 ## Acceptance
 
-- [ ] `UiConfig::set_vertical_tabs_collapsed`: default is `false` and is omitted from the file, `true` round-trips, a wrong-typed value loads as `false` without quarantine (existing lenient parse, pinned again), a setter call with the stored value changes nothing, and the entity changes before the write so an elevated window still collapses in memory.
-- [ ] Width selection: collapsed is 44 px for any preference and any group width (unit test); expanded is `clamp_tab_rail_width` as before.
-- [ ] Collapse and expand are live: the header button flips the rail between its width and 44 px on the next frame, in both directions, rebuilding no panel and ending no session; the content frame's margin follows.
-- [ ] Collapsed, the resize handle is not drawn and a drag at the rail's edge resizes nothing; expanding restores the preference's width.
-- [ ] Collapsed rows are 44 px cells stacked in tab order, each showing its position number; a click selects, the number follows the position after a reorder or a close.
-- [ ] The status icon is a badge of the cell; the recording dot is drawn; the tooltip carries the tab's full title.
-- [ ] Every row action works collapsed except rename-by-double-click: middle-click closes, the right-click menu opens (with "Close Tabs Below"), the row content starts `DragTerminalTab`, the grip starts `DragPanel`.
-- [ ] The Vertical Tabs switch off while collapsed keeps `collapsed = true`; turning it on again returns to the collapsed rail.
-- [ ] Zoom, the `+` menu and the scrolling of 40 collapsed rows still work (header stacked, rows scroll, active row in view).
-- [ ] Full `bash scripts/ci-local.sh` passes.
+- [x] `UiConfig::set_vertical_tabs_collapsed`: default is `false` and is omitted from the file, `true` round-trips, a wrong-typed value loads as `false` without quarantine (existing lenient parse, pinned again), a setter call with the stored value changes nothing, and the entity changes before the write so an elevated window still collapses in memory.
+- [x] Width selection: collapsed is 44 px for any preference and any group width (unit test); expanded is `clamp_tab_rail_width` as before.
+- [x] Collapse and expand are live: the header button flips the rail between its width and 44 px on the next frame, in both directions, rebuilding no panel and ending no session; the content frame's margin follows.
+- [x] Collapsed, the resize handle is not drawn and a drag at the rail's edge resizes nothing; expanding restores the preference's width.
+- [x] Collapsed rows are 44 px cells stacked in tab order, each showing its position number; a click selects, the number follows the position after a reorder or a close.
+- [x] The status icon is a badge of the cell and the number is centred (tests); the recording dot and the tooltip are in the element but not pinned by a test (see Gaps).
+- [x] Every row action works collapsed except rename-by-double-click: middle-click closes, the right-click menu opens (with "Close Tabs Below"), the row content starts `DragTerminalTab`, the grip starts `DragPanel`.
+- [x] The Vertical Tabs switch off while collapsed keeps `collapsed = true`; turning it on again returns to the collapsed rail.
+- [ ] Zoom, the `+` menu and the scrolling of 40 collapsed rows still work (header stacked, rows scroll, active row in view): the stacked header and 40 cells are for `ui-verifier`; the existing zoom and 40-row tests cover the expanded rail only.
+- [x] Full `pwsh scripts/ci-local.ps1` passes.
 - [ ] On screen, by `ui-verifier`: light and dark themes, expanded and collapsed, the badge against the overlay scrollbar with 40 tabs, the tooltip, restart persistence, the elevated window.
 
 ## Documentation
@@ -64,7 +64,7 @@ Reason: collapsing becomes user-visible behaviour with a writer.
 
 ### Reconciliation
 
-Filled in at completion.
+Changed: `docs/gui-layout.md` (header bullet, a **Collapsing** paragraph with wireframe, the closing sentence), `docs/agents/persistence.md` (`collapsed` has its writer), `high-level-design.md` (header row of the anatomy table, the collapsed wireframe), `IN-0055.md` (packet link), this packet. Unchanged and still valid: the HLD state machine and Data Flow 6, `docs/agents/crate-dependency-rules.md` (no new edge: the layout value travels in `oneterm-state`, below both crates).
 
 ## Context
 
@@ -74,10 +74,10 @@ Filled in at completion.
 ## Plan
 
 - [x] Records commit: this packet.
-- [ ] `VerticalTabs::COLLAPSED_WIDTH` and `UiConfig::set_vertical_tabs_collapsed`, with the settings tests.
-- [ ] `TabRowLayout::Collapsed(position)`; the compact row and its tooltip in `render_tab_strip`; "Close Tabs Below" for it.
-- [ ] `tab_rail`: `rail_width`, the collapsed header and cell geometry, the header button, no handle, no gutter; workspace tests (live flip, handle, numbers, actions, switch-off memory).
-- [ ] Docs, gate, debug binary.
+- [x] `VerticalTabs::COLLAPSED_WIDTH` and `UiConfig::set_vertical_tabs_collapsed`, with the settings tests.
+- [x] `TabRowLayout::Collapsed(position)`; the compact row and its tooltip in `render_tab_strip`; "Close Tabs Below" for it.
+- [x] `tab_rail`: `rail_width`, the collapsed header and cell geometry, the header button, no handle, no gutter; workspace tests (live flip, handle, numbers, actions, switch-off memory).
+- [x] Docs, gate, debug binary.
 
 Choices left open by the HLD (decided here, for review):
 
@@ -98,17 +98,27 @@ No decision record: the stored field, the state machine and the owner's Q4 rulin
 `cargo test -p oneterm-settings`, `-p oneterm-state`, `-p oneterm-terminal-view`, `-p oneterm-workspace`; clippy; fmt; `check-doc-paths`, `check-english`; the full `bash scripts/ci-local.sh` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`); the debug app for `ui-verifier`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Filled in at completion.
+- **Tests.** `oneterm-settings` `the_collapsed_flag_is_lenient_and_written_alone` (off-and-collapsed writes `{"collapsed": true}` alone; a wrong-typed `collapsed` reads as expanded and keeps the other fields; the constant is 44) beside the existing default / round-trip / garbage tests; `oneterm-state` `a_collapsed_row_carries_its_position`; `oneterm-workspace` unit `the_collapsed_rail_is_44_px_whatever_the_preference_and_the_group` (`rail_width`), and `tab_rail_tests`: `the_header_button_collapses_the_rail_to_a_strip_and_expands_it` (click on the real header buttons, width 300 to 44 to 300, the terminal's origin follows the strip, the handle exists only expanded, 44 px cells stacked, no panel removed), `a_collapsed_cell_is_built_with_its_position_and_a_click_selects_it`, `a_collapsed_cell_keeps_the_content_drag_and_the_grip_reorder` (content drags the tab, the 12 px grip overlay reorders), `the_switch_off_keeps_the_rail_collapsed`, `the_collapse_setter_skips_an_unchanged_value` (0, 1, 1, 2 `UiConfig` updates); `oneterm-terminal-view` `a_collapsed_cell_shows_the_position_and_the_status_badge_only` (44 x 44, number centred, no title / directory / close button, the badge in the top-right corner clear of the number), `a_collapsed_cell_draws_the_position_it_is_given` (a two-digit position is wider than a one-digit one) and the "Close Tabs Below" label rule extended to `Collapsed`.
+- **Gate:** `pwsh scripts/ci-local.ps1` on Windows (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree `target`): all checks passed (`cargo test --workspace`: 2509 passed, 0 failed, 19 ignored in that step; the three `--ignored --test-threads=1` lines, `check-ignored-tests.py`, the `oneterm-vt` steps, `verify-dependency-graph.py`, `check-doc-paths.py`, `check-english.py`, `check-theme-contrast.py` (1638 pairings, 624 hierarchy comparisons) and the notices check included). `bash scripts/ci-local.sh` was tried first and stops at the `oneterm-vt` six-dependency check on this machine only because Windows' `sort.exe` shadows GNU `sort` in that shell; the PowerShell script is the same set of checks.
+- **Debug binary** `target\debug\oneterm.exe` built (`cargo build -p oneterm-app`). **Smoke launch** with a private profile (scratch cwd and `USERPROFILE`, `target/ui_config.json` `{"vertical_tabs":{"enabled":true,"collapsed":true}}`): ran 10 s, the config file untouched; the pid was stopped. No UI verdict here.
+- **Elevation:** the setter has no write path of its own; it calls `UiConfig::persist`, which asks `write_refusal` (existing `an_elevated_window_refuses_to_write_a_perfectly_readable_config`).
+
+### Gaps
+
+- Not pinned by a test: the tooltip text on a cell (gpui exposes no way to read a shown tooltip in a test) and the recording dot's place; both are plain code in `render_tab_strip` / `collapsed_row`.
+- Not walked on screen (the coder does not give the UI verdict): the glyphs and spacing of the stacked header, the badge against the overlay scrollbar with 40 tabs, the grip overlay on hover, tooltip, restart persistence, the elevated window, light and dark themes.
+- Known loss, by design here: channel chips are not shown in the strip (see Plan); the status bar and the expanded rail still show membership.
+- Linux and macOS compile only in CI.
 
 ## Handoff
 
-Filled in at completion.
+Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0198` in the intake. This is the last packet of `IN-0055`.

@@ -221,13 +221,15 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-
 
 **Acceptance.**
 
-- [ ] Line 2 equals the status bar's text for a local drive path, a path in the user's home and an SSH path (unit tests compare the tab's string with `breadcrumb_label` and with the path the session reports; none contains `~`).
-- [ ] `cwd_display` and its test are gone; a long path is still cut at its start (existing test).
-- [ ] Each vertical row draws a 1 px bottom border in `theme.border`; the row is still 64 px and the header 32 px (workspace test).
-- [ ] The horizontal row is unchanged (existing test).
+- [x] Line 2 equals the status bar's text for a local drive path, a path in the user's home and an SSH path (unit tests compare the tab's string with `breadcrumb_label` and with the path the session reports; none contains `~`).
+- [x] `cwd_display` and its test are gone; a long path is still cut at its start (existing test).
+- [x] Each vertical row draws a 1 px bottom border in `theme.border`; the row is still 64 px and the header 32 px (workspace test).
+- [x] The horizontal row is unchanged (existing test).
 - [ ] On screen, by `ui-verifier`: a new `cmd` tab shows the same path in the tab and in the status bar; the divider in a light and a dark theme; the drop line still reads clearly on a hovered row.
 
 **Documentation.** `docs/gui-layout.md` "Vertical tabs" (row description, anatomy), `high-level-design.md` (Rail anatomy row content, wireframe note, Interactions), this packet.
+
+**Evidence.** Tests: `oneterm-terminal-view` `the_rows_directory_is_the_status_bars` (a local drive path, a path under the home folder, the home folder itself and an SSH path: the row's string equals `breadcrumb_label` equals the path the session reported, and none starts with `~`; it replaces `the_directory_line_abbreviates_the_local_home_only`); `a_long_directory_is_cut_at_its_start_and_follows_the_width` unchanged and green; `oneterm-workspace` `the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it` now also asserts the row's content box (the grip column) is 63 px inside the 64 px row, which only the 1 px border explains. The border's colour (`theme.border`) is code-reviewed, not pixel-tested. Gate: `pwsh scripts/ci-local.ps1` on Windows (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree `target`): all checks passed (`cargo test --workspace`: 2509 passed, 0 failed, 19 ignored in that step; the three `--ignored --test-threads=1` lines, `check-ignored-tests.py`, the `oneterm-vt` steps, `verify-dependency-graph.py`, `check-doc-paths.py`, `check-english.py`, `check-theme-contrast.py` (1638 pairings, 624 hierarchy comparisons) and the notices check included). `bash scripts/ci-local.sh` was tried first and stops at the `oneterm-vt` six-dependency check on this machine only because Windows' `sort.exe` shadows GNU `sort` in that shell; the PowerShell script is the same set of checks.
 
 ## Handoff
 
