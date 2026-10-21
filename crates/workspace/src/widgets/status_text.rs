@@ -429,8 +429,11 @@ impl Render for StatusText {
             .as_ref()
             .and_then(|label| label.segments.first())
             .map_or(Tone::Foreground, |segment| segment.tone);
+        let id = self.id;
         div()
-            .id(self.id)
+            .id(id)
+            // Lets a test ask where the indicator was drawn. A no-op outside test builds.
+            .debug_selector(move || format!("status-{id}"))
             .flex()
             .items_center()
             .gap_1()

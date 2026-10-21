@@ -1,5 +1,6 @@
-//! Status bar — left: the clock; centre: breadcrumb + git status; right: the
-//! network speed, the CPU/memory indicator and the right-dock toggle.
+//! Status bar — left: the Collapse / Expand Tabs button (only while Vertical Tabs is on) and
+//! the clock; centre: breadcrumb + git status; right: the network speed, the CPU/memory
+//! indicator and the right-dock toggle.
 //!
 //! The clock, net-speed, breadcrumb, git-status, and resource entities are created once in
 //! [`StatusBarView::new`], avoiding a fresh one each render (which would drop the
@@ -33,8 +34,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, Context, Entity, IntoElement, ParentElement as _, Pixels, Render, StyleRefinement,
-    Styled, Window, div, px,
+    AnyElement, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
+    Render, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::dock::{DockArea, DockEvent, DockPlacement};
 use gpui_component::{
@@ -43,12 +44,19 @@ use gpui_component::{
     status_bar::StatusBar,
 };
 
+use oneterm_settings::UiConfig;
+
 use crate::widgets::status_text::measure_status_text;
 use crate::widgets::{StatusText, breadcrumb, datetime_clock, git_status, net_speed, resource};
 
 /// Everything in the bar that is not a label: the bar's padding, the gaps
 /// between its items, the four separators and the dock-toggle button.
 const BAR_CHROME: Pixels = px(116.);
+/// The Collapse / Expand Tabs button and the gap the left region puts after it: an `xsmall`
+/// icon button (`h_5`, so 20 px) and the region's 8 px gap.
+const TABS_TOGGLE_CHROME: Pixels = px(28.);
+/// Names the Collapse / Expand Tabs button in the debug-bounds map. A no-op outside test builds.
+const TABS_TOGGLE_SELECTOR: &str = "oneterm-status-tabs-toggle";
 /// One indicator's leading icon and the gap after it.
 const ICON_CHROME: Pixels = px(16.);
 /// The path keeps at least this much before the branch starts giving way.
@@ -86,6 +94,24 @@ fn divide_centre(window_width: Pixels, icons: usize, fixed: Pixels, git: Pixels)
         path: shrinkable - git,
         git,
     }
+}
+
+/// The button that collapses the vertical tab rail to its strip or expands it again (`US-0198`,
+/// owner rework 4): one writer, `UiConfig::set_vertical_tabs_collapsed`, which writes nothing
+/// when the value is unchanged and only changes memory in an elevated window.
+fn tabs_toggle(collapsed: bool) -> Button {
+    let (id, icon, tooltip) = if collapsed {
+        ("expand-tabs", IconName::PanelLeftOpen, "Expand Tabs")
+    } else {
+        ("collapse-tabs", IconName::PanelLeftClose, "Collapse Tabs")
+    };
+    Button::new(id)
+        .ghost()
+        .xsmall()
+        .icon(icon)
+        .tooltip(tooltip)
+        .debug_selector(|| TABS_TOGGLE_SELECTOR.to_string())
+        .on_click(move |_, _, cx| UiConfig::set_vertical_tabs_collapsed(!collapsed, cx))
 }
 
 /// The height the kit's `StatusBar` lays itself out at, for the cached embed
@@ -213,8 +239,16 @@ fn build_status_bar(
         .into_iter()
         .flatten()
         .fold(px(0.), |total, width| total + width);
+    // The button is there only while the rail is switched on, and takes room from the centre.
+    let tabs = UiConfig::read_vertical_tabs(cx);
+    let toggle = tabs.enabled.then(|| tabs_toggle(tabs.collapsed));
+    let toggle_chrome = if toggle.is_some() {
+        TABS_TOGGLE_CHROME
+    } else {
+        px(0.)
+    };
     let budgets = divide_centre(
-        window.viewport_size().width,
+        window.viewport_size().width - toggle_chrome,
         icons,
         fixed,
         visible[4].unwrap_or(px(0.)),
@@ -227,6 +261,7 @@ fn build_status_bar(
     StatusBar::new()
         // Sync the top border color with the Dock border (cx.theme().border)
         .border_color(cx.theme().border)
+        .when_some(toggle, |bar, toggle| bar.left(toggle))
         .left(clock)
         // The centre region is `flex-1` with a zero basis, so these two are the
         // only indicators the window can squeeze (`US-0112`).
@@ -439,6 +474,79 @@ mod tests {
                     rem: px(16.),
                 }
             })
+        }
+
+        /// Owner rework 4 of `US-0198`: the Collapse / Expand Tabs button is the first item of the
+        /// bar's left group, just before the clock, only while Vertical Tabs is on, and its
+        /// click flips `collapsed` through the setter (icon and words swap with it).
+        #[gpui::test]
+        fn the_tabs_toggle_shows_only_with_vertical_tabs_and_flips_collapsed(
+            cx: &mut TestAppContext,
+        ) {
+            use oneterm_settings::{UiConfig, ui_config::UiConfigGlobal};
+
+            use super::super::TABS_TOGGLE_SELECTOR;
+
+            let config = cx.update(|cx| {
+                let config = cx.new(|_| UiConfig {
+                    persist_blocked: true,
+                    ..UiConfig::default()
+                });
+                cx.set_global(UiConfigGlobal(config.clone()));
+                config
+            });
+            let (_host, cx) = host(Embed::Workspace, cx);
+            let draw = |cx: &mut VisualTestContext| {
+                cx.update(|_, cx| cx.refresh_windows());
+                cx.run_until_parked();
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+            };
+            draw(cx);
+            assert!(
+                cx.debug_bounds(TABS_TOGGLE_SELECTOR).is_none(),
+                "no button while Vertical Tabs is off"
+            );
+
+            config.update(cx, |config, cx| {
+                config.vertical_tabs.enabled = true;
+                cx.notify();
+            });
+            draw(cx);
+            let bar = cx.debug_bounds("bar").expect("the bar");
+            let toggle = cx.debug_bounds(TABS_TOGGLE_SELECTOR).expect("the button");
+            let clock = cx.debug_bounds("status-clock").expect("the clock");
+            assert_eq!(
+                toggle.left(),
+                bar.left() + px(8.),
+                "first in the left group"
+            );
+            assert_eq!(
+                toggle.right() + px(8.),
+                clock.left(),
+                "just before the clock"
+            );
+
+            // Collapsing and expanding: the writer is the setter, and the button follows it.
+            let collapsed = |cx: &mut VisualTestContext| {
+                config.read_with(cx, |config, _| config.vertical_tabs.collapsed)
+            };
+            assert!(!collapsed(cx));
+            cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+            draw(cx);
+            assert!(collapsed(cx), "the click collapses the rail");
+            let toggle = cx
+                .debug_bounds(TABS_TOGGLE_SELECTOR)
+                .expect("the expand button");
+            cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+            draw(cx);
+            assert!(!collapsed(cx), "the second click expands it");
+
+            config.update(cx, |config, cx| {
+                config.vertical_tabs.enabled = false;
+                cx.notify();
+            });
+            draw(cx);
+            assert!(cx.debug_bounds(TABS_TOGGLE_SELECTOR).is_none());
         }
 
         /// The workspace's embed, and its accessibility branch, lay the bar out

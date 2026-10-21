@@ -141,6 +141,22 @@ No decision record: the stored field, the state machine and the owner's Q4 rulin
 
 - **Gate after rework 3:** `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`): all checks passed, `cargo test --workspace` 2513 passed, 0 failed, 19 ignored; debug app rebuilt.
 
+### Rework 4 (owner): the collapse button lives in the status bar
+
+Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-10-21 (translated from Vietnamese): "Move the Collapse/Expand Tabs button to the status bar, left-aligned, just before the clock." The other 2026-10-21 owner requests (no zoom button, `+` on the right, no scrollbar) are in the `US-0196` Rework 4 entry.
+
+- **Outcome.** The rail header no longer holds the collapse / expand button. The status bar has it as the first item of its left group, immediately to the left of the clock: `PanelLeftClose` with the tooltip "Collapse Tabs" while the rail is expanded, `PanelLeftOpen` with "Expand Tabs" while it is collapsed (the same icons and words as the header button had). It calls the same writer, `UiConfig::set_vertical_tabs_collapsed(!collapsed, cx)`, so a value equal to the stored one still writes nothing and the elevated window still applies it in memory and writes nothing (`write_refusal`).
+- **When it shows.** Only while Vertical Tabs is on (`UiConfig::read_vertical_tabs(cx).enabled`, read when the bar renders; the setters already `refresh_windows`, which re-renders the cached bar). It is not tied to whether the active tab group happens to draw the rail (the SSH Client group does not): the button is a switch for the stored preference, which every rail follows. The elevated window shows it (the rail can show there) and its click changes memory only.
+- **Where the code is.** `crates/workspace/src/layout/statusbar.rs` (`build_status_bar`): `workspace` already depends on `settings`, so no crate edge is added (R2, R4 hold); `StatusBar::left(toggle)` before `.left(clock)`. The centre region's width budget (`divide_centre`) gets the button's 28 px (20 px plus the left region's 8 px gap) taken off the window width while the button is shown.
+- **Collapsed header.** With the button gone the collapsed header holds only `+` (see `US-0196` Rework 4); the three-button stacking floor is deleted.
+- **Tests.** `tab_rail_tests`: the collapse test flips the rail through the setter and asserts the header has neither button; `statusbar.rs` `caching::the_tabs_toggle_shows_only_with_vertical_tabs_and_flips_collapsed` (absent while the switch is off; present while on, left of the clock; a click collapses and the second expands).
+- **Acceptance.**
+  - [x] The rail header has no collapse / expand button, expanded or collapsed.
+  - [x] The status bar shows the button just left of the clock only while Vertical Tabs is on, and its click flips `collapsed` live.
+  - [ ] On screen, by `ui-verifier`: placement and spacing next to the clock in two themes, the tooltip, an elevated window, a narrow window (the centre breadcrumb still gives way first).
+- **Gate.** `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`): all checks passed; `cargo build -p oneterm-app` debug binary built.
+- **Documentation.** `docs/gui-layout.md` ("Collapsing", Status bar), `high-level-design.md` (wireframes, anatomy, collapse step).
+
 ### Gaps
 
 - Not pinned by a test: the tooltip text on a cell (gpui exposes no way to read a shown tooltip in a test) and the recording dot's place; both are plain code in `render_tab_strip` / `collapsed_row`.

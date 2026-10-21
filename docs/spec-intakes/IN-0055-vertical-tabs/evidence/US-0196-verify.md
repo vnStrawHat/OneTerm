@@ -283,3 +283,61 @@ Coordinator: merged on the advisor PASS. The status-icon items were not walkable
 - The walk items the packet lists (both themes, start truncation while the path changes and the window narrows, `~` on a local tab, a remote path on SSH, the grip on line 1, the icon clear of the scrollbar with 40 tabs).
 
 Gate for both parts: see `US-0197-verify.md` (same run, five crates).
+
+## Advisor code review (rework 4)
+
+Head `e5f98b62` (three commits on main `ab69703e`), reviewed on `verify/in-0055-rework4` in the coder's worktree, 2026-10-21. Covers the `US-0196` Rework 4 and `US-0198` Rework 4 entries together (one diff).
+
+### Verdict: PASS
+
+No defect in the code; two points for the owner (1 and 3 below). No pinned test added: nothing found that a test could flip when fixed.
+
+### Gate (one crate set per command, `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree target reused)
+
+- `cargo test -p oneterm-terminal-view -p oneterm-workspace -p oneterm-settings -p oneterm-state`: 659 passed, 7 ignored (8 suites).
+- `cargo clippy` on the same four crates, `--all-targets -- -D warnings`: clean.
+- `cargo fmt --all -- --check`: clean. `python scripts/check-english.py`: 1140 files pass. `python scripts/check-doc-paths.py`: 219 paths pass.
+- `python scripts/check-ignored-tests.py`: not re-run (its whole-workspace `cargo test --list` ran out of memory on this machine); the diff adds no `#[ignore]`, so the census is unchanged. The coder's full `ci-local.ps1` run stands for it.
+
+### The coder's attack list
+
+1. **Zoom stranding: Medium, owner decision, not a code defect.** With the rail drawn there is now no pointer path to zoom in or out: the rail has no button (`tab_rail.rs:452-477`, the header holds only the `+`), the rail draws no `...` menu, the rail rows have no context menu of their own (no `context_menu` / `popup_menu` in `tab_rail.rs`), and no application menu carries `ToggleZoom` (`app_menus.rs` has no zoom entry). The only way in or out is the `ToggleZoom` key binding (default `shift-escape`, `key_bindings_actions.rs:64-70`, allowed in an elevated window, `elevated_policy.rs:85`). Zoom is persisted (`docks.json` `zoomed_panel`), so a user who zoomed on the horizontal strip, then switched Vertical Tabs on, or who restarts into a zoomed layout, sees a zoomed terminal with no visible way back. The owner asked for the button's removal, so this is the consequence to confirm, not a defect. Fix shape if wanted: a `Zoom Out` row in the terminal tab's own context menu while `group.is_zoomed()` (the menu `tab_title.rs` already draws, the rail re-uses it), or a `View > Toggle Zoom` menu item; either is a few lines and keeps the header bare.
+2. **Status-bar toggle gated on the switch only: Low, documented choice.** `build_status_bar` shows the button on `UiConfig::read_vertical_tabs(cx).enabled` alone (`statusbar.rs:243-244`). A centre group that is not all-terminal (a panel dragged into the centre; `draws_rail`, `tab_rail.rs:97-107`) draws the strip, yet the bar still offers Collapse / Expand, and a click flips the persisted `collapsed` with nothing on screen moving. The `US-0198` Rework 4 entry records this as deliberate (the button is a switch for the stored preference). Fix shape if the owner minds: also require that some centre group draws the rail (the bar holds `dock_area`; `layout(DockPlacement::Center)` and `panel_names` are enough).
+3. **The OSC 7501 icon claim: verified; "it animated before" is not explained by this change or by the kit bump.** The animation code is the `701a4b16` (2026-10-15) version, untouched; the new `the_working_icon_animates_in_every_row_layout` passes for the strip, the vertical row and the collapsed cell. Reduced motion: `gpui-base` `reduce_motion.rs` reads `SPI_GETCLIENTAREAANIMATION` once at `init` (Windows `follow` is a no-op, `reduce_motion.rs:141`) and `AnimationElement::request_layout` draws one static frame under the flag (`gpui-pre-0.3.9` `elements/animation.rs:407-413`). That file exists in `gpui-base` 0.7.0, 0.7.1 and 0.7.3 and not in 0.6.0; the 0.7.0 bump (`5a5bcff1`, 2026-09-28) is an ancestor of the animation commit, so the icon was born under a reduce-motion-aware kit and the bump cannot be what changed. The repo's own walk record already says it: `US-0193-tab-status-icon.md:94`, "The icon was static on screen: this machine has Windows animation effects off". Other explanations for having seen it animate: the flag is read once per launch, so an instance started while Animation effects were on kept animating until it was closed (the setting is also turned off by Performance Options "Adjust for best performance", by some Remote Desktop experience profiles and by some power-saver profiles); or it was seen on another machine or user account. Recommendation: the owner checks Settings > Accessibility > Visual effects > Animation effects; if it is on and the icon is still static, that is a new bug. Cheap aid either way: one `log::info!` of `cx.reduce_motion()` after `gpui_component::init` in `crates/app/src/init.rs`, so a walk log says which state the app read.
+4. **28 px chrome vs the real layout: verified.** An icon-only `xsmall` kit button is `size_5` (`gpui-component-0.7.3` `button/button.rs:674`), 20 px; the bar's left region is an `h_flex` with `gap_2` (`status_bar.rs:84`), 8 px; the test pins both edges (`statusbar.rs:519-528`).
+5. **Right-edge presses vs the 4 px handle: by design.** The handle is `right(-1)` and 4 px wide (`tab_rail.rs:271-272`), so it covers the rail's last 3 px and a press there starts a resize, not a selection. The new test's smallest offset is 5 px (`tab_rail_tests.rs:1246`), which is the first pixel a press can select at.
+6. **The scrollbar-click test against the old code: done, it discriminates.** With `.vertical_scrollbar(&self.scroll_handle)` put back on the expanded list (local patch, not committed), `a_click_across_an_expanded_row_of_an_overflowing_rail_selects_it` fails at `tab_rail_tests.rs:1259` ("5 px from the edge: left 0, right 5": the track took the press and no tab was selected) while `forty_tabs_scroll_and_the_active_one_is_brought_into_view` still passes. The file was restored to `e5f98b62` afterwards (`git status` clean).
+
+### Everything else
+
+- **Cached status bar follows the setting.** All three `vertical_tabs` setters end with `cx.refresh_windows()` (`ui_config.rs:462, 483, 499`); a cached view re-renders while `window.refreshing` (`gpui-pre-0.3.9` `view.rs:534-535`), so the button appears, flips and disappears without the bar observing the config. The test drives the Settings switch's path by hand (`cx.refresh_windows()` in its `draw`), which matches what `set_vertical_tabs_enabled` does.
+- **Dead code.** None: `ZoomButton`, `zoom_button`, `COLLAPSED_HEADER_HEIGHT`, `RowPlace::gutter`, `TabRail::overflowing` and the `Scrollbar` / `v_flex` / `Button` / `IconName` / `ToggleZoom` imports left with their uses; clippy is clean.
+- **Crate rules.** No new edge: `oneterm-workspace` already used `oneterm-settings` (`layout/workspace/mod.rs:351`).
+- **Records.** `US-0196` Rework 4, `US-0198` Rework 4, `IN-0055.md`, the HLD (wireframes, rail anatomy, Zoom row, collapse step) and `docs/gui-layout.md` (anatomy, header, scrolling, Collapsing, Status bar) all describe the code as it is: 32 px header in both states, `+` right-aligned / centred, no scrollbar, status-bar button left of the clock, gated on the switch.
+
+### For the owner
+
+1. Confirm the zoom consequence in point 1 (key binding only while the rail is drawn), or pick one of the two small affordances.
+2. Decide the icon question in point 3 after checking the Windows Animation effects switch.
+3. The ui-verifier walk items the packets list: header in both states and two themes, 40 tabs without a scrollbar, the status icon clear of the row's edge, the status-bar button next to the clock (two themes, tooltip, elevated window, narrow window).
+
+## UI verification (rework 4)
+
+Build: copy of the debug binary at head e5f98b62, private profile and cwd, window 1280x800 (also resized down to 900 and 640; the window will not go below ~656 px). Coordinates below are screenshot (full-window) space unless marked client; client = screenshot x minus 8, y unchanged. Screenshots: `<scratchpad>\uivrw4-shots\uivrw4-*.png`.
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1 | Rail header holds only `+`, 32 px (y 34..65); expanded `+` right-aligned (x 209), collapsed centred (x 28); no zoom button in rail; strip (Vertical Tabs off) still has zoom | PASS | 01-launch, 09-collapsed, 17-vt-off |
+| 2 | Status bar button first in the left group before the clock; tooltip "Collapse Tabs" (PanelLeftClose) / "Expand Tabs" (PanelLeftOpen); click flips rail live; hidden when Vertical Tabs off | PASS | 08, 10, crop-08, crop-10, 17-vt-off |
+| 2b | Narrow widths: nothing overlaps at 900 / 656 expanded and collapsed. The centre breadcrumb could not be exercised (child shells die here, no cwd) | PASS (breadcrumb NOT WALKED) | 12-narrow-exp-*, 13-narrow-coll-* |
+| 3 | 40 tabs: no scrollbar expanded or collapsed; wheel scrolls; selected tab revealed after expanding (tab 40 at bottom) and collapsing (17 and 29 visible); row content uses the full width | PASS | 05, 06, 09, 13-narrow-coll-640 |
+| 3b | Clicks select the right row: expanded at 5 px from the right (client x 214), centre, left (client x 3); collapsed at client x 38, 20, 1, 42 | PASS | 07-click-*, 11-collclick-* |
+| 4 | Collapsed persists across restart (`ui_config.json` has `collapsed: true`; relaunch shows the strip); light theme collapsed and expanded legible, tooltip themed | PASS | 14, 15, 16 |
+
+Defects: none blocking.
+
+1. (Info, by design) Expanded rail: a click at client x 216 (screenshot x 224), inside the 4 px resize handle over the right border, does not select a row. 5 px in works.
+
+Not walked: OSC 7501 icon and animation, cwd line, centre breadcrumb yielding to the buttons (no cwd without a live shell), hover-only states beyond tooltips, High-DPI.
+
+Owner-only checks: with a real shell, narrow the window until the breadcrumb is long and confirm it truncates before touching the new button and the clock; check the OSC 7501 icon and cwd line in a row; try keyboard focus on the status bar button.

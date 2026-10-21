@@ -9,7 +9,7 @@ Date: 2026-10-20
 Terminal Tabs are drawn today by the GPUI Kit tab strip along the top of the centre tab group.
 With **Vertical Tabs** on (Settings > General > Interface, off by default) OneTerm's own
 tab-group renderer draws them instead as a **rail** down the left side of that group: a header
-with the `+` menu and the zoom button, then one row per tab. The row content is the same element
+with the `+` menu, then one row per tab. The row content is the same element
 the strip shows today (`TerminalPanel::title`), in a vertical variant, so every per-tab behaviour
 comes along without a second implementation. The switch applies live, persists in
 `ui_config.json`, and changes nothing about panels, sessions, docks or `docks.json`. Later
@@ -61,8 +61,8 @@ UiConfig (oneterm-settings, global entity)
         │                  content_frame():  + margin-left W
         │                        │
         │                        │ for each visible panel: PanelHandle::of(p).title(window, cx)
-        │                        │ header: PanelHandle::of(active).title_suffix(..), zoom control
-        │                        │ callbacks: TabGroupContext::{select_tab, toggle_zoom,
+        │                        │ header: PanelHandle::of(active).title_suffix(..)
+        │                        │ callbacks: TabGroupContext::{select_tab,
         │                        │            drag_panel, drop_panel}
         │                        ▼
         └──────────────► TerminalPanel::title() → render_tab_strip (oneterm-terminal-view)
@@ -121,7 +121,7 @@ change of active tab scrolls the row into view; a clicked row is not snapped.
 
 | Part | Content | Behaviour |
 | --- | --- | --- |
-| Header (32 px, the strip's height; `US-0198`: a collapse / expand button beside zoom, stacked in a column when collapsed) | `+` = the active panel's `title_suffix` (OneTerm's New Terminal menu, `terminal_panel.rs:721`); zoom button | Zoom follows the kit's rule: Zoom Out whenever the group is zoomed, whatever the control says; otherwise Zoom In when `panel.zoomable` and `zoom_control().toolbar_visible()` (`tab_panel.rs:140-146`, `:305-307`); it calls `group.toggle_zoom`. Icons as the strip (maximize / minimize). The kit's tooltip strings are its private locale (`t!`), so the rail carries its own text, "Zoom In" / "Zoom Out", the same words. No `...` menu (Q5), no right-dock toggle |
+| Header (32 px, the strip's height; the same collapsed; amended 2026-10-21, owner rework 4: no zoom button, the collapse button moved to the status bar, `+` on the right) | `+` = the active panel's `title_suffix` (OneTerm's New Terminal menu, `terminal_panel.rs:721`), right-aligned (centred in the collapsed strip) | No zoom button (the `ToggleZoom` key binding and the horizontal strip's button stay), no `...` menu (Q5), no right-dock toggle, no collapse button (the status bar holds it, just left of the clock, while Vertical Tabs is on) |
 | Rows (64 px each, two lines; was 32 px until the 2026-10-21 owner rework 2) | base `Tab` wrapping `PanelHandle::of(panel).title(window, cx)` | click: `group.select_tab(ix)`; selected: `tab.active.background` + 2 px bar on the left edge in `oneterm_theme::selection_accent` (the theme's `table.active.border`, kept past OneTerm's own blanking of `Theme::table_active_border`; the strip's top bar reads the same, amended at `US-0196`) |
 | Row content (amended 2026-10-21, owner; two lines at rework 2) | **Line 1** (24 px): chips, recording dot, label (ellipsis at its end). **Line 2** (20 px, `text_xs`, `muted.foreground`): the terminal's current directory left-aligned and cut at its **start** when too long (`…\src\panel`, gpui's `TextOverflow::TruncateStart`, so it follows the live width), then the OSC 7501 status icon right-aligned at the end of the line. 10 px above line 1 and below line 2, the last pixel of which is the row's 1 px divider (so 10 + 24 + 20 + 9 + 1 = 64 and the lines are never squeezed). **No `×` close button**; with no cwd line 2 shows no path, with no status nothing is drawn at its end. The strip's row is unchanged (chips, dot, status icon, label, `×`) | the same row element, selected by `TabRowLayout`; the close paths left in the rail are middle-click, the right-click menu (Close, Close Others, Close Tabs Below) and the panel's keyboard paths (`ClosePanel`, and Close Space on the last Space); the icon sits inside the row's 4 px right padding and, once the rows overflow, clear of the scrollbar's gutter. The cwd is the active Space's `TerminalSession::cwd()` (OSC 7, sanitised by `TerminalSecurityPolicy::sanitize_cwd`); the very string the status bar's breadcrumb shows (`TerminalPanel::breadcrumb_label`, no `~` abbreviation; owner rework 3, 2026-10-21); the row has a 1 px `border` divider on its bottom edge, inside the 64 px; it updates live (`TerminalViewEvent::CwdChanged`) |
 | Row leading edge, the grip (12 px, the strip tab's padding, kit `tab/tab.rs:72-89`; Q9) | a `grip-vertical` glyph, centred on line 1 (not on the whole 64 px row), in `muted.foreground` and the `OpenHand` cursor while the row is hovered (a new `crates/theme/assets/icons/grip-vertical.svg`, so `AppIcon::GripVertical`; the kit's `IconName` has no grip) | starts `DragPanel` (`group.drag_panel(ix)`, guarded by `is_draggable`), the reorder and dock-move drag, as the kit tab's padding does today. The rest of the row is the title row, whose own drag (`DragTerminalTab`) wins, as on the strip |
@@ -158,7 +158,7 @@ Vertical (`US-0196`, rail 220 px):
 +--------------------------------------------------------------------------+
 | >_ OneTerm  [menu]                                              _  □  x  |
 +------------------+---------------------------------------+---------------+
-| [+]          [⛶] |                                       | Session    [+]|
+|              [+] |                                       | Session    [+]|
 |------------------|  PS C:\> _                            |  ...          |
 |▌A ● PowerShell   |                                       |               |
 |▌ C:\work\src    ⟳|                                       |---------------|
@@ -175,14 +175,14 @@ Vertical (`US-0196`, rail 220 px):
   ▌ = selected row: tab.active.background + 2 px accent bar on its left edge
   ⠿ = the reorder grip, shown on the hovered row (here web-01), level with line 1, open-hand cursor
   ⟳ ✓ = the OSC 7501 status icon at the right end of line 2 (none: nothing drawn); no × in a row
-  rows scroll vertically when they do not fit; the header stays
+  rows scroll vertically (wheel or touchpad, no scrollbar) when they do not fit; the header stays
 ```
 
 Vertical, resizing (`US-0197`):
 
 ```text
 +------------------++---------------------
-| [+]          [⛶] ||   drag the right edge: 140 px .. min(400 px, 35 % of the tab group)
+|              [+] ||   drag the right edge: 140 px .. min(400 px, 35 % of the tab group)
 |▌PowerShell       ||
 | C:\work\src      ⟳||
 |  web-01          ||   the width the user sets is remembered and
@@ -193,9 +193,7 @@ Vertical, collapsed (`US-0198`, 44 px):
 
 ```text
 +----+------------------------------------
-|[»] |
-|[+] |
-|[⛶] |
+| [+]|
 |----|
 |▌ 1⟳|  ← 44 x 44 cell: position number centred; status icon as a top-right badge,
 |  2 |     recording dot top-left (`US-0198`); tooltip: full title;
@@ -224,7 +222,7 @@ Interface
 | Right dock width | Unchanged formula (35 % of the window, 240 px floor); the rail is taken from the centre's share. At 900 px with the dock open: dock 315, rail 220 (`US-0196`) or 204.75 (`US-0197`), terminal 365 or 380.25 px | `clamp_right_dock_width`, `mod.rs:76-85` |
 | Title bar | Unchanged; nothing moves into it | `title_bar.rs` |
 | Status bar, FPS HUD | Unchanged. The HUD keeps its position (title bar + 32 + 12 px from the top, 12 px from the right), which in vertical mode lies over the terminal's top-right rows or, with the dock open, the right dock's session search field, as it does today | `widgets/fps_hud.rs:26-27`, `:159` |
-| Zoom | The zoomed group keeps its rail, as it keeps its strip today ("the whole TerminalPanel is zoomed, including its tab-group chrome"); the zoom button shows Zoom Out. A zoomed group is neither draggable nor droppable (`tab_group.rs:441-460`), so reorder and drops are off while zoomed, as on the strip. Zoom persistence (`docks.json` `zoomed_panel`) is unchanged | `docs/gui-layout.md` § Zoom |
+| Zoom | The zoomed group keeps its rail, as it keeps its strip today ("the whole TerminalPanel is zoomed, including its tab-group chrome"); the rail has no zoom button (owner rework 4), so Zoom Out is the `ToggleZoom` key binding. A zoomed group is neither draggable nor droppable (`tab_group.rs:441-460`), so reorder and drops are off while zoomed, as on the strip. Zoom persistence (`docks.json` `zoomed_panel`) is unchanged | `docs/gui-layout.md` § Zoom |
 | Lock screen | Covered like everything else (the lock replaces the window's whole element tree); after unlock the rail returns as it was, scroll position included | `docs/gui-layout.md` § Lock screen |
 | Broadcast channels | Chips stay in the row; the Space badge is unchanged | same row element |
 | OSC 7501 status icon (`US-0193`) | Same icon, same rules, drawn at the right end of line 2 of a vertical row (amended 2026-10-21) and before the label in the strip (single-Space tabs only, acknowledge on `set_active(true)`, which a row click reaches through `select_tab` like a strip click). Of its colours only the bell's `warning` is measured on the tab surfaces; `primary`, `success` and `danger` are not, as for the strip | same row element; `terminal_panel.rs:670-684` |
@@ -377,7 +375,7 @@ spends 440 px on rails, until `US-0197` lands.
    mouse-up stores the preference through its setter (one write). Any change of a group's painted
    width (window resize, dock open or close, a split) re-applies the clamp from the preference on
    the next frame.
-6. **Collapse (`US-0198`).** The header button flips `collapsed` through its setter; the row
+6. **Collapse (`US-0198`).** The status bar button (just left of the clock; it was in the header until owner rework 4) flips `collapsed` through its setter; the row
    element renders its compact form when it reads `collapsed`.
 
 ## Detail Design
