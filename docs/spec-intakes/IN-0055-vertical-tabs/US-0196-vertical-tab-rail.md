@@ -13,7 +13,7 @@ Created: 2026-10-20
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -140,6 +140,32 @@ Done on branch `verify/US-0196` on top of the advisor evidence; the UI walk is a
 - **F3.** The HLD "Readers" paragraph, the accent token and the drop-line rows are amended.
 - **Gate after the rework:** `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`): all checks passed, 141 suites, 5067 passed, 0 failed, 33 ignored; `check-theme-contrast` 1638 pairings and 624 hierarchy comparisons pass. Debug app rebuilt (`target\\debug\\oneterm.exe`). The UI fixes (D1 on a live theme switch, D3 scrollbar, D4 chip) are for `ui-verifier` to re-walk on screen.
 - **F4 (info, for US-0197).** `draws_rail` is evaluated three times per group per frame (`frame`, `content_frame`, `render_tab_bar`); each upgrades the area and walks the centre tree. Negligible now; evaluate once per frame when `US-0197` adds per-frame work to it.
+
+## Rework 2026-10-21 (owner): no close button in a vertical row, status at the trailing end
+
+Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-10-21 (translated from Vietnamese): "In vertical tab mode, remove the x button at the end of the tab and show the OSC 7501 status there instead."
+
+**Outcome.** A vertical rail row (`TabRowLayout::Vertical`) draws no `tab-close` element. The OSC 7501 status icon moves from before the label to the trailing end of the row, right-aligned where the `x` was; with no status nothing is drawn there and the label keeps the full width. The horizontal strip's row is exactly as before (status icon before the label, `x` at the end). Closing a tab in the rail still works by middle-click, the right-click menu (Close, Close Others, Close Tabs Below) and the panel's keyboard paths (`ClosePanel`, Close Space on the last Space).
+
+**Choices left open by the request.**
+
+- Channel chips and the recording dot stay where they are (before the label): the request names only the close button and the status icon, and they fit the row as before.
+- Scrollbar gutter (D3): unchanged mechanism. The list reserves `Scrollbar::width()` once the rows overflow, which was written to keep the `x` clear of the overlay scrollbar; the status icon is the right-most element now and rides the same reservation, so it stays clear. Only the comment and the test wording changed.
+- The status icon keeps its tooltip and its `flex_shrink_0`; the row keeps its 4 px right padding. The icon is part of the row content, so a drag started on it is the tab drag (it is no longer a "starts neither" element; only the grip differs).
+
+**Acceptance.**
+
+- [x] A vertical row has no `tab-close` element (test in `oneterm-terminal-view`).
+- [x] With a status, the status icon is drawn after the label in a vertical row, inside the row and right of the label's box; with none, nothing is drawn and the label spans to the row's right padding (test).
+- [x] The horizontal row still has the `x` and the status icon before the label (test).
+- [x] The "x starts neither drag" assertions are replaced: in the rail, the trailing status icon is row content and starts the tab drag; the grip still starts the reorder (terminal-view and workspace tests).
+- [x] The D3 gutter test stands (rows clear the scrollbar gutter once they overflow), re-worded for the status icon.
+- [x] Middle-click still closes a vertical row's tab (existing test or new one, see Evidence).
+- [ ] On screen, by `ui-verifier`: no `x` in any rail row in a light and a dark theme; the status icon at the right end for Working, Blocked, Done and Error; the label ellipsis with and without a status; the icon clear of the scrollbar with 40 tabs; middle-click and the menu close a tab; the strip (switch off) unchanged.
+
+**Documentation.** `high-level-design.md` (diagram note, Rail anatomy row, wireframe, Interactions rows for drag, close and status icon, contrast table); `IN-0055.md` (two walk sentences); `docs/gui-layout.md` "Vertical tabs" (anatomy, row description, scrollbar sentence).
+
+**Verification.** `cargo test -p oneterm-terminal-view`, `-p oneterm-workspace`; clippy; fmt; `check-english`, `check-doc-paths`, `check-theme-contrast`; full `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`); debug app rebuilt for `ui-verifier`.
 
 ## Handoff
 
