@@ -213,3 +213,26 @@ Verdict: partly. Selecting at the left and centre works and expand/collapse keep
 ### Still by hand (ui-verifier)
 
 - 40 collapsed tabs: wheel scrolls the strip; every cell selects at its left, centre and right edge; collapse / expand keeps the displayed tab in view; no thumb drawn in the strip; the expanded rail's scrollbar still drags.
+
+## UI re-walk 3 (head d044d982, ui-verifier, 2026-10-21)
+
+Screenshots `uiv198d-*` in the scratchpad `uiv198-shots\`.
+
+**Coordinate space.** The driver's `click x y` takes client coordinates; screenshots are of the whole window with an 8 px frame, so a cell is client x=0..42 (screenshot x=8..50). The x values below are client x. This corrects the earlier re-walk 2: its "x=37..50" are screenshot-space-shifted client x, i.e. screenshot x=45..58, which is where the 16 px/6 px scrollbar track sat; the "x=43..50 dead zone" there was partly outside the cell (client x >= 43 is the terminal side), so only the x=37..42 part was a real defect, and that was the scrollbar track. This build has no strip scrollbar.
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| 40 collapsed tabs: click at client x = 2, 14, 22, 30, 36, 38, 40, 42 on a non-active cell (a different tab active before each) | PASS | `02-x2` .. `02-x42`: the clicked cell becomes active every time (accent at the clicked row), no list jump |
+| Clicks at client x = 44..50 (outside the strip) | n/a, expected no selection | `02-x44` .. `x50`: previous tab stays active, nothing moves |
+| Repros 34 to 35/33/28 and 12 to 14 equivalents: after a bottom-scrolled list, click tabs 35, 33, 28, 39 and (after scrolling up) 12 | PASS | `03-click-35/33/28/39/12`: accent on the clicked cell each time |
+| Tab 39 selected, list scrolled to the top, Expand | PASS | `05`: selected row visible at the bottom |
+| Collapse again | PASS | `06`: tab 39 visible with accent |
+| Strip scrolls by wheel | PASS | wheel up/down moved the list (`04`, `01`) |
+| No scrollbar drawn when collapsed | PASS | `01`, `02-x42`, `09` (light): no thumb |
+| Expanded rail scrollbar unchanged, thumb draggable | PASS | `07` (thumb at top), `08` (dragging thumb from y=150 to 450 scrolled the list, thumb moved down) |
+| Light and dark glance | PASS | dark `01`, `05`, `07`; light `09` (click at x=40 selects tab 5), `10` |
+
+### Defects
+None found in this walk. (The 4 px thumb drag defect D4 of re-walk 2 is gone with the scrollbar.) Not walked: the hover-to-reveal of an active cell for tab counts beyond 40, status badges (no live shell).
+
+Verdict: yes for everything walkable.
