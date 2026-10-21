@@ -474,9 +474,9 @@ pub(super) fn render_tab_strip(
                 let hidden = shown.clone();
                 cx.new(|_| CellTooltip { inner, hidden }).into()
             })
-            // The tooltip would stay on top of the menu a right-click opens (gpui keeps a
-            // tooltip while its own element is hovered), so a right-press hides it until the
-            // pointer comes back to the cell.
+            // gpui clears a tooltip on a press but shows it again on the next pointer move
+            // while the cell is hovered, which put it on top of the menu a right-click opens,
+            // so a right-press hides it until the pointer comes back to the cell.
             .on_hover(move |hovered, _, _| {
                 if *hovered {
                     entered.set(false);

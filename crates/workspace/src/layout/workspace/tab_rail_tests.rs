@@ -1270,3 +1270,37 @@ fn expanding_the_rail_keeps_the_active_row_in_view(cx: &mut TestAppContext) {
         "the active row {last:?} must still be inside the list {list:?} after expanding"
     );
 }
+
+/// `US-0198` UI defect D3: in an overflowing collapsed rail a click on a cell must select its
+/// tab and leave the list where it is. The overlay scrollbar takes presses on its track (a
+/// press there pages the list and is not passed on), so the cells must not sit under it.
+#[gpui::test]
+fn a_click_on_a_cell_of_an_overflowing_collapsed_rail_selects_it(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    let labels: Vec<&'static str> = (0..40).map(|ix| &*format!("tab {ix}").leak()).collect();
+    set_centre(&window.area, &terminals(&labels), false, &report, cx);
+    assert_eq!(rail_width(cx), 44.);
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+
+    for (ix, offset) in [(3, 0.5), (5, 0.8), (7, 0.1)] {
+        let cell = row(ix, cx).expect("a cell in view");
+        assert!(cell.bottom() <= list.bottom(), "cell {ix} is in view");
+        let before = cell.top();
+        // Across the cell, including 80 % of the way (x = 34 of 43 px), which the kit's 16 px
+        // default track (x >= 27) covered; only the 6 px edge strip is the scrollbar's.
+        let at = point(cell.left() + cell.size.width * offset, cell.center().y);
+        // A real pointer arrives first, which is what shows the overlay scrollbar over its track.
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        settle(cx);
+        cx.simulate_click(at, Modifiers::none());
+        settle(cx);
+        assert_eq!(centre_tabs(&window.area, cx).1, ix, "click at {offset}");
+        assert_eq!(
+            row(ix, cx).unwrap().top(),
+            before,
+            "the list did not scroll"
+        );
+    }
+}
