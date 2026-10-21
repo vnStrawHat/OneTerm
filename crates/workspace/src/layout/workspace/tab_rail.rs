@@ -68,6 +68,8 @@ pub(super) const ROW_SELECTOR: &str = "oneterm-tab-rail-row";
 pub(super) const HEADER_SELECTOR: &str = "oneterm-tab-rail-header";
 pub(super) const GRIP_SELECTOR: &str = "oneterm-tab-rail-grip";
 pub(super) const GRIP_GLYPH_SELECTOR: &str = "oneterm-tab-rail-grip-glyph";
+/// The hover fill behind an unselected row (the row index follows).
+pub(super) const HOVER_SELECTOR: &str = "oneterm-tab-rail-hover";
 pub(super) const EMPTY_SELECTOR: &str = "oneterm-tab-rail-empty";
 pub(super) const HANDLE_SELECTOR: &str = "oneterm-tab-rail-handle";
 /// The drag handle on the rail's right edge.
@@ -536,7 +538,7 @@ impl TabRail {
             theme.tab_active_foreground,
             theme.tokens.tab_active,
         );
-        let (muted, divider) = (theme.muted_foreground, theme.border);
+        let (muted, divider, hover_fill) = (theme.muted_foreground, theme.border, theme.list_hover);
         // Not `table_active_border`: OneTerm blanks that for the data tables after every theme
         // change, which made the bar vanish.
         let accent = oneterm_theme::selection_accent(cx);
@@ -623,7 +625,7 @@ impl TabRail {
             .border_color(divider)
             .text_sm()
             .text_color(foreground)
-            .group(hover_group)
+            .group(hover_group.clone())
             .hover(move |style| style.text_color(active_foreground))
             .when(droppable, |this| {
                 this.drag_over::<DragPanel>({
@@ -658,6 +660,23 @@ impl TabRail {
                         .bottom_0()
                         .w(ACCENT_BAR_WIDTH)
                         .bg(accent),
+                )
+            })
+            // The whole row's hover fill, behind the content. Not the row's own `hover`: the kit's
+            // `Tab::render` registers its hover style after ours and a gpui `hover` replaces the
+            // previous one, so only the text colour ever changed. The selected row keeps its
+            // active fill and accent bar.
+            .when(!selected, |this| {
+                this.child(
+                    div()
+                        .id(("tab-rail-hover", ix))
+                        .debug_selector(move || format!("{HOVER_SELECTOR}-{ix}"))
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
+                        .group_hover(hover_group, move |style| style.bg(hover_fill)),
                 )
             })
             .children(lead)

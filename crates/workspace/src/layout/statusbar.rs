@@ -1,5 +1,5 @@
-//! Status bar — left: the Collapse / Expand Tabs button (only while Vertical Tabs is on) and
-//! the clock; centre: breadcrumb + git status; right: the network speed, the CPU/memory
+//! Status bar — left: the Collapse / Expand Tabs button and a separator (only while Vertical Tabs
+//! is on) and the clock; centre: breadcrumb + git status; right: the network speed, the CPU/memory
 //! indicator and the right-dock toggle.
 //!
 //! The clock, net-speed, breadcrumb, git-status, and resource entities are created once in
@@ -52,9 +52,9 @@ use crate::widgets::{StatusText, breadcrumb, datetime_clock, git_status, net_spe
 /// Everything in the bar that is not a label: the bar's padding, the gaps
 /// between its items, the four separators and the dock-toggle button.
 const BAR_CHROME: Pixels = px(116.);
-/// The Collapse / Expand Tabs button and the gap the left region puts after it: an `xsmall`
-/// icon button (`h_5`, so 20 px) and the region's 8 px gap.
-const TABS_TOGGLE_CHROME: Pixels = px(28.);
+/// The Collapse / Expand Tabs button and what the left region puts after it: an `xsmall` icon
+/// button (`h_5`, so 20 px), the region's 8 px gap, the 1 px separator and another 8 px gap.
+const TABS_TOGGLE_CHROME: Pixels = px(37.);
 /// Names the Collapse / Expand Tabs button in the debug-bounds map. A no-op outside test builds.
 const TABS_TOGGLE_SELECTOR: &str = "oneterm-status-tabs-toggle";
 /// One indicator's leading icon and the gap after it.
@@ -261,7 +261,7 @@ fn build_status_bar(
     StatusBar::new()
         // Sync the top border color with the Dock border (cx.theme().border)
         .border_color(cx.theme().border)
-        .when_some(toggle, |bar, toggle| bar.left(toggle))
+        .when_some(toggle, |bar, toggle| bar.left(toggle).left(separator()))
         .left(clock)
         // The centre region is `flex-1` with a zero basis, so these two are the
         // only indicators the window can squeeze (`US-0112`).
@@ -520,10 +520,11 @@ mod tests {
                 bar.left() + px(8.),
                 "first in the left group"
             );
+            // The left group's 8 px gap, the 1 px separator, the gap again.
             assert_eq!(
-                toggle.right() + px(8.),
+                toggle.right() + px(8.) + px(1.) + px(8.),
                 clock.left(),
-                "just before the clock"
+                "a separator between the button and the clock"
             );
 
             // Collapsing and expanding: the writer is the setter, and the button follows it.

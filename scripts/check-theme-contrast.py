@@ -133,7 +133,14 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #                          tab_rail.rs`, draws the same pair). Added by `IN-0055`; it also
     #                          turns on the `HIERARCHY` comparison against `muted.foreground`
     #                          on that fill, because `muted.foreground` is listed there too.
-    "tab.active.foreground": ("tab.active.background", "tab_bar.background"),
+    #   tab_bar.hover.background  the same rail row under the pointer, which now also gets the
+    #                          list hover fill over the bar (owner rework 5 of `US-0196`;
+    #                          `tab_rail.rs`, the `group_hover` fill)
+    "tab.active.foreground": (
+        "tab.active.background",
+        "tab_bar.background",
+        "tab_bar.hover.background",
+    ),
     # `accent.foreground` -- the label of a hovered or selected menu row, which swaps both
     # fill and text (kit `menu/menu_item.rs:115-120`): every OneTerm popup menu -- the tab
     # strip's `+` menu, the terminal and session context menus, the app menu's dropdowns.
@@ -207,6 +214,7 @@ SURFACES: dict[str, tuple[str, ...]] = {
         "table.even.background",
         "table.hover.background",
         "tab_bar.background",
+        "tab_bar.hover.background",
         "tab.active.background",
     ),
     # `tab.foreground` -- an inactive tab label, drawn on the strip; `tab.background` is
@@ -259,6 +267,9 @@ SURFACES: dict[str, tuple[str, ...]] = {
         "tab.background",
         "tab.active.background",
     ),
+    # Not measured on `tab_bar.hover.background`: the bell is a status glyph, not text, so the
+    # bar for it on a rail row under the pointer is WCAG 1.4.11's 3:1, not this file's 4.5:1
+    # (the worst built-in variant is 4.0:1 there, probed when the hover fill was added).
 }
 
 # The hierarchy rule, as (primary, secondary) pairs. On every surface both tokens are drawn
@@ -279,6 +290,7 @@ HIERARCHY: tuple[tuple[str, str], ...] = (
 PARENTS: dict[str, str] = {
     "tab.background": "tab_bar.background",
     "tab.active.background": "tab_bar.background",
+    "tab_bar.hover.background": "tab_bar.background",
     "accent.background": "popover.background",
     "list.even.background": "list.background",
     "list.hover.background": "list.background",
@@ -312,6 +324,8 @@ FALLBACKS: dict[str, str | tuple] = {
     "table.hover.background": "list.hover.background",                   # schema.rs:1009
     "table.head.background": "list.head.background",                     # schema.rs:1005
     "tab_bar.background": "background",                                  # schema.rs:998
+    # Not a kit token: the rail row's hover fill is `list.hover.background`, drawn over the bar.
+    "tab_bar.hover.background": "list.hover.background",
     "tab.background": "background",                                      # schema.rs:995
     "tab.active.background": "background",                               # schema.rs:996
     "tab.foreground": "foreground",                                      # schema.rs:1000

@@ -196,7 +196,7 @@ Vertical, collapsed (`US-0198`, 44 px):
 | [+]|
 |----|
 |▌ 1⟳|  ← 44 x 44 cell: position number centred; status icon as a top-right badge,
-|  2 |     recording dot top-left (`US-0198`); tooltip: full title;
+|  2 |     recording dot top-left (`US-0198`); hover card: the expanded row's content;
 |● 3 |     click / middle-click / right-click as expanded; chips and cwd not drawn
 +----+
 ```

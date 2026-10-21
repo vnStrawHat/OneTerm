@@ -19,7 +19,7 @@ use oneterm_state::{TabRowLayout, panel_names};
 
 use super::tab_rail::{
     COLLAPSED_ROW_HEIGHT, EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, HANDLE_SELECTOR,
-    HEADER_SELECTOR, LIST_SELECTOR, RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
+    HEADER_SELECTOR, HOVER_SELECTOR, LIST_SELECTOR, RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
 };
 use super::{MAIN_DOCK_VERSION, dock_skin};
 
@@ -502,6 +502,35 @@ fn the_grip_glyph_sits_on_the_title_line_and_the_header_keeps_its_height(cx: &mu
         px(32.),
         "the header is the strip's height"
     );
+}
+
+/// Owner rework 5 of `US-0196`: every unselected row has a hover fill over the whole row, behind
+/// its content, expanded and collapsed; the selected row has none (it keeps its active fill).
+#[gpui::test]
+fn an_unselected_row_has_a_hover_fill_over_the_whole_row(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+
+    for collapsed in [false, true] {
+        cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(collapsed, cx));
+        settle(cx);
+        let row = row(1, cx).unwrap();
+        let fill = bounds_of(format!("{HOVER_SELECTOR}-1"), cx).expect("the unselected row's fill");
+        assert_eq!(fill.left(), row.left(), "collapsed: {collapsed}");
+        assert_eq!(fill.right(), row.right(), "collapsed: {collapsed}");
+        assert_eq!(fill.top(), row.top(), "collapsed: {collapsed}");
+        // The row's own 1 px divider stays outside the fill.
+        assert_eq!(
+            fill.bottom() + px(1.),
+            row.bottom(),
+            "collapsed: {collapsed}"
+        );
+        assert!(
+            bounds_of(format!("{HOVER_SELECTOR}-0"), cx).is_none(),
+            "the selected row keeps its active fill, collapsed: {collapsed}"
+        );
+    }
 }
 
 /// The rail rule: only a centre group of terminal panels.
