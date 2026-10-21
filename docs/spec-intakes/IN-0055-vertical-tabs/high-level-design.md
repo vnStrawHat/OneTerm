@@ -121,9 +121,9 @@ change of active tab scrolls the row into view; a clicked row is not snapped.
 
 | Part | Content | Behaviour |
 | --- | --- | --- |
-| Header (32 px, the strip's height) | `+` = the active panel's `title_suffix` (OneTerm's New Terminal menu, `terminal_panel.rs:721`); zoom button | Zoom follows the kit's rule: Zoom Out whenever the group is zoomed, whatever the control says; otherwise Zoom In when `panel.zoomable` and `zoom_control().toolbar_visible()` (`tab_panel.rs:140-146`, `:305-307`); it calls `group.toggle_zoom`. Icons as the strip (maximize / minimize). The kit's tooltip strings are its private locale (`t!`), so the rail carries its own text, "Zoom In" / "Zoom Out", the same words. No `...` menu (Q5), no right-dock toggle |
+| Header (32 px, the strip's height; `US-0198`: a collapse / expand button beside zoom, stacked in a column when collapsed) | `+` = the active panel's `title_suffix` (OneTerm's New Terminal menu, `terminal_panel.rs:721`); zoom button | Zoom follows the kit's rule: Zoom Out whenever the group is zoomed, whatever the control says; otherwise Zoom In when `panel.zoomable` and `zoom_control().toolbar_visible()` (`tab_panel.rs:140-146`, `:305-307`); it calls `group.toggle_zoom`. Icons as the strip (maximize / minimize). The kit's tooltip strings are its private locale (`t!`), so the rail carries its own text, "Zoom In" / "Zoom Out", the same words. No `...` menu (Q5), no right-dock toggle |
 | Rows (64 px each, two lines; was 32 px until the 2026-10-21 owner rework 2) | base `Tab` wrapping `PanelHandle::of(panel).title(window, cx)` | click: `group.select_tab(ix)`; selected: `tab.active.background` + 2 px bar on the left edge in `oneterm_theme::selection_accent` (the theme's `table.active.border`, kept past OneTerm's own blanking of `Theme::table_active_border`; the strip's top bar reads the same, amended at `US-0196`) |
-| Row content (amended 2026-10-21, owner; two lines at rework 2) | **Line 1** (24 px): chips, recording dot, label (ellipsis at its end). **Line 2** (20 px, `text_xs`, `muted.foreground`): the terminal's current directory left-aligned and cut at its **start** when too long (`…\src\panel`, gpui's `TextOverflow::TruncateStart`, so it follows the live width), then the OSC 7501 status icon right-aligned at the end of the line. 10 px above line 1 and below line 2. **No `×` close button**; with no cwd line 2 shows no path, with no status nothing is drawn at its end. The strip's row is unchanged (chips, dot, status icon, label, `×`) | the same row element, selected by `TabRowLayout`; the close paths left in the rail are middle-click, the right-click menu (Close, Close Others, Close Tabs Below) and the panel's keyboard paths (`ClosePanel`, and Close Space on the last Space); the icon sits inside the row's 4 px right padding and, once the rows overflow, clear of the scrollbar's gutter. The cwd is the active Space's `TerminalSession::cwd()` (OSC 7, sanitised by `TerminalSecurityPolicy::sanitize_cwd`); a local tab shows the home directory as `~` and a drive path with `\`, an SSH tab the remote path as reported; it updates live (`TerminalViewEvent::CwdChanged`) |
+| Row content (amended 2026-10-21, owner; two lines at rework 2) | **Line 1** (24 px): chips, recording dot, label (ellipsis at its end). **Line 2** (20 px, `text_xs`, `muted.foreground`): the terminal's current directory left-aligned and cut at its **start** when too long (`…\src\panel`, gpui's `TextOverflow::TruncateStart`, so it follows the live width), then the OSC 7501 status icon right-aligned at the end of the line. 10 px above line 1 and below line 2, the last pixel of which is the row's 1 px divider (so 10 + 24 + 20 + 9 + 1 = 64 and the lines are never squeezed). **No `×` close button**; with no cwd line 2 shows no path, with no status nothing is drawn at its end. The strip's row is unchanged (chips, dot, status icon, label, `×`) | the same row element, selected by `TabRowLayout`; the close paths left in the rail are middle-click, the right-click menu (Close, Close Others, Close Tabs Below) and the panel's keyboard paths (`ClosePanel`, and Close Space on the last Space); the icon sits inside the row's 4 px right padding and, once the rows overflow, clear of the scrollbar's gutter. The cwd is the active Space's `TerminalSession::cwd()` (OSC 7, sanitised by `TerminalSecurityPolicy::sanitize_cwd`); the very string the status bar's breadcrumb shows (`TerminalPanel::breadcrumb_label`, no `~` abbreviation; owner rework 3, 2026-10-21); the row has a 1 px `border` divider on its bottom edge, inside the 64 px; it updates live (`TerminalViewEvent::CwdChanged`) |
 | Row leading edge, the grip (12 px, the strip tab's padding, kit `tab/tab.rs:72-89`; Q9) | a `grip-vertical` glyph, centred on line 1 (not on the whole 64 px row), in `muted.foreground` and the `OpenHand` cursor while the row is hovered (a new `crates/theme/assets/icons/grip-vertical.svg`, so `AppIcon::GripVertical`; the kit's `IconName` has no grip) | starts `DragPanel` (`group.drag_panel(ix)`, guarded by `is_draggable`), the reorder and dock-move drag, as the kit tab's padding does today. The rest of the row is the title row, whose own drag (`DragTerminalTab`) wins, as on the strip |
 | Row as drop target | 2 px line in `drag_border` while a `DragPanel` hovers, on the edge where the tab will land: below the hovered row for a tab dragged forward within its own group, above it otherwise, none on the dragged row itself (amended at `US-0196`) | drop: `group.drop_panel(drag, Some(ix), true)` (mirrors `tab_panel.rs:594-612`) |
 | Space below the last row | `drop_target` fill while dragged over | drop: append, or last slot for a panel from this group (mirrors `tab_panel.rs:630-651`) |
@@ -161,7 +161,7 @@ Vertical (`US-0196`, rail 220 px):
 | [+]          [⛶] |                                       | Session    [+]|
 |------------------|  PS C:\> _                            |  ...          |
 |▌A ● PowerShell   |                                       |               |
-|▌ ~\src\panel   ⟳|                                       |---------------|
+|▌ C:\work\src    ⟳|                                       |---------------|
 |⠿ web-01          |                                       | SFTP Browser  |
 |  /srv/…/releases✓|                                       |               |
 |  cmd             |                                       |               |
@@ -171,7 +171,7 @@ Vertical (`US-0196`, rail 220 px):
 | 12:04  C:\work  main*                      ↓1 KB/s  CPU 1%  MEM 60 MB [▣]|
 +--------------------------------------------------------------------------+
   each row is 64 px, two lines: line 1 = chips, ●, title; line 2 = the current directory
-  (left, cut at its START when too long: "…\panel", "~" for a local home) and the status icon (right)
+  (left, cut at its START when too long: "…\panel") and the status icon (right)
   ▌ = selected row: tab.active.background + 2 px accent bar on its left edge
   ⠿ = the reorder grip, shown on the hovered row (here web-01), level with line 1, open-hand cursor
   ⟳ ✓ = the OSC 7501 status icon at the right end of line 2 (none: nothing drawn); no × in a row
@@ -184,7 +184,7 @@ Vertical, resizing (`US-0197`):
 +------------------++---------------------
 | [+]          [⛶] ||   drag the right edge: 140 px .. min(400 px, 35 % of the tab group)
 |▌PowerShell       ||
-| ~\src\panel     ⟳||
+| C:\work\src      ⟳||
 |  web-01          ||   the width the user sets is remembered and
 +------------------++   re-applied (clamped) when the window grows again
 ```
@@ -197,9 +197,9 @@ Vertical, collapsed (`US-0198`, 44 px):
 |[+] |
 |[⛶] |
 |----|
-|▌1  |  ← position number; status icon as a corner badge
-| 2⟳ |     tooltip: full label; click / middle-click / right-click as expanded
-| 3  |
+|▌ 1⟳|  ← 44 x 44 cell: position number centred; status icon as a top-right badge,
+|  2 |     recording dot top-left (`US-0198`); tooltip: full title;
+|● 3 |     click / middle-click / right-click as expanded; chips and cwd not drawn
 +----+
 ```
 

@@ -18,8 +18,8 @@ use oneterm_settings::{UiConfig, VerticalTabs, ui_config::UiConfigGlobal};
 use oneterm_state::{TabRowLayout, panel_names};
 
 use super::tab_rail::{
-    EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, HANDLE_SELECTOR, LIST_SELECTOR,
-    RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
+    COLLAPSED_ROW_HEIGHT, EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, HANDLE_SELECTOR,
+    LIST_SELECTOR, RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
 };
 use super::{MAIN_DOCK_VERSION, dock_skin};
 
@@ -459,6 +459,10 @@ fn the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it(cx: &mut TestAppC
     // Rows that fit leave no scrollbar gutter.
     let list = bounds_of(LIST_SELECTOR, cx).unwrap();
     assert_eq!(rows[0].right(), list.right());
+    // A 1 px divider sits on each row's bottom edge, inside the 64 px: the row's content box
+    // (the grip is as tall as it) is one pixel shorter.
+    let grip = bounds_of(format!("{GRIP_SELECTOR}-0"), cx).expect("the grip column");
+    assert_eq!(grip.size.height, ROW_HEIGHT - px(1.));
 
     assert_eq!(centre_tabs(&window.area, cx).1, 0);
     cx.simulate_click(rows[2].center(), Modifiers::none());
@@ -570,16 +574,19 @@ fn forty_tabs_scroll_and_the_active_one_is_brought_into_view(cx: &mut TestAppCon
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     let labels: Vec<&'static str> = (0..40).map(|ix| &*format!("tab {ix}").leak()).collect();
-    set_centre(&window.area, &terminals(&labels), false, &report, cx);
+    set_centre(&window.area, &terminals(&labels), true, &report, cx);
 
     let list = bounds_of(LIST_SELECTOR, cx).expect("the list is drawn");
     let first = row(0, cx).unwrap();
     let last = row(39, cx).unwrap();
-    // The overflowing list leaves the scrollbar's gutter free of rows (their trailing status
-    // icons would sit under it).
+    // The overflowing list leaves the scrollbar's gutter free of row content (the trailing
+    // status icons would sit under it), but the row itself, and so its divider, spans the
+    // whole rail.
+    assert_eq!(first.right(), list.right(), "the row spans the list");
+    let content = bounds_of("probe-row-tab 0", cx).expect("the row's content");
     assert!(
-        first.right() <= list.right() - gpui_component::scroll::Scrollbar::width(),
-        "row {first:?} must clear the scrollbar gutter of the list {list:?}"
+        content.right() <= list.right() - gpui_component::scroll::Scrollbar::width(),
+        "content {content:?} must clear the scrollbar gutter of the list {list:?}"
     );
     assert!(first.top() >= list.top() && first.bottom() <= list.bottom());
     assert!(
@@ -1029,5 +1036,293 @@ fn the_width_setter_clamps_and_skips_an_unchanged_value(cx: &mut TestAppContext)
         cx.update(|_, cx| UiConfig::set_vertical_tabs_width(given, cx));
         assert_eq!(stored_width(&window, cx), stored, "given {given}");
         assert_eq!(updates.get(), count, "given {given}");
+    }
+}
+
+fn is_collapsed(window: &RailWindow, cx: &mut VisualTestContext) -> bool {
+    window
+        .config
+        .read_with(cx, |config, _| config.vertical_tabs.collapsed)
+}
+
+/// The header button collapses the rail to the 44 px strip and expands it again, live, with
+/// no panel rebuilt; the content frame follows, the resize handle exists only while expanded,
+/// and the preference's width is back on expanding (`US-0198`).
+#[gpui::test]
+fn the_header_button_collapses_the_rail_to_a_strip_and_expands_it(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        false,
+        &report,
+        cx,
+    );
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_width(300, cx));
+    settle(cx);
+    assert_eq!(rail_width(cx), 300.);
+    assert!(bounds_of(HANDLE_SELECTOR, cx).is_some());
+    assert!(bounds_of(format!("{RAIL_SELECTOR}-expand-rail"), cx).is_none());
+
+    let collapse = bounds_of(format!("{RAIL_SELECTOR}-collapse-rail"), cx).expect("collapse");
+    cx.simulate_click(collapse.center(), Modifiers::none());
+    settle(cx);
+    assert!(is_collapsed(&window, cx));
+    assert_eq!(rail_width(cx), 44., "the strip, whatever the preference");
+    assert_eq!(
+        report.bounds.get().origin.x,
+        bounds_of(RAIL_SELECTOR, cx).unwrap().right(),
+        "the terminal starts where the strip ends"
+    );
+    assert!(
+        bounds_of(HANDLE_SELECTOR, cx).is_none(),
+        "no resizing the strip"
+    );
+    assert!(bounds_of(format!("{RAIL_SELECTOR}-collapse-rail"), cx).is_none());
+    let rows: Vec<_> = (0..3)
+        .map(|ix| row(ix, cx).expect("a cell per tab"))
+        .collect();
+    for pair in rows.windows(2) {
+        assert_eq!(pair[0].size.height, COLLAPSED_ROW_HEIGHT);
+        assert_eq!(pair[1].top(), pair[0].bottom(), "cells stack");
+    }
+    // The cell is as wide as the strip, less its 1 px border.
+    assert_eq!(f32::from(rows[0].size.width), 43.);
+    // The stacked header (three 20 px buttons) has a fixed least height.
+    let rail = bounds_of(RAIL_SELECTOR, cx).unwrap();
+    assert!(rows[0].top() - rail.top() >= px(76.));
+
+    let expand = bounds_of(format!("{RAIL_SELECTOR}-expand-rail"), cx).expect("expand");
+    cx.simulate_click(expand.center(), Modifiers::none());
+    settle(cx);
+    assert!(!is_collapsed(&window, cx));
+    assert_eq!(rail_width(cx), 300., "the preference comes back");
+    assert!(bounds_of(HANDLE_SELECTOR, cx).is_some());
+    assert_eq!(report.removed.get(), 0, "no panel was rebuilt");
+}
+
+/// A cell asks the panel for its collapsed layout with the tab's 1-based position, and a click
+/// on it selects the tab.
+#[gpui::test]
+fn a_collapsed_cell_is_built_with_its_position_and_a_click_selects_it(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        true,
+        &report,
+        cx,
+    );
+    assert_eq!(
+        report.title_layout.get(),
+        Some(TabRowLayout::Collapsed(3)),
+        "the last cell drawn is the third"
+    );
+    cx.update(|_, cx| {
+        assert_eq!(TabRowLayout::current(cx), TabRowLayout::Horizontal);
+    });
+
+    let rows: Vec<_> = (0..3).map(|ix| row(ix, cx).unwrap()).collect();
+    assert_eq!(centre_tabs(&window.area, cx).1, 0);
+    cx.simulate_click(rows[2].center(), Modifiers::none());
+    settle(cx);
+    assert_eq!(centre_tabs(&window.area, cx).1, 2);
+}
+
+/// Collapsed, the title row's own drag and the grip's reorder still start from the right place:
+/// the cell's content drags the tab, and the grip (a 12 px overlay on its left edge) reorders.
+#[gpui::test]
+fn a_collapsed_cell_keeps_the_content_drag_and_the_grip_reorder(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        true,
+        &report,
+        cx,
+    );
+    let (original, _) = centre_tabs(&window.area, cx);
+    let target = row(2, cx).unwrap().center();
+
+    let title = bounds_of("probe-row-a", cx).expect("the title row fills the cell");
+    drag_to(title.center() + point(px(8.), px(0.)), target, cx);
+    assert!(has_active_drag(cx), "the cell's content starts a drag");
+    assert_eq!(report.title_drags.get(), 1, "it is the title row's drag");
+    release(target, cx);
+    assert_eq!(centre_tabs(&window.area, cx).0, original);
+
+    let grip = bounds_of(format!("{GRIP_SELECTOR}-2"), cx).expect("a grip per cell");
+    assert_eq!(grip.size.width, px(12.));
+    let first = row(0, cx).unwrap().center();
+    drag_to(grip.center(), first, cx);
+    assert!(has_active_drag(cx), "the grip starts a drag");
+    assert_eq!(report.title_drags.get(), 1, "not the title row's drag");
+    release(first, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[2], original[0], original[1]]
+    );
+}
+
+/// Turning the Vertical Tabs switch off keeps the collapsed state, and on again returns to the
+/// strip.
+#[gpui::test]
+fn the_switch_off_keeps_the_rail_collapsed(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    settle(cx);
+    assert_eq!(rail_width(cx), 44.);
+
+    set_vertical(&window.config, false, cx);
+    assert!(bounds_of(RAIL_SELECTOR, cx).is_none(), "the strip is back");
+    assert!(is_collapsed(&window, cx), "and the collapse is remembered");
+
+    set_vertical(&window.config, true, cx);
+    assert_eq!(rail_width(cx), 44.);
+}
+
+/// The collapse setter stores the flag, redraws, and does nothing for a value already stored.
+#[gpui::test]
+fn the_collapse_setter_skips_an_unchanged_value(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let (updates, _subscription) = count_config_updates(&window.config, cx);
+    for (given, count) in [(false, 0), (true, 1), (true, 1), (false, 2)] {
+        cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(given, cx));
+        assert_eq!(is_collapsed(&window, cx), given);
+        assert_eq!(updates.get(), count, "given {given}");
+    }
+}
+
+/// Advisor (`US-0198` verify): 40 collapsed cells overflow the list without a scrollbar gutter
+/// (each cell is the strip less its 1 px border), and a tab that becomes active from elsewhere
+/// is scrolled into view, as expanded rows are.
+#[gpui::test]
+fn forty_collapsed_cells_scroll_without_a_gutter_and_reveal_the_active_one(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    let labels: Vec<&'static str> = (0..40).map(|ix| &*format!("tab {ix}").leak()).collect();
+    set_centre(&window.area, &terminals(&labels), false, &report, cx);
+
+    let list = bounds_of(LIST_SELECTOR, cx).expect("the list is drawn");
+    let first = row(0, cx).unwrap();
+    let last = row(39, cx).unwrap();
+    assert_eq!(first.size.height, COLLAPSED_ROW_HEIGHT);
+    assert_eq!(f32::from(first.size.width), 43., "no gutter is reserved");
+    assert!(last.bottom() > list.bottom(), "40 cells of 44 px overflow");
+
+    let (panels, _) = centre_tabs(&window.area, cx);
+    let newest = panels[39];
+    cx.update(|w, app| {
+        window
+            .area
+            .update(app, |area, cx| area.select_panel(newest, w, cx))
+    });
+    settle(cx);
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+    let last = row(39, cx).unwrap();
+    assert!(
+        last.top() >= list.top() && last.bottom() <= list.bottom(),
+        "the newly active cell {last:?} must be inside the list {list:?}"
+    );
+}
+
+/// Advisor pin (`US-0198` verify, finding 1): the scroll offset is kept in pixels across a
+/// collapse or an expand, so with many tabs the active row would leave the viewport when the
+/// row height changes (44 -> 64 px here). The rail re-reveals the active row when the layout
+/// flips.
+#[gpui::test]
+fn expanding_the_rail_keeps_the_active_row_in_view(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    let labels: Vec<&'static str> = (0..40).map(|ix| &*format!("tab {ix}").leak()).collect();
+    set_centre(&window.area, &terminals(&labels), false, &report, cx);
+    let (panels, _) = centre_tabs(&window.area, cx);
+    let newest = panels[39];
+    cx.update(|w, app| {
+        window
+            .area
+            .update(app, |area, cx| area.select_panel(newest, w, cx))
+    });
+    settle(cx);
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+    let last = row(39, cx).unwrap();
+    assert!(last.top() >= list.top() && last.bottom() <= list.bottom());
+
+    let expand = bounds_of(format!("{RAIL_SELECTOR}-expand-rail"), cx).expect("expand");
+    cx.simulate_click(expand.center(), Modifiers::none());
+    settle(cx);
+    assert_eq!(rail_width(cx), 220.);
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+    let last = row(39, cx).expect("row 39 is drawn");
+    assert!(
+        last.top() >= list.top() && last.bottom() <= list.bottom(),
+        "the active row {last:?} must still be inside the list {list:?} after expanding"
+    );
+}
+
+/// `US-0198` UI defects D3 and D4: in an overflowing collapsed rail a click anywhere across a
+/// cell, its right edge included, must select its tab and leave the list where it is. The kit's
+/// overlay scrollbar takes presses on its track (a press there pages the list and goes no
+/// further), and it is shown after a wheel scroll or while hovered, so the strip draws none.
+#[gpui::test]
+fn a_click_across_a_cell_of_an_overflowing_collapsed_rail_selects_it(cx: &mut TestAppContext) {
+    use gpui::{ScrollDelta, ScrollWheelEvent};
+
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    let labels: Vec<&'static str> = (0..40).map(|ix| &*format!("tab {ix}").leak()).collect();
+    set_centre(&window.area, &terminals(&labels), false, &report, cx);
+    assert_eq!(rail_width(cx), 44.);
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+
+    // The scrollbar is shown while it was just scrolled, which is when a user looks for a cell.
+    cx.simulate_event(ScrollWheelEvent {
+        position: list.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-300.))),
+        ..Default::default()
+    });
+    settle(cx);
+
+    // Every pixel across a cell, left edge to right edge, on a cell that is not the displayed one.
+    let first = (0..40)
+        .find(|ix| row(*ix, cx).is_some_and(|cell| cell.top() >= list.top()))
+        .expect("a cell in view");
+    for across in 0..43 {
+        let displayed = centre_tabs(&window.area, cx).1;
+        let ix = (first..first + 6)
+            .filter(|ix| *ix != displayed)
+            .nth(across % 3)
+            .unwrap();
+        let cell = row(ix, cx).expect("a cell in view");
+        assert!(cell.bottom() <= list.bottom(), "cell {ix} is in view");
+        let before = cell.top();
+        let at = point(cell.left() + px(across as f32 + 0.5), cell.center().y);
+        // A real pointer arrives first, which is what shows the overlay scrollbar.
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        settle(cx);
+        cx.simulate_click(at, Modifiers::none());
+        settle(cx);
+        assert_eq!(
+            centre_tabs(&window.area, cx).1,
+            ix,
+            "a click {across} px across the cell"
+        );
+        assert_eq!(
+            row(ix, cx).unwrap().top(),
+            before,
+            "the list did not scroll"
+        );
     }
 }

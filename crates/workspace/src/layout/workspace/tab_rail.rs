@@ -27,6 +27,7 @@ use gpui_component::{
     dock::{BasePanelView, DragPanel, PanelHandle, PanelId, TabGroupContext, ToggleZoom},
     h_flex,
     scroll::{ScrollableElement as _, Scrollbar},
+    v_flex,
 };
 use oneterm_settings::{UiConfig, VerticalTabs};
 use oneterm_state::{TabRowLayout, panel_names};
@@ -52,6 +53,16 @@ pub(super) fn clamp_tab_rail_width(width: f32, group: f32) -> f32 {
     width.clamp(MIN_WIDTH, ceiling)
 }
 
+/// The width the rail is drawn at: the collapsed strip whatever the preference or the group is,
+/// otherwise [`clamp_tab_rail_width`] of the preference (or the width being dragged).
+pub(super) fn rail_width(collapsed: bool, requested: f32, group: f32) -> f32 {
+    if collapsed {
+        VerticalTabs::COLLAPSED_WIDTH as f32
+    } else {
+        clamp_tab_rail_width(requested, group)
+    }
+}
+
 /// Names in the debug-bounds map, so a test can ask a really drawn frame where things are. A
 /// no-op outside test builds.
 pub(super) const RAIL_SELECTOR: &str = "oneterm-tab-rail";
@@ -68,8 +79,14 @@ const RESIZE_CURSOR: CursorStyle = CursorStyle::ResizeColumn;
 
 /// Height of the header (`+` and zoom): the strip's height.
 const HEADER_HEIGHT: Pixels = px(32.);
+/// The collapsed header's least height: three 20 px buttons (expand, `+`, zoom) with 4 px gaps
+/// and padding, so the cells below do not move when a panel offers no zoom button.
+const COLLAPSED_HEADER_HEIGHT: Pixels = px(3. * 20. + 4. * 4.);
 /// Two lines (`TerminalPanel::title`'s vertical row): the title, then the directory and status.
 pub(super) const ROW_HEIGHT: Pixels = px(TabRowLayout::VERTICAL_ROW_HEIGHT);
+/// A cell of the collapsed rail: a square as wide as the strip (the position number and a
+/// badge need no second line).
+pub(super) const COLLAPSED_ROW_HEIGHT: Pixels = px(VerticalTabs::COLLAPSED_WIDTH as f32);
 /// The reorder grip: the strip tab's leading padding.
 const GRIP_WIDTH: Pixels = px(12.);
 /// The grip glyph (`Icon::xsmall`).
@@ -163,6 +180,10 @@ struct RowPlace {
     position: usize,
     rows: usize,
     selected: bool,
+    /// The rail is the 44 px strip: the cell shows the position number, not the two lines.
+    collapsed: bool,
+    /// Leave the scrollbar's gutter free on the right of the row's content.
+    gutter: bool,
     /// Every panel of the group in tab order, to place a dragged tab among the rows.
     order: Rc<Vec<PanelId>>,
 }
@@ -173,6 +194,7 @@ struct RowPlace {
 #[derive(Clone, Copy)]
 struct RailFrame {
     draws: bool,
+    collapsed: bool,
     width: Pixels,
 }
 
@@ -193,6 +215,9 @@ enum Resize {
 pub(super) struct TabRail {
     scroll_handle: ScrollHandle,
     last_active_ix: Rc<Cell<Option<usize>>>,
+    /// Whether the last frame drew the collapsed strip: a flip changes every row's height, so
+    /// the pixel scroll offset no longer points at the displayed tab.
+    last_collapsed: Cell<bool>,
     /// Whether the rows overflowed the list last frame, so the scrollbar's gutter is reserved.
     overflowing: Cell<bool>,
     frame: Cell<RailFrame>,
@@ -207,9 +232,11 @@ impl TabRail {
         Self {
             scroll_handle: ScrollHandle::default(),
             last_active_ix: Rc::new(Cell::new(None)),
+            last_collapsed: Cell::new(false),
             overflowing: Cell::new(false),
             frame: Cell::new(RailFrame {
                 draws: false,
+                collapsed: false,
                 width: px(VerticalTabs::DEFAULT_WIDTH as f32),
             }),
             group: Rc::new(Cell::new(Bounds::default())),
@@ -217,18 +244,20 @@ impl TabRail {
         }
     }
 
-    /// Start a frame of this group: whether it draws the rail (the caller worked that out), and
-    /// the width it draws at, the stored preference or the width being dragged, kept within
-    /// the group's own bound.
+    /// Start a frame of this group: whether it draws the rail (the caller worked that out),
+    /// whether it is collapsed, and the width it draws at: the strip's, or the stored preference
+    /// or the width being dragged kept within the group's own bound.
     pub(super) fn begin_frame(&self, draws: bool, cx: &App) {
+        let stored = UiConfig::read_vertical_tabs(cx);
         let requested = match self.resize.get() {
             Resize::Dragging(width) => width,
-            Resize::Idle | Resize::Pressed => UiConfig::read_vertical_tabs(cx).width as f32,
+            Resize::Idle | Resize::Pressed => stored.width as f32,
         };
         let group = f32::from(self.group.get().size.width);
         self.frame.set(RailFrame {
             draws,
-            width: px(clamp_tab_rail_width(requested, group)),
+            collapsed: stored.collapsed,
+            width: px(rail_width(stored.collapsed, requested, group)),
         });
     }
 
@@ -345,7 +374,11 @@ impl TabRail {
                 .iter()
                 .position(|panel| panel.panel_id(cx) == displayed)
         });
-        if active_changed(&self.last_active_ix, active_ix)
+        let collapsed = self.frame.get().collapsed;
+        // Both are recorded every frame, so evaluate both before testing either.
+        let tab_changed = active_changed(&self.last_active_ix, active_ix);
+        let layout_changed = self.last_collapsed.replace(collapsed) != collapsed;
+        if (tab_changed || layout_changed)
             && let Some(position) = visible.iter().position(|ix| *ix == active_ix)
         {
             self.scroll_handle.scroll_to_item(position);
@@ -373,7 +406,7 @@ impl TabRail {
                 .collect(),
         );
 
-        let header = self.header(group, window, cx);
+        let header = self.header(group, collapsed, window, cx);
         let list = Tabs::new("tab-rail-list")
             .debug_selector(|| LIST_SELECTOR.to_string())
             .aria_orientation(accesskit::Orientation::Vertical)
@@ -381,7 +414,6 @@ impl TabRail {
             .flex()
             .flex_col()
             .overflow_y_scroll()
-            .when(overflowing, |this| this.pr(Scrollbar::width()))
             .track_scroll(&self.scroll_handle)
             .children(visible.into_iter().enumerate().map(|(position, ix)| {
                 let place = RowPlace {
@@ -389,6 +421,11 @@ impl TabRail {
                     position,
                     rows,
                     selected: displayed_ix == Some(ix),
+                    collapsed,
+                    // The 44 px strip has no room for the gutter; its overlay scrollbar rides
+                    // over the cells. Expanded, each row pads its content by the gutter
+                    // itself, so its divider still spans the whole rail.
+                    gutter: overflowing && !collapsed,
                     order: order.clone(),
                 };
                 self.row(group, place, window, cx)
@@ -438,19 +475,33 @@ impl TabRail {
                     .min_h(px(0.))
                     .overflow_hidden()
                     .child(list)
-                    .vertical_scrollbar(&self.scroll_handle),
+                    // The 44 px strip draws no scrollbar: the kit's track pages the list on any
+                    // press inside it and passes nothing on, and no track narrow enough to
+                    // leave the cells clickable is draggable (`US-0198` D3, D4). The wheel and
+                    // the auto-reveal of the displayed tab scroll it.
+                    .when(!collapsed, |this| {
+                        this.vertical_scrollbar(&self.scroll_handle)
+                    }),
             )
-            .child(self.handle(cx))
+            // No resizing the strip: it has one width.
+            .when(!collapsed, |this| this.child(self.handle(cx)))
             .when(self.resize.get() != Resize::Idle, |this| {
                 this.child(self.tracker())
             })
             .into_any_element()
     }
 
-    /// `+` (the active panel's own title suffix: OneTerm's New Terminal menu) and the zoom
-    /// button. No `...` menu (its tab list is the rail itself) and no dock toggle (the status
-    /// bar and `Ctrl+Shift+B` own it).
-    fn header(&self, group: &TabGroupContext, window: &mut Window, cx: &mut App) -> AnyElement {
+    /// `+` (the active panel's own title suffix: OneTerm's New Terminal menu), the zoom button
+    /// and the button that collapses or expands the rail. No `...` menu (its tab list is the
+    /// rail itself) and no dock toggle (the status bar and `Ctrl+Shift+B` own it). Expanded they
+    /// share one 32 px line; collapsed they stack in the 44 px strip, the expand button first.
+    fn header(
+        &self,
+        group: &TabGroupContext,
+        collapsed: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
         let border = cx.theme().border;
         let handle = group.active_panel().and_then(PanelHandle::of);
         let toolbar_zoom = group
@@ -461,7 +512,52 @@ impl TabRail {
             .is_some_and(|control| control.toolbar_visible());
         let zoomed = group.is_zoomed();
         let suffix = handle.and_then(|handle| handle.title_suffix(window, cx));
+        let zoom = zoom_button(zoomed, toolbar_zoom).map(|button| {
+            let (id, icon, tooltip) = match button {
+                ZoomButton::Out => ("zoom-out", IconName::Minimize, "Zoom Out"),
+                ZoomButton::In => ("zoom-in", IconName::Maximize, "Zoom In"),
+            };
+            Button::new(id)
+                .icon(icon)
+                .xsmall()
+                .ghost()
+                .tab_stop(false)
+                .tooltip_with_action(tooltip, &ToggleZoom, None)
+                .selected(zoomed)
+                .debug_selector(move || format!("{RAIL_SELECTOR}-{id}"))
+                .on_click({
+                    let group = group.clone();
+                    move |_, window, cx| group.toggle_zoom(window, cx)
+                })
+        });
+        let (toggle_id, toggle_icon, toggle_tooltip) = if collapsed {
+            ("expand-rail", IconName::PanelLeftOpen, "Expand Tabs")
+        } else {
+            ("collapse-rail", IconName::PanelLeftClose, "Collapse Tabs")
+        };
+        let toggle = Button::new(toggle_id)
+            .icon(toggle_icon)
+            .xsmall()
+            .ghost()
+            .tab_stop(false)
+            .tooltip(toggle_tooltip)
+            .debug_selector(move || format!("{RAIL_SELECTOR}-{toggle_id}"))
+            .on_click(move |_, _, cx| UiConfig::set_vertical_tabs_collapsed(!collapsed, cx));
 
+        if collapsed {
+            return v_flex()
+                .flex_shrink_0()
+                .min_h(COLLAPSED_HEADER_HEIGHT)
+                .items_center()
+                .gap_1()
+                .py_1()
+                .border_b_1()
+                .border_color(border)
+                .child(toggle)
+                .children(suffix)
+                .children(zoom)
+                .into_any_element();
+        }
         h_flex()
             .h(HEADER_HEIGHT)
             .flex_shrink_0()
@@ -471,28 +567,7 @@ impl TabRail {
             .border_b_1()
             .border_color(border)
             .child(h_flex().gap_1().children(suffix))
-            .child(
-                h_flex()
-                    .gap_1()
-                    .children(zoom_button(zoomed, toolbar_zoom).map(|button| {
-                        let (id, icon, tooltip) = match button {
-                            ZoomButton::Out => ("zoom-out", IconName::Minimize, "Zoom Out"),
-                            ZoomButton::In => ("zoom-in", IconName::Maximize, "Zoom In"),
-                        };
-                        Button::new(id)
-                            .icon(icon)
-                            .xsmall()
-                            .ghost()
-                            .tab_stop(false)
-                            .tooltip_with_action(tooltip, &ToggleZoom, None)
-                            .selected(zoomed)
-                            .debug_selector(move || format!("{RAIL_SELECTOR}-{id}"))
-                            .on_click({
-                                let group = group.clone();
-                                move |_, window, cx| group.toggle_zoom(window, cx)
-                            })
-                    })),
-            )
+            .child(h_flex().gap_1().child(toggle).children(zoom))
             .into_any_element()
     }
 
@@ -509,15 +584,25 @@ impl TabRail {
             position,
             rows,
             selected,
+            collapsed,
+            gutter,
             order,
         } = place;
         let panel = &group.panels()[ix];
         let handle = PanelHandle::of(panel);
         // The kit strip prefers a panel's short name over its title element; so does the rail.
         // The vertical layout holds only while the title element is built.
+        let layout = if collapsed {
+            TabRowLayout::Collapsed(position + 1)
+        } else {
+            TabRowLayout::Vertical
+        };
         let title = {
-            let mut scope = TabRowLayout::Vertical.scope(cx);
+            let mut scope = layout.scope(cx);
             match handle {
+                // The cell shows the position and the status, which only the panel's own row
+                // knows how to draw.
+                Some(handle) if collapsed => handle.title(window, &mut scope),
                 Some(handle) => match handle.tab_name(&scope) {
                     Some(name) => div()
                         .flex_1()
@@ -544,7 +629,7 @@ impl TabRail {
             theme.tab_active_foreground,
             theme.tokens.tab_active,
         );
-        let muted = theme.muted_foreground;
+        let (muted, divider) = (theme.muted_foreground, theme.border);
         // Not `table_active_border`: OneTerm blanks that for the data tables after every theme
         // change, which made the bar vanish.
         let accent = oneterm_theme::selection_accent(cx);
@@ -559,16 +644,22 @@ impl TabRail {
             .flex()
             .items_start()
             .justify_center()
+            // Collapsed, the number is centred in the whole cell, so the grip overlays its left
+            // edge (painted after the content, below, so it still takes the press there).
+            .when(collapsed, |this| this.absolute().left_0().top_0())
             .when_some(drag, |this, drag| {
                 this.cursor_grab()
                     .child(
                         div()
                             .id(("tab-rail-grip-glyph", ix))
                             .debug_selector(move || format!("{GRIP_GLYPH_SELECTOR}-{ix}"))
-                            // The glyph is centred on the title line, not on the whole row.
-                            .mt(px(
+                            // The glyph is centred on the title line of an expanded row, and on
+                            // the whole collapsed cell.
+                            .mt(px(if collapsed {
+                                (f32::from(COLLAPSED_ROW_HEIGHT) - GRIP_GLYPH_SIZE) / 2.
+                            } else {
                                 TabRowLayout::vertical_first_line_centre() - GRIP_GLYPH_SIZE / 2.
-                            ))
+                            }))
                             .opacity(0.)
                             .group_hover(hover_group.clone(), |style| style.opacity(1.))
                             .child(Icon::new(AppIcon::GripVertical).xsmall().text_color(muted)),
@@ -585,6 +676,14 @@ impl TabRail {
                         }
                     })
             });
+
+        // Expanded, the grip is the row's leading column; collapsed it overlays the cell, so it
+        // comes after the title to be hit first.
+        let (lead, trail) = if collapsed {
+            (None, Some(grip))
+        } else {
+            (Some(grip), None)
+        };
 
         Tab::new(("tab-rail-row", ix))
             .debug_selector(move || format!("{ROW_SELECTOR}-{ix}"))
@@ -605,9 +704,17 @@ impl TabRail {
             })
             .relative()
             .w_full()
-            .h(ROW_HEIGHT)
+            .h(if collapsed {
+                COLLAPSED_ROW_HEIGHT
+            } else {
+                ROW_HEIGHT
+            })
             .flex_shrink_0()
             .justify_start()
+            .when(gutter, |this| this.pr(Scrollbar::width()))
+            // A 1 px divider inside the row's 64 px (sizes are border-box).
+            .border_b(px(TabRowLayout::VERTICAL_ROW_DIVIDER))
+            .border_color(divider)
             .text_sm()
             .text_color(foreground)
             .group(hover_group)
@@ -622,7 +729,9 @@ impl TabRail {
                         let line = cx.theme().drag_border;
                         match drop_edge(from, ix) {
                             DropEdge::Nowhere => this,
-                            DropEdge::Above => this.border_t_2().border_color(line),
+                            // The line replaces the row's own divider on that edge; keeping
+                            // the bottom one would recolour it as a second drop line.
+                            DropEdge::Above => this.border_t_2().border_b_0().border_color(line),
                             DropEdge::Below => this.border_b_2().border_color(line),
                         }
                     }
@@ -645,8 +754,9 @@ impl TabRail {
                         .bg(accent),
                 )
             })
-            .child(grip)
+            .children(lead)
             .child(title)
+            .children(trail)
             .into_any_element()
     }
 }
@@ -749,6 +859,20 @@ mod tests {
             let group = group as f32;
             let rail = clamp_tab_rail_width(400., group);
             assert!(group - rail >= group * 0.65 - 0.001, "group {group}");
+        }
+    }
+
+    /// Collapsed is the 44 px strip for any preference and any group; expanded is the clamp.
+    #[test]
+    fn the_collapsed_rail_is_44_px_whatever_the_preference_and_the_group() {
+        for requested in [0., 140., 220., 400., 9999.] {
+            for group in [0., 100., 380., 1920.] {
+                assert_eq!(rail_width(true, requested, group), 44.);
+                assert_eq!(
+                    rail_width(false, requested, group),
+                    clamp_tab_rail_width(requested, group)
+                );
+            }
         }
     }
 

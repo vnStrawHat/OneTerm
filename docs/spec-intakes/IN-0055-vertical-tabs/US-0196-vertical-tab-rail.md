@@ -208,6 +208,31 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-
 
 **Verification.** `cargo test -p oneterm-terminal-view`, `-p oneterm-workspace`, `-p oneterm-state`; clippy; fmt; the doc and contrast scripts; the full `pwsh scripts/ci-local.ps1` once after `US-0197` (owner request: one full gate at the end of both parts).
 
+## Rework 3 2026-10-21 (owner): the tab's directory is the status bar's, and a divider between rows
+
+Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-10-21 (translated from Vietnamese): (1) "When I open a new cmd terminal, the cwd on the tab shows `~` while the status bar shows the full path. Make the tab's cwd the same as the status bar's." (2) "Add a bottom border to separate the tabs more clearly."
+
+**Outcome.** Line 2 of a vertical row shows exactly the string the status bar's breadcrumb shows for that tab: `TerminalPanel::breadcrumb_label` (the session's OSC 7 working directory, `PathBuf::display`). There is no `~` substitution, no separator rewriting and no local/SSH difference any more; `cwd_display` and `is_drive_path` are deleted. The start-cut (`TextOverflow::TruncateStart`) stays. Each vertical row has a 1 px bottom border in the theme's `border` token (the colour the rail's own header divider and right edge already use), inside the row's 64 px (the rail does not grow); the horizontal strip is unchanged.
+
+**Choices left open by the request.**
+
+- *Where the one formatter lives.* The status bar reaches the label through `oneterm_state::active_terminal::breadcrumb`, whose provider (`terminal-view/src/status.rs`) calls `TerminalPanel::breadcrumb_label`. The tab row is drawn by the same `TerminalPanel` in the same crate, so no code moves: `tab_cwd` is now a one-line call to `breadcrumb_label`. The status bar's width-driven `PathTail` shortening is presentation of the same string and stays the bar's.
+- *Row budget (advisor A2).* The row's lines and padding summed to 64 px inside a 63 px content box. The bottom padding is now 9 px (`TabRowLayout::VERTICAL_ROW_DIVIDER` is carved out of `VERTICAL_ROW_PADDING`), so 10 + 24 + 20 + 9 + 1 = 64 and nothing is squeezed.
+- *Divider width (UI defect U2).* The scrollbar's gutter was padding on the list, so every row, and its divider, stopped short of the rail's edge once the rows overflowed. The gutter is now padding inside each row, so the row and its divider span the whole rail.
+- *The border and the drop line.* The row's border is the row's own `border_b_1` (taffy sizes are border-box, so the row stays 64 px). While a `DragPanel` hovers a row, the drop line (2 px, `drag_border`, above or below) replaces it on that edge; "above" also drops the row's own divider so the single border colour is not mistaken for a second drop line.
+
+**Acceptance.**
+
+- [x] Line 2 equals the status bar's text for a local drive path, a path in the user's home and an SSH path (unit tests compare the tab's string with `breadcrumb_label` and with the path the session reports; none contains `~`).
+- [x] `cwd_display` and its test are gone; a long path is still cut at its start (existing test).
+- [x] Each vertical row draws a 1 px bottom border in `theme.border`; the row is still 64 px and the header 32 px (workspace test).
+- [x] The horizontal row is unchanged (existing test).
+- [ ] On screen, by `ui-verifier`: a new `cmd` tab shows the same path in the tab and in the status bar; the divider in a light and a dark theme; the drop line still reads clearly on a hovered row.
+
+**Documentation.** `docs/gui-layout.md` "Vertical tabs" (row description, anatomy), `high-level-design.md` (Rail anatomy row content, wireframe note, Interactions), this packet.
+
+**Evidence.** Tests: `oneterm-terminal-view` `the_rows_directory_is_the_status_bars` (a local drive path, a path under the home folder, the home folder itself and an SSH path: the row's string equals `breadcrumb_label` equals the path the session reported, and none starts with `~`; it replaces `the_directory_line_abbreviates_the_local_home_only`); `a_long_directory_is_cut_at_its_start_and_follows_the_width` unchanged and green; `oneterm-workspace` `the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it` now also asserts the row's content box (the grip column) is 63 px inside the 64 px row, which only the 1 px border explains. The border's colour (`theme.border`) is code-reviewed, not pixel-tested. Gate: `pwsh scripts/ci-local.ps1` on Windows (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree `target`): all checks passed (`cargo test --workspace`: 2509 passed, 0 failed, 19 ignored in that step; the three `--ignored --test-threads=1` lines, `check-ignored-tests.py`, the `oneterm-vt` steps, `verify-dependency-graph.py`, `check-doc-paths.py`, `check-english.py`, `check-theme-contrast.py` (1638 pairings, 624 hierarchy comparisons) and the notices check included). `bash scripts/ci-local.sh` was tried first and stops at the `oneterm-vt` six-dependency check on this machine only because Windows' `sort.exe` shadows GNU `sort` in that shell; the PowerShell script is the same set of checks.
+
 ## Handoff
 
 Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0196` in the intake. `US-0197` (resize, `clamp_tab_rail_width`, done) and `US-0198` (collapse) build on `tab_rail.rs` and the stored `vertical_tabs` fields.

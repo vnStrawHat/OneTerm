@@ -1,0 +1,238 @@
+# US-0198 verification (advisor)
+
+## Advisor code review
+
+- Packets: `US-0196-vertical-tab-rail.md` Rework 3 (commits `bfc41610`, `78458872`) and `US-0198-collapsible-rail.md` (commits `ae1bdf12`, `832242aa`, `a866cc93`); `git diff 734096a4..a866cc93`, branch `verify/in-0055-rework3-us-0198` in worktree `agent-ad487657edc3792e1`.
+- Read: `tab_rail.rs` (`rail_width`, `RailFrame`, `begin_frame`, `render`, `header`, `row`), `tab_title.rs` (`tab_cwd`, `collapsed_row`, `render_tab_strip`), `terminal_panel.rs:443-448` (`breadcrumb_label`), `status.rs:30-33`, `ui_config.rs:117-209` (lenient reader), `:483-500` (setter), `tab_row_layout.rs`; the new tests in `tab_rail_tests.rs` and `panel/tests.rs`; the two packets, the HLD (Rail anatomy, wireframes, State Machine, Data Flow 6, Data Ownership), `docs/gui-layout.md` "Vertical tabs", `docs/agents/persistence.md`; gpui 0.3.9 (`gpui-pre-0.3.9`) `elements/div.rs:2965-2990` (drag start: `pending_mouse_down` set when the hitbox is hovered, the drag starts on the first move past the threshold only while `!cx.has_active_drag()`), `window.rs:5958` (mouse listeners dispatched in reverse paint order), `div.rs:4322-4328` (`scroll_to_item` records an index resolved in prepaint against the live child bounds), `div.rs:2481-2485` (the offset is clamped to the content, in pixels).
+- Gate re-run here (`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`, worktree `target`): `cargo test -p oneterm-settings -p oneterm-state -p oneterm-terminal-view -p oneterm-workspace` = 56 + 77 + 414 + 106 passed, 0 failed (3 + 3 ignored as recorded); `cargo clippy` on the same four crates `--all-targets -- -D warnings` clean; `cargo fmt --check`, `check-english.py`, `check-doc-paths.py` green. The full gate was not re-run (the coder's `pwsh scripts/ci-local.ps1` record stands; disk on `D:` is at 6.6 GB free).
+- Tests added (commit on this branch, `tab_rail_tests.rs`): `forty_collapsed_cells_scroll_without_a_gutter_and_reveal_the_active_one` (coverage of the coder's untested point 4: 40 collapsed cells overflow, 43 px wide, the newly active one is revealed; passes) and the pin `expanding_the_rail_keeps_the_active_row_in_view` (`#[should_panic]`; finding 1; flip by removing the attribute).
+
+## Verdict
+
+**PASS with defects.** One low-severity behaviour defect (finding 1, pinned), the rest documentation or informational. The grip overlay, the row divider and drop lines, the header, the breadcrumb sharing, the lenient `collapsed` parse, the elevation path and the records all hold.
+
+## The coder's own points
+
+1. **Grip overlay hit-testing (collapsed).** Holds. The grip is `absolute().left_0().top_0()` with `w(12) h_full()` and is pushed as `trail` after the title (`tab_rail.rs:659-665`, `:733-735`), so it paints last. gpui dispatches mouse listeners in reverse paint order (`window.rs:5958`), and a drag starts in the first listener whose `pending_mouse_down` is set and that sees no active drag (`div.rs:2979-2984`); both the grip's and the title row's hitboxes are hovered over the 12 px overlap (`Hitbox::is_hovered` is membership in the hit-test stack, `window.rs:862`), so the grip's listener runs first there and starts `DragPanel`, the title's sees `has_active_drag()` and stays idle. Outside the overlap only the title row's `on_drag` is hovered, so content drag wins on the right side. The press itself: `pending_mouse_down` is set by the mouse-down of every hovered drag element (`div.rs:2965`), so the press on the grip lands. Pinned by the coder's `a_collapsed_cell_keeps_the_content_drag_and_the_grip_reorder` (grip at `GRIP_SELECTOR-2`, 12 px wide; content at title centre + 8 px). One side effect, not a defect (finding 4): the title row's middle-click and context-menu listeners also fire for a press on the overlay, because the title row is hovered under the grip; expanded, the grip is beside the title and takes neither.
+2. **Row border vs drop lines, the 1 px content-box shrink.** Holds. `border_b_1` in `theme.border` on the `Tab` (`tab_rail.rs:692-694`), sizes are border-box so the row stays 64 / 44 px (coder's test: grip column 63 px); `DropEdge::Above` sets `border_t_2().border_b_0()` and `Below` `border_b_2()`, both with `border_color(line)` (`:706-712`), so a row never shows two colours. The selected accent bar is `absolute().top_0().bottom_0()` against the padding box, so it stops above the divider. The one consequence worth a line in the records (finding 2): the expanded row's inner `v_flex` budget is still 10 + 24 + 20 + 10 = 64 px (`tab_title.rs:359-375`, `TabRowLayout::VERTICAL_ROW_PADDING` and the two line heights) inside a 63 px content box; taffy shrinks the two fixed-height lines by a fraction of a pixel. Nothing visible, and `vertical_first_line_centre()` (used for the grip glyph) is off by under 0.3 px; `a_long_directory_is_cut_at_its_start_and_follows_the_width` and the geometry tests still pass.
+3. **Header fit in 44 px.** Holds by construction: the collapsed header is a `v_flex().items_center().gap_1().py_1()` of three `xsmall` ghost icon buttons (`tab_rail.rs:531-541`; the `+` is `Button::new("add-shell-tab").xsmall()`, `terminal_panel.rs:725-731`), each narrower than the 43 px content width. Unlike the expanded header it has no fixed height (`HEADER_HEIGHT` is applied only to the `h_flex` branch, `:543`); its height would change if the zoom button came and went, but `TerminalPanel::zoom_control` is `PanelControl::Both`, so the zoom button is always there (finding 3, informational). The on-screen spacing is the `ui-verifier`'s.
+4. **Untested: tooltip, recording dot, 40 collapsed rows + overlay scrollbar vs badge.** The tooltip is `Tooltip::new(drag_title)` on the title row only `when(collapsed)` (`tab_title.rs:441-445`); the recording dot is an absolute `top/left 3 px` child of `collapsed_row` (`:271-277`). 40 collapsed rows: now covered by the advisor test (overflow, no gutter, reveal of the newly active cell). The overlay scrollbar over the badge is a visual item for `ui-verifier`. What the 40-row case did expose is finding 1.
+
+## Everything else checked
+
+- **`breadcrumb_label` for SSH and before the first OSC 7.** `tab_cwd` is `self.breadcrumb_label(cx)` (`tab_title.rs:55-57`), the same function `status.rs:30-33` hands the status bar through `oneterm_state::active_terminal::breadcrumb`. It is `active_terminal()?` then `session.cwd()?` then `cwd.display().to_string()` (`terminal_panel.rs:445-448`): `None` for an empty Space or before any OSC 7 (line 2 shows no path; the status bar's widget hides, `widgets/breadcrumb.rs:4`), and for SSH the `PathBuf` built from the remote string is displayed unchanged (`PathBuf::display` rewrites nothing; `the_rows_directory_is_the_status_bars` pins `/srv/app/releases`). Equality with the status bar is by construction, which is what the owner asked. `cwd_display` / `is_drive_path` and their test are gone; no other caller existed. Collapsed cells never call it (`cwd = vertical.then(..)`, `:307`), so the strip costs no cwd read.
+- **Lenient `collapsed`.** `VerticalTabs::from_value`'s `flag` reads `Bool` only; `null`, a missing key, a string, a number or an array give `false` with a warning and leave `enabled` and `width` intact (`ui_config.rs:181-190`); the whole-object fallback covers a non-object. `the_collapsed_flag_is_lenient_and_written_alone` pins `"yes"`, `1`, `[]`, `null`, and that off-and-collapsed serialises as `{"collapsed": true}` (`is_default` on the struct, `Not::not` on the field).
+- **Setter and elevation.** `set_vertical_tabs_collapsed` returns before touching the entity when unchanged, else updates the entity, `persist` (which asks `write_refusal(is_restricted())` first) and `refresh_windows` (`ui_config.rs:490-500`), the same shape as the width setter. The header button captures the rendered `collapsed` and writes `!collapsed`, right under `refresh_windows` since every rail re-renders after a flip. `set_vertical_tabs_enabled` never touches `collapsed` (switch-off memory; `the_switch_off_keeps_the_rail_collapsed`).
+- **Per-frame cost.** `begin_frame` reads `UiConfig::read_vertical_tabs` once per group per frame as before and now also keeps `collapsed` in the `RailFrame` cell; `header` builds one more `Button`; a collapsed row clones one `SharedString` for the tooltip closure. No new entity reads, no new observers, nothing per row beyond the element tree. The handle and tracker are not built while collapsed (`:468-472`).
+- **Scrolling.** `scroll_to_item(position)` is resolved against the live child bounds in prepaint, so it is correct for 44 px cells (advisor test). `overflowing` is the previous frame's `max_offset().y > 0`, unchanged.
+- **Crate rules.** No new edge: `oneterm-workspace` already depended on `oneterm-settings` and `oneterm-state`; `oneterm-terminal-view` reads only `TabRowLayout` from `oneterm-state` and hardcodes no width (the cell is `flex_1`; the test host's `44.` is test-only). The shell reaches the cell through `PanelHandle::title` inside the `Collapsed(position + 1)` scope, as the HLD's rendering seam says.
+- **Records.** `docs/gui-layout.md` Collapsing paragraph, wireframe and bullets match the code (44 px, no handle, no gutter, grip overlay painted after the content, tooltip, "Close Tabs Below", chips not drawn); `docs/agents/persistence.md` names the writer and the switch-off memory; the HLD header row, Data Ownership row and the collapsed wireframe match; `IN-0055.md` links the packet and leaves its tick for acceptance; the US-0196 Rework 3 section names the deleted helper, the divider token and the drop-line rule. `check-doc-paths` and `check-english` green.
+
+## Findings
+
+1. **Low (behaviour) — the active row can leave the viewport on collapse or expand with many tabs.** `tab_rail.rs:368-372`: the rail calls `scroll_to_item` only when `active_changed(&self.last_active_ix, active_ix)`; a layout flip keeps the `ScrollHandle`'s pixel offset (gpui clamps it to the new content, `div.rs:2481-2485`) while every row changes height 64 <-> 44 px, so the row that was in view is no longer the one at that offset. Reproduction (pinned, `should_panic`): 40 tabs, collapsed, select tab 39 (revealed at the bottom), click Expand: row 39 is drawn below the list's bottom edge; the user has to scroll to find the selected tab. Fix shape: remember the last drawn `collapsed` in `TabRail` (a `Cell<bool>` next to `overflowing`) and, when it differs in `render`, call `self.scroll_handle.scroll_to_item(position of active_ix)` (or simply `self.last_active_ix.set(None)` from the header button's click handler so the existing `active_changed` path re-reveals it on the next frame). Then remove `#[should_panic]` from `expanding_the_rail_keeps_the_active_row_in_view`.
+2. **Low (records) — the expanded row's inner budget is 64 px in a 63 px content box.** `tab_title.rs:359-375` and `TabRowLayout::VERTICAL_ROW_PADDING` / `VERTICAL_FIRST_LINE_HEIGHT` / `VERTICAL_SECOND_LINE_HEIGHT` still sum to 64 while the `Tab`'s `border_b_1` leaves 63 px; taffy absorbs the 1 px by shrinking the two lines fractionally. The HLD "10 px above line 1 and below line 2" and the Rework 3 note "inside the row's 64 px" should say the divider takes 1 px of the bottom padding; or make it exact by lowering the bottom padding to 9 px (one constant). No visible effect either way.
+3. **Info — the collapsed header has no fixed height** (`tab_rail.rs:531-541` vs `HEADER_HEIGHT` on `:543`). Stable today because the zoom button is always present for terminal panels; if a panel without `PanelControl::Both` ever shares the rail, the cells would shift by one button height when zoom toggles. Optional: `min_h(HEADER_HEIGHT)` or a fixed `h` of three buttons.
+4. **Info — middle-click and right-click on the 12 px grip overlay reach the title row collapsed, not expanded** (`tab_rail.rs:659-665`; the row's `on_mouse_down(Middle)` and context menu at `tab_title.rs:455-470` fire for any hovered press). Harmless (a bigger close / menu target) but undocumented; a half sentence under "The reorder grip" in `docs/gui-layout.md` if the owner cares.
+5. **Info — packet Verification Plan names `bash scripts/ci-local.sh`** (`US-0198-collapsible-rail.md:98`) while the gate that ran is `pwsh scripts/ci-local.ps1` (explained in Evidence). Cosmetic.
+
+## For the owner / ui-verifier to check by hand
+
+- The stacked header's glyphs and spacing in both themes; the collapse / expand button position beside zoom when expanded.
+- The badge against the overlay scrollbar thumb with 40 collapsed cells; the tooltip text; the recording dot's corner.
+- Finding 1 on screen: with 40 tabs select the last, expand, see whether the selected row is in view.
+- Restart persistence of `collapsed`; the elevated window collapsing in memory with no write.
+- The divider and the drop line on a hovered row in a light and a dark theme.
+
+
+## UI verification (US-0196 rework 3 and US-0198, ui-verifier, 2026-10-21)
+
+Build: copy of the debug binary for head a866cc93, private profile, 1280x800. Screenshots (prefix `uiv198-`) in the session scratchpad `uiv198-shots\`. Child shells die in this sandbox, so no status badge, no OSC 7 cwd.
+
+### US-0196 rework 3
+| Item | Verdict | Evidence |
+|---|---|---|
+| 1 px bottom divider on each vertical row | PASS | Dark `02`: pixels 62,68,81 at y=129, 193, 257 (one row each); light `21`, `24` faint but visible. |
+| Rows still 64 px | PASS | Dividers 64 px apart (`02`). |
+| Horizontal strip unchanged | PASS | `16` (switch off): no divider, same strip as before. |
+| Drop line distinct from the divider | NOT WALKED | Posted-message drags (`03`..`03g`) showed only the drag ghost; no drop line and no reorder happened, so this is a driver limit, not a verdict. Owner-only. |
+| Line 2 cwd equals status bar cwd | NOT WALKED (owner-only) | No cwd reported in the sandbox. |
+
+### US-0198
+| Item | Verdict | Evidence |
+|---|---|---|
+| Collapse button in header, tooltip "Collapse Tabs" | PASS | `04` |
+| Rail becomes 44 px; terminal follows | PASS | `05` (strip x=8..51, border at 51) |
+| Position numbers 1,2,3 centred | PASS | `05`, crop shows centred digits; 2-digit numbers fine (`12`, `13`) |
+| Status badge top-right | NOT WALKED | needs a live shell status |
+| Tooltip with title on cell hover | PASS | `06`, `23` |
+| Expand button tooltip "Expand Tabs" | PASS | `08` |
+| `+` and zoom stacked, fit; `+` menu opens | PASS | `05`, `11` |
+| No resize handle while collapsed | PASS | `14`: drag from the edge changes nothing, no hover line |
+| Click selects; accent bar follows | PASS | `09` |
+| Context menu works (Rename, Duplicate, Close, Close Others, Close Tabs Below) | PASS (see D1) | `10` |
+| `vertical_tabs.collapsed` persists across restart | PASS | config held `collapsed: true`; relaunch `22` still collapsed (light theme kept too) |
+| Switch off then on returns to collapsed rail | PASS | `16` strip, `17` collapsed rail; file kept `{"collapsed": true}` while off |
+| 39 collapsed tabs: scroll, active in view | PASS | `12` (active 39 in view), `13` (wheel back to top) |
+| Scrollbar versus badge | NOT WALKED (no badge). The thumb (x=41..47) is clear of the centred numbers, including 2 digits (`12`). The top-right badge sits where the thumb is drawn, so an owner check is needed with a real status icon. |
+| Light and dark, expanded and collapsed | PASS | dark `02`, `05`; light `19`, `20`, `21`, `23`, `24` |
+
+### Defects
+- D1 (low): in the collapsed rail, the cell tooltip of the hovered cell stays on screen when the right-click menu opens and covers the menu's first item (Rename...). Screen: collapsed rail. Steps: hover cell 2 (tooltip), right-click it (`10`).
+- D2 (low): in the expanded rail with a scrollbar (many tabs), the row divider stops at the scrollbar gutter (light `21`: ends x=212, rail edge 227), so the divider looks cut short. Steps: 40 tabs, expanded.
+- Note (info): idle numbers in collapsed cells are fairly dim in dark (`05`); legible.
+
+### Owner-only checks
+Drop line versus divider while dragging a row (and grip reorder); line 2 cwd equals the status bar (`cmd` tab); status badge in the cell corner and its overlap with the overlay scrollbar thumb; recording dot; elevated window; middle-click close in collapsed cells.
+
+Verdict: the UI meets the requirements for everything walkable (partly: the items above are not walked).
+
+## Advisor re-review (rework after A1-A5 and U1-U2, 2026-10-21)
+
+- Reviewed: `git diff e5147f23..11717240` (commits `b2ed9ebf`, `d2d09538` evidence merge; `1e592798` fix; `11717240` docs) on `verify/in-0055-rework3-us-0198`. No conflict markers anywhere under `crates/`, `docs/`, `scripts/` (scanned by script, not grep).
+- Gate re-run here (`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`): `cargo test -p oneterm-settings -p oneterm-state -p oneterm-terminal-view -p oneterm-workspace` = 56 + 77 + 415 + 108 passed, 0 failed; clippy on the four crates `--all-targets -- -D warnings` clean; `check-english.py` green. The advisor pin `expanding_the_rail_keeps_the_active_row_in_view` is unpinned (no `should_panic`) and passes, so finding 1 is closed by a test that failed before the fix.
+- gpui 0.3.9 read for U1: `elements/div.rs:3746-3752` (any mouse-down clears a visible non-hoverable tooltip), `:3836-3842` (a mouse move while hovered and with no active tooltip schedules a new show), `:698-708` (`.tooltip(..)` is `hoverable: false`); kit `button.rs:674,682` (`XSmall` = `size_5` / `h_5` = 20 px).
+
+### Verdict
+
+**PASS.** All five fixes do what the records say; the remaining notes are informational.
+
+### Each fix
+
+- **A1 `last_collapsed` re-reveal** (`tab_rail.rs:220`, `:235`, `:377-385`). `tab_changed` and `layout_changed` are both evaluated as `let`s before the `||`, so neither `Cell` misses a frame. Steady state: `replace(collapsed)` returns the same value, `layout_changed` is false, nothing fires per frame. First frame: `last_collapsed` starts `false`, so a rail that starts collapsed (persisted) reports a change on its first frame; harmless, because `tab_changed` is true on that frame anyway (`last_active_ix` starts `None`) and the result is the same single `scroll_to_item`. A click on a row still sets `last_active_ix` first (no snap); a later flip re-reveals on purpose. Rail off then on: `render` is not called while off, so the cell is stale only across a state that cannot change `collapsed` (the button lives in the rail). Split centre: one `TabRail` per group, each with its own cell.
+- **A2 9 px bottom padding** (`tab_title.rs:382-386`, `tab_row_layout.rs:35-37`). `pt 10 + 24 + 20 + pb 9 = 63` = the content box under `border_b_1`; `vertical_first_line_centre()` stays 22 (test). One coupling note (N1 below): the rail draws the divider as the literal `border_b_1`, not `px(TabRowLayout::VERTICAL_ROW_DIVIDER)`, so the constant describes the rail rather than driving it.
+- **A3 `COLLAPSED_HEADER_HEIGHT`** (`tab_rail.rs:84`, `:544`). `3 * 20 + 4 * 4 = 76` matches the content exactly (`py_1` 4 + 4, two `gap_1`s, three `h_5` buttons); as `min_h` with border-box sizing the header is 77 px when all three buttons are present (76 content + 1 px divider) and never shrinks below 76 when one is absent. Test asserts `rows[0].top() - rail.top() >= 76`.
+- **U1 `CellTooltip` + `tab_tooltip_hidden`** (`tab_title.rs:245-258`, `:464-488`; `terminal_panel.rs:180`, `:302`). Mechanism check against gpui: the right-press itself already clears the visible tooltip (`div.rs:3746-3752`, the kit tooltip is non-hoverable); what the walk saw is the re-show, because the cell stays hovered beside the menu and the next mouse move schedules a fresh show (`:3836-3842`). The flag targets exactly that: the new tooltip view draws an empty `div` while `hidden` is set, and `window.refresh()` on the press makes the current frame honour it. Stale-flag cases: (a) menu dismissed with Escape, or by a click on an item, while the pointer never left the cell: no hover-enter fires, so that cell's tooltip stays empty until the pointer leaves and returns, which is what `docs/gui-layout.md` says ("until the pointer returns"); (b) right-press then leave without a menu: cleared on return; (c) the flag is per `TerminalPanel`, and a panel is one cell in one group, so no cross-cell sharing; the drag preview and the strip never read it (`when(collapsed)`). No leak: the `CellTooltip` entity is created by the tooltip builder per show and dropped with gpui's `ActiveTooltip`; `on_hover` writes a `Cell` without a refresh, the press refreshes once; no notify loop. The test pins the flag only; the drawn tooltip is the ui-verifier's.
+- **U2 gutter inside each row** (`tab_rail.rs:182-184`, `:425-429`, `:708`). The `Tab` is `w_full` so the row, its divider and the drop lines span the rail; `pr(Scrollbar::width())` shrinks only the content box, so line 2's status icon still clears the thumb (40-tab test: `first.right() == list.right()`, content right <= list right - 16). Toggling `overflowing` moves the content by 16 px as it did when the padding sat on the list; no new layout shift. Collapsed rows get no gutter (`gutter: overflowing && !collapsed`), as before.
+
+### Notes (informational, no action required)
+
+- **N1** — `tab_rail.rs:710` `border_b_1` and `tab_row_layout.rs:37` `VERTICAL_ROW_DIVIDER = 1.0` are the same 1 px twice; `.border_b(px(TabRowLayout::VERTICAL_ROW_DIVIDER))` would make the state constant the one source.
+- **N2** — The code comment at `tab_title.rs:477-479` says gpui "keeps a tooltip while its own element is hovered"; it is re-shown after the press clears it (gpui `div.rs:3746-3752`, `:3836-3842`). Same fix, more exact wording.
+- **N3** — U1 case (a) above: after an Escape with the pointer still on the cell, the tooltip is an empty view until the pointer leaves. Acceptable; a dismiss hook on the kit menu would be the only cleaner path.
+
+### Still by hand (ui-verifier / owner)
+
+- U1 on screen: right-click a collapsed cell, wait past the tooltip delay, confirm no tooltip over the menu; dismiss with Escape without moving, move out and back, confirm the tooltip returns.
+- U2 on screen: 40 expanded tabs, dividers reach the rail's right edge, status icons clear the thumb.
+- A1 on screen: 40 tabs, select the last, collapse and expand, the selected row stays in view.
+
+## UI re-walk (rework head 11717240, ui-verifier, 2026-10-21)
+
+Screenshots `uiv198b-*` in the scratchpad `uiv198-shots\`. Dark theme, 1280x800.
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| U1 tooltip gone while the right-click menu is open, "Rename..." not covered | PASS | `01`, `02` (menu fully visible, Rename... readable, no tooltip) |
+| U1 Escape dismiss, move off and back: tooltip works again | PASS | `03`, `04` |
+| U1 click-away dismiss, tooltip works again | PASS | `05`, `06` |
+| U2 expanded, 40 tabs: divider spans full rail width | PASS | `12`, `33`: divider pixels (62,68,81) at x=150..227 on every row; rows 64 px apart |
+| U2 row content not under the scrollbar thumb | PASS | thumb x~217..222, row text ends x~134 |
+| A1 select a tab, Expand: selected row visible; collapse again: still visible | PASS (with the D3 caveat) | selected via the expanded rail (`34`), collapse shows it (`35`, tab 12 with accent); expand/collapse with the last tab selected keeps it visible (`09`, `10`, `12`, `13`, `33`) |
+| Expanded spacing (9 px + 1 px divider), collapsed header buttons | PASS | `33`; header column unchanged (`07`, `28`) |
+| Light theme | NOT RE-WALKED (no light change in this rework; `19`..`24` of the first walk stand) |
+
+### New defect
+- **D3 (high, probably a regression or a latent bug of the collapsed rail): in a collapsed rail that overflows (18 and 40 tabs), clicking a cell does not select the tab.** Expected: the clicked tab becomes active (accent bar, terminal switches). Observed: the active tab stays the same (`22`, `26`, `27`: 34 stayed active after clicks on 35, 33 and 28; `29`..`32`: 18 stayed active after clicking 3; `37`: 12 stayed active after clicking 14), and in several cases the list scrolled by about a page after the click (`21`, `22`, `24`, `27`, `29`). The same click selects normally with 5 tabs in the collapsed rail (`38`) and in the expanded rail with 40 tabs (`34`). Likely cause to check (not a code review): with no gutter reserved, the overlay scrollbar's track may take presses over the whole cell width; a click that pages the list instead of selecting is consistent with the jumps. Steps: `vertical_tabs.enabled` and `collapsed` true, add 18 or more tabs, click any cell other than the active one.
+- Because of D3 A1 was exercised by selecting in the expanded rail; selecting tab 39 by clicking in the collapsed rail (the owner's flow) is blocked by D3.
+
+Verdict: partly. U1 and U2 pass; D3 needs a fix and a re-walk.
+
+## Advisor re-review 2 (D3 narrow scrollbar, N1, N2; 2026-10-21)
+
+- Reviewed: `git diff 705db540..8da2c685` (`fd6fd8c1` UI re-walk evidence, `8da2c685` D3 fix + N1/N2) on `verify/in-0055-rework3-us-0198`. Worktree clean before and after the experiment below.
+- Gate re-run here (`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`): four-crate tests 56 + 77 + 415 + 109 passed, 0 failed; clippy on the four crates `--all-targets -- -D warnings` clean.
+- **Does the test fail without the fix?** Yes. With `tab_rail.rs:501-504` reverted locally to the plain `.vertical_scrollbar(&self.scroll_handle)` (not committed; file restored with `git checkout`, worktree clean), `a_click_on_a_cell_of_an_overflowing_collapsed_rail_selects_it` fails at `tab_rail_tests.rs:1299` with `click at 0.8: left 3, right 5`: the click at x = 34 of 43 px on cell 5 was swallowed by the 16 px track and the selection stayed on cell 3 (the 0.5 click had passed). With the fix the test passes.
+
+### Verdict
+
+**PASS.** The root cause is the kit's track hit area, `.styles(..)` narrows that hit area and not only the paint, the mount is the kit's own, the thumb still drags, and the one remaining overlap (the badge's right edge) is the accepted cost the records state.
+
+### Attack points
+
+- **Root cause (kit `reference/gpui-kit/crates/base/src/scrollbar.rs`).** `WIDTH = 16` (`:22`); per axis `track_width = styles.track.width.or(theme track width).unwrap_or(WIDTH)` (`:1376-1381`); the bar `bounds` for a vertical axis is the right `track_width` of the hitbox (`:1409-1413`); while `is_visible` the `MouseDownEvent` listener does `cx.stop_propagation()` for any press inside `bounds`, then either starts a thumb drag or jumps the offset to the click (`:1716-1745`). `is_visible = state.visibility_requested || visibility_opacity > 0.0` (`:1599`), and OneTerm sets `ScrollbarMode::Always` (`crates/theme/src/theme.rs:299`), so in OneTerm the track takes presses at all times, not only after a wheel scroll or while hovered as the packet's D3 text says (doc nit D3-N1 below; the test's preparatory mouse move is harmless). No theme override of the track width exists in `crates/theme`, so the strip's 6 px is the one in effect.
+- **Does `.styles(..)` shrink the hit track?** Yes: the same `track_width` value feeds the hit `bounds` (`:1409-1413`) that the mouse-down and mouse-move listeners test (`:1717`, `:1764`) and the painted bar; there is no second, wider hit rectangle. The thumb: `self.styles.thumb.width` wins over the theme's for the normal, hovered and active states (`:987-991`, state styles unset here), so the thumb is 4 px with a 1 px inset in every state and `thumb_bounds` is inside the 6 px track.
+- **Thumb drag.** Unchanged path: a press inside `thumb_bounds` calls `scroll_handle.start_drag()` and records the grab point (`:1719-1731`), the move listener drags while `dragged_axis == Some(axis)` (`:1790-1800`); nothing in the override touches it. On-screen feel of a 4 px thumb is the ui-verifier's.
+- **`viewport_from_layout` vs the expanded rail.** The kit's own `vertical_scrollbar` is `render_scrollbar` (`component/src/scroll/scrollable.rs:280-288`): `div().absolute().inset_0().child(Scrollbar::new(handle).id(..).axis(..).viewport_from_layout())`. `narrow_scrollbar` (`tab_rail.rs:291-306`) is the same mount with `Scrollbar::vertical` and the style override, so the collapsed and expanded rails resolve the same viewport (the `tab-rail-scroll` wrapper's layout bounds, `:1290`). The only differences are the kit's inspector-picking guard and its `scrollbar-overlay` debug selector, neither of which matters here.
+- **Other overlay hit areas.** The status badge sits at `right 3 px` of the 43 px cell with an `xsmall` icon, so roughly x = 26..40; the 6 px track covers x = 37..43: a press on the badge's rightmost 3-4 px pages the list instead of selecting (the recorded accepted cost). Hover is unaffected (the kit stops only presses and thumb-drag moves), so the badge's own tooltip still shows. The grip overlay is on the left edge and never meets the track. Expanded rows keep the 16 px gutter inside the row, so the track and content do not overlap there.
+- **N1, N2.** `border_b(px(TabRowLayout::VERTICAL_ROW_DIVIDER))` at `tab_rail.rs:736`; the tooltip comment at `tab_title.rs:477-479` now describes the clear-then-re-show. Both as recommended.
+
+### Notes (informational)
+
+- **D3-N1** — `US-0198-collapsible-rail.md` Rework 2 says the track takes presses "while the bar is shown (after a wheel scroll, or while hovered)"; with OneTerm's `ScrollbarMode::Always` (`theme.rs:299`) it is shown, and takes presses, always. One clause.
+
+### Still by hand (ui-verifier)
+
+- 40 collapsed tabs: click cells at their centre and right half, each selects; drag the 4 px thumb; a press on the badge's right edge pages the list (accepted).
+
+## UI re-walk 2 (D3, head 8da2c685, ui-verifier, 2026-10-21)
+
+Screenshots `uiv198c-*` in the scratchpad `uiv198-shots\`. Cells span x=8..50 in the window; 40 tabs collapsed, list settled by a wheel scroll before every click, a different tab active before each probe. "Selects" is read from the 2 px accent bar position.
+
+| Probe | Result |
+|---|---|
+| Click at the left (x=22) and centre (x=28) | selects, no page jump (`02`, `03`, `04`) |
+| Click at x=33, 36 | selects (`04`) |
+| Click at x=37..41 (about 75% of the width) | FAIL: the tab does not select and the list pages (the active tab leaves the view) (`04-x38`, `05-x37/39/40/41`) |
+| Click at x=43..50 | FAIL: the tab does not select, the list does not move (the previous tab stays active) (`05-x43..x50`) |
+| Click at 5 tabs (no overflow) | selects (earlier walk `38`) |
+| Select tab 39 by click, Expand, collapse again | PASS: accent visible expanded (`07`) and collapsed (`06`, `08`); the click was at x=28 |
+| Thin scrollbar look | visible thin thumb at x~46..48, dark `10` and light `12`; it does not overlap the numbers |
+| Drag the thumb | FAIL / NOT WORKING: dragging from (47, 150) to (47, 420) at the top of the list left the list unmoved (`10`, `11`); the wheel scrolls |
+| Exact earlier repros (34 to 35/33/28, 18 to 3, 12 to 14) | re-done as the x probes above at several rows: left and centre clicks select, right-hand clicks do not |
+
+### Defect
+- **D3 remains, smaller (high-medium): in an overflowing collapsed rail, a press in the right part of a cell (x >= 37, i.e. about the right third, 14 px, not 6 px) does not select the tab.** x=37..41 pages the list; x=43..50 does nothing. Expected (per the coordinator): only the right-most 6 px may be taken by the scrollbar. Steps: 18+ collapsed tabs, wheel scroll once, press at x=40 on a non-active cell. The 75% position (x=40) from the brief is inside the dead zone.
+- **D4 (low): the 4 px scrollbar thumb cannot be dragged** (press at x=47 on the thumb does not move the list), so the thin bar is display-only; the wheel works.
+
+Verdict: partly. Selecting at the left and centre works and expand/collapse keeps the row visible; the right third of each cell still swallows presses.
+
+## Advisor re-review 3 (no scrollbar in the collapsed strip; 2026-10-21)
+
+- Reviewed: `git diff fe4d01b6..d044d982` (`d044d982`: `narrow_scrollbar` and `COLLAPSED_SCROLLBAR_WIDTH` deleted, the kit scrollbar mounted only `when(!collapsed)`, the widened test, the records, and the folded-in `a9c40611` UI re-walk 2 evidence). No conflict markers under `crates/`, `docs/`, `scripts/` (script scan). Worktree clean before and after the experiment.
+- Gate re-run here (`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`): four-crate tests 56 + 77 + 415 + 109 passed, 0 failed; clippy on the four crates `--all-targets -- -D warnings` clean (so no dead code: `Scrollbar` is still imported for `Scrollbar::width()` at `tab_rail.rs:714`, the expanded gutter).
+- **Does the test fail pre-fix?** Yes. With `tab_rail.rs` checked out from `8da2c685` (the 6 px track) and the new test from `d044d982`, `a_click_across_a_cell_of_an_overflowing_collapsed_rail_selects_it` fails at `tab_rail_tests.rs:1317`: `a click 37 px across the cell: left 7, right 9`, i.e. the first pixel of the 6 px track (43 - 6 = 37; the packet says 39, see nit below). File restored to `d044d982`, nothing committed. With the fix every pixel 0..42 selects.
+
+### Verdict
+
+**PASS.** The strip scrolls without the bar (gpui's own wheel path), the expanded rail is untouched, nothing is left dead, and the records describe the shipped behaviour; two wording nits.
+
+### Checks
+
+- **Wheel scrolling needs no scrollbar element.** The list is a base `Tabs` with `.overflow_y_scroll().track_scroll(&self.scroll_handle)` (`tab_rail.rs`), which is gpui's `Interactivity` (`div.rs:1535-1537`, `:1549-1552`). gpui registers the `ScrollWheelEvent` listener itself in `paint_scroll_listener` for any element with a scroll offset (`div.rs:3331-3339`): it moves `scroll_offset` by `event.delta.pixel_delta(line_height)` when the element's hitbox should handle the scroll, and the offset is clamped in prepaint (`:2481-2485`). The kit's `Scrollbar` only reads and writes the same `ScrollHandle`; `vertical_scrollbar` is an added overlay child (`scrollable.rs:24`, `:280-288`), not the scroll container, so removing it removes nothing from the wheel path. The coder's test proves it in the same frame set: a `ScrollWheelEvent` of -300 px at the list's centre moves the cells before any click.
+- **Auto-reveal still covers the keyboard-less case.** `scroll_to_item` on a tab change and on a collapse / expand (`tab_rail.rs`, `tab_changed || layout_changed`, from the A1 fix) is unchanged; `forty_collapsed_cells_scroll_without_a_gutter_and_reveal_the_active_one` still passes.
+- **Expanded rail unchanged.** The only edit in `render` is the removal of the `when(collapsed, ..)` arm; the `when(!collapsed, vertical_scrollbar)` arm, the gutter in each row, the handle and the tracker are as at `8da2c685`. `forty_tabs_scroll_and_the_active_one_is_brought_into_view` and the resize tests pass.
+- **The verifier's "x = 43..50 dead" reading.** Consistent with the coder's explanation: the walk's table says the cells span window x = 8..50 and the driver posts client coordinates; client 37..42 is the 6 px track (window 45..50, which paged the list in the walk), client 43 is the rail's 1 px border and 44+ the terminal, where a click selects nothing and moves nothing. So the walk saw one hit-eater, the track, plus the frame offset, not a second one. The new test's pixel sweep (0..42) rules out any other eater inside the cell.
+- **Records.** `docs/gui-layout.md:154` and the packet's Rework 3 say the strip draws no scrollbar, wheel / touchpad and auto-reveal scroll it, D4 is moot with it, and the expanded rail keeps the bar. The packet's "Scrollbar" plan line is marked superseded.
+
+### Nits (wording only)
+
+- **R3-N1** — `US-0198-collapsible-rail.md` Rework 3 "Test" bullet says the test fails at 39 px against the 6 px track; it fails at 37 px (the track is x = 37..42 of 43). One number.
+- **R3-N2** — `docs/gui-layout.md:154` and the Rework 2 D3 bullet (`:129`) still say the kit bar "is shown after a wheel scroll or while hovered"; with OneTerm's `ScrollbarMode::Always` (`crates/theme/src/theme.rs:299`) it is always shown. Now moot for the strip (no bar) and harmless for the expanded rail, so optional; the earlier D3-N1 note is closed by the removal.
+
+### Still by hand (ui-verifier)
+
+- 40 collapsed tabs: wheel scrolls the strip; every cell selects at its left, centre and right edge; collapse / expand keeps the displayed tab in view; no thumb drawn in the strip; the expanded rail's scrollbar still drags.
+
+## UI re-walk 3 (head d044d982, ui-verifier, 2026-10-21)
+
+Screenshots `uiv198d-*` in the scratchpad `uiv198-shots\`.
+
+**Coordinate space.** The driver's `click x y` takes client coordinates; screenshots are of the whole window with an 8 px frame, so a cell is client x=0..42 (screenshot x=8..50). The x values below are client x. This corrects the earlier re-walk 2: its "x=37..50" are screenshot-space-shifted client x, i.e. screenshot x=45..58, which is where the 16 px/6 px scrollbar track sat; the "x=43..50 dead zone" there was partly outside the cell (client x >= 43 is the terminal side), so only the x=37..42 part was a real defect, and that was the scrollbar track. This build has no strip scrollbar.
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| 40 collapsed tabs: click at client x = 2, 14, 22, 30, 36, 38, 40, 42 on a non-active cell (a different tab active before each) | PASS | `02-x2` .. `02-x42`: the clicked cell becomes active every time (accent at the clicked row), no list jump |
+| Clicks at client x = 44..50 (outside the strip) | n/a, expected no selection | `02-x44` .. `x50`: previous tab stays active, nothing moves |
+| Repros 34 to 35/33/28 and 12 to 14 equivalents: after a bottom-scrolled list, click tabs 35, 33, 28, 39 and (after scrolling up) 12 | PASS | `03-click-35/33/28/39/12`: accent on the clicked cell each time |
+| Tab 39 selected, list scrolled to the top, Expand | PASS | `05`: selected row visible at the bottom |
+| Collapse again | PASS | `06`: tab 39 visible with accent |
+| Strip scrolls by wheel | PASS | wheel up/down moved the list (`04`, `01`) |
+| No scrollbar drawn when collapsed | PASS | `01`, `02-x42`, `09` (light): no thumb |
+| Expanded rail scrollbar unchanged, thumb draggable | PASS | `07` (thumb at top), `08` (dragging thumb from y=150 to 450 scrolled the list, thumb moved down) |
+| Light and dark glance | PASS | dark `01`, `05`, `07`; light `09` (click at x=40 selects tab 5), `10` |
+
+### Defects
+None found in this walk. (The 4 px thumb drag defect D4 of re-walk 2 is gone with the scrollbar.) Not walked: the hover-to-reveal of an active cell for tab counts beyond 40, status badges (no live shell).
+
+Verdict: yes for everything walkable.

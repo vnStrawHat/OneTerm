@@ -1010,6 +1010,10 @@ fn the_close_following_row_names_the_direction_of_the_layout() {
         close_following_label(TabRowLayout::Vertical),
         "Close Tabs Below"
     );
+    assert_eq!(
+        close_following_label(TabRowLayout::Collapsed(2)),
+        "Close Tabs Below"
+    );
 }
 
 /// A tab row drawn by hand beside a drop target for `DragTerminalTab`, to see which gestures
@@ -1046,6 +1050,7 @@ impl gpui::Render for TabRowHost {
             oneterm_state::TabRowLayout::Vertical => {
                 oneterm_state::TabRowLayout::VERTICAL_ROW_HEIGHT
             }
+            oneterm_state::TabRowLayout::Collapsed(_) => 44.,
         };
         gpui::div()
             .size_full()
@@ -1086,6 +1091,22 @@ fn tab_row_window_of_width(
     oneterm_terminal::test_support::FakeSessionProbe,
     &mut VisualTestContext,
 ) {
+    let (dropped, probe, _, cx) = tab_row_window_with_panel(cx, layout, width, kind);
+    (dropped, probe, cx)
+}
+
+/// Same, also handing back the first tab's panel.
+fn tab_row_window_with_panel(
+    cx: &mut TestAppContext,
+    layout: oneterm_state::TabRowLayout,
+    width: f32,
+    kind: oneterm_terminal::SessionKind,
+) -> (
+    Rc<std::cell::Cell<usize>>,
+    oneterm_terminal::test_support::FakeSessionProbe,
+    gpui::Entity<TerminalPanel>,
+    &mut VisualTestContext,
+) {
     cx.update(gpui_component::init);
     cx.update(crate::init);
     cx.update(oneterm_settings::TerminalSettings::init);
@@ -1094,7 +1115,7 @@ fn tab_row_window_of_width(
     let counted = dropped.clone();
     let (first_session, first_probe) = FakeTerminalSession::boxed_with_kind(24, 80, "first", kind);
     let (second_session, _) = FakeTerminalSession::boxed(24, 80, "second");
-    let (_host, cx) = cx.add_window_view(move |window, cx| {
+    let (host, cx) = cx.add_window_view(move |window, cx| {
         let dock_area = cx.new(|cx| DockArea::new("tab-row-test", None, window, cx));
         let first =
             cx.new(|cx| TerminalPanel::from_spec(session_spec(first_session, "First"), window, cx));
@@ -1117,7 +1138,8 @@ fn tab_row_window_of_width(
             width,
         }
     });
-    (dropped, first_probe, cx)
+    let panel = host.read_with(cx, |host, _| host.panel.clone());
+    (dropped, first_probe, panel, cx)
 }
 
 /// The bounds of the drawn row and of the parts of it a test asks about.
@@ -1351,52 +1373,164 @@ fn a_long_directory_is_cut_at_its_start_and_follows_the_width(cx: &mut TestAppCo
     ));
 }
 
-/// A tab's directory line: `~` for the local home, `\` for a local drive path, untouched on SSH.
-#[test]
-fn the_directory_line_abbreviates_the_local_home_only() {
-    use crate::panel::tab_title::cwd_display;
+/// A vertical row's directory is the status bar's: the breadcrumb text of the same tab, as the
+/// session reported it, for a local drive path, a path in the home folder and an SSH path. No
+/// `~` is ever substituted.
+#[gpui::test]
+fn the_rows_directory_is_the_status_bars(cx: &mut TestAppContext) {
+    use oneterm_state::TabRowLayout;
+    use oneterm_terminal::SessionKind;
 
-    let home = Some("C:\\Users\\dev");
-    // A local Windows tab: backslashes, `~` for the home, whole components only.
-    assert_eq!(
-        cwd_display("C:/Users/dev/src/panel", home, true),
-        "~\\src\\panel"
+    let home = oneterm_core::home_dir().expect("tests run with a home directory");
+    let cases = [
+        (
+            SessionKind::Local,
+            std::path::PathBuf::from("D:\\work\\src"),
+        ),
+        (SessionKind::Local, home.join("src").join("panel")),
+        (SessionKind::Local, home.clone()),
+        (
+            SessionKind::Ssh,
+            std::path::PathBuf::from("/srv/app/releases"),
+        ),
+    ];
+    for (kind, reported) in cases {
+        let (_, probe, panel, cx) =
+            tab_row_window_with_panel(cx, TabRowLayout::Vertical, 220., kind);
+        probe.set_cwd(Some(reported.clone()));
+        cx.run_until_parked();
+        let (row, status_bar) = cx.update(|_, cx| {
+            let panel = panel.read(cx);
+            (panel.tab_cwd(cx), panel.breadcrumb_label(cx))
+        });
+        let shown = reported.display().to_string();
+        assert_eq!(row, status_bar, "{kind:?} {shown}");
+        assert_eq!(row.as_deref(), Some(shown.as_str()));
+        assert!(!shown.starts_with('~'));
+    }
+}
+
+/// The collapsed rail's cell (`US-0198`) is the tab's position with the status icon as a corner
+/// badge: no title, directory or close button, the number centred in the cell and follows the
+/// position it was given.
+#[gpui::test]
+fn a_collapsed_cell_shows_the_position_and_the_status_badge_only(cx: &mut TestAppContext) {
+    use gpui::px;
+    use oneterm_state::TabRowLayout;
+    use oneterm_terminal::SessionKind;
+
+    use crate::panel::tab_title::{
+        TAB_CLOSE_SELECTOR, TAB_CWD_SELECTOR, TAB_LABEL_SELECTOR, TAB_NUMBER_SELECTOR,
+        TAB_ROW_SELECTOR, TAB_STATUS_SELECTOR,
+    };
+
+    let (_, probe, cx) =
+        tab_row_window_of_width(cx, TabRowLayout::Collapsed(7), 44., SessionKind::Local);
+    probe.set_cwd(Some(std::path::PathBuf::from("Z:/oneterm-test/x")));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let row = cx
+        .debug_bounds(TAB_ROW_SELECTOR)
+        .expect("the cell is drawn");
+    let number = cx
+        .debug_bounds(TAB_NUMBER_SELECTOR)
+        .expect("the position is drawn");
+    assert_eq!((row.size.width, row.size.height), (px(44.), px(44.)));
+    assert!(
+        (number.center().x - row.center().x).abs() <= px(1.)
+            && (number.center().y - row.center().y).abs() <= px(1.),
+        "the number {number:?} is centred in the cell {row:?}"
     );
-    assert_eq!(cwd_display("c:\\users\\DEV", home, true), "~");
-    assert_eq!(
-        cwd_display("C:/Users/devops/src", home, true),
-        "C:\\Users\\devops\\src"
+    for (selector, what) in [
+        (TAB_LABEL_SELECTOR, "title"),
+        (TAB_CWD_SELECTOR, "directory"),
+        (TAB_CLOSE_SELECTOR, "close button"),
+        (TAB_STATUS_SELECTOR, "status icon without a status"),
+    ] {
+        assert!(cx.debug_bounds(selector).is_none(), "no {what} in the cell");
+    }
+
+    // A status is a badge in the top-right corner, clear of the number.
+    report_done(&probe, cx);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let status = cx
+        .debug_bounds(TAB_STATUS_SELECTOR)
+        .expect("the status badge is drawn");
+    assert!(status.right() <= row.right() && status.top() >= row.top());
+    assert!(
+        status.center().x > row.center().x && status.center().y < row.center().y,
+        "the badge {status:?} sits in the top-right corner of {row:?}"
     );
-    assert_eq!(cwd_display("D:/work/x", home, true), "D:\\work\\x");
-    assert_eq!(cwd_display("D:/work/x", None, true), "D:\\work\\x");
-    // The same home with a trailing separator.
-    assert_eq!(
-        cwd_display("C:/Users/dev/a", Some("C:\\Users\\dev\\"), true),
-        "~\\a"
+    assert!(
+        status.left() >= number.right(),
+        "the badge {status:?} does not cover the number {number:?}"
     );
-    // A local POSIX tab keeps `/` and compares case-sensitively.
-    assert_eq!(
-        cwd_display("/home/dev/src", Some("/home/dev"), true),
-        "~/src"
+}
+
+/// The number is the position the rail gave the cell.
+#[gpui::test]
+fn a_collapsed_cell_draws_the_position_it_is_given(cx: &mut TestAppContext) {
+    use oneterm_state::TabRowLayout;
+    use oneterm_terminal::SessionKind;
+
+    use crate::panel::tab_title::TAB_NUMBER_SELECTOR;
+
+    let mut width_of = |position: usize| {
+        let (_, _, cx) = tab_row_window_of_width(
+            cx,
+            TabRowLayout::Collapsed(position),
+            44.,
+            SessionKind::Local,
+        );
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.debug_bounds(TAB_NUMBER_SELECTOR)
+            .expect("the position is drawn")
+            .size
+            .width
+    };
+    let (one, ten) = (width_of(1), width_of(10));
+    assert!(
+        ten > one,
+        "two digits are wider than one: {ten:?} vs {one:?}"
     );
-    assert_eq!(
-        cwd_display("/home/Dev/src", Some("/home/dev"), true),
-        "/home/Dev/src"
-    );
-    assert_eq!(
-        cwd_display("/home/devops", Some("/home/dev"), true),
-        "/home/devops"
-    );
-    assert_eq!(cwd_display("/opt/x", Some("/"), true), "/opt/x");
-    // An SSH tab shows the remote path as reported, even when it looks like the local home.
-    assert_eq!(
-        cwd_display("/home/dev/src", Some("/home/dev"), false),
-        "/home/dev/src"
-    );
-    assert_eq!(
-        cwd_display("C:/Users/dev/src", home, false),
-        "C:/Users/dev/src"
-    );
+}
+
+/// The cell's tooltip would stay over the menu a right-click opens, so a right press hides it
+/// until the pointer comes back to the cell (`US-0198` UI defect U1).
+#[gpui::test]
+fn a_right_click_hides_the_collapsed_cells_tooltip_until_the_pointer_returns(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    use oneterm_state::TabRowLayout;
+    use oneterm_terminal::SessionKind;
+
+    use crate::panel::tab_title::TAB_ROW_SELECTOR;
+
+    let (_, _, panel, cx) =
+        tab_row_window_with_panel(cx, TabRowLayout::Collapsed(1), 44., SessionKind::Local);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let row = cx
+        .debug_bounds(TAB_ROW_SELECTOR)
+        .expect("the cell is drawn");
+    let hidden = panel.read_with(cx, |panel, _| panel.tab_tooltip_hidden.clone());
+
+    let inside = row.origin + point(px(4.), px(4.));
+    cx.simulate_mouse_move(inside, None, Modifiers::none());
+    assert!(!hidden.get(), "hovering alone shows the tooltip");
+    cx.simulate_mouse_down(inside, MouseButton::Right, Modifiers::none());
+    assert!(hidden.get(), "a right press hides it");
+    cx.simulate_mouse_up(inside, MouseButton::Right, Modifiers::none());
+
+    // Dismiss the menu by clicking away, which also takes the pointer off the cell.
+    let away = point(px(300.), px(200.));
+    cx.simulate_mouse_move(away, None, Modifiers::none());
+    cx.simulate_click(away, Modifiers::none());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(hidden.get(), "still hidden while the pointer is away");
+    cx.simulate_mouse_move(inside, None, Modifiers::none());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(!hidden.get(), "the pointer coming back shows it again");
 }
 
 /// OSC 7 from the shell tells the panel to repaint, so the row's path is live.

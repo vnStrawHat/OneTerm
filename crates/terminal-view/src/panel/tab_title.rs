@@ -4,13 +4,14 @@
 //! × close, double-click rename). The vertical rail's row is the same element on two
 //! lines (the title, then the current directory and the status icon) without the ×.
 
+use std::cell::Cell;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt as _, App, AppContext as _, ClickEvent, Context, Div, Entity, EntityId,
-    Focusable as _, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
+    Focusable as _, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Transformation, Window, div,
     percentage, prelude::FluentBuilder as _, px,
 };
@@ -27,7 +28,7 @@ use gpui_component::{
 };
 use oneterm_core::ShellKind;
 use oneterm_state::TabRowLayout;
-use oneterm_terminal::{ProgramState, SessionKind, TerminalLogState};
+use oneterm_terminal::{ProgramState, TerminalLogState};
 use oneterm_theme::notif_ext::notify;
 
 use super::TerminalPanel;
@@ -50,19 +51,10 @@ impl TerminalPanel {
         cx.notify();
     }
 
-    /// The directory line of a vertical tab row: the active Space's OSC 7 working directory
-    /// (already sanitised by the session), `None` while the shell has reported none.
+    /// The directory line of a vertical tab row: the very string the status bar's breadcrumb
+    /// shows for this tab (`None` while the shell has reported no directory).
     pub(super) fn tab_cwd(&self, cx: &App) -> Option<String> {
-        let view = self.tree.active_terminal()?;
-        let session = view.read(cx).session.read(cx);
-        let cwd = session.cwd()?;
-        let local = session.kind() == SessionKind::Local;
-        let home = local.then(oneterm_core::home_dir).flatten();
-        Some(cwd_display(
-            &cwd.to_string_lossy(),
-            home.as_deref().and_then(Path::to_str),
-            local,
-        ))
+        self.breadcrumb_label(cx)
     }
 
     /// The OSC 7501 state the tab's status icon shows: only for an unsplit tab
@@ -92,60 +84,6 @@ impl TerminalPanel {
                         matches!(logging.state(), TerminalLogState::Running { .. })
                     })
             })
-    }
-}
-
-/// Whether `path` starts with a Windows drive (`C:\`, `c:/`, or `C:` alone).
-fn is_drive_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    bytes.len() >= 2
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes.get(2), None | Some(b'\\' | b'/'))
-}
-
-/// The directory line of a vertical tab row (`IN-0055`). A local tab abbreviates the user's
-/// home directory to `~` and shows a drive path with `\`; an SSH tab shows the remote path
-/// exactly as the shell reported it. Strings only: a Windows-shaped path is never built with
-/// `std::path`, whose separator is the host's.
-pub(super) fn cwd_display(cwd: &str, home: Option<&str>, local: bool) -> String {
-    if !local {
-        return cwd.to_string();
-    }
-    let drive = is_drive_path(cwd);
-    let shown = if drive {
-        cwd.replace('/', "\\")
-    } else {
-        cwd.to_string()
-    };
-    let Some(home) = home else {
-        return shown;
-    };
-    let home = if drive {
-        home.replace('/', "\\")
-    } else {
-        home.to_string()
-    };
-    let home = home.trim_end_matches(['\\', '/']);
-    // The root as home (`/`) would turn every path into `~/...`.
-    if home.is_empty() {
-        return shown;
-    }
-    // A drive path compares case-insensitively (the file system does); a POSIX one does not.
-    let prefix = shown.get(..home.len()).filter(|prefix| {
-        if drive {
-            prefix.eq_ignore_ascii_case(home)
-        } else {
-            *prefix == home
-        }
-    });
-    match prefix {
-        Some(_) if shown.len() == home.len() => "~".to_string(),
-        // Whole components only: `C:\Users\a` is not the home of `C:\Users\ab`.
-        Some(_) if shown[home.len()..].starts_with(['\\', '/']) => {
-            format!("~{}", &shown[home.len()..])
-        }
-        _ => shown,
     }
 }
 
@@ -278,6 +216,10 @@ pub(super) const TAB_STATUS_SELECTOR: &str = "oneterm-tab-status";
 pub(super) const TAB_LABEL_SELECTOR: &str = "oneterm-tab-label";
 /// Same, for the current directory on line 2 of a vertical row.
 pub(super) const TAB_CWD_SELECTOR: &str = "oneterm-tab-cwd";
+/// Same, for the position number of a collapsed cell.
+pub(super) const TAB_NUMBER_SELECTOR: &str = "oneterm-tab-number";
+/// How far a collapsed cell's badges sit from its corner.
+const COLLAPSED_BADGE_INSET: f32 = 3.;
 
 fn tab_title_label() -> Div {
     // GPUI creates a rectangular content mask when either overflow axis is
@@ -298,12 +240,68 @@ pub(super) fn tab_cwd_label(cwd: String, color: gpui::Hsla) -> Div {
         .child(cwd)
 }
 
+/// The collapsed cell's tooltip: the kit's, drawn as nothing while a right-click menu is open on
+/// the cell.
+struct CellTooltip {
+    inner: gpui::AnyView,
+    hidden: Rc<Cell<bool>>,
+}
+
+impl Render for CellTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        if self.hidden.get() {
+            div().into_any_element()
+        } else {
+            self.inner.clone().into_any_element()
+        }
+    }
+}
+
+/// The compact cell of the collapsed rail (`US-0198`): the tab's position, the status icon as a
+/// badge in the top-right corner and the recording dot in the top-left. The title is the
+/// row's tooltip and the directory and channel chips are not drawn, so the cell is the same
+/// element as the expanded row minus everything that needs width.
+fn collapsed_row(
+    position: usize,
+    status: Option<gpui::AnyElement>,
+    recording: Option<gpui::Stateful<Div>>,
+) -> Div {
+    div()
+        .relative()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .child(
+            div()
+                .debug_selector(|| TAB_NUMBER_SELECTOR.to_string())
+                .child(position.to_string()),
+        )
+        .children(status.map(|icon| {
+            div()
+                .absolute()
+                .top(px(COLLAPSED_BADGE_INSET))
+                .right(px(COLLAPSED_BADGE_INSET))
+                .child(icon)
+        }))
+        .children(recording.map(|dot| {
+            div()
+                .absolute()
+                .top(px(COLLAPSED_BADGE_INSET))
+                .left(px(COLLAPSED_BADGE_INSET))
+                .child(dot)
+        }))
+}
+
 /// Build the tab-strip row for `panel`: active bar, drag source, middle-click
 /// close, recording dot, status icon, the (double-click to rename) label, and
 /// the × button. The vertical rail's row (`IN-0055`, `US-0196` rework) has two
 /// lines and no ×: the label after the chips and the dot, then the current
 /// directory with the status icon at the end of the line; the tab closes by
-/// middle-click and the context menu.
+/// middle-click and the context menu. The collapsed rail's cell (`US-0198`) is the position
+/// number with the status icon as a corner badge and the title as a tooltip.
 pub(super) fn render_tab_strip(
     panel: &mut TerminalPanel,
     _window: &mut Window,
@@ -311,7 +309,9 @@ pub(super) fn render_tab_strip(
 ) -> impl IntoElement {
     let layout = TabRowLayout::current(cx);
     let vertical = layout == TabRowLayout::Vertical;
+    let collapsed = matches!(layout, TabRowLayout::Collapsed(_));
     let tab_panel = panel.tab_panel.clone();
+    let tooltip_hidden = panel.tab_tooltip_hidden.clone();
     let panel_entity = cx.entity().clone();
     let panel_weak = cx.entity().downgrade();
     let muted = cx.theme().muted_foreground;
@@ -365,7 +365,9 @@ pub(super) fn render_tab_strip(
         })
         .child(tab_label);
 
-    let row = if vertical {
+    let row = if let TabRowLayout::Collapsed(position) = layout {
+        collapsed_row(position, status_icon, recording_dot)
+    } else if vertical {
         // Line 1: chips, recording dot, title. Line 2: the directory (cut at its start when it
         // does not fit) and the status icon at the end. The rail draws the selected row's accent
         // bar and the reorder grip itself, so this row carries neither the top bar nor the
@@ -377,7 +379,11 @@ pub(super) fn render_tab_strip(
             .flex_1()
             .min_w_0()
             .pr_1()
-            .py(px(TabRowLayout::VERTICAL_ROW_PADDING))
+            .pt(px(TabRowLayout::VERTICAL_ROW_PADDING))
+            // The rail's divider takes the last pixel of the row, so the padding stops short of it.
+            .pb(px(
+                TabRowLayout::VERTICAL_ROW_PADDING - TabRowLayout::VERTICAL_ROW_DIVIDER
+            ))
             .child(
                 h_flex()
                     .h(px(TabRowLayout::VERTICAL_FIRST_LINE_HEIGHT))
@@ -455,6 +461,32 @@ pub(super) fn render_tab_strip(
         .debug_selector(|| TAB_ROW_SELECTOR.to_string())
         .relative()
         .h_full()
+        // A collapsed cell has no room for the title, so the tooltip carries it.
+        .when(collapsed, |this| {
+            let title = drag_title.clone();
+            let (shown, entered, pressed) = (
+                tooltip_hidden.clone(),
+                tooltip_hidden.clone(),
+                tooltip_hidden.clone(),
+            );
+            this.tooltip(move |window, cx| {
+                let inner = Tooltip::new(title.clone()).build(window, cx);
+                let hidden = shown.clone();
+                cx.new(|_| CellTooltip { inner, hidden }).into()
+            })
+            // gpui clears a tooltip on a press but shows it again on the next pointer move
+            // while the cell is hovered, which put it on top of the menu a right-click opens,
+            // so a right-press hides it until the pointer comes back to the cell.
+            .on_hover(move |hovered, _, _| {
+                if *hovered {
+                    entered.set(false);
+                }
+            })
+            .on_mouse_down(MouseButton::Right, move |_, window, _| {
+                pressed.set(true);
+                window.refresh();
+            })
+        })
         // Drag the tab into an empty Space with the terminal-specific
         // payload consumed by Space-tree drop targets.
         .when_some(tab_panel, |this, _| {
@@ -652,7 +684,7 @@ fn tab_context_menu(
 pub(super) fn close_following_label(layout: TabRowLayout) -> &'static str {
     match layout {
         TabRowLayout::Horizontal => "Close to the Right",
-        TabRowLayout::Vertical => "Close Tabs Below",
+        TabRowLayout::Vertical | TabRowLayout::Collapsed(_) => "Close Tabs Below",
     }
 }
 
