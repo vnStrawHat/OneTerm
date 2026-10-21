@@ -86,3 +86,33 @@ Build: copy of the debug binary for head a866cc93, private profile, 1280x800. Sc
 Drop line versus divider while dragging a row (and grip reorder); line 2 cwd equals the status bar (`cmd` tab); status badge in the cell corner and its overlap with the overlay scrollbar thumb; recording dot; elevated window; middle-click close in collapsed cells.
 
 Verdict: the UI meets the requirements for everything walkable (partly: the items above are not walked).
+
+## Advisor re-review (rework after A1-A5 and U1-U2, 2026-10-21)
+
+- Reviewed: `git diff e5147f23..11717240` (commits `b2ed9ebf`, `d2d09538` evidence merge; `1e592798` fix; `11717240` docs) on `verify/in-0055-rework3-us-0198`. No conflict markers anywhere under `crates/`, `docs/`, `scripts/` (scanned by script, not grep).
+- Gate re-run here (`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`): `cargo test -p oneterm-settings -p oneterm-state -p oneterm-terminal-view -p oneterm-workspace` = 56 + 77 + 415 + 108 passed, 0 failed; clippy on the four crates `--all-targets -- -D warnings` clean; `check-english.py` green. The advisor pin `expanding_the_rail_keeps_the_active_row_in_view` is unpinned (no `should_panic`) and passes, so finding 1 is closed by a test that failed before the fix.
+- gpui 0.3.9 read for U1: `elements/div.rs:3746-3752` (any mouse-down clears a visible non-hoverable tooltip), `:3836-3842` (a mouse move while hovered and with no active tooltip schedules a new show), `:698-708` (`.tooltip(..)` is `hoverable: false`); kit `button.rs:674,682` (`XSmall` = `size_5` / `h_5` = 20 px).
+
+### Verdict
+
+**PASS.** All five fixes do what the records say; the remaining notes are informational.
+
+### Each fix
+
+- **A1 `last_collapsed` re-reveal** (`tab_rail.rs:220`, `:235`, `:377-385`). `tab_changed` and `layout_changed` are both evaluated as `let`s before the `||`, so neither `Cell` misses a frame. Steady state: `replace(collapsed)` returns the same value, `layout_changed` is false, nothing fires per frame. First frame: `last_collapsed` starts `false`, so a rail that starts collapsed (persisted) reports a change on its first frame; harmless, because `tab_changed` is true on that frame anyway (`last_active_ix` starts `None`) and the result is the same single `scroll_to_item`. A click on a row still sets `last_active_ix` first (no snap); a later flip re-reveals on purpose. Rail off then on: `render` is not called while off, so the cell is stale only across a state that cannot change `collapsed` (the button lives in the rail). Split centre: one `TabRail` per group, each with its own cell.
+- **A2 9 px bottom padding** (`tab_title.rs:382-386`, `tab_row_layout.rs:35-37`). `pt 10 + 24 + 20 + pb 9 = 63` = the content box under `border_b_1`; `vertical_first_line_centre()` stays 22 (test). One coupling note (N1 below): the rail draws the divider as the literal `border_b_1`, not `px(TabRowLayout::VERTICAL_ROW_DIVIDER)`, so the constant describes the rail rather than driving it.
+- **A3 `COLLAPSED_HEADER_HEIGHT`** (`tab_rail.rs:84`, `:544`). `3 * 20 + 4 * 4 = 76` matches the content exactly (`py_1` 4 + 4, two `gap_1`s, three `h_5` buttons); as `min_h` with border-box sizing the header is 77 px when all three buttons are present (76 content + 1 px divider) and never shrinks below 76 when one is absent. Test asserts `rows[0].top() - rail.top() >= 76`.
+- **U1 `CellTooltip` + `tab_tooltip_hidden`** (`tab_title.rs:245-258`, `:464-488`; `terminal_panel.rs:180`, `:302`). Mechanism check against gpui: the right-press itself already clears the visible tooltip (`div.rs:3746-3752`, the kit tooltip is non-hoverable); what the walk saw is the re-show, because the cell stays hovered beside the menu and the next mouse move schedules a fresh show (`:3836-3842`). The flag targets exactly that: the new tooltip view draws an empty `div` while `hidden` is set, and `window.refresh()` on the press makes the current frame honour it. Stale-flag cases: (a) menu dismissed with Escape, or by a click on an item, while the pointer never left the cell: no hover-enter fires, so that cell's tooltip stays empty until the pointer leaves and returns, which is what `docs/gui-layout.md` says ("until the pointer returns"); (b) right-press then leave without a menu: cleared on return; (c) the flag is per `TerminalPanel`, and a panel is one cell in one group, so no cross-cell sharing; the drag preview and the strip never read it (`when(collapsed)`). No leak: the `CellTooltip` entity is created by the tooltip builder per show and dropped with gpui's `ActiveTooltip`; `on_hover` writes a `Cell` without a refresh, the press refreshes once; no notify loop. The test pins the flag only; the drawn tooltip is the ui-verifier's.
+- **U2 gutter inside each row** (`tab_rail.rs:182-184`, `:425-429`, `:708`). The `Tab` is `w_full` so the row, its divider and the drop lines span the rail; `pr(Scrollbar::width())` shrinks only the content box, so line 2's status icon still clears the thumb (40-tab test: `first.right() == list.right()`, content right <= list right - 16). Toggling `overflowing` moves the content by 16 px as it did when the padding sat on the list; no new layout shift. Collapsed rows get no gutter (`gutter: overflowing && !collapsed`), as before.
+
+### Notes (informational, no action required)
+
+- **N1** — `tab_rail.rs:710` `border_b_1` and `tab_row_layout.rs:37` `VERTICAL_ROW_DIVIDER = 1.0` are the same 1 px twice; `.border_b(px(TabRowLayout::VERTICAL_ROW_DIVIDER))` would make the state constant the one source.
+- **N2** — The code comment at `tab_title.rs:477-479` says gpui "keeps a tooltip while its own element is hovered"; it is re-shown after the press clears it (gpui `div.rs:3746-3752`, `:3836-3842`). Same fix, more exact wording.
+- **N3** — U1 case (a) above: after an Escape with the pointer still on the cell, the tooltip is an empty view until the pointer leaves. Acceptable; a dismiss hook on the kit menu would be the only cleaner path.
+
+### Still by hand (ui-verifier / owner)
+
+- U1 on screen: right-click a collapsed cell, wait past the tooltip delay, confirm no tooltip over the menu; dismiss with Escape without moving, move out and back, confirm the tooltip returns.
+- U2 on screen: 40 expanded tabs, dividers reach the rail's right edge, status icons clear the thumb.
+- A1 on screen: 40 tabs, select the last, collapse and expand, the selected row stays in view.
