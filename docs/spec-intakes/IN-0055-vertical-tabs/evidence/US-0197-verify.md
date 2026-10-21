@@ -44,3 +44,42 @@
 | `python scripts/check-english.py` | passed |
 
 Disk D: 10.7 GB free at start, 9.9 GB after the builds. Not re-run: the full `ci-local.ps1` (recorded in the packet), the app binary.
+
+## UI walk (rework 2 + US-0197, ui-verifier, head 96270e82)
+
+### UI verification IN-0055 r3 (two-line rail rows, resizable rail), head 96270e82
+
+Build `in0055-bin4\oneterm.exe`, REAL USERPROFILE kept, scratch cwd `us0196-cwd-w3` (config under its `target\`). Shots `in0055r3-*.png`. Widths below are measured from pixel scans (rail border column), client px.
+
+**Local shells still died** with the real profile: no cmd/pwsh child under the app, log shows "terminal session is closed". So no OSC 7501, no `cd`, no OSC 7 path: all Part A items that need status or cwd are NOT WALKED. Not caused by the profile; the agent environment blocks ConPTY children. Needs an owner run.
+
+### Part A
+| # | Verdict | Evidence |
+|---|---|---|
+| 1 | PARTLY | Row height 64 px in Zed One Dark (`01`) and Zed One Light (`06`). Chips and recording dot on line 1 NOT WALKED. |
+| 2 | NOT WALKED | needs status/cwd. With no OSC 7 the row shows no path before the title only (`01`, `05`): no stray path. |
+| 3, 4, 5 | NOT WALKED | need cwd/OSC 7 |
+| 6 | PARTLY | Selected-row accent bar still shows (`01`, `05`, `06`). Grip level, reorder, Space drag, drop line NOT WALKED in this build. |
+| 7 | PARTLY | 40 tabs scroll, scrollbar thumb drag works and stays clear of the resize handle (`02`, `03`); icon clearance NOT WALKED. |
+| 8 | PARTLY | No × in any row (`01`, `05`, `06`). Middle-click and context menu NOT WALKED in this build. |
+| 9 | NOT WALKED | switch-off not retried in this build |
+
+### Part B
+| # | Verdict | Evidence |
+|---|---|---|
+| 1 | PASS (cursor NOT WALKED) | Handle sits at the rail border (grab x = border-1). Dragging resizes live and the terminal follows (220 to 338 to 140 to 400 to 300). Hover and drag show a 3 px accent line (dark `04`, 82,139,255). Line-2 path re-truncation NOT WALKED (no path). Cursor shape not visible. |
+| 2 | PASS | Drag far left: 140 px. Far right at 1280: 400 px (the 400 cap; 35 % would be 442). Window 1000 wide: 344 px; 800 wide: 274 px, i.e. 35 % of the group (window minus 16 px borders), slightly under the 350/280 quoted because the group is 984/784 px. |
+| 3 | PASS | `ui_config.json` held `{"vertical_tabs":{"enabled":true,"width":300}}`; after restart the rail was 300 px. |
+| 4 | PASS | Window 1000 to 344, 800 to 274, back to 1280 restored 400 (preference kept). |
+| 5 | PASS | Right dock open: rail 288 px (35 % of the narrower group); closed: 400 again. |
+| 6 | PASS | Split centre (grip drag to the right edge): both rails 221 px, each bounded by its own group (`05`) although the preference was 300. |
+| 7 | PASS | Dragging the scrollbar thumb with 40 tabs scrolled the rows and did not resize the rail (`03`). |
+| 8 | PASS | Hover line visible in dark (82,139,255 at x404..406, `04`) and light (82,111,255 at x225..227). |
+
+### Defects
+None found in what could be walked.
+
+### Owner-only / needs a working shell
+Part A 2-5, the status icon positions, path truncation at the start, `~`, split-tab cwd, chips on line 1, grip level with line 1, reorder and Space drag on 64 px rows, middle-click/menu on this build, switch-off strip, resize cursor shape.
+
+Coordinator: merged on the advisor PASS for both parts and the Part B walk PASS. Part A items needing a live shell (status icon, cwd line, home abbreviation, split-tab cwd, chips on line 1, grip level) were not walkable because the agent environment blocks ConPTY children; they are pinned by terminal-view layout tests and left to the owner on screen.

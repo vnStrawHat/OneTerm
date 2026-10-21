@@ -29,7 +29,7 @@ The vertical tab rail's width is resizable. A 4 px handle on the rail's right ed
 
 ## Scope
 
-- [x] In scope: the pure `clamp_tab_rail_width` with the HLD's six worked examples and the four window examples as unit tests; `UiConfig::set_vertical_tabs_width` (the one writer, clamps to the range, writes nothing when unchanged); per-group painted width read through `on_prepaint` on the group frame, re-clamp on change; the drag handle (4 px, right edge, `ResizeLeftRight` cursor, also while the pointer is dragging past the handle); one write per drag; `draws_rail` evaluated once per frame per group (advisor F4); `docs/gui-layout.md`, `docs/agents/persistence.md`, the HLD.
+- [x] In scope: the pure `clamp_tab_rail_width` with the HLD's six worked examples and the four window examples as unit tests; `UiConfig::set_vertical_tabs_width` (the one writer, clamps to the range, writes nothing when unchanged); per-group painted width read through `on_prepaint` on the group frame, re-clamp on change; the drag handle (4 px, right edge, `CursorStyle::ResizeColumn` cursor, also while the pointer is dragging past the handle); one write per drag; `draws_rail` evaluated once per frame per group (advisor F4); `docs/gui-layout.md`, `docs/agents/persistence.md`, the HLD.
 - [x] Out of scope: collapse (`US-0198`), a double-click-to-reset on the handle, keyboard resizing, resizing from the stored preference when the width is hand-edited out of range (already clamped on read).
 
 ## Acceptance
@@ -113,7 +113,7 @@ No decision record: the bound and the preference/applied split are the HLD's (ow
 ### Gaps
 
 - Not walked on screen (the coder does not give the UI verdict): the drag in the real window, the cursor, the handle against the overlay scrollbar with 40 tabs (the handle covers the scrollbar's right 3-4 px), restart persistence, the elevated window.
-- A drag started and released outside the window is ended by the next pointer move without the button (`pressed_button`); not covered by a test.
+- Designed behaviour, also an open choice: a drag released outside the window ends on the next pointer move without the button (`pressed_button`), storing the width once; not covered by a test.
 - Linux and macOS compile only in CI.
 
 ## Handoff
