@@ -1019,6 +1019,8 @@ struct TabRowHost {
     panel: gpui::Entity<TerminalPanel>,
     layout: oneterm_state::TabRowLayout,
     dropped: Rc<std::cell::Cell<usize>>,
+    /// The width of the slot the row is drawn in: the rail's width, or a strip tab's room.
+    width: f32,
 }
 
 impl gpui::Render for TabRowHost {
@@ -1039,6 +1041,12 @@ impl gpui::Render for TabRowHost {
             })
         };
         let dropped = self.dropped.clone();
+        let height = match self.layout {
+            oneterm_state::TabRowLayout::Horizontal => 32.,
+            oneterm_state::TabRowLayout::Vertical => {
+                oneterm_state::TabRowLayout::VERTICAL_ROW_HEIGHT
+            }
+        };
         gpui::div()
             .size_full()
             .flex()
@@ -1047,8 +1055,8 @@ impl gpui::Render for TabRowHost {
                 gpui::div()
                     .id("row-slot")
                     .flex()
-                    .w(gpui::px(220.))
-                    .h(gpui::px(32.))
+                    .w(gpui::px(self.width))
+                    .h(gpui::px(height))
                     .child(row),
             )
             .child(gpui::div().id("space-drop").flex_1().on_drop(
@@ -1065,13 +1073,26 @@ fn tab_row_window(
     oneterm_terminal::test_support::FakeSessionProbe,
     &mut VisualTestContext,
 ) {
+    tab_row_window_of_width(cx, layout, 220., oneterm_terminal::SessionKind::Local)
+}
+
+fn tab_row_window_of_width(
+    cx: &mut TestAppContext,
+    layout: oneterm_state::TabRowLayout,
+    width: f32,
+    kind: oneterm_terminal::SessionKind,
+) -> (
+    Rc<std::cell::Cell<usize>>,
+    oneterm_terminal::test_support::FakeSessionProbe,
+    &mut VisualTestContext,
+) {
     cx.update(gpui_component::init);
     cx.update(crate::init);
     cx.update(oneterm_settings::TerminalSettings::init);
     cx.update(oneterm_state::AppState::init);
     let dropped = Rc::new(std::cell::Cell::new(0));
     let counted = dropped.clone();
-    let (first_session, first_probe) = FakeTerminalSession::boxed(24, 80, "first");
+    let (first_session, first_probe) = FakeTerminalSession::boxed_with_kind(24, 80, "first", kind);
     let (second_session, _) = FakeTerminalSession::boxed(24, 80, "second");
     let (_host, cx) = cx.add_window_view(move |window, cx| {
         let dock_area = cx.new(|cx| DockArea::new("tab-row-test", None, window, cx));
@@ -1093,6 +1114,7 @@ fn tab_row_window(
             panel: first,
             layout,
             dropped: counted,
+            width,
         }
     });
     (dropped, first_probe, cx)
@@ -1104,6 +1126,7 @@ struct DrawnRow {
     label: gpui::Bounds<gpui::Pixels>,
     status: Option<gpui::Bounds<gpui::Pixels>>,
     close: Option<gpui::Bounds<gpui::Pixels>>,
+    cwd: Option<gpui::Bounds<gpui::Pixels>>,
 }
 
 /// Draw a frame and read where the row and its parts landed.
@@ -1123,6 +1146,7 @@ fn drawn_row(cx: &mut VisualTestContext) -> DrawnRow {
             .expect("the label is drawn"),
         status: cx.debug_bounds(TAB_STATUS_SELECTOR),
         close: cx.debug_bounds(TAB_CLOSE_SELECTOR),
+        cwd: cx.debug_bounds(crate::panel::tab_title::TAB_CWD_SELECTOR),
     }
 }
 
@@ -1212,22 +1236,184 @@ fn the_vertical_row_has_no_close_button_and_its_status_icon_trails_the_label(
         bare.row
     );
 
-    // A status: the icon sits right of the label, inside the row, at its trailing end.
+    // A status: the icon sits on the second line, below the title, at the row's trailing end.
     report_done(&probe, cx);
     let shown = drawn_row(cx);
     assert!(shown.close.is_none(), "a status brings no close button");
     let status = shown.status.expect("the status icon is drawn");
     assert!(
-        status.left() >= shown.label.right(),
-        "the icon {status:?} must follow the label {:?}",
+        status.top() >= shown.label.bottom() - px(1.),
+        "the icon {status:?} must be on the line below the title {:?}",
         shown.label
     );
+    assert!(status.bottom() <= shown.row.bottom());
     assert!(status.right() <= shown.row.right());
     assert!(
         status.right() >= shown.row.right() - px(8.),
         "the icon {status:?} must sit at the trailing end of the row {:?}",
         shown.row
     );
+    assert!(
+        shown.label.right() >= shown.row.right() - px(5.),
+        "the status icon is on line 2, so the title keeps the whole width of line 1"
+    );
+}
+
+/// A vertical row is two lines in 64 px: the title on the first, the working directory on the
+/// second with the status icon after it. No directory reported means no path (`US-0196`
+/// rework 2).
+#[gpui::test]
+fn the_vertical_row_shows_the_title_then_the_directory_and_the_status(cx: &mut TestAppContext) {
+    use gpui::px;
+    use oneterm_state::TabRowLayout;
+
+    let (_, probe, cx) = tab_row_window(cx, TabRowLayout::Vertical);
+
+    // Nothing reported yet: line 2 is empty.
+    let unknown = drawn_row(cx);
+    assert_eq!(unknown.row.size.height, px(64.), "twice the strip's 32 px");
+    assert!(unknown.cwd.is_none(), "an unknown directory draws no path");
+
+    probe.set_cwd(Some(std::path::PathBuf::from("Z:/oneterm-test/src/panel")));
+    report_done(&probe, cx);
+    let shown = drawn_row(cx);
+    let path = shown.cwd.expect("the directory is drawn");
+    let status = shown.status.expect("the status icon is drawn");
+    assert_eq!(shown.row.size.height, px(64.));
+    assert!(
+        path.top() >= shown.label.bottom() - px(1.),
+        "the path {path:?} is below the title {:?}",
+        shown.label
+    );
+    assert_eq!(
+        path.left(),
+        shown.label.left(),
+        "left-aligned under the title"
+    );
+    assert!(
+        (path.center().y - status.center().y).abs() <= px(1.),
+        "the path {path:?} and the icon {status:?} share line 2"
+    );
+    assert!(path.right() <= status.left(), "the icon follows the path");
+    assert!(
+        status.right() >= shown.row.right() - px(8.),
+        "the icon sits at the end of line 2"
+    );
+
+    // No directory, still a status: the icon stays at the right end, on line 2.
+    probe.set_cwd(None);
+    let bare = drawn_row(cx);
+    assert!(bare.cwd.is_none());
+    let status = bare.status.expect("the status icon is drawn");
+    assert!(status.right() >= bare.row.right() - px(8.));
+    assert!(status.top() >= bare.label.bottom() - px(1.));
+}
+
+/// A long directory is cut from its start, so the end (the name that matters) stays; the strip
+/// shows no directory at all.
+#[gpui::test]
+fn a_long_directory_is_cut_at_its_start_and_follows_the_width(cx: &mut TestAppContext) {
+    use gpui::Styled as _;
+    use oneterm_state::TabRowLayout;
+    use oneterm_terminal::SessionKind;
+
+    let long = "Z:/oneterm-test/a-rather-long-directory/with/many/nested/folders/src/panel";
+    let width_of = |width: f32, cx: &mut TestAppContext| {
+        let (_, probe, cx) =
+            tab_row_window_of_width(cx, TabRowLayout::Vertical, width, SessionKind::Local);
+        probe.set_cwd(Some(std::path::PathBuf::from(long)));
+        report_done(&probe, cx);
+        let row = drawn_row(cx);
+        let path = row.cwd.expect("the directory is drawn");
+        assert!(
+            path.left() >= row.row.left() && path.right() <= row.row.right(),
+            "{path:?}"
+        );
+        path.size.width
+    };
+    let wide = width_of(900., cx);
+    let narrow = width_of(220., cx);
+    let narrower = width_of(160., cx);
+    assert!(
+        narrow < wide,
+        "a narrow rail cuts the path: {narrow:?} vs {wide:?}"
+    );
+    assert!(
+        narrower < narrow,
+        "and a narrower one cuts more: {narrower:?} vs {narrow:?}"
+    );
+
+    // The cut is at the start: the element asks gpui for `TruncateStart`, not the end.
+    let mut label = crate::panel::tab_title::tab_cwd_label(long.to_string(), gpui::black());
+    assert!(matches!(
+        label.style().text.text_overflow.clone(),
+        Some(gpui::TextOverflow::TruncateStart(_))
+    ));
+}
+
+/// A tab's directory line: `~` for the local home, `\` for a local drive path, untouched on SSH.
+#[test]
+fn the_directory_line_abbreviates_the_local_home_only() {
+    use crate::panel::tab_title::cwd_display;
+
+    let home = Some("C:\\Users\\dev");
+    // A local Windows tab: backslashes, `~` for the home, whole components only.
+    assert_eq!(
+        cwd_display("C:/Users/dev/src/panel", home, true),
+        "~\\src\\panel"
+    );
+    assert_eq!(cwd_display("c:\\users\\DEV", home, true), "~");
+    assert_eq!(
+        cwd_display("C:/Users/devops/src", home, true),
+        "C:\\Users\\devops\\src"
+    );
+    assert_eq!(cwd_display("D:/work/x", home, true), "D:\\work\\x");
+    assert_eq!(cwd_display("D:/work/x", None, true), "D:\\work\\x");
+    // The same home with a trailing separator.
+    assert_eq!(
+        cwd_display("C:/Users/dev/a", Some("C:\\Users\\dev\\"), true),
+        "~\\a"
+    );
+    // A local POSIX tab keeps `/` and compares case-sensitively.
+    assert_eq!(
+        cwd_display("/home/dev/src", Some("/home/dev"), true),
+        "~/src"
+    );
+    assert_eq!(
+        cwd_display("/home/Dev/src", Some("/home/dev"), true),
+        "/home/Dev/src"
+    );
+    assert_eq!(
+        cwd_display("/home/devops", Some("/home/dev"), true),
+        "/home/devops"
+    );
+    assert_eq!(cwd_display("/opt/x", Some("/"), true), "/opt/x");
+    // An SSH tab shows the remote path as reported, even when it looks like the local home.
+    assert_eq!(
+        cwd_display("/home/dev/src", Some("/home/dev"), false),
+        "/home/dev/src"
+    );
+    assert_eq!(
+        cwd_display("C:/Users/dev/src", home, false),
+        "C:/Users/dev/src"
+    );
+}
+
+/// OSC 7 from the shell tells the panel to repaint, so the row's path is live.
+#[gpui::test]
+fn a_reported_directory_repaints_the_row(cx: &mut TestAppContext) {
+    use oneterm_state::TabRowLayout;
+
+    let (_, probe, cx) = tab_row_window(cx, TabRowLayout::Vertical);
+    assert!(drawn_row(cx).cwd.is_none());
+    probe.set_cwd(Some(std::path::PathBuf::from("Z:/oneterm-test/one")));
+    probe
+        .emit(oneterm_terminal::SessionEvent::Cwd(
+            std::path::PathBuf::from("Z:/oneterm-test/one"),
+        ))
+        .expect("event channel must accept the cwd");
+    cx.run_until_parked();
+    assert!(drawn_row(cx).cwd.is_some(), "the new directory is drawn");
 }
 
 /// The strip's row keeps its content-sized shape: the vertical variant is opt-in.

@@ -28,7 +28,7 @@ OneTermWorkspace (layout/workspace/mod.rs:562-594)        column: title bar / do
     │       │     ├── per panel: kit Tab ── child: TerminalPanel::title()
     │       │     │                         = render_tab_strip (tab_title.rs:207-345):
     │       │     │                           chips · ● · status icon · label · ×
-    │       │     │                           (vertical row: chips · ● · label · status icon, no ×)
+    │       │     │                           (vertical row, two lines: chips · ● · label / cwd · status icon, no ×)
     │       │     │                           drag: DragTerminalTab   menu: Rename/Duplicate/Close...
     │       │     └── suffix: `+` (title_suffix) · zoom · `...` · right-dock toggle
     │       └── content_frame → active TerminalPanel (cached) → Space tree
@@ -67,7 +67,7 @@ UiConfig (oneterm-settings, global entity)
         │                        ▼
         └──────────────► TerminalPanel::title() → render_tab_strip (oneterm-terminal-view)
                            vertical variant: fill row width, no top bar, no -5 px margin,
-                           no ×, status icon at the trailing end,
+                           no ×, two lines (title; cwd + status icon at the end),
                            "Close Tabs Below" in its menu
 
 Settings > General > Interface > [Vertical Tabs]  ──► UiConfig::set_vertical_tabs_enabled
@@ -122,16 +122,16 @@ change of active tab scrolls the row into view; a clicked row is not snapped.
 | Part | Content | Behaviour |
 | --- | --- | --- |
 | Header (32 px, the strip's height) | `+` = the active panel's `title_suffix` (OneTerm's New Terminal menu, `terminal_panel.rs:721`); zoom button | Zoom follows the kit's rule: Zoom Out whenever the group is zoomed, whatever the control says; otherwise Zoom In when `panel.zoomable` and `zoom_control().toolbar_visible()` (`tab_panel.rs:140-146`, `:305-307`); it calls `group.toggle_zoom`. Icons as the strip (maximize / minimize). The kit's tooltip strings are its private locale (`t!`), so the rail carries its own text, "Zoom In" / "Zoom Out", the same words. No `...` menu (Q5), no right-dock toggle |
-| Rows (32 px each) | base `Tab` wrapping `PanelHandle::of(panel).title(window, cx)` | click: `group.select_tab(ix)`; selected: `tab.active.background` + 2 px bar on the left edge in `oneterm_theme::selection_accent` (the theme's `table.active.border`, kept past OneTerm's own blanking of `Theme::table_active_border`; the strip's top bar reads the same, amended at `US-0196`) |
-| Row content (amended 2026-10-21, owner) | chips, recording dot, label, then at the trailing end the OSC 7501 status icon. **No `×` close button**; with no status nothing is drawn at the end and the label keeps the full width. The strip's row is unchanged (chips, dot, status icon, label, `×`) | the same row element, selected by `TabRowLayout`; the close paths left in the rail are middle-click, the right-click menu (Close, Close Others, Close Tabs Below) and the panel's keyboard paths (`ClosePanel`, and Close Space on the last Space); the status icon sits right-aligned where the `×` was, inside the row's 4 px right padding and, once the rows overflow, clear of the scrollbar's gutter |
-| Row leading edge, the grip (12 px, the strip tab's padding, kit `tab/tab.rs:72-89`; Q9) | a `grip-vertical` glyph in `muted.foreground` and the `OpenHand` cursor while the row is hovered (a new `crates/theme/assets/icons/grip-vertical.svg`, so `AppIcon::GripVertical`; the kit's `IconName` has no grip) | starts `DragPanel` (`group.drag_panel(ix)`, guarded by `is_draggable`), the reorder and dock-move drag, as the kit tab's padding does today. The rest of the row is the title row, whose own drag (`DragTerminalTab`) wins, as on the strip |
+| Rows (64 px each, two lines; was 32 px until the 2026-10-21 owner rework 2) | base `Tab` wrapping `PanelHandle::of(panel).title(window, cx)` | click: `group.select_tab(ix)`; selected: `tab.active.background` + 2 px bar on the left edge in `oneterm_theme::selection_accent` (the theme's `table.active.border`, kept past OneTerm's own blanking of `Theme::table_active_border`; the strip's top bar reads the same, amended at `US-0196`) |
+| Row content (amended 2026-10-21, owner; two lines at rework 2) | **Line 1** (24 px): chips, recording dot, label (ellipsis at its end). **Line 2** (20 px, `text_xs`, `muted.foreground`): the terminal's current directory left-aligned and cut at its **start** when too long (`…\src\panel`, gpui's `TextOverflow::TruncateStart`, so it follows the live width), then the OSC 7501 status icon right-aligned at the end of the line. 10 px above line 1 and below line 2. **No `×` close button**; with no cwd line 2 shows no path, with no status nothing is drawn at its end. The strip's row is unchanged (chips, dot, status icon, label, `×`) | the same row element, selected by `TabRowLayout`; the close paths left in the rail are middle-click, the right-click menu (Close, Close Others, Close Tabs Below) and the panel's keyboard paths (`ClosePanel`, and Close Space on the last Space); the icon sits inside the row's 4 px right padding and, once the rows overflow, clear of the scrollbar's gutter. The cwd is the active Space's `TerminalSession::cwd()` (OSC 7, sanitised by `TerminalSecurityPolicy::sanitize_cwd`); a local tab shows the home directory as `~` and a drive path with `\`, an SSH tab the remote path as reported; it updates live (`TerminalViewEvent::CwdChanged`) |
+| Row leading edge, the grip (12 px, the strip tab's padding, kit `tab/tab.rs:72-89`; Q9) | a `grip-vertical` glyph, centred on line 1 (not on the whole 64 px row), in `muted.foreground` and the `OpenHand` cursor while the row is hovered (a new `crates/theme/assets/icons/grip-vertical.svg`, so `AppIcon::GripVertical`; the kit's `IconName` has no grip) | starts `DragPanel` (`group.drag_panel(ix)`, guarded by `is_draggable`), the reorder and dock-move drag, as the kit tab's padding does today. The rest of the row is the title row, whose own drag (`DragTerminalTab`) wins, as on the strip |
 | Row as drop target | 2 px line in `drag_border` while a `DragPanel` hovers, on the edge where the tab will land: below the hovered row for a tab dragged forward within its own group, above it otherwise, none on the dragged row itself (amended at `US-0196`) | drop: `group.drop_panel(drag, Some(ix), true)` (mirrors `tab_panel.rs:594-612`) |
 | Space below the last row | `drop_target` fill while dragged over | drop: append, or last slot for a panel from this group (mirrors `tab_panel.rs:630-651`) |
 
 The kit's tab bar also accepts a host-owned `AnyDrag` on tabs and the empty space. The rail does
 not: no OneTerm crate creates an `AnyDrag` or handles `TabGroupEvent::DragDrop`, so such a handler
 could be neither used nor tested here. A future host drag adds it with its first user.
-| Right edge | 1 px `border` | `US-0197`: 4 px resize handle |
+| Right edge | 1 px `border` | `US-0197`: a 4 px resize handle over it (column-resize cursor); the drag sets the width live in memory and the release stores the preference once (`set_vertical_tabs_width`) |
 
 ## UI Wireframe
 
@@ -160,17 +160,21 @@ Vertical (`US-0196`, rail 220 px):
 +------------------+---------------------------------------+---------------+
 | [+]          [⛶] |                                       | Session    [+]|
 |------------------|  PS C:\> _                            |  ...          |
-|▌A ● PowerShell  ⟳|                                       |               |
-|⠿ web-01         ✓|                                       |---------------|
-|  cmd             |                                       | SFTP Browser  |
-|                  |                                       |               |
+|▌A ● PowerShell   |                                       |               |
+|▌ ~\src\panel   ⟳|                                       |---------------|
+|⠿ web-01          |                                       | SFTP Browser  |
+|  /srv/…/releases✓|                                       |               |
+|  cmd             |                                       |               |
+|  (no cwd yet)    |                                       |               |
 |  (drop space)    |                                       |               |
 +------------------+---------------------------------------+---------------+
 | 12:04  C:\work  main*                      ↓1 KB/s  CPU 1%  MEM 60 MB [▣]|
 +--------------------------------------------------------------------------+
+  each row is 64 px, two lines: line 1 = chips, ●, title; line 2 = the current directory
+  (left, cut at its START when too long: "…\panel", "~" for a local home) and the status icon (right)
   ▌ = selected row: tab.active.background + 2 px accent bar on its left edge
-  ⠿ = the reorder grip, shown on the hovered row (here web-01) with an open-hand cursor
-  ⟳ ✓ = the OSC 7501 status icon at the trailing end (none: nothing drawn); no × in a row
+  ⠿ = the reorder grip, shown on the hovered row (here web-01), level with line 1, open-hand cursor
+  ⟳ ✓ = the OSC 7501 status icon at the right end of line 2 (none: nothing drawn); no × in a row
   rows scroll vertically when they do not fit; the header stays
 ```
 
@@ -179,8 +183,9 @@ Vertical, resizing (`US-0197`):
 ```text
 +------------------++---------------------
 | [+]          [⛶] ||   drag the right edge: 140 px .. min(400 px, 35 % of the tab group)
-|▌PowerShell      x||
-|  web-01         x||   the width the user sets is remembered and
+|▌PowerShell       ||
+| ~\src\panel     ⟳||
+|  web-01          ||   the width the user sets is remembered and
 +------------------++   re-applied (clamped) when the window grows again
 ```
 
@@ -222,8 +227,8 @@ Interface
 | Zoom | The zoomed group keeps its rail, as it keeps its strip today ("the whole TerminalPanel is zoomed, including its tab-group chrome"); the zoom button shows Zoom Out. A zoomed group is neither draggable nor droppable (`tab_group.rs:441-460`), so reorder and drops are off while zoomed, as on the strip. Zoom persistence (`docks.json` `zoomed_panel`) is unchanged | `docs/gui-layout.md` § Zoom |
 | Lock screen | Covered like everything else (the lock replaces the window's whole element tree); after unlock the rail returns as it was, scroll position included | `docs/gui-layout.md` § Lock screen |
 | Broadcast channels | Chips stay in the row; the Space badge is unchanged | same row element |
-| OSC 7501 status icon (`US-0193`) | Same icon, same rules, drawn at the trailing end of a vertical row (amended 2026-10-21) and before the label in the strip (single-Space tabs only, acknowledge on `set_active(true)`, which a row click reaches through `select_tab` like a strip click). Of its colours only the bell's `warning` is measured on the tab surfaces; `primary`, `success` and `danger` are not, as for the strip | same row element; `terminal_panel.rs:670-684` |
-| Close a tab (`×`, amended 2026-10-21, owner) | A vertical row has **no `×`**; the trailing end shows the OSC 7501 status icon instead. A tab still closes by middle-click on the row, the right-click menu (Close, Close Others, Close Tabs Below) and the panel's keyboard paths (`ClosePanel`, Close Space on the last Space). The strip keeps its `×` | `render_tab_strip` omits the `tab-close` element when the layout is vertical |
+| OSC 7501 status icon (`US-0193`) | Same icon, same rules, drawn at the right end of line 2 of a vertical row (amended 2026-10-21) and before the label in the strip (single-Space tabs only, acknowledge on `set_active(true)`, which a row click reaches through `select_tab` like a strip click). Of its colours only the bell's `warning` is measured on the tab surfaces; `primary`, `success` and `danger` are not, as for the strip | same row element; `terminal_panel.rs:670-684` |
+| Close a tab (`×`, amended 2026-10-21, owner) | A vertical row has **no `×`**; line 2 shows the current directory and the OSC 7501 status icon at its right end instead. A tab still closes by middle-click on the row, the right-click menu (Close, Close Others, Close Tabs Below) and the panel's keyboard paths (`ClosePanel`, Close Space on the last Space). The strip keeps its `×` | `render_tab_strip` omits the `tab-close` element when the layout is vertical |
 | Tab context menu | Same rows; "Close to the Right" reads "Close Tabs Below" while vertical (Q6) | `tab_title.rs:469-507` |
 | `...` menu | Not drawn in vertical mode (Q5); its tab list is the rail itself | `tab_title.rs:520-548` |
 | Keyboard | No tab navigation exists in either layout; rows are not tab stops (like the strip's). Follow-up packet proposed in the intake | `crates/actions/src/lib.rs` |
@@ -244,7 +249,7 @@ The rail draws only tokens the strip draws, on the surfaces the strip uses:
 | Inactive row label | `tab.foreground` | `tab_bar.background` | yes |
 | Hovered row label | `tab.active.foreground` | `tab_bar.background` | **no: added by `US-0196`** (the strip draws the same pair on hover, kit `tab.rs:172-184`, so the addition also covers the strip) |
 | Selected row | `tab.active.foreground` | `tab.active.background` | yes |
-| `×` (strip only), grip | `muted.foreground` | `tab_bar.background`, `tab.active.background` | yes |
+| `×` (strip only), grip, cwd line 2 of a vertical row | `muted.foreground` | `tab_bar.background`, `tab.active.background` | yes (the cwd line draws no new pair) |
 | Bell (OSC 7501 blocked) | `warning` | `tab_bar.background`, `tab.background`, `tab.active.background` | yes (`US-0193`) |
 | Channel chips, recording dot, other status icons | `chart_1..5`, `danger`, `primary`, `success` | `tab_bar.background`, `tab.active.background` | no, as for the strip (no new gap: same pairs the strip draws) |
 | Accent bar, drop border, drop fill | `selection_accent`, `drag_border`, `drop_target` | non-text | n/a |

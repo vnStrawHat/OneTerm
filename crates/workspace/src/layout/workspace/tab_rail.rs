@@ -14,25 +14,43 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, ClickEvent, Context, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, Render, ScrollHandle, SharedString, Size,
-    StatefulInteractiveElement as _, Styled as _, Window, accesskit, div,
+    AnyElement, App, AppContext as _, Bounds, ClickEvent, Context, CursorStyle, Div,
+    InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
+    ParentElement as _, Pixels, Render, ScrollHandle, SharedString, Size, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Window, accesskit, canvas, div,
     prelude::FluentBuilder as _, px, size,
 };
 use gpui_base::{Tab, Tabs};
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _,
+    ActiveTheme as _, ElementExt as _, Icon, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     dock::{BasePanelView, DragPanel, PanelHandle, PanelId, TabGroupContext, ToggleZoom},
     h_flex,
     scroll::{ScrollableElement as _, Scrollbar},
 };
+use oneterm_settings::{UiConfig, VerticalTabs};
 use oneterm_state::{TabRowLayout, panel_names};
 use oneterm_theme::AppIcon;
 
-/// The rail's width in `US-0196`: the strip's tab ceiling, so a label fits exactly as much as
-/// it does today. `US-0197` replaces this with the stored, clamped preference.
-pub(super) const RAIL_WIDTH: Pixels = px(220.);
+/// The narrowest and widest a rail may be, and the share of its own tab group's width it may
+/// take: the right dock's share (`RIGHT_DOCK_MAX_SHARE`), so a split centre or an open dock
+/// narrows each rail instead of starving the terminals (`IN-0055` Q3).
+const MIN_WIDTH: f32 = *VerticalTabs::WIDTH_RANGE.start() as f32;
+const MAX_WIDTH: f32 = *VerticalTabs::WIDTH_RANGE.end() as f32;
+const GROUP_SHARE: f32 = 0.35;
+
+/// The width the rail is drawn at: `width` (the stored preference, or the width being dragged)
+/// kept within 140 px at least and `max(140, min(400, 35 % of the group))` at most. `group` is
+/// the painted width of the rail's own tab group, rail included, so the rail's width does not
+/// feed back into its own bound; zero means the group has not been painted yet, and only the
+/// absolute bounds apply.
+pub(super) fn clamp_tab_rail_width(width: f32, group: f32) -> f32 {
+    if group <= 0. {
+        return width.clamp(MIN_WIDTH, MAX_WIDTH);
+    }
+    let ceiling = (group * GROUP_SHARE).clamp(MIN_WIDTH, MAX_WIDTH);
+    width.clamp(MIN_WIDTH, ceiling)
+}
 
 /// Names in the debug-bounds map, so a test can ask a really drawn frame where things are. A
 /// no-op outside test builds.
@@ -40,13 +58,22 @@ pub(super) const RAIL_SELECTOR: &str = "oneterm-tab-rail";
 pub(super) const LIST_SELECTOR: &str = "oneterm-tab-rail-list";
 pub(super) const ROW_SELECTOR: &str = "oneterm-tab-rail-row";
 pub(super) const GRIP_SELECTOR: &str = "oneterm-tab-rail-grip";
+pub(super) const GRIP_GLYPH_SELECTOR: &str = "oneterm-tab-rail-grip-glyph";
 pub(super) const EMPTY_SELECTOR: &str = "oneterm-tab-rail-empty";
+pub(super) const HANDLE_SELECTOR: &str = "oneterm-tab-rail-handle";
+/// The drag handle on the rail's right edge.
+const HANDLE_WIDTH: Pixels = px(4.);
+/// The cursor over the handle, and over the whole window while it is dragged.
+const RESIZE_CURSOR: CursorStyle = CursorStyle::ResizeColumn;
 
 /// Height of the header (`+` and zoom): the strip's height.
 const HEADER_HEIGHT: Pixels = px(32.);
-const ROW_HEIGHT: Pixels = px(32.);
+/// Two lines (`TerminalPanel::title`'s vertical row): the title, then the directory and status.
+pub(super) const ROW_HEIGHT: Pixels = px(TabRowLayout::VERTICAL_ROW_HEIGHT);
 /// The reorder grip: the strip tab's leading padding.
 const GRIP_WIDTH: Pixels = px(12.);
+/// The grip glyph (`Icon::xsmall`).
+const GRIP_GLYPH_SIZE: f32 = 12.;
 const ACCENT_BAR_WIDTH: Pixels = px(2.);
 /// What the drag preview occupies, reported to base so a drop placeholder knows where to fly
 /// in from. The chip is content-sized between a floor and a ceiling; this is a typical size.
@@ -65,6 +92,14 @@ pub(super) fn draws_rail<'a>(
     }
     let mut panels = panels.into_iter().peekable();
     panels.peek().is_some() && panels.all(|name| name == panel_names::TERMINAL)
+}
+
+/// End a drag of the rail's edge: store the width it reached, once. A press that never moved
+/// stores nothing.
+fn finish_resize(resize: &Cell<Resize>, cx: &mut App) {
+    if let Resize::Dragging(width) = resize.replace(Resize::Idle) {
+        UiConfig::set_vertical_tabs_width(width.round().max(0.) as u32, cx);
+    }
 }
 
 /// Whether the displayed tab changed since the last frame, recording `active` as seen: a
@@ -132,6 +167,26 @@ struct RowPlace {
     order: Rc<Vec<PanelId>>,
 }
 
+/// What the group frame decided this frame, read by the two later hooks of the same render
+/// (base calls `frame`, `render_tab_bar`, `content_frame` in that order), so the rail rule and
+/// the width are worked out once per group per frame.
+#[derive(Clone, Copy)]
+struct RailFrame {
+    draws: bool,
+    width: Pixels,
+}
+
+/// Where a drag of the rail's edge is.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Resize {
+    Idle,
+    /// The button went down on the handle and the pointer has not moved yet: a click, which
+    /// stores nothing.
+    Pressed,
+    /// The requested width, from the pointer; applied clamped, stored once on release.
+    Dragging(f32),
+}
+
 /// One tab group's rail state: the list's scroll position and the displayed tab the last frame
 /// drew. Built per group (the dock area asks for one renderer per container), like the kit
 /// strip's own.
@@ -140,6 +195,11 @@ pub(super) struct TabRail {
     last_active_ix: Rc<Cell<Option<usize>>>,
     /// Whether the rows overflowed the list last frame, so the scrollbar's gutter is reserved.
     overflowing: Cell<bool>,
+    frame: Cell<RailFrame>,
+    /// The group's painted bounds last frame, rail included: the bound on the rail's width and
+    /// the origin a drag measures from.
+    group: Rc<Cell<Bounds<Pixels>>>,
+    resize: Rc<Cell<Resize>>,
 }
 
 impl TabRail {
@@ -148,7 +208,116 @@ impl TabRail {
             scroll_handle: ScrollHandle::default(),
             last_active_ix: Rc::new(Cell::new(None)),
             overflowing: Cell::new(false),
+            frame: Cell::new(RailFrame {
+                draws: false,
+                width: px(VerticalTabs::DEFAULT_WIDTH as f32),
+            }),
+            group: Rc::new(Cell::new(Bounds::default())),
+            resize: Rc::new(Cell::new(Resize::Idle)),
         }
+    }
+
+    /// Start a frame of this group: whether it draws the rail (the caller worked that out), and
+    /// the width it draws at, the stored preference or the width being dragged, kept within
+    /// the group's own bound.
+    pub(super) fn begin_frame(&self, draws: bool, cx: &App) {
+        let requested = match self.resize.get() {
+            Resize::Dragging(width) => width,
+            Resize::Idle | Resize::Pressed => UiConfig::read_vertical_tabs(cx).width as f32,
+        };
+        let group = f32::from(self.group.get().size.width);
+        self.frame.set(RailFrame {
+            draws,
+            width: px(clamp_tab_rail_width(requested, group)),
+        });
+    }
+
+    pub(super) fn draws(&self) -> bool {
+        self.frame.get().draws
+    }
+
+    /// The width of this frame's rail, and so the content frame's left margin.
+    pub(super) fn width(&self) -> Pixels {
+        self.frame.get().width
+    }
+
+    /// Measure the group's frame: its painted width bounds the rail, so a window resize, the
+    /// right dock opening or a centre split asks for one more frame to re-apply the clamp. The
+    /// rail's own width is inside the group's, so this cannot feed back.
+    pub(super) fn track_group(&self, frame: Stateful<Div>) -> Stateful<Div> {
+        let group = self.group.clone();
+        frame.on_prepaint(move |bounds, window, _| {
+            if group.replace(bounds).size.width != bounds.size.width {
+                window.request_animation_frame();
+            }
+        })
+    }
+
+    /// The 4 px handle on the rail's right edge. Pressing it arms a drag; the rest is the
+    /// tracker, which sees the pointer wherever it goes.
+    fn handle(&self, cx: &App) -> Stateful<Div> {
+        let resize = self.resize.clone();
+        let ring = cx.theme().ring;
+        div()
+            .id("tab-rail-resize")
+            .debug_selector(|| HANDLE_SELECTOR.to_string())
+            .occlude()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            // Over the rail's 1 px border, which is the rail's outermost pixel.
+            .right(-px(1.))
+            .w(HANDLE_WIDTH)
+            .cursor(RESIZE_CURSOR)
+            .hover(move |style| style.bg(ring))
+            .when(resize.get() != Resize::Idle, |this| this.bg(ring))
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                resize.set(Resize::Pressed);
+                window.refresh();
+            })
+    }
+
+    /// Follows a drag of the handle anywhere in the window (a window-level listener can only be
+    /// registered while painting, as the dock's own resize does): the width tracks the pointer
+    /// in memory, and the release stores the preference once.
+    fn tracker(&self) -> impl IntoElement {
+        let resize = self.resize.clone();
+        let group = self.group.clone();
+        canvas(
+            |_, _, _| (),
+            move |_, (), window, _| {
+                // Held for the whole drag: the pointer leaves the 4 px band at once.
+                window.set_window_cursor_style(RESIZE_CURSOR);
+                window.on_mouse_event({
+                    let resize = resize.clone();
+                    let group = group.clone();
+                    move |event: &MouseMoveEvent, phase, window, cx| {
+                        if !phase.bubble() || resize.get() == Resize::Idle {
+                            return;
+                        }
+                        // The button came up outside the window.
+                        if event.pressed_button != Some(MouseButton::Left) {
+                            finish_resize(&resize, cx);
+                        } else {
+                            let from_left = event.position.x - group.get().origin.x;
+                            resize.set(Resize::Dragging(f32::from(from_left)));
+                        }
+                        window.refresh();
+                    }
+                });
+                window.on_mouse_event({
+                    let resize = resize.clone();
+                    move |_: &MouseUpEvent, phase, window, cx| {
+                        if phase.bubble() && resize.get() != Resize::Idle {
+                            finish_resize(&resize, cx);
+                            window.refresh();
+                        }
+                    }
+                });
+            },
+        )
+        .absolute()
     }
 
     /// The rail for `group`: header, then one row per visible tab, then room to drop a panel
@@ -253,7 +422,7 @@ impl TabRail {
             .top_0()
             .bottom_0()
             .left_0()
-            .w(RAIL_WIDTH)
+            .w(self.width())
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -271,6 +440,10 @@ impl TabRail {
                     .child(list)
                     .vertical_scrollbar(&self.scroll_handle),
             )
+            .child(self.handle(cx))
+            .when(self.resize.get() != Resize::Idle, |this| {
+                this.child(self.tracker())
+            })
             .into_any_element()
     }
 
@@ -384,12 +557,18 @@ impl TabRail {
             .h_full()
             .flex_shrink_0()
             .flex()
-            .items_center()
+            .items_start()
             .justify_center()
             .when_some(drag, |this, drag| {
                 this.cursor_grab()
                     .child(
                         div()
+                            .id(("tab-rail-grip-glyph", ix))
+                            .debug_selector(move || format!("{GRIP_GLYPH_SELECTOR}-{ix}"))
+                            // The glyph is centred on the title line, not on the whole row.
+                            .mt(px(
+                                TabRowLayout::vertical_first_line_centre() - GRIP_GLYPH_SIZE / 2.
+                            ))
                             .opacity(0.)
                             .group_hover(hover_group.clone(), |style| style.opacity(1.))
                             .child(Icon::new(AppIcon::GripVertical).xsmall().text_color(muted)),
@@ -521,6 +700,65 @@ mod tests {
         assert!(!draws_rail(true, true, [panel_names::SSH_CLIENT]));
         assert!(!draws_rail(true, true, [terminal, panel_names::SFTP]));
         assert!(!draws_rail(true, true, [panel_names::SESSION, terminal]));
+    }
+
+    /// The worked examples of `high-level-design.md` § Width, row for row.
+    #[test]
+    fn the_rail_width_is_clamped_to_its_group_as_the_design_works_out() {
+        // (group width, requested, applied)
+        let cases = [
+            (1920., 220., 220.),
+            (1920., 520., 400.),
+            (800., 300., 280.),
+            (600., 220., 210.),
+            (380., 220., 140.),
+            // Not painted yet: only the absolute bounds apply.
+            (0., 100., 140.),
+            (0., 520., 400.),
+            (0., 260., 260.),
+        ];
+        for (group, requested, applied) in cases {
+            let got = clamp_tab_rail_width(requested, group);
+            assert!(
+                (got - applied).abs() < 0.01,
+                "group {group}, requested {requested}: {got} is not {applied}"
+            );
+        }
+    }
+
+    /// The window table of the same section: the right dock at its own ceiling (35 % of the
+    /// window, 240 px floor) leaves the centre groups below.
+    #[test]
+    fn the_rail_width_in_a_window_with_the_right_dock_open() {
+        // (centre groups, each one's width, rail applied to a 220 px preference)
+        let cases = [
+            (1, 650., 220.),
+            (2, 325., 140.),
+            (1, 585., 204.75),
+            (1, 360., 140.),
+        ];
+        for (groups, group, rail) in cases {
+            let got = clamp_tab_rail_width(220., group);
+            assert!(
+                (got - rail).abs() < 0.01,
+                "{groups} group(s) of {group}: {got} is not {rail}"
+            );
+        }
+        // A terminal keeps at least 65 % of its group once the group is 400 px or wider.
+        for group in (400..2000).step_by(7) {
+            let group = group as f32;
+            let rail = clamp_tab_rail_width(400., group);
+            assert!(group - rail >= group * 0.65 - 0.001, "group {group}");
+        }
+    }
+
+    #[gpui::test]
+    fn the_handle_has_the_resize_cursor(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            let mut handle = TabRail::new().handle(cx);
+            assert_eq!(handle.style().mouse_cursor, Some(CursorStyle::ResizeColumn));
+        });
     }
 
     #[test]

@@ -169,6 +169,45 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-
 
 **Verification.** `cargo test -p oneterm-terminal-view`, `-p oneterm-workspace`; clippy; fmt; `check-english`, `check-doc-paths`, `check-theme-contrast`; full `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`); debug app rebuilt for `ui-verifier`.
 
+## Rework 2 2026-10-21 (owner): two-line rows, 64 px, current directory on line 2
+
+Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-10-21 (translated from Vietnamese): "The height of each tab in vertical mode is a bit small, so it looks out of place. Make each tab twice the current height. Show the information on 2 lines. Line 1 is the title. Line 2 shows the current directory aligned left (cut from the LEFT side if too long), and the OSC 7501 status icon aligned right."
+
+**Outcome.** A vertical rail row is 64 px high (the header stays 32 px; the horizontal strip is unchanged). Line 1: the reorder grip (on hover), the channel chips, the recording dot, then the title, which ellipsizes at its end as before. Line 2: the terminal's current directory, left-aligned in muted text and cut at its **start** when too long (`…\src\panel`), then the OSC 7501 status icon right-aligned at the end of the line. Still no close button.
+
+**Assumptions made for the owner (recorded as assumptions, to be confirmed in the walk).**
+
+- (a) An unknown cwd (no OSC 7 yet) shows no path on line 2, only the status icon if any.
+- (b) A **local** tab abbreviates the user's home directory to `~` (`~\src` on a Windows path, `~/src` on a POSIX one); an **SSH** tab shows the remote path exactly as reported.
+- (c) A split tab uses the active Space's cwd (its status icon stays absent, as today).
+- (d) The path updates live: `TerminalView` now emits a `CwdChanged` event on the session's OSC 7 event, and the panel, already subscribed to every leaf, repaints its row.
+
+**Choices left open by the request.**
+
+- *Source.* `TerminalSession::cwd()` (`crates/terminal/src/session.rs`; set by the OSC router from OSC 7 after `TerminalSecurityPolicy::sanitize_cwd` strips controls and bounds the length). Terminal-view reads it through the active Space's session, as `breadcrumb_label` / `local_cwd` do; a new `TerminalPanel::tab_cwd` returns the display text.
+- *Start truncation.* gpui-pre 0.3.9 has `TextOverflow::TruncateStart` (`Styled::text_ellipsis_start`), which the text element measures against the live available width, so the path follows the rail width (including `US-0197`'s resize) with no measuring of our own. No hand-written truncation function; the path element also uses `whitespace_nowrap`, like the title.
+- *Home abbreviation and separators* are a pure string function (`cwd_display`): a drive-letter path is shown with `\` for a local tab, a prefix match on the home directory is made on whole components (`C:\Users\a` is not the home of `C:\Users\ab`), case-insensitive for drive paths only. No `std::path` (code-style: Windows-shaped strings are not built with `Path`).
+- *Geometry.* The row is a column: 10 px top padding, line 1 (24 px), line 2 (20 px), 10 px bottom padding = 64 px. The grip stays the row's leading edge but its glyph is centred on line 1 (shared constants in `oneterm_state::TabRowLayout`, so the shell and the panel cannot drift apart). Line 2 is `text_xs` in `muted.foreground`, a pair the contrast script already measures on both row surfaces (and the hierarchy against `tab.active.foreground`), so no new surface is added.
+- *Gutter.* Unchanged: the list reserves the scrollbar's gutter once rows overflow; the status icon at the end of line 2 rides it.
+
+**Acceptance.**
+
+- [x] Row height is 64 px; the header 32 px (workspace test).
+- [x] Title on line 1, cwd on line 2 below it (terminal-view test: label above path, same left edge).
+- [x] A long cwd is cut at the start (`TextOverflow::TruncateStart` on the path element, and the drawn path is narrower than the full text); the title still ellipsizes at the end.
+- [x] Status icon at the right end of line 2, level with the path; with no cwd the icon is still right-aligned; with no cwd and no status line 2 is empty.
+- [x] Unknown cwd shows no path; a local home path shows `~`; an SSH path is unchanged (pure-function tests).
+- [x] An OSC 7 event repaints the row (event test).
+- [x] 40-tab scroll, scroll into view, gutter clearance, drag priority and the drop line still pass at 64 px (existing workspace tests).
+- [x] The horizontal row is unchanged (existing test).
+- [ ] On screen, by `ui-verifier`: both themes, the two lines, start truncation while the path changes and while the window narrows, `~` on a local tab, a remote path on an SSH tab, the grip aligned to line 1, the icon clear of the scrollbar with 40 tabs.
+
+**Evidence.** Tests: `oneterm-terminal-view` `the_vertical_row_shows_the_title_then_the_directory_and_the_status`, `a_long_directory_is_cut_at_its_start_and_follows_the_width` (the path element asks for `TruncateStart`; its drawn width shrinks with 900 / 220 / 160 px slots), `the_directory_line_abbreviates_the_local_home_only` (pure function), `a_reported_directory_repaints_the_row`, `cwd_event_emits_cwd_changed`, and the reworked `the_vertical_row_has_no_close_button_and_its_status_icon_trails_the_label` (the icon now on line 2); `oneterm-workspace` `the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it` (64 px rows) and `the_grip_glyph_sits_on_the_title_line_and_the_header_keeps_its_height`; `oneterm-state` `the_vertical_row_is_two_lines_between_equal_padding`. The fake session got `FakeSessionProbe::set_cwd` for these. Gate in the worktree: `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`, `cargo test -p oneterm-terminal-view` (412 passed), `-p oneterm-state` (76), `-p oneterm-workspace tab_rail` (18), `check-doc-paths`, `check-english`. The full `pwsh scripts/ci-local.ps1` was run once after `US-0197` (owner request): all checks passed, 5084 tests passed, 0 failed, 33 ignored (`US-0197` packet, Evidence). Debug app rebuilt (`target\debug\oneterm.exe`). No UI verdict here.
+
+**Documentation.** `high-level-design.md` (Rail anatomy rows, row content, wireframe, Interactions rows), `IN-0055.md` (walk sentence), `docs/gui-layout.md` "Vertical tabs".
+
+**Verification.** `cargo test -p oneterm-terminal-view`, `-p oneterm-workspace`, `-p oneterm-state`; clippy; fmt; the doc and contrast scripts; the full `pwsh scripts/ci-local.ps1` once after `US-0197` (owner request: one full gate at the end of both parts).
+
 ## Handoff
 
-Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0196` in the intake. `US-0197` (resize, `clamp_tab_rail_width`) and `US-0198` (collapse) build on `tab_rail.rs` and the stored `vertical_tabs` fields.
+Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0196` in the intake. `US-0197` (resize, `clamp_tab_rail_width`, done) and `US-0198` (collapse) build on `tab_rail.rs` and the stored `vertical_tabs` fields.

@@ -22,6 +22,26 @@ pub enum TabRowLayout {
 
 impl Global for TabRowLayout {}
 
+/// The vertical row's geometry in logical pixels. The panel draws the row and the rail draws the
+/// grip beside it, so both read the same numbers: two lines (the title, then the directory and
+/// the status icon) between equal padding.
+impl TabRowLayout {
+    /// Height of one row of the vertical rail.
+    pub const VERTICAL_ROW_HEIGHT: f32 = 64.0;
+    /// Padding above the first line and below the second.
+    pub const VERTICAL_ROW_PADDING: f32 = 10.0;
+    /// Height of the title line.
+    pub const VERTICAL_FIRST_LINE_HEIGHT: f32 = 24.0;
+    /// Height of the directory and status line.
+    pub const VERTICAL_SECOND_LINE_HEIGHT: f32 = 20.0;
+
+    /// Distance from the top of a vertical row to the middle of its title line, where the
+    /// rail centres its reorder grip.
+    pub const fn vertical_first_line_centre() -> f32 {
+        Self::VERTICAL_ROW_PADDING + Self::VERTICAL_FIRST_LINE_HEIGHT / 2.0
+    }
+}
+
 impl TabRowLayout {
     /// The layout the row being built now should take.
     pub fn current(cx: &App) -> Self {
@@ -67,6 +87,17 @@ impl Drop for TabRowScope<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_vertical_row_is_two_lines_between_equal_padding() {
+        assert_eq!(
+            2.0 * TabRowLayout::VERTICAL_ROW_PADDING
+                + TabRowLayout::VERTICAL_FIRST_LINE_HEIGHT
+                + TabRowLayout::VERTICAL_SECOND_LINE_HEIGHT,
+            TabRowLayout::VERTICAL_ROW_HEIGHT
+        );
+        assert_eq!(TabRowLayout::vertical_first_line_centre(), 22.0);
+    }
 
     #[gpui::test]
     fn the_layout_is_horizontal_except_while_a_rail_draws(cx: &mut gpui::TestAppContext) {
