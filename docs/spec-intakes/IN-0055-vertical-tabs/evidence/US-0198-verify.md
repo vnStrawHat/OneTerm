@@ -116,3 +116,24 @@ Verdict: the UI meets the requirements for everything walkable (partly: the item
 - U1 on screen: right-click a collapsed cell, wait past the tooltip delay, confirm no tooltip over the menu; dismiss with Escape without moving, move out and back, confirm the tooltip returns.
 - U2 on screen: 40 expanded tabs, dividers reach the rail's right edge, status icons clear the thumb.
 - A1 on screen: 40 tabs, select the last, collapse and expand, the selected row stays in view.
+
+## UI re-walk (rework head 11717240, ui-verifier, 2026-10-21)
+
+Screenshots `uiv198b-*` in the scratchpad `uiv198-shots\`. Dark theme, 1280x800.
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| U1 tooltip gone while the right-click menu is open, "Rename..." not covered | PASS | `01`, `02` (menu fully visible, Rename... readable, no tooltip) |
+| U1 Escape dismiss, move off and back: tooltip works again | PASS | `03`, `04` |
+| U1 click-away dismiss, tooltip works again | PASS | `05`, `06` |
+| U2 expanded, 40 tabs: divider spans full rail width | PASS | `12`, `33`: divider pixels (62,68,81) at x=150..227 on every row; rows 64 px apart |
+| U2 row content not under the scrollbar thumb | PASS | thumb x~217..222, row text ends x~134 |
+| A1 select a tab, Expand: selected row visible; collapse again: still visible | PASS (with the D3 caveat) | selected via the expanded rail (`34`), collapse shows it (`35`, tab 12 with accent); expand/collapse with the last tab selected keeps it visible (`09`, `10`, `12`, `13`, `33`) |
+| Expanded spacing (9 px + 1 px divider), collapsed header buttons | PASS | `33`; header column unchanged (`07`, `28`) |
+| Light theme | NOT RE-WALKED (no light change in this rework; `19`..`24` of the first walk stand) |
+
+### New defect
+- **D3 (high, probably a regression or a latent bug of the collapsed rail): in a collapsed rail that overflows (18 and 40 tabs), clicking a cell does not select the tab.** Expected: the clicked tab becomes active (accent bar, terminal switches). Observed: the active tab stays the same (`22`, `26`, `27`: 34 stayed active after clicks on 35, 33 and 28; `29`..`32`: 18 stayed active after clicking 3; `37`: 12 stayed active after clicking 14), and in several cases the list scrolled by about a page after the click (`21`, `22`, `24`, `27`, `29`). The same click selects normally with 5 tabs in the collapsed rail (`38`) and in the expanded rail with 40 tabs (`34`). Likely cause to check (not a code review): with no gutter reserved, the overlay scrollbar's track may take presses over the whole cell width; a click that pages the list instead of selecting is consistent with the jumps. Steps: `vertical_tabs.enabled` and `collapsed` true, add 18 or more tabs, click any cell other than the active one.
+- Because of D3 A1 was exercised by selecting in the expanded rail; selecting tab 39 by clicking in the collapsed rail (the owner's flow) is blocked by D3.
+
+Verdict: partly. U1 and U2 pass; D3 needs a fix and a re-walk.
