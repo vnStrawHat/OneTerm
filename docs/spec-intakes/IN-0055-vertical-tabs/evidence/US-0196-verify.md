@@ -224,3 +224,31 @@ Not re-run: the full `ci-local.ps1` (recorded in the packet), the app binary (di
 ### Findings
 
 None. For the `ui-verifier` walk the packet already lists: no `x` in any rail row in a light and a dark theme, the status icon at the right end for each state, the label ellipsis with and without a status, the icon clear of the scrollbar with 40 tabs, middle-click and the menu closing a tab, the strip unchanged.
+
+## UI walk (owner rework 2026-10-21, ui-verifier, head 99e63050)
+
+### UI verification: US-0196 owner rework (× removed from rail rows), head 99e63050
+
+Build `us0196-bin3\oneterm.exe`, fresh private profile (label o1), pwsh 7 driver, shots `us0196o-*.png` (small crops).
+
+**Environment limit:** every shell started in this environment exits within seconds ("terminal session is closed" in the log, no cmd/pwsh child under the app), so no OSC 7501 state, chip-with-status, recording dot or SSH could be produced. All status-icon items are NOT WALKED. This is not a verdict on the rework; the owner (or a session where local shells stay alive) must walk them.
+
+| # | Item | Verdict | Evidence |
+|---|------|---------|----------|
+| 1 | No × in any rail row, light and dark | PASS | Dark (Zed One Dark): idle, hovered, selected rows (`02`); light (Zed One Light): idle, hovered, selected (`03`). Only the 12 px grip shows on hover. |
+| 2 | Status icon at the right end for Working/Blocked/Done/Error, not before the label | NOT WALKED | No status producible. Idle rows show nothing before the label (`02`, `03`). |
+| 3 | Label full width when no status; ellipsis before the icon when status | PARTLY | No-status case PASS: a 46-char title ellipsizes at the far right of the row (`03`, `04`), a short one is unaffected. With-status case NOT WALKED. |
+| 4 | Chips, recording dot, status icon on one row | NOT WALKED | Needs status; chip alone was verified in the previous walk. |
+| 5 | 40 tabs: status icons clear of scrollbar/gutter | NOT WALKED (icons) | 40 tabs open and scroll (`13`); icon clearance not testable. The earlier re-walk showed the gutter and scrollbar with no trailing element. |
+| 6 | Middle-click closes; Close / Close Others / Close Tabs Below | PASS | Middle-click removed the row (`04`); menu lists Rename, Duplicate, Close, Close Others, Close Tabs Below (`05`); Close removed the row (`06`); Close Others confirm then 1 row left (`07`, `08`); Close Tabs Below after adding tabs left 1 row (`09`; the added rows were not individually counted before the close). |
+| 7 | Drag label/trailing icon into an empty Space; grip reorders; icon tooltip | PARTLY | Label drag into a Space moved the tab out of the rail (`10`, `11`; dragging the active tab that owns the Space does nothing, as before); grip reorder to the bottom works (`12`). Dragging from the trailing icon and the icon tooltip: NOT WALKED. |
+| 8 | Switch off: strip as before (icon before label, × at end), × closes; live both ways | PARTLY | Live flip off and on again worked, strip has × at each tab's end (`14`), rail returned (`16`). The × click was sent (`15`) but the strip scrolled, so the closed tab was not individually confirmed. Status icon before the label: NOT WALKED. |
+| 9 | Split tab shows no status icon | NOT WALKED | No status producible; the split tab row is plain (`10`). |
+
+### Defects
+None found in what could be walked.
+
+### Needs an owner or a working-shell session
+Items 2, 4, 5 (icon part), 7 (icon drag, tooltip), 8 (icon before label), 9, the recording dot, and confirming the strip × close.
+
+Coordinator: merged on the advisor PASS. The status-icon items were not walkable (local shells exit at once under the scratch profile); the icon slot is pinned by the terminal-view layout test, and the owner checks it on screen with scripts/osc7501-test.sh.
