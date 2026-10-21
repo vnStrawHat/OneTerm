@@ -186,3 +186,30 @@ Screenshots `uiv198c-*` in the scratchpad `uiv198-shots\`. Cells span x=8..50 in
 - **D4 (low): the 4 px scrollbar thumb cannot be dragged** (press at x=47 on the thumb does not move the list), so the thin bar is display-only; the wheel works.
 
 Verdict: partly. Selecting at the left and centre works and expand/collapse keeps the row visible; the right third of each cell still swallows presses.
+
+## Advisor re-review 3 (no scrollbar in the collapsed strip; 2026-10-21)
+
+- Reviewed: `git diff fe4d01b6..d044d982` (`d044d982`: `narrow_scrollbar` and `COLLAPSED_SCROLLBAR_WIDTH` deleted, the kit scrollbar mounted only `when(!collapsed)`, the widened test, the records, and the folded-in `a9c40611` UI re-walk 2 evidence). No conflict markers under `crates/`, `docs/`, `scripts/` (script scan). Worktree clean before and after the experiment.
+- Gate re-run here (`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`): four-crate tests 56 + 77 + 415 + 109 passed, 0 failed; clippy on the four crates `--all-targets -- -D warnings` clean (so no dead code: `Scrollbar` is still imported for `Scrollbar::width()` at `tab_rail.rs:714`, the expanded gutter).
+- **Does the test fail pre-fix?** Yes. With `tab_rail.rs` checked out from `8da2c685` (the 6 px track) and the new test from `d044d982`, `a_click_across_a_cell_of_an_overflowing_collapsed_rail_selects_it` fails at `tab_rail_tests.rs:1317`: `a click 37 px across the cell: left 7, right 9`, i.e. the first pixel of the 6 px track (43 - 6 = 37; the packet says 39, see nit below). File restored to `d044d982`, nothing committed. With the fix every pixel 0..42 selects.
+
+### Verdict
+
+**PASS.** The strip scrolls without the bar (gpui's own wheel path), the expanded rail is untouched, nothing is left dead, and the records describe the shipped behaviour; two wording nits.
+
+### Checks
+
+- **Wheel scrolling needs no scrollbar element.** The list is a base `Tabs` with `.overflow_y_scroll().track_scroll(&self.scroll_handle)` (`tab_rail.rs`), which is gpui's `Interactivity` (`div.rs:1535-1537`, `:1549-1552`). gpui registers the `ScrollWheelEvent` listener itself in `paint_scroll_listener` for any element with a scroll offset (`div.rs:3331-3339`): it moves `scroll_offset` by `event.delta.pixel_delta(line_height)` when the element's hitbox should handle the scroll, and the offset is clamped in prepaint (`:2481-2485`). The kit's `Scrollbar` only reads and writes the same `ScrollHandle`; `vertical_scrollbar` is an added overlay child (`scrollable.rs:24`, `:280-288`), not the scroll container, so removing it removes nothing from the wheel path. The coder's test proves it in the same frame set: a `ScrollWheelEvent` of -300 px at the list's centre moves the cells before any click.
+- **Auto-reveal still covers the keyboard-less case.** `scroll_to_item` on a tab change and on a collapse / expand (`tab_rail.rs`, `tab_changed || layout_changed`, from the A1 fix) is unchanged; `forty_collapsed_cells_scroll_without_a_gutter_and_reveal_the_active_one` still passes.
+- **Expanded rail unchanged.** The only edit in `render` is the removal of the `when(collapsed, ..)` arm; the `when(!collapsed, vertical_scrollbar)` arm, the gutter in each row, the handle and the tracker are as at `8da2c685`. `forty_tabs_scroll_and_the_active_one_is_brought_into_view` and the resize tests pass.
+- **The verifier's "x = 43..50 dead" reading.** Consistent with the coder's explanation: the walk's table says the cells span window x = 8..50 and the driver posts client coordinates; client 37..42 is the 6 px track (window 45..50, which paged the list in the walk), client 43 is the rail's 1 px border and 44+ the terminal, where a click selects nothing and moves nothing. So the walk saw one hit-eater, the track, plus the frame offset, not a second one. The new test's pixel sweep (0..42) rules out any other eater inside the cell.
+- **Records.** `docs/gui-layout.md:154` and the packet's Rework 3 say the strip draws no scrollbar, wheel / touchpad and auto-reveal scroll it, D4 is moot with it, and the expanded rail keeps the bar. The packet's "Scrollbar" plan line is marked superseded.
+
+### Nits (wording only)
+
+- **R3-N1** — `US-0198-collapsible-rail.md` Rework 3 "Test" bullet says the test fails at 39 px against the 6 px track; it fails at 37 px (the track is x = 37..42 of 43). One number.
+- **R3-N2** — `docs/gui-layout.md:154` and the Rework 2 D3 bullet (`:129`) still say the kit bar "is shown after a wheel scroll or while hovered"; with OneTerm's `ScrollbarMode::Always` (`crates/theme/src/theme.rs:299`) it is always shown. Now moot for the strip (no bar) and harmless for the expanded rail, so optional; the earlier D3-N1 note is closed by the removal.
+
+### Still by hand (ui-verifier)
+
+- 40 collapsed tabs: wheel scrolls the strip; every cell selects at its left, centre and right edge; collapse / expand keeps the displayed tab in view; no thumb drawn in the strip; the expanded rail's scrollbar still drags.
