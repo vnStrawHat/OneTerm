@@ -320,3 +320,24 @@ No defect in the code; two points for the owner (1 and 3 below). No pinned test 
 1. Confirm the zoom consequence in point 1 (key binding only while the rail is drawn), or pick one of the two small affordances.
 2. Decide the icon question in point 3 after checking the Windows Animation effects switch.
 3. The ui-verifier walk items the packets list: header in both states and two themes, 40 tabs without a scrollbar, the status icon clear of the row's edge, the status-bar button next to the clock (two themes, tooltip, elevated window, narrow window).
+
+## UI verification (rework 4)
+
+Build: copy of the debug binary at head e5f98b62, private profile and cwd, window 1280x800 (also resized down to 900 and 640; the window will not go below ~656 px). Coordinates below are screenshot (full-window) space unless marked client; client = screenshot x minus 8, y unchanged. Screenshots: `<scratchpad>\uivrw4-shots\uivrw4-*.png`.
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1 | Rail header holds only `+`, 32 px (y 34..65); expanded `+` right-aligned (x 209), collapsed centred (x 28); no zoom button in rail; strip (Vertical Tabs off) still has zoom | PASS | 01-launch, 09-collapsed, 17-vt-off |
+| 2 | Status bar button first in the left group before the clock; tooltip "Collapse Tabs" (PanelLeftClose) / "Expand Tabs" (PanelLeftOpen); click flips rail live; hidden when Vertical Tabs off | PASS | 08, 10, crop-08, crop-10, 17-vt-off |
+| 2b | Narrow widths: nothing overlaps at 900 / 656 expanded and collapsed. The centre breadcrumb could not be exercised (child shells die here, no cwd) | PASS (breadcrumb NOT WALKED) | 12-narrow-exp-*, 13-narrow-coll-* |
+| 3 | 40 tabs: no scrollbar expanded or collapsed; wheel scrolls; selected tab revealed after expanding (tab 40 at bottom) and collapsing (17 and 29 visible); row content uses the full width | PASS | 05, 06, 09, 13-narrow-coll-640 |
+| 3b | Clicks select the right row: expanded at 5 px from the right (client x 214), centre, left (client x 3); collapsed at client x 38, 20, 1, 42 | PASS | 07-click-*, 11-collclick-* |
+| 4 | Collapsed persists across restart (`ui_config.json` has `collapsed: true`; relaunch shows the strip); light theme collapsed and expanded legible, tooltip themed | PASS | 14, 15, 16 |
+
+Defects: none blocking.
+
+1. (Info, by design) Expanded rail: a click at client x 216 (screenshot x 224), inside the 4 px resize handle over the right border, does not select a row. 5 px in works.
+
+Not walked: OSC 7501 icon and animation, cwd line, centre breadcrumb yielding to the buttons (no cwd without a live shell), hover-only states beyond tooltips, High-DPI.
+
+Owner-only checks: with a real shell, narrow the window until the breadcrumb is long and confirm it truncates before touching the new button and the clock; check the OSC 7501 icon and cwd line in a row; try keyboard focus on the status bar button.

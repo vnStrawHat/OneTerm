@@ -250,6 +250,8 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner requests, 2026
 - What stops it is gpui's reduced-motion flag. `gpui-base` (`reduce_motion.rs`, in the dependency since GPUI Kit 0.7.0, 2026-09-28) reads the Windows **Animation effects** switch (`SPI_GETCLIENTAREAANIMATION`) at start-up and sets `App::reduce_motion`; `AnimationElement::request_layout` (`gpui-pre` `elements/animation.rs:407`) then draws one static frame and asks for no more. On this machine that switch reads **off** (checked with `SystemParametersInfo`), and the US-0193 walk already recorded "the icon was static on screen ... Windows animation effects off". So the icon is static here in every layout and animates when the Windows switch is on (remote-desktop sessions also turn animations off).
 - The two readings: if the owner wants the animation back, turn Windows Settings > Accessibility > Visual effects > Animation effects on (no code change; the app follows the system), or decide OneTerm should ignore the system switch for this icon (a deliberate departure from the accessibility default). If the owner wants it to stay static, it already is on this machine, and a setting to force it would be new scope.
 
+**Owner ruling on item 2, 2026-10-21:** keep it static. OneTerm keeps following the Windows Animation effects switch (gpui reduced motion); no code change. To see the icon move, turn Animation effects on and restart OneTerm.
+
 **Choices left open by the requests.**
 
 - *Header height collapsed.* Fixed at the expanded header's 32 px (`HEADER_HEIGHT`), not the old stacked floor.
