@@ -1060,14 +1060,18 @@ impl gpui::Render for TabRowHost {
 fn tab_row_window(
     cx: &mut TestAppContext,
     layout: oneterm_state::TabRowLayout,
-) -> (Rc<std::cell::Cell<usize>>, &mut VisualTestContext) {
+) -> (
+    Rc<std::cell::Cell<usize>>,
+    oneterm_terminal::test_support::FakeSessionProbe,
+    &mut VisualTestContext,
+) {
     cx.update(gpui_component::init);
     cx.update(crate::init);
     cx.update(oneterm_settings::TerminalSettings::init);
     cx.update(oneterm_state::AppState::init);
     let dropped = Rc::new(std::cell::Cell::new(0));
     let counted = dropped.clone();
-    let (first_session, _) = FakeTerminalSession::boxed(24, 80, "first");
+    let (first_session, first_probe) = FakeTerminalSession::boxed(24, 80, "first");
     let (second_session, _) = FakeTerminalSession::boxed(24, 80, "second");
     let (_host, cx) = cx.add_window_view(move |window, cx| {
         let dock_area = cx.new(|cx| DockArea::new("tab-row-test", None, window, cx));
@@ -1091,7 +1095,48 @@ fn tab_row_window(
             dropped: counted,
         }
     });
-    (dropped, cx)
+    (dropped, first_probe, cx)
+}
+
+/// The bounds of the drawn row and of the parts of it a test asks about.
+struct DrawnRow {
+    row: gpui::Bounds<gpui::Pixels>,
+    label: gpui::Bounds<gpui::Pixels>,
+    status: Option<gpui::Bounds<gpui::Pixels>>,
+    close: Option<gpui::Bounds<gpui::Pixels>>,
+}
+
+/// Draw a frame and read where the row and its parts landed.
+fn drawn_row(cx: &mut VisualTestContext) -> DrawnRow {
+    use crate::panel::tab_title::{
+        TAB_CLOSE_SELECTOR, TAB_LABEL_SELECTOR, TAB_ROW_SELECTOR, TAB_STATUS_SELECTOR,
+    };
+
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    DrawnRow {
+        row: cx
+            .debug_bounds(TAB_ROW_SELECTOR)
+            .expect("the tab row is drawn"),
+        label: cx
+            .debug_bounds(TAB_LABEL_SELECTOR)
+            .expect("the label is drawn"),
+        status: cx.debug_bounds(TAB_STATUS_SELECTOR),
+        close: cx.debug_bounds(TAB_CLOSE_SELECTOR),
+    }
+}
+
+/// Make the row's terminal report a finished program, so its tab shows a status icon.
+fn report_done(
+    probe: &oneterm_terminal::test_support::FakeSessionProbe,
+    cx: &mut VisualTestContext,
+) {
+    probe
+        .emit(oneterm_terminal::SessionEvent::ProgramStatus(Some(
+            oneterm_terminal::ProgramState::Done,
+        )))
+        .expect("event channel must accept the status");
+    cx.run_until_parked();
 }
 
 /// In the vertical rail the row fills the width it is given, and the gestures that start a
@@ -1102,12 +1147,8 @@ fn the_vertical_row_fills_its_width_and_only_its_content_drags_the_tab(cx: &mut 
     use gpui::{Modifiers, MouseButton, point, px};
     use oneterm_state::TabRowLayout;
 
-    let (dropped, cx) = tab_row_window(cx, TabRowLayout::Vertical);
-    cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
-    let row = cx
-        .debug_bounds(crate::panel::tab_title::TAB_ROW_SELECTOR)
-        .expect("the tab row is drawn");
+    let (dropped, _, cx) = tab_row_window(cx, TabRowLayout::Vertical);
+    let row = drawn_row(cx).row;
     assert_eq!(
         row.size.width,
         px(220.),
@@ -1131,22 +1172,62 @@ fn the_vertical_row_fills_its_width_and_only_its_content_drags_the_tab(cx: &mut 
     cx.simulate_mouse_up(space, MouseButton::Left, Modifiers::none());
     assert_eq!(dropped.get(), 1, "it is the tab drag a Space accepts");
 
-    // The `x` (right end of the row, inside the 4 px the vertical row keeps clear) starts
-    // no drag.
-    let close = point(row.right() - px(4. + 8.), row.center().y);
-    cx.simulate_mouse_down(close, MouseButton::Left, Modifiers::none());
+    // The right end of the row, where the strip has its `x`, is row content too: it starts
+    // the same tab drag.
+    let end = point(row.right() - px(4. + 8.), row.center().y);
+    cx.simulate_mouse_down(end, MouseButton::Left, Modifiers::none());
     cx.simulate_mouse_move(
-        close + point(px(0.), px(6.)),
+        end + point(px(0.), px(6.)),
         MouseButton::Left,
         Modifiers::none(),
     );
     cx.simulate_mouse_move(space, MouseButton::Left, Modifiers::none());
     assert!(
-        !cx.update(|_, cx| cx.has_active_drag()),
-        "the x starts neither drag"
+        cx.update(|_, cx| cx.has_active_drag()),
+        "the trailing end of a vertical row drags the tab"
     );
     cx.simulate_mouse_up(space, MouseButton::Left, Modifiers::none());
-    assert_eq!(dropped.get(), 1);
+    assert_eq!(dropped.get(), 2);
+}
+
+/// A vertical row has no close button; its status icon is the last thing in it, after the
+/// label, and with no status the label keeps the whole width (`US-0196` rework).
+#[gpui::test]
+fn the_vertical_row_has_no_close_button_and_its_status_icon_trails_the_label(
+    cx: &mut TestAppContext,
+) {
+    use gpui::px;
+    use oneterm_state::TabRowLayout;
+
+    let (_, probe, cx) = tab_row_window(cx, TabRowLayout::Vertical);
+
+    // No status: nothing at the end, the label runs to the row's 4 px right padding.
+    let bare = drawn_row(cx);
+    assert!(bare.close.is_none(), "a vertical row draws no close button");
+    assert!(bare.status.is_none());
+    assert!(
+        bare.label.right() >= bare.row.right() - px(5.),
+        "the label {:?} keeps the full width of the row {:?}",
+        bare.label,
+        bare.row
+    );
+
+    // A status: the icon sits right of the label, inside the row, at its trailing end.
+    report_done(&probe, cx);
+    let shown = drawn_row(cx);
+    assert!(shown.close.is_none(), "a status brings no close button");
+    let status = shown.status.expect("the status icon is drawn");
+    assert!(
+        status.left() >= shown.label.right(),
+        "the icon {status:?} must follow the label {:?}",
+        shown.label
+    );
+    assert!(status.right() <= shown.row.right());
+    assert!(
+        status.right() >= shown.row.right() - px(8.),
+        "the icon {status:?} must sit at the trailing end of the row {:?}",
+        shown.row
+    );
 }
 
 /// The strip's row keeps its content-sized shape: the vertical variant is opt-in.
@@ -1155,15 +1236,27 @@ fn the_horizontal_row_is_content_sized_as_before(cx: &mut TestAppContext) {
     use gpui::px;
     use oneterm_state::TabRowLayout;
 
-    let (_, cx) = tab_row_window(cx, TabRowLayout::Horizontal);
-    cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
-    let row = cx
-        .debug_bounds(crate::panel::tab_title::TAB_ROW_SELECTOR)
-        .expect("the tab row is drawn");
+    let (_, probe, cx) = tab_row_window(cx, TabRowLayout::Horizontal);
+    let row = drawn_row(cx).row;
     assert!(
         row.size.width >= px(100.) && row.size.width <= px(220.),
         "the strip tab keeps its 100-220 px band, got {:?}",
         row.size.width
+    );
+
+    // The strip keeps its order: status icon, label, then the close button.
+    report_done(&probe, cx);
+    let drawn = drawn_row(cx);
+    let status = drawn.status.expect("the status icon is drawn");
+    let close = drawn.close.expect("the strip tab keeps its close button");
+    assert!(
+        status.right() <= drawn.label.left(),
+        "the status icon {status:?} precedes the label {:?}",
+        drawn.label
+    );
+    assert!(
+        close.left() >= drawn.label.right(),
+        "the close button {close:?} follows the label {:?}",
+        drawn.label
     );
 }

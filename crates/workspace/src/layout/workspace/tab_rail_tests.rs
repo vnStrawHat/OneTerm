@@ -39,7 +39,7 @@ struct Report {
 struct Probe {
     name: &'static str,
     label: SharedString,
-    /// Draw a title element of its own (a draggable row holding a close button) instead of
+    /// Draw a title element of its own (a draggable row ending in a status icon) instead of
     /// offering a short name, the way the terminal panel's tab row is built.
     title_row: bool,
     report: Report,
@@ -98,7 +98,7 @@ impl Panel for Probe {
         let started = self.report.title_drags.clone();
         let label = self.label.clone();
         let selector = format!("probe-row-{label}");
-        let close = format!("probe-close-{label}");
+        let status = format!("probe-status-{label}");
         h_flex()
             .id(SharedString::from(selector.clone()))
             .debug_selector(move || selector.clone())
@@ -110,13 +110,13 @@ impl Panel for Probe {
                 cx.new(|_| drag.clone())
             })
             .child(div().flex_1().child(label))
+            // Like the real row's trailing status icon: plain row content, so a drag that starts
+            // on it is the row's own.
             .child(
                 div()
-                    .id("probe-close")
-                    .debug_selector(move || close.clone())
-                    .size_4()
-                    // Like the real `x`: it stops left mouse-down, so neither drag starts.
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+                    .id("probe-status")
+                    .debug_selector(move || status.clone())
+                    .size_4(),
             )
     }
 
@@ -548,8 +548,8 @@ fn forty_tabs_scroll_and_the_active_one_is_brought_into_view(cx: &mut TestAppCon
     let list = bounds_of(LIST_SELECTOR, cx).expect("the list is drawn");
     let first = row(0, cx).unwrap();
     let last = row(39, cx).unwrap();
-    // The overflowing list leaves the scrollbar's gutter free of rows (their close buttons
-    // would sit under it).
+    // The overflowing list leaves the scrollbar's gutter free of rows (their trailing status
+    // icons would sit under it).
     assert!(
         first.right() <= list.right() - gpui_component::scroll::Scrollbar::width(),
         "row {first:?} must clear the scrollbar gutter of the list {list:?}"
@@ -608,11 +608,10 @@ fn zoom_keeps_the_rail_and_its_button_restores(cx: &mut TestAppContext) {
 }
 
 /// Drag priority (`IN-0055` HLD § Interactions): the title row's own drag wins over the row's
-/// reorder drag, the grip starts the reorder, and the `x` starts neither.
+/// reorder drag (also from the trailing status icon, which is row content), and only the grip
+/// starts the reorder.
 #[gpui::test]
-fn the_title_row_drags_into_a_space_the_grip_reorders_and_the_close_button_starts_neither(
-    cx: &mut TestAppContext,
-) {
+fn the_title_row_drags_into_a_space_and_only_the_grip_reorders(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     set_centre(
@@ -641,11 +640,12 @@ fn the_title_row_drags_into_a_space_the_grip_reorders_and_the_close_button_start
         "no reorder from the title row"
     );
 
-    // The close button starts no drag at all.
-    let close = bounds_of("probe-close-a", cx).unwrap();
-    drag_to(close.center(), target, cx);
-    assert!(!has_active_drag(cx), "the close button starts no drag");
-    assert_eq!(report.title_drags.get(), 1);
+    // The trailing status icon is part of the title row: its drag is the row's own, and it
+    // reorders nothing either.
+    let status = bounds_of("probe-status-a", cx).unwrap();
+    drag_to(status.center(), target, cx);
+    assert!(has_active_drag(cx), "the status icon is row content");
+    assert_eq!(report.title_drags.get(), 2, "it is the title row's drag");
     release(target, cx);
     assert_eq!(centre_tabs(&window.area, cx).0, original);
 
@@ -655,7 +655,7 @@ fn the_title_row_drags_into_a_space_the_grip_reorders_and_the_close_button_start
     let first = row(0, cx).unwrap().center();
     drag_to(grip.center(), first, cx);
     assert!(has_active_drag(cx), "the grip starts a drag");
-    assert_eq!(report.title_drags.get(), 1, "not the title row's drag");
+    assert_eq!(report.title_drags.get(), 2, "not the title row's drag");
     release(first, cx);
     let (reordered, _) = centre_tabs(&window.area, cx);
     assert_eq!(
