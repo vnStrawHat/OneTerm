@@ -1580,3 +1580,34 @@ fn the_horizontal_row_is_content_sized_as_before(cx: &mut TestAppContext) {
         drawn.label
     );
 }
+
+/// The working icon spins in the strip, the vertical row and the collapsed cell alike: each
+/// draw of a live row asks for the next frame.
+#[gpui::test]
+fn the_working_icon_animates_in_every_row_layout(cx: &mut TestAppContext) {
+    use oneterm_state::TabRowLayout;
+    for layout in [
+        TabRowLayout::Horizontal,
+        TabRowLayout::Vertical,
+        TabRowLayout::Collapsed(1),
+    ] {
+        let (_, probe, cx) = tab_row_window(cx, layout);
+        probe
+            .emit(oneterm_terminal::SessionEvent::ProgramStatus(Some(
+                oneterm_terminal::ProgramState::Working,
+            )))
+            .expect("event channel must accept the status");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds(crate::panel::tab_title::TAB_STATUS_SELECTOR)
+                .is_some(),
+            "{layout:?}: the status icon is drawn"
+        );
+        let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+        assert!(
+            frames > 0,
+            "{layout:?}: no frame requested, the icon is static"
+        );
+    }
+}

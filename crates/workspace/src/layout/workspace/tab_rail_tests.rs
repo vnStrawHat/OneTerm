@@ -19,7 +19,7 @@ use oneterm_state::{TabRowLayout, panel_names};
 
 use super::tab_rail::{
     COLLAPSED_ROW_HEIGHT, EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, HANDLE_SELECTOR,
-    LIST_SELECTOR, RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
+    HEADER_SELECTOR, LIST_SELECTOR, RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
 };
 use super::{MAIN_DOCK_VERSION, dock_skin};
 
@@ -38,6 +38,9 @@ struct Report {
     /// What the row layout was while its title was built.
     title_layout: Rc<Cell<Option<TabRowLayout>>>,
 }
+
+/// The probe's header `+`.
+const PLUS_SELECTOR: &str = "probe-plus";
 
 /// A panel that records the box its tab group gave it, drawn under any registered name.
 struct Probe {
@@ -124,8 +127,13 @@ impl Panel for Probe {
             )
     }
 
-    // Like the terminal panel: the toolbar offers zoom, and the content frame adds no top
-    // padding for several tabs.
+    // Like the terminal panel: the header's `+`.
+    fn title_suffix(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<impl IntoElement> {
+        Some(div().debug_selector(|| PLUS_SELECTOR.to_string()).size_5())
+    }
+
+    // Like the terminal panel: the toolbar offers zoom (the rail draws no button for it), and
+    // the content frame adds no top padding for several tabs.
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         Some(PanelControl::Both)
     }
@@ -456,7 +464,7 @@ fn the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it(cx: &mut TestAppC
         rows[0].top() > rail.top(),
         "the header sits above the first row"
     );
-    // Rows that fit leave no scrollbar gutter.
+    // Rows span the list.
     let list = bounds_of(LIST_SELECTOR, cx).unwrap();
     assert_eq!(rows[0].right(), list.right());
     // A 1 px divider sits on each row's bottom edge, inside the 64 px: the row's content box
@@ -579,14 +587,13 @@ fn forty_tabs_scroll_and_the_active_one_is_brought_into_view(cx: &mut TestAppCon
     let list = bounds_of(LIST_SELECTOR, cx).expect("the list is drawn");
     let first = row(0, cx).unwrap();
     let last = row(39, cx).unwrap();
-    // The overflowing list leaves the scrollbar's gutter free of row content (the trailing
-    // status icons would sit under it), but the row itself, and so its divider, spans the
-    // whole rail.
+    // The rail draws no scrollbar (owner request), so no gutter is left free: the row spans the
+    // list and its content reaches the row's right padding, as with a few tabs.
     assert_eq!(first.right(), list.right(), "the row spans the list");
     let content = bounds_of("probe-row-tab 0", cx).expect("the row's content");
     assert!(
-        content.right() <= list.right() - gpui_component::scroll::Scrollbar::width(),
-        "content {content:?} must clear the scrollbar gutter of the list {list:?}"
+        content.right() > list.right() - px(16.),
+        "content {content:?} must use the width of the list {list:?}, no gutter"
     );
     assert!(first.top() >= list.top() && first.bottom() <= list.bottom());
     assert!(
@@ -611,14 +618,26 @@ fn forty_tabs_scroll_and_the_active_one_is_brought_into_view(cx: &mut TestAppCon
     assert_eq!(centre_tabs(&window.area, cx).1, 39);
 }
 
-/// Zoom keeps the rail (it is the group's chrome); the button reads Zoom Out while zoomed.
+/// The header holds the `+` alone, on the right, with no zoom button even though the panel
+/// offers one; zoom keeps the rail (it is the group's chrome) and the header as it was.
 #[gpui::test]
-fn zoom_keeps_the_rail_and_its_button_restores(cx: &mut TestAppContext) {
+fn the_header_holds_only_the_plus_on_the_right_and_zoom_keeps_it(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
-    assert!(bounds_of(format!("{RAIL_SELECTOR}-zoom-in"), cx).is_some());
-    assert!(bounds_of(format!("{RAIL_SELECTOR}-zoom-out"), cx).is_none());
+    let header = bounds_of(HEADER_SELECTOR, cx).expect("the header");
+    let plus = bounds_of(PLUS_SELECTOR, cx).expect("the `+`");
+    assert_eq!(header.size.height, px(32.));
+    // 8 px of padding, then the right edge of the header's content.
+    assert_eq!(
+        plus.right(),
+        header.right() - px(8.),
+        "the `+` is right-aligned"
+    );
+    assert!(
+        plus.left() > header.center().x,
+        "nothing else sits left of it"
+    );
 
     let node = centre_node(&window.area, cx);
     cx.update(|w, app| {
@@ -631,14 +650,8 @@ fn zoom_keeps_the_rail_and_its_button_restores(cx: &mut TestAppContext) {
         bounds_of(RAIL_SELECTOR, cx).is_some(),
         "the zoomed group keeps its rail"
     );
-    assert!(bounds_of(format!("{RAIL_SELECTOR}-zoom-out"), cx).is_some());
-    assert!(bounds_of(format!("{RAIL_SELECTOR}-zoom-in"), cx).is_none());
-
-    let button = bounds_of(format!("{RAIL_SELECTOR}-zoom-out"), cx).unwrap();
-    cx.simulate_click(button.center(), Modifiers::none());
-    settle(cx);
-    assert!(window.area.read_with(cx, |area, _| !area.is_zoomed()));
-    assert!(bounds_of(format!("{RAIL_SELECTOR}-zoom-in"), cx).is_some());
+    assert_eq!(bounds_of(PLUS_SELECTOR, cx), Some(plus), "and its header");
+    assert!(window.area.read_with(cx, |area, _| area.is_zoomed()));
 }
 
 /// Drag priority (`IN-0055` HLD § Interactions): the title row's own drag wins over the row's
@@ -1006,8 +1019,8 @@ fn each_rail_of_a_split_centre_is_bounded_by_its_own_group(cx: &mut TestAppConte
     );
 }
 
-/// The row is exactly as wide as the live rail (less the scrollbar's gutter when the rows
-/// overflow), which is what a path on its second line is cut against.
+/// The row is exactly as wide as the live rail, which is what a path on its second line is cut
+/// against.
 #[gpui::test]
 fn the_rows_follow_the_live_width_of_the_rail(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
@@ -1045,11 +1058,13 @@ fn is_collapsed(window: &RailWindow, cx: &mut VisualTestContext) -> bool {
         .read_with(cx, |config, _| config.vertical_tabs.collapsed)
 }
 
-/// The header button collapses the rail to the 44 px strip and expands it again, live, with
-/// no panel rebuilt; the content frame follows, the resize handle exists only while expanded,
-/// and the preference's width is back on expanding (`US-0198`).
+/// Collapsing and expanding (through the setter the status bar's button calls) switch the rail
+/// between its width and the 44 px strip, live, with no panel rebuilt; the content frame
+/// follows, the resize handle exists only while expanded, the preference's width is back on
+/// expanding, and the header is the same 32 px with only the `+`, centred in the strip
+/// (`US-0198`, owner rework 4).
 #[gpui::test]
-fn the_header_button_collapses_the_rail_to_a_strip_and_expands_it(cx: &mut TestAppContext) {
+fn the_setter_collapses_the_rail_to_a_strip_and_expands_it(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     set_centre(
@@ -1063,10 +1078,8 @@ fn the_header_button_collapses_the_rail_to_a_strip_and_expands_it(cx: &mut TestA
     settle(cx);
     assert_eq!(rail_width(cx), 300.);
     assert!(bounds_of(HANDLE_SELECTOR, cx).is_some());
-    assert!(bounds_of(format!("{RAIL_SELECTOR}-expand-rail"), cx).is_none());
 
-    let collapse = bounds_of(format!("{RAIL_SELECTOR}-collapse-rail"), cx).expect("collapse");
-    cx.simulate_click(collapse.center(), Modifiers::none());
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
     settle(cx);
     assert!(is_collapsed(&window, cx));
     assert_eq!(rail_width(cx), 44., "the strip, whatever the preference");
@@ -1079,7 +1092,6 @@ fn the_header_button_collapses_the_rail_to_a_strip_and_expands_it(cx: &mut TestA
         bounds_of(HANDLE_SELECTOR, cx).is_none(),
         "no resizing the strip"
     );
-    assert!(bounds_of(format!("{RAIL_SELECTOR}-collapse-rail"), cx).is_none());
     let rows: Vec<_> = (0..3)
         .map(|ix| row(ix, cx).expect("a cell per tab"))
         .collect();
@@ -1089,12 +1101,16 @@ fn the_header_button_collapses_the_rail_to_a_strip_and_expands_it(cx: &mut TestA
     }
     // The cell is as wide as the strip, less its 1 px border.
     assert_eq!(f32::from(rows[0].size.width), 43.);
-    // The stacked header (three 20 px buttons) has a fixed least height.
+    // The header is the expanded one's 32 px, holding the `+` alone, centred in the strip.
     let rail = bounds_of(RAIL_SELECTOR, cx).unwrap();
-    assert!(rows[0].top() - rail.top() >= px(76.));
+    assert_eq!(rows[0].top() - rail.top(), px(32.));
+    let plus = bounds_of(PLUS_SELECTOR, cx).expect("the `+`");
+    assert!(
+        (f32::from(plus.center().x) - f32::from(rail.center().x)).abs() <= 1.,
+        "the `+` {plus:?} is centred in the strip {rail:?}"
+    );
 
-    let expand = bounds_of(format!("{RAIL_SELECTOR}-expand-rail"), cx).expect("expand");
-    cx.simulate_click(expand.center(), Modifiers::none());
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(false, cx));
     settle(cx);
     assert!(!is_collapsed(&window, cx));
     assert_eq!(rail_width(cx), 300., "the preference comes back");
@@ -1200,6 +1216,50 @@ fn the_collapse_setter_skips_an_unchanged_value(cx: &mut TestAppContext) {
     }
 }
 
+/// Owner rework 4: the expanded rail draws no scrollbar either, so a press anywhere across a row,
+/// its right edge included, selects the tab and leaves the list where it is (the kit's scrollbar
+/// track, shown after a wheel scroll, would take it), and the wheel still scrolls.
+#[gpui::test]
+fn a_click_across_an_expanded_row_of_an_overflowing_rail_selects_it(cx: &mut TestAppContext) {
+    use gpui::{ScrollDelta, ScrollWheelEvent};
+
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    let labels: Vec<&'static str> = (0..40).map(|ix| &*format!("tab {ix}").leak()).collect();
+    set_centre(&window.area, &terminals(&labels), false, &report, cx);
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+    let top_before = row(0, cx).unwrap().top();
+
+    cx.simulate_event(ScrollWheelEvent {
+        position: list.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-300.))),
+        ..Default::default()
+    });
+    settle(cx);
+    assert!(row(0, cx).unwrap().top() < top_before, "the wheel scrolls");
+
+    // The resize handle covers the last 3 px of the rows; the scrollbar track would have covered
+    // 16. Each press goes to a visible row that is not the displayed one.
+    let mut origin = None;
+    for dx in [5., 8., 15., 16.] {
+        let displayed = centre_tabs(&window.area, cx).1;
+        let (ix, cell) = (0..40)
+            .filter_map(|ix| row(ix, cx).map(|cell| (ix, cell)))
+            .find(|(ix, cell)| {
+                *ix != displayed && cell.top() >= list.top() && cell.bottom() <= list.bottom()
+            })
+            .expect("a visible row that is not displayed");
+        // Where row 0 would be: constant while the list does not move.
+        let top = cell.top() - ROW_HEIGHT * ix as f32;
+        assert_eq!(*origin.get_or_insert(top), top, "the list did not move");
+        let at = point(cell.right() - px(dx), cell.center().y);
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.simulate_click(at, Modifiers::none());
+        settle(cx);
+        assert_eq!(centre_tabs(&window.area, cx).1, ix, "{dx} px from the edge");
+    }
+}
+
 /// Advisor (`US-0198` verify): 40 collapsed cells overflow the list without a scrollbar gutter
 /// (each cell is the strip less its 1 px border), and a tab that becomes active from elsewhere
 /// is scrolled into view, as expanded rows are.
@@ -1259,8 +1319,7 @@ fn expanding_the_rail_keeps_the_active_row_in_view(cx: &mut TestAppContext) {
     let last = row(39, cx).unwrap();
     assert!(last.top() >= list.top() && last.bottom() <= list.bottom());
 
-    let expand = bounds_of(format!("{RAIL_SELECTOR}-expand-rail"), cx).expect("expand");
-    cx.simulate_click(expand.center(), Modifiers::none());
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(false, cx));
     settle(cx);
     assert_eq!(rail_width(cx), 220.);
     let list = bounds_of(LIST_SELECTOR, cx).unwrap();

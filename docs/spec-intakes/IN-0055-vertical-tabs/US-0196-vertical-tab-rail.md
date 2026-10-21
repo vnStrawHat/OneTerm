@@ -264,6 +264,8 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner requests, 2026
 - [x] The working status icon asks for frames in the strip, the vertical row and the collapsed cell (terminal-view test).
 - [ ] On screen, by `ui-verifier`: the header in both states and two themes, no scrollbar with 40 tabs, the status icon clear of the row's edge.
 
+**Evidence.** Tests: `oneterm-workspace` `the_header_holds_only_the_plus_on_the_right_and_zoom_keeps_it` (replaces the zoom-button test: header 32 px, `+` right-aligned, no other control, unchanged while zoomed), `the_setter_collapses_the_rail_to_a_strip_and_expands_it` (header 32 px with the `+` centred when collapsed; the cells start at 32 px), `forty_tabs_scroll_and_the_active_one_is_brought_into_view` (no gutter: row content reaches into the old 16 px), `a_click_across_an_expanded_row_of_an_overflowing_rail_selects_it` (after a wheel scroll a press 5, 8, 15 and 16 px from the right edge selects its tab and the list does not move; the scrollbar track would have taken the last three); `oneterm-terminal-view` `the_working_icon_animates_in_every_row_layout`. `tab_rail::zoom_button` and its unit test are deleted with the code. Gate: `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree `target`): all checks passed.
+
 **Documentation.** `docs/gui-layout.md` "Vertical tabs" (anatomy, header, scrolling, collapsing) and the Status bar section, `high-level-design.md` (wireframes, rail anatomy, zoom row, collapse step), this entry.
 
 ## Handoff

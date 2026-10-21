@@ -154,6 +154,7 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-
   - [x] The rail header has no collapse / expand button, expanded or collapsed.
   - [x] The status bar shows the button just left of the clock only while Vertical Tabs is on, and its click flips `collapsed` live.
   - [ ] On screen, by `ui-verifier`: placement and spacing next to the clock in two themes, the tooltip, an elevated window, a narrow window (the centre breadcrumb still gives way first).
+- **Gate.** `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`): all checks passed; `cargo build -p oneterm-app` debug binary built.
 - **Documentation.** `docs/gui-layout.md` ("Collapsing", Status bar), `high-level-design.md` (wireframes, anatomy, collapse step).
 
 ### Gaps
