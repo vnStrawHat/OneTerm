@@ -185,3 +185,70 @@ Build: scratchpad `us0196-bin2\oneterm.exe`, fresh private profile (label r1), 1
 - Mid-drag captures can show a blank frame right after a dialog closes; recaptured after a hover pause.
 
 Coordinator: D4 accepted as is; the chip is content-sized to at most 240 px, so a long title is ellipsised by design.
+
+## Review (owner rework 2026-10-21): no close button in a vertical row, status icon at the trailing end
+
+- Reviewed `git diff 91297cfd..99e63050` (8 files) on branch `verify/US-0196-r2` in worktree `agent-aece93a0e0e48ea0e`; read `tab_title.rs:186-240` / `:328-360`, the two test files, `tab_rail.rs:188-197`, the packet's rework section, the HLD and `docs/gui-layout.md` amendments; gpui 0.3.9 `elements/div.rs:878-900` (`debug_selector`), root `Cargo.toml:24` (`resolver = "3"`).
+- Disk D: 7.9 GB free at start, 7.7 GB after the builds (never near the 3 GB stop line). App binary not built.
+- No code changed, no pinned test added: no defect found.
+
+### Verdict
+
+**PASS.** The vertical row omits the `x`, puts the status icon last and leaves the strip byte-for-byte as before; the three points the coder asked about hold.
+
+### The coder's three points
+
+1. **Trailing status icon versus the scrollbar gutter.** It is clear by containment, not by a separate assertion. The row element is a child of the list; once the rows overflow, the list reserves `Scrollbar::width()` as right padding (`tab_rail.rs:214`), so every row's right edge is at or left of the gutter (asserted by `forty_tabs_scroll_and_the_active_one_is_brought_into_view`: `first.right() <= list.right() - Scrollbar::width()`). Inside the row the title element is `flex_1().min_w_0().pr_1()`, the label is `flex_1().min_w_0()` with `text_ellipsis` (`tab_title.rs:212`), and the status icon is `flex_shrink_0` and the last child: the label is the only item that gives way, so the fixed items (grip 12 px, up to five chips, the dot, the 16 px icon, 4 px padding) cannot push the icon past the row's edge in a 204 px row. The terminal-view test asserts the other half, `status.right() <= row.right()` and `status.right() >= row.right() - 8` (so it is really at the end, inside the 4 px padding). Together the two tests pin `icon.right <= list.right - gutter` in a 40-tab frame; a single cross-crate assertion is not possible (R4: the shell cannot draw the real row), and is not needed.
+2. **`debug_selector` on the shared status icon and label.** A no-op outside tests: gpui compiles the recording body only under `cfg(any(test, all(debug_assertions, feature = "test-support")))` and otherwise an inlined identity that never calls the closure (`div.rs:884-900`). `test-support` is a dev-dependency feature of `oneterm-terminal-view` and `oneterm-workspace`; with `resolver = "3"` dev-dependency features do not unify into the `oneterm-app` build, so the strip in the shipped binary pays nothing. In a `cargo test` build each drawn row allocates three short strings per frame, which is what every other selector in the file already does. Duplicate names across rows (every tab's icon is `oneterm-tab-status`) matter only to `debug_bounds`, and the terminal-view host draws exactly one row.
+3. **Drag priority with the `x` gone.** The former "starts neither" element is now row content; the tests say so and still prove the split: `the_vertical_row_fills_its_width_and_only_its_content_drags_the_tab` drags from the former `x` spot and lands a `DragTerminalTab` on the Space drop target (`dropped` 1 -> 2); `the_title_row_drags_into_a_space_and_only_the_grip_reorders` drags from the probe's status stand-in (plain content, no stop-propagation) and asserts it is the title row's own drag that reorders nothing, then that only the grip reorders. The horizontal strip keeps its `x` with its left mouse-down stop, unchanged and untouched by the diff.
+
+### Everything else
+
+- **Strip unchanged.** `leading_status` / `trailing_status` resolve to the old order when `!vertical` (`tab_title.rs:238-243`), and the `x` is gated by `tab_panel.filter(|_| !vertical)` (`:349`); `the_horizontal_row_is_content_sized_as_before` now also pins status-before-label and `x`-after-label on the strip.
+- **Close paths left in the rail.** Middle-click (`on_mouse_down(Middle)` on the whole row, untouched), the context menu rows and the panel's keyboard paths; the packet is right that no gpui test drives middle-click, and lists it for the UI walk.
+- **Status icon behaviour.** Same element (`tab_status_icon`), same tooltip, id and rules; only its slot moves. With no status nothing is drawn and the label runs to the padding (asserted).
+- **Docs.** HLD (diagram, Rail anatomy, wireframe, Interactions rows, contrast table), `IN-0055.md` walk sentences, `docs/gui-layout.md` anatomy and row description, and the packet (reopened, rework section, acceptance) all say what the code does. The drag preview chip still renders the horizontal row (so it shows an `x`); that is the existing design and not touched here.
+
+### Gate (one crate per command, `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree target reused)
+
+| Command | Result |
+| --- | --- |
+| `cargo clippy -p oneterm-terminal-view --all-targets -- -D warnings` | green |
+| `cargo test -p oneterm-terminal-view` | 407 passed, 0 failed, 3 ignored |
+| `cargo clippy -p oneterm-workspace --all-targets -- -D warnings` | green |
+| `cargo test -p oneterm-workspace` | 90 passed, 0 failed, 3 ignored |
+| `python scripts/check-english.py` | passed |
+
+Not re-run: the full `ci-local.ps1` (recorded in the packet), the app binary (disk).
+
+### Findings
+
+None. For the `ui-verifier` walk the packet already lists: no `x` in any rail row in a light and a dark theme, the status icon at the right end for each state, the label ellipsis with and without a status, the icon clear of the scrollbar with 40 tabs, middle-click and the menu closing a tab, the strip unchanged.
+
+## UI walk (owner rework 2026-10-21, ui-verifier, head 99e63050)
+
+### UI verification: US-0196 owner rework (× removed from rail rows), head 99e63050
+
+Build `us0196-bin3\oneterm.exe`, fresh private profile (label o1), pwsh 7 driver, shots `us0196o-*.png` (small crops).
+
+**Environment limit:** every shell started in this environment exits within seconds ("terminal session is closed" in the log, no cmd/pwsh child under the app), so no OSC 7501 state, chip-with-status, recording dot or SSH could be produced. All status-icon items are NOT WALKED. This is not a verdict on the rework; the owner (or a session where local shells stay alive) must walk them.
+
+| # | Item | Verdict | Evidence |
+|---|------|---------|----------|
+| 1 | No × in any rail row, light and dark | PASS | Dark (Zed One Dark): idle, hovered, selected rows (`02`); light (Zed One Light): idle, hovered, selected (`03`). Only the 12 px grip shows on hover. |
+| 2 | Status icon at the right end for Working/Blocked/Done/Error, not before the label | NOT WALKED | No status producible. Idle rows show nothing before the label (`02`, `03`). |
+| 3 | Label full width when no status; ellipsis before the icon when status | PARTLY | No-status case PASS: a 46-char title ellipsizes at the far right of the row (`03`, `04`), a short one is unaffected. With-status case NOT WALKED. |
+| 4 | Chips, recording dot, status icon on one row | NOT WALKED | Needs status; chip alone was verified in the previous walk. |
+| 5 | 40 tabs: status icons clear of scrollbar/gutter | NOT WALKED (icons) | 40 tabs open and scroll (`13`); icon clearance not testable. The earlier re-walk showed the gutter and scrollbar with no trailing element. |
+| 6 | Middle-click closes; Close / Close Others / Close Tabs Below | PASS | Middle-click removed the row (`04`); menu lists Rename, Duplicate, Close, Close Others, Close Tabs Below (`05`); Close removed the row (`06`); Close Others confirm then 1 row left (`07`, `08`); Close Tabs Below after adding tabs left 1 row (`09`; the added rows were not individually counted before the close). |
+| 7 | Drag label/trailing icon into an empty Space; grip reorders; icon tooltip | PARTLY | Label drag into a Space moved the tab out of the rail (`10`, `11`; dragging the active tab that owns the Space does nothing, as before); grip reorder to the bottom works (`12`). Dragging from the trailing icon and the icon tooltip: NOT WALKED. |
+| 8 | Switch off: strip as before (icon before label, × at end), × closes; live both ways | PARTLY | Live flip off and on again worked, strip has × at each tab's end (`14`), rail returned (`16`). The × click was sent (`15`) but the strip scrolled, so the closed tab was not individually confirmed. Status icon before the label: NOT WALKED. |
+| 9 | Split tab shows no status icon | NOT WALKED | No status producible; the split tab row is plain (`10`). |
+
+### Defects
+None found in what could be walked.
+
+### Needs an owner or a working-shell session
+Items 2, 4, 5 (icon part), 7 (icon drag, tooltip), 8 (icon before label), 9, the recording dot, and confirming the strip × close.
+
+Coordinator: merged on the advisor PASS. The status-icon items were not walkable (local shells exit at once under the scratch profile); the icon slot is pinned by the terminal-view layout test, and the owner checks it on screen with scripts/osc7501-test.sh.

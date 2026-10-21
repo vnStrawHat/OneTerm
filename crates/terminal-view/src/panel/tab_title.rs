@@ -1,7 +1,8 @@
 //! Everything about a Terminal Tab's label: resolving it from the live OSC 0/2
 //! title, the manual rename override and its dialog, and the tab-strip element
 //! (recording dot, OSC 7501 status icon, active bar, drag source, middle-click /
-//! × close, double-click rename).
+//! × close, double-click rename). The vertical rail's row is the same element without
+//! the × and with the status icon at its trailing end.
 
 use std::path::Path;
 use std::rc::Rc;
@@ -188,6 +189,7 @@ pub(super) fn tab_status_icon(status: ProgramState, panel: EntityId, cx: &App) -
     };
     div()
         .id(("tab-status", panel.as_u64()))
+        .debug_selector(|| TAB_STATUS_SELECTOR.to_string())
         .flex_shrink_0()
         .flex()
         .items_center()
@@ -199,6 +201,10 @@ pub(super) fn tab_status_icon(status: ProgramState, panel: EntityId, cx: &App) -
 /// Names the tab row in the debug-bounds map, so a test can ask a really drawn frame where it
 /// is. A no-op outside test builds.
 pub(super) const TAB_ROW_SELECTOR: &str = "oneterm-tab-row";
+/// Same, for the row's close button, status icon and label.
+pub(super) const TAB_CLOSE_SELECTOR: &str = "oneterm-tab-close";
+pub(super) const TAB_STATUS_SELECTOR: &str = "oneterm-tab-status";
+pub(super) const TAB_LABEL_SELECTOR: &str = "oneterm-tab-label";
 
 fn tab_title_label() -> Div {
     // GPUI creates a rectangular content mask when either overflow axis is
@@ -208,7 +214,9 @@ fn tab_title_label() -> Div {
 
 /// Build the tab-strip row for `panel`: active bar, drag source, middle-click
 /// close, recording dot, status icon, the (double-click to rename) label, and
-/// the × button.
+/// the × button. In the vertical rail the status icon trails the label and
+/// there is no × (`IN-0055`, `US-0196` rework): the tab closes by middle-click
+/// and the context menu.
 pub(super) fn render_tab_strip(
     panel: &mut TerminalPanel,
     _window: &mut Window,
@@ -227,6 +235,13 @@ pub(super) fn render_tab_strip(
     let status_icon = panel
         .tab_status(cx)
         .map(|status| tab_status_icon(status, panel_entity.entity_id(), cx));
+    // The strip shows the status before the label; the rail at the trailing end, where the
+    // strip has its ×.
+    let (leading_status, trailing_status) = if vertical {
+        (None, status_icon)
+    } else {
+        (status_icon, None)
+    };
     // One chip per distinct channel of this tab's Spaces, in A..E order.
     let chips: Vec<_> = panel
         .tab_channels(cx)
@@ -313,10 +328,11 @@ pub(super) fn render_tab_strip(
                     .child("●"),
             )
         })
-        .children(status_icon)
+        .children(leading_status)
         .child(
             tab_title_label()
                 .id(title_label_id)
+                .debug_selector(|| TAB_LABEL_SELECTOR.to_string())
                 .on_click({
                     let panel = panel_entity.clone();
                     move |event, window, cx| {
@@ -329,10 +345,12 @@ pub(super) fn render_tab_strip(
                 })
                 .child(tab_label),
         )
-        .when_some(tab_panel, |this, _| {
+        .children(trailing_status)
+        .when_some(tab_panel.filter(|_| !vertical), |this, _| {
             this.child(
                 div()
                     .id("tab-close")
+                    .debug_selector(|| TAB_CLOSE_SELECTOR.to_string())
                     .flex_shrink_0()
                     .cursor_pointer()
                     .size_4()
