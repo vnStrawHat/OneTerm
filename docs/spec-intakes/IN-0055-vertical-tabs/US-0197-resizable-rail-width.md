@@ -10,8 +10,8 @@ Created: 2026-10-21
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -34,15 +34,15 @@ The vertical tab rail's width is resizable. A 4 px handle on the rail's right ed
 
 ## Acceptance
 
-- [ ] `clamp_tab_rail_width` reproduces every worked example of HLD § Width (six group/requested rows and the four window rows) in a unit test.
-- [ ] Dragging the handle inside the bounds sets the rail's width live, and on mouse-up the preference is stored (`UiConfig` entity) exactly once: no `UiConfig` update during the move frames, one at the release; a press and release without a move stores nothing.
-- [ ] A drag past the ceiling stops there (the applied width equals the ceiling) while the stored preference is the dragged width clamped to 140..=400.
-- [ ] Narrowing the window narrows the rail to the new ceiling, and widening it again restores the preference; a split centre bounds each rail by its own group's width.
-- [ ] The handle has the resize cursor.
-- [ ] The row's directory on line 2 changes width with the rail (test: the path element is wider in a wider rail).
-- [ ] An elevated window writes nothing: the setter has no write path of its own, it calls `UiConfig::persist`, which asks `write_refusal` (the existing `an_elevated_window_refuses_to_write_a_perfectly_readable_config`).
-- [ ] The width is read, not recomputed, per group: `draws_rail` is evaluated once per frame per group.
-- [ ] Full `pwsh scripts/ci-local.ps1` passes.
+- [x] `clamp_tab_rail_width` reproduces every worked example of HLD § Width (six group/requested rows and the four window rows) in a unit test.
+- [x] Dragging the handle inside the bounds sets the rail's width live, and on mouse-up the preference is stored (`UiConfig` entity) exactly once: no `UiConfig` update during the move frames, one at the release; a press and release without a move stores nothing.
+- [x] A drag past the ceiling stops there (the applied width equals the ceiling) while the stored preference is the dragged width clamped to 140..=400.
+- [x] Narrowing the window narrows the rail to the new ceiling, and widening it again restores the preference; a split centre bounds each rail by its own group's width.
+- [x] The handle has the resize cursor.
+- [x] The row's directory on line 2 changes width with the rail: each row is exactly as wide as the live rail (workspace test `the_rows_follow_the_live_width_of_the_rail`), and the path element inside a row is cut against the row's width (terminal-view test `a_long_directory_is_cut_at_its_start_and_follows_the_width`).
+- [x] An elevated window writes nothing: the setter has no write path of its own, it calls `UiConfig::persist`, which asks `write_refusal` (the existing `an_elevated_window_refuses_to_write_a_perfectly_readable_config`).
+- [x] The width is read, not recomputed, per group: `draws_rail` is evaluated once per frame per group.
+- [x] Full `pwsh scripts/ci-local.ps1` passes.
 - [ ] On screen, by `ui-verifier`: drag in a light and a dark theme, the cursor, the handle against the scrollbar with 40 tabs, restart persistence, narrowing and widening the window, a split centre, the elevated window.
 
 ## Documentation
@@ -63,7 +63,7 @@ Reason: the width becomes user-visible behaviour with a writer and a bound.
 
 ### Reconciliation
 
-(filled at completion)
+Changed: `docs/gui-layout.md` (Vertical tabs: rendering seam names the clamped preference, a **Resizing** paragraph, the closing sentence), `docs/agents/persistence.md` (`width` has its writer), `high-level-design.md` (Right edge row), this packet. Unchanged and still valid: the HLD § Width formula and worked examples (they are the unit tests), § Data Flow 5, `docs/agents/crate-dependency-rules.md` (no new edge: `oneterm-workspace` already depends on `oneterm-settings`).
 
 ## Context
 
@@ -74,10 +74,10 @@ Reason: the width becomes user-visible behaviour with a writer and a bound.
 ## Plan
 
 - [x] Records commit: this packet.
-- [ ] `UiConfig::set_vertical_tabs_width`.
-- [ ] `tab_rail`: `clamp_tab_rail_width` and its tests; the group's bounds, the live drag width, the handle, the drag tracker; width used by the rail and the content margin; `draws_rail` once per frame.
-- [ ] Workspace tests: drag, one write, ceiling, narrow and widen, split centre, cursor, line-2 path follows the width.
-- [ ] Docs, gate, debug binary.
+- [x] `UiConfig::set_vertical_tabs_width`.
+- [x] `tab_rail`: `clamp_tab_rail_width` and its tests; the group's bounds, the live drag width, the handle, the drag tracker; width used by the rail and the content margin; `draws_rail` once per frame.
+- [x] Workspace tests: drag, one write, ceiling, narrow and widen, split centre, cursor, line-2 path follows the width.
+- [x] Docs, gate, debug binary.
 
 Choices left open by the HLD (decided here):
 
@@ -95,16 +95,26 @@ No decision record: the bound and the preference/applied split are the HLD's (ow
 `cargo test -p oneterm-workspace`, `-p oneterm-settings`; clippy; fmt; `check-doc-paths`, `check-english`; full `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`); debug app for `ui-verifier`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-(filled at completion)
+- **Tests** (`crates/workspace/src/layout/workspace/tab_rail.rs` and `tab_rail_tests.rs`): `the_rail_width_is_clamped_to_its_group_as_the_design_works_out` (the six HLD rows plus the not-painted rows) and `the_rail_width_in_a_window_with_the_right_dock_open` (the four window rows, and the 65 % terminal share for every group from 400 px up); `a_drag_resizes_live_and_stores_the_width_once_on_release` (a click stores nothing, 0 `UiConfig` updates while the pointer moves, exactly 1 at the release, the terminal's origin follows the edge); `a_drag_stops_at_the_ceiling_and_at_the_floor` (stored 400 and 140); `narrowing_the_window_clamps_the_rail_and_widening_it_restores_the_preference` (700 px gives 245, back gives 300, no update; also pins that a changed group width asks for one more frame, which failed with the `request_animation_frame` call removed); `each_rail_of_a_split_centre_is_bounded_by_its_own_group`; `the_rows_follow_the_live_width_of_the_rail`; `the_width_setter_clamps_and_skips_an_unchanged_value`; `the_handle_has_the_resize_cursor`.
+- **Gate:** `pwsh scripts/ci-local.ps1` on Windows (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree `target`), run once after both parts: all checks passed, 5084 tests passed, 0 failed, 33 ignored (the `--ignored --test-threads=1` lines for the workspace, session-ui and settings-ui crates and `check-ignored-tests.py` included); `check-theme-contrast.py` 1638 pairings and 624 hierarchy comparisons pass (no new colour pair: the handle's `ring` fill is non-text).
+- **Smoke launch** of `target\debug\oneterm.exe` with a private profile (scratch cwd and `USERPROFILE`, `vertical_tabs` `{"enabled":true,"width":300}`): ran 10 s, the config file untouched; the pid was stopped. No UI verdict here.
+- **Elevation:** the setter has no write path of its own; it calls `UiConfig::persist`, which asks `write_refusal` (existing test `an_elevated_window_refuses_to_write_a_perfectly_readable_config`).
+- **F4 (advisor):** `draws_rail` is now evaluated once per group per frame, in `frame`; `render_tab_bar` and `content_frame` read the result. This relies on base calling the three hooks in that order within one `render` (`gpui-base` `tab_group.rs`); a comment in `dock_skin.rs` says so.
+
+### Gaps
+
+- Not walked on screen (the coder does not give the UI verdict): the drag in the real window, the cursor, the handle against the overlay scrollbar with 40 tabs (the handle covers the scrollbar's right 3-4 px), restart persistence, the elevated window.
+- A drag started and released outside the window is ended by the next pointer move without the button (`pressed_button`); not covered by a test.
+- Linux and macOS compile only in CI.
 
 ## Handoff
 

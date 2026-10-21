@@ -77,8 +77,8 @@ pub struct UiConfig {
     /// The vertical tab rail (`IN-0055`): `{ "enabled", "width", "collapsed" }`. Omitted while
     /// every field is its default; a value of the wrong shape loads as the default instead of
     /// quarantining the whole file. Written only through
-    /// [`UiConfig::set_vertical_tabs_enabled`] (`width` and `collapsed` get their writers
-    /// with the resize and collapse packets).
+    /// [`UiConfig::set_vertical_tabs_enabled`] and [`UiConfig::set_vertical_tabs_width`]
+    /// (`collapsed` gets its writer with the collapse packet).
     #[serde(
         default,
         skip_serializing_if = "VerticalTabs::is_default",
@@ -453,6 +453,27 @@ impl UiConfig {
     pub fn set_vertical_tabs_enabled(enabled: bool, cx: &mut App) {
         Self::global(cx).update(cx, |cfg, cx| {
             cfg.vertical_tabs.enabled = enabled;
+            cx.notify();
+        });
+        Self::persist(cx);
+        cx.refresh_windows();
+    }
+
+    /// Store the vertical tab rail's width preference (clamped to
+    /// [`VerticalTabs::WIDTH_RANGE`]): the one writer of `vertical_tabs.width`, called once at
+    /// the end of a drag on the rail's edge. A width equal to the stored one writes nothing.
+    /// The entity changes first, so the rail keeps the width even where the write is refused
+    /// (an elevated window). Persists and redraws every window.
+    pub fn set_vertical_tabs_width(width: u32, cx: &mut App) {
+        let width = width.clamp(
+            *VerticalTabs::WIDTH_RANGE.start(),
+            *VerticalTabs::WIDTH_RANGE.end(),
+        );
+        if Self::read_vertical_tabs(cx).width == width {
+            return;
+        }
+        Self::global(cx).update(cx, |cfg, cx| {
+            cfg.vertical_tabs.width = width;
             cx.notify();
         });
         Self::persist(cx);

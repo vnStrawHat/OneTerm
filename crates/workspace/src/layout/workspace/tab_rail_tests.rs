@@ -18,10 +18,13 @@ use oneterm_settings::{UiConfig, VerticalTabs, ui_config::UiConfigGlobal};
 use oneterm_state::{TabRowLayout, panel_names};
 
 use super::tab_rail::{
-    EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, LIST_SELECTOR, RAIL_SELECTOR, RAIL_WIDTH,
-    ROW_HEIGHT, ROW_SELECTOR,
+    EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, HANDLE_SELECTOR, LIST_SELECTOR,
+    RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
 };
 use super::{MAIN_DOCK_VERSION, dock_skin};
+
+/// The default width, which a roomy test window leaves unclamped.
+const RAIL_WIDTH: Pixels = px(VerticalTabs::DEFAULT_WIDTH as f32);
 
 /// What a probe panel reports to the test.
 #[derive(Clone, Default)]
@@ -773,4 +776,258 @@ fn a_forward_reorder_lands_after_the_hovered_row_and_a_backward_one_before_it(
         centre_tabs(&window.area, cx).0,
         vec![original[2], original[1], original[0]]
     );
+}
+
+// ── Resizing the rail (`US-0197`) ────────────────────────────────────────
+
+fn rail_width(cx: &mut VisualTestContext) -> f32 {
+    f32::from(
+        bounds_of(RAIL_SELECTOR, cx)
+            .expect("the rail is drawn")
+            .size
+            .width,
+    )
+}
+
+/// Count the updates `UiConfig` announces (a setter notifies once; a drag in memory never does).
+fn count_config_updates(
+    config: &Entity<UiConfig>,
+    cx: &mut VisualTestContext,
+) -> (Rc<Cell<usize>>, gpui::Subscription) {
+    let updates = Rc::new(Cell::new(0));
+    let counted = updates.clone();
+    let subscription =
+        cx.update(|_, cx| cx.observe(config, move |_, _| counted.set(counted.get() + 1)));
+    (updates, subscription)
+}
+
+fn stored_width(window: &RailWindow, cx: &mut VisualTestContext) -> u32 {
+    window
+        .config
+        .read_with(cx, |config, _| config.vertical_tabs.width)
+}
+
+fn move_to(at: Point<Pixels>, cx: &mut VisualTestContext) {
+    cx.simulate_mouse_move(at, MouseButton::Left, Modifiers::none());
+    settle(cx);
+}
+
+/// Dragging the handle moves the rail's edge with the pointer, in memory; the release stores
+/// the preference, once. A press and release that never moved stores nothing.
+#[gpui::test]
+fn a_drag_resizes_live_and_stores_the_width_once_on_release(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+    let (updates, _subscription) = count_config_updates(&window.config, cx);
+    assert_eq!(rail_width(cx), 220.);
+
+    // A click on the handle stores nothing.
+    let handle = bounds_of(HANDLE_SELECTOR, cx).expect("the rail has a handle");
+    assert_eq!(handle.size.width, px(4.));
+    assert_eq!(
+        handle.right(),
+        bounds_of(RAIL_SELECTOR, cx).unwrap().right()
+    );
+    cx.simulate_mouse_down(handle.center(), MouseButton::Left, Modifiers::none());
+    settle(cx);
+    release(handle.center(), cx);
+    assert_eq!(updates.get(), 0, "a click is not a resize");
+    assert_eq!(stored_width(&window, cx), 220);
+
+    // A drag: the edge follows the pointer frame by frame, and nothing is stored until release.
+    let left = bounds_of(RAIL_SELECTOR, cx).unwrap().left();
+    cx.simulate_mouse_down(handle.center(), MouseButton::Left, Modifiers::none());
+    settle(cx);
+    move_to(point(left + px(260.), handle.center().y), cx);
+    assert_eq!(rail_width(cx), 260.);
+    assert_eq!(
+        report.bounds.get().origin.x,
+        left + px(260.),
+        "the terminal follows"
+    );
+    move_to(point(left + px(300.), handle.center().y), cx);
+    assert_eq!(rail_width(cx), 300.);
+    assert_eq!(
+        updates.get(),
+        0,
+        "no write, no update, while the pointer moves"
+    );
+    assert_eq!(stored_width(&window, cx), 220);
+
+    release(point(left + px(300.), handle.center().y), cx);
+    assert_eq!(updates.get(), 1, "one store at the release");
+    assert_eq!(stored_width(&window, cx), 300);
+    assert_eq!(rail_width(cx), 300.);
+    // The pointer no longer drives the width.
+    move_to(point(left + px(180.), handle.center().y), cx);
+    assert_eq!(rail_width(cx), 300.);
+    assert_eq!(updates.get(), 1);
+}
+
+/// Dragging past the ceiling stops at it; the preference stored is the drag clamped to the
+/// absolute bounds, so a wider window honours it. Below the floor it stops at 140.
+#[gpui::test]
+fn a_drag_stops_at_the_ceiling_and_at_the_floor(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+    // A window narrow enough for the group's share to bind below 400 px.
+    let height = cx.update(|window, _| window.viewport_size().height);
+    cx.simulate_resize(gpui::size(px(800.), height));
+    settle(cx);
+    let group = rail_width(cx) + f32::from(report.bounds.get().size.width);
+    let ceiling = (group * 0.35).clamp(140., 400.);
+    assert!(
+        ceiling < 400. && ceiling > 220.,
+        "the test window ({group} px) puts the ceiling between the default and 400"
+    );
+
+    let handle = bounds_of(HANDLE_SELECTOR, cx).unwrap();
+    let left = bounds_of(RAIL_SELECTOR, cx).unwrap().left();
+    let far = point(left + px(group - 1.), handle.center().y);
+    cx.simulate_mouse_down(handle.center(), MouseButton::Left, Modifiers::none());
+    settle(cx);
+    move_to(far, cx);
+    assert!(
+        (rail_width(cx) - ceiling).abs() < 0.01,
+        "stops at the ceiling"
+    );
+    release(far, cx);
+    assert_eq!(
+        stored_width(&window, cx),
+        400,
+        "the preference is the drag, clamped to 400"
+    );
+    assert!((rail_width(cx) - ceiling).abs() < 0.01);
+
+    // Below the floor.
+    let handle = bounds_of(HANDLE_SELECTOR, cx).unwrap();
+    let near = point(left + px(20.), handle.center().y);
+    cx.simulate_mouse_down(handle.center(), MouseButton::Left, Modifiers::none());
+    settle(cx);
+    move_to(near, cx);
+    assert_eq!(rail_width(cx), 140.);
+    release(near, cx);
+    assert_eq!(stored_width(&window, cx), 140);
+}
+
+/// Narrowing the window narrows the rail to its group's ceiling; widening it again gives the
+/// preference back, and nothing is stored on the way.
+#[gpui::test]
+fn narrowing_the_window_clamps_the_rail_and_widening_it_restores_the_preference(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_width(300, cx));
+    settle(cx);
+    let original = cx.update(|window, _| window.viewport_size());
+    assert!(
+        f32::from(original.width) * 0.35 >= 300.,
+        "the window is wide enough for 300"
+    );
+    assert_eq!(rail_width(cx), 300.);
+    let (updates, _subscription) = count_config_updates(&window.config, cx);
+
+    cx.simulate_resize(gpui::size(px(700.), original.height));
+    cx.run_until_parked();
+    // The first frame at the new size still measures the old group; it asks for another.
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|window, cx| window.simulate_next_frame(cx)) > 0,
+        "a changed group width asks for one more frame"
+    );
+    settle(cx);
+    let narrowed = rail_width(cx);
+    assert!(
+        (narrowed - 245.).abs() < 0.5,
+        "35 % of 700 px, got {narrowed}"
+    );
+
+    cx.simulate_resize(original);
+    settle(cx);
+    assert_eq!(rail_width(cx), 300., "the preference comes back");
+    assert_eq!(stored_width(&window, cx), 300);
+    assert_eq!(updates.get(), 0, "narrowing the window stored nothing");
+}
+
+/// A split centre bounds each rail by its own group, not by the window.
+#[gpui::test]
+fn each_rail_of_a_split_centre_is_bounded_by_its_own_group(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let (first, second) = (Report::default(), Report::default());
+    cx.update(|window_, app| {
+        let layout = DockLayout::h_split()
+            .child(tab_group(&terminals(&["a", "b"]), false, &first, app), None)
+            .child(
+                tab_group(&terminals(&["c", "d"]), false, &second, app),
+                None,
+            );
+        window
+            .area
+            .update(app, |area, cx| area.set_center(layout, window_, cx));
+    });
+    let height = cx.update(|window, _| window.viewport_size().height);
+    cx.simulate_resize(gpui::size(px(1000.), height));
+    settle(cx);
+
+    // The first group starts at the window's left edge, so its rail is its terminal's left edge.
+    let rail = f32::from(first.bounds.get().origin.x);
+    let group = rail + f32::from(first.bounds.get().size.width);
+    let viewport = f32::from(cx.update(|window, _| window.viewport_size()).width);
+    assert!(
+        group < viewport * 0.6,
+        "two groups share the window: {group} of {viewport} px"
+    );
+    assert!(rail < 220., "bounded by its group, not the window: {rail}");
+    let expected = (group * 0.35).clamp(140., 400.);
+    assert!(
+        (rail - expected).abs() < 0.01,
+        "35 % of the group: {rail} vs {expected}"
+    );
+    // The other group is the same width, so its terminal is laid out beside a rail of the same
+    // size.
+    let widths = (
+        first.bounds.get().size.width,
+        second.bounds.get().size.width,
+    );
+    assert!(
+        (f32::from(widths.0) - f32::from(widths.1)).abs() < 2.,
+        "{widths:?}"
+    );
+}
+
+/// The row is exactly as wide as the live rail (less the scrollbar's gutter when the rows
+/// overflow), which is what a path on its second line is cut against.
+#[gpui::test]
+fn the_rows_follow_the_live_width_of_the_rail(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+    let handle = bounds_of(HANDLE_SELECTOR, cx).unwrap();
+    let left = bounds_of(RAIL_SELECTOR, cx).unwrap().left();
+    cx.simulate_mouse_down(handle.center(), MouseButton::Left, Modifiers::none());
+    settle(cx);
+    for width in [180., 240., 300.] {
+        move_to(point(left + px(width), handle.center().y), cx);
+        let row = row(0, cx).unwrap();
+        // The rail has a 1 px right border.
+        assert_eq!(f32::from(row.size.width), width - 1., "at {width}");
+    }
+    release(point(left + px(300.), handle.center().y), cx);
+}
+
+/// The width setter keeps the preference inside 140..=400 and writes nothing for a value that
+/// is already stored.
+#[gpui::test]
+fn the_width_setter_clamps_and_skips_an_unchanged_value(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let (updates, _subscription) = count_config_updates(&window.config, cx);
+    for (given, stored, count) in [(220, 220, 0), (9999, 400, 1), (400, 400, 1), (0, 140, 2)] {
+        cx.update(|_, cx| UiConfig::set_vertical_tabs_width(given, cx));
+        assert_eq!(stored_width(&window, cx), stored, "given {given}");
+        assert_eq!(updates.get(), count, "given {given}");
+    }
 }

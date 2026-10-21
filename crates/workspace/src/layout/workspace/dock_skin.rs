@@ -22,7 +22,7 @@ use gpui_component::dock::{
 use oneterm_settings::UiConfig;
 use oneterm_state::panel_names;
 
-use super::tab_rail::{self, RAIL_WIDTH, TabRail};
+use super::tab_rail::{self, TabRail};
 
 pub(super) fn dock_area(
     id: impl Into<SharedString>,
@@ -146,11 +146,20 @@ impl OneTermTabGroupSkin {
 
 impl TabGroupRenderer for OneTermTabGroupSkin {
     fn frame(&self, group: &TabGroupContext, window: &mut Window, cx: &mut App) -> Stateful<Div> {
-        self.inner
+        // Base calls `frame`, `render_tab_bar` and `content_frame` in that order within one
+        // render, so the rail rule and the width are settled here and the other two read them.
+        let draws = self.draws_rail(group, cx);
+        self.rail.begin_frame(draws, cx);
+        let frame = self
+            .inner
             .frame(group, window, cx)
             .role(Role::Pane)
-            .aria_label("Terminal tabs")
-            .when(self.draws_rail(group, cx), |this| this.relative())
+            .aria_label("Terminal tabs");
+        if draws {
+            self.rail.track_group(frame.relative())
+        } else {
+            frame
+        }
     }
 
     fn content_frame(
@@ -164,7 +173,7 @@ impl TabGroupRenderer for OneTermTabGroupSkin {
         // content region under it.
         self.inner
             .content_frame(group, window, cx)
-            .when(self.draws_rail(group, cx), |this| this.ml(RAIL_WIDTH))
+            .when(self.rail.draws(), |this| this.ml(self.rail.width()))
     }
 
     fn render_tab_bar(
@@ -175,7 +184,7 @@ impl TabGroupRenderer for OneTermTabGroupSkin {
     ) -> AnyElement {
         if Self::owns_header(group, cx) {
             Empty.into_any_element()
-        } else if self.draws_rail(group, cx) {
+        } else if self.rail.draws() {
             self.rail.render(group, window, cx)
         } else {
             self.inner.render_tab_bar(group, window, cx)

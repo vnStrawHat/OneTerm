@@ -131,7 +131,7 @@ change of active tab scrolls the row into view; a clicked row is not snapped.
 The kit's tab bar also accepts a host-owned `AnyDrag` on tabs and the empty space. The rail does
 not: no OneTerm crate creates an `AnyDrag` or handles `TabGroupEvent::DragDrop`, so such a handler
 could be neither used nor tested here. A future host drag adds it with its first user.
-| Right edge | 1 px `border` | `US-0197`: 4 px resize handle |
+| Right edge | 1 px `border` | `US-0197`: a 4 px resize handle over it (column-resize cursor); the drag sets the width live in memory and the release stores the preference once (`set_vertical_tabs_width`) |
 
 ## UI Wireframe
 
