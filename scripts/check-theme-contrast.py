@@ -8,7 +8,10 @@ every label, name and value beside them. This script computes the WCAG relative-
 contrast ratio of each of those tokens against every surface `SURFACES` says it is drawn on,
 for every variant of every theme in `crates/theme/themes/`, and applies two rules:
 
-* **Floor** -- no token drops below 4.5:1 on any of its surfaces.
+* **Floor** -- no token drops below 4.5:1 on any of its surfaces. The one exception is a
+  non-text glyph, which WCAG 1.4.11 holds to 3:1: `GLYPH_SURFACES` lists those (the OSC 7501
+  "waiting" bell) and every one of them is measured at `GLYPH_FLOOR` on every surface it is
+  drawn on, one rule for all of them (owner ruling, 2026-10-21).
 * **Hierarchy** -- on every surface both are drawn on, `foreground` reads *more* strongly
   than `muted.foreground` (`HIERARCHY`). Raising only the secondary token clears the floor
   and inverts the page: secondary text louder than the primary text beside it is not a
@@ -42,6 +45,9 @@ THEMES_DIR = REPO_ROOT / "crates" / "theme" / "themes"
 
 # WCAG 2.1 AA for body text.
 FLOOR = 4.5
+# WCAG 2.1 1.4.11 for a graphic that carries information (a status icon): 3:1 against its
+# neighbouring colours. Only the tokens in `GLYPH_SURFACES` get it.
+GLYPH_FLOOR = 3.0
 
 # The surfaces each checked foreground token is composited over in OneTerm, with the line
 # that draws the pair. A token that sits on more than one surface must clear the floor on all
@@ -241,9 +247,10 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #                         (`crates/terminal-view/src/terminal_view/render.rs:510,603`)
     #   popover.background    a `Warning` notification's whole body
     #                         (`crates/theme/src/notif_ext.rs:86`), which is popover-backed
-    #   tab_bar.background,   the tab title's "waiting for you" bell (OSC 7501 `blocked`,
-    #   tab.background,       `crates/terminal-view/src/panel/tab_title.rs`), a glyph read as
-    #   tab.active.background a marker on an inactive or the selected tab
+    #
+    # The tab title's "waiting for you" bell (OSC 7501 `blocked`,
+    # `crates/terminal-view/src/panel/tab_title.rs`) also uses this token, but it is a glyph,
+    # not text, so it is measured at the 3:1 of `GLYPH_SURFACES` below and not here.
     #
     # **The name is the trap this entry exists to close.** `ThemeConfigColors` renames the
     # field to `warning.background` (`gpui-component/src/theme/schema.rs:617`) while
@@ -263,13 +270,25 @@ SURFACES: dict[str, tuple[str, ...]] = {
         "title_bar.background",
         "background",
         "popover.background",
+    ),
+}
+
+# Tokens drawn as a non-text glyph, held to `GLYPH_FLOOR` (3:1) on every surface they are drawn
+# on -- the same rule everywhere, not a per-surface exception (owner ruling, 2026-10-21).
+#   warning.background   the tab title's "waiting for you" bell (OSC 7501 `blocked`,
+#                        `crates/terminal-view/src/panel/tab_title.rs`): on an inactive tab
+#                        (`tab_bar.background`, `tab.background`), the selected tab
+#                        (`tab.active.background`) and a vertical-rail row under the pointer
+#                        (`tab_bar.hover.background`, the list hover fill over the bar,
+#                        `crates/workspace/src/layout/workspace/tab_rail.rs`). Its text uses
+#                        are in `SURFACES` above, at 4.5:1.
+GLYPH_SURFACES: dict[str, tuple[str, ...]] = {
+    "warning.background": (
         "tab_bar.background",
         "tab.background",
         "tab.active.background",
+        "tab_bar.hover.background",
     ),
-    # Not measured on `tab_bar.hover.background`: the bell is a status glyph, not text, so the
-    # bar for it on a rail row under the pointer is WCAG 1.4.11's 3:1, not this file's 4.5:1
-    # (the worst built-in variant is 4.0:1 there, probed when the hover fill was added).
 }
 
 # The hierarchy rule, as (primary, secondary) pairs. On every surface both tokens are drawn
@@ -447,7 +466,9 @@ def shared_surfaces(primary: str, secondary: str) -> tuple[str, ...]:
 
 def pairings() -> int:
     """How many foreground/surface pairs one pass actually measures."""
-    return len(variants()) * sum(len(surfaces) for surfaces in SURFACES.values())
+    return len(variants()) * sum(
+        len(surfaces) for surfaces in (*SURFACES.values(), *GLYPH_SURFACES.values())
+    )
 
 
 def comparisons() -> int:
@@ -455,14 +476,18 @@ def comparisons() -> int:
     return len(variants()) * sum(len(shared_surfaces(*pair)) for pair in HIERARCHY)
 
 
-def rows() -> list[tuple[str, str, str, str, str, float]]:
-    """(file, variant, mode, fg token, worst surface, worst ratio) for every checked token."""
+def rows() -> list[tuple[str, str, str, str, str, float, float]]:
+    """(file, variant, mode, fg token, worst surface, worst ratio, its floor) per checked token.
+
+    A glyph token is its own row (`token (glyph)`), measured at `GLYPH_FLOOR`.
+    """
     out = []
     for file_name, name, mode, colors in variants():
-        for fg_token, surfaces in SURFACES.items():
-            measured = [(bg, measure(colors, fg_token, bg)) for bg in surfaces]
-            bg, ratio = min(measured, key=lambda item: item[1])
-            out.append((file_name, name, mode, fg_token, bg, ratio))
+        for table, floor, suffix in ((SURFACES, FLOOR, ""), (GLYPH_SURFACES, GLYPH_FLOOR, " (glyph)")):
+            for fg_token, surfaces in table.items():
+                measured = [(bg, measure(colors, fg_token, bg)) for bg in surfaces]
+                bg, ratio = min(measured, key=lambda item: item[1])
+                out.append((file_name, name, mode, fg_token + suffix, bg, ratio, floor))
     return out
 
 
@@ -561,6 +586,11 @@ def self_test(quiet: bool = False) -> int:
     only_popover = dict(upright, **{"popover.foreground": "#767676"})
     found = inversions([("fixture.json", "Fixture", "light", only_popover)])
     assert [row[3] for row in found] == ["popover.foreground"], found
+    # The glyph tier is a lower floor, not a skipped check: 3.5:1 passes it and fails the text
+    # floor, and 2.5:1 fails both.
+    bell = {"background": "#ffffff", "tab_bar.background": "#ffffff"}
+    assert GLYPH_FLOOR <= measure(dict(bell, **{"warning.background": "#8a8a8a"}), "warning.background", "tab_bar.background") < FLOOR
+    assert measure(dict(bell, **{"warning.background": "#a0a0a0"}), "warning.background", "tab_bar.background") < GLYPH_FLOOR
     # A token with no value and no kit fallback is reported, not a traceback.
     try:
         stops({"background": "#000000"}, "muted.foreground")
@@ -584,15 +614,15 @@ def main() -> int:
 
     self_test(quiet=True)
     measured = rows()
-    failures = [row for row in measured if row[5] < FLOOR]
+    failures = [row for row in measured if row[5] < row[6]]
     inverted = inversions()
     inverted_comparisons = sum(row[7] for row in inverted)
     secondary = HIERARCHY[0][1]
 
     if args.report:
         width = max(len(row[1]) for row in measured)
-        for file_name, name, mode, fg_token, bg_token, ratio in measured:
-            mark = "FAIL" if ratio < FLOOR else "ok  "
+        for file_name, name, mode, fg_token, bg_token, ratio, floor in measured:
+            mark = "FAIL" if ratio < floor else "ok  "
             print(f"{mark} {name:<{width}} {mode:<5} {fg_token:<22} on {bg_token:<24} {ratio:5.2f}:1")
         print(f"\n{len(measured)} measurements, {len(failures)} below {FLOOR}:1")
         for file_name, name, mode, fg_token, bg_token, hi, lo, count in inverted:
@@ -607,8 +637,11 @@ def main() -> int:
 
     if failures or inverted:
         if not args.report:
-            for file_name, name, mode, fg_token, bg_token, ratio in failures:
-                print(f"{file_name}: {name} ({mode}): {fg_token} on {bg_token} is {ratio:.2f}:1")
+            for file_name, name, mode, fg_token, bg_token, ratio, floor in failures:
+                print(
+                    f"{file_name}: {name} ({mode}): {fg_token} on {bg_token} is {ratio:.2f}:1 "
+                    f"(floor {floor}:1)"
+                )
             for file_name, name, mode, fg_token, bg_token, hi, lo, count in inverted:
                 print(
                     f"{file_name}: {name} ({mode}): on {bg_token} {fg_token} is {hi:.2f}:1 but "
@@ -617,7 +650,8 @@ def main() -> int:
                 )
         if failures:
             print(
-                f"check-theme-contrast: {len(failures)} token(s) below the {FLOOR}:1 floor",
+                f"check-theme-contrast: {len(failures)} token(s) below their floor "
+                f"({FLOOR}:1 text, {GLYPH_FLOOR}:1 glyph)",
                 file=sys.stderr,
             )
         if inverted:
@@ -631,7 +665,8 @@ def main() -> int:
 
     print(
         f"check-theme-contrast: {pairings()} foreground/surface pairings across "
-        f"{len(measured)} token/variant rows, all >= {FLOOR}:1; primary text out-reads "
+        f"{len(measured)} token/variant rows, all >= {FLOOR}:1 (glyphs >= {GLYPH_FLOOR}:1); "
+        f"primary text out-reads "
         f"{secondary} on all {comparisons()} shared-surface comparisons"
     )
     return 0
