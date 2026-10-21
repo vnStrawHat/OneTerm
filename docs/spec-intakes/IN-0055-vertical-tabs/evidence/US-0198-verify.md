@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # US-0198 verification (advisor)
 
 ## Advisor code review
@@ -44,7 +43,7 @@
 - Finding 1 on screen: with 40 tabs select the last, expand, see whether the selected row is in view.
 - Restart persistence of `collapsed`; the elevated window collapsing in memory with no write.
 - The divider and the drop line on a hovered row in a light and a dark theme.
-=======
+
 
 ## UI verification (US-0196 rework 3 and US-0198, ui-verifier, 2026-10-21)
 
@@ -87,4 +86,3 @@ Build: copy of the debug binary for head a866cc93, private profile, 1280x800. Sc
 Drop line versus divider while dragging a row (and grip reorder); line 2 cwd equals the status bar (`cmd` tab); status badge in the cell corner and its overlap with the overlay scrollbar thumb; recording dot; elevated window; middle-click close in collapsed cells.
 
 Verdict: the UI meets the requirements for everything walkable (partly: the items above are not walked).
->>>>>>> 70749f95 (docs(IN-0055): UI verification of US-0196 rework 3 and US-0198)
