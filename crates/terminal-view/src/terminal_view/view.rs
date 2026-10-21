@@ -93,11 +93,6 @@ pub(crate) struct BroadcastOrigin {
 }
 
 impl BroadcastOrigin {
-    /// The channel this origin is in, if any.
-    pub(crate) fn channel(&self, cx: &App) -> Option<InputChannel> {
-        self.channels.as_ref()?.read(cx).channel_of(self.id)
-    }
-
     /// Repeat `input` on this origin's channel peers; a no-op without a registry.
     pub(crate) fn fan_out(&self, input: BroadcastInput<'_>, cx: &mut App) {
         let Some(registry) = self.channels.clone() else {

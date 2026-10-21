@@ -20,6 +20,8 @@ use crate::panel::{PanelSpec, TerminalPanel};
 use crate::space::{CloseOutcome, SplitDir};
 use crate::terminal_view::TerminalView;
 
+mod tab_menu_and_card;
+
 /// The scroll estimate must count the rows the menu really emits, in both modes
 /// — a literal would go stale the next time a row is added (`IN-0043`).
 #[test]

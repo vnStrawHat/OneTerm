@@ -43,8 +43,8 @@ last remaining leaf reverts the tab to a plain single terminal (no borders).
 
 ## Broadcast input channels (IN-0022)
 
-A Space can join one of the five broadcast input channels A..E from its context menu
-("Input Channel"), so that one keystroke, typed text, paste or Ctrl+C reaches every other
+A Space can join one of the five broadcast input channels A..E from its **tab's** context
+menu ("Input Channel", acting on the tab's active Space; `US-0199`), so that one keystroke, typed text, paste or Ctrl+C reaches every other
 member of that channel. What it means for Spaces (DEC-0009):
 
 - Membership belongs to the **Space** — to the `TerminalView` entity, not to the tab or the

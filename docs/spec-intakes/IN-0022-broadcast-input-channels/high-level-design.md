@@ -45,25 +45,25 @@ enum BroadcastInput<'a> { Bytes(&'a [u8]), Text(&'a str), Paste(&'a str), Interr
 
 ## UI Wireframe
 
-Context menu of a Space (submenu shown for a Space in channel B inside a split tab):
+Context menu of a **tab** (`US-0199`; it was the terminal's menu in `US-0056`), submenu shown for a tab whose active Space is in channel B inside a split tab:
 
 ```text
 +------------------------------+      +-----------------------------------+
-| New Terminal          Ctrl+T |      |   Channel A                       |
-| Duplicate Session          > |      | * Channel B                       |
-| Split Right ...              |      |   Channel C                       |
-| ---------------------------- |      |   Channel D                       |
-| Input Channel              > |─────▶|   Channel E                       |
-| ---------------------------- |      | --------------------------------- |
-| Copy / Paste / Select All    |      |   Leave Channel                   |
-| ...                          |      |   Close Channel B                 |
+| Rename...                    |      |   Channel A                       |
+| Duplicate                    |      | * Channel B                       |
+| ---------------------------- |      |   Channel C                       |
+| Input Channel              > |─────▶|   Channel D                       |
+| ---------------------------- |      |   Channel E                       |
+| Close                        |      | --------------------------------- |
+| Close Others                 |      |   Leave Channel                   |
+| Close to the Right           |      |   Close Channel B                 |
 +------------------------------+      | --------------------------------- |
                                       |   Join All Spaces In Tab To B     |
                                       |   Leave With All Spaces In Tab    |
                                       +-----------------------------------+
 ```
 
-- `Channel A..E` join **this Space**; the current channel is marked.
+- `Channel A..E` join the tab's **active Space** (the one its chips, status icon and key bindings use); the current channel is marked. The terminal area's own menu has no channel items (`US-0199`).
 - `Leave Channel` and `Close Channel <X>` appear only when this Space is a member.
 - The last section appears only when the tab has more than one Space. "Join All Spaces In
   Tab To <X>" needs this Space to be a member (it copies this Space's channel to its
@@ -95,8 +95,8 @@ Tab strip and Space badges (tab "fleet" split into three Spaces, tab "db" with o
 
 ## Data Flow
 
-1. The user picks "Input Channel › Channel A" on a Space. The menu dispatches
-   `JoinInputChannel(InputChannel::A)`; the panel handler resolves the active Space's
+1. The user picks "Input Channel › Channel A" in a tab's menu. The row calls the tab's
+   `apply_channel_item`, which (like the `JoinInputChannel(InputChannel::A)` key action) resolves the active Space's
    `TerminalView` and calls `view.join_channel(A, cx)`, which calls
    `registry.join(entity_id, A, session.clone())`. Joining while in another channel moves the
    Space (one channel per Space). "Join All Spaces In Tab To A" calls the same for every
@@ -140,8 +140,8 @@ and persistence (sessions are not restored across restarts, see `docs/agents/per
   action because nothing binds them to a key.
 - `crates/terminal-view`: `TerminalDeps.input_channels: Option<Entity<InputChannelRegistry>>`
   resolved in `from_globals`; hooks in `input/keys.rs`, `terminal_view/ime.rs`,
-  `input/edit.rs`; submenu in `input/menu.rs` (`MenuContext` gains the Space's channel and
-  the tab's member count); chips in `theme/input_channel.rs`, used by
+  `input/edit.rs`; submenu in `panel/channel_menu.rs`, attached to the tab's menu in `panel/tab_title.rs`
+  (`US-0199`; `US-0056` first put it in `input/menu.rs`); chips in `theme/input_channel.rs`, used by
   `panel/tab_title.rs` and the Space badge in `space/render.rs`; `on_action` handlers in `panel/terminal_panel.rs`.
 - `crates/settings-ui/src/key_bindings`: seven `BindableAction` entries (five joins, leave,
   close) in group "Input Channel", all `default: None`.

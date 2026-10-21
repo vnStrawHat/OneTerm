@@ -2,7 +2,8 @@
 //! title, the manual rename override and its dialog, and the tab-strip element
 //! (recording dot, OSC 7501 status icon, active bar, drag source, middle-click /
 //! × close, double-click rename). The vertical rail's row is the same element on two
-//! lines (the title, then the current directory and the status icon) without the ×.
+//! lines (the title, then the current directory and the status icon) without the ×; the
+//! collapsed rail's hover card draws those same two lines.
 
 use std::cell::Cell;
 use std::path::Path;
@@ -12,8 +13,8 @@ use std::time::Duration;
 use gpui::{
     Animation, AnimationExt as _, App, AppContext as _, ClickEvent, Context, Div, Entity, EntityId,
     Focusable as _, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Transformation, Window, div,
-    percentage, prelude::FluentBuilder as _, px,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Transformation, Window,
+    div, percentage, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
@@ -27,11 +28,13 @@ use gpui_component::{
     v_flex,
 };
 use oneterm_core::ShellKind;
+use oneterm_settings::VerticalTabs;
 use oneterm_state::TabRowLayout;
 use oneterm_terminal::{ProgramState, TerminalLogState};
 use oneterm_theme::notif_ext::notify;
 
 use super::TerminalPanel;
+use super::channel_menu::channel_submenu;
 use crate::space::DragTerminalTab;
 use crate::theme::channel_chip;
 
@@ -240,6 +243,88 @@ pub(super) fn tab_cwd_label(cwd: String, color: gpui::Hsla) -> Div {
         .child(cwd)
 }
 
+/// The width of the collapsed cell's hover card: the default rail width, so it reads like the
+/// expanded row it stands for.
+const HOVER_CARD_WIDTH: f32 = VerticalTabs::DEFAULT_WIDTH as f32;
+/// What the kit's tooltip adds around its content, horizontally: a 1 px border and 8 px of
+/// padding on each side.
+const TOOLTIP_CHROME_X: f32 = 18.;
+/// Names the hover card's title in the debug-bounds map. A no-op outside test builds.
+#[cfg(test)]
+pub(super) const TAB_CARD_LABEL_SELECTOR: &str = "oneterm-tab-card-label";
+
+/// The two lines of a vertical row, shared by the rail's row and the collapsed cell's hover
+/// card so the two cannot drift apart. Line 1: the channel chips, the recording dot, the title.
+/// Line 2: the directory (cut at its start when it does not fit) and the status icon at the end.
+/// The path is as wide as its text up to the room there is, so it shrinks (and is cut) before
+/// the spacer that keeps the status icon at the end.
+fn vertical_row_lines(
+    chips: Vec<Stateful<Div>>,
+    recording: Option<Stateful<Div>>,
+    label: impl IntoElement,
+    path: Option<Div>,
+    status: Option<gpui::AnyElement>,
+) -> Div {
+    v_flex()
+        .child(
+            h_flex()
+                .h(px(TabRowLayout::VERTICAL_FIRST_LINE_HEIGHT))
+                .gap_1()
+                .children(chips)
+                .children(recording)
+                .child(label),
+        )
+        .child(
+            h_flex()
+                .h(px(TabRowLayout::VERTICAL_SECOND_LINE_HEIGHT))
+                .gap_1()
+                .children(path)
+                .child(div().flex_1().min_w_0())
+                .children(status),
+        )
+}
+
+/// The recording dot of a tab.
+fn recording_dot(color: gpui::Hsla) -> Stateful<Div> {
+    div()
+        .id("tab-recording")
+        .flex_shrink_0()
+        .text_xs()
+        .text_color(color)
+        .child("●")
+}
+
+/// One chip per distinct channel of the tab's Spaces, in A..E order.
+fn tab_chips(panel: &TerminalPanel, cx: &App) -> Vec<Stateful<Div>> {
+    panel
+        .tab_channels(cx)
+        .into_iter()
+        .enumerate()
+        .map(|(index, channel)| channel_chip(channel, ("tab-channel", index), cx))
+        .collect()
+}
+
+/// What the collapsed cell shows while the pointer rests on it: the expanded row's content, with
+/// the same lines, read from the live tab.
+pub(super) fn tab_hover_card(panel: &TerminalPanel, panel_id: EntityId, cx: &App) -> Div {
+    let muted = cx.theme().muted_foreground;
+    let label = tab_title_label();
+    #[cfg(test)]
+    let label = label.debug_selector(|| TAB_CARD_LABEL_SELECTOR.to_string());
+    vertical_row_lines(
+        tab_chips(panel, cx),
+        panel
+            .shows_recording_dot(cx)
+            .then(|| recording_dot(cx.theme().danger)),
+        label.child(panel.tab_label(cx)),
+        panel.tab_cwd(cx).map(|cwd| tab_cwd_label(cwd, muted)),
+        panel
+            .tab_status(cx)
+            .map(|status| tab_status_icon(status, panel_id, cx)),
+    )
+    .w(px(HOVER_CARD_WIDTH - TOOLTIP_CHROME_X))
+}
+
 /// The collapsed cell's tooltip: the kit's, drawn as nothing while a right-click menu is open on
 /// the cell.
 struct CellTooltip {
@@ -258,9 +343,9 @@ impl Render for CellTooltip {
 }
 
 /// The compact cell of the collapsed rail (`US-0198`): the tab's position, the status icon as a
-/// badge in the top-right corner and the recording dot in the top-left. The title is the
-/// row's tooltip and the directory and channel chips are not drawn, so the cell is the same
-/// element as the expanded row minus everything that needs width.
+/// badge in the top-right corner and the recording dot in the top-left. The title, directory
+/// and channel chips are the hover card's ([`tab_hover_card`]), so the cell is the same element
+/// as the expanded row minus everything that needs width.
 fn collapsed_row(
     position: usize,
     status: Option<gpui::AnyElement>,
@@ -301,7 +386,7 @@ fn collapsed_row(
 /// lines and no ×: the label after the chips and the dot, then the current
 /// directory with the status icon at the end of the line; the tab closes by
 /// middle-click and the context menu. The collapsed rail's cell (`US-0198`) is the position
-/// number with the status icon as a corner badge and the title as a tooltip.
+/// number with the status icon as a corner badge and the expanded row's content as a hover card.
 pub(super) fn render_tab_strip(
     panel: &mut TerminalPanel,
     _window: &mut Window,
@@ -324,13 +409,7 @@ pub(super) fn render_tab_strip(
         .map(|status| tab_status_icon(status, panel_entity.entity_id(), cx));
     // The directory is shown by the vertical row only.
     let cwd = vertical.then(|| panel.tab_cwd(cx)).flatten();
-    // One chip per distinct channel of this tab's Spaces, in A..E order.
-    let chips: Vec<_> = panel
-        .tab_channels(cx)
-        .into_iter()
-        .enumerate()
-        .map(|(index, channel)| channel_chip(channel, ("tab-channel", index), cx))
-        .collect();
+    let chips = tab_chips(panel, cx);
     let tab_label = panel.tab_label(cx);
     let drag_title: SharedString = tab_label.clone().into();
     let rename_title = tab_label.clone();
@@ -342,14 +421,7 @@ pub(super) fn render_tab_strip(
     // strip the same menu state.
     let title_row_id = SharedString::from(format!("tab-title-{panel_entity:?}"));
 
-    let recording_dot = show_recording.then(|| {
-        div()
-            .id("tab-recording")
-            .flex_shrink_0()
-            .text_xs()
-            .text_color(recording_color)
-            .child("●")
-    });
+    let recording_dot = show_recording.then(|| recording_dot(recording_color));
     let label = tab_title_label()
         .id(title_label_id)
         .debug_selector(|| TAB_LABEL_SELECTOR.to_string())
@@ -368,14 +440,10 @@ pub(super) fn render_tab_strip(
     let row = if let TabRowLayout::Collapsed(position) = layout {
         collapsed_row(position, status_icon, recording_dot)
     } else if vertical {
-        // Line 1: chips, recording dot, title. Line 2: the directory (cut at its start when it
-        // does not fit) and the status icon at the end. The rail draws the selected row's accent
-        // bar and the reorder grip itself, so this row carries neither the top bar nor the
-        // strip's negative margin.
-        // The path is as wide as its text up to the room there is, so it shrinks (and is cut)
-        // before the spacer that keeps the status icon at the end.
+        // The rail draws the selected row's accent bar and the reorder grip itself, so this row
+        // carries neither the top bar nor the strip's negative margin.
         let path = cwd.map(|cwd| tab_cwd_label(cwd, muted));
-        v_flex()
+        vertical_row_lines(chips, recording_dot, label, path, status_icon)
             .flex_1()
             .min_w_0()
             .pr_1()
@@ -384,22 +452,6 @@ pub(super) fn render_tab_strip(
             .pb(px(
                 TabRowLayout::VERTICAL_ROW_PADDING - TabRowLayout::VERTICAL_ROW_DIVIDER
             ))
-            .child(
-                h_flex()
-                    .h(px(TabRowLayout::VERTICAL_FIRST_LINE_HEIGHT))
-                    .gap_1()
-                    .children(chips)
-                    .children(recording_dot)
-                    .child(label),
-            )
-            .child(
-                h_flex()
-                    .h(px(TabRowLayout::VERTICAL_SECOND_LINE_HEIGHT))
-                    .gap_1()
-                    .children(path)
-                    .child(div().flex_1().min_w_0())
-                    .children(status_icon),
-            )
     } else {
         // No `w_full()`: the kit's `Tab` is content-sized and `flex_shrink_0`
         // (`component/src/tab/tab.rs:715-718,794-800`), so a percentage width
@@ -461,16 +513,25 @@ pub(super) fn render_tab_strip(
         .debug_selector(|| TAB_ROW_SELECTOR.to_string())
         .relative()
         .h_full()
-        // A collapsed cell has no room for the title, so the tooltip carries it.
+        // A collapsed cell has no room for the title, directory or chips, so a hover card with
+        // the expanded row's content carries them.
         .when(collapsed, |this| {
-            let title = drag_title.clone();
+            let card_panel = panel_weak.clone();
             let (shown, entered, pressed) = (
                 tooltip_hidden.clone(),
                 tooltip_hidden.clone(),
                 tooltip_hidden.clone(),
             );
             this.tooltip(move |window, cx| {
-                let inner = Tooltip::new(title.clone()).build(window, cx);
+                let card_panel = card_panel.clone();
+                // Rebuilt from the live panel each time the card is drawn.
+                let inner = Tooltip::element(move |_, cx| match card_panel.upgrade() {
+                    Some(panel) => {
+                        tab_hover_card(panel.read(cx), panel.entity_id(), cx).into_any_element()
+                    }
+                    None => div().into_any_element(),
+                })
+                .build(window, cx);
                 let hidden = shown.clone();
                 cx.new(|_| CellTooltip { inner, hidden }).into()
             })
@@ -512,8 +573,15 @@ pub(super) fn render_tab_strip(
         // The kit attaches no right-click handler to a tab and stops only left
         // mouse-down (`base/src/tabs.rs:172`), so the tab's own menu lives here,
         // on the content OneTerm renders (`US-0116`, `F12`).
-        .context_menu(move |menu, _window, cx| {
-            tab_context_menu(menu, menu_panel.clone(), menu_title.clone(), layout, cx)
+        .context_menu(move |menu, window, cx| {
+            tab_context_menu(
+                menu,
+                menu_panel.clone(),
+                menu_title.clone(),
+                layout,
+                window,
+                cx,
+            )
         })
 }
 
@@ -643,40 +711,44 @@ fn tab_context_menu(
     panel: Entity<TerminalPanel>,
     label: String,
     layout: TabRowLayout,
+    window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
-    menu.item(PopupMenuItem::new("Rename...").on_click({
-        let panel = panel.clone();
-        move |_, window, cx| open_tab_title_dialog(panel.clone(), label.clone(), window, cx)
-    }))
-    .item(PopupMenuItem::new("Duplicate").on_click({
-        let panel = panel.clone();
-        move |_, window, cx| {
-            panel.update(cx, |panel, cx| {
-                let space = panel.tree.active();
-                panel.duplicate_session(space, window, cx);
-            });
-        }
-    }))
-    .separator()
-    .item(PopupMenuItem::new("Close").on_click({
-        let panel = panel.clone();
-        move |_, window, cx| {
-            panel.update(cx, |panel, cx| panel.close_tab(window, cx));
-        }
-    }))
-    .item(close_scope_row(
-        "Close Others",
-        panel.clone(),
-        CloseScope::Others,
-        cx,
-    ))
-    .item(close_scope_row(
-        close_following_label(layout),
-        panel,
-        CloseScope::ToTheRight,
-        cx,
-    ))
+    let menu = menu
+        .item(PopupMenuItem::new("Rename...").on_click({
+            let panel = panel.clone();
+            move |_, window, cx| open_tab_title_dialog(panel.clone(), label.clone(), window, cx)
+        }))
+        .item(PopupMenuItem::new("Duplicate").on_click({
+            let panel = panel.clone();
+            move |_, window, cx| {
+                panel.update(cx, |panel, cx| {
+                    let space = panel.tree.active();
+                    panel.duplicate_session(space, window, cx);
+                });
+            }
+        }));
+    // After its own separator; absent for a tab with no terminal (`US-0199`).
+    channel_submenu(menu, panel.clone(), window, cx)
+        .separator()
+        .item(PopupMenuItem::new("Close").on_click({
+            let panel = panel.clone();
+            move |_, window, cx| {
+                panel.update(cx, |panel, cx| panel.close_tab(window, cx));
+            }
+        }))
+        .item(close_scope_row(
+            "Close Others",
+            panel.clone(),
+            CloseScope::Others,
+            cx,
+        ))
+        .item(close_scope_row(
+            close_following_label(layout),
+            panel,
+            CloseScope::ToTheRight,
+            cx,
+        ))
 }
 
 /// The wording of the menu row that closes the tabs after this one: they are to the right in

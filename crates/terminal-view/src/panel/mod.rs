@@ -8,10 +8,12 @@
 //! - [`spaces`] — split / close / fill / drag-drop over the Space tree
 //! - [`duplicate`] — duplicating a session into a tab, Space, or split
 //! - [`tab_title`] — tab label resolution, the rename dialog, the tab strip
+//! - [`channel_menu`] — the tab menu's "Input Channel" submenu
 //!
 //! The current owning design is
 //! `docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`.
 
+mod channel_menu;
 mod duplicate;
 mod spaces;
 mod tab_title;

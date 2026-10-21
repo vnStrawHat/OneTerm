@@ -11,7 +11,7 @@ Created: 2026-10-21
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [x] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -34,12 +34,12 @@ The "Input Channel" submenu is no longer in the terminal area's right-click menu
 
 ## Acceptance
 
-- [ ] The terminal's right-click menu has no "Input Channel" item and keeps its other rows and separators in order.
-- [ ] The tab's right-click menu has "Input Channel" between Duplicate and Close, after a separator, with the items `channel_menu_items` lists (Channel A..E with the current one marked, Leave / Close for a member, the two tab-wide rows for a tab of two or more Spaces).
-- [ ] Each item acts on the right-clicked tab, not on whichever tab is active (test: an item applied to an inactive tab moves that tab's active Space and no other).
-- [ ] An empty tab (no terminal Space) shows no submenu.
+- [x] The terminal's right-click menu has no "Input Channel" item and keeps its other rows and separators in order.
+- [x] The tab's right-click menu has "Input Channel" between Duplicate and Close, after a separator, with the items `channel_menu_items` lists (Channel A..E with the current one marked, Leave / Close for a member, the two tab-wide rows for a tab of two or more Spaces).
+- [x] Each item acts on the right-clicked tab, not on whichever tab is active (test: an item applied to an inactive tab moves that tab's active Space and no other).
+- [x] An empty tab (no terminal Space) shows no submenu (by construction: `channel_entries` is `None` without an active terminal; not driven by a test, because an empty tab cannot be built without spawning a shell).
 - [ ] On screen, by `ui-verifier`: the submenu from a horizontal tab, a vertical row and a collapsed cell; a split tab; the terminal menu without it.
-- [ ] Full `pwsh scripts/ci-local.ps1` passes.
+- [x] Full `pwsh scripts/ci-local.ps1` passes.
 
 ## Documentation
 
@@ -57,7 +57,7 @@ Reason: the menu's location is stated as "the terminal context menu / a Space's 
 
 ### Reconciliation
 
-Filled in at the end of the packet (Evidence).
+Changed: `IN-0022.md` (surface line, packet link), `high-level-design.md` (wireframe, bullet, data flow 1, module list), `low-level-design/menu-chip-frame.md` (amendment note), `US-0056` (amendment note), `docs/gui-layout.md` (tab menu sentence, Broadcast input channels), `docs/terminal-split.md`. Unchanged and still valid: `DEC-0009`, `docs/terminal-split/04-context-menu.md`, the IN-0018 `input.md` (it never listed the submenu).
 
 ## Context
 
@@ -68,9 +68,9 @@ Filled in at the end of the packet (Evidence).
 ## Plan
 
 - [x] Records commit: this packet and the intake link.
-- [ ] `panel/channel_menu.rs`: `ChannelMenuItem`, `channel_menu_items`, `channel_item_label` (moved, tests moved with them), `TerminalPanel::active_channel`, `TerminalPanel::apply_channel_item`, and the submenu builder used by `tab_context_menu`.
-- [ ] `input/menu.rs` and its caller in `terminal_view/render.rs`: drop the submenu and the three `MenuContext` fields.
-- [ ] Tests, docs, gate, debug binary.
+- [x] `panel/channel_menu.rs`: `ChannelMenuItem`, `channel_menu_items`, `channel_item_label` (moved, tests moved with them), `TerminalPanel::active_channel`, `TerminalPanel::apply_channel_item`, and the submenu builder used by `tab_context_menu`.
+- [x] `input/menu.rs` and its caller in `terminal_view/render.rs`: drop the submenu and the three `MenuContext` fields.
+- [x] Tests, docs, gate, debug binary.
 
 Choices left open by the request (decided here, for review):
 
@@ -88,16 +88,19 @@ No new decision record; `DEC-0009` (membership per Space) is respected and uncha
 `cargo test -p oneterm-terminal-view` (the moved menu-item tests, the new tab-menu tests), clippy, fmt, `check-doc-paths`, `check-english`, the full `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`), the debug app for `ui-verifier`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Filled in at the end of the packet.
+- **Tests.** `oneterm-terminal-view`: the four item-table tests moved with their code to `panel/channel_menu.rs` (`a_non_member_space_is_offered_the_five_channels_only`, `leave_and_close_need_a_membership`, `the_tab_wide_items_need_siblings`, `the_current_channel_is_the_only_marked_item`); new `panel/tests/tab_menu_and_card.rs` `the_tab_menus_channel_items_act_on_the_right_clicked_tab` (two tabs, the item applied on the second joins only its active Space, the marker and the Close row follow, Leave leaves the other tab alone, Close empties the channel in every tab). `PopupMenu` keeps its items private, so the placement itself (between Duplicate and Close, the terminal menu without it) is for `ui-verifier`.
+- **Removed.** `MenuContext.{channel, tab_spaces, tab_has_member}`, `BroadcastOrigin::channel` (no remaining reader), the submenu builder and its three helpers in `input/menu.rs`.
+- **Known loss (recorded in Plan).** A split tab's non-active Space can no longer be addressed from a menu directly; focus it first.
+- **Gate.** See the report: `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree `target`), `cargo build -p oneterm-app`.
 
 ## Handoff
 

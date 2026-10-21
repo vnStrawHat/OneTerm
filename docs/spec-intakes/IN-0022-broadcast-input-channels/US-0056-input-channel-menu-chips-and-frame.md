@@ -23,6 +23,8 @@ Created: 2026-09-09
 - Risk lane: normal
 - Spec Intake, when required: IN-0022
 
+> Amended by `US-0199` (2026-10-21): the "Input Channel" submenu this packet added to the terminal's context menu now lives in the tab's context menu. Everything below describes `US-0056` as built.
+
 ## Outcome
 
 From a Space's context menu the user joins channel A..E, leaves, closes the channel, or
