@@ -270,6 +270,22 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner requests, 2026
 
 **Documentation.** `docs/gui-layout.md` "Vertical tabs" (anatomy, header, scrolling, collapsing) and the Status bar section, `high-level-design.md` (wireframes, rail anatomy, zoom row, collapse step), this entry.
 
+## Rework 5 2026-10-21 (owner): a hover background on every rail row
+
+Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-10-21 (translated from Vietnamese): "When hovering a vertical tab, I want that tab's background to change colour as a highlight. Today only the title text changes." The other rework 5 requests (status bar separator, the collapsed cell's hover card) are in the `US-0198` Rework 5 entry.
+
+**Root cause.** The rail's `.hover(text_color)` on the row's `Tab` never ran for its background: the kit's `Tab::render` registers its own `.hover(..)` afterwards, and a gpui `hover` call *replaces* the previous hover style, so what showed was the kit's hover for an unselected tab (the active-foreground text colour over a transparent fill).
+
+**Outcome.** Every unselected row of the rail, expanded or collapsed, gets the theme's list hover fill (`theme.list_hover`, the colour the session tree and SFTP rows use for hover) across the whole row, behind the content. It is a first child of the row, an `absolute` fill that is transparent until the row's hover group is hovered (`group_hover`), so it does not depend on the kit's replaced hover style. The selected row keeps its active background and accent bar (no hover fill is added to it, so hovering it changes nothing); the 1 px divider is the row's own bottom border and the fill sits inside it, so the divider stays. The grip, number, badges and text are drawn after the fill.
+
+**Contrast.** The fill is translucent over the rail's `tab_bar.background`, and the row's text is `tab.active.foreground` (the kit's hover text colour) and `muted.foreground` (directory, grip) with the OSC 7501 bell in `warning`. `scripts/check-theme-contrast.py` gets a new surface, `tab_bar.hover.background` (= `list.hover.background` composited over `tab_bar.background`), listed for `tab.active.foreground`, `muted.foreground` and `warning.background`; the hierarchy rule therefore also compares `tab.active.foreground` against `muted.foreground` on it.
+
+**Acceptance.**
+
+- [ ] An unselected row (expanded and collapsed) has the hover fill element; the selected row does not (workspace test).
+- [ ] The contrast check measures the hover surface in every built-in theme and passes.
+- [ ] On screen, by `ui-verifier`: hovering a row in two themes, the active row unchanged, the divider and accent bar visible, collapsed cells likewise.
+
 ## Handoff
 
 Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0196` in the intake. `US-0197` (resize, `clamp_tab_rail_width`, done) and `US-0198` (collapse) build on `tab_rail.rs` and the stored `vertical_tabs` fields.
