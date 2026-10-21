@@ -1271,11 +1271,14 @@ fn expanding_the_rail_keeps_the_active_row_in_view(cx: &mut TestAppContext) {
     );
 }
 
-/// `US-0198` UI defect D3: in an overflowing collapsed rail a click on a cell must select its
-/// tab and leave the list where it is. The overlay scrollbar takes presses on its track (a
-/// press there pages the list and is not passed on), so the cells must not sit under it.
+/// `US-0198` UI defects D3 and D4: in an overflowing collapsed rail a click anywhere across a
+/// cell, its right edge included, must select its tab and leave the list where it is. The kit's
+/// overlay scrollbar takes presses on its track (a press there pages the list and goes no
+/// further), and it is shown after a wheel scroll or while hovered, so the strip draws none.
 #[gpui::test]
-fn a_click_on_a_cell_of_an_overflowing_collapsed_rail_selects_it(cx: &mut TestAppContext) {
+fn a_click_across_a_cell_of_an_overflowing_collapsed_rail_selects_it(cx: &mut TestAppContext) {
+    use gpui::{ScrollDelta, ScrollWheelEvent};
+
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
@@ -1284,19 +1287,38 @@ fn a_click_on_a_cell_of_an_overflowing_collapsed_rail_selects_it(cx: &mut TestAp
     assert_eq!(rail_width(cx), 44.);
     let list = bounds_of(LIST_SELECTOR, cx).unwrap();
 
-    for (ix, offset) in [(3, 0.5), (5, 0.8), (7, 0.1)] {
+    // The scrollbar is shown while it was just scrolled, which is when a user looks for a cell.
+    cx.simulate_event(ScrollWheelEvent {
+        position: list.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-300.))),
+        ..Default::default()
+    });
+    settle(cx);
+
+    // Every pixel across a cell, left edge to right edge, on a cell that is not the displayed one.
+    let first = (0..40)
+        .find(|ix| row(*ix, cx).is_some_and(|cell| cell.top() >= list.top()))
+        .expect("a cell in view");
+    for across in 0..43 {
+        let displayed = centre_tabs(&window.area, cx).1;
+        let ix = (first..first + 6)
+            .filter(|ix| *ix != displayed)
+            .nth(across % 3)
+            .unwrap();
         let cell = row(ix, cx).expect("a cell in view");
         assert!(cell.bottom() <= list.bottom(), "cell {ix} is in view");
         let before = cell.top();
-        // Across the cell, including 80 % of the way (x = 34 of 43 px), which the kit's 16 px
-        // default track (x >= 27) covered; only the 6 px edge strip is the scrollbar's.
-        let at = point(cell.left() + cell.size.width * offset, cell.center().y);
-        // A real pointer arrives first, which is what shows the overlay scrollbar over its track.
+        let at = point(cell.left() + px(across as f32 + 0.5), cell.center().y);
+        // A real pointer arrives first, which is what shows the overlay scrollbar.
         cx.simulate_mouse_move(at, None, Modifiers::none());
         settle(cx);
         cx.simulate_click(at, Modifiers::none());
         settle(cx);
-        assert_eq!(centre_tabs(&window.area, cx).1, ix, "click at {offset}");
+        assert_eq!(
+            centre_tabs(&window.area, cx).1,
+            ix,
+            "a click {across} px across the cell"
+        );
         assert_eq!(
             row(ix, cx).unwrap().top(),
             before,

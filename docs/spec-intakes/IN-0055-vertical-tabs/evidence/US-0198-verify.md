@@ -164,3 +164,25 @@ Verdict: partly. U1 and U2 pass; D3 needs a fix and a re-walk.
 ### Still by hand (ui-verifier)
 
 - 40 collapsed tabs: click cells at their centre and right half, each selects; drag the 4 px thumb; a press on the badge's right edge pages the list (accepted).
+
+## UI re-walk 2 (D3, head 8da2c685, ui-verifier, 2026-10-21)
+
+Screenshots `uiv198c-*` in the scratchpad `uiv198-shots\`. Cells span x=8..50 in the window; 40 tabs collapsed, list settled by a wheel scroll before every click, a different tab active before each probe. "Selects" is read from the 2 px accent bar position.
+
+| Probe | Result |
+|---|---|
+| Click at the left (x=22) and centre (x=28) | selects, no page jump (`02`, `03`, `04`) |
+| Click at x=33, 36 | selects (`04`) |
+| Click at x=37..41 (about 75% of the width) | FAIL: the tab does not select and the list pages (the active tab leaves the view) (`04-x38`, `05-x37/39/40/41`) |
+| Click at x=43..50 | FAIL: the tab does not select, the list does not move (the previous tab stays active) (`05-x43..x50`) |
+| Click at 5 tabs (no overflow) | selects (earlier walk `38`) |
+| Select tab 39 by click, Expand, collapse again | PASS: accent visible expanded (`07`) and collapsed (`06`, `08`); the click was at x=28 |
+| Thin scrollbar look | visible thin thumb at x~46..48, dark `10` and light `12`; it does not overlap the numbers |
+| Drag the thumb | FAIL / NOT WORKING: dragging from (47, 150) to (47, 420) at the top of the list left the list unmoved (`10`, `11`); the wheel scrolls |
+| Exact earlier repros (34 to 35/33/28, 18 to 3, 12 to 14) | re-done as the x probes above at several rows: left and centre clicks select, right-hand clicks do not |
+
+### Defect
+- **D3 remains, smaller (high-medium): in an overflowing collapsed rail, a press in the right part of a cell (x >= 37, i.e. about the right third, 14 px, not 6 px) does not select the tab.** x=37..41 pages the list; x=43..50 does nothing. Expected (per the coordinator): only the right-most 6 px may be taken by the scrollbar. Steps: 18+ collapsed tabs, wheel scroll once, press at x=40 on a non-active cell. The 75% position (x=40) from the brief is inside the dead zone.
+- **D4 (low): the 4 px scrollbar thumb cannot be dragged** (press at x=47 on the thumb does not move the list), so the thin bar is display-only; the wheel works.
+
+Verdict: partly. Selecting at the left and centre works and expand/collapse keeps the row visible; the right third of each cell still swallows presses.

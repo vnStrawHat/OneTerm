@@ -82,8 +82,6 @@ const HEADER_HEIGHT: Pixels = px(32.);
 /// The collapsed header's least height: three 20 px buttons (expand, `+`, zoom) with 4 px gaps
 /// and padding, so the cells below do not move when a panel offers no zoom button.
 const COLLAPSED_HEADER_HEIGHT: Pixels = px(3. * 20. + 4. * 4.);
-/// The collapsed strip's scrollbar track.
-const COLLAPSED_SCROLLBAR_WIDTH: Pixels = px(6.);
 /// Two lines (`TerminalPanel::title`'s vertical row): the title, then the directory and status.
 pub(super) const ROW_HEIGHT: Pixels = px(TabRowLayout::VERTICAL_ROW_HEIGHT);
 /// A cell of the collapsed rail: a square as wide as the strip (the position number and a
@@ -284,27 +282,6 @@ impl TabRail {
         })
     }
 
-    /// The collapsed strip's scrollbar. The kit's default track is 16 px wide and a press on it
-    /// pages the list and goes no further, which in a 43 px cell would swallow a third of every
-    /// click (`US-0198` D3), so the strip's track is a thin edge instead. It is the kit's own
-    /// scrollbar, drawn as the kit's `vertical_scrollbar` does, with a narrower track and thumb.
-    fn narrow_scrollbar(&self) -> impl IntoElement {
-        div().absolute().inset_0().child(
-            Scrollbar::vertical(&self.scroll_handle)
-                .id("tab-rail-collapsed-scrollbar")
-                .viewport_from_layout()
-                .styles(|styles| {
-                    styles
-                        .track(|track| track.width(COLLAPSED_SCROLLBAR_WIDTH))
-                        .thumb(|thumb| {
-                            thumb
-                                .width(COLLAPSED_SCROLLBAR_WIDTH - px(2.))
-                                .inset(px(1.))
-                        })
-                }),
-        )
-    }
-
     /// The 4 px handle on the rail's right edge. Pressing it arms a drag; the rest is the
     /// tracker, which sees the pointer wherever it goes.
     fn handle(&self, cx: &App) -> Stateful<Div> {
@@ -498,10 +475,13 @@ impl TabRail {
                     .min_h(px(0.))
                     .overflow_hidden()
                     .child(list)
+                    // The 44 px strip draws no scrollbar: the kit's track pages the list on any
+                    // press inside it and passes nothing on, and no track narrow enough to
+                    // leave the cells clickable is draggable (`US-0198` D3, D4). The wheel and
+                    // the auto-reveal of the displayed tab scroll it.
                     .when(!collapsed, |this| {
                         this.vertical_scrollbar(&self.scroll_handle)
-                    })
-                    .when(collapsed, |this| this.child(self.narrow_scrollbar())),
+                    }),
             )
             // No resizing the strip: it has one width.
             .when(!collapsed, |this| this.child(self.handle(cx)))
