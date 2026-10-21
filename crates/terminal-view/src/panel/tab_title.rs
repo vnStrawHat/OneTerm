@@ -215,6 +215,10 @@ pub(super) const TAB_STATUS_SELECTOR: &str = "oneterm-tab-status";
 pub(super) const TAB_LABEL_SELECTOR: &str = "oneterm-tab-label";
 /// Same, for the current directory on line 2 of a vertical row.
 pub(super) const TAB_CWD_SELECTOR: &str = "oneterm-tab-cwd";
+/// Same, for the position number of a collapsed cell.
+pub(super) const TAB_NUMBER_SELECTOR: &str = "oneterm-tab-number";
+/// How far a collapsed cell's badges sit from its corner.
+const COLLAPSED_BADGE_INSET: f32 = 3.;
 
 fn tab_title_label() -> Div {
     // GPUI creates a rectangular content mask when either overflow axis is
@@ -235,12 +239,51 @@ pub(super) fn tab_cwd_label(cwd: String, color: gpui::Hsla) -> Div {
         .child(cwd)
 }
 
+/// The compact cell of the collapsed rail (`US-0198`): the tab's position, the status icon as a
+/// badge in the top-right corner and the recording dot in the top-left. The title is the
+/// row's tooltip and the directory and channel chips are not drawn, so the cell is the same
+/// element as the expanded row minus everything that needs width.
+fn collapsed_row(
+    position: usize,
+    status: Option<gpui::AnyElement>,
+    recording: Option<gpui::Stateful<Div>>,
+) -> Div {
+    div()
+        .relative()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .child(
+            div()
+                .debug_selector(|| TAB_NUMBER_SELECTOR.to_string())
+                .child(position.to_string()),
+        )
+        .children(status.map(|icon| {
+            div()
+                .absolute()
+                .top(px(COLLAPSED_BADGE_INSET))
+                .right(px(COLLAPSED_BADGE_INSET))
+                .child(icon)
+        }))
+        .children(recording.map(|dot| {
+            div()
+                .absolute()
+                .top(px(COLLAPSED_BADGE_INSET))
+                .left(px(COLLAPSED_BADGE_INSET))
+                .child(dot)
+        }))
+}
+
 /// Build the tab-strip row for `panel`: active bar, drag source, middle-click
 /// close, recording dot, status icon, the (double-click to rename) label, and
 /// the × button. The vertical rail's row (`IN-0055`, `US-0196` rework) has two
 /// lines and no ×: the label after the chips and the dot, then the current
 /// directory with the status icon at the end of the line; the tab closes by
-/// middle-click and the context menu.
+/// middle-click and the context menu. The collapsed rail's cell (`US-0198`) is the position
+/// number with the status icon as a corner badge and the title as a tooltip.
 pub(super) fn render_tab_strip(
     panel: &mut TerminalPanel,
     _window: &mut Window,
@@ -248,6 +291,7 @@ pub(super) fn render_tab_strip(
 ) -> impl IntoElement {
     let layout = TabRowLayout::current(cx);
     let vertical = layout == TabRowLayout::Vertical;
+    let collapsed = matches!(layout, TabRowLayout::Collapsed(_));
     let tab_panel = panel.tab_panel.clone();
     let panel_entity = cx.entity().clone();
     let panel_weak = cx.entity().downgrade();
@@ -302,7 +346,9 @@ pub(super) fn render_tab_strip(
         })
         .child(tab_label);
 
-    let row = if vertical {
+    let row = if let TabRowLayout::Collapsed(position) = layout {
+        collapsed_row(position, status_icon, recording_dot)
+    } else if vertical {
         // Line 1: chips, recording dot, title. Line 2: the directory (cut at its start when it
         // does not fit) and the status icon at the end. The rail draws the selected row's accent
         // bar and the reorder grip itself, so this row carries neither the top bar nor the
@@ -392,6 +438,11 @@ pub(super) fn render_tab_strip(
         .debug_selector(|| TAB_ROW_SELECTOR.to_string())
         .relative()
         .h_full()
+        // A collapsed cell has no room for the title, so the tooltip carries it.
+        .when(collapsed, |this| {
+            let title = drag_title.clone();
+            this.tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
+        })
         // Drag the tab into an empty Space with the terminal-specific
         // payload consumed by Space-tree drop targets.
         .when_some(tab_panel, |this, _| {
@@ -589,7 +640,7 @@ fn tab_context_menu(
 pub(super) fn close_following_label(layout: TabRowLayout) -> &'static str {
     match layout {
         TabRowLayout::Horizontal => "Close to the Right",
-        TabRowLayout::Vertical => "Close Tabs Below",
+        TabRowLayout::Vertical | TabRowLayout::Collapsed(_) => "Close Tabs Below",
     }
 }
 

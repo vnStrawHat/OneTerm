@@ -18,6 +18,8 @@ pub enum TabRowLayout {
     Horizontal,
     /// A full-width row in the vertical rail.
     Vertical,
+    /// A compact cell in the collapsed rail: the tab's position (1-based) and its status.
+    Collapsed(usize),
 }
 
 impl Global for TabRowLayout {}
@@ -114,6 +116,14 @@ mod tests {
                 assert_eq!(TabRowLayout::current(&vertical), TabRowLayout::Vertical);
             }
             assert_eq!(TabRowLayout::current(cx), TabRowLayout::Horizontal);
+        });
+    }
+
+    #[gpui::test]
+    fn a_collapsed_row_carries_its_position(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let scope = TabRowLayout::Collapsed(3).scope(cx);
+            assert_eq!(TabRowLayout::current(&scope), TabRowLayout::Collapsed(3));
         });
     }
 

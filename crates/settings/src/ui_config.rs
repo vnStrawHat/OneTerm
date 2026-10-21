@@ -77,8 +77,8 @@ pub struct UiConfig {
     /// The vertical tab rail (`IN-0055`): `{ "enabled", "width", "collapsed" }`. Omitted while
     /// every field is its default; a value of the wrong shape loads as the default instead of
     /// quarantining the whole file. Written only through
-    /// [`UiConfig::set_vertical_tabs_enabled`] and [`UiConfig::set_vertical_tabs_width`]
-    /// (`collapsed` gets its writer with the collapse packet).
+    /// [`UiConfig::set_vertical_tabs_enabled`], [`UiConfig::set_vertical_tabs_width`] and
+    /// [`UiConfig::set_vertical_tabs_collapsed`].
     #[serde(
         default,
         skip_serializing_if = "VerticalTabs::is_default",
@@ -132,7 +132,8 @@ pub struct VerticalTabs {
     /// clamped to the tab group's own width.
     #[serde(skip_serializing_if = "VerticalTabs::is_default_width")]
     pub width: u32,
-    /// The rail is shown as a narrow strip. Remembered while the rail is off.
+    /// The rail is shown as a [`COLLAPSED_WIDTH`](VerticalTabs::COLLAPSED_WIDTH) strip.
+    /// Remembered while the rail is off.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub collapsed: bool,
 }
@@ -150,6 +151,8 @@ impl Default for VerticalTabs {
 impl VerticalTabs {
     /// The rail's width until the user sets one.
     pub const DEFAULT_WIDTH: u32 = 220;
+    /// The width of the collapsed strip.
+    pub const COLLAPSED_WIDTH: u32 = 44;
     /// The widths a stored preference may take.
     pub const WIDTH_RANGE: std::ops::RangeInclusive<u32> = 140..=400;
 
@@ -480,6 +483,22 @@ impl UiConfig {
         cx.refresh_windows();
     }
 
+    /// Collapse the vertical tab rail to a strip, or expand it: the one writer of
+    /// `vertical_tabs.collapsed`, used by the rail's header button. A value equal to the stored
+    /// one writes nothing. The entity changes first, so the rail collapses even where the write
+    /// is refused (an elevated window). Persists and redraws every window.
+    pub fn set_vertical_tabs_collapsed(collapsed: bool, cx: &mut App) {
+        if Self::read_vertical_tabs(cx).collapsed == collapsed {
+            return;
+        }
+        Self::global(cx).update(cx, |cfg, cx| {
+            cfg.vertical_tabs.collapsed = collapsed;
+            cx.notify();
+        });
+        Self::persist(cx);
+        cx.refresh_windows();
+    }
+
     /// Set the idle lock's timeout (clamped to [`Self::LOCK_AFTER_IDLE_RANGE`]): the one
     /// writer of `lock_after_idle_minutes`, used by Settings > Security. Persists; the
     /// lock timer observes the config and restarts with the new value.
@@ -784,6 +803,40 @@ mod tests {
         assert_eq!(width("-30"), 140);
         assert_eq!(width("401"), 400);
         assert_eq!(width("100000"), 400);
+    }
+
+    /// `collapsed` is remembered whatever `enabled` says, is written alone when it is the only
+    /// field that differs, and a value of the wrong type reads as expanded without costing the
+    /// other fields (`US-0198`).
+    #[test]
+    fn the_collapsed_flag_is_lenient_and_written_alone() {
+        let parse = |raw: &str| UiConfig::parse_document(raw).unwrap().vertical_tabs;
+        let off_and_collapsed = parse(r#"{"vertical_tabs":{"collapsed":true}}"#);
+        assert!(off_and_collapsed.collapsed && !off_and_collapsed.enabled);
+        let value = serde_json::to_value(UiConfig {
+            vertical_tabs: off_and_collapsed,
+            ..UiConfig::default()
+        })
+        .unwrap();
+        assert_eq!(
+            value["vertical_tabs"],
+            serde_json::json!({"collapsed": true})
+        );
+        for wrong in [r#""yes""#, "1", "[]", "null"] {
+            let tabs = parse(&format!(
+                r#"{{"vertical_tabs":{{"enabled":true,"width":300,"collapsed":{wrong}}}}}"#
+            ));
+            assert_eq!(
+                tabs,
+                VerticalTabs {
+                    enabled: true,
+                    width: 300,
+                    collapsed: false
+                },
+                "{wrong}"
+            );
+        }
+        assert_eq!(VerticalTabs::COLLAPSED_WIDTH, 44);
     }
 
     /// The field is additive: a document with it survives a load and a save, and the rest of

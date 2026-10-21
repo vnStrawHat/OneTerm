@@ -18,8 +18,8 @@ use oneterm_settings::{UiConfig, VerticalTabs, ui_config::UiConfigGlobal};
 use oneterm_state::{TabRowLayout, panel_names};
 
 use super::tab_rail::{
-    EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, HANDLE_SELECTOR, LIST_SELECTOR,
-    RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
+    COLLAPSED_ROW_HEIGHT, EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, HANDLE_SELECTOR,
+    LIST_SELECTOR, RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
 };
 use super::{MAIN_DOCK_VERSION, dock_skin};
 
@@ -1032,6 +1032,164 @@ fn the_width_setter_clamps_and_skips_an_unchanged_value(cx: &mut TestAppContext)
     for (given, stored, count) in [(220, 220, 0), (9999, 400, 1), (400, 400, 1), (0, 140, 2)] {
         cx.update(|_, cx| UiConfig::set_vertical_tabs_width(given, cx));
         assert_eq!(stored_width(&window, cx), stored, "given {given}");
+        assert_eq!(updates.get(), count, "given {given}");
+    }
+}
+
+fn is_collapsed(window: &RailWindow, cx: &mut VisualTestContext) -> bool {
+    window
+        .config
+        .read_with(cx, |config, _| config.vertical_tabs.collapsed)
+}
+
+/// The header button collapses the rail to the 44 px strip and expands it again, live, with
+/// no panel rebuilt; the content frame follows, the resize handle exists only while expanded,
+/// and the preference's width is back on expanding (`US-0198`).
+#[gpui::test]
+fn the_header_button_collapses_the_rail_to_a_strip_and_expands_it(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        false,
+        &report,
+        cx,
+    );
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_width(300, cx));
+    settle(cx);
+    assert_eq!(rail_width(cx), 300.);
+    assert!(bounds_of(HANDLE_SELECTOR, cx).is_some());
+    assert!(bounds_of(format!("{RAIL_SELECTOR}-expand-rail"), cx).is_none());
+
+    let collapse = bounds_of(format!("{RAIL_SELECTOR}-collapse-rail"), cx).expect("collapse");
+    cx.simulate_click(collapse.center(), Modifiers::none());
+    settle(cx);
+    assert!(is_collapsed(&window, cx));
+    assert_eq!(rail_width(cx), 44., "the strip, whatever the preference");
+    assert_eq!(
+        report.bounds.get().origin.x,
+        bounds_of(RAIL_SELECTOR, cx).unwrap().right(),
+        "the terminal starts where the strip ends"
+    );
+    assert!(
+        bounds_of(HANDLE_SELECTOR, cx).is_none(),
+        "no resizing the strip"
+    );
+    assert!(bounds_of(format!("{RAIL_SELECTOR}-collapse-rail"), cx).is_none());
+    let rows: Vec<_> = (0..3)
+        .map(|ix| row(ix, cx).expect("a cell per tab"))
+        .collect();
+    for pair in rows.windows(2) {
+        assert_eq!(pair[0].size.height, COLLAPSED_ROW_HEIGHT);
+        assert_eq!(pair[1].top(), pair[0].bottom(), "cells stack");
+    }
+    // The cell is as wide as the strip, less its 1 px border.
+    assert_eq!(f32::from(rows[0].size.width), 43.);
+
+    let expand = bounds_of(format!("{RAIL_SELECTOR}-expand-rail"), cx).expect("expand");
+    cx.simulate_click(expand.center(), Modifiers::none());
+    settle(cx);
+    assert!(!is_collapsed(&window, cx));
+    assert_eq!(rail_width(cx), 300., "the preference comes back");
+    assert!(bounds_of(HANDLE_SELECTOR, cx).is_some());
+    assert_eq!(report.removed.get(), 0, "no panel was rebuilt");
+}
+
+/// A cell asks the panel for its collapsed layout with the tab's 1-based position, and a click
+/// on it selects the tab.
+#[gpui::test]
+fn a_collapsed_cell_is_built_with_its_position_and_a_click_selects_it(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        true,
+        &report,
+        cx,
+    );
+    assert_eq!(
+        report.title_layout.get(),
+        Some(TabRowLayout::Collapsed(3)),
+        "the last cell drawn is the third"
+    );
+    cx.update(|_, cx| {
+        assert_eq!(TabRowLayout::current(cx), TabRowLayout::Horizontal);
+    });
+
+    let rows: Vec<_> = (0..3).map(|ix| row(ix, cx).unwrap()).collect();
+    assert_eq!(centre_tabs(&window.area, cx).1, 0);
+    cx.simulate_click(rows[2].center(), Modifiers::none());
+    settle(cx);
+    assert_eq!(centre_tabs(&window.area, cx).1, 2);
+}
+
+/// Collapsed, the title row's own drag and the grip's reorder still start from the right place:
+/// the cell's content drags the tab, and the grip (a 12 px overlay on its left edge) reorders.
+#[gpui::test]
+fn a_collapsed_cell_keeps_the_content_drag_and_the_grip_reorder(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        true,
+        &report,
+        cx,
+    );
+    let (original, _) = centre_tabs(&window.area, cx);
+    let target = row(2, cx).unwrap().center();
+
+    let title = bounds_of("probe-row-a", cx).expect("the title row fills the cell");
+    drag_to(title.center() + point(px(8.), px(0.)), target, cx);
+    assert!(has_active_drag(cx), "the cell's content starts a drag");
+    assert_eq!(report.title_drags.get(), 1, "it is the title row's drag");
+    release(target, cx);
+    assert_eq!(centre_tabs(&window.area, cx).0, original);
+
+    let grip = bounds_of(format!("{GRIP_SELECTOR}-2"), cx).expect("a grip per cell");
+    assert_eq!(grip.size.width, px(12.));
+    let first = row(0, cx).unwrap().center();
+    drag_to(grip.center(), first, cx);
+    assert!(has_active_drag(cx), "the grip starts a drag");
+    assert_eq!(report.title_drags.get(), 1, "not the title row's drag");
+    release(first, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[2], original[0], original[1]]
+    );
+}
+
+/// Turning the Vertical Tabs switch off keeps the collapsed state, and on again returns to the
+/// strip.
+#[gpui::test]
+fn the_switch_off_keeps_the_rail_collapsed(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    settle(cx);
+    assert_eq!(rail_width(cx), 44.);
+
+    set_vertical(&window.config, false, cx);
+    assert!(bounds_of(RAIL_SELECTOR, cx).is_none(), "the strip is back");
+    assert!(is_collapsed(&window, cx), "and the collapse is remembered");
+
+    set_vertical(&window.config, true, cx);
+    assert_eq!(rail_width(cx), 44.);
+}
+
+/// The collapse setter stores the flag, redraws, and does nothing for a value already stored.
+#[gpui::test]
+fn the_collapse_setter_skips_an_unchanged_value(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let (updates, _subscription) = count_config_updates(&window.config, cx);
+    for (given, count) in [(false, 0), (true, 1), (true, 1), (false, 2)] {
+        cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(given, cx));
+        assert_eq!(is_collapsed(&window, cx), given);
         assert_eq!(updates.get(), count, "given {given}");
     }
 }
