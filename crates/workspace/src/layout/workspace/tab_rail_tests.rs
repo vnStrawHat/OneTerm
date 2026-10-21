@@ -1193,3 +1193,76 @@ fn the_collapse_setter_skips_an_unchanged_value(cx: &mut TestAppContext) {
         assert_eq!(updates.get(), count, "given {given}");
     }
 }
+
+/// Advisor (`US-0198` verify): 40 collapsed cells overflow the list without a scrollbar gutter
+/// (each cell is the strip less its 1 px border), and a tab that becomes active from elsewhere
+/// is scrolled into view, as expanded rows are.
+#[gpui::test]
+fn forty_collapsed_cells_scroll_without_a_gutter_and_reveal_the_active_one(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    let labels: Vec<&'static str> = (0..40).map(|ix| &*format!("tab {ix}").leak()).collect();
+    set_centre(&window.area, &terminals(&labels), false, &report, cx);
+
+    let list = bounds_of(LIST_SELECTOR, cx).expect("the list is drawn");
+    let first = row(0, cx).unwrap();
+    let last = row(39, cx).unwrap();
+    assert_eq!(first.size.height, COLLAPSED_ROW_HEIGHT);
+    assert_eq!(f32::from(first.size.width), 43., "no gutter is reserved");
+    assert!(last.bottom() > list.bottom(), "40 cells of 44 px overflow");
+
+    let (panels, _) = centre_tabs(&window.area, cx);
+    let newest = panels[39];
+    cx.update(|w, app| {
+        window
+            .area
+            .update(app, |area, cx| area.select_panel(newest, w, cx))
+    });
+    settle(cx);
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+    let last = row(39, cx).unwrap();
+    assert!(
+        last.top() >= list.top() && last.bottom() <= list.bottom(),
+        "the newly active cell {last:?} must be inside the list {list:?}"
+    );
+}
+
+/// Advisor pin (`US-0198` verify, finding 1): the scroll offset is kept in pixels across a
+/// collapse or an expand, and `scroll_to_item` runs only when the active index changes, so
+/// with many tabs the active row leaves the viewport when the row height changes (44 -> 64 px
+/// here). Flip by removing `should_panic` once the rail re-reveals the active row after the
+/// layout change.
+#[gpui::test]
+#[should_panic(expected = "must still be inside the list")]
+fn expanding_the_rail_keeps_the_active_row_in_view(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
+    let labels: Vec<&'static str> = (0..40).map(|ix| &*format!("tab {ix}").leak()).collect();
+    set_centre(&window.area, &terminals(&labels), false, &report, cx);
+    let (panels, _) = centre_tabs(&window.area, cx);
+    let newest = panels[39];
+    cx.update(|w, app| {
+        window
+            .area
+            .update(app, |area, cx| area.select_panel(newest, w, cx))
+    });
+    settle(cx);
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+    let last = row(39, cx).unwrap();
+    assert!(last.top() >= list.top() && last.bottom() <= list.bottom());
+
+    let expand = bounds_of(format!("{RAIL_SELECTOR}-expand-rail"), cx).expect("expand");
+    cx.simulate_click(expand.center(), Modifiers::none());
+    settle(cx);
+    assert_eq!(rail_width(cx), 220.);
+    let list = bounds_of(LIST_SELECTOR, cx).unwrap();
+    let last = row(39, cx).expect("row 39 is drawn");
+    assert!(
+        last.top() >= list.top() && last.bottom() <= list.bottom(),
+        "the active row {last:?} must still be inside the list {list:?} after expanding"
+    );
+}
