@@ -1414,18 +1414,3 @@ fn a_click_across_a_cell_of_an_overflowing_collapsed_rail_selects_it(cx: &mut Te
         );
     }
 }
-
-/// Advisor pin (`US-0199-verify.md` finding 1). The rail's row is `gpui_base::Tab`, whose
-/// `render` registers no hover style of its own, so the row's `.hover(..)` at `tab_rail.rs` is
-/// the live one: gpui refuses a second `hover` on one element in a debug build, so a kit that
-/// "registered its own `.hover(..)` afterwards" (the recorded root cause) would panic every
-/// rail test instead of silently replacing the row's style. Flip or delete this test when the
-/// comment and the `US-0196` Rework 5 record say why the fill was really missing.
-#[test]
-#[should_panic(expected = "hover style already set")]
-fn a_second_hover_on_a_base_tab_panics_so_the_kit_cannot_replace_the_rows() {
-    use gpui::{InteractiveElement as _, Styled as _};
-    let _ = gpui_base::Tab::new(0usize)
-        .hover(|style| style.text_color(gpui::red()))
-        .hover(|style| style.bg(gpui::blue()));
-}

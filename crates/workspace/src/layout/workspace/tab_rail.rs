@@ -662,14 +662,13 @@ impl TabRail {
                         .bg(accent),
                 )
             })
-            // The whole row's hover fill, behind the content. Not the row's own `hover`: the kit's
-            // `Tab::render` registers its hover style after ours and a gpui `hover` replaces the
-            // previous one, so only the text colour ever changed. The selected row keeps its
-            // active fill and accent bar.
+            // The whole row's hover fill, behind the content. The row's own `hover` above sets
+            // only the text colour (nothing ever gave it a background), and a second `hover` on
+            // one element is refused by gpui, so the fill is a child that follows the row's hover
+            // group. The selected row keeps its active fill and accent bar.
             .when(!selected, |this| {
                 this.child(
                     div()
-                        .id(("tab-rail-hover", ix))
                         .debug_selector(move || format!("{HOVER_SELECTOR}-{ix}"))
                         .absolute()
                         .top_0()

@@ -176,7 +176,7 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner requests, 2026
 
 - [x] With Vertical Tabs on, a separator sits between the button and the clock (test: `toggle.right() + 8 + 1 + 8 == clock.left()`); with it off there is neither.
 - [x] The centre budget accounts for the separator (the constant equals button + separator + two gaps).
-- [x] The hover card is built from the same function as the expanded row (test draws the card: title, directory, status icon, and a chip and the recording dot are in it).
+- [x] The hover card is built from the same function as the expanded row (test draws the card: title, directory below it, status icon on line 2, width. The channel chips and the recording dot come from the same `tab_chips` / `recording_dot` helpers the expanded row uses, but the card test does not drive a channel or a log, so they are not pinned there).
 - [ ] On screen, by `ui-verifier`: separator in two themes, the card on a collapsed cell with chips / a long directory / the status icon, hidden while the context menu is open.
 
 ### Gaps
