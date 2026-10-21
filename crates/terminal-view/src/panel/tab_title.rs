@@ -27,7 +27,7 @@ use gpui_component::{
 };
 use oneterm_core::ShellKind;
 use oneterm_state::TabRowLayout;
-use oneterm_terminal::{ProgramState, SessionKind, TerminalLogState};
+use oneterm_terminal::{ProgramState, TerminalLogState};
 use oneterm_theme::notif_ext::notify;
 
 use super::TerminalPanel;
@@ -50,19 +50,10 @@ impl TerminalPanel {
         cx.notify();
     }
 
-    /// The directory line of a vertical tab row: the active Space's OSC 7 working directory
-    /// (already sanitised by the session), `None` while the shell has reported none.
+    /// The directory line of a vertical tab row: the very string the status bar's breadcrumb
+    /// shows for this tab (`None` while the shell has reported no directory).
     pub(super) fn tab_cwd(&self, cx: &App) -> Option<String> {
-        let view = self.tree.active_terminal()?;
-        let session = view.read(cx).session.read(cx);
-        let cwd = session.cwd()?;
-        let local = session.kind() == SessionKind::Local;
-        let home = local.then(oneterm_core::home_dir).flatten();
-        Some(cwd_display(
-            &cwd.to_string_lossy(),
-            home.as_deref().and_then(Path::to_str),
-            local,
-        ))
+        self.breadcrumb_label(cx)
     }
 
     /// The OSC 7501 state the tab's status icon shows: only for an unsplit tab
@@ -92,60 +83,6 @@ impl TerminalPanel {
                         matches!(logging.state(), TerminalLogState::Running { .. })
                     })
             })
-    }
-}
-
-/// Whether `path` starts with a Windows drive (`C:\`, `c:/`, or `C:` alone).
-fn is_drive_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    bytes.len() >= 2
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes.get(2), None | Some(b'\\' | b'/'))
-}
-
-/// The directory line of a vertical tab row (`IN-0055`). A local tab abbreviates the user's
-/// home directory to `~` and shows a drive path with `\`; an SSH tab shows the remote path
-/// exactly as the shell reported it. Strings only: a Windows-shaped path is never built with
-/// `std::path`, whose separator is the host's.
-pub(super) fn cwd_display(cwd: &str, home: Option<&str>, local: bool) -> String {
-    if !local {
-        return cwd.to_string();
-    }
-    let drive = is_drive_path(cwd);
-    let shown = if drive {
-        cwd.replace('/', "\\")
-    } else {
-        cwd.to_string()
-    };
-    let Some(home) = home else {
-        return shown;
-    };
-    let home = if drive {
-        home.replace('/', "\\")
-    } else {
-        home.to_string()
-    };
-    let home = home.trim_end_matches(['\\', '/']);
-    // The root as home (`/`) would turn every path into `~/...`.
-    if home.is_empty() {
-        return shown;
-    }
-    // A drive path compares case-insensitively (the file system does); a POSIX one does not.
-    let prefix = shown.get(..home.len()).filter(|prefix| {
-        if drive {
-            prefix.eq_ignore_ascii_case(home)
-        } else {
-            *prefix == home
-        }
-    });
-    match prefix {
-        Some(_) if shown.len() == home.len() => "~".to_string(),
-        // Whole components only: `C:\Users\a` is not the home of `C:\Users\ab`.
-        Some(_) if shown[home.len()..].starts_with(['\\', '/']) => {
-            format!("~{}", &shown[home.len()..])
-        }
-        _ => shown,
     }
 }
 

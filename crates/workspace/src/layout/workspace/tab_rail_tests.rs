@@ -459,6 +459,10 @@ fn the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it(cx: &mut TestAppC
     // Rows that fit leave no scrollbar gutter.
     let list = bounds_of(LIST_SELECTOR, cx).unwrap();
     assert_eq!(rows[0].right(), list.right());
+    // A 1 px divider sits on each row's bottom edge, inside the 64 px: the row's content box
+    // (the grip is as tall as it) is one pixel shorter.
+    let grip = bounds_of(format!("{GRIP_SELECTOR}-0"), cx).expect("the grip column");
+    assert_eq!(grip.size.height, ROW_HEIGHT - px(1.));
 
     assert_eq!(centre_tabs(&window.area, cx).1, 0);
     cx.simulate_click(rows[2].center(), Modifiers::none());

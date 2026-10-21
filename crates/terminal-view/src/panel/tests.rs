@@ -1086,6 +1086,22 @@ fn tab_row_window_of_width(
     oneterm_terminal::test_support::FakeSessionProbe,
     &mut VisualTestContext,
 ) {
+    let (dropped, probe, _, cx) = tab_row_window_with_panel(cx, layout, width, kind);
+    (dropped, probe, cx)
+}
+
+/// Same, also handing back the first tab's panel.
+fn tab_row_window_with_panel(
+    cx: &mut TestAppContext,
+    layout: oneterm_state::TabRowLayout,
+    width: f32,
+    kind: oneterm_terminal::SessionKind,
+) -> (
+    Rc<std::cell::Cell<usize>>,
+    oneterm_terminal::test_support::FakeSessionProbe,
+    gpui::Entity<TerminalPanel>,
+    &mut VisualTestContext,
+) {
     cx.update(gpui_component::init);
     cx.update(crate::init);
     cx.update(oneterm_settings::TerminalSettings::init);
@@ -1094,7 +1110,7 @@ fn tab_row_window_of_width(
     let counted = dropped.clone();
     let (first_session, first_probe) = FakeTerminalSession::boxed_with_kind(24, 80, "first", kind);
     let (second_session, _) = FakeTerminalSession::boxed(24, 80, "second");
-    let (_host, cx) = cx.add_window_view(move |window, cx| {
+    let (host, cx) = cx.add_window_view(move |window, cx| {
         let dock_area = cx.new(|cx| DockArea::new("tab-row-test", None, window, cx));
         let first =
             cx.new(|cx| TerminalPanel::from_spec(session_spec(first_session, "First"), window, cx));
@@ -1117,7 +1133,8 @@ fn tab_row_window_of_width(
             width,
         }
     });
-    (dropped, first_probe, cx)
+    let panel = host.read_with(cx, |host, _| host.panel.clone());
+    (dropped, first_probe, panel, cx)
 }
 
 /// The bounds of the drawn row and of the parts of it a test asks about.
@@ -1351,52 +1368,41 @@ fn a_long_directory_is_cut_at_its_start_and_follows_the_width(cx: &mut TestAppCo
     ));
 }
 
-/// A tab's directory line: `~` for the local home, `\` for a local drive path, untouched on SSH.
-#[test]
-fn the_directory_line_abbreviates_the_local_home_only() {
-    use crate::panel::tab_title::cwd_display;
+/// A vertical row's directory is the status bar's: the breadcrumb text of the same tab, as the
+/// session reported it, for a local drive path, a path in the home folder and an SSH path. No
+/// `~` is ever substituted.
+#[gpui::test]
+fn the_rows_directory_is_the_status_bars(cx: &mut TestAppContext) {
+    use oneterm_state::TabRowLayout;
+    use oneterm_terminal::SessionKind;
 
-    let home = Some("C:\\Users\\dev");
-    // A local Windows tab: backslashes, `~` for the home, whole components only.
-    assert_eq!(
-        cwd_display("C:/Users/dev/src/panel", home, true),
-        "~\\src\\panel"
-    );
-    assert_eq!(cwd_display("c:\\users\\DEV", home, true), "~");
-    assert_eq!(
-        cwd_display("C:/Users/devops/src", home, true),
-        "C:\\Users\\devops\\src"
-    );
-    assert_eq!(cwd_display("D:/work/x", home, true), "D:\\work\\x");
-    assert_eq!(cwd_display("D:/work/x", None, true), "D:\\work\\x");
-    // The same home with a trailing separator.
-    assert_eq!(
-        cwd_display("C:/Users/dev/a", Some("C:\\Users\\dev\\"), true),
-        "~\\a"
-    );
-    // A local POSIX tab keeps `/` and compares case-sensitively.
-    assert_eq!(
-        cwd_display("/home/dev/src", Some("/home/dev"), true),
-        "~/src"
-    );
-    assert_eq!(
-        cwd_display("/home/Dev/src", Some("/home/dev"), true),
-        "/home/Dev/src"
-    );
-    assert_eq!(
-        cwd_display("/home/devops", Some("/home/dev"), true),
-        "/home/devops"
-    );
-    assert_eq!(cwd_display("/opt/x", Some("/"), true), "/opt/x");
-    // An SSH tab shows the remote path as reported, even when it looks like the local home.
-    assert_eq!(
-        cwd_display("/home/dev/src", Some("/home/dev"), false),
-        "/home/dev/src"
-    );
-    assert_eq!(
-        cwd_display("C:/Users/dev/src", home, false),
-        "C:/Users/dev/src"
-    );
+    let home = oneterm_core::home_dir().expect("tests run with a home directory");
+    let cases = [
+        (
+            SessionKind::Local,
+            std::path::PathBuf::from("D:\\work\\src"),
+        ),
+        (SessionKind::Local, home.join("src").join("panel")),
+        (SessionKind::Local, home.clone()),
+        (
+            SessionKind::Ssh,
+            std::path::PathBuf::from("/srv/app/releases"),
+        ),
+    ];
+    for (kind, reported) in cases {
+        let (_, probe, panel, cx) =
+            tab_row_window_with_panel(cx, TabRowLayout::Vertical, 220., kind);
+        probe.set_cwd(Some(reported.clone()));
+        cx.run_until_parked();
+        let (row, status_bar) = cx.update(|_, cx| {
+            let panel = panel.read(cx);
+            (panel.tab_cwd(cx), panel.breadcrumb_label(cx))
+        });
+        let shown = reported.display().to_string();
+        assert_eq!(row, status_bar, "{kind:?} {shown}");
+        assert_eq!(row.as_deref(), Some(shown.as_str()));
+        assert!(!shown.starts_with('~'));
+    }
 }
 
 /// OSC 7 from the shell tells the panel to repaint, so the row's path is live.

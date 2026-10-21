@@ -544,7 +544,7 @@ impl TabRail {
             theme.tab_active_foreground,
             theme.tokens.tab_active,
         );
-        let muted = theme.muted_foreground;
+        let (muted, divider) = (theme.muted_foreground, theme.border);
         // Not `table_active_border`: OneTerm blanks that for the data tables after every theme
         // change, which made the bar vanish.
         let accent = oneterm_theme::selection_accent(cx);
@@ -608,6 +608,9 @@ impl TabRail {
             .h(ROW_HEIGHT)
             .flex_shrink_0()
             .justify_start()
+            // A 1 px divider inside the row's 64 px (sizes are border-box).
+            .border_b_1()
+            .border_color(divider)
             .text_sm()
             .text_color(foreground)
             .group(hover_group)
@@ -622,7 +625,9 @@ impl TabRail {
                         let line = cx.theme().drag_border;
                         match drop_edge(from, ix) {
                             DropEdge::Nowhere => this,
-                            DropEdge::Above => this.border_t_2().border_color(line),
+                            // The line replaces the row's own divider on that edge; keeping
+                            // the bottom one would recolour it as a second drop line.
+                            DropEdge::Above => this.border_t_2().border_b_0().border_color(line),
                             DropEdge::Below => this.border_b_2().border_color(line),
                         }
                     }
