@@ -149,3 +149,42 @@ comment and two record paragraphs; no product code changes). Findings 3 to 6 are
   right-click an inactive tab and confirm the chip appears on that tab; the terminal menu
   without the submenu.
 - Finding 2: which of (a), (b), (c).
+
+## Advisor re-review
+
+Date: 2026-10-21. Reviewed head: `2bfa0b69` (`081b425f` findings 1, 3, 4; `2bfa0b69` findings 2
+and 5, owner rulings), same branch.
+
+**Verdict: PASS.** Findings 1 to 5 are closed; two new low notes below, neither blocking.
+
+Gate: `cargo clippy -p oneterm-workspace --all-targets -- -D warnings` clean;
+`cargo test -p oneterm-workspace` 111 passed, 3 ignored (the pin is gone, as asked);
+`check-theme-contrast.py` 1755 pairings / 429 rows, all at their floor, 663 hierarchy
+comparisons; `--self-test` passes; `check-english.py` 1144 files; `check-doc-paths.py` 219
+paths. No other crate changed.
+
+Measured-pair set, before (`6952618c`) vs after, computed from both modules' tables:
+removed `warning.background` x {`tab_bar.background`, `tab.background`, `tab.active.background`}
+at 4.5:1; added the same three plus `tab_bar.hover.background` at 3.0:1. Nothing else: every
+other `SURFACES` pair, `HIERARCHY`, `PARENTS` and `FALLBACKS` are identical. So the only
+loosening is the bell on the three tab surfaces, which is the owner's ruling (one rule for
+the glyph everywhere), and the text uses of `warning.background` stay at 4.5:1. The worst
+glyph row is still 4.01:1 (Hybrid Dark on the hover fill), well above 3:1.
+
+Finding 1 text: the comment at `tab_rail.rs:665-668`, the US-0196 Rework 5 "Root cause" and
+`docs/gui-layout.md` now say the row's own hover set only the text colour and that gpui
+refuses a second `hover` on one element; both statements are true (`gpui_base::Tab::render`
+registers no hover, `reference/gpui-kit/crates/base/src/tabs.rs:150-182`; gpui-pre 0.3.9
+`div.rs:842-848`). Finding 3: the stateful id is gone, the fill is a plain `div` with the
+selector. Finding 4: the acceptance line now says what the card test pins and what it does
+not. Finding 5: the US-0199 Plan records the owner's acceptance.
+
+New, low, not blocking:
+
+- `scripts/check-theme-contrast.py` `--report` summary still prints
+  `"{n} below {FLOOR}:1"`; a glyph failure would be counted there under the 4.5:1 wording.
+  One f-string.
+- The new self-test lines assert `measure()` on two fixtures, which proves the ratio maths
+  (already covered) rather than that `rows()` applies `GLYPH_FLOOR` to a glyph row and
+  `FLOOR` to the rest. A fixture variant run through `rows()` with one glyph at 3.5:1 would
+  pin the tier itself.
