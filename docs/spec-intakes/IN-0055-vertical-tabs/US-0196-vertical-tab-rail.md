@@ -208,6 +208,27 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-
 
 **Verification.** `cargo test -p oneterm-terminal-view`, `-p oneterm-workspace`, `-p oneterm-state`; clippy; fmt; the doc and contrast scripts; the full `pwsh scripts/ci-local.ps1` once after `US-0197` (owner request: one full gate at the end of both parts).
 
+## Rework 3 2026-10-21 (owner): the tab's directory is the status bar's, and a divider between rows
+
+Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-10-21 (translated from Vietnamese): (1) "When I open a new cmd terminal, the cwd on the tab shows `~` while the status bar shows the full path. Make the tab's cwd the same as the status bar's." (2) "Add a bottom border to separate the tabs more clearly."
+
+**Outcome.** Line 2 of a vertical row shows exactly the string the status bar's breadcrumb shows for that tab: `TerminalPanel::breadcrumb_label` (the session's OSC 7 working directory, `PathBuf::display`). There is no `~` substitution, no separator rewriting and no local/SSH difference any more; `cwd_display` and `is_drive_path` are deleted. The start-cut (`TextOverflow::TruncateStart`) stays. Each vertical row has a 1 px bottom border in the theme's `border` token (the colour the rail's own header divider and right edge already use), inside the row's 64 px (the rail does not grow); the horizontal strip is unchanged.
+
+**Choices left open by the request.**
+
+- *Where the one formatter lives.* The status bar reaches the label through `oneterm_state::active_terminal::breadcrumb`, whose provider (`terminal-view/src/status.rs`) calls `TerminalPanel::breadcrumb_label`. The tab row is drawn by the same `TerminalPanel` in the same crate, so no code moves: `tab_cwd` is now a one-line call to `breadcrumb_label`. The status bar's width-driven `PathTail` shortening is presentation of the same string and stays the bar's.
+- *The border and the drop line.* The row's border is the row's own `border_b_1` (taffy sizes are border-box, so the row stays 64 px). While a `DragPanel` hovers a row, the drop line (2 px, `drag_border`, above or below) replaces it on that edge; "above" also drops the row's own divider so the single border colour is not mistaken for a second drop line.
+
+**Acceptance.**
+
+- [ ] Line 2 equals the status bar's text for a local drive path, a path in the user's home and an SSH path (unit tests compare the tab's string with `breadcrumb_label` and with the path the session reports; none contains `~`).
+- [ ] `cwd_display` and its test are gone; a long path is still cut at its start (existing test).
+- [ ] Each vertical row draws a 1 px bottom border in `theme.border`; the row is still 64 px and the header 32 px (workspace test).
+- [ ] The horizontal row is unchanged (existing test).
+- [ ] On screen, by `ui-verifier`: a new `cmd` tab shows the same path in the tab and in the status bar; the divider in a light and a dark theme; the drop line still reads clearly on a hovered row.
+
+**Documentation.** `docs/gui-layout.md` "Vertical tabs" (row description, anatomy), `high-level-design.md` (Rail anatomy row content, wireframe note, Interactions), this packet.
+
 ## Handoff
 
 Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0196` in the intake. `US-0197` (resize, `clamp_tab_rail_width`, done) and `US-0198` (collapse) build on `tab_rail.rs` and the stored `vertical_tabs` fields.
