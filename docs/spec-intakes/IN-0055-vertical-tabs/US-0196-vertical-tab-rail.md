@@ -233,6 +233,39 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-
 
 **Evidence.** Tests: `oneterm-terminal-view` `the_rows_directory_is_the_status_bars` (a local drive path, a path under the home folder, the home folder itself and an SSH path: the row's string equals `breadcrumb_label` equals the path the session reported, and none starts with `~`; it replaces `the_directory_line_abbreviates_the_local_home_only`); `a_long_directory_is_cut_at_its_start_and_follows_the_width` unchanged and green; `oneterm-workspace` `the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it` now also asserts the row's content box (the grip column) is 63 px inside the 64 px row, which only the 1 px border explains. The border's colour (`theme.border`) is code-reviewed, not pixel-tested. Gate: `pwsh scripts/ci-local.ps1` on Windows (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree `target`): all checks passed (`cargo test --workspace`: 2509 passed, 0 failed, 19 ignored in that step; the three `--ignored --test-threads=1` lines, `check-ignored-tests.py`, the `oneterm-vt` steps, `verify-dependency-graph.py`, `check-doc-paths.py`, `check-english.py`, `check-theme-contrast.py` (1638 pairings, 624 hierarchy comparisons) and the notices check included). `bash scripts/ci-local.sh` was tried first and stops at the `oneterm-vt` six-dependency check on this machine only because Windows' `sort.exe` shadows GNU `sort` in that shell; the PowerShell script is the same set of checks.
 
+## Rework 4 2026-10-21 (owner): no zoom button, `+` on the right, no scrollbar; the OSC 7501 icon
+
+Acceptance rework of this packet (reopened, not a new BUG). Owner requests, 2026-10-21 (translated from Vietnamese): (1) "Remove zoom in/out from the vertical tab rail; it has no effect." (2) "I no longer see the OSC 7501 status icon animating like before. Keep it static." (4) "Move the + button to the right side (currently left)." (5) "Hide the scrollbar in vertical tabs." The collapse button (request 3) moved to the status bar; see the `US-0198` Rework 4 entry.
+
+**Outcome.**
+
+- *Zoom button gone.* The rail header (expanded and collapsed) has no Zoom In / Zoom Out button; `ZoomButton`, `zoom_button` and the `ToggleZoom` tooltip wiring are deleted. The horizontal strip keeps its kit zoom button. Zoom itself is untouched and still reachable by its key binding (`ToggleZoom`), so a zoomed group (restored from `docks.json`) is not stranded; the rail keeps drawing in a zoomed group as before.
+- *`+` on the right.* The header is one 32 px line with the `+` (the active panel's `title_suffix`, the New Terminal menu) right-aligned. Collapsed, the header holds only `+`, centred in the 44 px strip, at the same 32 px height, so the cells below start at 32 px in both states. `COLLAPSED_HEADER_HEIGHT` (the three-button stacking floor) is deleted.
+- *No scrollbar in the rail.* The expanded rail draws no scrollbar either (the collapsed strip already had none). The list still scrolls by wheel or touchpad, and the displayed tab is still scrolled into view when it changes and when the rail collapses or expands. The per-row scrollbar gutter (`RowPlace::gutter`, `pr(Scrollbar::width())`), the `overflowing` flag and the `request_animation_frame` that tracked it are deleted, so row content uses the full width up to the row's own right padding. Why: owner request.
+
+**Item 2, the OSC 7501 icon: investigated, behaviour NOT changed.** The owner's sentence ("no longer see ... animating like before. Keep it static") can be read either way, so no behaviour was touched; the evidence is here for the coordinator to put to the owner.
+
+- The animation code (`tab_status_icon`, `crates/terminal-view/src/panel/tab_title.rs`) is what `701a4b16` (2026-10-15, US-0193) introduced: a repeating 1 s `with_animation` rotation for `Working` and a 1.2 s opacity pulse for `Blocked`. No later commit touched it (`git log -S"with_animation"` finds only `701a4b16`), and IN-0055 did not move it: the strip, the vertical row and the collapsed cell all call the same function.
+- New test `the_working_icon_animates_in_every_row_layout` proves the icon asks for the next frame in `Horizontal`, `Vertical` and `Collapsed` rows alike (it passes), so the rail did not lose the animation.
+- What stops it is gpui's reduced-motion flag. `gpui-base` (`reduce_motion.rs`, in the dependency since GPUI Kit 0.7.0, 2026-09-28) reads the Windows **Animation effects** switch (`SPI_GETCLIENTAREAANIMATION`) at start-up and sets `App::reduce_motion`; `AnimationElement::request_layout` (`gpui-pre` `elements/animation.rs:407`) then draws one static frame and asks for no more. On this machine that switch reads **off** (checked with `SystemParametersInfo`), and the US-0193 walk already recorded "the icon was static on screen ... Windows animation effects off". So the icon is static here in every layout and animates when the Windows switch is on (remote-desktop sessions also turn animations off).
+- The two readings: if the owner wants the animation back, turn Windows Settings > Accessibility > Visual effects > Animation effects on (no code change; the app follows the system), or decide OneTerm should ignore the system switch for this icon (a deliberate departure from the accessibility default). If the owner wants it to stay static, it already is on this machine, and a setting to force it would be new scope.
+
+**Choices left open by the requests.**
+
+- *Header height collapsed.* Fixed at the expanded header's 32 px (`HEADER_HEIGHT`), not the old stacked floor.
+- *Zoom keeps its action.* Only the rail's button went; `ToggleZoom` and the horizontal strip's button stay, because the request is about the rail's control and zoom state is persisted.
+- *Scrollbar and the 40-tab test.* Without a gutter the 40-tab test now asserts the opposite of before: row content may reach the row's right padding, and the rows are as wide as the list.
+
+**Acceptance.**
+
+- [x] The header (expanded and collapsed) has no zoom button; the horizontal strip is unchanged (workspace test: no `zoom-in` / `zoom-out` in the rail, also while the group is zoomed).
+- [x] Expanded, the `+` is the right-most thing in the 32 px header; collapsed it is centred in the 44 px strip and the first cell starts at 32 px.
+- [x] With 40 tabs the rail draws no scrollbar, the rows are as wide as the list, the wheel scrolls, and the displayed tab is revealed.
+- [x] The working status icon asks for frames in the strip, the vertical row and the collapsed cell (terminal-view test).
+- [ ] On screen, by `ui-verifier`: the header in both states and two themes, no scrollbar with 40 tabs, the status icon clear of the row's edge.
+
+**Documentation.** `docs/gui-layout.md` "Vertical tabs" (anatomy, header, scrolling, collapsing) and the Status bar section, `high-level-design.md` (wireframes, rail anatomy, zoom row, collapse step), this entry.
+
 ## Handoff
 
 Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0196` in the intake. `US-0197` (resize, `clamp_tab_rail_width`, done) and `US-0198` (collapse) build on `tab_rail.rs` and the stored `vertical_tabs` fields.
