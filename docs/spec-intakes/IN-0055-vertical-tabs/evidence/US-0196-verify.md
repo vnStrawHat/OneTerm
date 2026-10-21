@@ -252,3 +252,34 @@ None found in what could be walked.
 Items 2, 4, 5 (icon part), 7 (icon drag, tooltip), 8 (icon before label), 9, the recording dot, and confirming the strip × close.
 
 Coordinator: merged on the advisor PASS. The status-icon items were not walkable (local shells exit at once under the scratch profile); the icon slot is pinned by the terminal-view layout test, and the owner checks it on screen with scripts/osc7501-test.sh.
+
+## Review (rework 2 + US-0197): Part A, two-line 64 px rows with the cwd
+
+- Reviewed commits `188d8c2d` (packet) and `ffa63aae` (code) of `git diff afb39845..96270e82`, branch `verify/IN-0055-r3` in worktree `agent-aa7d464a81f2a206b`; read `tab_title.rs` (`tab_cwd`, `cwd_display`, `tab_cwd_label`, the two-line `render_tab_strip`), `tab_row_layout.rs` (geometry constants), `view.rs:434-441`, `terminal_panel.rs:404-418`, `osc_router.rs:219-226`, `test_support.rs`, the new tests, gpui 0.3.9 `styled.rs:97-98` / `style.rs:414` / `elements/text.rs:679`; the HLD, `IN-0055.md`, `docs/gui-layout.md` and the packet's "Rework 2" section. Part B is in `evidence/US-0197-verify.md`.
+- No code changed, no pinned test added: no defect.
+
+### Verdict (Part A)
+
+**PASS.** The row is 64 px, the title on line 1 keeps its end ellipsis, line 2 is the cwd cut at its start with the status icon right-aligned, the strip is unchanged, and the records say so.
+
+### The coder's points on Part A
+
+- **cwd_display edge cases** (`tab_title.rs:98-150`). UNC `\\server\share\x`: not a drive path, so it is shown untouched (backslashes kept, no `~`); the home prefix cannot match. Git Bash `/c/Users/dev/src` on a local tab: not a drive path either, so it is shown as reported, with `/` and **without** `~` (the home is `C:\Users\dev`, which does not prefix it); correct and safe, just not abbreviated, noted below for the owner. Drive matching is case-insensitive only for drive paths (`eq_ignore_ascii_case`), POSIX paths compare exactly; `shown.get(..home.len())` returns `None` on a non-char boundary, so no panic on a multi-byte path; a trailing separator on the home is trimmed and a root home (`/`) is refused; the whole-component check stops `C:\Users\a` from matching `C:\Users\ab`. Home abbreviation and the `\` rewrite apply only when `local` is true, which `tab_cwd` derives from `SessionKind::Local`, so an SSH path is never touched. All of this is pinned by `the_directory_line_abbreviates_the_local_home_only`.
+- **CwdChanged repaints in horizontal mode** (Info, not a defect). The panel's one subscription notifies on *every* `TerminalViewEvent` (`terminal_panel.rs:413-415`), and the router emits `SessionEvent::Cwd` on every OSC 7 without comparing to the previous value (`osc_router.rs:219-226`); most shells send OSC 7 at every prompt, so the strip's panel now re-renders once per prompt whether or not the cwd changed or is shown. It is one more notify in the same frame as the per-prompt OSC 0/2 title notify the panel already takes, so no new frames in practice; a cheap narrowing, if wanted, is to emit `CwdChanged` only when the path differs from the last one the view saw.
+- **Start-truncation test asserts the style flag and the width.** Adequate: `text_ellipsis_start` sets `TextOverflow::TruncateStart(ELLIPSIS)` (gpui `styled.rs:97-98`) and the text element honours it with `TruncateFrom::Start` (`elements/text.rs:679`); which glyphs survive is gpui's, and the three slot widths (900 / 220 / 160) prove the element is measured against the live width. The owner sees the `…\src\panel` shape in the walk.
+
+### Everything else on Part A
+
+- **Geometry.** 10 + 24 + 20 + 10 = 64 (`TabRowLayout` constants, asserted); the `Tab` is `h(ROW_HEIGHT)`, the row `v_flex` is `py(10)` with fixed line heights, so nothing depends on font metrics. The grip glyph is offset to line 1's centre (`tab_rail.rs`, asserted at 22 px).
+- **Line 2 layout.** `[path][flex_1 spacer][status]`: the path has `min_w_0` and no `flex_1`, so it is content-sized and shrinks (and is cut) before the spacer, keeping the icon at the end whether or not a path exists; the icon is `flex_shrink_0`. Tested for cwd+status, status only, and neither.
+- **Source and live update.** `tab_cwd` reads the active Space's `TerminalSession::cwd()` (already sanitised by the security policy); `SessionEvent::Cwd` now emits `TerminalViewEvent::CwdChanged`, and `cwd_event_emits_cwd_changed` / `a_reported_directory_repaints_the_row` cover the chain. `FakeSessionProbe::set_cwd` is test support only.
+- **Strip unchanged.** The horizontal branch keeps chips, dot, status, label, `x` in that order and its 100-220 px band with the `-5 px` margin; `h_flex` carries the `items_center` the old row had; `the_horizontal_row_is_content_sized_as_before` still passes.
+- **Contrast.** Line 2 is `muted.foreground` on the two row fills, pairs the script already measures.
+- **Records.** HLD (Rail anatomy rows, wireframes, Interactions), `IN-0055.md`, `docs/gui-layout.md` and the packet's assumptions (a)-(d) match the code.
+
+### For the owner (Part A)
+
+- A Git Bash local tab reports `/c/Users/...`; it is shown exactly so, with `/` and no `~`. Say if it should read `~\...` like a PowerShell tab (then `cwd_display` learns the `/c/` form).
+- The walk items the packet lists (both themes, start truncation while the path changes and the window narrows, `~` on a local tab, a remote path on SSH, the grip on line 1, the icon clear of the scrollbar with 40 tabs).
+
+Gate for both parts: see `US-0197-verify.md` (same run, five crates).
