@@ -175,6 +175,9 @@ pub struct TerminalPanel {
     pub(super) tab_title: String,
     /// Manual tab title override selected by the user (wins over OSC 0/2).
     pub(super) tab_title_override: Option<String>,
+    /// Set while a right-click menu is open on this tab's collapsed cell, so the cell's tooltip
+    /// draws nothing over it (`US-0198`).
+    pub(super) tab_tooltip_hidden: std::rc::Rc<std::cell::Cell<bool>>,
     /// Subscriptions to every terminal leaf's `TitleChanged` — rebuilt whenever
     /// the set of terminals changes (split / close / drop / fill).
     pub(super) _title_subs: Vec<Subscription>,
@@ -296,6 +299,7 @@ impl TerminalPanel {
             is_active: false,
             tab_title,
             tab_title_override: None,
+            tab_tooltip_hidden: Default::default(),
             _title_subs: Vec::new(),
             _settings_sub,
             _channels_sub,

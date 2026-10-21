@@ -30,8 +30,11 @@ impl Global for TabRowLayout {}
 impl TabRowLayout {
     /// Height of one row of the vertical rail.
     pub const VERTICAL_ROW_HEIGHT: f32 = 64.0;
-    /// Padding above the first line and below the second.
+    /// Padding above the first line and below the second, divider included.
     pub const VERTICAL_ROW_PADDING: f32 = 10.0;
+    /// The rail's 1 px divider under every row. It takes 1 px of the bottom padding, so the
+    /// row's content box is still the lines plus the padding and the row is 64 px.
+    pub const VERTICAL_ROW_DIVIDER: f32 = 1.0;
     /// Height of the title line.
     pub const VERTICAL_FIRST_LINE_HEIGHT: f32 = 24.0;
     /// Height of the directory and status line.
@@ -99,6 +102,8 @@ mod tests {
             TabRowLayout::VERTICAL_ROW_HEIGHT
         );
         assert_eq!(TabRowLayout::vertical_first_line_centre(), 22.0);
+        // The divider is carved out of the bottom padding, not added to the row.
+        assert!(TabRowLayout::VERTICAL_ROW_DIVIDER < TabRowLayout::VERTICAL_ROW_PADDING);
     }
 
     #[gpui::test]

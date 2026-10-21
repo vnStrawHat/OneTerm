@@ -1495,6 +1495,44 @@ fn a_collapsed_cell_draws_the_position_it_is_given(cx: &mut TestAppContext) {
     );
 }
 
+/// The cell's tooltip would stay over the menu a right-click opens, so a right press hides it
+/// until the pointer comes back to the cell (`US-0198` UI defect U1).
+#[gpui::test]
+fn a_right_click_hides_the_collapsed_cells_tooltip_until_the_pointer_returns(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    use oneterm_state::TabRowLayout;
+    use oneterm_terminal::SessionKind;
+
+    use crate::panel::tab_title::TAB_ROW_SELECTOR;
+
+    let (_, _, panel, cx) =
+        tab_row_window_with_panel(cx, TabRowLayout::Collapsed(1), 44., SessionKind::Local);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let row = cx
+        .debug_bounds(TAB_ROW_SELECTOR)
+        .expect("the cell is drawn");
+    let hidden = panel.read_with(cx, |panel, _| panel.tab_tooltip_hidden.clone());
+
+    let inside = row.origin + point(px(4.), px(4.));
+    cx.simulate_mouse_move(inside, None, Modifiers::none());
+    assert!(!hidden.get(), "hovering alone shows the tooltip");
+    cx.simulate_mouse_down(inside, MouseButton::Right, Modifiers::none());
+    assert!(hidden.get(), "a right press hides it");
+    cx.simulate_mouse_up(inside, MouseButton::Right, Modifiers::none());
+
+    // Dismiss the menu by clicking away, which also takes the pointer off the cell.
+    let away = point(px(300.), px(200.));
+    cx.simulate_mouse_move(away, None, Modifiers::none());
+    cx.simulate_click(away, Modifiers::none());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(hidden.get(), "still hidden while the pointer is away");
+    cx.simulate_mouse_move(inside, None, Modifiers::none());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(!hidden.get(), "the pointer coming back shows it again");
+}
+
 /// OSC 7 from the shell tells the panel to repaint, so the row's path is live.
 #[gpui::test]
 fn a_reported_directory_repaints_the_row(cx: &mut TestAppContext) {

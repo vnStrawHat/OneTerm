@@ -79,6 +79,9 @@ const RESIZE_CURSOR: CursorStyle = CursorStyle::ResizeColumn;
 
 /// Height of the header (`+` and zoom): the strip's height.
 const HEADER_HEIGHT: Pixels = px(32.);
+/// The collapsed header's least height: three 20 px buttons (expand, `+`, zoom) with 4 px gaps
+/// and padding, so the cells below do not move when a panel offers no zoom button.
+const COLLAPSED_HEADER_HEIGHT: Pixels = px(3. * 20. + 4. * 4.);
 /// Two lines (`TerminalPanel::title`'s vertical row): the title, then the directory and status.
 pub(super) const ROW_HEIGHT: Pixels = px(TabRowLayout::VERTICAL_ROW_HEIGHT);
 /// A cell of the collapsed rail: a square as wide as the strip (the position number and a
@@ -179,6 +182,8 @@ struct RowPlace {
     selected: bool,
     /// The rail is the 44 px strip: the cell shows the position number, not the two lines.
     collapsed: bool,
+    /// Leave the scrollbar's gutter free on the right of the row's content.
+    gutter: bool,
     /// Every panel of the group in tab order, to place a dragged tab among the rows.
     order: Rc<Vec<PanelId>>,
 }
@@ -210,6 +215,9 @@ enum Resize {
 pub(super) struct TabRail {
     scroll_handle: ScrollHandle,
     last_active_ix: Rc<Cell<Option<usize>>>,
+    /// Whether the last frame drew the collapsed strip: a flip changes every row's height, so
+    /// the pixel scroll offset no longer points at the displayed tab.
+    last_collapsed: Cell<bool>,
     /// Whether the rows overflowed the list last frame, so the scrollbar's gutter is reserved.
     overflowing: Cell<bool>,
     frame: Cell<RailFrame>,
@@ -224,6 +232,7 @@ impl TabRail {
         Self {
             scroll_handle: ScrollHandle::default(),
             last_active_ix: Rc::new(Cell::new(None)),
+            last_collapsed: Cell::new(false),
             overflowing: Cell::new(false),
             frame: Cell::new(RailFrame {
                 draws: false,
@@ -365,14 +374,17 @@ impl TabRail {
                 .iter()
                 .position(|panel| panel.panel_id(cx) == displayed)
         });
-        if active_changed(&self.last_active_ix, active_ix)
+        let collapsed = self.frame.get().collapsed;
+        // Both are recorded every frame, so evaluate both before testing either.
+        let tab_changed = active_changed(&self.last_active_ix, active_ix);
+        let layout_changed = self.last_collapsed.replace(collapsed) != collapsed;
+        if (tab_changed || layout_changed)
             && let Some(position) = visible.iter().position(|ix| *ix == active_ix)
         {
             self.scroll_handle.scroll_to_item(position);
         }
 
         let droppable = group.is_droppable();
-        let collapsed = self.frame.get().collapsed;
         let tabs = group.panels().len();
         let rows = visible.len();
         let tab_bar = cx.theme().tokens.tab_bar;
@@ -402,10 +414,6 @@ impl TabRail {
             .flex()
             .flex_col()
             .overflow_y_scroll()
-            // The 44 px strip has no room for the gutter; its overlay scrollbar rides over the cells.
-            .when(overflowing && !collapsed, |this| {
-                this.pr(Scrollbar::width())
-            })
             .track_scroll(&self.scroll_handle)
             .children(visible.into_iter().enumerate().map(|(position, ix)| {
                 let place = RowPlace {
@@ -414,6 +422,10 @@ impl TabRail {
                     rows,
                     selected: displayed_ix == Some(ix),
                     collapsed,
+                    // The 44 px strip has no room for the gutter; its overlay scrollbar rides
+                    // over the cells. Expanded, each row pads its content by the gutter
+                    // itself, so its divider still spans the whole rail.
+                    gutter: overflowing && !collapsed,
                     order: order.clone(),
                 };
                 self.row(group, place, window, cx)
@@ -529,6 +541,7 @@ impl TabRail {
         if collapsed {
             return v_flex()
                 .flex_shrink_0()
+                .min_h(COLLAPSED_HEADER_HEIGHT)
                 .items_center()
                 .gap_1()
                 .py_1()
@@ -566,6 +579,7 @@ impl TabRail {
             rows,
             selected,
             collapsed,
+            gutter,
             order,
         } = place;
         let panel = &group.panels()[ix];
@@ -691,6 +705,7 @@ impl TabRail {
             })
             .flex_shrink_0()
             .justify_start()
+            .when(gutter, |this| this.pr(Scrollbar::width()))
             // A 1 px divider inside the row's 64 px (sizes are border-box).
             .border_b_1()
             .border_color(divider)

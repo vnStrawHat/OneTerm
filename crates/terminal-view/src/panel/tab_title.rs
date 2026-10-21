@@ -4,13 +4,14 @@
 //! × close, double-click rename). The vertical rail's row is the same element on two
 //! lines (the title, then the current directory and the status icon) without the ×.
 
+use std::cell::Cell;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt as _, App, AppContext as _, ClickEvent, Context, Div, Entity, EntityId,
-    Focusable as _, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
+    Focusable as _, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Transformation, Window, div,
     percentage, prelude::FluentBuilder as _, px,
 };
@@ -239,6 +240,23 @@ pub(super) fn tab_cwd_label(cwd: String, color: gpui::Hsla) -> Div {
         .child(cwd)
 }
 
+/// The collapsed cell's tooltip: the kit's, drawn as nothing while a right-click menu is open on
+/// the cell.
+struct CellTooltip {
+    inner: gpui::AnyView,
+    hidden: Rc<Cell<bool>>,
+}
+
+impl Render for CellTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        if self.hidden.get() {
+            div().into_any_element()
+        } else {
+            self.inner.clone().into_any_element()
+        }
+    }
+}
+
 /// The compact cell of the collapsed rail (`US-0198`): the tab's position, the status icon as a
 /// badge in the top-right corner and the recording dot in the top-left. The title is the
 /// row's tooltip and the directory and channel chips are not drawn, so the cell is the same
@@ -293,6 +311,7 @@ pub(super) fn render_tab_strip(
     let vertical = layout == TabRowLayout::Vertical;
     let collapsed = matches!(layout, TabRowLayout::Collapsed(_));
     let tab_panel = panel.tab_panel.clone();
+    let tooltip_hidden = panel.tab_tooltip_hidden.clone();
     let panel_entity = cx.entity().clone();
     let panel_weak = cx.entity().downgrade();
     let muted = cx.theme().muted_foreground;
@@ -360,7 +379,11 @@ pub(super) fn render_tab_strip(
             .flex_1()
             .min_w_0()
             .pr_1()
-            .py(px(TabRowLayout::VERTICAL_ROW_PADDING))
+            .pt(px(TabRowLayout::VERTICAL_ROW_PADDING))
+            // The rail's divider takes the last pixel of the row, so the padding stops short of it.
+            .pb(px(
+                TabRowLayout::VERTICAL_ROW_PADDING - TabRowLayout::VERTICAL_ROW_DIVIDER
+            ))
             .child(
                 h_flex()
                     .h(px(TabRowLayout::VERTICAL_FIRST_LINE_HEIGHT))
@@ -441,7 +464,28 @@ pub(super) fn render_tab_strip(
         // A collapsed cell has no room for the title, so the tooltip carries it.
         .when(collapsed, |this| {
             let title = drag_title.clone();
-            this.tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
+            let (shown, entered, pressed) = (
+                tooltip_hidden.clone(),
+                tooltip_hidden.clone(),
+                tooltip_hidden.clone(),
+            );
+            this.tooltip(move |window, cx| {
+                let inner = Tooltip::new(title.clone()).build(window, cx);
+                let hidden = shown.clone();
+                cx.new(|_| CellTooltip { inner, hidden }).into()
+            })
+            // The tooltip would stay on top of the menu a right-click opens (gpui keeps a
+            // tooltip while its own element is hovered), so a right-press hides it until the
+            // pointer comes back to the cell.
+            .on_hover(move |hovered, _, _| {
+                if *hovered {
+                    entered.set(false);
+                }
+            })
+            .on_mouse_down(MouseButton::Right, move |_, window, _| {
+                pressed.set(true);
+                window.refresh();
+            })
         })
         // Drag the tab into an empty Space with the terminal-specific
         // payload consumed by Space-tree drop targets.

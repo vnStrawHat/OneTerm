@@ -574,16 +574,19 @@ fn forty_tabs_scroll_and_the_active_one_is_brought_into_view(cx: &mut TestAppCon
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     let labels: Vec<&'static str> = (0..40).map(|ix| &*format!("tab {ix}").leak()).collect();
-    set_centre(&window.area, &terminals(&labels), false, &report, cx);
+    set_centre(&window.area, &terminals(&labels), true, &report, cx);
 
     let list = bounds_of(LIST_SELECTOR, cx).expect("the list is drawn");
     let first = row(0, cx).unwrap();
     let last = row(39, cx).unwrap();
-    // The overflowing list leaves the scrollbar's gutter free of rows (their trailing status
-    // icons would sit under it).
+    // The overflowing list leaves the scrollbar's gutter free of row content (the trailing
+    // status icons would sit under it), but the row itself, and so its divider, spans the
+    // whole rail.
+    assert_eq!(first.right(), list.right(), "the row spans the list");
+    let content = bounds_of("probe-row-tab 0", cx).expect("the row's content");
     assert!(
-        first.right() <= list.right() - gpui_component::scroll::Scrollbar::width(),
-        "row {first:?} must clear the scrollbar gutter of the list {list:?}"
+        content.right() <= list.right() - gpui_component::scroll::Scrollbar::width(),
+        "content {content:?} must clear the scrollbar gutter of the list {list:?}"
     );
     assert!(first.top() >= list.top() && first.bottom() <= list.bottom());
     assert!(
@@ -1086,6 +1089,9 @@ fn the_header_button_collapses_the_rail_to_a_strip_and_expands_it(cx: &mut TestA
     }
     // The cell is as wide as the strip, less its 1 px border.
     assert_eq!(f32::from(rows[0].size.width), 43.);
+    // The stacked header (three 20 px buttons) has a fixed least height.
+    let rail = bounds_of(RAIL_SELECTOR, cx).unwrap();
+    assert!(rows[0].top() - rail.top() >= px(76.));
 
     let expand = bounds_of(format!("{RAIL_SELECTOR}-expand-rail"), cx).expect("expand");
     cx.simulate_click(expand.center(), Modifiers::none());
@@ -1231,12 +1237,10 @@ fn forty_collapsed_cells_scroll_without_a_gutter_and_reveal_the_active_one(
 }
 
 /// Advisor pin (`US-0198` verify, finding 1): the scroll offset is kept in pixels across a
-/// collapse or an expand, and `scroll_to_item` runs only when the active index changes, so
-/// with many tabs the active row leaves the viewport when the row height changes (44 -> 64 px
-/// here). Flip by removing `should_panic` once the rail re-reveals the active row after the
-/// layout change.
+/// collapse or an expand, so with many tabs the active row would leave the viewport when the
+/// row height changes (44 -> 64 px here). The rail re-reveals the active row when the layout
+/// flips.
 #[gpui::test]
-#[should_panic(expected = "must still be inside the list")]
 fn expanding_the_rail_keeps_the_active_row_in_view(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
