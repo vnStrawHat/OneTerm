@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # US-0198 verification (advisor)
 
 ## Advisor code review
@@ -43,3 +44,47 @@
 - Finding 1 on screen: with 40 tabs select the last, expand, see whether the selected row is in view.
 - Restart persistence of `collapsed`; the elevated window collapsing in memory with no write.
 - The divider and the drop line on a hovered row in a light and a dark theme.
+=======
+
+## UI verification (US-0196 rework 3 and US-0198, ui-verifier, 2026-10-21)
+
+Build: copy of the debug binary for head a866cc93, private profile, 1280x800. Screenshots (prefix `uiv198-`) in the session scratchpad `uiv198-shots\`. Child shells die in this sandbox, so no status badge, no OSC 7 cwd.
+
+### US-0196 rework 3
+| Item | Verdict | Evidence |
+|---|---|---|
+| 1 px bottom divider on each vertical row | PASS | Dark `02`: pixels 62,68,81 at y=129, 193, 257 (one row each); light `21`, `24` faint but visible. |
+| Rows still 64 px | PASS | Dividers 64 px apart (`02`). |
+| Horizontal strip unchanged | PASS | `16` (switch off): no divider, same strip as before. |
+| Drop line distinct from the divider | NOT WALKED | Posted-message drags (`03`..`03g`) showed only the drag ghost; no drop line and no reorder happened, so this is a driver limit, not a verdict. Owner-only. |
+| Line 2 cwd equals status bar cwd | NOT WALKED (owner-only) | No cwd reported in the sandbox. |
+
+### US-0198
+| Item | Verdict | Evidence |
+|---|---|---|
+| Collapse button in header, tooltip "Collapse Tabs" | PASS | `04` |
+| Rail becomes 44 px; terminal follows | PASS | `05` (strip x=8..51, border at 51) |
+| Position numbers 1,2,3 centred | PASS | `05`, crop shows centred digits; 2-digit numbers fine (`12`, `13`) |
+| Status badge top-right | NOT WALKED | needs a live shell status |
+| Tooltip with title on cell hover | PASS | `06`, `23` |
+| Expand button tooltip "Expand Tabs" | PASS | `08` |
+| `+` and zoom stacked, fit; `+` menu opens | PASS | `05`, `11` |
+| No resize handle while collapsed | PASS | `14`: drag from the edge changes nothing, no hover line |
+| Click selects; accent bar follows | PASS | `09` |
+| Context menu works (Rename, Duplicate, Close, Close Others, Close Tabs Below) | PASS (see D1) | `10` |
+| `vertical_tabs.collapsed` persists across restart | PASS | config held `collapsed: true`; relaunch `22` still collapsed (light theme kept too) |
+| Switch off then on returns to collapsed rail | PASS | `16` strip, `17` collapsed rail; file kept `{"collapsed": true}` while off |
+| 39 collapsed tabs: scroll, active in view | PASS | `12` (active 39 in view), `13` (wheel back to top) |
+| Scrollbar versus badge | NOT WALKED (no badge). The thumb (x=41..47) is clear of the centred numbers, including 2 digits (`12`). The top-right badge sits where the thumb is drawn, so an owner check is needed with a real status icon. |
+| Light and dark, expanded and collapsed | PASS | dark `02`, `05`; light `19`, `20`, `21`, `23`, `24` |
+
+### Defects
+- D1 (low): in the collapsed rail, the cell tooltip of the hovered cell stays on screen when the right-click menu opens and covers the menu's first item (Rename...). Screen: collapsed rail. Steps: hover cell 2 (tooltip), right-click it (`10`).
+- D2 (low): in the expanded rail with a scrollbar (many tabs), the row divider stops at the scrollbar gutter (light `21`: ends x=212, rail edge 227), so the divider looks cut short. Steps: 40 tabs, expanded.
+- Note (info): idle numbers in collapsed cells are fairly dim in dark (`05`); legible.
+
+### Owner-only checks
+Drop line versus divider while dragging a row (and grip reorder); line 2 cwd equals the status bar (`cmd` tab); status badge in the cell corner and its overlap with the overlay scrollbar thumb; recording dot; elevated window; middle-click close in collapsed cells.
+
+Verdict: the UI meets the requirements for everything walkable (partly: the items above are not walked).
+>>>>>>> 70749f95 (docs(IN-0055): UI verification of US-0196 rework 3 and US-0198)
