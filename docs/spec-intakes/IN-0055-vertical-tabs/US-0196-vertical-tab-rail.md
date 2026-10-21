@@ -217,6 +217,8 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-
 **Choices left open by the request.**
 
 - *Where the one formatter lives.* The status bar reaches the label through `oneterm_state::active_terminal::breadcrumb`, whose provider (`terminal-view/src/status.rs`) calls `TerminalPanel::breadcrumb_label`. The tab row is drawn by the same `TerminalPanel` in the same crate, so no code moves: `tab_cwd` is now a one-line call to `breadcrumb_label`. The status bar's width-driven `PathTail` shortening is presentation of the same string and stays the bar's.
+- *Row budget (advisor A2).* The row's lines and padding summed to 64 px inside a 63 px content box. The bottom padding is now 9 px (`TabRowLayout::VERTICAL_ROW_DIVIDER` is carved out of `VERTICAL_ROW_PADDING`), so 10 + 24 + 20 + 9 + 1 = 64 and nothing is squeezed.
+- *Divider width (UI defect U2).* The scrollbar's gutter was padding on the list, so every row, and its divider, stopped short of the rail's edge once the rows overflowed. The gutter is now padding inside each row, so the row and its divider span the whole rail.
 - *The border and the drop line.* The row's border is the row's own `border_b_1` (taffy sizes are border-box, so the row stays 64 px). While a `DragPanel` hovers a row, the drop line (2 px, `drag_border`, above or below) replaces it on that edge; "above" also drops the row's own divider so the single border colour is not mistaken for a second drop line.
 
 **Acceptance.**

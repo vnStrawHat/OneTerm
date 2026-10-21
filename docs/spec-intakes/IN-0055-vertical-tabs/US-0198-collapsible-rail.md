@@ -95,7 +95,7 @@ No decision record: the stored field, the state machine and the owner's Q4 rulin
 
 ## Verification Plan
 
-`cargo test -p oneterm-settings`, `-p oneterm-state`, `-p oneterm-terminal-view`, `-p oneterm-workspace`; clippy; fmt; `check-doc-paths`, `check-english`; the full `bash scripts/ci-local.sh` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`); the debug app for `ui-verifier`.
+`cargo test -p oneterm-settings`, `-p oneterm-state`, `-p oneterm-terminal-view`, `-p oneterm-workspace`; clippy; fmt; `check-doc-paths`, `check-english`; the full `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`; the bash script stops on this Windows machine at its `oneterm-vt` six-dependency check because Windows' `sort.exe` shadows GNU `sort`, the PowerShell script runs the same checks); the debug app for `ui-verifier`.
 
 <!-- HARNESS:PROOF:BEGIN -->
 - [x] Unit proof
@@ -111,6 +111,18 @@ No decision record: the stored field, the state machine and the owner's Q4 rulin
 - **Gate:** `pwsh scripts/ci-local.ps1` on Windows (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree `target`): all checks passed (`cargo test --workspace`: 2509 passed, 0 failed, 19 ignored in that step; the three `--ignored --test-threads=1` lines, `check-ignored-tests.py`, the `oneterm-vt` steps, `verify-dependency-graph.py`, `check-doc-paths.py`, `check-english.py`, `check-theme-contrast.py` (1638 pairings, 624 hierarchy comparisons) and the notices check included). `bash scripts/ci-local.sh` was tried first and stops at the `oneterm-vt` six-dependency check on this machine only because Windows' `sort.exe` shadows GNU `sort` in that shell; the PowerShell script is the same set of checks.
 - **Debug binary** `target\debug\oneterm.exe` built (`cargo build -p oneterm-app`). **Smoke launch** with a private profile (scratch cwd and `USERPROFILE`, `target/ui_config.json` `{"vertical_tabs":{"enabled":true,"collapsed":true}}`): ran 10 s, the config file untouched; the pid was stopped. No UI verdict here.
 - **Elevation:** the setter has no write path of its own; it calls `UiConfig::persist`, which asks `write_refusal` (existing `an_elevated_window_refuses_to_write_a_perfectly_readable_config`).
+
+### Rework after advisor review and the UI walk (2026-10-21)
+
+- **A1** (advisor, low): collapsing or expanding kept the pixel scroll offset, so with 40 tabs the displayed tab could leave the viewport. `TabRail` now remembers the last drawn `collapsed` and re-reveals the displayed tab when it flips (`tab_rail.rs`, `render`). The advisor's pinned test `expanding_the_rail_keeps_the_active_row_in_view` lost its `should_panic` and passes.
+- **A2** (advisor, low): the expanded row's budget is now exact, bottom padding 9 px plus the 1 px divider (`tab_title.rs`, `TabRowLayout::VERTICAL_ROW_DIVIDER`); recorded in the HLD, `gui-layout.md` and the US-0196 Rework 3 entry.
+- **A3** (advisor, info): the collapsed header has `min_h` of three 20 px buttons (`COLLAPSED_HEADER_HEIGHT`, pinned by the collapse test).
+- **A4** (advisor, info): a middle or right press on the 12 px grip overlay reaches the cell's own close and menu handlers, because the overlay handles only the left-press drag, so those presses fall through to the cell. **Accepted** as a larger target; documented in `gui-layout.md`.
+- **A5** (advisor, info): the Verification Plan names `pwsh scripts/ci-local.ps1`, with the reason.
+- **U1** (ui-verifier, low): the cell's hover tooltip stayed over the right-click menu. The tooltip is now a small view that draws nothing while `TerminalPanel::tab_tooltip_hidden` is set; a right press sets it and the pointer entering the cell clears it (test `a_right_click_hides_the_collapsed_cells_tooltip_until_the_pointer_returns` pins the flag; that the drawn tooltip really goes away is for `ui-verifier` to re-walk).
+- **U2** (ui-verifier, low): the divider stopped at the scrollbar's gutter; the gutter moved from the list into each row's own padding, so the divider spans the rail (workspace 40-tab test: the row spans the list, its content clears the gutter).
+
+- **Gate after the rework:** `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`): all checks passed, `cargo test --workspace` 2512 passed, 0 failed, 19 ignored; debug app rebuilt.
 
 ### Gaps
 
