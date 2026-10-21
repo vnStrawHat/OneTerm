@@ -40,13 +40,17 @@ pub(super) const RAIL_SELECTOR: &str = "oneterm-tab-rail";
 pub(super) const LIST_SELECTOR: &str = "oneterm-tab-rail-list";
 pub(super) const ROW_SELECTOR: &str = "oneterm-tab-rail-row";
 pub(super) const GRIP_SELECTOR: &str = "oneterm-tab-rail-grip";
+pub(super) const GRIP_GLYPH_SELECTOR: &str = "oneterm-tab-rail-grip-glyph";
 pub(super) const EMPTY_SELECTOR: &str = "oneterm-tab-rail-empty";
 
 /// Height of the header (`+` and zoom): the strip's height.
 const HEADER_HEIGHT: Pixels = px(32.);
-const ROW_HEIGHT: Pixels = px(32.);
+/// Two lines (`TerminalPanel::title`'s vertical row): the title, then the directory and status.
+pub(super) const ROW_HEIGHT: Pixels = px(TabRowLayout::VERTICAL_ROW_HEIGHT);
 /// The reorder grip: the strip tab's leading padding.
 const GRIP_WIDTH: Pixels = px(12.);
+/// The grip glyph (`Icon::xsmall`).
+const GRIP_GLYPH_SIZE: f32 = 12.;
 const ACCENT_BAR_WIDTH: Pixels = px(2.);
 /// What the drag preview occupies, reported to base so a drop placeholder knows where to fly
 /// in from. The chip is content-sized between a floor and a ceiling; this is a typical size.
@@ -384,12 +388,18 @@ impl TabRail {
             .h_full()
             .flex_shrink_0()
             .flex()
-            .items_center()
+            .items_start()
             .justify_center()
             .when_some(drag, |this, drag| {
                 this.cursor_grab()
                     .child(
                         div()
+                            .id(("tab-rail-grip-glyph", ix))
+                            .debug_selector(move || format!("{GRIP_GLYPH_SELECTOR}-{ix}"))
+                            // The glyph is centred on the title line, not on the whole row.
+                            .mt(px(
+                                TabRowLayout::vertical_first_line_centre() - GRIP_GLYPH_SIZE / 2.
+                            ))
                             .opacity(0.)
                             .group_hover(hover_group.clone(), |style| style.opacity(1.))
                             .child(Icon::new(AppIcon::GripVertical).xsmall().text_color(muted)),

@@ -18,7 +18,8 @@ use oneterm_settings::{UiConfig, VerticalTabs, ui_config::UiConfigGlobal};
 use oneterm_state::{TabRowLayout, panel_names};
 
 use super::tab_rail::{
-    EMPTY_SELECTOR, GRIP_SELECTOR, LIST_SELECTOR, RAIL_SELECTOR, RAIL_WIDTH, ROW_SELECTOR,
+    EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, LIST_SELECTOR, RAIL_SELECTOR, RAIL_WIDTH,
+    ROW_HEIGHT, ROW_SELECTOR,
 };
 use super::{MAIN_DOCK_VERSION, dock_skin};
 
@@ -443,7 +444,8 @@ fn the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it(cx: &mut TestAppC
         .collect();
     assert!(row(3, cx).is_none(), "no row beyond the tabs");
     for pair in rows.windows(2) {
-        assert_eq!(pair[0].size.height, px(32.));
+        assert_eq!(pair[0].size.height, px(64.), "twice the strip's 32 px");
+        assert_eq!(pair[0].size.height, ROW_HEIGHT);
         assert_eq!(pair[1].top(), pair[0].bottom(), "rows stack");
     }
     let rail = bounds_of(RAIL_SELECTOR, cx).unwrap();
@@ -462,6 +464,28 @@ fn the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it(cx: &mut TestAppC
         centre_tabs(&window.area, cx).1,
         2,
         "a click on a row selects its tab"
+    );
+}
+
+/// The reorder grip's glyph is centred on the title line (line 1 of the two-line row), not on
+/// the whole 64 px row, and the header keeps the strip's 32 px.
+#[gpui::test]
+fn the_grip_glyph_sits_on_the_title_line_and_the_header_keeps_its_height(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+
+    let row = row(0, cx).unwrap();
+    let glyph = bounds_of(format!("{GRIP_GLYPH_SELECTOR}-0"), cx).expect("the grip glyph");
+    assert_eq!(
+        glyph.center().y - row.top(),
+        px(TabRowLayout::vertical_first_line_centre())
+    );
+    let rail = bounds_of(RAIL_SELECTOR, cx).unwrap();
+    assert_eq!(
+        row.top() - rail.top(),
+        px(32.),
+        "the header is the strip's height"
     );
 }
 
@@ -557,7 +581,7 @@ fn forty_tabs_scroll_and_the_active_one_is_brought_into_view(cx: &mut TestAppCon
     assert!(first.top() >= list.top() && first.bottom() <= list.bottom());
     assert!(
         last.bottom() > list.bottom(),
-        "40 rows of 32 px do not fit the list ({list:?}), so the last is out of view"
+        "40 rows of 64 px do not fit the list ({list:?}), so the last is out of view"
     );
 
     let (panels, _) = centre_tabs(&window.area, cx);

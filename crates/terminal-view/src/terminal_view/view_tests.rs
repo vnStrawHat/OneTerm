@@ -222,6 +222,32 @@ fn title_event_emits_title_changed(cx: &mut TestAppContext) {
     assert_eq!(seen.get(), 1, "only the title event notifies the panel");
 }
 
+#[gpui::test]
+fn cwd_event_emits_cwd_changed(cx: &mut TestAppContext) {
+    let (session, _) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+    let seen = Rc::new(Cell::new(0));
+    let _subscription = cx.update(|_, cx| {
+        let seen = seen.clone();
+        cx.subscribe(&view, move |_, event: &TerminalViewEvent, _| {
+            if *event == TerminalViewEvent::CwdChanged {
+                seen.set(seen.get() + 1);
+            }
+        })
+    });
+
+    view.update(cx, |view, cx| {
+        view.handle_event(SessionEvent::Cwd("/tmp".into()), cx);
+        view.handle_event(SessionEvent::Bell, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        seen.get(),
+        1,
+        "only the cwd event tells the panel the path changed"
+    );
+}
+
 // ── OSC 7501 status for the tab icon (`IN-0049`, `US-0193`) ──────────────
 
 fn status(summary: Option<ProgramState>) -> SessionEvent {

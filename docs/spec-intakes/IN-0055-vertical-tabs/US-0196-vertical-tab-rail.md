@@ -192,15 +192,17 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-
 
 **Acceptance.**
 
-- [ ] Row height is 64 px; the header 32 px (workspace test).
-- [ ] Title on line 1, cwd on line 2 below it (terminal-view test: label above path, same left edge).
-- [ ] A long cwd is cut at the start (`TextOverflow::TruncateStart` on the path element, and the drawn path is narrower than the full text); the title still ellipsizes at the end.
-- [ ] Status icon at the right end of line 2, level with the path; with no cwd the icon is still right-aligned; with no cwd and no status line 2 is empty.
-- [ ] Unknown cwd shows no path; a local home path shows `~`; an SSH path is unchanged (pure-function tests).
-- [ ] An OSC 7 event repaints the row (event test).
-- [ ] 40-tab scroll, scroll into view, gutter clearance, drag priority and the drop line still pass at 64 px (existing workspace tests).
-- [ ] The horizontal row is unchanged (existing test).
+- [x] Row height is 64 px; the header 32 px (workspace test).
+- [x] Title on line 1, cwd on line 2 below it (terminal-view test: label above path, same left edge).
+- [x] A long cwd is cut at the start (`TextOverflow::TruncateStart` on the path element, and the drawn path is narrower than the full text); the title still ellipsizes at the end.
+- [x] Status icon at the right end of line 2, level with the path; with no cwd the icon is still right-aligned; with no cwd and no status line 2 is empty.
+- [x] Unknown cwd shows no path; a local home path shows `~`; an SSH path is unchanged (pure-function tests).
+- [x] An OSC 7 event repaints the row (event test).
+- [x] 40-tab scroll, scroll into view, gutter clearance, drag priority and the drop line still pass at 64 px (existing workspace tests).
+- [x] The horizontal row is unchanged (existing test).
 - [ ] On screen, by `ui-verifier`: both themes, the two lines, start truncation while the path changes and while the window narrows, `~` on a local tab, a remote path on an SSH tab, the grip aligned to line 1, the icon clear of the scrollbar with 40 tabs.
+
+**Evidence.** Tests: `oneterm-terminal-view` `the_vertical_row_shows_the_title_then_the_directory_and_the_status`, `a_long_directory_is_cut_at_its_start_and_follows_the_width` (the path element asks for `TruncateStart`; its drawn width shrinks with 900 / 220 / 160 px slots), `the_directory_line_abbreviates_the_local_home_only` (pure function), `a_reported_directory_repaints_the_row`, `cwd_event_emits_cwd_changed`, and the reworked `the_vertical_row_has_no_close_button_and_its_status_icon_trails_the_label` (the icon now on line 2); `oneterm-workspace` `the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it` (64 px rows) and `the_grip_glyph_sits_on_the_title_line_and_the_header_keeps_its_height`; `oneterm-state` `the_vertical_row_is_two_lines_between_equal_padding`. The fake session got `FakeSessionProbe::set_cwd` for these. Gate in the worktree: `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`, `cargo test -p oneterm-terminal-view` (412 passed), `-p oneterm-state` (76), `-p oneterm-workspace tab_rail` (18), `check-doc-paths`, `check-english`. The full `pwsh scripts/ci-local.ps1` is run once after `US-0197` (below). No UI verdict here.
 
 **Documentation.** `high-level-design.md` (Rail anatomy rows, row content, wireframe, Interactions rows), `IN-0055.md` (walk sentence), `docs/gui-layout.md` "Vertical tabs".
 

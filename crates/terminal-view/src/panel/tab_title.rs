@@ -1,8 +1,8 @@
 //! Everything about a Terminal Tab's label: resolving it from the live OSC 0/2
 //! title, the manual rename override and its dialog, and the tab-strip element
 //! (recording dot, OSC 7501 status icon, active bar, drag source, middle-click /
-//! × close, double-click rename). The vertical rail's row is the same element without
-//! the × and with the status icon at its trailing end.
+//! × close, double-click rename). The vertical rail's row is the same element on two
+//! lines (the title, then the current directory and the status icon) without the ×.
 
 use std::path::Path;
 use std::rc::Rc;
@@ -18,14 +18,16 @@ use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{DialogButtonProps, DialogFooter},
+    h_flex,
     input::{Input, InputState},
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     notification::NotificationType,
     tooltip::Tooltip,
+    v_flex,
 };
 use oneterm_core::ShellKind;
 use oneterm_state::TabRowLayout;
-use oneterm_terminal::{ProgramState, TerminalLogState};
+use oneterm_terminal::{ProgramState, SessionKind, TerminalLogState};
 use oneterm_theme::notif_ext::notify;
 
 use super::TerminalPanel;
@@ -46,6 +48,21 @@ impl TerminalPanel {
     fn set_custom_tab_title(&mut self, title: String, cx: &mut Context<Self>) {
         self.tab_title_override = Some(title);
         cx.notify();
+    }
+
+    /// The directory line of a vertical tab row: the active Space's OSC 7 working directory
+    /// (already sanitised by the session), `None` while the shell has reported none.
+    pub(super) fn tab_cwd(&self, cx: &App) -> Option<String> {
+        let view = self.tree.active_terminal()?;
+        let session = view.read(cx).session.read(cx);
+        let cwd = session.cwd()?;
+        let local = session.kind() == SessionKind::Local;
+        let home = local.then(oneterm_core::home_dir).flatten();
+        Some(cwd_display(
+            &cwd.to_string_lossy(),
+            home.as_deref().and_then(Path::to_str),
+            local,
+        ))
     }
 
     /// The OSC 7501 state the tab's status icon shows: only for an unsplit tab
@@ -75,6 +92,60 @@ impl TerminalPanel {
                         matches!(logging.state(), TerminalLogState::Running { .. })
                     })
             })
+    }
+}
+
+/// Whether `path` starts with a Windows drive (`C:\`, `c:/`, or `C:` alone).
+fn is_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes.get(2), None | Some(b'\\' | b'/'))
+}
+
+/// The directory line of a vertical tab row (`IN-0055`). A local tab abbreviates the user's
+/// home directory to `~` and shows a drive path with `\`; an SSH tab shows the remote path
+/// exactly as the shell reported it. Strings only: a Windows-shaped path is never built with
+/// `std::path`, whose separator is the host's.
+pub(super) fn cwd_display(cwd: &str, home: Option<&str>, local: bool) -> String {
+    if !local {
+        return cwd.to_string();
+    }
+    let drive = is_drive_path(cwd);
+    let shown = if drive {
+        cwd.replace('/', "\\")
+    } else {
+        cwd.to_string()
+    };
+    let Some(home) = home else {
+        return shown;
+    };
+    let home = if drive {
+        home.replace('/', "\\")
+    } else {
+        home.to_string()
+    };
+    let home = home.trim_end_matches(['\\', '/']);
+    // The root as home (`/`) would turn every path into `~/...`.
+    if home.is_empty() {
+        return shown;
+    }
+    // A drive path compares case-insensitively (the file system does); a POSIX one does not.
+    let prefix = shown.get(..home.len()).filter(|prefix| {
+        if drive {
+            prefix.eq_ignore_ascii_case(home)
+        } else {
+            *prefix == home
+        }
+    });
+    match prefix {
+        Some(_) if shown.len() == home.len() => "~".to_string(),
+        // Whole components only: `C:\Users\a` is not the home of `C:\Users\ab`.
+        Some(_) if shown[home.len()..].starts_with(['\\', '/']) => {
+            format!("~{}", &shown[home.len()..])
+        }
+        _ => shown,
     }
 }
 
@@ -205,6 +276,8 @@ pub(super) const TAB_ROW_SELECTOR: &str = "oneterm-tab-row";
 pub(super) const TAB_CLOSE_SELECTOR: &str = "oneterm-tab-close";
 pub(super) const TAB_STATUS_SELECTOR: &str = "oneterm-tab-status";
 pub(super) const TAB_LABEL_SELECTOR: &str = "oneterm-tab-label";
+/// Same, for the current directory on line 2 of a vertical row.
+pub(super) const TAB_CWD_SELECTOR: &str = "oneterm-tab-cwd";
 
 fn tab_title_label() -> Div {
     // GPUI creates a rectangular content mask when either overflow axis is
@@ -212,11 +285,25 @@ fn tab_title_label() -> Div {
     div().flex_1().min_w_0().text_ellipsis().whitespace_nowrap()
 }
 
+/// The directory on line 2 of a vertical row: muted, one line, and cut at its **start** when
+/// the room runs out, so the folder the user is in stays visible (`…\src\panel`).
+pub(super) fn tab_cwd_label(cwd: String, color: gpui::Hsla) -> Div {
+    div()
+        .debug_selector(|| TAB_CWD_SELECTOR.to_string())
+        .min_w_0()
+        .text_xs()
+        .text_color(color)
+        .whitespace_nowrap()
+        .text_ellipsis_start()
+        .child(cwd)
+}
+
 /// Build the tab-strip row for `panel`: active bar, drag source, middle-click
 /// close, recording dot, status icon, the (double-click to rename) label, and
-/// the × button. In the vertical rail the status icon trails the label and
-/// there is no × (`IN-0055`, `US-0196` rework): the tab closes by middle-click
-/// and the context menu.
+/// the × button. The vertical rail's row (`IN-0055`, `US-0196` rework) has two
+/// lines and no ×: the label after the chips and the dot, then the current
+/// directory with the status icon at the end of the line; the tab closes by
+/// middle-click and the context menu.
 pub(super) fn render_tab_strip(
     panel: &mut TerminalPanel,
     _window: &mut Window,
@@ -235,13 +322,8 @@ pub(super) fn render_tab_strip(
     let status_icon = panel
         .tab_status(cx)
         .map(|status| tab_status_icon(status, panel_entity.entity_id(), cx));
-    // The strip shows the status before the label; the rail at the trailing end, where the
-    // strip has its ×.
-    let (leading_status, trailing_status) = if vertical {
-        (None, status_icon)
-    } else {
-        (status_icon, None)
-    };
+    // The directory is shown by the vertical row only.
+    let cwd = vertical.then(|| panel.tab_cwd(cx)).flatten();
     // One chip per distinct channel of this tab's Spaces, in A..E order.
     let chips: Vec<_> = panel
         .tab_channels(cx)
@@ -260,11 +342,59 @@ pub(super) fn render_tab_strip(
     // strip the same menu state.
     let title_row_id = SharedString::from(format!("tab-title-{panel_entity:?}"));
 
-    gpui_component::h_flex()
-        .id(title_row_id)
-        .debug_selector(|| TAB_ROW_SELECTOR.to_string())
-        .relative()
-        .h_full()
+    let recording_dot = show_recording.then(|| {
+        div()
+            .id("tab-recording")
+            .flex_shrink_0()
+            .text_xs()
+            .text_color(recording_color)
+            .child("●")
+    });
+    let label = tab_title_label()
+        .id(title_label_id)
+        .debug_selector(|| TAB_LABEL_SELECTOR.to_string())
+        .on_click({
+            let panel = panel_entity.clone();
+            move |event, window, cx| {
+                if event.click_count() != 2 {
+                    return;
+                }
+                cx.stop_propagation();
+                open_tab_title_dialog(panel.clone(), rename_title.clone(), window, cx);
+            }
+        })
+        .child(tab_label);
+
+    let row = if vertical {
+        // Line 1: chips, recording dot, title. Line 2: the directory (cut at its start when it
+        // does not fit) and the status icon at the end. The rail draws the selected row's accent
+        // bar and the reorder grip itself, so this row carries neither the top bar nor the
+        // strip's negative margin.
+        // The path is as wide as its text up to the room there is, so it shrinks (and is cut)
+        // before the spacer that keeps the status icon at the end.
+        let path = cwd.map(|cwd| tab_cwd_label(cwd, muted));
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .pr_1()
+            .py(px(TabRowLayout::VERTICAL_ROW_PADDING))
+            .child(
+                h_flex()
+                    .h(px(TabRowLayout::VERTICAL_FIRST_LINE_HEIGHT))
+                    .gap_1()
+                    .children(chips)
+                    .children(recording_dot)
+                    .child(label),
+            )
+            .child(
+                h_flex()
+                    .h(px(TabRowLayout::VERTICAL_SECOND_LINE_HEIGHT))
+                    .gap_1()
+                    .children(path)
+                    .child(div().flex_1().min_w_0())
+                    .children(status_icon),
+            )
+    } else {
         // No `w_full()`: the kit's `Tab` is content-sized and `flex_shrink_0`
         // (`component/src/tab/tab.rs:715-718,794-800`), so a percentage width
         // against it contributes nothing to intrinsic sizing and every tab
@@ -273,31 +403,61 @@ pub(super) fn render_tab_strip(
         // the strip (`US-0116`, `F11`). Sized by the label between a floor and
         // a ceiling instead: no tab loses its name, and one long OSC title
         // elides rather than eating the strip.
-        //
-        // A row in the vertical rail fills the width the rail gives it instead
-        // (`IN-0055`): the rail draws the selected row's accent bar and the
-        // reorder grip itself, so this row carries neither the top bar nor the
-        // strip's negative margin.
-        .when(!vertical, |this| {
-            this.min_w(px(100.)).max_w(px(220.)).mr(-px(5.))
-        })
-        .when(vertical, |this| this.flex_1().min_w_0().pr_1())
-        .items_center()
-        .gap_1()
-        .when(is_active && !vertical, |this| {
-            this.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left(-px(20.))
-                    .right(-px(20.))
-                    .h(px(2.))
-                    .bg(highlight),
-            )
-        })
+        h_flex()
+            .min_w(px(100.))
+            .max_w(px(220.))
+            .mr(-px(5.))
+            .gap_1()
+            .when(is_active, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left(-px(20.))
+                        .right(-px(20.))
+                        .h(px(2.))
+                        .bg(highlight),
+                )
+            })
+            .children(chips)
+            .children(recording_dot)
+            .children(status_icon)
+            .child(label)
+            .when_some(tab_panel.clone(), |this, _| {
+                this.child(
+                    div()
+                        .id("tab-close")
+                        .debug_selector(|| TAB_CLOSE_SELECTOR.to_string())
+                        .flex_shrink_0()
+                        .cursor_pointer()
+                        .size_4()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(3.))
+                        .hover(move |this| this.bg(muted.opacity(0.15)))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .on_click({
+                            let panel_entity = panel_entity.clone();
+                            move |_, window, cx| {
+                                cx.stop_propagation();
+                                panel_entity.update(cx, |panel, cx| panel.close_tab(window, cx));
+                            }
+                        })
+                        .child(Icon::new(IconName::Close).xsmall().text_color(muted)),
+                )
+            })
+    };
+
+    row.id(title_row_id)
+        .debug_selector(|| TAB_ROW_SELECTOR.to_string())
+        .relative()
+        .h_full()
         // Drag the tab into an empty Space with the terminal-specific
         // payload consumed by Space-tree drop targets.
-        .when_some(tab_panel.clone(), |this, _| {
+        .when_some(tab_panel, |this, _| {
             this.on_drag(
                 DragTerminalTab {
                     panel: panel_weak.clone(),
@@ -316,58 +476,6 @@ pub(super) fn render_tab_strip(
                 cx.stop_propagation();
                 panel.update(cx, |panel, cx| panel.close_tab(window, cx));
             }
-        })
-        .children(chips)
-        .when(show_recording, |this| {
-            this.child(
-                div()
-                    .id("tab-recording")
-                    .flex_shrink_0()
-                    .text_xs()
-                    .text_color(recording_color)
-                    .child("●"),
-            )
-        })
-        .children(leading_status)
-        .child(
-            tab_title_label()
-                .id(title_label_id)
-                .debug_selector(|| TAB_LABEL_SELECTOR.to_string())
-                .on_click({
-                    let panel = panel_entity.clone();
-                    move |event, window, cx| {
-                        if event.click_count() != 2 {
-                            return;
-                        }
-                        cx.stop_propagation();
-                        open_tab_title_dialog(panel.clone(), rename_title.clone(), window, cx);
-                    }
-                })
-                .child(tab_label),
-        )
-        .children(trailing_status)
-        .when_some(tab_panel.filter(|_| !vertical), |this, _| {
-            this.child(
-                div()
-                    .id("tab-close")
-                    .debug_selector(|| TAB_CLOSE_SELECTOR.to_string())
-                    .flex_shrink_0()
-                    .cursor_pointer()
-                    .size_4()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(3.))
-                    .hover(move |this| this.bg(muted.opacity(0.15)))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        cx.stop_propagation();
-                    })
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        panel_entity.update(cx, |panel, cx| panel.close_tab(window, cx));
-                    })
-                    .child(Icon::new(IconName::Close).xsmall().text_color(muted)),
-            )
         })
         // The kit attaches no right-click handler to a tab and stops only left
         // mouse-down (`base/src/tabs.rs:172`), so the tab's own menu lives here,

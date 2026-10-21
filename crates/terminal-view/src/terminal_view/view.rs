@@ -119,6 +119,9 @@ pub(crate) enum TerminalViewEvent {
     TitleChanged,
     /// [`TerminalView::program_status`] changed; the tab's status icon follows.
     StatusChanged,
+    /// The shell reported a working directory (OSC 7); the vertical tab row shows it. The panel
+    /// re-reads it through the session.
+    CwdChanged,
 }
 
 /// View that renders one terminal session (local or ssh — via `dyn TerminalSession`).
@@ -431,9 +434,11 @@ impl TerminalView {
                 let kind = self.session.read(cx).kind();
                 self.handle_session_closed(kind);
             }
-            // OSC 7 cwd is read on demand through the capabilities; OSC 133
-            // row roles are not consumed by the UI yet.
-            SessionEvent::Cwd(_) | SessionEvent::ShellIntegration(_) => {}
+            // The cwd itself is read on demand through the session; this only tells the
+            // panel to repaint the tab row that shows it. OSC 133 row roles are not
+            // consumed by the UI yet.
+            SessionEvent::Cwd(_) => cx.emit(TerminalViewEvent::CwdChanged),
+            SessionEvent::ShellIntegration(_) => {}
         }
         // A view in a tab that is not on screen draws nothing, but the tab strip
         // reads it (the tab label), so the window tracks it and a notify here

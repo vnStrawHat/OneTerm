@@ -318,6 +318,11 @@ impl FakeSessionProbe {
         *shown = text;
     }
 
+    /// Set the working directory the session reports (OSC 7); sends no event.
+    pub fn set_cwd(&self, cwd: Option<PathBuf>) {
+        *self.state.cwd.lock().unwrap() = cwd;
+    }
+
     /// Feed raw bytes to the terminal behind the fake.
     pub fn feed(&self, bytes: &[u8]) {
         self.state.engine.lock().unwrap().feed(bytes);
@@ -441,6 +446,7 @@ struct FakeSessionState {
     writes: Mutex<Vec<Vec<u8>>>,
     input_calls: Mutex<Vec<FakeInputCall>>,
     selection: Mutex<Option<String>>,
+    cwd: Mutex<Option<PathBuf>>,
     event_tx: Sender<SessionEvent>,
     fail_writes: AtomicBool,
     alive: AtomicBool,
@@ -469,6 +475,7 @@ impl FakeTerminalSession {
             writes: Mutex::new(Vec::new()),
             input_calls: Mutex::new(Vec::new()),
             selection: Mutex::new(None),
+            cwd: Mutex::new(None),
             event_tx,
             fail_writes: AtomicBool::new(false),
             alive: AtomicBool::new(true),
@@ -765,7 +772,7 @@ impl TerminalLifecycle for FakeTerminalSession {
     }
 
     fn cwd(&self) -> Option<PathBuf> {
-        None
+        self.state.cwd.lock().unwrap().clone()
     }
 }
 
