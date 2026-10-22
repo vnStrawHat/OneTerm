@@ -135,3 +135,76 @@ File restored; `git status` clean afterwards. With the product lines back, both 
 - A real SSH drop (pull the network, or `kill -9` the remote shell) on a joined Space: the
   chip should go on `Closed` alone; only the fake session was used here.
 - The ruling on finding 1.
+
+# Advisor re-review (join of an exited Space blocked)
+
+Date: 2026-10-22. Reviewed head: `371de3c5` (one commit on `a19829bf`), `verify/us-0200`
+fast-forwarded to it. The owner ruled on finding 1 above: block the join. The coder applied
+the fix shape as written.
+
+## Verdict
+
+**PASS.** No defect; one low record note (finding R1). No pinning test added.
+
+## Gate
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p oneterm-terminal-view -p oneterm-state -p oneterm-terminal` | state 78, terminal 183, terminal-view 426 (3 ignored); all pass, incl. `joining_the_tab_skips_an_exited_space`, `only_a_tab_without_a_running_terminal_loses_the_channel_submenu`, flipped `a_session_that_ends_leaves_its_channel` |
+| `cargo clippy` same three crates `--all-targets -- -D warnings` | clean (re-checked `oneterm-state`, `oneterm-terminal-view`) |
+| `python scripts/check-english.py`, `check-doc-paths.py` | 1147 files / 219 paths pass |
+
+## The attack list
+
+1. **`alive` timing against the events.** Safe in both backends. Every `Exited` and `Closed`
+   comes from `TerminalPump`, and both variants flip the flag before they send:
+   `publish_exit*` calls `record_exit` (sets `exit_code`, then `set_alive(false)`,
+   `crates/terminal/src/backend/state.rs:111-114`) and `publish_closed*` calls
+   `set_alive(false)` first (`crates/terminal/src/backend/pump.rs:210-236`); the event is sent
+   after the flush. The local shell goes through `publish_child_exit`
+   (`crates/local-shell/src/event_loop.rs:678-685`) and SSH through `publish_exit` /
+   `publish_closed` (`crates/ssh/src/task.rs:97,100,144`); nothing else sets `alive` on a
+   session (`crates/ssh/src/session.rs:956` is a test). So at the moment the view sees the
+   event, `alive()` is already false: a join attempted before the flip succeeds and is undone
+   by the auto-leave on delivery; one attempted after the flip is refused. No ordering lets a
+   dead Space end up a member. The one known hole is older and symmetric: the Linux lost-hang-up
+   case documented at `event_loop.rs:636-642` keeps `alive()` true and sends no event, so the
+   Space neither leaves nor is refused; that is the BUG-0074 lane, not this packet.
+
+2. **Other paths into `registry.join`.** Only `TerminalView::join_channel`
+   (`view.rs:533`) outside tests. The key-bound / palette `JoinInputChannel` action
+   (`terminal_panel.rs:627-630`), the menu row (`channel_menu.rs:111`) and
+   `join_tab_to_channel` (`terminal_panel.rs:511-514`) all go through it. Duplicate Session
+   and split create a fresh non-member view (HLD flow 6); nothing restores membership
+   (DEC-0009, no persistence). Info: a key-bound `JoinInputChannel` on a dead Space is
+   refused silently, which matches the empty-Space case and the disabled menu row.
+
+3. **Disabled row when the active Space is dead but a sibling lives.** The whole
+   "Input Channel" row is disabled, so "Leave With All Spaces In Tab" and "Close Channel"
+   are unreachable from that tab's menu until the user focuses a live Space. This is the
+   same shape US-0199 already fixed for an empty active Space with live siblings (owner
+   rule, ui-verifier D1), so it is consistent, and the key-bound Leave / Close still work
+   from the live Space. If the owner wants the tab-wide rows reachable from a dead active
+   Space, the shape is: keep the submenu and omit only the five Join rows when
+   `!session_alive` (`channel_menu_items` gains a `can_join` flag). Not recommended now;
+   the ruling asked for the disabled row.
+
+4. **Records.** `gui-layout.md`, HLD flow 6, LLD edge case, US-0199 acceptance and Plan,
+   `fan_out` rustdoc, US-0200 Scope / Acceptance / Plan / status / proof blocks all say
+   "refused" and match the code. `docs/terminal-split.md:52-54` says only "no automatic
+   rejoin"; still true, no edit needed. See R1 for the stale lines.
+
+## Findings
+
+- **R1, Low, record.** `US-0200-leave-channel-on-exit.md:97-98` ("Evidence and Gaps"): the
+  first two bullets still describe the first version ("Code: two lines in `handle_event`";
+  the view test "... a join by hand holds until `shutdown`"), which the rework bullet below
+  then contradicts. Rewrite the two bullets to the current code (`join_channel` guard,
+  `session_alive`, `channel_entries`) and the current assertion (the join is refused, the
+  running member can still move). Text only; can land in the merge commit.
+
+## Still by hand
+
+Unchanged from the first review (on-screen chip / badge / frame, a real SSH drop), plus:
+the disabled "Input Channel" row on a tab whose shell has exited, and "Join All Spaces In
+Tab" on a split tab with one exited Space (the exited one gets no badge).
