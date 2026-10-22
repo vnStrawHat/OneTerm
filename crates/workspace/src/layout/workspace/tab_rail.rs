@@ -107,8 +107,9 @@ const DRAG_PREVIEW_SIZE: Size<Pixels> = size(px(140.), px(30.));
 
 /// The fills of a rail row: `(selected, hover)`. Selected is the list hover colour, which is
 /// what OneTerm draws a selected list item in everywhere (the session tree, the SFTP rows;
-/// `Theme::list_active` is not read: the kit derives it from its own token and a theme change
-/// resets it, which painted the selected row at a fifth of the strength in the running app).
+/// the owner's choice; `Theme::list_active` is the kit's token for the same thing, clamped to
+/// 0.2 alpha in the kit's own `tokens`, which the override did not reach before `BUG-0088`, so
+/// the rail reads the colour it means directly).
 /// `tab.active.background` is the terminal's own colour in the built-in themes, so a row filled
 /// with it would read as the page. Hover is the same colour at half strength, so
 /// selected > hover > idle in every theme.

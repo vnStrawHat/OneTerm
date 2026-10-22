@@ -41,7 +41,7 @@ impl TabRowLayout {
     /// Height of the directory and status line.
     pub const VERTICAL_SECOND_LINE_HEIGHT: f32 = 16.0;
     /// Width of the accent pill on the left edge of the selected row or cell. The rail draws it,
-    /// and a collapsed cell's status fill starts after it so the pill keeps its own background.
+    /// and a selected collapsed cell with a status fill draws its own over the fill.
     pub const ACCENT_BAR_WIDTH: f32 = 3.0;
     /// How far the accent pill stops short of the row's top and bottom edges.
     pub const ACCENT_BAR_INSET: f32 = 8.0;

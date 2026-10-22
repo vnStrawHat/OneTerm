@@ -66,15 +66,23 @@ const EMBEDDED_THEME_FILES: &[(&str, &str)] = &[
 /// `apply_config` / `Theme::change` reset `list_active` + `list_active_border`
 /// from the theme JSON (or fallback), so this must be called again after each
 /// theme switch.
+///
+/// The writes go through [`Theme::update`], not `Theme::global_mut`: the kit paints a table's
+/// selected row from `Theme::tokens.table_active` (and a list's from `tokens.list_active`), which
+/// it syncs from the colours only inside `update`. Written through `global_mut` the tokens kept
+/// the kit's own 0.2-alpha derivation, so the SFTP tables drew the kit's selection overlay on top
+/// of their own highlight (`BUG-0088`).
 pub fn apply_list_style_override(cx: &mut App) {
+    // Before the edit: this reads the theme's own `table_active_border`, which the edit blanks.
     record_selection_accent(cx);
-    let theme = Theme::global_mut(cx);
-    theme.list_active = theme.list_hover;
-    theme.list_active_border = gpui::transparent_black();
-    // DataTable selected-row overlay: disable both bg and border so the highlight
-    // is drawn by `render_tr` (= `table_hover`, like hover, no border).
-    theme.table_active = gpui::transparent_black();
-    theme.table_active_border = gpui::transparent_black();
+    Theme::update(cx, |theme| {
+        theme.list_active = theme.list_hover;
+        theme.list_active_border = gpui::transparent_black();
+        // DataTable selected-row overlay: disable both bg and border so the highlight
+        // is drawn by `render_tr` (= `table_hover`, like hover, no border).
+        theme.table_active = gpui::transparent_black();
+        theme.table_active_border = gpui::transparent_black();
+    });
 }
 
 /// The theme's own `table.active.border`, kept for the surfaces that mean "this one is

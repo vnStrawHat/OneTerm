@@ -244,6 +244,10 @@ Acceptance rework of this packet (reopened), with `US-0196` Rework 7 (the expand
 
 Not pinned by a test: that gpui really shows the card at the spot the drawn test models (the tooltip view is drawn at the pointer's place by the test host, not by gpui's tooltip machinery); the coder's screenshot of the running build shows it at 6 px from the strip, vertically centred, in both themes (`vt-rework7\r7-dark-collapsed-card.png`, `r7-light-collapsed-card.png`).
 
+### Rework 7 after the advisor review (2026-10-22), finding 3
+
+A selected collapsed cell with a status fill showed two 3 x 8 px notches of plain background at its top-left and bottom-left corners: the fill started 3 px in (to leave the rail's accent bar its own background) but the pill is now inset 8 px top and bottom. The fill now covers the whole cell. The rail's pill is under the fill, and a `Working` fill (`primary`) can be the pill's own colour, so a selected filled cell draws its **own pill over the fill in the glyph colour** (`legible_on(fill, [background, foreground])`, the pick the glyph and recording dot already make, held to 3:1 for every variant and fill by `check-theme-contrast.py`), with the same 3 px width and 8 px inset. An unselected cell has none. Test: `a_selected_fill_covers_the_cell_and_carries_its_own_pill` replaces `a_selected_fill_leaves_the_accent_bar_its_own_background`.
+
 ### Gaps
 
 - Not pinned by a test: the tooltip text on a cell (gpui exposes no way to read a shown tooltip in a test) and the recording dot's place; both are plain code in `render_tab_strip` / `collapsed_row`.

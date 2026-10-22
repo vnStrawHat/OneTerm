@@ -282,6 +282,7 @@ pub(super) const TAB_CWD_SELECTOR: &str = "oneterm-tab-cwd";
 /// Same, for the shell icon of a collapsed cell and for its status fill.
 pub(super) const TAB_SHELL_ICON_SELECTOR: &str = "oneterm-tab-shell-icon";
 pub(super) const TAB_FILL_SELECTOR: &str = "oneterm-tab-fill";
+pub(super) const TAB_FILL_PILL_SELECTOR: &str = "oneterm-tab-fill-pill";
 /// How far a collapsed cell's recording dot sits from its corner.
 const COLLAPSED_DOT_INSET: f32 = 3.;
 
@@ -484,9 +485,10 @@ impl Render for CellTooltip {
 /// The icon is the cell's content, so it starts the tab drag (`drag`, which an empty Space
 /// accepts); the rest of the cell belongs to the rail, which starts its reorder drag there.
 ///
-/// The fill is an absolute child so a selected cell can leave the rail's accent pill its own
-/// background: it starts after the pill, which a `Working` fill (`primary`) could otherwise
-/// swallow. It is painted over the rail's hover fill, so a filled cell takes no hover tint.
+/// The fill is an absolute child over the whole cell, painted over the rail's hover fill (so a
+/// filled cell takes no hover tint) and over the rail's accent pill, which a `Working` fill
+/// (`primary`) could swallow anyway; a selected filled cell draws its own pill in the glyph's
+/// colour instead.
 fn collapsed_row(
     icon: AppIcon,
     fill: Option<(gpui::Hsla, gpui::Hsla)>,
@@ -511,15 +513,22 @@ fn collapsed_row(
             div()
                 .debug_selector(|| TAB_FILL_SELECTOR.to_string())
                 .absolute()
-                .top_0()
-                .bottom_0()
-                .right_0()
-                .left(px(if selected {
-                    TabRowLayout::ACCENT_BAR_WIDTH
-                } else {
-                    0.
-                }))
+                .inset_0()
                 .bg(background)
+        }))
+        // The rail's accent pill is under the fill, so a selected filled cell draws its own, in
+        // the glyph's colour (the better of `background` and `foreground` on the fill), which
+        // reads on a fill of any colour, `primary` included.
+        .children(fill.filter(|_| selected).map(|(_, glyph)| {
+            div()
+                .debug_selector(|| TAB_FILL_PILL_SELECTOR.to_string())
+                .absolute()
+                .left_0()
+                .top(px(TabRowLayout::ACCENT_BAR_INSET))
+                .bottom(px(TabRowLayout::ACCENT_BAR_INSET))
+                .w(px(TabRowLayout::ACCENT_BAR_WIDTH))
+                .rounded(px(TabRowLayout::ACCENT_BAR_WIDTH / 2.))
+                .bg(glyph)
         }))
         .child(
             div()
