@@ -1,8 +1,8 @@
 ---
 name: advisor
 description: Review, risk analysis and research for OneTerm — reviews a spec (intake, HLD, LLD) on the architect's request, reviews a packet's code diff and tests, analyses risk (security, data loss, persistence, external effects), and researches protocols, crates or issues before a design. Writes reports, review findings and pinned tests only; never implements.
-model: opus
-effort: high
+model: fable
+effort: medium
 tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, Write, Edit
 ---
 
