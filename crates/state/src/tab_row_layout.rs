@@ -18,8 +18,8 @@ pub enum TabRowLayout {
     Horizontal,
     /// A full-width row in the vertical rail.
     Vertical,
-    /// A compact cell in the collapsed rail: the tab's position (1-based) and its status.
-    Collapsed(usize),
+    /// A compact cell in the collapsed rail: the tab's shell icon on its status colour.
+    Collapsed,
 }
 
 impl Global for TabRowLayout {}
@@ -39,6 +39,9 @@ impl TabRowLayout {
     pub const VERTICAL_FIRST_LINE_HEIGHT: f32 = 24.0;
     /// Height of the directory and status line.
     pub const VERTICAL_SECOND_LINE_HEIGHT: f32 = 20.0;
+    /// Width of the bar on the left edge of the selected row or cell. The rail draws it, and a
+    /// collapsed cell's status fill starts after it so the bar keeps its own background.
+    pub const ACCENT_BAR_WIDTH: f32 = 2.0;
 
     /// Distance from the top of a vertical row to the middle of its title line, where the
     /// rail centres its reorder grip.
@@ -125,10 +128,10 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_collapsed_row_carries_its_position(cx: &mut gpui::TestAppContext) {
+    fn a_collapsed_row_is_a_layout_of_its_own(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            let scope = TabRowLayout::Collapsed(3).scope(cx);
-            assert_eq!(TabRowLayout::current(&scope), TabRowLayout::Collapsed(3));
+            let scope = TabRowLayout::Collapsed.scope(cx);
+            assert_eq!(TabRowLayout::current(&scope), TabRowLayout::Collapsed);
         });
     }
 

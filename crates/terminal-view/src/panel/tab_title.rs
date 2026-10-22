@@ -3,7 +3,8 @@
 //! (recording dot, OSC 7501 status icon, active bar, drag source, middle-click /
 //! × close, double-click rename). The vertical rail's row is the same element on two
 //! lines (the title, then the current directory and the status icon) without the ×; the
-//! collapsed rail's hover card draws those same two lines.
+//! collapsed rail's cell is the shell icon on the status colour, and its hover card draws those
+//! same two lines.
 
 use std::cell::Cell;
 use std::path::Path;
@@ -27,11 +28,11 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
-use oneterm_core::ShellKind;
+use oneterm_core::{SessionDuplicateConfig, ShellKind};
 use oneterm_settings::VerticalTabs;
 use oneterm_state::TabRowLayout;
 use oneterm_terminal::{ProgramState, TerminalLogState};
-use oneterm_theme::notif_ext::notify;
+use oneterm_theme::{AppIcon, notif_ext::notify};
 
 use super::TerminalPanel;
 use super::channel_menu::channel_submenu;
@@ -70,6 +71,16 @@ impl TerminalPanel {
         self.tree
             .active_terminal()
             .and_then(|view| view.read(cx).program_status())
+    }
+
+    /// The glyph a collapsed cell shows for the shell the tab's active Space runs (see
+    /// [`shell_icon`]); the generic terminal glyph when the tab has no terminal.
+    pub(super) fn tab_shell_icon(&self, cx: &App) -> AppIcon {
+        let view = self.tree.active_terminal();
+        shell_icon(
+            view.as_ref()
+                .and_then(|view| view.read(cx).duplicate_config.as_ref()),
+        )
     }
 
     /// Whether the tab shows the recording dot: only an unsplit tab whose
@@ -162,6 +173,49 @@ pub(crate) fn trim_path_title(title: &str) -> &str {
     }
 }
 
+/// The icon of a collapsed cell for the shell a terminal was launched with (`US-0198` rework 6):
+/// `cmd` and PowerShell (Windows PowerShell or PowerShell 7) have their own; every other shell,
+/// an SSH session and a terminal with no recorded launch data take the generic terminal glyph.
+/// An explicit `program` names the shell, as it names the tab label, so `kind: cmd` running
+/// `nu.exe` is not a `cmd` icon; with none, the kind decides. The window title is never read.
+pub(super) fn shell_icon(config: Option<&SessionDuplicateConfig>) -> AppIcon {
+    let Some(SessionDuplicateConfig::Local(shell)) = config else {
+        return AppIcon::Terminal;
+    };
+    let program = shell
+        .program
+        .as_deref()
+        .and_then(Path::to_str)
+        .and_then(program_display_name);
+    let by_name = |name: &str| match name.to_ascii_lowercase().as_str() {
+        "cmd" => AppIcon::Cmd,
+        "powershell" | "pwsh" => AppIcon::Powershell,
+        _ => AppIcon::Terminal,
+    };
+    match (program, shell.kind) {
+        (Some(name), _) => by_name(name),
+        (None, ShellKind::Cmd) => AppIcon::Cmd,
+        (None, ShellKind::PowerShell | ShellKind::Pwsh) => AppIcon::Powershell,
+        (None, _) => AppIcon::Terminal,
+    }
+}
+
+/// The background of a collapsed cell and the colour of its glyph for the tab's OSC 7501 state
+/// (`US-0198` rework 6): the tokens [`tab_status_icon`] draws the state's icon in, with their
+/// `*_foreground` pair. `None` (idle, or nothing reported) leaves the cell as it is.
+pub(super) fn collapsed_fill(
+    status: ProgramState,
+    theme: &gpui_component::Theme,
+) -> Option<(gpui::Hsla, gpui::Hsla)> {
+    match status {
+        ProgramState::Working => Some((theme.primary, theme.primary_foreground)),
+        ProgramState::Blocked => Some((theme.warning, theme.warning_foreground)),
+        ProgramState::Done => Some((theme.success, theme.success_foreground)),
+        ProgramState::Error => Some((theme.danger, theme.danger_foreground)),
+        ProgramState::Idle => None,
+    }
+}
+
 /// The tab's OSC 7501 status icon (owner's icon set, `IN-0049`): a rotating
 /// loader while working, a pulsing bell while waiting on the user, a check or a
 /// cross for a result. Colours are theme tokens. The animations are gpui's, so a
@@ -219,10 +273,11 @@ pub(super) const TAB_STATUS_SELECTOR: &str = "oneterm-tab-status";
 pub(super) const TAB_LABEL_SELECTOR: &str = "oneterm-tab-label";
 /// Same, for the current directory on line 2 of a vertical row.
 pub(super) const TAB_CWD_SELECTOR: &str = "oneterm-tab-cwd";
-/// Same, for the position number of a collapsed cell.
-pub(super) const TAB_NUMBER_SELECTOR: &str = "oneterm-tab-number";
-/// How far a collapsed cell's badges sit from its corner.
-const COLLAPSED_BADGE_INSET: f32 = 3.;
+/// Same, for the shell icon of a collapsed cell and for its status fill.
+pub(super) const TAB_SHELL_ICON_SELECTOR: &str = "oneterm-tab-shell-icon";
+pub(super) const TAB_FILL_SELECTOR: &str = "oneterm-tab-fill";
+/// How far a collapsed cell's recording dot sits from its corner.
+const COLLAPSED_DOT_INSET: f32 = 3.;
 
 fn tab_title_label() -> Div {
     // GPUI creates a rectangular content mask when either overflow axis is
@@ -342,15 +397,25 @@ impl Render for CellTooltip {
     }
 }
 
-/// The compact cell of the collapsed rail (`US-0198`): the tab's position, the status icon as a
-/// badge in the top-right corner and the recording dot in the top-left. The title, directory
-/// and channel chips are the hover card's ([`tab_hover_card`]), so the cell is the same element
-/// as the expanded row minus everything that needs width.
+/// The compact cell of the collapsed rail (`US-0198`): the tab's shell icon, centred, on the
+/// tab's status colour, and the recording dot in the top-left corner. There is no status badge
+/// and nothing animates: the state is the background. The title, directory, channel chips and
+/// status icon are the hover card's ([`tab_hover_card`]).
+///
+/// The fill is an absolute child so a selected cell can leave the rail's accent bar its own
+/// background: it starts after the bar, which a `Working` fill (`primary`) could otherwise
+/// swallow. It is painted over the rail's hover fill, so a filled cell takes no hover tint.
 fn collapsed_row(
-    position: usize,
-    status: Option<gpui::AnyElement>,
+    icon: AppIcon,
+    fill: Option<(gpui::Hsla, gpui::Hsla)>,
+    selected: bool,
     recording: Option<gpui::Stateful<Div>>,
 ) -> Div {
+    let glyph = Icon::new(icon).small();
+    let glyph = match fill {
+        Some((_, foreground)) => glyph.text_color(foreground),
+        None => glyph,
+    };
     div()
         .relative()
         .flex_1()
@@ -358,24 +423,31 @@ fn collapsed_row(
         .flex()
         .items_center()
         .justify_center()
-        .text_sm()
+        .children(fill.map(|(background, _)| {
+            div()
+                .debug_selector(|| TAB_FILL_SELECTOR.to_string())
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .left(px(if selected {
+                    TabRowLayout::ACCENT_BAR_WIDTH
+                } else {
+                    0.
+                }))
+                .bg(background)
+        }))
         .child(
             div()
-                .debug_selector(|| TAB_NUMBER_SELECTOR.to_string())
-                .child(position.to_string()),
+                .debug_selector(|| TAB_SHELL_ICON_SELECTOR.to_string())
+                .flex()
+                .child(glyph),
         )
-        .children(status.map(|icon| {
-            div()
-                .absolute()
-                .top(px(COLLAPSED_BADGE_INSET))
-                .right(px(COLLAPSED_BADGE_INSET))
-                .child(icon)
-        }))
         .children(recording.map(|dot| {
             div()
                 .absolute()
-                .top(px(COLLAPSED_BADGE_INSET))
-                .left(px(COLLAPSED_BADGE_INSET))
+                .top(px(COLLAPSED_DOT_INSET))
+                .left(px(COLLAPSED_DOT_INSET))
                 .child(dot)
         }))
 }
@@ -385,8 +457,8 @@ fn collapsed_row(
 /// the × button. The vertical rail's row (`IN-0055`, `US-0196` rework) has two
 /// lines and no ×: the label after the chips and the dot, then the current
 /// directory with the status icon at the end of the line; the tab closes by
-/// middle-click and the context menu. The collapsed rail's cell (`US-0198`) is the position
-/// number with the status icon as a corner badge and the expanded row's content as a hover card.
+/// middle-click and the context menu. The collapsed rail's cell (`US-0198`) is the shell icon on
+/// the status colour, with the expanded row's content as a hover card.
 pub(super) fn render_tab_strip(
     panel: &mut TerminalPanel,
     _window: &mut Window,
@@ -394,7 +466,7 @@ pub(super) fn render_tab_strip(
 ) -> impl IntoElement {
     let layout = TabRowLayout::current(cx);
     let vertical = layout == TabRowLayout::Vertical;
-    let collapsed = matches!(layout, TabRowLayout::Collapsed(_));
+    let collapsed = layout == TabRowLayout::Collapsed;
     let tab_panel = panel.tab_panel.clone();
     let tooltip_hidden = panel.tab_tooltip_hidden.clone();
     let panel_entity = cx.entity().clone();
@@ -404,8 +476,10 @@ pub(super) fn render_tab_strip(
     let recording_color = cx.theme().danger;
     let is_active = panel.is_active;
     let show_recording = panel.shows_recording_dot(cx);
-    let status_icon = panel
-        .tab_status(cx)
+    let status = panel.tab_status(cx);
+    // A collapsed cell shows the state as its background instead of an icon.
+    let status_icon = status
+        .filter(|_| !collapsed)
         .map(|status| tab_status_icon(status, panel_entity.entity_id(), cx));
     // The directory is shown by the vertical row only.
     let cwd = vertical.then(|| panel.tab_cwd(cx)).flatten();
@@ -437,8 +511,9 @@ pub(super) fn render_tab_strip(
         })
         .child(tab_label);
 
-    let row = if let TabRowLayout::Collapsed(position) = layout {
-        collapsed_row(position, status_icon, recording_dot)
+    let row = if collapsed {
+        let fill = status.and_then(|status| collapsed_fill(status, cx.theme()));
+        collapsed_row(panel.tab_shell_icon(cx), fill, is_active, recording_dot)
     } else if vertical {
         // The rail draws the selected row's accent bar and the reorder grip itself, so this row
         // carries neither the top bar nor the strip's negative margin.
@@ -756,7 +831,7 @@ fn tab_context_menu(
 pub(super) fn close_following_label(layout: TabRowLayout) -> &'static str {
     match layout {
         TabRowLayout::Horizontal => "Close to the Right",
-        TabRowLayout::Vertical | TabRowLayout::Collapsed(_) => "Close Tabs Below",
+        TabRowLayout::Vertical | TabRowLayout::Collapsed => "Close Tabs Below",
     }
 }
 

@@ -81,14 +81,14 @@ const RESIZE_CURSOR: CursorStyle = CursorStyle::ResizeColumn;
 const HEADER_HEIGHT: Pixels = px(32.);
 /// Two lines (`TerminalPanel::title`'s vertical row): the title, then the directory and status.
 pub(super) const ROW_HEIGHT: Pixels = px(TabRowLayout::VERTICAL_ROW_HEIGHT);
-/// A cell of the collapsed rail: a square as wide as the strip (the position number and a
-/// badge need no second line).
+/// A cell of the collapsed rail: a square as wide as the strip (the shell icon needs no second
+/// line).
 pub(super) const COLLAPSED_ROW_HEIGHT: Pixels = px(VerticalTabs::COLLAPSED_WIDTH as f32);
 /// The reorder grip: the strip tab's leading padding.
 const GRIP_WIDTH: Pixels = px(12.);
 /// The grip glyph (`Icon::xsmall`).
 const GRIP_GLYPH_SIZE: f32 = 12.;
-const ACCENT_BAR_WIDTH: Pixels = px(2.);
+const ACCENT_BAR_WIDTH: Pixels = px(TabRowLayout::ACCENT_BAR_WIDTH);
 /// What the drag preview occupies, reported to base so a drop placeholder knows where to fly
 /// in from. The chip is content-sized between a floor and a ceiling; this is a typical size.
 const DRAG_PREVIEW_SIZE: Size<Pixels> = size(px(140.), px(30.));
@@ -160,7 +160,7 @@ struct RowPlace {
     position: usize,
     rows: usize,
     selected: bool,
-    /// The rail is the 44 px strip: the cell shows the position number, not the two lines.
+    /// The rail is the 44 px strip: the cell shows the shell icon, not the two lines.
     collapsed: bool,
     /// Every panel of the group in tab order, to place a dragged tab among the rows.
     order: Rc<Vec<PanelId>>,
@@ -502,15 +502,15 @@ impl TabRail {
         // The kit strip prefers a panel's short name over its title element; so does the rail.
         // The vertical layout holds only while the title element is built.
         let layout = if collapsed {
-            TabRowLayout::Collapsed(position + 1)
+            TabRowLayout::Collapsed
         } else {
             TabRowLayout::Vertical
         };
         let title = {
             let mut scope = layout.scope(cx);
             match handle {
-                // The cell shows the position and the status, which only the panel's own row
-                // knows how to draw.
+                // The cell shows the shell icon on the status colour, which only the panel's own
+                // row knows how to draw.
                 Some(handle) if collapsed => handle.title(window, &mut scope),
                 Some(handle) => match handle.tab_name(&scope) {
                     Some(name) => div()
@@ -553,7 +553,7 @@ impl TabRail {
             .flex()
             .items_start()
             .justify_center()
-            // Collapsed, the number is centred in the whole cell, so the grip overlays its left
+            // Collapsed, the icon is centred in the whole cell, so the grip overlays its left
             // edge (painted after the content, below, so it still takes the press there).
             .when(collapsed, |this| this.absolute().left_0().top_0())
             .when_some(drag, |this, drag| {

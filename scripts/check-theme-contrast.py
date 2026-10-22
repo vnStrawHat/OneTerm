@@ -282,6 +282,11 @@ SURFACES: dict[str, tuple[str, ...]] = {
 #                        (`tab_bar.hover.background`, the list hover fill over the bar,
 #                        `crates/workspace/src/layout/workspace/tab_rail.rs`). Its text uses
 #                        are in `SURFACES` above, at 4.5:1.
+#   <status>.foreground  the shell icon of a collapsed rail cell, on the cell's status fill
+#                        (`US-0198` rework 6, `collapsed_fill` in
+#                        `crates/terminal-view/src/panel/tab_title.rs`): Working `primary`,
+#                        Blocked `warning`, Done `success`, Error `danger`, each with its own
+#                        `*_foreground`. The glyph is the only thing drawn on the fill.
 GLYPH_SURFACES: dict[str, tuple[str, ...]] = {
     "warning.background": (
         "tab_bar.background",
@@ -290,6 +295,20 @@ GLYPH_SURFACES: dict[str, tuple[str, ...]] = {
         "tab_bar.hover.background",
     ),
 }
+
+# The collapsed cell's glyph on its status fill, measured at `GLYPH_FLOOR` like the tier above
+# but ADVISORY: a failure is printed and does not fail the check. The shipped themes were never
+# tuned for these pairs (the kit gives most of them the built-in green/red or an unrelated
+# `primary.foreground`), so about a third of the pairs read below 3:1 today; retuning the themes
+# is the owner's decision (`US-0198` rework 6). Move a pair into `GLYPH_SURFACES` once the
+# themes clear it, and it gates.
+ADVISORY_GLYPH_SURFACES: dict[str, tuple[str, ...]] = {
+    "primary.foreground": ("primary.background",),
+    "warning.foreground": ("warning.background",),
+    "success.foreground": ("success.background",),
+    "danger.foreground": ("danger.background",),
+}
+ADVISORY = " (glyph, advisory)"
 
 # The hierarchy rule, as (primary, secondary) pairs. On every surface both tokens are drawn
 # on -- the intersection of their `SURFACES` entries -- the primary token's ratio must be
@@ -355,6 +374,21 @@ FALLBACKS: dict[str, str | tuple] = {
     "secondary.foreground": "foreground",                                # schema.rs:819
     "table.head.foreground": "muted.foreground",                         # schema.rs:1006
     "muted.foreground": ("blend", "muted.background", "foreground", 0.7),  # schema.rs:777-779
+    # The status foregrounds a theme leaves out take its own `primary.foreground`.
+    "success.foreground": "primary.foreground",                          # schema.rs:840
+    "warning.foreground": "primary.foreground",                          # schema.rs:883
+    "danger.foreground": "primary.foreground",                           # schema.rs:931
+}
+
+# What the kit shows for a status background a theme omits: the built-in palette of the
+# theme's mode (`default-theme.json`: `success.background` green-500 / green-400,
+# `danger.background` red-500 / red-400, resolved through `default-colors.json`). It has no
+# expression in the theme's own colours, so `variants()` writes it into the variant. 35 of the
+# 39 variants omit `success.background`, 25 omit `danger.background`; `warning.background` is
+# set by every one (see its `SURFACES` entry), `primary.background` too.
+KIT_DEFAULTS: dict[str, dict[str, str]] = {
+    "light": {"success.background": "#22c55e", "danger.background": "#ef4444"},
+    "dark": {"success.background": "#4ade80", "danger.background": "#f87171"},
 }
 
 HEX = re.compile(r"#[0-9a-fA-F]{3,8}\b")
@@ -455,7 +489,8 @@ def variants() -> list[tuple[str, str, str, dict[str, str]]]:
     for path in sorted(THEMES_DIR.glob("*.json")):
         document = json.loads(path.read_text(encoding="utf-8"))
         for theme in document.get("themes", []):
-            out.append((path.name, theme["name"], theme.get("mode", "dark"), theme["colors"]))
+            mode = theme.get("mode", "dark")
+            out.append((path.name, theme["name"], mode, {**KIT_DEFAULTS[mode], **theme["colors"]}))
     return out
 
 
@@ -467,7 +502,12 @@ def shared_surfaces(primary: str, secondary: str) -> tuple[str, ...]:
 def pairings() -> int:
     """How many foreground/surface pairs one pass actually measures."""
     return len(variants()) * sum(
-        len(surfaces) for surfaces in (*SURFACES.values(), *GLYPH_SURFACES.values())
+        len(surfaces)
+        for surfaces in (
+            *SURFACES.values(),
+            *GLYPH_SURFACES.values(),
+            *ADVISORY_GLYPH_SURFACES.values(),
+        )
     )
 
 
@@ -485,7 +525,11 @@ def rows(
     """
     out = []
     for file_name, name, mode, colors in variants() if only is None else only:
-        for table, floor, suffix in ((SURFACES, FLOOR, ""), (GLYPH_SURFACES, GLYPH_FLOOR, " (glyph)")):
+        for table, floor, suffix in (
+            (SURFACES, FLOOR, ""),
+            (GLYPH_SURFACES, GLYPH_FLOOR, " (glyph)"),
+            (ADVISORY_GLYPH_SURFACES, GLYPH_FLOOR, ADVISORY),
+        ):
             for fg_token, surfaces in table.items():
                 measured = [(bg, measure(colors, fg_token, bg)) for bg in surfaces]
                 bg, ratio = min(measured, key=lambda item: item[1])
@@ -592,7 +636,9 @@ def self_test(quiet: bool = False) -> int:
     # row alone: a bell at about 3.4:1 on its worst surface passes its own row and would fail the text floor, about 2.4:1 fails it.
     fixture = {"background": "#ffffff", "foreground": "#000000", "border": "#cccccc",
                "muted.background": "#eeeeee", "accent.background": "#dddddd",
-               "secondary.background": "#eeeeee"}
+               "secondary.background": "#eeeeee", "primary.background": "#000000",
+               "primary.foreground": "#ffffff", "success.background": "#008000",
+               "danger.background": "#c00000"}
     for bell, passes in (("#808080", True), ("#a8a8a8", False)):
         measured = rows([("fixture.json", "Fixture", "light", dict(fixture, **{"warning.background": bell}))])
         glyph = [row for row in measured if row[3] == "warning.background (glyph)"]
@@ -624,7 +670,9 @@ def main() -> int:
 
     self_test(quiet=True)
     measured = rows()
-    failures = [row for row in measured if row[5] < row[6]]
+    below = [row for row in measured if row[5] < row[6]]
+    failures = [row for row in below if not row[3].endswith(ADVISORY)]
+    advisory = [row for row in below if row[3].endswith(ADVISORY)]
     inverted = inversions()
     inverted_comparisons = sum(row[7] for row in inverted)
     secondary = HIERARCHY[0][1]
@@ -676,9 +724,15 @@ def main() -> int:
             )
         return 1
 
+    if advisory:
+        print(
+            f"check-theme-contrast: ADVISORY {len(advisory)} status-fill glyph row(s) in "
+            f"{len({row[1] for row in advisory})} variant(s) below {GLYPH_FLOOR}:1 "
+            "(not a failure; --report lists them, the themes are the owner's to retune)"
+        )
     print(
         f"check-theme-contrast: {pairings()} foreground/surface pairings across "
-        f"{len(measured)} token/variant rows, all >= {FLOOR}:1 (glyphs >= {GLYPH_FLOOR}:1); "
+        f"{len(measured)} token/variant rows, all >= {FLOOR}:1 (gating glyphs >= {GLYPH_FLOOR}:1); "
         f"primary text out-reads "
         f"{secondary} on all {comparisons()} shared-surface comparisons"
     )
