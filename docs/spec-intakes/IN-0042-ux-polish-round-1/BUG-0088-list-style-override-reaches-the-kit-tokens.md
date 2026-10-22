@@ -30,7 +30,7 @@ Created: 2026-10-22
 ## Scope
 
 - [x] In scope: the override's writes go through `Theme::update` (so the kit's reconcile copies them to `tokens`), with `record_selection_accent` still run first so `selection_accent` keeps the theme's own `table.active.border`; a check of every reader of the overridden fields.
-- [x] Out of scope: the `warning` legibility correction (`apply_warning_legibility`) writes `Theme::warning` the same way; no kit reader paints from a `warning` token, so it is untouched and not part of this bug. Any change to what SFTP rows or the session tree look like beyond removing the overlay.
+- [x] Out of scope: the `warning` legibility correction (`apply_warning_legibility`) writes `Theme::warning` the same way; the kit's `Warning` button variant reads `tokens.warning`, but OneTerm draws no `Warning` button, so nothing on screen depends on it today; it is untouched and not part of this bug (pinned as current behaviour in `the_override_inside_theme_update_keeps_the_other_overrides`). Any change to what SFTP rows or the session tree look like beyond removing the overlay.
 
 ## Acceptance
 
