@@ -394,3 +394,34 @@ fn only_a_tab_without_a_running_terminal_loses_the_channel_submenu(cx: &mut Test
         "a tab with no terminal offers none (its row is disabled)"
     );
 }
+
+/// Advisor check (`US-0198` rework 7): the right-press hide still works through the placed
+/// card. While `hidden` is set the tooltip draws no card at all; clearing it brings the card
+/// back at its place.
+#[gpui::test]
+fn the_hover_card_is_not_drawn_while_a_right_press_hides_it(cx: &mut TestAppContext) {
+    use gpui::{point, px};
+
+    use crate::panel::tab_title::TAB_CARD_SELECTOR;
+
+    let (_panel, _probe, cx) = card_window(cx, "First", point(px(20.), px(130.)));
+    let (card, _) = drawn_card(cx);
+    assert!(card.size.width > px(0.));
+
+    let hidden = cx.update(|window, cx| {
+        let host = window.root::<CardHost>().flatten().expect("the card host");
+        host.read(cx).tooltip.read(cx).hidden.clone()
+    });
+    hidden.set(true);
+    cx.update(|window, _| window.refresh());
+    draw(cx);
+    assert!(
+        cx.debug_bounds(TAB_CARD_SELECTOR).is_none(),
+        "a hidden tooltip draws no card"
+    );
+
+    hidden.set(false);
+    cx.update(|window, _| window.refresh());
+    let (card, _) = drawn_card(cx);
+    assert!(card.size.width > px(0.), "the card is back");
+}

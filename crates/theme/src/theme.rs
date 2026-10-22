@@ -557,4 +557,84 @@ mod tests {
         assert!(registry.themes().contains_key("Zed One Light"));
         assert!(registry.themes().len() >= EMBEDDED_THEME_FILES.len());
     }
+
+    /// Advisor check (`US-0196` rework 7). The packet records that "a theme change after
+    /// OneTerm's list-style override resets `Theme::list_active`", which is why the rail reads
+    /// `list_hover`. Every theme path the app has (start-up `init`, `SwitchTheme`,
+    /// `SwitchThemeMode`, the Appearance page, and any `Theme::update`) re-applies the override
+    /// right after the change, so `list_active` is `list_hover` after each of them. This test
+    /// passing means the record's root cause is not what happened in the running build.
+    #[gpui::test]
+    fn list_active_is_list_hover_after_every_app_theme_path(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        use oneterm_settings::{UiConfig, ui_config::UiConfigGlobal};
+
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let config = cx.new(|_| UiConfig {
+                persist_blocked: true,
+                ..UiConfig::default()
+            });
+            cx.set_global(UiConfigGlobal(config));
+            let same = |cx: &App, step: &str| {
+                let theme = Theme::global(cx);
+                assert_eq!(theme.list_active, theme.list_hover, "{step}");
+            };
+            // Start-up.
+            init(cx);
+            same(cx, "after init");
+            // `SwitchThemeMode` / the Appearance page's mode switch.
+            Theme::change(gpui_component::ThemeMode::Light, None, cx);
+            apply_list_style_override(cx);
+            apply_warning_legibility(cx);
+            same(cx, "after Theme::change + override");
+            // `SwitchTheme` / the Appearance page's theme picker.
+            let dark = ThemeRegistry::global(cx)
+                .themes()
+                .get("Zed One Dark")
+                .unwrap()
+                .clone();
+            Theme::global_mut(cx).apply_config(&dark);
+            apply_list_style_override(cx);
+            apply_warning_legibility(cx);
+            same(cx, "after apply_config + override");
+            // Any later `Theme::update` (the kit's reconcile path) keeps it.
+            Theme::update(cx, |theme| theme.font_size = px(15.));
+            same(cx, "after Theme::update");
+        });
+    }
+
+    /// Advisor pin (`US-0196` rework 7 verify, finding 1). GPUI Kit 0.7 draws the data table's
+    /// selected row from `Theme::tokens.table_active` (`table/state.rs:2279`, `:2106`) and the
+    /// kit's `Theme::edit` only syncs `tokens` from `colors` inside `Theme::update`.
+    /// `apply_list_style_override` writes `colors` through `Theme::global_mut`, so the tokens
+    /// keep the kit's own 0.2-alpha derivation and the SFTP tables (row-selectable) get the
+    /// kit's overlay on top of OneTerm's own `render_tr` highlight. The override must reach the
+    /// tokens as well (run it inside `Theme::update`, or set `tokens.*` alongside).
+    #[gpui::test]
+    fn the_list_style_override_reaches_the_tokens_the_kit_reads(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let registry = ThemeRegistry::global_mut(cx);
+            for (_, content) in EMBEDDED_THEME_FILES {
+                registry.load_themes_from_str(content).unwrap();
+            }
+            let config = ThemeRegistry::global(cx)
+                .themes()
+                .get("Zed One Dark")
+                .unwrap()
+                .clone();
+            Theme::global_mut(cx).apply_config(&config);
+            apply_list_style_override(cx);
+            let theme = Theme::global(cx);
+            assert_eq!(
+                theme.tokens.table_active.color.a, 0.,
+                "the table token the kit paints the selected row with is blanked too"
+            );
+            assert_eq!(
+                theme.tokens.list_active.color, theme.list_hover,
+                "the list token follows the override"
+            );
+        });
+    }
 }

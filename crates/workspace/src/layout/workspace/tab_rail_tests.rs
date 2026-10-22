@@ -1518,3 +1518,45 @@ fn a_click_across_a_cell_of_an_overflowing_collapsed_rail_selects_it(cx: &mut Te
         );
     }
 }
+
+/// Advisor check (`US-0196` rework 7): at the rail's 140 px floor the header still holds the
+/// "Terminals" label left of the 24 px `+` with a gap between them, and the first row's title
+/// starts at the same 14 px the label does.
+#[gpui::test]
+fn the_header_label_and_the_plus_fit_the_narrowest_rail(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), true, &report, cx);
+    window.config.update(cx, |config, cx| {
+        config.vertical_tabs.width = 140;
+        cx.notify();
+    });
+    cx.update(|_, cx| cx.refresh_windows());
+    settle(cx);
+    assert_eq!(rail_width(cx), 140.);
+
+    let header = bounds_of(HEADER_SELECTOR, cx).expect("the header");
+    let label = bounds_of(HEADER_LABEL_SELECTOR, cx).expect("the label");
+    let plus = bounds_of(PLUS_SELECTOR, cx).expect("the `+`");
+    assert_eq!(
+        header.size.width,
+        px(139.),
+        "the rail's width inside its border"
+    );
+    assert!(
+        label.right() + px(4.) <= plus.left(),
+        "the label {label:?} ends clear of the `+` {plus:?}"
+    );
+    assert_eq!(plus.right(), header.right() - px(8.));
+    let title = bounds_of("probe-row-a", cx).expect("the first row's title");
+    assert_eq!(
+        header.left(),
+        title.left(),
+        "the header and the rows share the rail's edge"
+    );
+    assert_eq!(
+        label.left() - header.left(),
+        px(TabRowLayout::VERTICAL_ROW_PADDING_LEFT),
+        "the label starts where a row's content does"
+    );
+}
