@@ -267,3 +267,11 @@ Info, not blocking: a channel member whose process exits stays a member until it
 closed (pre-existing, not introduced here). If the owner wants exited members out of the
 fan-out, that is a one-line `leave_channel` in the `Exited` arm plus a test, as a separate
 packet.
+
+## UI re-walk (D1, D2)
+
+Binary copy of head `15f6b19f`, desktop unlocked, 1280x800, private profile. Screenshots `uivrw5-40`..`52` in the session scratchpad `uivrw5-shots`.
+
+- **D2: PASS.** Status bar left group with Vertical Tabs on, expanded (`50`) and collapsed (`46`): `[toggle] | clock` and nothing after the clock (non-background pixels only at x=44 and the clock). Vertical Tabs off (`51`/`51z`): clock only, no separator before or after it.
+- **D1: NOT WALKED (disabled row), live path PASS.** The PowerShell 7 tab did not fail to spawn in this run (cursor drawn; two PowerShell 7 tabs created and checked, `43`, `48`), so the disabled "Input Channel" row could not be seen. Every tab, PowerShell 7 included, showed the live Input Channel submenu (A..E) with the correct order in the vertical row (`42`, `43`, `48`), the collapsed cell (`45`) and the horizontal strip (`52`). The first run's missing item on a PowerShell 7 tab did not recur, so the disabled state needs a tab whose shell really failed (for example a missing pwsh on PATH).
+- **Regression glance: PASS.** Collapsed cell hover fills the whole cell (44,49,60), dividers kept (`46`); expanded hover and active row unchanged (`50`); the toggle-clock separator is still present (x=44).
