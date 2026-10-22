@@ -188,3 +188,30 @@ New, low, not blocking:
   (already covered) rather than that `rows()` applies `GLYPH_FLOOR` to a glyph row and
   `FLOOR` to the rest. A fixture variant run through `rows()` with one glyph at 3.5:1 would
   pin the tier itself.
+
+Re-run once the desktop is unlocked; the driver `scratchpad\uivrw5-gui.ps1` and `uivrw5.sh` are ready (use `pwsh -File`, Windows PowerShell 5.1 mis-binds the coordinate arguments).
+
+## UI verification (rework 5 + US-0199), re-run
+
+Binary copy built from `081b425f` (UI identical to `dbacc969`), desktop unlocked, 1280x800 window, private profile. Coordinates below are screenshot pixels of the full window (about 8 px left frame; the custom title bar is inside the client area, so client x = shot x - 8, client y = shot y). Screenshots: `scratchpad\uivrw5-shots\uivrw5-<nn>-*.png`.
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1 | Row hover fills the whole row; active row unchanged; divider and accent bar visible; text readable | PASS | `03` dark expanded: hovered row (44,49,60) at x=30, 200, 225 and y=200, 250, idle rows (30,34,39), dividers (62,68,81) at the row edges, active row (35,39,46) with the 2 px accent (82,139,255). `04`: hovering the active row leaves it unchanged. `18` dark collapsed: whole 44 px cell (44,49,60), bar and dividers kept. `22` light expanded: hover (229,229,230) vs idle (240,240,241) vs active white, dividers kept. `25`/`26` light collapsed: cell filled, accent bar (82,111,255). The grip appears at the left of the hovered row/cell. |
+| 2 | Collapsed cell hover card | PASS | `18`, `20`, `25`/`26`: card about 220 px wide (x 39..258), two-line layout (line 1 chip + title; line 2 blank here, since cwd and status icon are empty in this sandbox), popover fill and border, themed in both themes. It appears just below-right of the pointer, overlapping the right edge of the strip by about 12 px and the cell underneath; it is never clipped off-window (checked at cell 2 and cell 6). Right-click on the cell hides it while the context menu is open (`19`). cwd line and status icon: NOT WALKED (no live cwd/OSC 7501 here). |
+| 3 | Status bar separator between Collapse/Expand button and clock | PASS | Separator at x=44 between button (x=26) and clock, in dark (`24` zoom) and light (`23` zoom). Absent with Vertical Tabs off (`27`: clock first, no button, no separator). Narrow (window clamps to about 656 px, `34-narrow-330`/`420`): button, separator, clock and right group do not overlap. |
+| 4 | Input Channel in the tab menu | PARTLY | Order Rename..., Duplicate, separator, Input Channel >, separator, Close, Close Others, Close to the Right / Close Tabs Below: PASS in the horizontal strip (`30`), a vertical row (`05`, `11`, `13`) and a collapsed cell (`19`). Right-click in the terminal area: no Input Channel item (`08`). Right-click on an INACTIVE tab, join Channel A (vertical, `06`/`07`) and Channel B (horizontal, `31`/`33`): only that tab gets the chip, the active tab is unchanged and stays selected. A split tab: NOT WALKED (Split Right creates an empty Space, not a split tab; `09`). See D1. |
+
+### Defects
+
+**D1 (medium): the "PowerShell 7" tab menu has no Input Channel item and no separator pair.**
+- Screen: tab context menu of the tab opened from the New Terminal menu as "PowerShell 7", in the vertical rail (`10`, `14`, `15c`). Expected: Input Channel on every terminal tab (US-0199). Observed: Rename..., Duplicate, separator, Close, Close Others, Close Tabs Below only; reproducible whether the tab is active or inactive, before and after a Space split, while Command Prompt and PowerShell tabs show the item. Likely the PowerShell 7 shell did not start in this sandbox, so the panel may not be a live terminal; if so the omission may be intended and the owner should confirm with a working pwsh.
+- Steps: Vertical Tabs on, + > PowerShell 7, right-click that row.
+
+**D2 (low, observation, probably pre-existing): two empty separators after the clock.** Status bar, left group: `button | clock | | ` (x=186 and 203 dark and light, `23`/`24`), an empty cell between them; with Vertical Tabs off the same pair follows the clock (x=149, 166). Not part of rework 5 but visible next to the new separator.
+
+### Owner-only checks
+- Hover card with a real cwd, the OSC 7501 status icon, channel chips and the recording dot (needs a live shell with a prompt that reports its directory).
+- Input Channel on a live split tab and the pane frame of a joined channel (no split tab can be made here; the joined tab was inactive so no frame is visible).
+- D1 with a working PowerShell 7.
+- Keyboard-only access to the menu, elevated window, physical-key behaviour.
