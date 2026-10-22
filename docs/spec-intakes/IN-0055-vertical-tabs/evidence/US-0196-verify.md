@@ -391,3 +391,41 @@ No defect in the rework's own code blocks acceptance. The records state a root c
 2. Finding 2: open a BUG for the override not reaching the kit's tokens (SFTP selected-row overlay), outside this intake.
 3. Finding 3: say whether the pill should sit on a full-width status fill (notches gone) or the notches are acceptable.
 4. ui-verifier: the drop line on rows without dividers (above and below, on the selected row too), the selected filled cell's corners, the card at the bottom-most cell of an overflowing strip.
+
+## UI verification (rework 7)
+
+Build: debug binary copy at head e033390c, private profile (scratch USERPROFILE and cwd), Zed One Dark and Zed One Light, window 1280x800 (shot x = client x + 8). Measured with pixels. Screenshots (prefix `uivrw7-`): `C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\vt-rework7-walk`.
+
+| Item | Result | Evidence |
+|---|---|---|
+| Rows 48 px, line 1 centred without a directory | PASS (y66..113 = 48 px; title ink centre 138.5 vs row centre 137.5) | d01, d03 |
+| No row dividers | PASS (rows touch; only the rail's right border #3e4451) | d02, d15 |
+| Selected > hover > idle, dark | PASS: rail #1e2227, hover #252a32, selected #2c313c; idle title #8f96a3, hover and selected title #ffffff | d03 |
+| Selected > hover > idle, light | PASS but weak: rail #f0f0f1, hover #eaeaeb, selected #e5e5e6; idle title #5d677a, hover and selected #383a42 | l02 |
+| Hover on the selected row changes nothing | PASS (fill stays #2c313c dark / #e5e5e6 light) | d03, l02 |
+| 3 px pill, inset 8 px | PASS (x client 0..2, y 74..105 in a 66..113 row, #528bff) | d01 |
+| Grip: hover-only overlay, far left, clear of title | PASS (ink x client 1..6, y centred on the row; title ink starts client 15; 8 px gap) | d03, d03z |
+| Drag from x 0 and x 4 reorders; drop line drawn | PASS (blue 3 px line on the row boundary) | d04, d05 |
+| Title-row drag is the tab drag, not a reorder | PASS as far as walkable (different ghost, no reorder); dropping into an empty Space NOT WALKED (no empty Space made) | d06 |
+| Header "Terminals" + 24 px `+`, no bottom border | PASS (label x client 13..64, `+` glyph centred 198.5; no line under the header) | d03z |
+| Header at 140 px | PASS (label and `+` both fit, no clipping) | d07-narrow140 |
+| Collapsed: icon 16 px, centred, no grip | PASS (ink 15 x 12 px, centred on the 43 px cell both axes; no grip in cells) | d08 |
+| Card: 6 px gap, centred, rounded, shadow, one line | PASS (border x58 vs strip border x51 = 6 px; card centre y equals cell centre; dark and light; first and last cell) | d09, d17, l03 |
+| Right-click hides the card, menu opens | PASS | d10 |
+| Cell-margin drag reorders; icon drag is the tab drag | PASS | d11, d12, d13, d14 |
+| Click selects (expanded, collapsed), context menu, status bar toggle | PASS | d10, d18, d16 |
+| Two-line row with a directory, status icon at line 2's end | NOT WALKED: no directory reaches the rail in a private profile (no OSC 7 from the shells; typed input did not render in the pane) | |
+| Card clipped for the cell at the window bottom | NOT WALKED: 15 cells fit without reaching the bottom (last cell y682..725 of 763) | d17 |
+| 15 tabs, both themes | PASS (list scrolls; the top row is cut by the header edge) | d15, l04 |
+
+### Defects
+
+1. LOW, light theme, rows and cells. The three steps are 5 to 6 levels apart (#f0f0f1 / #eaeaeb / #e5e5e6), so a hovered row is almost invisible and the selected row reads mainly through the pill and the darker title. Steps: hover any idle row in Zed One Light (l02).
+2. LOW, dark theme, same rows. Steps are 7 levels (#1e2227 / #252a32 / #2c313c); hover is visible but faint (d19).
+3. LOW, hover and selected share the full-strength title colour (#ffffff dark, #383a42 light), so only the fill and the pill tell them apart, and the idle to hover change is a large jump.
+4. LOW, a right-clicked row (menu open) keeps the bright title but loses the hover fill (d18).
+5. INFO, with the header border gone a scrolled row is cut flat under the header (d15, l04 at y66).
+
+### Owner-only checks
+
+A tab with a directory (two lines); an empty-Space drop of a title-row or icon drag; real-host status icons; the card on a cell touching the window bottom.
