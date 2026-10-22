@@ -507,6 +507,10 @@ pub(super) fn render_tab_strip(
         .then(|| status.and_then(|status| collapsed_fill(status, cx.theme())))
         .flatten();
     let dot_color = fill.map_or(recording_color, |(_, glyph)| glyph);
+    if collapsed {
+        // The rail draws the reorder grip over the cell and needs to know what it is on.
+        TabRowLayout::report_cell_fill(cx, fill.map(|(background, _)| background));
+    }
     let recording_dot = show_recording.then(|| recording_dot(dot_color));
     let label = tab_title_label()
         .id(title_label_id)

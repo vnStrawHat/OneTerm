@@ -323,3 +323,7 @@ Verdict: partly (icons, no numbers, regressions all PASS; status fills and glyph
 - Feed `printf '\033]7501;state=working\007'` (and blocked / done / error) in a live Git Bash, PowerShell, or Windows cmd tab: fill colour per state, glyph colour readable on every fill, 2 px accent bar visible on a selected filled cell, no hover tint on a filled cell, hover card still shows the status icon.
 - Repeat in Catppuccin Latte, Everforest Light and Solarized Light (low-contrast fills), light and dark.
 - A split tab shows no fill.
+
+## Coder follow-up (rework 6 findings, 2026-10-22)
+
+F1, F2, N4 and N2 are fixed in the coder's commit after this evidence (see the packet's "Rework after the advisor review and the UI walk of rework 6"). The two pinned tests passed against the fixed script and now live in its `--self-test`; `scripts/test_check_theme_contrast.py` is deleted, so the references to it above describe the pins as they were when written.

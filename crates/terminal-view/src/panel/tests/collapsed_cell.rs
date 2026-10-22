@@ -219,6 +219,9 @@ fn a_collapsed_cell_is_the_shell_icon_on_the_status_fill(cx: &mut TestAppContext
         ProgramState::Error,
     ] {
         report(&probe, Some(state), cx);
+        let reported = cx.update(|_, cx| TabRowLayout::take_cell_fill(cx));
+        let expected = cx.update(|_, cx| collapsed_fill(state, cx.theme()).map(|(fill, _)| fill));
+        assert_eq!(reported, expected, "{state:?}: the rail is told the fill");
         let fill = cx
             .debug_bounds(TAB_FILL_SELECTOR)
             .unwrap_or_else(|| panic!("{state:?}: the cell is filled"));
@@ -231,6 +234,11 @@ fn a_collapsed_cell_is_the_shell_icon_on_the_status_fill(cx: &mut TestAppContext
     assert!(
         cx.debug_bounds(TAB_FILL_SELECTOR).is_none(),
         "a cleared state removes the fill"
+    );
+    assert_eq!(
+        cx.update(|_, cx| TabRowLayout::take_cell_fill(cx)),
+        None,
+        "an idle cell reports no fill to the rail"
     );
 }
 

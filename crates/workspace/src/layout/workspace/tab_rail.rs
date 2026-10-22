@@ -93,6 +93,16 @@ const ACCENT_BAR_WIDTH: Pixels = px(TabRowLayout::ACCENT_BAR_WIDTH);
 /// in from. The chip is content-sized between a floor and a ceiling; this is a typical size.
 const DRAG_PREVIEW_SIZE: Size<Pixels> = size(px(140.), px(30.));
 
+/// The reorder grip's colour: `muted.foreground`, or on a collapsed cell filled with a status
+/// colour whichever of `background` and `foreground` reads better on that fill (the pick the
+/// cell's own glyph makes).
+fn grip_glyph_color(cell_fill: Option<gpui::Hsla>, theme: &gpui_component::Theme) -> gpui::Hsla {
+    match cell_fill {
+        Some(fill) => oneterm_theme::legible_on(fill, [theme.background, theme.foreground]),
+        None => theme.muted_foreground,
+    }
+}
+
 /// Whether a tab group draws the rail: the switch is on, the group is in the centre, and it
 /// holds at least one panel and nothing but terminal panels. Every other group (the SSH Client
 /// group, a right-dock group a terminal tab was dropped into) keeps what it draws today.
@@ -527,6 +537,13 @@ impl TabRail {
             }
         };
 
+        // A collapsed cell reports the status colour it filled itself with; the grip glyph is
+        // drawn over it.
+        let cell_fill = if collapsed {
+            TabRowLayout::take_cell_fill(cx)
+        } else {
+            None
+        };
         let droppable = group.is_droppable();
         let drag = group
             .is_draggable()
@@ -538,7 +555,8 @@ impl TabRail {
             theme.tab_active_foreground,
             theme.tokens.tab_active,
         );
-        let (muted, divider, hover_fill) = (theme.muted_foreground, theme.border, theme.list_hover);
+        let (divider, hover_fill) = (theme.border, theme.list_hover);
+        let grip_color = grip_glyph_color(cell_fill, theme);
         // Not `table_active_border`: OneTerm blanks that for the data tables after every theme
         // change, which made the bar vanish.
         let accent = oneterm_theme::selection_accent(cx);
@@ -571,7 +589,11 @@ impl TabRail {
                             }))
                             .opacity(0.)
                             .group_hover(hover_group.clone(), |style| style.opacity(1.))
-                            .child(Icon::new(AppIcon::GripVertical).xsmall().text_color(muted)),
+                            .child(
+                                Icon::new(AppIcon::GripVertical)
+                                    .xsmall()
+                                    .text_color(grip_color),
+                            ),
                     )
                     .on_drag(drag, {
                         let panel = panel.clone();
@@ -784,6 +806,25 @@ mod tests {
             let rail = clamp_tab_rail_width(400., group);
             assert!(group - rail >= group * 0.65 - 0.001, "group {group}");
         }
+    }
+
+    /// The grip glyph stays `muted.foreground` on an ordinary cell and takes the better of
+    /// `background` and `foreground` on a status-filled one.
+    #[gpui::test]
+    fn the_grip_glyph_reads_on_a_filled_cell(cx: &mut gpui::TestAppContext) {
+        use gpui_component::ActiveTheme as _;
+
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            let mut theme = cx.theme().clone();
+            theme.background = gpui::hsla(0., 0., 0.05, 1.);
+            theme.foreground = gpui::hsla(0., 0., 0.95, 1.);
+            assert_eq!(grip_glyph_color(None, &theme), theme.muted_foreground);
+            let dark = gpui::hsla(0.6, 0.6, 0.15, 1.);
+            let light = gpui::hsla(0.1, 0.5, 0.85, 1.);
+            assert_eq!(grip_glyph_color(Some(dark), &theme), theme.foreground);
+            assert_eq!(grip_glyph_color(Some(light), &theme), theme.background);
+        });
     }
 
     /// Collapsed is the 44 px strip for any preference and any group; expanded is the clamp.

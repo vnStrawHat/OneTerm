@@ -486,6 +486,11 @@ def measure(colors: dict[str, str], fg_token: str, bg_token: str) -> float:
     return worst
 
 
+def with_kit_defaults(mode: str, colors: dict[str, str]) -> dict[str, str]:
+    """A variant's colours with the kit's built-in status backgrounds under the ones it omits."""
+    return {**KIT_DEFAULTS[mode], **colors}
+
+
 def variants() -> list[tuple[str, str, str, dict[str, str]]]:
     """(file name, variant name, mode, colors) for every variant of every built-in theme."""
     out = []
@@ -493,7 +498,7 @@ def variants() -> list[tuple[str, str, str, dict[str, str]]]:
         document = json.loads(path.read_text(encoding="utf-8"))
         for theme in document.get("themes", []):
             mode = theme.get("mode", "dark")
-            out.append((path.name, theme["name"], mode, {**KIT_DEFAULTS[mode], **theme["colors"]}))
+            out.append((path.name, theme["name"], mode, with_kit_defaults(mode, theme["colors"])))
     return out
 
 
@@ -651,6 +656,41 @@ def self_test(quiet: bool = False) -> int:
         assert glyph[0][6] == GLYPH_FLOOR and text[0][6] == FLOOR, "each tier carries its floor"
         assert (glyph[0][5] >= glyph[0][6]) is passes, glyph
         assert glyph[0][5] < FLOOR, "a 3:1-class bell would fail the text floor"
+    # The picked-glyph tier (the collapsed cell's glyph on a status fill) is the better of
+    # `background` and `foreground` against each fill, held to the glyph floor.
+    fixture = dict(fixture, **{"warning.background": "#808080"})
+    fixture_rows = rows([("fixture.json", "Fixture", "light", fixture)])
+    picked = [r for r in fixture_rows if r[3] == PICKED_GLYPH]
+    assert [r[4] for r in picked] == list(PICKED_GLYPH_FILLS), picked
+    assert all(r[6] == GLYPH_FLOOR and r[5] >= GLYPH_FLOOR for r in picked), picked
+    # ...white on the black primary fill is 21:1, the better token, not the worse one.
+    assert abs(picked[0][5] - 21.0) < 0.01, picked[0]
+    # When neither token can reach it the row fails, and only `KNOWN_BELOW` can exempt it.
+    muddy = dict(fixture, background="#808080", foreground="#909090", **{"warning.background": "#888888"})
+    muddy_rows = rows([("fixture.json", "Muddy", "light", muddy)])
+    low = [r for r in muddy_rows if r[3] == PICKED_GLYPH and r[4] == "warning.background"]
+    assert len(low) == 1 and low[0][5] < GLYPH_FLOOR, low
+    known, failures, stale = split_known(muddy_rows, frozenset())
+    assert low[0] in failures and not known and not stale
+    known, failures, stale = split_known(muddy_rows, frozenset({("Muddy", "warning.background")}))
+    assert low[0] in known and low[0] not in failures and not stale
+    # A stale exemption -- a pair that reads, or one that never matched -- is reported, so it
+    # fails the run instead of being kept for ever.
+    fine = ("Fixture", "primary.background")
+    gone = ("Nowhere", "success.background")
+    assert split_known(fixture_rows, frozenset({fine, gone}))[2] == sorted({fine, gone})
+    assert not split_known(fixture_rows, frozenset())[2]
+    # The summary counts exempt rows instead of claiming every glyph clears the floor.
+    clean = summary(10, 5, 0, "muted.foreground", 3)
+    assert f"glyphs >= {GLYPH_FLOOR}:1;" in clean and "known" not in clean, clean
+    exempt = summary(10, 5, 5, "muted.foreground", 3)
+    assert "5 known glyph rows below the floor" in exempt, exempt
+    assert f"glyphs >= {GLYPH_FLOOR}:1;" not in exempt, exempt
+    # The kit's status backgrounds fill in what a theme omits and never override what it sets.
+    assert with_kit_defaults("light", {})["success.background"] == KIT_DEFAULTS["light"]["success.background"]
+    assert with_kit_defaults("dark", {})["danger.background"] == KIT_DEFAULTS["dark"]["danger.background"]
+    assert with_kit_defaults("dark", {"success.background": "#123456"})["success.background"] == "#123456"
+    assert KIT_DEFAULTS["light"] != KIT_DEFAULTS["dark"], "the defaults are per mode"
     # A token with no value and no kit fallback is reported, not a traceback.
     try:
         stops({"background": "#000000"}, "muted.foreground")
@@ -661,6 +701,37 @@ def self_test(quiet: bool = False) -> int:
     if not quiet:
         print("check-theme-contrast: self-test passed")
     return 0
+
+
+def split_known(
+    measured: list, known_below: frozenset[tuple[str, str]] | None = None
+) -> tuple[list, list, list]:
+    """(known, failures, stale) of the rows below their floor.
+
+    `known` are the picked-glyph rows `KNOWN_BELOW` exempts, `failures` every other row below
+    its floor, and `stale` the `KNOWN_BELOW` entries no row below the floor matches -- the pair
+    now reads, or the variant or fill is gone -- which must be deleted, not kept for ever.
+    """
+    exempt = KNOWN_BELOW if known_below is None else known_below
+    below = [row for row in measured if row[5] < row[6]]
+    known = [row for row in below if row[3] == PICKED_GLYPH and (row[1], row[4]) in exempt]
+    failures = [row for row in below if row not in known]
+    stale = sorted(exempt - {(row[1], row[4]) for row in known})
+    return known, failures, stale
+
+
+def summary(pairs: int, row_count: int, known: int, secondary: str, compared: int) -> str:
+    """The closing line of a passing run; it counts the exempt glyph rows instead of hiding them."""
+    glyphs = (
+        f"glyphs >= {GLYPH_FLOOR}:1"
+        if not known
+        else f"glyphs >= {GLYPH_FLOOR}:1 except {known} known glyph rows below the floor"
+    )
+    return (
+        f"check-theme-contrast: {pairs} foreground/surface pairings across {row_count} "
+        f"token/variant rows, text >= {FLOOR}:1, {glyphs}; primary text out-reads "
+        f"{secondary} on all {compared} shared-surface comparisons"
+    )
 
 
 def main() -> int:
@@ -674,9 +745,7 @@ def main() -> int:
 
     self_test(quiet=True)
     measured = rows()
-    below = [row for row in measured if row[5] < row[6]]
-    known = [row for row in below if row[3] == PICKED_GLYPH and (row[1], row[4]) in KNOWN_BELOW]
-    failures = [row for row in below if row not in known]
+    known, failures, stale = split_known(measured)
     inverted = inversions()
     inverted_comparisons = sum(row[7] for row in inverted)
     secondary = HIERARCHY[0][1]
@@ -700,7 +769,12 @@ def main() -> int:
             f"inverted across {len(inverted)} token/variant row(s)"
         )
 
-    if failures or inverted:
+    if failures or inverted or stale:
+        for name, fill in stale:
+            print(
+                f"check-theme-contrast: STALE KNOWN_BELOW entry ({name}, {fill}): that pair is "
+                "not below the glyph floor (or the variant or fill is gone); delete the entry"
+            )
         if not args.report:
             for file_name, name, mode, fg_token, bg_token, ratio, floor in failures:
                 print(
@@ -719,6 +793,11 @@ def main() -> int:
                 f"({FLOOR}:1 text, {GLYPH_FLOOR}:1 glyph)",
                 file=sys.stderr,
             )
+        if stale:
+            print(
+                f"check-theme-contrast: {len(stale)} stale KNOWN_BELOW entr(y/ies)",
+                file=sys.stderr,
+            )
         if inverted:
             print(
                 f"check-theme-contrast: {inverted_comparisons} comparison(s) in "
@@ -733,12 +812,7 @@ def main() -> int:
             f"check-theme-contrast: KNOWN {name} ({mode}): status glyph on {bg_token} is "
             f"{ratio:.2f}:1 (floor {floor}:1), awaiting the owner"
         )
-    print(
-        f"check-theme-contrast: {pairings()} foreground/surface pairings across "
-        f"{len(measured)} token/variant rows, all >= {FLOOR}:1 (glyphs >= {GLYPH_FLOOR}:1); "
-        f"primary text out-reads "
-        f"{secondary} on all {comparisons()} shared-surface comparisons"
-    )
+    print(summary(pairings(), len(measured), len(known), secondary, comparisons()))
     return 0
 
 

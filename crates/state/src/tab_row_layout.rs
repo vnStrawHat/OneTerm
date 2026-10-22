@@ -8,7 +8,7 @@
 
 use std::ops::{Deref, DerefMut};
 
-use gpui::{App, Global};
+use gpui::{App, Global, Hsla};
 
 /// The shape of a Terminal Tab's row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -63,6 +63,31 @@ impl TabRowLayout {
         let previous = Self::current(cx);
         cx.set_global(self);
         TabRowScope { cx, previous }
+    }
+}
+
+/// The status fill of the collapsed cell last built, handed from the cell to the rail.
+#[derive(Default)]
+struct CellFill(Option<Hsla>);
+
+impl Global for CellFill {}
+
+impl TabRowLayout {
+    /// The collapsed cell being built says what colour it filled itself with (`None`: it did not),
+    /// so the rail can draw what it overlays on the cell, the reorder grip, in a colour that
+    /// reads on it. The rail cannot see the tab's status itself.
+    pub fn report_cell_fill(cx: &mut App, fill: Option<Hsla>) {
+        cx.set_global(CellFill(fill));
+    }
+
+    /// The fill the cell built just now reported, if any; reading it clears it, so one cell's
+    /// fill never leaks onto the next.
+    pub fn take_cell_fill(cx: &mut App) -> Option<Hsla> {
+        let fill = cx.try_global::<CellFill>().and_then(|reported| reported.0);
+        if fill.is_some() {
+            cx.set_global(CellFill(None));
+        }
+        fill
     }
 }
 
@@ -124,6 +149,23 @@ mod tests {
                 assert_eq!(TabRowLayout::current(&vertical), TabRowLayout::Vertical);
             }
             assert_eq!(TabRowLayout::current(cx), TabRowLayout::Horizontal);
+        });
+    }
+
+    #[gpui::test]
+    fn a_cells_fill_is_handed_over_once(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            assert_eq!(
+                TabRowLayout::take_cell_fill(cx),
+                None,
+                "nothing reported yet"
+            );
+            let red = gpui::hsla(0., 1., 0.5, 1.);
+            TabRowLayout::report_cell_fill(cx, Some(red));
+            assert_eq!(TabRowLayout::take_cell_fill(cx), Some(red));
+            assert_eq!(TabRowLayout::take_cell_fill(cx), None, "read once");
+            TabRowLayout::report_cell_fill(cx, None);
+            assert_eq!(TabRowLayout::take_cell_fill(cx), None);
         });
     }
 
