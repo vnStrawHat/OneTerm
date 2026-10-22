@@ -335,6 +335,36 @@ Advisor PASS with findings (`evidence/US-0196-verify.md`, "Advisor code review (
 - **Finding 3.** See `US-0198` Rework 7 after the review: a selected filled cell no longer shows notches.
 - Records: `docs/gui-layout.md` no longer says "2 px accent bar" for a collapsed cell.
 
+## Rework 8 2026-10-22 (owner): five polish items from the rework 7 UI walk
+
+Acceptance rework of this packet (reopened, not a new BUG). Owner ruling, 2026-10-22: do the five polish items the ui-verifier recorded under "Defects" of `evidence/US-0196-verify.md` ("UI verification (rework 7)"). The collapsed strip's drag split stays as it is (the icon drags the tab into a Space, the rest of the cell reorders): not touched.
+
+**Outcome.**
+
+1. **Light theme: selected, hover and idle are clearly three steps.** In Zed One Light the fills were `#f0f0f1` (rail) / `#eaeaeb` (hover) / `#e5e5e6` (selected), 5 to 6 levels apart. Target strength: about `#e6e6e8` hover and `#dcdde1` selected.
+2. **Dark theme: hover is stronger.** In Zed One Dark the fills were `#1e2227` / `#252a32` / `#2c313c`; hover is about 62 % of the selected step instead of 50 %.
+3. **A hovered title is one step dimmer than the selected one.** Idle is `tab.foreground`, selected is `tab.active.foreground`, hover is the theme-derived midpoint of the two (it was the selected colour).
+4. **A right-clicked row keeps its hover highlight while its context menu is open** (fill and title colour), until the menu is dismissed.
+5. **A 1 px line under the "Terminals" header, only while the list is scrolled** (scroll offset above 0), in the `border` token. It is an overlay, so the header does not change height.
+
+**Choices the request left open (all recorded here).**
+
+- *Fills from the foreground, not from `list_hover`.* Across the 39 built-in variants the rework 7 rule (selected = `list_hover`, hover = `list_hover` at 50 %) puts the selected fill at a WCAG contrast of 1.00 to 1.33 against the rail (Aurora Light and Gruvbox Light: exactly the rail; Catppuccin Latte 1.01, Solarized Light 1.03): the weakness is the themes' `list.hover.background`, which several themes set barely off the list background, not only Zed One Light. The rail's fills are therefore the theme's `foreground` at a fixed alpha over the rail (`tab_bar.background`): **selected = `foreground` at 10 %, hover = selected at 62 % (6.2 % of `foreground`)**. This is the single formula that gives the targets in both Zed One themes (computed from the tokens: light selected about `#dedfe1`, hover about `#e4e5e6`; dark selected about `#35393d`, hover about `#2b2e33`; the Evidence section lists the actual values) and a selected step of 1.12 to 1.37 against the rail in every variant (measured offline). The session tree and the SFTP rows keep `list_hover` for selection (not this packet's); the rail was the only surface the owner flagged.
+- *Hover title colour.* `tab.foreground` blended 50 % towards `tab.active.foreground` (`tab_foreground.blend(tab_active_foreground.opacity(0.5))`). Both ends clear 4.5:1 on the hover fill, so the midpoint does; `scripts/check-theme-contrast.py` gets a `tab_bar.hover.foreground` token (that blend) measured on `tab_bar.hover.background` so a theme cannot break it silently. The hover text style is not applied to the selected row (it would dim the selected title under the pointer).
+- *How the rail learns a menu is open.* The kit's `ContextMenu` keeps its open state in private element state and the menu is built by the terminal panel's title (`tab_context_menu`), not by the rail. `oneterm-state` gets a small global, `TabMenuOpen` (the panel whose tab menu is open), beside `TabRowLayout`, which already carries row state between the rail and the panel; the menu builder sets it when the menu is built and clears it on the menu's `DismissEvent` (Escape, an outside click, a chosen item). The rail reads it per row. The drawing rule is one pure function over a row state (idle / hover / menu open / selected) that returns the fill and title colour, so the tests pin it without a pointer.
+- *The header line is an overlay, not a border.* A bottom border would shrink the 32 px header's content box by 1 px and nudge the label and the `+`; a 1 px absolute child at the bottom edge moves nothing.
+- *The hover state of the collapsed strip's cells* is the same code (`TabRail::row`), so they take items 1 to 4 too.
+
+**Acceptance.**
+
+- [ ] The row fills come from one function: selected = `foreground` at 10 %, hover = selected at 62 %, idle = none; for every embedded theme the order idle < hover < selected holds against the rail (workspace test over the whole theme registry), and in Zed One Dark / Zed One Light the three steps are measurably apart (test with thresholds).
+- [ ] The title colour order idle, hover, selected is strictly ordered by luminance in the direction of the selected colour, in every embedded theme (workspace test); the hover colour is not applied to the selected row.
+- [ ] A row whose context menu is open draws the hover fill and the hover title colour (pure-function test of the row state; `TabMenuOpen` set by the menu builder and cleared on dismiss: terminal-view test with a real menu).
+- [ ] The header has the 1 px `border` line when the list is scrolled and none at offset 0 (pure-function test, and a drawn-frame workspace test with 40 tabs).
+- [ ] `scripts/check-theme-contrast.py` measures the new fills (`tab_bar.hover.background`, `tab_bar.selected.background`) and the new hover title colour in every variant and passes; no theme retuned.
+- [ ] Full `pwsh scripts/ci-local.ps1` passes.
+- [ ] On screen, by `ui-verifier`: the three steps in a dark and a light theme, the hovered vs selected title, a right-clicked row with its menu open (and after Escape), the header line appearing on scroll and vanishing at the top.
+
 ## Handoff
 
 Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0196` in the intake. `US-0197` (resize, `clamp_tab_rail_width`, done) and `US-0198` (collapse) build on `tab_rail.rs` and the stored `vertical_tabs` fields.
