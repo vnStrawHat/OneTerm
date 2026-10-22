@@ -646,6 +646,61 @@ fn shutdown_leaves_the_channel(cx: &mut TestAppContext) {
     );
 }
 
+/// A Space whose session ends leaves its channel (`US-0200`): `Exited` for a shell that
+/// quit, `Closed` alone for an SSH link that dropped without an exit status. The running
+/// member is untouched and no broadcast reaches the dead one afterwards. Events are fed to
+/// the view directly, so the fake session stays writable and an empty probe proves the
+/// registry no longer targets it rather than that the write failed.
+#[gpui::test]
+fn a_session_that_ends_leaves_its_channel(cx: &mut TestAppContext) {
+    for ending in [SessionEvent::Exited(Some(0)), SessionEvent::Closed] {
+        test_support::init(cx);
+        cx.update(InputChannelRegistry::init);
+        let (live_session, live_probe) = FakeTerminalSession::boxed(24, 80, "");
+        let (dead_session, dead_probe) = FakeTerminalSession::boxed(24, 80, "");
+        let (outsider_session, _) = FakeTerminalSession::boxed(24, 80, "");
+        let (views, cx) = open_views(cx, vec![live_session, dead_session, outsider_session]);
+        let (live, dead, outsider) = (views[0].clone(), views[1].clone(), views[2].clone());
+        let registry = cx.update(|_, cx| InputChannelRegistry::global(cx));
+        let channel_of = |cx: &mut gpui::VisualTestContext, id| {
+            registry.read_with(cx, |registry, _| registry.channel_of(id))
+        };
+
+        live.update(cx, |view, cx| view.join_channel(InputChannel::A, cx));
+        dead.update(cx, |view, cx| view.join_channel(InputChannel::A, cx));
+        dead.update(cx, |view, cx| view.handle_event(ending.clone(), cx));
+
+        assert_eq!(channel_of(cx, dead.entity_id()), None, "{ending:?}");
+        assert_eq!(
+            channel_of(cx, live.entity_id()),
+            Some(InputChannel::A),
+            "the running member stays ({ending:?})"
+        );
+        // A view that was never a member takes the event without a trace.
+        outsider.update(cx, |view, cx| view.handle_event(ending.clone(), cx));
+        assert_eq!(channel_of(cx, outsider.entity_id()), None);
+
+        live.update_in(cx, |view, window, cx| {
+            view.on_key_down(&key_down("enter", Modifiers::default()), window, cx);
+        });
+        assert_eq!(live_probe.writes(), vec![b"\r".to_vec()]);
+        assert!(
+            dead_probe.writes().is_empty(),
+            "a peer's input no longer targets the dead Space ({ending:?})"
+        );
+
+        // No automatic rejoin: a second event changes nothing. Once the session is dead (a
+        // real one flips `alive` before it publishes the event) a join by hand is refused
+        // too, while the running member can still move channel.
+        dead.update(cx, |view, cx| view.handle_event(ending.clone(), cx));
+        dead_probe.set_alive(false);
+        dead.update(cx, |view, cx| view.join_channel(InputChannel::B, cx));
+        assert_eq!(channel_of(cx, dead.entity_id()), None, "{ending:?}");
+        live.update(cx, |view, cx| view.join_channel(InputChannel::B, cx));
+        assert_eq!(channel_of(cx, live.entity_id()), Some(InputChannel::B));
+    }
+}
+
 // ── Press, repeat and release (IN-0040, US-0108) ────────────────────────
 
 /// With no keyboard flag pushed, a press, three OS repeats and a release write

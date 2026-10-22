@@ -153,9 +153,10 @@ impl InputChannelRegistry {
     ///
     /// A non-member origin writes nothing. The origin itself is skipped — it
     /// has already written to its own session — so nothing recurses and
-    /// nothing is typed twice. A peer whose session rejects the write (an
-    /// exited session behind the "session closed" banner) is logged, never
-    /// fatal: the remaining peers still receive the input.
+    /// nothing is typed twice. A session that ends leaves its channel and an
+    /// exited one cannot join, so a peer normally accepts the write; one that
+    /// still rejects it (a session dying between the check and the write) is
+    /// logged, never fatal: the remaining peers still receive the input.
     pub fn fan_out(&self, origin: EntityId, input: BroadcastInput<'_>, cx: &mut App) {
         let Some(channel) = self.channel_of(origin) else {
             return;

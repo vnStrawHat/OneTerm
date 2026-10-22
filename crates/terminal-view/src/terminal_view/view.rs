@@ -415,6 +415,8 @@ impl TerminalView {
             // The spec: process exit ends whatever was working or blocked;
             // a result (`Done` / `Error`) waits to be seen.
             SessionEvent::Exited(_) => {
+                // A dead session is no broadcast target (`US-0200`).
+                self.leave_channel(cx);
                 if matches!(
                     self.program_status,
                     Some(ProgramState::Working | ProgramState::Blocked)
@@ -426,6 +428,8 @@ impl TerminalView {
                 self.set_program_status(summary.filter(|s| *s != ProgramState::Idle), cx);
             }
             SessionEvent::Closed => {
+                // An SSH drop sends no `Exited`; `Closed` follows every end (`US-0200`).
+                self.leave_channel(cx);
                 let kind = self.session.read(cx).kind();
                 self.handle_session_closed(kind);
             }
@@ -509,11 +513,21 @@ impl TerminalView {
         }
     }
 
-    /// Join `channel`, leaving whichever channel this Space was in.
+    /// Whether this Space's session is still running (false once its process exited or its link
+    /// closed).
+    pub(crate) fn session_alive(&self, cx: &App) -> bool {
+        self.session.read(cx).alive()
+    }
+
+    /// Join `channel`, leaving whichever channel this Space was in. An exited Space cannot join
+    /// (`US-0200`): it would be a broadcast target that can only fail.
     pub(crate) fn join_channel(&mut self, channel: InputChannel, cx: &mut Context<Self>) {
         let Some(registry) = self.deps.input_channels.clone() else {
             return;
         };
+        if !self.session_alive(cx) {
+            return;
+        }
         let id = cx.entity_id();
         let session = self.session.clone();
         registry.update(cx, |registry, cx| registry.join(id, channel, session, cx));
