@@ -139,14 +139,15 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #                          tab_rail.rs`, draws the same pair). Added by `IN-0055`; it also
     #                          turns on the `HIERARCHY` comparison against `muted.foreground`
     #                          on that fill, because `muted.foreground` is listed there too.
-    #   tab_bar.hover.background  the same rail row under the pointer, which now also gets the
-    #                          list hover fill over the bar (owner rework 5 of `US-0196`;
-    #                          `tab_rail.rs`, the `group_hover` fill), at half strength since
-    #                          owner rework 7 so that it never outranks the selected row
-    #   tab_bar.selected.background  the selected rail row since owner rework 7: `list.hover.background`,
-    #                          OneTerm's selected-item colour (`crates/theme/src/theme.rs:69-77`;
-    #                          `tab.active.background` is the terminal's own colour, which cannot
-    #                          make the row stand out)
+    #   tab_bar.hover.background  the same rail row under the pointer (or with its context menu
+    #                          open), which also gets a fill over the bar (owner rework 5 of
+    #                          `US-0196`; `tab_rail.rs`, the `group_hover` fill): `foreground` at
+    #                          5 % since owner rework 8, half of the selected row's fill, so it
+    #                          never outranks the selected row
+    #   tab_bar.selected.background  the selected rail row: `foreground` at 10 % since owner
+    #                          rework 8 (it was `list.hover.background`, which several themes set
+    #                          barely off the list background; `tab.active.background` is the
+    #                          terminal's own colour, which cannot make the row stand out)
     #   tab.active.background  stays for the horizontal strip's active tab and the rail's drag
     #                          preview chip
     "tab.active.foreground": (
@@ -155,6 +156,19 @@ SURFACES: dict[str, tuple[str, ...]] = {
         "tab_bar.hover.background",
         "tab_bar.selected.background",
     ),
+    # `tab_bar.hover.foreground` -- not a kit token: the title of a hovered rail row, halfway
+    # from `tab.foreground` to `tab.active.foreground` so it reads one step dimmer than the
+    # selected title (owner rework 8 of `US-0196`; `row_paint` in `tab_rail.rs`). Drawn on the
+    # hover fill, and on it only.
+    "tab_bar.hover.foreground": ("tab_bar.hover.background",),
+    # `tab_bar.selected.foreground` -- not a kit token: the secondary text of the *selected* rail
+    # row (its directory line, `tab_title.rs`, and its reorder grip, `tab_rail.rs`), which is
+    # `muted.foreground` halfway towards `tab.active.foreground`
+    # (`oneterm_theme::selected_row_secondary`, owner rework 8 of `US-0196`). The selected fill
+    # is `foreground` at 10 %, which `muted.foreground` itself could not read on in several
+    # variants (4.0 to 4.4:1; it is about 5:1 on the bar). The hierarchy comparison below keeps
+    # it under the selected title.
+    "tab_bar.selected.foreground": ("tab_bar.selected.background",),
     # `accent.foreground` -- the label of a hovered or selected menu row, which swaps both
     # fill and text (kit `menu/menu_item.rs:115-120`): every OneTerm popup menu -- the tab
     # strip's `+` menu, the terminal and session context menus, the app menu's dropdowns.
@@ -229,7 +243,6 @@ SURFACES: dict[str, tuple[str, ...]] = {
         "table.hover.background",
         "tab_bar.background",
         "tab_bar.hover.background",
-        "tab_bar.selected.background",
         "tab.active.background",
     ),
     # `tab.foreground` -- an inactive tab label, drawn on the strip; `tab.background` is
@@ -339,6 +352,7 @@ HIERARCHY: tuple[tuple[str, str], ...] = (
     ("popover.foreground", "muted.foreground"),
     ("sidebar.foreground", "muted.foreground"),
     ("tab.active.foreground", "muted.foreground"),
+    ("tab.active.foreground", "tab_bar.selected.foreground"),
     ("accent.foreground", "muted.foreground"),
 )
 
@@ -382,11 +396,13 @@ FALLBACKS: dict[str, str | tuple] = {
     "table.hover.background": "list.hover.background",                   # schema.rs:1009
     "table.head.background": "list.head.background",                     # schema.rs:1005
     "tab_bar.background": "background",                                  # schema.rs:998
-    # Not kit tokens. The rail row's hover fill is `list.hover.background` at half alpha, drawn
-    # over the bar; its selected fill is `list.hover.background` itself, OneTerm's
-    # selected-item colour (owner rework 7 of `US-0196`).
-    "tab_bar.hover.background": ("alpha", "list.hover.background", 0.5),
-    "tab_bar.selected.background": "list.hover.background",
+    # Not kit tokens. The rail row's selected fill is `foreground` at 10 % drawn over the bar, its
+    # hover fill 5 %, and a hovered title is `tab.foreground` blended halfway towards
+    # `tab.active.foreground` (owner rework 8 of `US-0196`; `row_paint` in `tab_rail.rs`).
+    "tab_bar.hover.background": ("alpha", "foreground", 0.05),
+    "tab_bar.selected.background": ("alpha", "foreground", 0.10),
+    "tab_bar.hover.foreground": ("blend", "tab.foreground", "tab.active.foreground", 0.5),
+    "tab_bar.selected.foreground": ("blend", "muted.foreground", "tab.active.foreground", 0.5),
     "tab.background": "background",                                      # schema.rs:995
     "tab.active.background": "background",                               # schema.rs:996
     "tab.foreground": "foreground",                                      # schema.rs:1000

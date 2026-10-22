@@ -139,6 +139,20 @@ fn contrast(a: Hsla, b: Hsla) -> f32 {
     (hi + 0.05) / (lo + 0.05)
 }
 
+/// The secondary text of the selected row of the vertical tab rail (its directory line and
+/// reorder grip): `muted.foreground` halfway towards `tab.active.foreground`.
+///
+/// The selected row's fill is `foreground` at 10 % over the rail, which in a light theme can be
+/// too dark for `muted.foreground` itself (below 4.5:1 in several built-in variants; it is only
+/// about 5:1 on the rail). Halfway towards the selected title colour reads at 4.7:1 or more in
+/// every built-in variant, and still below the title, so the hierarchy holds
+/// (`scripts/check-theme-contrast.py`, `tab_bar.selected.foreground`).
+pub fn selected_row_secondary(theme: &Theme) -> Hsla {
+    theme
+        .muted_foreground
+        .blend(theme.tab_active_foreground.opacity(0.5))
+}
+
 /// Whichever of two theme colours reads better on `fill` (the higher WCAG contrast ratio; the
 /// first wins a tie). A glyph on a status colour the theme did not choose it for (the collapsed
 /// tab cell, `US-0198`) takes `[background, foreground]`, so it is light on a dark fill and

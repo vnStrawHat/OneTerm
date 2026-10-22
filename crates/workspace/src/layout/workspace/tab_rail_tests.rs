@@ -19,8 +19,8 @@ use oneterm_state::{TabRowLayout, panel_names};
 
 use super::tab_rail::{
     COLLAPSED_ROW_HEIGHT, EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, HANDLE_SELECTOR,
-    HEADER_LABEL_SELECTOR, HEADER_SELECTOR, HOVER_SELECTOR, LIST_SELECTOR, PILL_SELECTOR,
-    RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
+    HEADER_LABEL_SELECTOR, HEADER_RULE_SELECTOR, HEADER_SELECTOR, HOVER_SELECTOR, LIST_SELECTOR,
+    PILL_SELECTOR, RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
 };
 use super::{MAIN_DOCK_VERSION, dock_skin};
 
@@ -712,6 +712,64 @@ fn forty_tabs_scroll_and_the_active_one_is_brought_into_view(cx: &mut TestAppCon
         "the newly active row {last:?} must be inside the list {list:?}"
     );
     assert_eq!(centre_tabs(&window.area, cx).1, 39);
+}
+
+/// Owner rework 8: a 1 px rule under the header appears while the list is scrolled and not
+/// before; it is drawn over the header's bottom edge, so the header keeps its 32 px and the
+/// `+` and the label do not move.
+#[gpui::test]
+fn the_header_has_a_rule_only_while_the_list_is_scrolled(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+
+    // Two tabs fit: nothing to scroll, no rule.
+    set_centre(&window.area, &terminals(&["a", "b"]), true, &report, cx);
+    assert!(bounds_of(HEADER_RULE_SELECTOR, cx).is_none());
+
+    let labels: Vec<&'static str> = (0..40).map(|ix| &*format!("tab {ix}").leak()).collect();
+    set_centre(&window.area, &terminals(&labels), true, &report, cx);
+    assert!(
+        bounds_of(HEADER_RULE_SELECTOR, cx).is_none(),
+        "the first tab is displayed and the list is at its top"
+    );
+    let header = bounds_of(HEADER_SELECTOR, cx).unwrap();
+    let plus = bounds_of(PLUS_SELECTOR, cx).unwrap();
+
+    let select = |ix: usize, cx: &mut VisualTestContext| {
+        let (panels, _) = centre_tabs(&window.area, cx);
+        cx.update(|w, app| {
+            window
+                .area
+                .update(app, |area, cx| area.select_panel(panels[ix], w, cx))
+        });
+        settle(cx);
+    };
+    select(39, cx);
+    let rule = bounds_of(HEADER_RULE_SELECTOR, cx).expect("the list is scrolled to the end");
+    assert_eq!(rule.size.height, px(1.));
+    assert_eq!(rule.left(), header.left());
+    assert_eq!(rule.right(), header.right());
+    assert_eq!(
+        rule.bottom(),
+        header.bottom(),
+        "on the header's bottom edge"
+    );
+    assert_eq!(
+        bounds_of(HEADER_SELECTOR, cx),
+        Some(header),
+        "no size change"
+    );
+    assert_eq!(
+        bounds_of(PLUS_SELECTOR, cx),
+        Some(plus),
+        "the `+` has not moved"
+    );
+
+    select(0, cx);
+    assert!(
+        bounds_of(HEADER_RULE_SELECTOR, cx).is_none(),
+        "back at the top, the rule goes"
+    );
 }
 
 /// The header holds the "Terminals" label on the left and the `+` on the right, with no zoom
