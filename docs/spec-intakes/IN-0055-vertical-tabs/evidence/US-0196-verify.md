@@ -463,3 +463,53 @@ Coder head `5ec1b2b4` on `verify/in-0055-rework7` (since `7c92db85`: `d56dcd50` 
 1. Reword the `BUG-0088` out-of-scope line (the kit's Warning button variant does read the token; OneTerm has no such button).
 2. Accept or reject the glyph-coloured pill on a filled selected cell (see the design note); `ui-verifier` should look at Working / Blocked / Done / Error selected cells in both themes.
 3. `ui-verifier`: a selected SFTP row (remote and local) shows `table_hover` only, in a dark and a light theme.
+
+## Advisor review (rework 8)
+
+Reviewed on branch `verify/in-0055-rework8` at the coder's head `210d7fc0` (base `main` @ `3705c001`), in the coder's worktree, 2026-10-22. Diff: `crates/state` (`TabMenuOpen`), `crates/theme` (`selected_row_secondary`), `crates/terminal-view` (`tab_title.rs`, `tests.rs`), `crates/workspace` (`tab_rail.rs`, `tab_rail_tests.rs`), `scripts/check-theme-contrast.py`, `docs/gui-layout.md`, the HLD and the packet.
+
+### Verdict: PASS with defects (two Low, both records or hardening; nothing blocks the merge)
+
+### Gate (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, one crate per command)
+
+| Command | Result |
+| --- | --- |
+| `cargo clippy -p oneterm-workspace --all-targets -- -D warnings` | clean |
+| `cargo clippy -p oneterm-terminal-view --all-targets -- -D warnings` | clean |
+| `cargo clippy -p oneterm-state --all-targets -- -D warnings` | clean |
+| `cargo clippy -p oneterm-theme --all-targets -- -D warnings` | clean |
+| `cargo fmt --all -- --check` | clean |
+| `cargo test -p oneterm-workspace --lib -- tab_rail` | 45 passed |
+| `cargo test -p oneterm-terminal-view --lib -- tab_menu records_that_it_is_open` | 10 passed (incl. `a_tab_menu_records_that_it_is_open_until_it_is_dismissed`) |
+| `cargo test -p oneterm-state --lib -- tab_menu_open` | 1 passed |
+| `cargo test -p oneterm-theme --lib` | 10 passed |
+| `python scripts/check-theme-contrast.py` | passes: 2067 pairings, 702 hierarchy comparisons, the 5 known glyph rows only |
+| `python scripts/check-english.py`, `python scripts/check-doc-paths.py` | pass |
+
+Records-first order holds: `6bb06aa1` (packet) before `15cfb1b6` (code) before `210d7fc0` (evidence and drawn rules).
+
+### The coder's attack list, verified
+
+1. **`panel.is_active` versus the rail's `selected`.** The rail's `selected` is the group's `active_ix` (`tab_rail.rs:437-446`); the panel's `is_active` is delivered by the kit's `schedule_active_sync` in a spawned task after the group's `reconcile_active` (kit `base/src/dock/tab_group.rs:471-512`), one for the displayed panel of *each* group. So in a split centre every rail's selected row is its own group's `is_active` panel, and across windows the ids are the app's entity ids. The only gap is one frame on a tab switch where the directory line is still `muted` on the already-selected fill; the panel's `set_active` notifies (`terminal_panel.rs:675-679`) and the next frame repaints. Not a defect.
+2. **`TabMenuOpen` lifecycle.** The kit's `PopupMenu` emits `DismissEvent` from `dismiss` (`component/src/menu/popup_menu.rs:1064-1066`), which runs on Escape, an outside click (both pinned by the coder's test) and a chosen item (`confirm` then `dismiss`, `:861-888`), so Close / Close Others from the menu clear the record before the panel goes. A second right-click on another row dismisses the first menu and opens the second in a deferred frame; the stale-close guard (`tab_menu_open.rs:33-37`) makes either order safe. The record is keyed by entity id, so another panel's or another window's row cannot match. The one path with no `DismissEvent` is the kit dropping the menu entity (`open_menu` sets `menu_view = None` for a replacement, `context_menu.rs:450-456`, and element-state loss drops `shared_state`): for a replacement on the same tab, `opened` rewrites the same id, so it self-heals; for element-state loss the trigger (the row) is gone with its panel in every path I could reach. See finding 1 for the one-line hardening.
+3. **The contrast script models what is drawn.** `("alpha", "foreground", 0.05 / 0.10)` is composited over `tab_bar.background`, itself over `background` (`PARENTS`, `surface()`), which is exactly the rail's `foreground.opacity(a)` drawn on the bar; `("blend", a, b, 0.5)` is `a.blend(b.opacity(0.5))`, gpui's `Hsla::blend` (RGB source-over, `color.rs:580-592`). No built-in variant gives `foreground`, `muted.foreground`, `tab.foreground` or `tab.active.foreground` an alpha, so the script's opaque blend result matches the Rust one. Three dark variants give `tab_bar.background` an alpha (Flexoki Dark `#1C1B1A99`, Gruvbox Dark `#28282899`, Solarized Dark `#07364266`); the script composites those over `background` correctly. (The Rust registry test blends over the raw translucent token there, which is a looser model than the script's, but the assertion is an ordering one and holds either way.)
+4. **Step sizes, every variant** (independent recomputation with the script's own functions; levels are the red channel of the rail / hover / selected composite): the smallest steps are Harper (1 / 9 / 18, ratios 1.049 and 1.056), Solarized Light (238 / 230 / 222, 1.068 / 1.070) and Catppuccin Latte (220 / 213 / 206, 1.071 / 1.073); the near-black rails get the largest (Fahrenheit 0 / 13 / 26). Zed One Light 240 / 231 / 222 and Zed One Dark 30 / 40 / 51, as the packet says. Every variant passes the test's 1.04 floor; the faintest (Harper, Latte, Solarized Light) are visible but not far above it.
+5. **Precedence.** A selected row takes neither the hover text (`.when(!selected, hover)`, `tab_rail.rs:758-760`) nor the hover fill (the fill child is `.when(!selected, ...)`, `:803-820`), so hovering it changes nothing; a selected row with its menu open is `RowState::Selected` (`resting`, `:124-130`); an unselected menu-open row gets the 5 % fill as its resting fill and the same from `group_hover`, so nothing stacks. Pinned by `a_row_with_its_menu_open_looks_hovered_until_it_closes`. The kit's base `Tab` carries only a `selected` style refinement and no default hover (`base/src/tabs.rs:91-118`), so nothing underneath re-colours the selected row.
+
+### Findings
+
+1. **Low, hardening.** `crates/terminal-view/src/panel/tab_title.rs:933-936`: the record is cleared only on `DismissEvent`. The kit drops a `PopupMenu` without emitting it when the trigger's element state goes or the menu is replaced (`context_menu.rs:450-456`); today every such path also takes the panel away or re-records the same id, so no live row can stick, but the invariant rests on the kit's element-state behaviour rather than on the menu's own lifetime. Fix shape: add `cx.on_release(move |_, cx| TabMenuOpen::closed(tab, cx)).detach()` beside the subscription (gpui `Context::on_release`), so the record cannot outlive the entity whatever drops it. Not pinned: there is no reproduction through the public surface in which a live row stays lit.
+2. **Low, records.** `docs/gui-layout.md` (the "Colours are the strip's" bullet) still opens with "`tab.active.foreground` on a hovered or selected row, `muted.foreground` for the grip, the directory on line 2" before the rework 8 sentences that contradict it (the hover title is the midpoint; the selected row's grip and directory are `selected_row_secondary`). The HLD's "Row content" row (line 2 in `muted.foreground`), its grip row and its "grip, cwd line 2" colour-table row say `muted.foreground` on `tab_bar.background` / `tab.active.background` only, while the selected row now draws `tab_bar.selected.foreground` and the hovered row draws on `tab_bar.hover.background`. One-line amendments.
+
+Informational, not defects: (a) the header reads `scroll_handle.offset()` before the list's prepaint clamps it, so when enough tabs close for the rest to fit while the list is scrolled, the rule can stay one frame past the snap to the top; the next repaint clears it. (b) `tab_context_menu` also records the strip's (horizontal, right dock) menus; no rail row can match those ids, so nothing lights.
+
+### The coder's deviations
+
+1. *Hover at 50 % of selected, not 60-65 %.* Supported. Recomputed: at a 6.2 % hover alpha `muted.foreground` on the hover fill is 4.39:1 (Aurora Light), 4.39:1 (macOS Classic Light) and 4.42:1 (Solarized Dark); at 5 % they are 4.51, 4.51 and 4.57. The cap is real. Two ways out if the owner wants the ratio: selected 8 % / hover 5 % (62.5 %, the light steps shrink to about 7 / 14 levels), or draw the hovered row's directory line in a blend like the selected row's so the hover alpha can rise (a small follow-up, not this rework).
+2. *Dark selected got lighter* (Zed One Dark 44 to 51). A side effect of one formula; still 21 levels over the rail and the pill marks the row. For the owner's eye.
+3. *The rail no longer matches `list_hover`.* Acceptable: `list.hover.background` is the rail colour itself in Aurora Light and Gruvbox Light, so matching it meant drawing nothing there. A cosmetic inconsistency with the session tree and SFTP rows only.
+4. *Hover is stronger in absolute terms* (dark 10 levels over the rail, was 7; light 9, was 5): item 2 of the owner's request is met as asked even though the ratio is not.
+
+### For the owner
+
+The three steps and the hover versus selected title in a dark and a light theme on screen (the `ui-verifier` walk); whether the lighter dark selected row (`#33373b`) still reads as intended; the menu-open highlight after choosing an item from the menu.
