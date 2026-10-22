@@ -187,7 +187,9 @@ per empty destination, separator, Split Right, Split Down); separator (with `spl
 Right/Left/Up/Down; separator; Copy (disabled without selection); Paste; Select All; Clear;
 separator; Log submenu (only when `capabilities().logging` is `Some`: Start disabled while
 running, Stop disabled while not; async with a notification), separator; Close Terminal Tab
-(`ClosePanel`); Close Space (`CloseSpace`, only when `leaf_count() > 1`). The wrapper div gets a
+(`ClosePanel`); Close Space (`CloseSpace`, only when `leaf_count() > 1`). When the session has
+ended (`MenuContext::session_alive` is false, `US-0201`) the Duplicate Session entry is a plain
+disabled row (no submenu) and the four Split items are disabled; nothing else changes. The wrapper div gets a
 stable `ElementId` so the menu state survives re-render.
 
 ## Interfaces

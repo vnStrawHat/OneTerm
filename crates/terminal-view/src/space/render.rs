@@ -311,7 +311,7 @@ fn placeholder_menu(
             let _ = panel.update(cx, |p, cx| p.new_terminal_here(space_id, window, cx));
         }
     }));
-    let mut menu = split_items(menu, panel.clone(), space_id, None)
+    let mut menu = split_items(menu, panel.clone(), space_id, None, false)
         .separator()
         // Close Terminal Tab — closes the whole tab (all Spaces).
         .item(

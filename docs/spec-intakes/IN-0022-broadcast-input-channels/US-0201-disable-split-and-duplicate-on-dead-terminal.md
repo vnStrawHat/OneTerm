@@ -11,7 +11,7 @@ Created: 2026-10-22
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [x] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -34,11 +34,11 @@ Right-clicking a terminal whose session has ended (local shell exited, SSH close
 
 ## Acceptance
 
-- [ ] Dead session: the four split rows and the Duplicate Session row are disabled; Duplicate Session has no submenu.
-- [ ] Live session: the four split rows are enabled and Duplicate Session is the submenu it was.
-- [ ] Other rows are unaffected by liveness (Copy still follows the selection; New Terminal, Paste, Select All, Clear, Close Terminal Tab, Close Space are built the same).
-- [ ] The empty-Space placeholder menu still has its four splits enabled.
-- [ ] Full `pwsh scripts/ci-local.ps1` passes; `cargo build -p oneterm-app` builds.
+- [x] Dead session: the four split rows and the Duplicate Session row are disabled; Duplicate Session has no submenu.
+- [x] Live session: the four split rows are enabled and Duplicate Session is the submenu it was.
+- [x] Other rows are unaffected by liveness (Copy still follows the selection; New Terminal, Paste, Select All, Clear, Close Terminal Tab, Close Space are built the same).
+- [x] The empty-Space placeholder menu still has its four splits enabled.
+- [x] Full `pwsh scripts/ci-local.ps1` passes; `cargo build -p oneterm-app` builds.
 
 ## Documentation
 
@@ -58,7 +58,7 @@ Reason: the docs describe the menu as unconditionally enabled.
 
 ### Reconciliation
 
-To be filled at completion.
+Changed: `docs/terminal-split/04-context-menu.md` (the dead-terminal bullet), `IN-0018` LLD `input.md` (menu builder), `docs/gui-layout.md` (Broadcast input channels), `IN-0022.md` (packet link, ticked). `IN-0003` / `IN-0006` unchanged: a live session duplicates exactly as before.
 
 ## Context
 
@@ -68,10 +68,10 @@ To be filled at completion.
 
 ## Plan
 
-- [ ] `MenuContext.session_alive: bool`, set in the `context_menu` closure from `session.read(cx).alive()` (the closure holds the session, not the view; it is the same `alive()` that `TerminalView::session_alive` reads).
-- [ ] `build_menu`: if `!ctx.session_alive` the Duplicate Session entry is `PopupMenuItem::new("Duplicate Session").action(DuplicateSession).disabled(true)` (no submenu, same shape as `US-0199`'s dead "Input Channel" row; the action stays so the shortcut hint column does not change) and the splits pass `disabled = true`.
-- [ ] `split_items(..., disabled)`; the item construction factored into `split_item` so a test can read the built item.
-- [ ] Choice, key-bound and tab-menu paths: **menu only.** The owner's words are the terminal area's menu. Refusing in `duplicate_session_to` would be one line, but it also changes the tab menu's "Duplicate", which the owner did not mention and which is the only way to reconnect a dropped SSH tab (it reopens the connection); refusing the split actions needs a look-up of the Space's view in the shared `split_active_at`, which the placeholder menu also uses (an empty Space has no view and must still split). Neither is a one-line guard on the action handler alone, so neither is done; the recommendation goes in the report for an owner ruling.
+- [x] `MenuContext.session_alive: bool`, set in the `context_menu` closure from `session.read(cx).alive()` (the closure holds the session, not the view; it is the same `alive()` that `TerminalView::session_alive` reads).
+- [x] `build_menu`: if `!ctx.session_alive` the Duplicate Session entry is `PopupMenuItem::new("Duplicate Session").action(DuplicateSession).disabled(true)` (no submenu, same shape as `US-0199`'s dead "Input Channel" row; the action stays so the shortcut hint column does not change) and the splits pass `disabled = true`.
+- [x] `split_items(..., disabled)`; the item construction factored into `split_item` so a test can read the built item.
+- [x] Choice, key-bound and tab-menu paths: **menu only.** The owner's words are the terminal area's menu. Refusing in `duplicate_session_to` would be one line, but it also changes the tab menu's "Duplicate", which the owner did not mention and which is the only way to reconnect a dropped SSH tab (it reopens the connection); refusing the split actions needs a look-up of the Space's view in the shared `split_active_at`, which the placeholder menu also uses (an empty Space has no view and must still split). Neither is a one-line guard on the action handler alone, so neither is done; the recommendation goes in the report for an owner ruling.
 
 ## Decisions
 
@@ -83,16 +83,20 @@ No decision record: it is a menu-enablement rule inside IN-0022's liveness model
 - Full gate `pwsh scripts/ci-local.ps1`; `cargo build -p oneterm-app`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
+- [x] Unit proof
 - [ ] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-To be filled after implementation.
+- Code: `MenuContext::session_alive` (read from `session.alive()` in the `context_menu` closure of `terminal_view/render.rs`, i.e. on every right-click); `build_menu` builds `dead_duplicate_item()` instead of the Duplicate Session submenu and passes `disabled = !session_alive` to `split_items`; `split_items` now folds over `split_item`; the placeholder menu (`space/render.rs`) passes `false` (`crates/terminal-view/src/input/menu.rs`).
+- Tests: `menu_tests::split_items_follow_the_session_liveness` (each of the four directions: enabled live, disabled dead, same label) and `menu_tests::the_dead_duplicate_row_is_a_plain_disabled_row`. Gap: `PopupMenu` keeps its item list `pub(crate)`, so the wiring (`build_menu` choosing the dead row and passing `!session_alive`, and the live Duplicate Session still being the submenu) is covered by review and by the ui-verifier walk, not by a unit test.
+- Gate: `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`): all checks passed (5117 tests passed summed over every test run in the script); `cargo build -p oneterm-app` built.
+- Key bindings and tab menu: not refused (Plan). Recommendation: refuse nothing further for the splits (a split of a dead tab yields an empty Space the user can fill with New Terminal Here, which stays useful) and keep the tab menu's Duplicate enabled (it is the reconnect path of a dropped SSH tab); if the owner wants consistency, a guard in `duplicate_session_to` is one line but also disables that reconnect path. The menu now disagrees with those two paths on a dead terminal, by decision.
+- Not walked on screen: the change is visible, so `ui-verifier` is dispatched.
 
 ## Handoff
 

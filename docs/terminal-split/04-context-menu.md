@@ -56,6 +56,13 @@ Close Space            ← only shown when the tab has > 1 Space
 - **Split R/L/U/D** call `TerminalPanel::split_active_at(space_id, dir, window, cx)` →
   `SpaceTree::split(active, dir, …)` ([02](02-split-and-close.md) §1). The target is
   the Space that was right-clicked (which also becomes active on right-click).
+- **A terminal whose session has ended** (`session.alive()` is false: the local shell exited, or
+  the SSH link closed or dropped) shows the four Split rows and **Duplicate Session**
+  **disabled** (`US-0201`); Duplicate Session is then a plain disabled row with no submenu, the
+  shape of the tab menu's disabled "Input Channel" row. Every other row is unchanged. This is
+  the terminal area's menu only: the empty-Space menu below keeps its Splits enabled (it has no
+  terminal), and the key-bound `Split*` / `DuplicateSession` actions and the tab menu's
+  "Duplicate" are not refused.
 - **Close Space** is placed **directly below Close Terminal Tab** (requirement R6).
   It calls `TerminalPanel::close_space(space_id, window, cx)`
   ([02](02-split-and-close.md) §2). It is **hidden when the tab has only one Space**
