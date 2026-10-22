@@ -208,3 +208,33 @@ the fix shape as written.
 Unchanged from the first review (on-screen chip / badge / frame, a real SSH drop), plus:
 the disabled "Input Channel" row on a tab whose shell has exited, and "Join All Spaces In
 Tab" on a split tab with one exited Space (the exited one gets no badge).
+
+## UI verification
+
+Verifier: ui-verifier, 2026-10-22. Binary built from 371de3c5 (later commits docs only); head f7d5a40b. Private profile (scratch USERPROFILE and cwd), pids spawned by the driver only. Screenshots: `C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad` prefix `uiv200-` (full-window shots, include the ~8 px frame; driver clicks are client coordinates, x = shot x - 8, y = shot y). Desktop was unlocked (shots not black).
+
+Environment limit: in this sandbox every child shell (Command Prompt, PowerShell, PowerShell 7) is already dead at start (blank terminal, no prompt), so every tab under test is an exited Space. Git Bash is not offered in the + menu.
+
+| Item | Result | Shot |
+|---|---|---|
+| 1a Vertical row, exited tab: "Input Channel" row present, greyed, no submenu, between the two separators (Rename/Duplicate, sep, Input Channel, sep, Close/Close Others/Close Tabs Below); checked on 4 tabs, clicking the row does nothing | PASS | uiv200-v02-menu, uiv200-v05-menu-tab153/217/281, uiv200-v08-click-disabled |
+| 1b Collapsed cell | PASS | uiv200-v07-collapsed-menu |
+| 1c Horizontal strip (2 tabs) | PASS | uiv200-h02-menu, uiv200-h06-ps7-menu |
+| 2 No chip/frame on any exited tab (tab menu path: row disabled, so no join possible) | PASS | uiv200-v04-tabs, uiv200-h03-after-keyjoin |
+| 2 Key-bound join: bound `join_input_channel_a` to ctrl-alt-1 through ui_config.json (no default shortcut exists), pressed it on exited tabs: no chip, no frame | PASS (see note 1) | uiv200-h03-after-keyjoin, uiv200-h06-ps7-menu |
+| 3 Live shell joined then exited; live sibling keeps chip; Join All Spaces In Tab on a split with one dead and one live Space | NOT WALKED (no shell survives here) | |
+| 4 Tab menu order unchanged; terminal-area menu has no Input Channel | PASS | uiv200-h07-area-menu |
+| 4 Light (Zed One Light) and dark (Zed One Dark) glance: disabled row legible but clearly dimmer than Close | PASS | uiv200-v02-menu, uiv200-d01-menu |
+
+Note 1: the key press was posted with the driver chord; the binding loading is not proven by a positive control (no live shell to show it firing), so this row proves only "no chip appeared", not that the action was dispatched and refused.
+
+### Defects
+
+None found in the walked scope. Observation (Info, not US-0200): on a dead terminal the area menu still offers Split and Duplicate Session enabled; not part of this packet.
+
+### Owner-only checks
+
+- A live shell joined to a channel, then xit: chip, badge and frame disappear at once; a live sibling keeps its chip.
+- Split tab with one dead and one live Space: "Join All Spaces In Tab" joins only the live Space.
+- Key-bound join (Settings > Key Bindings > Input Channel) on a dead Space with a live shell elsewhere.
+- SSH drop (Closed without Exited) leaving the channel.
