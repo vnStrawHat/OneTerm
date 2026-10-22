@@ -207,7 +207,10 @@ the plain border, and the single Space of an unsplit tab stays borderless. The b
 only thing in that corner — `US-0117` briefly put a `#N` chip beside it and the owner removed
 the chip on 2026-09-17, leaving the active-Space ring as the whole cue. The
 badge takes no focus and its clicks activate the Space like any other click in it. Both read the `InputChannelRegistry`, and every `TerminalPanel` observes it,
-so a `Close Channel` performed in one tab repaints the others.
+so a `Close Channel` performed in one tab repaints the others. A Space whose session ends (the
+shell exits, or the SSH link drops) leaves its channel by itself, the same way "Leave Channel"
+does, so its chip and frame go and broadcasts stop targeting it; it does not rejoin, and a join
+by hand is not blocked (`US-0200`).
 
 ## Status bar
 

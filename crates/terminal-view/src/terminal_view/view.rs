@@ -415,6 +415,8 @@ impl TerminalView {
             // The spec: process exit ends whatever was working or blocked;
             // a result (`Done` / `Error`) waits to be seen.
             SessionEvent::Exited(_) => {
+                // A dead session is no broadcast target (`US-0200`).
+                self.leave_channel(cx);
                 if matches!(
                     self.program_status,
                     Some(ProgramState::Working | ProgramState::Blocked)
@@ -426,6 +428,8 @@ impl TerminalView {
                 self.set_program_status(summary.filter(|s| *s != ProgramState::Idle), cx);
             }
             SessionEvent::Closed => {
+                // An SSH drop sends no `Exited`; `Closed` follows every end (`US-0200`).
+                self.leave_channel(cx);
                 let kind = self.session.read(cx).kind();
                 self.handle_session_closed(kind);
             }

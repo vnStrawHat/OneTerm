@@ -49,7 +49,9 @@ member of that channel. What it means for Spaces (DEC-0009):
 
 - Membership belongs to the **Space** — to the `TerminalView` entity, not to the tab or the
   Space id. A tab dragged into an empty Space keeps its channel because the same view entity
-  moves; Close Space and Close Tab leave the channel with the session.
+  moves; Close Space and Close Tab leave the channel with the session, and so does a session
+  that ends by itself (the shell exits or the SSH link drops): the Space leaves at once, with
+  no automatic rejoin (`US-0200`).
 - A Space created by Split or Duplicate Session is a **non-member**, even when its siblings
   are members. "Input Channel > Join All Spaces In Tab To X" is the one-click way to put the
   whole tab in one channel.

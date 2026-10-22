@@ -856,6 +856,73 @@ fn tab_channel_helpers_cover_every_space_of_the_tab(cx: &mut TestAppContext) {
     );
 }
 
+/// A Space whose session ends drops out of the tab's chips (`US-0200`): the other member of
+/// the channel keeps its chip, and when the last member goes the tab shows none, like a
+/// manual leave.
+#[gpui::test]
+fn an_exited_space_leaves_the_tab_chips(cx: &mut TestAppContext) {
+    use oneterm_terminal::SessionEvent;
+
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(InputChannelRegistry::init);
+
+    let (session_a, probe_a) = FakeTerminalSession::boxed(24, 80, "A");
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_spec(session_spec(session_a, "A"), window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+
+    let first_space = panel.read_with(cx, |panel, _| panel.tree.active());
+    panel.update_in(cx, |panel, window, cx| {
+        panel.split_active_at(first_space, SplitDir::Right, window, cx);
+    });
+    let second_space = panel.read_with(cx, |panel, _| panel.tree.active());
+    let (session_b, probe_b) = FakeTerminalSession::boxed(24, 80, "B");
+    panel.update_in(cx, |panel, window, cx| {
+        let session = cx.new(|_| session_b);
+        let view = cx.new(|cx| TerminalView::new(session, panel.deps.clone(), window, cx));
+        panel
+            .tree
+            .fill_empty(second_space, view)
+            .expect("the new split Space must be empty");
+    });
+    cx.run_until_parked();
+
+    let first = panel
+        .read_with(cx, |panel, _| panel.tree.leaf_terminal(first_space))
+        .expect("the first Space holds a terminal");
+    let second = panel
+        .read_with(cx, |panel, _| panel.tree.leaf_terminal(second_space))
+        .expect("the second Space holds a terminal");
+    first.update(cx, |view, cx| view.join_channel(InputChannel::A, cx));
+    second.update(cx, |view, cx| view.join_channel(InputChannel::B, cx));
+    let chips = |cx: &mut VisualTestContext| panel.read_with(cx, |p, cx| p.tab_channels(cx));
+    assert_eq!(chips(cx), vec![InputChannel::A, InputChannel::B]);
+
+    probe_a
+        .emit(SessionEvent::Exited(Some(0)))
+        .expect("event channel must accept the exit");
+    cx.run_until_parked();
+    assert_eq!(
+        chips(cx),
+        vec![InputChannel::B],
+        "the exited Space's chip is gone and the running Space keeps its own"
+    );
+    assert_eq!(first.update(cx, |view, cx| view.channel(cx)), None);
+
+    probe_b
+        .emit(SessionEvent::Closed)
+        .expect("event channel must accept the close");
+    cx.run_until_parked();
+    assert!(
+        chips(cx).is_empty(),
+        "the last member ending leaves the tab with no chip, as a manual leave does"
+    );
+}
+
 /// Output in a tab the group is not showing must not notify its view (US-0145):
 /// the tab strip reads that view, so the window tracks it, and every notify cost
 /// a whole-window frame that changed no pixel. The shown tab still notifies.

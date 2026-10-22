@@ -120,7 +120,10 @@ Tab strip and Space badges (tab "fleet" split into three Spaces, tab "db" with o
 6. Tree changes: split and Duplicate Session create a new `TerminalView`, which starts as a
    non-member. Dragging a tab into an empty Space moves the existing `TerminalView` entity
    (`take_active_terminal_view` → `fill_empty`), so membership travels with it. Close Space
-   and Close Tab run `TerminalView::shutdown`, which calls `registry.leave(entity_id)`.
+   and Close Tab run `TerminalView::shutdown`, which calls `registry.leave(entity_id)`. A
+   session that ends by itself does the same through `handle_event` (`Exited`, or `Closed`
+   alone after an SSH drop), so a dead Space stops being a fan-out target at once; nothing
+   rejoins it (`US-0200`).
 
 Out of scope on purpose: mouse reports, scroll, resize, completion navigation keys (they act
 on the origin only; accepted completion text reaches peers as `Text`), a status-bar segment,

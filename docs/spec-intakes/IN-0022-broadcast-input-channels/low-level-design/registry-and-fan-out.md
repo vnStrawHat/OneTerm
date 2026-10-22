@@ -69,7 +69,9 @@ out of the view) so the classifier and encoders stay pure. `TerminalDeps.fan_out
 when `input_channels` is `None` (tests, headless).
 
 `TerminalView::shutdown` calls `registry.leave(cx.entity_id())` next to
-`AgentRegistry::remove_terminal`.
+`AgentRegistry::remove_terminal`. `handle_event` calls the same `leave_channel` on
+`SessionEvent::Exited` and on `SessionEvent::Closed` (SSH sends no `Exited` when the link
+drops), so a Space whose session ended is no longer a member (`US-0200`).
 
 ## Interfaces
 
@@ -104,8 +106,9 @@ impl TerminalView {
 - [ ] Only member of its channel: no peer writes; own write unchanged.
 - [ ] Joining channel B while in A: the Space leaves A implicitly; A's other members are
   untouched.
-- [ ] A peer session has already exited (tab kept open by the "session closed" banner): the
-  write fails, is logged like a failed key write today, and the remaining peers still receive
+- [ ] A peer session has already exited (tab kept open by the "session closed" banner): since
+  `US-0200` it has left the channel and is not a peer. Only a Space joined by hand after it
+  exited can still be one; its write fails, is logged like a failed key write today, and the remaining peers still receive
   the input.
 - [ ] A peer is on the alternate screen (`vim`): bytes are delivered unchanged; the user
   chose membership for that Space. Documented in `docs/terminal-split.md`.
