@@ -234,11 +234,15 @@ Acceptance rework of this packet (reopened), with `US-0196` Rework 7 (the expand
 
 **Acceptance.**
 
-- [ ] A collapsed cell's shell icon is 16 x 16 and centred in the cell (terminal-view test).
-- [ ] A collapsed cell has no grip element; dragging the cell outside its icon reorders (the tab lands in the dropped cell's slot), dragging the icon starts the tab drag and reorders nothing (workspace test, probe cell modelled on the real one).
-- [ ] The hover card: single line without a directory and two lines with one, content-sized up to 280 px, 6 px radius, popover background and border tokens, its left edge 6 px right of the strip whatever the pointer position (terminal-view tests).
-- [ ] Full `pwsh scripts/ci-local.ps1` passes; `cargo build -p oneterm-app` builds.
+- [x] A collapsed cell's shell icon is 16 x 16 and centred in the cell (terminal-view test).
+- [x] A collapsed cell has no grip element; dragging the cell outside its icon reorders (the tab lands in the dropped cell's slot), dragging the icon starts the tab drag and reorders nothing (workspace test, probe cell modelled on the real one).
+- [x] The hover card: single line without a directory and two lines with one, content-sized up to 280 px, 6 px radius, popover background and border tokens, its left edge 6 px right of the strip whatever the pointer position (terminal-view tests).
+- [x] Full `pwsh scripts/ci-local.ps1` passes; `cargo build -p oneterm-app` builds.
 - [ ] On screen, by `ui-verifier`: the 16 px icon in both themes, a drag from the cell's margin reorders, a drag from the icon lands in an empty Space, the card's gap and radius in both themes.
+
+**Evidence (coder).** Same gate run as `US-0196` Rework 7. Tests: `oneterm-terminal-view` `a_collapsed_cell_is_the_shell_icon_on_the_status_fill` (the icon is 16 x 16 and centred), `the_hover_card_is_one_line_without_a_directory_and_hugs_its_content` (one line 30 px, two lines 46 px, capped at 280 px), `the_hover_card_is_a_popover_with_a_six_pixel_radius` (6 px radius, popover fill / foreground, `border`, shadow, on the element's style), `the_drawn_hover_card_is_six_pixels_from_the_strip_wherever_the_pointer_is` (the real tooltip view drawn for three pointer positions and with and without a directory: left edge = cell right + 1 + 6, level with the cell's middle), `the_hover_card_goes_six_pixels_from_the_strip_wherever_the_pointer_is` (the offset arithmetic); `oneterm-workspace` `a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon` (no grip element; a press on the icon starts the tab drag and reorders nothing; presses 3 px inside the left and right edges reorder; the probe cell is modelled on the real one: only a 16 px icon carries the tab drag).
+
+Not pinned by a test: that gpui really shows the card at the spot the drawn test models (the tooltip view is drawn at the pointer's place by the test host, not by gpui's tooltip machinery); the coder's screenshot of the running build shows it at 6 px from the strip, vertically centred, in both themes (`vt-rework7\r7-dark-collapsed-card.png`, `r7-light-collapsed-card.png`).
 
 ### Gaps
 

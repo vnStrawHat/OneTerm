@@ -105,13 +105,16 @@ const HOVER_FILL_STRENGTH: f32 = 0.5;
 /// in from. The chip is content-sized between a floor and a ceiling; this is a typical size.
 const DRAG_PREVIEW_SIZE: Size<Pixels> = size(px(140.), px(30.));
 
-/// The fills of a rail row: `(selected, hover)`. Selected is the theme's selected-list-item
-/// colour (`tab.active.background` is the terminal's own colour in the built-in themes, so a row
-/// filled with it would read as the page); hover is the list hover colour at half strength, so
+/// The fills of a rail row: `(selected, hover)`. Selected is the list hover colour, which is
+/// what OneTerm draws a selected list item in everywhere (the session tree, the SFTP rows;
+/// `Theme::list_active` is not read: the kit derives it from its own token and a theme change
+/// resets it, which painted the selected row at a fifth of the strength in the running app).
+/// `tab.active.background` is the terminal's own colour in the built-in themes, so a row filled
+/// with it would read as the page. Hover is the same colour at half strength, so
 /// selected > hover > idle in every theme.
 fn row_fills(theme: &gpui_component::Theme) -> (gpui::Hsla, gpui::Hsla) {
     (
-        theme.list_active,
+        theme.list_hover,
         theme.list_hover.opacity(HOVER_FILL_STRENGTH),
     )
 }
@@ -863,12 +866,11 @@ mod tests {
                     .cloned()
                     .unwrap_or_else(|| panic!("{name} is not registered"));
                 Theme::global_mut(cx).apply_config(&theme_config);
-                oneterm_theme::apply_list_style_override(cx);
 
                 let theme = cx.theme();
                 let (selected, hover) = row_fills(theme);
                 let (rail, terminal) = (*theme.tokens.tab_bar, theme.background);
-                assert_eq!(selected, theme.list_active, "{name}");
+                assert_eq!(selected, theme.list_hover, "{name}");
                 assert_eq!(hover, theme.list_hover.opacity(0.5), "{name}");
                 let hovered = rail.blend(hover);
                 let (selected_vs_rail, hover_vs_rail) =

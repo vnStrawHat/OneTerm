@@ -143,10 +143,10 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #                          list hover fill over the bar (owner rework 5 of `US-0196`;
     #                          `tab_rail.rs`, the `group_hover` fill), at half strength since
     #                          owner rework 7 so that it never outranks the selected row
-    #   tab_bar.selected.background  the selected rail row since owner rework 7: `Theme::list_active`
-    #                          (`tab.active.background` is the terminal's own colour, which cannot
-    #                          make the row stand out), and OneTerm's list-style override
-    #                          (`crates/theme/src/theme.rs:69-77`) makes that `list.hover.background`
+    #   tab_bar.selected.background  the selected rail row since owner rework 7: `list.hover.background`,
+    #                          OneTerm's selected-item colour (`crates/theme/src/theme.rs:69-77`;
+    #                          `tab.active.background` is the terminal's own colour, which cannot
+    #                          make the row stand out)
     #   tab.active.background  stays for the horizontal strip's active tab and the rail's drag
     #                          preview chip
     "tab.active.foreground": (
@@ -383,8 +383,8 @@ FALLBACKS: dict[str, str | tuple] = {
     "table.head.background": "list.head.background",                     # schema.rs:1005
     "tab_bar.background": "background",                                  # schema.rs:998
     # Not kit tokens. The rail row's hover fill is `list.hover.background` at half alpha, drawn
-    # over the bar; its selected fill is `Theme::list_active`, which OneTerm sets to
-    # `list.hover.background` after every theme application (owner rework 7 of `US-0196`).
+    # over the bar; its selected fill is `list.hover.background` itself, OneTerm's
+    # selected-item colour (owner rework 7 of `US-0196`).
     "tab_bar.hover.background": ("alpha", "list.hover.background", 0.5),
     "tab_bar.selected.background": "list.hover.background",
     "tab.background": "background",                                      # schema.rs:995
