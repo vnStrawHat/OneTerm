@@ -327,3 +327,46 @@ Verdict: partly (icons, no numbers, regressions all PASS; status fills and glyph
 ## Coder follow-up (rework 6 findings, 2026-10-22)
 
 F1, F2, N4 and N2 are fixed in the coder's commit after this evidence (see the packet's "Rework after the advisor review and the UI walk of rework 6"). The two pinned tests passed against the fixed script and now live in its `--self-test`; `scripts/test_check_theme_contrast.py` is deleted, so the references to it above describe the pins as they were when written.
+
+## Advisor re-review (rework 6)
+
+Reviewed: `ebc10543` on `verify/in-0055-rework6` (after `da11e0c5`: `1989df8c` UI evidence, `ebc10543` F1, F2, N4, N2), 2026-10-22. No conflict markers in `crates/`, `docs/` or `scripts/`.
+
+### Verdict
+
+**PASS.** F1, F2 and N4 are fixed as asked. The N2 hand-over (`report_cell_fill` / `take_cell_fill`) is **safe as used today**: the ordering is synchronous and deterministic, every collapsed cell overwrites the slot (also with `None`) and the read clears it, so no fill can reach another cell, group or window. It is still a hidden side channel, and a cleaner shape exists inside the same crate (note R1); recommended as a follow-up, not a blocker.
+
+### Gate re-run (one crate per command, `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`)
+
+| Check | Result |
+|---|---|
+| `cargo clippy -p oneterm-theme -p oneterm-terminal-view -p oneterm-workspace -p oneterm-state --all-targets -- -D warnings` | clean |
+| `cargo test -p oneterm-state` | 78 passed (+1: `a_cells_fill_is_handed_over_once`) |
+| `cargo test -p oneterm-terminal-view` | 423 passed, 3 ignored (census) |
+| `cargo test -p oneterm-workspace` | 113 passed, 3 ignored (+1: `the_grip_glyph_reads_on_a_filled_cell`) |
+| `python scripts/check-theme-contrast.py` | exit 0; summary now reads `glyphs >= 3.0:1 except 5 known glyph rows below the floor` |
+| `python scripts/check-theme-contrast.py --self-test` | passed |
+| `check-english`, `check-doc-paths` | passed |
+
+### N2 attacked
+
+1. **Render-order dependence.** None. `TabRail::row` builds the cell's title with `handle.title(window, &mut scope)` (`crates/workspace/src/layout/workspace/tab_rail.rs:520-535`); the kit's `PanelHandle::title` is `self.update(cx, |this, cx| this.title(window, cx).into_any_element())` (`reference/gpui-kit/crates/component/src/dock/panel.rs:170`), and `TerminalPanel::title` is `render_tab_strip` (`crates/terminal-view/src/panel/terminal_panel.rs:700-701`), a plain function that calls `report_cell_fill` while it runs (`tab_title.rs:510-513`). So the report is complete before `take_cell_fill` at `tab_rail.rs:543`, within one straight-line function, independent of gpui's layout/paint order, of caching and of whether any other view re-renders. A frame in which the rail is not re-rendered rebuilds neither the cell nor the grip, so the two cannot disagree.
+2. **No re-render of the cell.** The title is rebuilt on every `row()` call; there is no cached title element. The only way to get a grip without a fresh report would be a `handle == None` panel in a collapsed rail (`tab_rail.rs:536`), which cannot report; the slot it would read was cleared by the previous cell's take (or holds `None`), so it gets `muted.foreground`, correct for a cell that drew no fill.
+3. **Leakage across cells / groups / windows.** `report_cell_fill` is called for every collapsed cell, with `None` when idle (`tab_title.rs:510-513`; pinned by the drawn test's "an idle cell reports no fill to the rail"), and `take_cell_fill` clears a `Some` (`crates/state/src/tab_row_layout.rs:85-91`). Within the rail every report is paired with a take in the same `row()`. Outside the rail, `TabRowLayout::Collapsed` is in force only inside the rail's scope (`TabRowScope` restores on drop, `tab_row_layout.rs:114-118`); the drag preview calls `handle.title` with no scope, so `collapsed` is false and nothing is reported (`tab_rail.rs:716-719`); the hover card is `tab_hover_card`, not `render_tab_strip`. gpui is single-threaded per `App`, so two windows' renders do not interleave inside `row()`. No path found where a stale `Some` survives to another cell.
+4. **`set_global` during render.** `App::set_global` pushes `Effect::NotifyGlobalObservers` and inserts (`gpui/src/app.rs:2055-2059`); nothing observes `CellFill`, and the existing `TabRowScope` already sets a global on the same path, so this adds one no-op effect per collapsed cell per frame. Harmless.
+5. **Simpler path within crate rules.** The rail cannot read the tab's status (R4: `workspace` must not depend on `terminal-view`), and the kit's `Panel` trait is not ours to extend, so some hand-over is needed. Alternatives weighed: (a) draw the grip inside the cell: the grip's drag is the rail's (`DragPanel`, `RailDragPreview`) and the cell's own `on_drag` is the Space-drop payload, so moving it would entangle two drag protocols; rejected. (b) `title_style` (`Panel::title_style -> Option<TitleStyle>`, kit `panel.rs:87`) is read by the rail without any global, but `TitleStyle` carries `background`/`foreground` for the whole tab and would restyle the horizontal strip too; rejected unless gated on layout, which reintroduces the scope. (c) **Carry the slot in `TabRowScope`** (see R1). The coder's choice is acceptable; (c) is the tidier version of it.
+
+### F1, F2, N4 re-checked
+
+- F1: `split_known` (`scripts/check-theme-contrast.py:706-720`) computes `stale = exempt - {(variant, fill) of rows actually below}`; `main` prints each `STALE KNOWN_BELOW entry` and returns 1 (`:773-777`, `:797-800`). Verified by the self-test (a passing pair and a never-matched pair both reported) and by reading `main`.
+- F2: `summary()` (`:723-734`) says `except N known glyph rows below the floor` when any are exempt and the plain wording otherwise; live run confirms.
+- N4: the self-test now covers the picked tier (better token wins, 21:1 on black, floor carried, a muddy fill fails and only `KNOWN_BELOW` exempts it), stale entries, the summary wording and `with_kit_defaults` (fills in, never overrides, per mode). My two pins are subsumed and `scripts/test_check_theme_contrast.py` is gone; nothing else references it.
+
+### Notes (non-blocking)
+
+- **R1 (Low, follow-up).** Tie the hand-over to the scope that already exists for the opposite direction: give `TabRowScope` the slot (`report_cell_fill(cx, fill)` writes a `CellFill` global exactly as now; `TabRowScope::cell_fill(&self) -> Option<Hsla>` reads it; `Drop` clears it along with restoring the layout). Then there is no `take`, a report can never outlive the scope that asked for the cell, and a future second caller cannot read another cell's value. Same crate, about ten lines, tests move unchanged. Not required for merge.
+- **R2 (informational).** `grip_glyph_color` is only correct while the cell's own glyph pick is `legible_on(fill, [background, foreground])`; the two are now computed in two crates from the same inputs. If the cell's rule ever changes, the grip's must follow. A one-line comment at each site cross-referencing the other would do.
+
+### Still by hand (ui-verifier)
+
+The grip glyph on a hovered filled cell in a light and a dark theme (the UI walk at `1989df8c` predates N2).
