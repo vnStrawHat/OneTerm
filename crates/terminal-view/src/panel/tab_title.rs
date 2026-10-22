@@ -2,9 +2,9 @@
 //! title, the manual rename override and its dialog, and the tab-strip element
 //! (recording dot, OSC 7501 status icon, active bar, drag source, middle-click /
 //! × close, double-click rename). The vertical rail's row is the same element on two
-//! lines (the title, then the current directory and the status icon) without the ×; the
-//! collapsed rail's cell is the shell icon on the status colour, and its hover card draws those
-//! same two lines.
+//! lines (the title, then the current directory and the status icon) without the ×, or on one
+//! centred line when the tab has no directory; the collapsed rail's cell is the shell icon on the
+//! status colour, and its hover card draws those same lines.
 
 use std::cell::Cell;
 use std::path::Path;
@@ -12,13 +12,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt as _, App, AppContext as _, ClickEvent, Context, Div, Entity, EntityId,
-    Focusable as _, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Transformation, Window,
-    div, percentage, prelude::FluentBuilder as _, px,
+    Animation, AnimationExt as _, App, AppContext as _, Bounds, ClickEvent, Context, Div, Entity,
+    EntityId, Focusable as _, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, Pixels, Point, Render, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Transformation, WeakEntity, Window, div,
+    percentage, point, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
+    ActiveTheme as _, ElementExt as _, Icon, IconName, Sizable as _, Size, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{DialogButtonProps, DialogFooter},
     h_flex,
@@ -29,7 +30,6 @@ use gpui_component::{
     v_flex,
 };
 use oneterm_core::{SessionDuplicateConfig, ShellKind};
-use oneterm_settings::VerticalTabs;
 use oneterm_state::TabRowLayout;
 use oneterm_terminal::{ProgramState, TerminalLogState};
 use oneterm_theme::{AppIcon, notif_ext::notify};
@@ -304,21 +304,26 @@ pub(super) fn tab_cwd_label(cwd: String, color: gpui::Hsla) -> Div {
         .child(cwd)
 }
 
-/// The width of the collapsed cell's hover card: the default rail width, so it reads like the
-/// expanded row it stands for.
-const HOVER_CARD_WIDTH: f32 = VerticalTabs::DEFAULT_WIDTH as f32;
-/// What the kit's tooltip adds around its content, horizontally: a 1 px border and 8 px of
-/// padding on each side.
-const TOOLTIP_CHROME_X: f32 = 18.;
-/// Names the hover card's title in the debug-bounds map. A no-op outside test builds.
+/// The widest a collapsed cell's hover card grows; narrower when its content is.
+pub(super) const HOVER_CARD_MAX_WIDTH: f32 = 280.;
+/// The gap between the strip's outer edge and the hover card.
+pub(super) const HOVER_CARD_GAP: f32 = 6.;
+/// The card's corner radius.
+pub(super) const HOVER_CARD_RADIUS: f32 = 6.;
+/// What the card adds around its lines, vertically: a 1 px border and 4 px of padding each side.
+const HOVER_CARD_CHROME_Y: f32 = 10.;
+/// Names the hover card's frame and title in the debug-bounds map. A no-op outside test builds.
+#[cfg(test)]
+pub(super) const TAB_CARD_SELECTOR: &str = "oneterm-tab-card";
 #[cfg(test)]
 pub(super) const TAB_CARD_LABEL_SELECTOR: &str = "oneterm-tab-card-label";
 
-/// The two lines of a vertical row, shared by the rail's row and the collapsed cell's hover
-/// card so the two cannot drift apart. Line 1: the channel chips, the recording dot, the title.
-/// Line 2: the directory (cut at its start when it does not fit) and the status icon at the end.
-/// The path is as wide as its text up to the room there is, so it shrinks (and is cut) before
-/// the spacer that keeps the status icon at the end.
+/// The lines of a vertical row, shared by the rail's row and the collapsed cell's hover card so
+/// the two cannot drift apart. Line 1: the channel chips, the recording dot, the title. Line 2:
+/// the directory (cut at its start when it does not fit) and the status icon at the end. The path
+/// is as wide as its text up to the room there is, so it shrinks (and is cut) before the spacer
+/// that keeps the status icon at the end. A tab with **no directory has no line 2**: line 1 is
+/// the whole content, centred in a row that is taller than it, and the status icon ends it.
 fn vertical_row_lines(
     chips: Vec<Stateful<Div>>,
     recording: Option<Stateful<Div>>,
@@ -326,23 +331,23 @@ fn vertical_row_lines(
     path: Option<Div>,
     status: Option<gpui::AnyElement>,
 ) -> Div {
-    v_flex()
-        .child(
-            h_flex()
-                .h(px(TabRowLayout::VERTICAL_FIRST_LINE_HEIGHT))
-                .gap_1()
-                .children(chips)
-                .children(recording)
-                .child(label),
-        )
-        .child(
+    let title = h_flex()
+        .h(px(TabRowLayout::VERTICAL_FIRST_LINE_HEIGHT))
+        .gap_1()
+        .children(chips)
+        .children(recording)
+        .child(label);
+    match path {
+        None => v_flex().justify_center().child(title.children(status)),
+        Some(path) => v_flex().child(title).child(
             h_flex()
                 .h(px(TabRowLayout::VERTICAL_SECOND_LINE_HEIGHT))
                 .gap_1()
-                .children(path)
+                .child(path)
                 .child(div().flex_1().min_w_0())
                 .children(status),
-        )
+        ),
+    }
 }
 
 /// The recording dot of a tab.
@@ -365,59 +370,132 @@ fn tab_chips(panel: &TerminalPanel, cx: &App) -> Vec<Stateful<Div>> {
         .collect()
 }
 
-/// What the collapsed cell shows while the pointer rests on it: the expanded row's content, with
-/// the same lines, read from the live tab.
+/// What the collapsed cell shows while the pointer rests on it: the expanded row's lines, read
+/// from the live tab, in a popover frame (the kit's tooltip look: `popover` fill and
+/// foreground, `border`, `shadow_md`; a 6 px radius) as wide as they are up to 280 px. The title
+/// does not grow into spare room, so the card hugs its content, and is cut with an ellipsis
+/// when the content is wider than the card may be.
 pub(super) fn tab_hover_card(panel: &TerminalPanel, panel_id: EntityId, cx: &App) -> Div {
-    let muted = cx.theme().muted_foreground;
-    let label = tab_title_label();
+    let theme = cx.theme();
+    let label = div().min_w_0().text_ellipsis().whitespace_nowrap();
     #[cfg(test)]
     let label = label.debug_selector(|| TAB_CARD_LABEL_SELECTOR.to_string());
-    vertical_row_lines(
+    let lines = vertical_row_lines(
         tab_chips(panel, cx),
         panel
             .shows_recording_dot(cx)
-            .then(|| recording_dot(cx.theme().danger)),
+            .then(|| recording_dot(theme.danger)),
         label.child(panel.tab_label(cx)),
-        panel.tab_cwd(cx).map(|cwd| tab_cwd_label(cwd, muted)),
+        panel
+            .tab_cwd(cx)
+            .map(|cwd| tab_cwd_label(cwd, theme.muted_foreground)),
         panel
             .tab_status(cx)
             .map(|status| tab_status_icon(status, panel_id, cx)),
-    )
-    .w(px(HOVER_CARD_WIDTH - TOOLTIP_CHROME_X))
+    );
+    let card = div()
+        .max_w(px(HOVER_CARD_MAX_WIDTH))
+        .px_2()
+        .py_1()
+        .border_1()
+        .border_color(theme.border)
+        .rounded(px(HOVER_CARD_RADIUS))
+        .bg(theme.tokens.popover)
+        .text_color(theme.popover_foreground)
+        .font_family(theme.font_family.clone())
+        .text_sm()
+        // As in a row (the kit's `Tab` sets it), so the 20 px line holds its 14 px text.
+        .line_height(gpui::relative(1.))
+        .shadow_md()
+        .child(lines);
+    #[cfg(test)]
+    let card = card.debug_selector(|| TAB_CARD_SELECTOR.to_string());
+    card
 }
 
-/// The collapsed cell's tooltip: the kit's, drawn as nothing while a right-click menu is open on
-/// the cell.
-struct CellTooltip {
-    inner: gpui::AnyView,
-    hidden: Rc<Cell<bool>>,
+/// How tall the hover card is: its lines (one, or two with a directory) and its frame.
+pub(super) fn hover_card_height(has_cwd: bool) -> Pixels {
+    let lines = TabRowLayout::VERTICAL_FIRST_LINE_HEIGHT
+        + if has_cwd {
+            TabRowLayout::VERTICAL_SECOND_LINE_HEIGHT
+        } else {
+            0.
+        };
+    px(lines + HOVER_CARD_CHROME_Y)
+}
+
+/// Where the hover card goes relative to where gpui puts a native tooltip, which is 1 px right of
+/// and below the pointer: its left edge `HOVER_CARD_GAP` right of the strip's outer edge (the
+/// cell's right edge and the rail's own border) and its middle level with the cell's, whatever
+/// the pointer's position in the cell. The result is the inset to give the card.
+pub(super) fn hover_card_offset(
+    cell: Bounds<Pixels>,
+    pointer: Point<Pixels>,
+    card_height: Pixels,
+) -> Point<Pixels> {
+    let origin = point(
+        cell.right() + px(TabRowLayout::RAIL_BORDER_WIDTH + HOVER_CARD_GAP),
+        cell.center().y - card_height / 2.,
+    );
+    origin - (pointer + point(px(1.), px(1.)))
+}
+
+/// The collapsed cell's tooltip, a gpui native one: it draws nothing while a right-click menu is
+/// open on the cell, and otherwise the live tab's hover card at the spot [`hover_card_offset`]
+/// works out. gpui lays a tooltip out at the pointer and flips it at the window's edge by its own
+/// size, so the root is a point and the card is an absolute child, which cannot be flipped
+/// the wrong way.
+pub(super) struct CellTooltip {
+    pub(super) panel: WeakEntity<TerminalPanel>,
+    /// The cell's bounds, and the pointer, when the tooltip was built.
+    pub(super) cell: Bounds<Pixels>,
+    pub(super) pointer: Point<Pixels>,
+    pub(super) hidden: Rc<Cell<bool>>,
 }
 
 impl Render for CellTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        if self.hidden.get() {
-            div().into_any_element()
-        } else {
-            self.inner.clone().into_any_element()
-        }
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(panel) = self.panel.upgrade().filter(|_| !self.hidden.get()) else {
+            return div().into_any_element();
+        };
+        let tab = panel.read(cx);
+        let offset = hover_card_offset(
+            self.cell,
+            self.pointer,
+            hover_card_height(tab.tab_cwd(cx).is_some()),
+        );
+        div()
+            .size_0()
+            .child(
+                tab_hover_card(tab, panel.entity_id(), cx)
+                    .absolute()
+                    .left(offset.x)
+                    .top(offset.y),
+            )
+            .into_any_element()
     }
 }
 
-/// The compact cell of the collapsed rail (`US-0198`): the tab's shell icon, centred, on the
-/// tab's status colour, and the recording dot in the top-left corner. There is no status badge
-/// and nothing animates: the state is the background. The title, directory, channel chips and
-/// status icon are the hover card's ([`tab_hover_card`]).
+/// The compact cell of the collapsed rail (`US-0198`): the tab's shell icon (16 px), centred, on
+/// the tab's status colour, and the recording dot in the top-left corner. There is no status
+/// badge and nothing animates: the state is the background. The title, directory, channel chips
+/// and status icon are the hover card's ([`tab_hover_card`]).
 ///
-/// The fill is an absolute child so a selected cell can leave the rail's accent bar its own
-/// background: it starts after the bar, which a `Working` fill (`primary`) could otherwise
+/// The icon is the cell's content, so it starts the tab drag (`drag`, which an empty Space
+/// accepts); the rest of the cell belongs to the rail, which starts its reorder drag there.
+///
+/// The fill is an absolute child so a selected cell can leave the rail's accent pill its own
+/// background: it starts after the pill, which a `Working` fill (`primary`) could otherwise
 /// swallow. It is painted over the rail's hover fill, so a filled cell takes no hover tint.
 fn collapsed_row(
     icon: AppIcon,
     fill: Option<(gpui::Hsla, gpui::Hsla)>,
     selected: bool,
     recording: Option<gpui::Stateful<Div>>,
+    icon_id: SharedString,
+    drag: Option<DragTerminalTab>,
 ) -> Div {
-    let glyph = Icon::new(icon).small();
+    let glyph = Icon::new(icon).with_size(Size::Medium);
     let glyph = match fill {
         Some((_, foreground)) => glyph.text_color(foreground),
         None => glyph,
@@ -445,9 +523,11 @@ fn collapsed_row(
         }))
         .child(
             div()
+                .id(icon_id)
                 .debug_selector(|| TAB_SHELL_ICON_SELECTOR.to_string())
                 .flex()
-                .child(glyph),
+                .child(glyph)
+                .when_some(drag, |this, drag| this.on_drag(drag, start_tab_drag)),
         )
         .children(recording.map(|dot| {
             div()
@@ -456,6 +536,27 @@ fn collapsed_row(
                 .left(px(COLLAPSED_DOT_INSET))
                 .child(dot)
         }))
+}
+
+/// The size of the New Terminal `+` button: the strip's 20 px, or 24 px in the rail, whose header
+/// has room for the larger target (the rail draws the button under its own layout).
+pub(super) fn new_tab_button_size(layout: TabRowLayout) -> Size {
+    match layout {
+        TabRowLayout::Horizontal => Size::XSmall,
+        TabRowLayout::Vertical | TabRowLayout::Collapsed => Size::Small,
+    }
+}
+
+/// Start dragging a tab: the preview is the title chip, and the payload is what an empty Space
+/// accepts.
+fn start_tab_drag(
+    drag: &DragTerminalTab,
+    _: Point<Pixels>,
+    _: &mut Window,
+    cx: &mut App,
+) -> Entity<DragTerminalTab> {
+    cx.stop_propagation();
+    cx.new(|_| drag.clone())
 }
 
 /// Build the tab-strip row for `panel`: active bar, drag source, middle-click
@@ -507,10 +608,6 @@ pub(super) fn render_tab_strip(
         .then(|| status.and_then(|status| collapsed_fill(status, cx.theme())))
         .flatten();
     let dot_color = fill.map_or(recording_color, |(_, glyph)| glyph);
-    if collapsed {
-        // The rail draws the reorder grip over the cell and needs to know what it is on.
-        TabRowLayout::report_cell_fill(cx, fill.map(|(background, _)| background));
-    }
     let recording_dot = show_recording.then(|| recording_dot(dot_color));
     let label = tab_title_label()
         .id(title_label_id)
@@ -527,21 +624,37 @@ pub(super) fn render_tab_strip(
         })
         .child(tab_label);
 
+    // What an empty Space accepts. A collapsed cell starts it from its icon only; every other row
+    // starts it from the whole row.
+    let tab_drag = tab_panel.as_ref().map(|_| DragTerminalTab {
+        panel: panel_weak.clone(),
+        title: drag_title.clone(),
+    });
+    let (cell_drag, row_drag) = if collapsed {
+        (tab_drag, None)
+    } else {
+        (None, tab_drag)
+    };
+
     let row = if collapsed {
-        collapsed_row(panel.tab_shell_icon(cx), fill, is_active, recording_dot)
+        collapsed_row(
+            panel.tab_shell_icon(cx),
+            fill,
+            is_active,
+            recording_dot,
+            SharedString::from(format!("tab-cell-icon-{panel_entity:?}")),
+            cell_drag,
+        )
     } else if vertical {
-        // The rail draws the selected row's accent bar and the reorder grip itself, so this row
+        // The rail draws the selected row's accent pill and the reorder grip itself, so this row
         // carries neither the top bar nor the strip's negative margin.
         let path = cwd.map(|cwd| tab_cwd_label(cwd, muted));
         vertical_row_lines(chips, recording_dot, label, path, status_icon)
             .flex_1()
             .min_w_0()
-            .pr_1()
-            .pt(px(TabRowLayout::VERTICAL_ROW_PADDING))
-            // The rail's divider takes the last pixel of the row, so the padding stops short of it.
-            .pb(px(
-                TabRowLayout::VERTICAL_ROW_PADDING - TabRowLayout::VERTICAL_ROW_DIVIDER
-            ))
+            .pl(px(TabRowLayout::VERTICAL_ROW_PADDING_LEFT))
+            .pr(px(TabRowLayout::VERTICAL_ROW_PADDING_RIGHT))
+            .py(px(TabRowLayout::VERTICAL_ROW_PADDING))
     } else {
         // No `w_full()`: the kit's `Tab` is content-sized and `flex_shrink_0`
         // (`component/src/tab/tab.rs:715-718,794-800`), so a percentage width
@@ -612,46 +725,36 @@ pub(super) fn render_tab_strip(
                 tooltip_hidden.clone(),
                 tooltip_hidden.clone(),
             );
-            this.tooltip(move |window, cx| {
-                let card_panel = card_panel.clone();
-                // Rebuilt from the live panel each time the card is drawn.
-                let inner = Tooltip::element(move |_, cx| match card_panel.upgrade() {
-                    Some(panel) => {
-                        tab_hover_card(panel.read(cx), panel.entity_id(), cx).into_any_element()
-                    }
-                    None => div().into_any_element(),
+            // Where the cell is, for placing the card beside the strip.
+            let cell = Rc::new(Cell::new(Bounds::<Pixels>::default()));
+            let measured = cell.clone();
+            this.on_prepaint(move |bounds, _, _| measured.set(bounds))
+                .tooltip(move |window, cx| {
+                    // Built from the live panel each time the card is drawn.
+                    let tooltip = CellTooltip {
+                        panel: card_panel.clone(),
+                        cell: cell.get(),
+                        pointer: window.mouse_position(),
+                        hidden: shown.clone(),
+                    };
+                    cx.new(|_| tooltip).into()
                 })
-                .build(window, cx);
-                let hidden = shown.clone();
-                cx.new(|_| CellTooltip { inner, hidden }).into()
-            })
-            // gpui clears a tooltip on a press but shows it again on the next pointer move
-            // while the cell is hovered, which put it on top of the menu a right-click opens,
-            // so a right-press hides it until the pointer comes back to the cell.
-            .on_hover(move |hovered, _, _| {
-                if *hovered {
-                    entered.set(false);
-                }
-            })
-            .on_mouse_down(MouseButton::Right, move |_, window, _| {
-                pressed.set(true);
-                window.refresh();
-            })
+                // gpui clears a tooltip on a press but shows it again on the next pointer move
+                // while the cell is hovered, which put it on top of the menu a right-click opens,
+                // so a right-press hides it until the pointer comes back to the cell.
+                .on_hover(move |hovered, _, _| {
+                    if *hovered {
+                        entered.set(false);
+                    }
+                })
+                .on_mouse_down(MouseButton::Right, move |_, window, _| {
+                    pressed.set(true);
+                    window.refresh();
+                })
         })
         // Drag the tab into an empty Space with the terminal-specific
         // payload consumed by Space-tree drop targets.
-        .when_some(tab_panel, |this, _| {
-            this.on_drag(
-                DragTerminalTab {
-                    panel: panel_weak.clone(),
-                    title: drag_title.clone(),
-                },
-                |drag, _pos, _win, cx| {
-                    cx.stop_propagation();
-                    cx.new(|_| drag.clone())
-                },
-            )
-        })
+        .when_some(row_drag, |this, drag| this.on_drag(drag, start_tab_drag))
         // Middle-click on a tab → close that tab.
         .on_mouse_down(MouseButton::Middle, {
             let panel = panel_entity.clone();

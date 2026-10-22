@@ -8,7 +8,7 @@
 
 use std::ops::{Deref, DerefMut};
 
-use gpui::{App, Global, Hsla};
+use gpui::{App, Global};
 
 /// The shape of a Terminal Tab's row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -25,29 +25,29 @@ pub enum TabRowLayout {
 impl Global for TabRowLayout {}
 
 /// The vertical row's geometry in logical pixels. The panel draws the row and the rail draws the
-/// grip beside it, so both read the same numbers: two lines (the title, then the directory and
-/// the status icon) between equal padding.
+/// frame around it, so both read the same numbers: two lines (the title, then the directory and
+/// the status icon) between equal padding, or one centred line when there is no directory.
 impl TabRowLayout {
     /// Height of one row of the vertical rail.
-    pub const VERTICAL_ROW_HEIGHT: f32 = 64.0;
-    /// Padding above the first line and below the second, divider included.
-    pub const VERTICAL_ROW_PADDING: f32 = 10.0;
-    /// The rail's 1 px divider under every row. It takes 1 px of the bottom padding, so the
-    /// row's content box is still the lines plus the padding and the row is 64 px.
-    pub const VERTICAL_ROW_DIVIDER: f32 = 1.0;
+    pub const VERTICAL_ROW_HEIGHT: f32 = 48.0;
+    /// Padding above the first line and below the second.
+    pub const VERTICAL_ROW_PADDING: f32 = 6.0;
+    /// Padding left of the row's content: clear of the accent pill and the grip overlay.
+    pub const VERTICAL_ROW_PADDING_LEFT: f32 = 14.0;
+    /// Padding right of the row's content.
+    pub const VERTICAL_ROW_PADDING_RIGHT: f32 = 10.0;
     /// Height of the title line.
-    pub const VERTICAL_FIRST_LINE_HEIGHT: f32 = 24.0;
+    pub const VERTICAL_FIRST_LINE_HEIGHT: f32 = 20.0;
     /// Height of the directory and status line.
-    pub const VERTICAL_SECOND_LINE_HEIGHT: f32 = 20.0;
-    /// Width of the bar on the left edge of the selected row or cell. The rail draws it, and a
-    /// collapsed cell's status fill starts after it so the bar keeps its own background.
-    pub const ACCENT_BAR_WIDTH: f32 = 2.0;
-
-    /// Distance from the top of a vertical row to the middle of its title line, where the
-    /// rail centres its reorder grip.
-    pub const fn vertical_first_line_centre() -> f32 {
-        Self::VERTICAL_ROW_PADDING + Self::VERTICAL_FIRST_LINE_HEIGHT / 2.0
-    }
+    pub const VERTICAL_SECOND_LINE_HEIGHT: f32 = 16.0;
+    /// Width of the accent pill on the left edge of the selected row or cell. The rail draws it,
+    /// and a collapsed cell's status fill starts after it so the pill keeps its own background.
+    pub const ACCENT_BAR_WIDTH: f32 = 3.0;
+    /// How far the accent pill stops short of the row's top and bottom edges.
+    pub const ACCENT_BAR_INSET: f32 = 8.0;
+    /// Width of the rail's own right border, the strip's outer edge a collapsed cell's hover card
+    /// keeps its distance from.
+    pub const RAIL_BORDER_WIDTH: f32 = 1.0;
 }
 
 impl TabRowLayout {
@@ -63,31 +63,6 @@ impl TabRowLayout {
         let previous = Self::current(cx);
         cx.set_global(self);
         TabRowScope { cx, previous }
-    }
-}
-
-/// The status fill of the collapsed cell last built, handed from the cell to the rail.
-#[derive(Default)]
-struct CellFill(Option<Hsla>);
-
-impl Global for CellFill {}
-
-impl TabRowLayout {
-    /// The collapsed cell being built says what colour it filled itself with (`None`: it did not),
-    /// so the rail can draw what it overlays on the cell, the reorder grip, in a colour that
-    /// reads on it. The rail cannot see the tab's status itself.
-    pub fn report_cell_fill(cx: &mut App, fill: Option<Hsla>) {
-        cx.set_global(CellFill(fill));
-    }
-
-    /// The fill the cell built just now reported, if any; reading it clears it, so one cell's
-    /// fill never leaks onto the next.
-    pub fn take_cell_fill(cx: &mut App) -> Option<Hsla> {
-        let fill = cx.try_global::<CellFill>().and_then(|reported| reported.0);
-        if fill.is_some() {
-            cx.set_global(CellFill(None));
-        }
-        fill
     }
 }
 
@@ -123,15 +98,21 @@ mod tests {
 
     #[test]
     fn the_vertical_row_is_two_lines_between_equal_padding() {
+        // 6 + 20 + 16 + 6: no divider takes a pixel of it any more.
+        assert_eq!(TabRowLayout::VERTICAL_ROW_HEIGHT, 48.0);
         assert_eq!(
             2.0 * TabRowLayout::VERTICAL_ROW_PADDING
                 + TabRowLayout::VERTICAL_FIRST_LINE_HEIGHT
                 + TabRowLayout::VERTICAL_SECOND_LINE_HEIGHT,
             TabRowLayout::VERTICAL_ROW_HEIGHT
         );
-        assert_eq!(TabRowLayout::vertical_first_line_centre(), 22.0);
-        // The divider is carved out of the bottom padding, not added to the row.
-        assert!(TabRowLayout::VERTICAL_ROW_DIVIDER < TabRowLayout::VERTICAL_ROW_PADDING);
+        // The title starts clear of the pill (3 px) and of the 8 px grip overlay.
+        assert!(TabRowLayout::VERTICAL_ROW_PADDING_LEFT > 8.0);
+        // The pill is shorter than the row and leaves room above and below it.
+        assert!(
+            2.0 * TabRowLayout::ACCENT_BAR_INSET < TabRowLayout::VERTICAL_ROW_HEIGHT,
+            "the pill has a height"
+        );
     }
 
     #[gpui::test]
@@ -149,23 +130,6 @@ mod tests {
                 assert_eq!(TabRowLayout::current(&vertical), TabRowLayout::Vertical);
             }
             assert_eq!(TabRowLayout::current(cx), TabRowLayout::Horizontal);
-        });
-    }
-
-    #[gpui::test]
-    fn a_cells_fill_is_handed_over_once(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            assert_eq!(
-                TabRowLayout::take_cell_fill(cx),
-                None,
-                "nothing reported yet"
-            );
-            let red = gpui::hsla(0., 1., 0.5, 1.);
-            TabRowLayout::report_cell_fill(cx, Some(red));
-            assert_eq!(TabRowLayout::take_cell_fill(cx), Some(red));
-            assert_eq!(TabRowLayout::take_cell_fill(cx), None, "read once");
-            TabRowLayout::report_cell_fill(cx, None);
-            assert_eq!(TabRowLayout::take_cell_fill(cx), None);
         });
     }
 

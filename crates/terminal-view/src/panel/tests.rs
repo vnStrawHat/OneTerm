@@ -1178,6 +1178,9 @@ impl gpui::Render for TabRowHost {
             .child(
                 gpui::div()
                     .id("row-slot")
+                    // What the kit's `Tab` gives the row it wraps in the rail.
+                    .text_sm()
+                    .line_height(gpui::relative(1.))
                     .flex()
                     .w(gpui::px(self.width))
                     .h(gpui::px(height))
@@ -1339,7 +1342,7 @@ fn the_vertical_row_fills_its_width_and_only_its_content_drags_the_tab(cx: &mut 
 
     // The right end of the row, where the strip has its `x`, is row content too: it starts
     // the same tab drag.
-    let end = point(row.right() - px(4. + 8.), row.center().y);
+    let end = point(row.right() - px(10. + 8.), row.center().y);
     cx.simulate_mouse_down(end, MouseButton::Left, Modifiers::none());
     cx.simulate_mouse_move(
         end + point(px(0.), px(6.)),
@@ -1355,8 +1358,9 @@ fn the_vertical_row_fills_its_width_and_only_its_content_drags_the_tab(cx: &mut 
     assert_eq!(dropped.get(), 2);
 }
 
-/// A vertical row has no close button; its status icon is the last thing in it, after the
-/// label, and with no status the label keeps the whole width (`US-0196` rework).
+/// A vertical row has no close button; with no directory its status icon ends the one centred
+/// line, after the label, and with no status the label keeps the whole width (`US-0196` rework,
+/// rework 7).
 #[gpui::test]
 fn the_vertical_row_has_no_close_button_and_its_status_icon_trails_the_label(
     cx: &mut TestAppContext,
@@ -1365,67 +1369,91 @@ fn the_vertical_row_has_no_close_button_and_its_status_icon_trails_the_label(
     use oneterm_state::TabRowLayout;
 
     let (_, probe, cx) = tab_row_window(cx, TabRowLayout::Vertical);
+    let right_padding = px(TabRowLayout::VERTICAL_ROW_PADDING_RIGHT);
 
-    // No status: nothing at the end, the label runs to the row's 4 px right padding.
+    // No status: nothing at the end, the label runs to the row's right padding.
     let bare = drawn_row(cx);
     assert!(bare.close.is_none(), "a vertical row draws no close button");
     assert!(bare.status.is_none());
     assert!(
-        bare.label.right() >= bare.row.right() - px(5.),
+        bare.label.right() >= bare.row.right() - right_padding - px(1.),
         "the label {:?} keeps the full width of the row {:?}",
         bare.label,
         bare.row
     );
 
-    // A status: the icon sits on the second line, below the title, at the row's trailing end.
+    // A status, no directory: the icon sits on the label's line, at the row's trailing end.
     report_done(&probe, cx);
     let shown = drawn_row(cx);
     assert!(shown.close.is_none(), "a status brings no close button");
     let status = shown.status.expect("the status icon is drawn");
     assert!(
-        status.top() >= shown.label.bottom() - px(1.),
-        "the icon {status:?} must be on the line below the title {:?}",
+        (status.center().y - shown.label.center().y).abs() <= px(1.),
+        "with no directory the icon {status:?} ends the title line {:?}",
         shown.label
     );
-    assert!(status.bottom() <= shown.row.bottom());
-    assert!(status.right() <= shown.row.right());
+    assert!(status.right() <= shown.row.right() - right_padding + px(1.));
     assert!(
-        status.right() >= shown.row.right() - px(8.),
+        status.right() >= shown.row.right() - right_padding - px(1.),
         "the icon {status:?} must sit at the trailing end of the row {:?}",
         shown.row
     );
     assert!(
-        shown.label.right() >= shown.row.right() - px(5.),
-        "the status icon is on line 2, so the title keeps the whole width of line 1"
+        shown.label.right() <= status.left(),
+        "the title ends before the icon"
     );
 }
 
-/// A vertical row is two lines in 64 px: the title on the first, the working directory on the
-/// second with the status icon after it. No directory reported means no path (`US-0196`
-/// rework 2).
+/// A vertical row is two lines in 48 px (6 + 20 + 16 + 6): the title on the first, the working
+/// directory on the second with the status icon after it. With no directory there is no second
+/// line: the title is vertically centred in the row, whether or not a status is shown, and the
+/// content starts at the row's left padding (`US-0196` rework 2, rework 7).
 #[gpui::test]
 fn the_vertical_row_shows_the_title_then_the_directory_and_the_status(cx: &mut TestAppContext) {
     use gpui::px;
     use oneterm_state::TabRowLayout;
 
     let (_, probe, cx) = tab_row_window(cx, TabRowLayout::Vertical);
+    let centred = |bounds: gpui::Bounds<gpui::Pixels>, row: gpui::Bounds<gpui::Pixels>| {
+        (bounds.center().y - row.center().y).abs() <= px(1.)
+    };
 
-    // Nothing reported yet: line 2 is empty.
+    // Nothing reported yet: no second line, the title is centred in the row.
     let unknown = drawn_row(cx);
-    assert_eq!(unknown.row.size.height, px(64.), "twice the strip's 32 px");
+    assert_eq!(unknown.row.size.height, px(48.), "6 + 20 + 16 + 6");
     assert!(unknown.cwd.is_none(), "an unknown directory draws no path");
+    assert!(
+        centred(unknown.label, unknown.row),
+        "the title {:?} is centred in the row {:?}, no blank second line",
+        unknown.label,
+        unknown.row
+    );
+    assert_eq!(
+        unknown.label.left() - unknown.row.left(),
+        px(TabRowLayout::VERTICAL_ROW_PADDING_LEFT),
+        "the content starts at the left padding, clear of the grip overlay"
+    );
 
     probe.set_cwd(Some(std::path::PathBuf::from("Z:/oneterm-test/src/panel")));
     report_done(&probe, cx);
     let shown = drawn_row(cx);
     let path = shown.cwd.expect("the directory is drawn");
     let status = shown.status.expect("the status icon is drawn");
-    assert_eq!(shown.row.size.height, px(64.));
+    assert_eq!(shown.row.size.height, px(48.));
     assert!(
         path.top() >= shown.label.bottom() - px(1.),
         "the path {path:?} is below the title {:?}",
         shown.label
     );
+    // Line 1 starts 6 px under the row's top (its text is no taller than the 20 px line) and
+    // line 2 ends 6 px above its bottom.
+    let first_line_top = shown.row.top() + px(TabRowLayout::VERTICAL_ROW_PADDING);
+    let first_line_centre = first_line_top + px(TabRowLayout::VERTICAL_FIRST_LINE_HEIGHT / 2.);
+    assert!((shown.label.center().y - first_line_centre).abs() <= px(1.));
+    let second_line_centre = shown.row.bottom()
+        - px(TabRowLayout::VERTICAL_ROW_PADDING)
+        - px(TabRowLayout::VERTICAL_SECOND_LINE_HEIGHT / 2.);
+    assert!((path.center().y - second_line_centre).abs() <= px(1.));
     assert_eq!(
         path.left(),
         shown.label.left(),
@@ -1437,17 +1465,24 @@ fn the_vertical_row_shows_the_title_then_the_directory_and_the_status(cx: &mut T
     );
     assert!(path.right() <= status.left(), "the icon follows the path");
     assert!(
-        status.right() >= shown.row.right() - px(8.),
+        status.right() >= shown.row.right() - px(TabRowLayout::VERTICAL_ROW_PADDING_RIGHT) - px(1.),
         "the icon sits at the end of line 2"
     );
 
-    // No directory, still a status: the icon stays at the right end, on line 2.
+    // No directory, still a status: the icon ends the one centred line, not a blank line 2.
     probe.set_cwd(None);
     let bare = drawn_row(cx);
     assert!(bare.cwd.is_none());
     let status = bare.status.expect("the status icon is drawn");
-    assert!(status.right() >= bare.row.right() - px(8.));
-    assert!(status.top() >= bare.label.bottom() - px(1.));
+    assert!(centred(bare.label, bare.row), "the title stays centred");
+    assert!(
+        (status.center().y - bare.label.center().y).abs() <= px(1.),
+        "the icon {status:?} is on the title's line {:?}",
+        bare.label
+    );
+    assert!(
+        status.right() >= bare.row.right() - px(TabRowLayout::VERTICAL_ROW_PADDING_RIGHT) - px(1.)
+    );
 }
 
 /// A long directory is cut from its start, so the end (the name that matters) stays; the strip

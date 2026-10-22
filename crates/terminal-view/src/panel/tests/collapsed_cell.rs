@@ -191,6 +191,8 @@ fn a_collapsed_cell_is_the_shell_icon_on_the_status_fill(cx: &mut TestAppContext
         .debug_bounds(TAB_SHELL_ICON_SELECTOR)
         .expect("the shell icon is drawn");
     assert_eq!((row.size.width, row.size.height), (px(44.), px(44.)));
+    // Owner rework 7: 16 px (`size_4`), not the 14 px of `small`.
+    assert_eq!((icon.size.width, icon.size.height), (px(16.), px(16.)));
     assert!(
         (icon.center().x - row.center().x).abs() <= px(1.)
             && (icon.center().y - row.center().y).abs() <= px(1.),
@@ -219,9 +221,6 @@ fn a_collapsed_cell_is_the_shell_icon_on_the_status_fill(cx: &mut TestAppContext
         ProgramState::Error,
     ] {
         report(&probe, Some(state), cx);
-        let reported = cx.update(|_, cx| TabRowLayout::take_cell_fill(cx));
-        let expected = cx.update(|_, cx| collapsed_fill(state, cx.theme()).map(|(fill, _)| fill));
-        assert_eq!(reported, expected, "{state:?}: the rail is told the fill");
         let fill = cx
             .debug_bounds(TAB_FILL_SELECTOR)
             .unwrap_or_else(|| panic!("{state:?}: the cell is filled"));
@@ -234,11 +233,6 @@ fn a_collapsed_cell_is_the_shell_icon_on_the_status_fill(cx: &mut TestAppContext
     assert!(
         cx.debug_bounds(TAB_FILL_SELECTOR).is_none(),
         "a cleared state removes the fill"
-    );
-    assert_eq!(
-        cx.update(|_, cx| TabRowLayout::take_cell_fill(cx)),
-        None,
-        "an idle cell reports no fill to the rail"
     );
 }
 

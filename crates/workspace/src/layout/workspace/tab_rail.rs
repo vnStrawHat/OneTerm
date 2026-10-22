@@ -68,6 +68,9 @@ pub(super) const ROW_SELECTOR: &str = "oneterm-tab-rail-row";
 pub(super) const HEADER_SELECTOR: &str = "oneterm-tab-rail-header";
 pub(super) const GRIP_SELECTOR: &str = "oneterm-tab-rail-grip";
 pub(super) const GRIP_GLYPH_SELECTOR: &str = "oneterm-tab-rail-grip-glyph";
+pub(super) const HEADER_LABEL_SELECTOR: &str = "oneterm-tab-rail-header-label";
+/// The selected row's accent pill (the row index follows).
+pub(super) const PILL_SELECTOR: &str = "oneterm-tab-rail-pill";
 /// The hover fill behind an unselected row (the row index follows).
 pub(super) const HOVER_SELECTOR: &str = "oneterm-tab-rail-hover";
 pub(super) const EMPTY_SELECTOR: &str = "oneterm-tab-rail-empty";
@@ -77,30 +80,40 @@ const HANDLE_WIDTH: Pixels = px(4.);
 /// The cursor over the handle, and over the whole window while it is dragged.
 const RESIZE_CURSOR: CursorStyle = CursorStyle::ResizeColumn;
 
-/// Height of the header (the `+`): the strip's height, expanded and collapsed.
+/// Height of the header (the label and the `+`): the strip's height, expanded and collapsed.
 const HEADER_HEIGHT: Pixels = px(32.);
-/// Two lines (`TerminalPanel::title`'s vertical row): the title, then the directory and status.
+/// The header's label, which sits where the rows' titles do.
+const HEADER_LABEL: &str = "Terminals";
+/// Two lines (`TerminalPanel::title`'s vertical row): the title, then the directory and status;
+/// one centred line when the tab has no directory.
 pub(super) const ROW_HEIGHT: Pixels = px(TabRowLayout::VERTICAL_ROW_HEIGHT);
 /// A cell of the collapsed rail: a square as wide as the strip (the shell icon needs no second
 /// line).
 pub(super) const COLLAPSED_ROW_HEIGHT: Pixels = px(VerticalTabs::COLLAPSED_WIDTH as f32);
-/// The reorder grip: the strip tab's leading padding.
-const GRIP_WIDTH: Pixels = px(12.);
-/// The grip glyph (`Icon::xsmall`).
-const GRIP_GLYPH_SIZE: f32 = 12.;
+/// The reorder grip: a strip on the row's left edge that is drawn over the row and takes no
+/// room from it, so the title never starts under it.
+const GRIP_WIDTH: Pixels = px(8.);
+/// How far the glyph's box (`Icon::xsmall`, 12 px) starts left of the grip's edge: the six dots
+/// of the glyph occupy the middle of their box, so this puts them in the grip's 0..6 px.
+const GRIP_GLYPH_SHIFT: f32 = 2.;
 const ACCENT_BAR_WIDTH: Pixels = px(TabRowLayout::ACCENT_BAR_WIDTH);
+const ACCENT_BAR_INSET: Pixels = px(TabRowLayout::ACCENT_BAR_INSET);
+/// How much of the selected fill a hovered row gets (as alpha over the rail): half of it lies
+/// between the rail and the selected row whatever the theme, so hover never outranks selected.
+const HOVER_FILL_STRENGTH: f32 = 0.5;
 /// What the drag preview occupies, reported to base so a drop placeholder knows where to fly
 /// in from. The chip is content-sized between a floor and a ceiling; this is a typical size.
 const DRAG_PREVIEW_SIZE: Size<Pixels> = size(px(140.), px(30.));
 
-/// The reorder grip's colour: `muted.foreground`, or on a collapsed cell filled with a status
-/// colour whichever of `background` and `foreground` reads better on that fill (the pick the
-/// cell's own glyph makes).
-fn grip_glyph_color(cell_fill: Option<gpui::Hsla>, theme: &gpui_component::Theme) -> gpui::Hsla {
-    match cell_fill {
-        Some(fill) => oneterm_theme::legible_on(fill, [theme.background, theme.foreground]),
-        None => theme.muted_foreground,
-    }
+/// The fills of a rail row: `(selected, hover)`. Selected is the theme's selected-list-item
+/// colour (`tab.active.background` is the terminal's own colour in the built-in themes, so a row
+/// filled with it would read as the page); hover is the list hover colour at half strength, so
+/// selected > hover > idle in every theme.
+fn row_fills(theme: &gpui_component::Theme) -> (gpui::Hsla, gpui::Hsla) {
+    (
+        theme.list_active,
+        theme.list_hover.opacity(HOVER_FILL_STRENGTH),
+    )
 }
 
 /// Whether a tab group draws the rail: the switch is on, the group is in the centre, and it
@@ -460,11 +473,12 @@ impl TabRail {
             .into_any_element()
     }
 
-    /// The header: `+` (the active panel's own title suffix: OneTerm's New Terminal menu) on its
-    /// own, right-aligned and centred in the strip. No zoom button, no `...` menu (its tab list
-    /// is the rail itself), no dock toggle (the status bar and `Ctrl+Shift+B` own it) and no
-    /// collapse button (the status bar's, just left of the clock). The same 32 px line in both
-    /// states, so the rows below start at the same place.
+    /// The header: the label "Terminals" on the left and `+` (the active panel's own title
+    /// suffix: OneTerm's New Terminal menu) on the right, with no rule under it; the collapsed
+    /// strip has the `+` alone, centred. No zoom button, no `...` menu (its tab list is the rail
+    /// itself), no dock toggle (the status bar and `Ctrl+Shift+B` own it) and no collapse button
+    /// (the status bar's, just left of the clock). The same 32 px line in both states, so the
+    /// rows below start at the same place.
     fn header(
         &self,
         group: &TabGroupContext,
@@ -472,21 +486,39 @@ impl TabRail {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        let border = cx.theme().border;
-        let suffix = group
-            .active_panel()
-            .and_then(PanelHandle::of)
-            .and_then(|handle| handle.title_suffix(window, cx));
+        let muted = cx.theme().muted_foreground;
+        let layout = if collapsed {
+            TabRowLayout::Collapsed
+        } else {
+            TabRowLayout::Vertical
+        };
+        // The `+` is built for the rail's layout (a larger target than the strip's).
+        let suffix = {
+            let mut scope = layout.scope(cx);
+            group
+                .active_panel()
+                .and_then(PanelHandle::of)
+                .and_then(|handle| handle.title_suffix(window, &mut scope))
+        };
         h_flex()
             .debug_selector(|| HEADER_SELECTOR.to_string())
             .h(HEADER_HEIGHT)
             .flex_shrink_0()
             .items_center()
-            .when(collapsed, |this| this.justify_center())
-            .when(!collapsed, |this| this.justify_end())
-            .px_2()
-            .border_b_1()
-            .border_color(border)
+            .when(collapsed, |this| this.justify_center().px_2())
+            .when(!collapsed, |this| {
+                this.justify_between()
+                    .pl(px(TabRowLayout::VERTICAL_ROW_PADDING_LEFT))
+                    .pr_2()
+                    .child(
+                        div()
+                            .debug_selector(|| HEADER_LABEL_SELECTOR.to_string())
+                            .text_xs()
+                            .text_color(muted)
+                            .whitespace_nowrap()
+                            .child(HEADER_LABEL),
+                    )
+            })
             .children(suffix)
             .into_any_element()
     }
@@ -537,84 +569,64 @@ impl TabRail {
             }
         };
 
-        // A collapsed cell reports the status colour it filled itself with; the grip glyph is
-        // drawn over it.
-        let cell_fill = if collapsed {
-            TabRowLayout::take_cell_fill(cx)
-        } else {
-            None
-        };
         let droppable = group.is_droppable();
         let drag = group
             .is_draggable()
             .then(|| group.drag_panel(ix, cx))
             .flatten();
         let theme = cx.theme();
-        let (foreground, active_foreground, active_background) = (
-            theme.tab_foreground,
-            theme.tab_active_foreground,
-            theme.tokens.tab_active,
-        );
-        let (divider, hover_fill) = (theme.border, theme.list_hover);
-        let grip_color = grip_glyph_color(cell_fill, theme);
+        let (foreground, active_foreground) = (theme.tab_foreground, theme.tab_active_foreground);
+        let (selected_fill, hover_fill) = row_fills(theme);
+        let grip_color = theme.muted_foreground;
         // Not `table_active_border`: OneTerm blanks that for the data tables after every theme
-        // change, which made the bar vanish.
+        // change, which made the pill vanish.
         let accent = oneterm_theme::selection_accent(cx);
         let hover_group = SharedString::from(format!("tab-rail-row-{ix}"));
-
-        let grip = div()
-            .id(("tab-rail-grip", ix))
-            .debug_selector(move || format!("{GRIP_SELECTOR}-{ix}"))
-            .w(GRIP_WIDTH)
-            .h_full()
-            .flex_shrink_0()
-            .flex()
-            .items_start()
-            .justify_center()
-            // Collapsed, the icon is centred in the whole cell, so the grip overlays its left
-            // edge (painted after the content, below, so it still takes the press there).
-            .when(collapsed, |this| this.absolute().left_0().top_0())
-            .when_some(drag, |this, drag| {
-                this.cursor_grab()
-                    .child(
-                        div()
-                            .id(("tab-rail-grip-glyph", ix))
-                            .debug_selector(move || format!("{GRIP_GLYPH_SELECTOR}-{ix}"))
-                            // The glyph is centred on the title line of an expanded row, and on
-                            // the whole collapsed cell.
-                            .mt(px(if collapsed {
-                                (f32::from(COLLAPSED_ROW_HEIGHT) - GRIP_GLYPH_SIZE) / 2.
-                            } else {
-                                TabRowLayout::vertical_first_line_centre() - GRIP_GLYPH_SIZE / 2.
-                            }))
-                            .opacity(0.)
-                            .group_hover(hover_group.clone(), |style| style.opacity(1.))
-                            .child(
-                                Icon::new(AppIcon::GripVertical)
-                                    .xsmall()
-                                    .text_color(grip_color),
-                            ),
-                    )
-                    .on_drag(drag, {
-                        let panel = panel.clone();
-                        move |drag, offset, _, cx| {
-                            cx.stop_propagation();
-                            drag.set_drag_offset(offset);
-                            drag.set_preview_size(DRAG_PREVIEW_SIZE);
-                            cx.new(|_| RailDragPreview {
-                                panel: panel.clone(),
-                            })
-                        }
-                    })
-            });
-
-        // Expanded, the grip is the row's leading column; collapsed it overlays the cell, so it
-        // comes after the title to be hit first.
-        let (lead, trail) = if collapsed {
-            (None, Some(grip))
-        } else {
-            (Some(grip), None)
+        let reorder = {
+            let panel = panel.clone();
+            move |drag: &DragPanel, offset, _: &mut Window, cx: &mut App| {
+                cx.stop_propagation();
+                drag.set_drag_offset(offset);
+                drag.set_preview_size(DRAG_PREVIEW_SIZE);
+                cx.new(|_| RailDragPreview {
+                    panel: panel.clone(),
+                })
+            }
         };
+
+        // An expanded row's reorder grip: a strip over the row's left edge, drawn after the
+        // title so it takes the press there, reserving no room (a collapsed cell has none: the
+        // whole cell outside its icon is the handle).
+        let grip = (!collapsed).then(|| {
+            div()
+                .id(("tab-rail-grip", ix))
+                .debug_selector(move || format!("{GRIP_SELECTOR}-{ix}"))
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(GRIP_WIDTH)
+                .flex()
+                .items_center()
+                .when_some(drag.clone(), |this, drag| {
+                    this.cursor_grab()
+                        .child(
+                            div()
+                                .id(("tab-rail-grip-glyph", ix))
+                                .debug_selector(move || format!("{GRIP_GLYPH_SELECTOR}-{ix}"))
+                                .flex_shrink_0()
+                                .ml(-px(GRIP_GLYPH_SHIFT))
+                                .opacity(0.)
+                                .group_hover(hover_group.clone(), |style| style.opacity(1.))
+                                .child(
+                                    Icon::new(AppIcon::GripVertical)
+                                        .xsmall()
+                                        .text_color(grip_color),
+                                ),
+                        )
+                        .on_drag(drag, reorder.clone())
+                })
+        });
 
         Tab::new(("tab-rail-row", ix))
             .debug_selector(move || format!("{ROW_SELECTOR}-{ix}"))
@@ -631,7 +643,7 @@ impl TabRail {
                 }
             })
             .styles(|styles| {
-                styles.selected(|style| style.text_color(active_foreground).bg(active_background))
+                styles.selected(|style| style.text_color(active_foreground).bg(selected_fill))
             })
             .relative()
             .w_full()
@@ -642,13 +654,15 @@ impl TabRail {
             })
             .flex_shrink_0()
             .justify_start()
-            // A 1 px divider inside the row's 64 px (sizes are border-box).
-            .border_b(px(TabRowLayout::VERTICAL_ROW_DIVIDER))
-            .border_color(divider)
             .text_sm()
             .text_color(foreground)
             .group(hover_group.clone())
             .hover(move |style| style.text_color(active_foreground))
+            // A collapsed cell has no grip: the cell is what is dragged. Its icon, the cell's
+            // content, starts the tab drag first and wins the press where it is.
+            .when_some(drag.filter(|_| collapsed), |this, drag| {
+                this.cursor_grab().on_drag(drag, reorder)
+            })
             .when(droppable, |this| {
                 this.drag_over::<DragPanel>({
                     let node = group.node();
@@ -659,9 +673,7 @@ impl TabRail {
                         let line = cx.theme().drag_border;
                         match drop_edge(from, ix) {
                             DropEdge::Nowhere => this,
-                            // The line replaces the row's own divider on that edge; keeping
-                            // the bottom one would recolour it as a second drop line.
-                            DropEdge::Above => this.border_t_2().border_b_0().border_color(line),
+                            DropEdge::Above => this.border_t_2().border_color(line),
                             DropEdge::Below => this.border_b_2().border_color(line),
                         }
                     }
@@ -673,21 +685,25 @@ impl TabRail {
                     }
                 })
             })
+            // The accent: a rounded pill inset from the row's top and bottom, not a bar the
+            // row's height.
             .when(selected, |this| {
                 this.child(
                     div()
+                        .debug_selector(move || format!("{PILL_SELECTOR}-{ix}"))
                         .absolute()
                         .left_0()
-                        .top_0()
-                        .bottom_0()
+                        .top(ACCENT_BAR_INSET)
+                        .bottom(ACCENT_BAR_INSET)
                         .w(ACCENT_BAR_WIDTH)
+                        .rounded(ACCENT_BAR_WIDTH / 2.)
                         .bg(accent),
                 )
             })
             // The whole row's hover fill, behind the content. The row's own `hover` above sets
             // only the text colour (nothing ever gave it a background), and a second `hover` on
             // one element is refused by gpui, so the fill is a child that follows the row's hover
-            // group. The selected row keeps its active fill and accent bar.
+            // group. The selected row keeps its own, stronger fill and takes none.
             .when(!selected, |this| {
                 this.child(
                     div()
@@ -700,9 +716,8 @@ impl TabRail {
                         .group_hover(hover_group, move |style| style.bg(hover_fill)),
                 )
             })
-            .children(lead)
             .child(title)
-            .children(trail)
+            .children(grip)
             .into_any_element()
     }
 }
@@ -808,22 +823,65 @@ mod tests {
         }
     }
 
-    /// The grip glyph stays `muted.foreground` on an ordinary cell and takes the better of
-    /// `background` and `foreground` on a status-filled one.
-    #[gpui::test]
-    fn the_grip_glyph_reads_on_a_filled_cell(cx: &mut gpui::TestAppContext) {
-        use gpui_component::ActiveTheme as _;
+    /// WCAG contrast of two opaque colours, to put the three fills of a rail row in order.
+    fn contrast(a: gpui::Hsla, b: gpui::Hsla) -> f32 {
+        fn luminance(color: gpui::Hsla) -> f32 {
+            let rgba = gpui::Rgba::from(color);
+            let channel = |c: f32| {
+                if c <= 0.03928 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(rgba.r) + 0.7152 * channel(rgba.g) + 0.0722 * channel(rgba.b)
+        }
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
 
-        cx.update(gpui_component::init);
+    /// Owner rework 7: selected > hover > idle in the dark and the light theme. The selected
+    /// fill must stand out from the rail and from the terminal (`tab.active.background` is the
+    /// terminal's own colour, which is why the rail does not use it); a hovered row, half of
+    /// that fill over the rail, sits between the rail and the selected row, never beyond it.
+    #[gpui::test]
+    fn selected_outranks_hover_outranks_idle_in_both_zed_themes(cx: &mut gpui::TestAppContext) {
+        use gpui_component::{ActiveTheme as _, Theme, ThemeRegistry};
+
         cx.update(|cx| {
-            let mut theme = cx.theme().clone();
-            theme.background = gpui::hsla(0., 0., 0.05, 1.);
-            theme.foreground = gpui::hsla(0., 0., 0.95, 1.);
-            assert_eq!(grip_glyph_color(None, &theme), theme.muted_foreground);
-            let dark = gpui::hsla(0.6, 0.6, 0.15, 1.);
-            let light = gpui::hsla(0.1, 0.5, 0.85, 1.);
-            assert_eq!(grip_glyph_color(Some(dark), &theme), theme.foreground);
-            assert_eq!(grip_glyph_color(Some(light), &theme), theme.background);
+            gpui_component::init(cx);
+            let config = cx.new(|_| UiConfig {
+                persist_blocked: true,
+                ..UiConfig::default()
+            });
+            cx.set_global(oneterm_settings::ui_config::UiConfigGlobal(config));
+            oneterm_theme::init(cx);
+            for name in ["Zed One Dark", "Zed One Light"] {
+                let theme_config = ThemeRegistry::global(cx)
+                    .themes()
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("{name} is not registered"));
+                Theme::global_mut(cx).apply_config(&theme_config);
+                oneterm_theme::apply_list_style_override(cx);
+
+                let theme = cx.theme();
+                let (selected, hover) = row_fills(theme);
+                let (rail, terminal) = (*theme.tokens.tab_bar, theme.background);
+                assert_eq!(selected, theme.list_active, "{name}");
+                assert_eq!(hover, theme.list_hover.opacity(0.5), "{name}");
+                let hovered = rail.blend(hover);
+                let (selected_vs_rail, hover_vs_rail) =
+                    (contrast(selected, rail), contrast(hovered, rail));
+                assert!(
+                    selected_vs_rail > hover_vs_rail && hover_vs_rail > 1.0,
+                    "{name}: selected {selected_vs_rail:.3} > hover {hover_vs_rail:.3} > idle 1.0"
+                );
+                assert!(
+                    contrast(selected, terminal) > 1.05,
+                    "{name}: the selected row reads as a row, not as the terminal"
+                );
+            }
         });
     }
 
