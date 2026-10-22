@@ -236,3 +236,57 @@ Screenshots `uiv198d-*` in the scratchpad `uiv198-shots\`.
 None found in this walk. (The 4 px thumb drag defect D4 of re-walk 2 is gone with the scrollbar.) Not walked: the hover-to-reveal of an active cell for tab counts beyond 40, status badges (no live shell).
 
 Verdict: yes for everything walkable.
+
+## Advisor code review (rework 6)
+
+Reviewed: coder head `996d5a11` (three commits on main `46ad8207`: packet, terminal-view + state + workspace, theme + script), on branch `verify/in-0055-rework6` in the coder's worktree, 2026-10-22. Scope: the collapsed cell shows the shell icon instead of the position number and the OSC 7501 state as its background instead of a badge.
+
+### Verdict
+
+**PASS** (with two Low findings in the contrast script's exemption mechanism, pinned by failing tests, and four notes). No product-code defect found; nothing blocks merge.
+
+### Gate re-run (one crate per command, `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`)
+
+| Check | Result |
+|---|---|
+| `cargo clippy -p oneterm-theme -p oneterm-terminal-view -p oneterm-workspace -p oneterm-state --all-targets -- -D warnings` | clean |
+| `cargo test -p oneterm-theme` | 7 passed |
+| `cargo test -p oneterm-state` | 77 passed |
+| `cargo test -p oneterm-terminal-view` | 423 passed, 3 ignored (census) |
+| `cargo test -p oneterm-workspace` | 112 passed, 3 ignored (census) |
+| `python scripts/check-theme-contrast.py` | exit 0, prints the five `KNOWN` rows |
+| `python scripts/check-theme-contrast.py --self-test` | passed |
+| `python scripts/check-english.py`, `python scripts/check-doc-paths.py` | passed |
+
+### Attack points (the brief's list)
+
+1. **`duplicate_config` on every tab.** Every `TerminalView` the panel builds goes through `TerminalPanel::new_view` (`crates/terminal-view/src/panel/terminal_panel.rs:380-392`), the one place the field is written after `TerminalView::new` sets it `None` (`crates/terminal-view/src/terminal_view/view.rs:285`). Writers: `spawn_local_view` passes `Some(Local(shell))` (`terminal_panel.rs:346-352`) and serves `PanelSpec::DefaultShell` (startup, `--elevated-shell`), `PanelSpec::Shell` (the `+` menu, `crates/terminal-view/src/status.rs:66`) and the split paths (`crates/terminal-view/src/panel/spaces.rs:113`); `PanelSpec::Session` is built in two places only, SSH connect (`crates/session-ui/src/common.rs:491-494`, `Some(Ssh(..))`, which Connect All in Group also uses) and Duplicate (`crates/terminal-view/src/panel/duplicate.rs:220-223`, `Some`). Session restore and startup records (IN-0051) reach the same two. So the only `None` is a spawn failure (empty Space, generic glyph by design) and the test-support view. No silent-generic path found.
+2. **Program-overrides-kind rule.** `shell_icon` (`crates/terminal-view/src/panel/tab_title.rs:181-201`) reuses `program_display_name` (`tab_title.rs:121-133`), the label's own function: last component after `/` or `\`, one trailing `.exe` removed case-insensitively, then `to_ascii_lowercase`. Walked: `C:\Windows\System32\cmd.exe` -> cmd; `C:/Program Files/PowerShell/7/pwsh` and `PWSH.EXE` -> PowerShell; `powershell_ise.exe`, `pwsh-preview.exe`, `nu.exe`, `wsl.exe` -> generic; a program that leaves no name (trailing separator) falls back to the kind, exactly as the label does. `program` is a `PathBuf` and `args` is separate (`crates/core/src/config/shell.rs:70-73`), so `powershell.exe -NoLogo` cannot be a program unless a user types it into the path field, in which case the label shows that same text and `resolve_shell` fails to spawn. Icon and label agree by construction (`shell_tab_title`, `tab_title.rs:144-157`).
+3. **Which Space decides.** `tab_shell_icon` reads `tree.active_terminal()` (`tab_title.rs:78-84`), the focused Space; `set_active_space` notifies (`spaces.rs:148-162`) so a focus change between a cmd Space and a pwsh Space redraws the icon. The fill is `tab_status`, which is `None` for any split tab (`tab_title.rs:66-73`, the `IN-0049` ruling), so a split tab shows its active Space's glyph on no fill. Consistent with the packet text.
+4. **`legible_on`.** `crates/theme/src/theme.rs:134-145`: reuses the existing WCAG `luminance`/`contrast` helpers (`theme.rs:113-132`), no new maths; strict `>` so the first candidate wins a tie, as documented and tested. Runtime does not composite alpha where the script does; every `background`/`foreground`/status token in the 39 variants is opaque, so no divergence today.
+5. **Script model vs runtime rule.** Same tokens: `theme.primary/warning/success/danger` are `primary.background` etc. in the kit (`reference/gpui-kit/crates/component/src/theme/schema.rs:682-700`, `apply_color!`), and OneTerm mutates none of them at run time except `warning` (`apply_warning_legibility`, `theme.rs:206-212`), which is a no-op for every shipped theme because the script already gates `warning.background` as text at 4.5:1 on the very three surfaces `legible_warning` checks (`title_bar`, `background`, `popover`; script lines 269-273). Kit defaults: a theme that omits `success.background`/`danger.background` gets the mode's default palette (`apply_color!` else branch) = `green-500 #22c55e` / `red-500 #ef4444` light, `green-400 #4ade80` / `red-400 #f87171` dark (`default-theme.json`, `default-colors.json`), which is exactly `KIT_DEFAULTS`. `max(measure(background), measure(foreground))` equals the runtime pick when the fill has no gradient (none does). Model matches.
+6. **`KNOWN_BELOW` cannot hide new failures.** The filter is `row[3] == PICKED_GLYPH and (variant, fill) in KNOWN_BELOW` (script lines 677-679), so a sixth pair, a text row or a hierarchy inversion still fails. Two weaknesses found, F1 and F2 below.
+7. **SVGs.** Both are 24 x 24, `fill="none"`, `stroke="currentColor"`, width 2, round caps and joins, like `terminal.svg` and `grip-vertical.svg` (which are Lucide files). `cmd.svg` is a window frame + title rule + prompt; `powershell.svg` is a slanted panel + `>_`. Neither is byte- or path-identical to any kit SVG. `third-party-notices.py` reads `Cargo.lock` only, so no notice check is affected. See N1 on the PowerShell shape.
+8. **Dead code after removing the position.** `TAB_NUMBER_SELECTOR`, `COLLAPSED_BADGE_INSET` and the two number tests are gone; `RowPlace.position` is still used for `set_position` (`crates/workspace/src/layout/workspace/tab_rail.rs:600`); no `Collapsed(` or `TAB_NUMBER` left in `crates/` or `docs/` outside historical IN-0055 text. Clean.
+9. **Hover / accent / drop line / grip.** The rail's `Tab` is `gpui_base::Tab` (`tab_rail.rs:23`), which puts children directly in the row with no padding (`reference/gpui-kit/crates/base/src/tabs.rs:150-181`), so the panel's `flex_1 h_full` title spans the 44 px cell and the fill reaches the edges (43 px tall above the 1 px divider border). Paint order in the row: accent bar, hover-fill child (unselected only), then the title, so the status fill covers the hover fill and the bar's 2 px stays clear through the `left(2px)` inset; the drop line is the Tab's own `border_t_2`/`border_b_2` (`tab_rail.rs:638-645`), outside the title, so it stays visible over a filled cell. See N2 on the grip glyph.
+10. **Records.** The `US-0198` Rework 6 section, the HLD sketch, the `IN-0055.md` Q4 amendment and `docs/gui-layout.md` agree with the code (tokens, inset, no hover tint, hover card keeps its icon, five `KNOWN_BELOW` pairs with the printed ratios).
+
+### Findings
+
+| # | Severity | Where | Finding | Fix shape |
+|---|---|---|---|---|
+| F1 | Low | `scripts/check-theme-contrast.py:676-679` | A `KNOWN_BELOW` entry is only consulted for rows that are below the floor, so an entry whose pair has since been retuned (or was mistyped and never matched) is kept for ever and reported nowhere. The comment says "Delete an entry when the theme is fixed" but nothing enforces it, unlike the `#[ignore]` census. | After computing `known`, `stale = KNOWN_BELOW - {(row[1], row[4]) for row in known}`; print each and return 1 when non-empty. Pinned by `scripts/test_check_theme_contrast.py::test_a_known_pair_that_now_reads_is_a_stale_entry_and_fails_the_run` (fails today). |
+| F2 | Low | `scripts/check-theme-contrast.py:736-741` | The summary line still reads `all >= 4.5:1 (glyphs >= 3.0:1)` while five glyph rows are below 3:1 and exempt. | Append `; N known glyph rows below the floor` to the summary when `known` is non-empty. Pinned by `test_the_summary_does_not_claim_every_glyph_clears_the_floor_while_known_rows_are_below` (fails today). |
+
+The pinning tests live in `scripts/test_check_theme_contrast.py` (new; not wired into `ci-local`; run `python -m unittest scripts/test_check_theme_contrast.py`). Flip or delete them when F1/F2 are fixed.
+
+### Notes (owner decision or hand check, no code defect)
+
+- **N1 (owner).** `powershell.svg` is a slanted parallelogram with a `>_` prompt. The packet states it is "not Microsoft's logos or marks"; the shape is however the same concept as the PowerShell mark (a skewed window with a prompt). Copyright-wise it is an original stroke drawing and no notice is needed; trademark-wise it is nominative use inside a terminal client. Low risk, but the owner should accept the claim knowingly or ask for a shape that does not echo the mark (for example a plain window with `PS`).
+- **N2 (ui-verifier).** On hover, the rail's reorder grip glyph fades in over the cell's left edge in `muted.foreground` (`tab_rail.rs:574`), which is now painted over a `primary`/`warning`/`success`/`danger` fill and is held to no floor there. It may be invisible on a filled cell. Either accept (the grip still takes the press) or colour it with the same `legible_on` pick.
+- **N3 (hand check).** Default Light / Default Dark (the kit's own themes in the menu) are not gated by the script, as before; their status fills are the kit palette, so legibility there follows from `KIT_DEFAULTS` being correct, which was verified above.
+- **N4 (informational).** The script's `self_test` does not cover the new tier (no fixture asserts a `PICKED_GLYPH` row or the `KIT_DEFAULTS` injection); the ratio maths it shares is covered. A one-line fixture assertion would close that.
+
+### Still by hand (ui-verifier)
+
+The packet's open acceptance line: glyphs at 16 px light and dark, each status fill with the glyph readable, the bar on a selected filled cell, hover on a filled and an idle cell (and N2's grip glyph), the hover card still showing the status icon, the recording dot on a filled cell.
