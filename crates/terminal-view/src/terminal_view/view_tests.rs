@@ -689,13 +689,15 @@ fn a_session_that_ends_leaves_its_channel(cx: &mut TestAppContext) {
             "a peer's input no longer targets the dead Space ({ending:?})"
         );
 
-        // No automatic rejoin: a second event changes nothing, and a join by hand holds
-        // until the Space is shut down.
+        // No automatic rejoin: a second event changes nothing. Once the session is dead (a
+        // real one flips `alive` before it publishes the event) a join by hand is refused
+        // too, while the running member can still move channel.
         dead.update(cx, |view, cx| view.handle_event(ending.clone(), cx));
+        dead_probe.set_alive(false);
         dead.update(cx, |view, cx| view.join_channel(InputChannel::B, cx));
-        assert_eq!(channel_of(cx, dead.entity_id()), Some(InputChannel::B));
-        dead.update(cx, |view, cx| view.shutdown(cx));
-        assert_eq!(channel_of(cx, dead.entity_id()), None);
+        assert_eq!(channel_of(cx, dead.entity_id()), None, "{ending:?}");
+        live.update(cx, |view, cx| view.join_channel(InputChannel::B, cx));
+        assert_eq!(channel_of(cx, live.entity_id()), Some(InputChannel::B));
     }
 }
 

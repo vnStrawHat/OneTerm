@@ -123,7 +123,8 @@ Tab strip and Space badges (tab "fleet" split into three Spaces, tab "db" with o
    and Close Tab run `TerminalView::shutdown`, which calls `registry.leave(entity_id)`. A
    session that ends by itself does the same through `handle_event` (`Exited`, or `Closed`
    alone after an SSH drop), so a dead Space stops being a fan-out target at once; nothing
-   rejoins it (`US-0200`).
+   rejoins it, and joining it by hand (the menu row, "Join All Spaces In Tab") is refused
+   (`US-0200`).
 
 Out of scope on purpose: mouse reports, scroll, resize, completion navigation keys (they act
 on the origin only; accepted completion text reaches peers as `Text`), a status-bar segment,

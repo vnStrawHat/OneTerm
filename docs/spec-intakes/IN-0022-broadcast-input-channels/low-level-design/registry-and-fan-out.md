@@ -107,8 +107,9 @@ impl TerminalView {
 - [ ] Joining channel B while in A: the Space leaves A implicitly; A's other members are
   untouched.
 - [ ] A peer session has already exited (tab kept open by the "session closed" banner): since
-  `US-0200` it has left the channel and is not a peer. Only a Space joined by hand after it
-  exited can still be one; its write fails, is logged like a failed key write today, and the remaining peers still receive
+  `US-0200` it has left the channel and is not a peer, and an exited Space cannot join (the
+  join is refused). Only a session dying between the liveness check and the write can still
+  fail; the write fails, is logged like a failed key write today, and the remaining peers still receive
   the input.
 - [ ] A peer is on the alternate screen (`vim`): bytes are delivered unchanged; the user
   chose membership for that Space. Documented in `docs/terminal-split.md`.

@@ -923,6 +923,55 @@ fn an_exited_space_leaves_the_tab_chips(cx: &mut TestAppContext) {
     );
 }
 
+/// "Join All Spaces In Tab" skips a Space whose session has exited (`US-0200`) and still puts
+/// the running ones in the channel.
+#[gpui::test]
+fn joining_the_tab_skips_an_exited_space(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(InputChannelRegistry::init);
+
+    let (session_a, probe_a) = FakeTerminalSession::boxed(24, 80, "A");
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_spec(session_spec(session_a, "A"), window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+
+    let first_space = panel.read_with(cx, |panel, _| panel.tree.active());
+    panel.update_in(cx, |panel, window, cx| {
+        panel.split_active_at(first_space, SplitDir::Right, window, cx);
+    });
+    let second_space = panel.read_with(cx, |panel, _| panel.tree.active());
+    let (session_b, _) = FakeTerminalSession::boxed(24, 80, "B");
+    panel.update_in(cx, |panel, window, cx| {
+        let session = cx.new(|_| session_b);
+        let view = cx.new(|cx| TerminalView::new(session, panel.deps.clone(), window, cx));
+        panel
+            .tree
+            .fill_empty(second_space, view)
+            .expect("the new split Space must be empty");
+    });
+    cx.run_until_parked();
+
+    probe_a.set_alive(false);
+    panel.update(cx, |panel, cx| {
+        panel.join_tab_to_channel(InputChannel::C, cx)
+    });
+    let first = panel
+        .read_with(cx, |panel, _| panel.tree.leaf_terminal(first_space))
+        .expect("the first Space holds a terminal");
+    let second = panel
+        .read_with(cx, |panel, _| panel.tree.leaf_terminal(second_space))
+        .expect("the second Space holds a terminal");
+    assert_eq!(first.update(cx, |view, cx| view.channel(cx)), None);
+    assert_eq!(
+        second.update(cx, |view, cx| view.channel(cx)),
+        Some(InputChannel::C)
+    );
+}
+
 /// Output in a tab the group is not showing must not notify its view (US-0145):
 /// the tab strip reads that view, so the window tracks it, and every notify cost
 /// a whole-window frame that changed no pixel. The shown tab still notifies.

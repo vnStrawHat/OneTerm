@@ -177,7 +177,7 @@ Duplicate and Close: `Channel A`..`Channel E` (the current one marked with a `* 
 Space (`DEC-0009`), so the single-Space rows act on the right-clicked tab's **active Space**
 (the Space its directory, status icon and recording dot report, and the one the key bindings act
 on); to put another Space of a split tab in a channel, focus it first or use the tab-wide rows.
-While the active Space holds no terminal (its shell failed to spawn) the row stays, disabled, so the menu keeps its shape; a terminal whose process exited still offers the submenu. The five joins, the leave, and the close
+While the active Space holds no terminal (its shell failed to spawn) the row stays, disabled, so the menu keeps its shape; a terminal whose session exited has it disabled too. The five joins, the leave, and the close
 are also actions in Settings > Key Bindings (group "Input Channel"), shipped unbound.
 
 ### Program status icon (OSC 7501)
@@ -209,8 +209,8 @@ the chip on 2026-09-17, leaving the active-Space ring as the whole cue. The
 badge takes no focus and its clicks activate the Space like any other click in it. Both read the `InputChannelRegistry`, and every `TerminalPanel` observes it,
 so a `Close Channel` performed in one tab repaints the others. A Space whose session ends (the
 shell exits, or the SSH link drops) leaves its channel by itself, the same way "Leave Channel"
-does, so its chip and frame go and broadcasts stop targeting it; it does not rejoin, and a join
-by hand is not blocked (`US-0200`).
+does, so its chip and frame go and broadcasts stop targeting it; it does not rejoin, and an exited
+Space cannot join: its tab's "Input Channel" row is disabled and "Join All Spaces In Tab" skips it (`US-0200`).
 
 ## Status bar
 

@@ -159,11 +159,11 @@ fn the_collapsed_cells_hover_card_has_the_expanded_rows_content(cx: &mut TestApp
     assert!(title.size.width <= px(202.), "{title:?}");
 }
 
-/// A tab with no terminal (the shell failed to spawn, or its Space was emptied) has no submenu
-/// to offer (its row is shown disabled), while a tab whose process has exited still has its
-/// terminal and therefore the live submenu.
+/// A tab with no terminal (the shell failed to spawn, or its Space was emptied) or whose
+/// session has exited (`US-0200`) has no submenu to offer (its row is shown disabled); a tab
+/// with a running terminal has the live one.
 #[gpui::test]
-fn only_a_tab_without_a_terminal_loses_the_channel_submenu(cx: &mut TestAppContext) {
+fn only_a_tab_without_a_running_terminal_loses_the_channel_submenu(cx: &mut TestAppContext) {
     use oneterm_terminal::SessionEvent;
 
     cx.update(gpui_component::init);
@@ -180,13 +180,15 @@ fn only_a_tab_without_a_terminal_loses_the_channel_submenu(cx: &mut TestAppConte
     let entries = |cx: &mut VisualTestContext| panel.read_with(cx, |p, cx| p.channel_entries(cx));
     assert!(entries(cx).is_some());
 
+    // A real session clears `alive` before it publishes `Exited`; the fake needs both.
+    probe.set_alive(false);
     probe
         .emit(SessionEvent::Exited(Some(0)))
         .expect("event channel must accept the exit");
     cx.run_until_parked();
     assert!(
-        entries(cx).is_some(),
-        "an exited session is still a terminal and offers the submenu"
+        entries(cx).is_none(),
+        "an exited session cannot join a channel, so its row is disabled"
     );
 
     panel.update(cx, |panel, cx| {

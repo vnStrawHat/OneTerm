@@ -506,7 +506,8 @@ impl TerminalPanel {
         }
     }
 
-    /// Put every terminal Space of this tab in `channel`.
+    /// Put every terminal Space of this tab in `channel`; an exited Space is skipped
+    /// (`TerminalView::join_channel`).
     pub(crate) fn join_tab_to_channel(&mut self, channel: InputChannel, cx: &mut Context<Self>) {
         for view in self.tree.terminal_views() {
             view.update(cx, |view, cx| view.join_channel(channel, cx));

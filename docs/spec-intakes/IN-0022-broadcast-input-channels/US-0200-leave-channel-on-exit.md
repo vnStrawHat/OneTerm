@@ -11,7 +11,7 @@ Created: 2026-10-22
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [x] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -30,7 +30,8 @@ When a Space's session ends, its `TerminalView` leaves its input channel through
 ## Scope
 
 - [x] In scope: `SessionEvent::Exited` and `SessionEvent::Closed` in `TerminalView::handle_event` call `leave_channel`; tests; the docs that state the membership lifetime.
-- [x] Out of scope: blocking a manual join of an exited Space (see Plan, "join of a dead Space"); a restart-on-exit feature (OneTerm has none); any change to the registry, to `fan_out` or to the tab-wide rows; persistence (channels are not persisted).
+- [x] In scope (owner ruling 2026-10-22, after the advisor review): blocking a join of an exited Space: `join_channel` returns early when the session is not `alive()`, `join_tab_to_channel` skips dead Spaces through it, and the tab menu's "Input Channel" row is disabled for a dead active Space.
+- [x] Out of scope: a restart-on-exit feature (OneTerm has none); any change to the registry, to `fan_out` or to the tab-wide rows; persistence (channels are not persisted).
 
 ## Acceptance
 
@@ -38,8 +39,8 @@ When a Space's session ends, its `TerminalView` leaves its input channel through
 - [x] A local shell and an SSH session both leave: SSH reports `Exited` only when the server sends an exit status or signal, and always reports `Closed` last, so a dropped connection (EOF, channel close, disconnect, no exit status) is covered by `Closed` (test: `Closed` alone makes a member leave).
 - [x] On a two-Space tab where one Space exits: the tab chip and the registry's member list lose it, the other member keeps its chip, and input typed in the live member reaches only live members (the dead session's probe records no write).
 - [x] A lone member that exits leaves an empty channel: the tab has no chip (same as a manual leave).
-- [x] A Space that exited and is joined again by hand stays a member (no automatic rejoin and no block) until its tab closes; `shutdown` still leaves.
-- [ ] Full `pwsh scripts/ci-local.ps1` passes; `cargo build -p oneterm-app` builds.
+- [x] A Space whose session is dead cannot join a channel by hand either: `join_channel` is refused, "Join All Spaces In Tab" skips it, and the tab menu row is disabled (tests `a_session_that_ends_leaves_its_channel`, `joining_the_tab_skips_an_exited_space`, `only_a_tab_without_a_running_terminal_loses_the_channel_submenu`).
+- [x] Full `pwsh scripts/ci-local.ps1` passes; `cargo build -p oneterm-app` builds.
 
 ## Documentation
 
@@ -70,7 +71,7 @@ Changed: `IN-0022.md` (packet link, lifecycle sentence), `high-level-design.md` 
 - [x] `Exited` and `Closed` arms call `self.leave_channel(cx)`. Both, not only `Exited`: the owner's rule is the session ending; `Exited` alone would miss an SSH drop, and `Closed` alone would delay the leave on an SSH server that sends an exit status but keeps the channel open.
 - [x] Choice, rejoin: **no automatic rejoin.** Nothing restarts a session in place, so there is nothing to rejoin; a new tab is a non-member and the user joins it from the tab menu.
 - [x] Choice, persistence: nothing to do. Membership is in memory only (DEC-0009), the registry is empty at start, and sessions are not restored, so an exited member cannot be resurrected.
-- [x] Choice, join of a dead Space: **not blocked.** A manual join (or "Join All Spaces In Tab") of an exited Space still works and the Space stays a member until its tab closes, as US-0199 recorded; a broadcast to it fails as a logged warning, as before. Blocking it would turn menu rows into silent no-ops and was not asked. Follow-up for the owner if wanted.
+- [x] Choice, join of a dead Space: **blocked** (owner ruling 2026-10-22, "yes, block joining an exited terminal", on the advisor's finding 1; the first version left it open). `TerminalView::join_channel` returns when `!session.alive()` (`alive` is false after `Exited` via `record_exit` and after `Closed` via `set_alive(false)`), so "Join All Spaces In Tab" skips dead Spaces through the same guard; `channel_entries` is `None` for a dead active Space, so the tab menu shows the disabled "Input Channel" row of `US-0199`. The advisor's low notes: the `fan_out` rustdoc and the US-0199 text are updated; the loop in the view test is kept (every pass ends with all views out).
 - [x] Tests (see Verification Plan).
 
 ## Decisions
@@ -84,19 +85,19 @@ No decision record: it is a lifetime rule inside DEC-0009's model and the Plan r
 - Full gate `pwsh scripts/ci-local.ps1`; `cargo build -p oneterm-app`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
+- [x] Unit proof
 - [ ] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
 - Code: two lines in `TerminalView::handle_event` (`crates/terminal-view/src/terminal_view/view.rs`, the `Exited` and `Closed` arms).
 - Tests (both fail on the old code, pass on the new): `view_tests::a_session_that_ends_leaves_its_channel` (for `Exited` and for `Closed` alone: the member leaves, the running one stays, a non-member is a no-op, the live member's input is not written to the dead one, a second event is a no-op, a join by hand holds until `shutdown`) and `panel::tests::an_exited_space_leaves_the_tab_chips` (two-Space tab: chip `[A, B]` then `[B]` then none, driven through the fake session's event channel).
-- Gate: see the report of the dispatch (`pwsh scripts/ci-local.ps1`, `cargo build -p oneterm-app`).
-- Gap: a manual join of an already-exited Space is not blocked (Plan). Not walked on screen: the change is visible (a chip disappears when a shell exits), so `ui-verifier` is dispatched.
+- Gate: `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`): all checks passed (5115 tests passed summed over every test run in the script); `cargo build -p oneterm-app` built.
+- Rework (owner ruling, join blocked): the same tests, flipped, plus `joining_the_tab_skips_an_exited_space`. Not walked on screen: the change is visible (a chip disappears when a shell exits), so `ui-verifier` is dispatched.
 
 ## Handoff
 
