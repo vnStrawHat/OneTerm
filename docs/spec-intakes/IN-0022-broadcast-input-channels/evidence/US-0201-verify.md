@@ -141,3 +141,36 @@ liveness read, the placeholder menu, the menu-only decision and the records are 
   tab and press Enter.
 - A real SSH drop (not only a local exit): the area menu greys the rows after the
   "SSH connection closed" banner; only the fake session was used here.
+
+---
+
+# US-0201 UI verification (ui-verifier)
+
+## UI verification
+
+Verifier: ui-verifier, 2026-10-22. Binary copy of head 809106f8 (debug), private profile (scratch USERPROFILE and cwd), only driver-spawned pids stopped. Screenshots: `C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\uiv201-shots` prefix `uiv201-` (full-window shots including the ~8 px frame; driver clicks are client coordinates, x = shot x - 8). Desktop unlocked (shots not black).
+
+Environment limit: every child shell dies at start in this sandbox, so every terminal is in the ended state.
+
+| Item | Result | Shot |
+|---|---|---|
+| 1 Ended terminal menu: Duplicate Session and Split Right/Left/Up/Down greyed, no submenu arrow on Duplicate; clicking Split Right and Duplicate does nothing (menu stays open, no split) | PASS | 02-menu-dark, 03-click-splitright, 04-click-dup |
+| 1 Keyboard: Down skips disabled rows (New Terminal, then Paste, then Select All), so Enter cannot reach a disabled row | PASS | 05-down2, 06-down3 |
+| 1 Other rows unchanged: New Terminal, Copy (greyed, no selection), Paste, Select All, Clear, Log submenu, Close Terminal Tab; no Close Space with one Space | PASS | 02-menu-dark |
+| 1 Close Space shown (Ctrl+Shift+X) when the tab has 2 Spaces | PASS | 09-dead-in-2space-menu |
+| 2 Empty Space menu: New Terminal Here, four Splits enabled, Close Terminal Tab, Close Space | PASS | 08-empty-space-menu |
+| 3 Live shell: Split enabled, Duplicate submenu | NOT WALKED (no shell survives) | |
+| 4 Tab menu "Duplicate" on dead tab enabled (Input Channel disabled, as US-0200) | PASS | 10-tab-menu |
+| 5 Dark (Zed One Dark) and light (Zed One Light): disabled rows dimmed like the tab menu's disabled Input Channel / Close Others | PASS | 02-menu-dark, 11-menu-light, 12-tabmenu-light |
+
+### Defects
+
+None against the acceptance list.
+
+Observations (Info): (a) the key binding Ctrl+Shift+Right still splits a dead terminal (01-start to 07-after-split-chord); the packet scope is the menu, confirm that is intended. (b) Disabled-row text in the light theme is fairly low contrast (same token as the tab menu, so consistent).
+
+### Owner-only checks
+
+- Live shell: splits enabled and Duplicate Session submenu (In New Tab, Into Space #N, Split Right/Down).
+- A shell that exits while the menu is open (row state at open time vs. live).
+- SSH session drop (Closed without Exited) shows the same disabled rows.
