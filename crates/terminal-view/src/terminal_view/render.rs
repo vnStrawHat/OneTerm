@@ -359,15 +359,16 @@ impl Render for TerminalView {
                         ctx,
                     })
                 });
-                let (has_selection, logging) = {
+                let (has_selection, session_alive, logging) = {
                     let s = session.read(cx);
-                    (s.has_selection(), s.capabilities().logging)
+                    (s.has_selection(), s.alive(), s.capabilities().logging)
                 };
                 let menu_ctx = MenuContext {
                     session: session.clone(),
                     origin: origin.clone(),
                     focus: focus.clone(),
                     has_selection,
+                    session_alive,
                     split,
                     logging,
                 };

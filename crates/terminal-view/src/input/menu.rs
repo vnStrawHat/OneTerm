@@ -5,7 +5,7 @@
 //! taking them as data keeps the builder callable from the wrapper's
 //! `context_menu` closure without borrowing the view across the call.
 
-use gpui::{App, Entity, FocusHandle, NoAction, WeakEntity, Window};
+use gpui::{App, Entity, FocusHandle, NoAction, WeakEntity, Window, prelude::FluentBuilder as _};
 use gpui_component::{
     WindowExt as _,
     menu::{PopupMenu, PopupMenuItem},
@@ -35,6 +35,9 @@ pub(crate) struct MenuContext {
     pub focus: FocusHandle,
     /// Enables the Copy item.
     pub has_selection: bool,
+    /// `session.alive()`: once the process exited or the link closed, Duplicate Session and
+    /// the Split items are disabled (they would act on a terminal that is gone).
+    pub session_alive: bool,
     /// `None` for a terminal that is not inside a Space tree: no Duplicate
     /// submenu, no Split items, no Close Space.
     pub split: Option<MenuSplitContext>,
@@ -100,72 +103,78 @@ pub(crate) fn build_menu(
         let destinations = split.empty_destinations.clone();
         let submenu_ctx = split.ctx.clone();
         let submenu_focus = focus.clone();
-        menu = menu.submenu("Duplicate Session", window, cx, move |submenu, _, _| {
-            let mut submenu = submenu.item(duplicate_item(
-                DuplicateDestination::NewTab,
-                &submenu_ctx,
-                &submenu_focus,
-                true,
-            ));
-            for space_id in &destinations {
-                submenu = submenu.item(duplicate_item(
-                    DuplicateDestination::ExistingSpace(*space_id),
+        menu = if ctx.session_alive {
+            menu.submenu("Duplicate Session", window, cx, move |submenu, _, _| {
+                let mut submenu = submenu.item(duplicate_item(
+                    DuplicateDestination::NewTab,
                     &submenu_ctx,
                     &submenu_focus,
-                    false,
+                    true,
                 ));
-            }
-            submenu
-                .separator()
-                .item(duplicate_item(
-                    DuplicateDestination::Split(SplitDir::Right),
-                    &submenu_ctx,
-                    &submenu_focus,
-                    false,
-                ))
-                .item(duplicate_item(
-                    DuplicateDestination::Split(SplitDir::Down),
-                    &submenu_ctx,
-                    &submenu_focus,
-                    false,
-                ))
-        });
+                for space_id in &destinations {
+                    submenu = submenu.item(duplicate_item(
+                        DuplicateDestination::ExistingSpace(*space_id),
+                        &submenu_ctx,
+                        &submenu_focus,
+                        false,
+                    ));
+                }
+                submenu
+                    .separator()
+                    .item(duplicate_item(
+                        DuplicateDestination::Split(SplitDir::Right),
+                        &submenu_ctx,
+                        &submenu_focus,
+                        false,
+                    ))
+                    .item(duplicate_item(
+                        DuplicateDestination::Split(SplitDir::Down),
+                        &submenu_ctx,
+                        &submenu_focus,
+                        false,
+                    ))
+            })
+        } else {
+            menu.item(dead_duplicate_item())
+        };
         menu = split_items(
             menu.separator(),
             split.ctx.panel.clone(),
             split.ctx.space_id,
             Some(&focus),
+            !ctx.session_alive,
         );
     }
 
     menu = menu
         .separator()
-        .item(
-            edit_item(
-                "Copy",
-                Box::new(TerminalCopy),
-                ctx,
-                edit::copy_selection as edit::EditCommand,
-            )
-            .disabled(!ctx.has_selection),
-        )
+        .item(edit_item(
+            "Copy",
+            Box::new(TerminalCopy),
+            ctx,
+            edit::copy_selection as edit::EditCommand,
+            !ctx.has_selection,
+        ))
         .item(edit_item(
             "Paste",
             Box::new(TerminalPaste),
             ctx,
             edit::paste_clipboard,
+            false,
         ))
         .item(edit_item(
             "Select All",
             Box::new(TerminalSelectAll),
             ctx,
             edit::select_all,
+            false,
         ))
         .item(edit_item(
             "Clear",
             Box::new(TerminalClear),
             ctx,
             edit::clear_screen,
+            false,
         ))
         .separator();
 
@@ -176,20 +185,24 @@ pub(crate) fn build_menu(
                 submenu
                     .item(
                         PopupMenuItem::new("Start")
-                            .action(Box::new(NoAction {}))
                             .disabled(running)
-                            .on_click({
+                            .when(!running, |item| {
                                 let logging = logging.clone();
-                                move |_, window, cx| start_logging(logging.clone(), window, cx)
+                                item.action(Box::new(NoAction {}))
+                                    .on_click(move |_, window, cx| {
+                                        start_logging(logging.clone(), window, cx)
+                                    })
                             }),
                     )
                     .item(
                         PopupMenuItem::new("Stop")
-                            .action(Box::new(NoAction {}))
                             .disabled(!running)
-                            .on_click({
+                            .when(running, |item| {
                                 let logging = logging.clone();
-                                move |_, window, cx| stop_logging(logging.clone(), window, cx)
+                                item.action(Box::new(NoAction {}))
+                                    .on_click(move |_, window, cx| {
+                                        stop_logging(logging.clone(), window, cx)
+                                    })
                             }),
                     )
             })
@@ -231,6 +244,13 @@ pub(crate) fn build_menu(
     menu
 }
 
+/// The Duplicate Session row of a terminal whose session has ended: a plain disabled row, not a
+/// submenu (the shape of the tab menu's disabled "Input Channel" row). It carries no action and
+/// no handler (the rule on [`split_item`]), so it shows no shortcut hint either.
+pub(crate) fn dead_duplicate_item() -> PopupMenuItem {
+    PopupMenuItem::new("Duplicate Session").disabled(true)
+}
+
 /// One Duplicate Session destination. Only the first item carries the
 /// `DuplicateSession` action, so the shortcut hint is shown once.
 fn duplicate_item(
@@ -259,24 +279,51 @@ fn duplicate_item(
 
 /// The four "Split …" items that split `space_id` of `panel`; shared with the
 /// empty-Space placeholder menu. `focus` (the terminal's handle, when the menu
-/// belongs to a terminal Space) is re-focused after the click.
+/// belongs to a terminal Space) is re-focused after the click. `disabled` greys
+/// all four (a terminal whose session has ended).
 pub(crate) fn split_items(
     menu: PopupMenu,
     panel: WeakEntity<TerminalPanel>,
     space_id: SpaceId,
     focus: Option<&FocusHandle>,
+    disabled: bool,
 ) -> PopupMenu {
-    let item = |label: &'static str, dir: SplitDir| {
-        let panel = panel.clone();
-        let f = focus.cloned();
-        PopupMenuItem::new(label)
-            .action(match dir {
-                SplitDir::Right => Box::new(SplitRight) as Box<dyn gpui::Action>,
-                SplitDir::Left => Box::new(SplitLeft),
-                SplitDir::Up => Box::new(SplitUp),
-                SplitDir::Down => Box::new(SplitDown),
-            })
-            .on_click(move |_, window, cx| {
+    [
+        SplitDir::Right,
+        SplitDir::Left,
+        SplitDir::Up,
+        SplitDir::Down,
+    ]
+    .into_iter()
+    .fold(menu, |menu, dir| {
+        menu.item(split_item(dir, &panel, space_id, focus, disabled))
+    })
+}
+
+/// One "Split …" item.
+///
+/// A disabled menu row carries no click path: no action and no click handler. The kit's
+/// `confirm` (Enter) runs a row's handler or action without checking `disabled`, and hovering a
+/// greyed row selects it, so a disabled row that kept either would still act on hover + Enter.
+pub(crate) fn split_item(
+    dir: SplitDir,
+    panel: &WeakEntity<TerminalPanel>,
+    space_id: SpaceId,
+    focus: Option<&FocusHandle>,
+    disabled: bool,
+) -> PopupMenuItem {
+    let (label, action): (&str, Box<dyn gpui::Action>) = match dir {
+        SplitDir::Right => ("Split Right", Box::new(SplitRight)),
+        SplitDir::Left => ("Split Left", Box::new(SplitLeft)),
+        SplitDir::Up => ("Split Up", Box::new(SplitUp)),
+        SplitDir::Down => ("Split Down", Box::new(SplitDown)),
+    };
+    let panel = panel.clone();
+    let f = focus.cloned();
+    PopupMenuItem::new(label)
+        .disabled(disabled)
+        .when(!disabled, |item| {
+            item.action(action).on_click(move |_, window, cx| {
                 if let Some(panel) = panel.upgrade() {
                     panel.update(cx, |p, cx| p.split_active_at(space_id, dir, window, cx));
                 }
@@ -284,29 +331,29 @@ pub(crate) fn split_items(
                     window.focus(f, cx);
                 }
             })
-    };
-    menu.item(item("Split Right", SplitDir::Right))
-        .item(item("Split Left", SplitDir::Left))
-        .item(item("Split Up", SplitDir::Up))
-        .item(item("Split Down", SplitDir::Down))
+        })
 }
 
 /// One edit command item: the action for the shortcut hint plus a click
-/// handler that runs the command and returns focus to the terminal.
+/// handler that runs the command and returns focus to the terminal. A disabled
+/// item carries neither (see the rule on [`split_item`]).
 fn edit_item(
     label: &'static str,
     action: Box<dyn gpui::Action>,
     ctx: &MenuContext,
     command: edit::EditCommand,
+    disabled: bool,
 ) -> PopupMenuItem {
     let session = ctx.session.clone();
     let origin = ctx.origin.clone();
     let f = ctx.focus.clone();
     PopupMenuItem::new(label)
-        .action(action)
-        .on_click(move |_, window, cx| {
-            command(&session, &origin, window, cx);
-            window.focus(&f, cx);
+        .disabled(disabled)
+        .when(!disabled, |item| {
+            item.action(action).on_click(move |_, window, cx| {
+                command(&session, &origin, window, cx);
+                window.focus(&f, cx);
+            })
         })
 }
 

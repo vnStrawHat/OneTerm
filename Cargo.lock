@@ -2656,6 +2656,7 @@ dependencies = [
  "chrono",
  "data-url",
  "futures",
+ "gpui-fast",
  "gpui-pre",
  "gpui-pre-macros",
  "gpui-pre-sum-tree",
@@ -2696,6 +2697,7 @@ dependencies = [
  "enum-iterator",
  "gpui-base",
  "gpui-component-macros",
+ "gpui-fast",
  "gpui-kit-assets",
  "gpui-pre",
  "gpui-pre-macros",
@@ -2738,6 +2740,87 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c0c9398aaf99e595d450e38eb44ff0c500df8c332b4783d5b72022e69525359"
 dependencies = [
  "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
+name = "gpui-fast"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f539554aee0e994d84014d99e85f3923db613a62a94f248a6559e628bbb0b0be"
+dependencies = [
+ "accesskit",
+ "anyhow",
+ "async-channel",
+ "async-task",
+ "backtrace",
+ "bitflags 2.13.2",
+ "chrono",
+ "ctor",
+ "derive_more",
+ "embed-resource",
+ "etagere",
+ "futures",
+ "futures-concurrency",
+ "getrandom 0.3.4",
+ "gpui-fast-macros",
+ "gpui-pre-collections",
+ "gpui-pre-http-client",
+ "gpui-pre-refineable",
+ "gpui-pre-scheduler",
+ "gpui-pre-shared-string",
+ "gpui-pre-sum-tree",
+ "gpui-pre-util",
+ "heapless",
+ "image",
+ "inventory",
+ "itertools 0.14.0",
+ "libc",
+ "log",
+ "lyon",
+ "num_cpus",
+ "objc2-core-foundation",
+ "objc2-core-video",
+ "parking",
+ "parking_lot",
+ "pin-project",
+ "pollster 0.4.0",
+ "postage",
+ "profiling",
+ "proptest",
+ "rand 0.9.4",
+ "raw-window-handle",
+ "regex",
+ "resvg 0.46.0",
+ "schemars",
+ "seahash",
+ "serde",
+ "serde_json",
+ "slotmap",
+ "smallvec",
+ "spin 0.10.1",
+ "strum",
+ "taffy 0.14.0",
+ "thiserror 2.0.20",
+ "ttf-parser",
+ "url",
+ "usvg 0.46.0",
+ "uuid",
+ "waker-fn",
+ "web-time",
+ "windows 0.62.2",
+ "zed-scap",
+]
+
+[[package]]
+name = "gpui-fast-macros"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce9b7a528e074c62bf71f05d886d6c8db88d567de2ccd8ab3d228ea2a6f6711"
+dependencies = [
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
@@ -2815,7 +2898,7 @@ dependencies = [
  "smallvec",
  "spin 0.10.1",
  "strum",
- "taffy",
+ "taffy 0.13.0",
  "thiserror 2.0.20",
  "ttf-parser",
  "url",
@@ -7966,6 +8049,18 @@ name = "taffy"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c034e05f6ee85a12daa63863c2245797715075c70649947aa0da54f3f2ab1d0f"
+dependencies = [
+ "arrayvec",
+ "serde",
+ "slotmap",
+ "smallvec",
+]
+
+[[package]]
+name = "taffy"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "639627c87f43b9181c811f40a6296409e093a17bc761214cba3c15df74f86b99"
 dependencies = [
  "arrayvec",
  "serde",

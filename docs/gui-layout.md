@@ -177,7 +177,7 @@ Duplicate and Close: `Channel A`..`Channel E` (the current one marked with a `* 
 Space (`DEC-0009`), so the single-Space rows act on the right-clicked tab's **active Space**
 (the Space its directory, status icon and recording dot report, and the one the key bindings act
 on); to put another Space of a split tab in a channel, focus it first or use the tab-wide rows.
-While the active Space holds no terminal (its shell failed to spawn) the row stays, disabled, so the menu keeps its shape; a terminal whose session exited has it disabled too. The five joins, the leave, and the close
+While the active Space holds no terminal (its shell failed to spawn) the row stays, disabled, so the menu keeps its shape; a terminal whose session exited has it disabled too (and its own right-click menu shows Split and Duplicate Session disabled, `US-0201`). The five joins, the leave, and the close
 are also actions in Settings > Key Bindings (group "Input Channel"), shipped unbound.
 
 ### Program status icon (OSC 7501)
