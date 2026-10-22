@@ -12,5 +12,5 @@ pub mod theme;
 pub use icon::{AppIcon, UiAssets};
 pub use theme::{
     apply_list_style_override, apply_warning_legibility, brand_accent, init, legible_on,
-    selection_accent,
+    selected_row_secondary, selection_accent,
 };

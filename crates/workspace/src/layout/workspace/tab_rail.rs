@@ -27,7 +27,7 @@ use gpui_component::{
     h_flex,
 };
 use oneterm_settings::{UiConfig, VerticalTabs};
-use oneterm_state::{TabRowLayout, panel_names};
+use oneterm_state::{TabMenuOpen, TabRowLayout, panel_names};
 use oneterm_theme::AppIcon;
 
 /// The narrowest and widest a rail may be, and the share of its own tab group's width it may
@@ -69,6 +69,8 @@ pub(super) const HEADER_SELECTOR: &str = "oneterm-tab-rail-header";
 pub(super) const GRIP_SELECTOR: &str = "oneterm-tab-rail-grip";
 pub(super) const GRIP_GLYPH_SELECTOR: &str = "oneterm-tab-rail-grip-glyph";
 pub(super) const HEADER_LABEL_SELECTOR: &str = "oneterm-tab-rail-header-label";
+/// The 1 px rule under the header while the list is scrolled.
+pub(super) const HEADER_RULE_SELECTOR: &str = "oneterm-tab-rail-header-rule";
 /// The selected row's accent pill (the row index follows).
 pub(super) const PILL_SELECTOR: &str = "oneterm-tab-rail-pill";
 /// The hover fill behind an unselected row (the row index follows).
@@ -98,26 +100,92 @@ const GRIP_WIDTH: Pixels = px(8.);
 const GRIP_GLYPH_SHIFT: f32 = 2.;
 const ACCENT_BAR_WIDTH: Pixels = px(TabRowLayout::ACCENT_BAR_WIDTH);
 const ACCENT_BAR_INSET: Pixels = px(TabRowLayout::ACCENT_BAR_INSET);
-/// How much of the selected fill a hovered row gets (as alpha over the rail): half of it lies
-/// between the rail and the selected row whatever the theme, so hover never outranks selected.
-const HOVER_FILL_STRENGTH: f32 = 0.5;
+/// How hard the selected row's fill is: the theme's `foreground` at this alpha over the rail.
+const SELECTED_FILL_STRENGTH: f32 = 0.10;
+/// A hovered row's fill: the same colour at half that. No stronger: `muted.foreground`, the
+/// directory line, is only about 5:1 on the rail in Aurora Light, macOS Classic Light and
+/// Solarized Dark, and a hover fill above 5 % drops it under the 4.5:1 floor there
+/// (`scripts/check-theme-contrast.py`).
+const HOVER_FILL_STRENGTH: f32 = 0.05;
+/// How far a hovered title has moved from the idle title colour (`tab.foreground`) towards the
+/// selected one (`tab.active.foreground`): halfway, so it reads one step dimmer than selected.
+const HOVER_TEXT_SHARE: f32 = 0.5;
 /// What the drag preview occupies, reported to base so a drop placeholder knows where to fly
 /// in from. The chip is content-sized between a floor and a ceiling; this is a typical size.
 const DRAG_PREVIEW_SIZE: Size<Pixels> = size(px(140.), px(30.));
 
-/// The fills of a rail row: `(selected, hover)`. Selected is the list hover colour, which is
-/// what OneTerm draws a selected list item in everywhere (the session tree, the SFTP rows;
-/// the owner's choice; `Theme::list_active` is the kit's token for the same thing, clamped to
-/// 0.2 alpha in the kit's own `tokens`, which the override did not reach before `BUG-0088`, so
-/// the rail reads the colour it means directly).
-/// `tab.active.background` is the terminal's own colour in the built-in themes, so a row filled
-/// with it would read as the page. Hover is the same colour at half strength, so
-/// selected > hover > idle in every theme.
-fn row_fills(theme: &gpui_component::Theme) -> (gpui::Hsla, gpui::Hsla) {
-    (
-        theme.list_hover,
-        theme.list_hover.opacity(HOVER_FILL_STRENGTH),
-    )
+/// What a rail row can look like. A row whose context menu is open looks hovered: the menu's
+/// overlay takes the pointer, so without this it would lose its highlight when it opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowState {
+    Idle,
+    Hover,
+    Selected,
+}
+
+impl RowState {
+    /// How a row looks when the pointer is elsewhere: the selected row is selected whatever else
+    /// is true of it, an unselected one with its menu open looks hovered.
+    fn resting(selected: bool, menu_open: bool) -> Self {
+        match (selected, menu_open) {
+            (true, _) => Self::Selected,
+            (false, true) => Self::Hover,
+            (false, false) => Self::Idle,
+        }
+    }
+}
+
+/// The fill and the text colours of a row in one state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RowPaint {
+    fill: Option<gpui::Hsla>,
+    /// The title.
+    text: gpui::Hsla,
+    /// The secondary text: the reorder grip (the directory line is the panel's own).
+    secondary: gpui::Hsla,
+}
+
+/// How a rail row is painted in `state`, from the theme's tokens only.
+///
+/// The fills are the theme's `foreground` over the rail (`tab_bar.background`): the selected row
+/// at 10 %, a hovered one at 5 %, an idle one none, so idle < hover < selected in every theme.
+/// They were `list_hover` (selected) and half of it (hover) until owner rework 8: several
+/// themes set `list.hover.background` barely off the list background (Aurora Light and Gruvbox
+/// Light draw it exactly as the rail), which left the three steps 5 to 6 levels apart in Zed One
+/// Light. `tab.active.background` is the terminal's own colour in the built-in themes, so a row
+/// filled with it would read as the page.
+///
+/// Titles: idle `tab.foreground`, selected `tab.active.foreground`, hover halfway between them,
+/// one step dimmer than selected. Secondary text is `muted.foreground`, except on the selected
+/// fill, which it cannot always read on ([`oneterm_theme::selected_row_secondary`]).
+fn row_paint(theme: &gpui_component::Theme, state: RowState) -> RowPaint {
+    let muted = theme.muted_foreground;
+    match state {
+        RowState::Idle => RowPaint {
+            fill: None,
+            text: theme.tab_foreground,
+            secondary: muted,
+        },
+        RowState::Hover => RowPaint {
+            fill: Some(theme.foreground.opacity(HOVER_FILL_STRENGTH)),
+            text: theme
+                .tab_foreground
+                .blend(theme.tab_active_foreground.opacity(HOVER_TEXT_SHARE)),
+            secondary: muted,
+        },
+        RowState::Selected => RowPaint {
+            fill: Some(theme.foreground.opacity(SELECTED_FILL_STRENGTH)),
+            text: theme.tab_active_foreground,
+            secondary: oneterm_theme::selected_row_secondary(theme),
+        },
+    }
+}
+
+/// Whether the list is scrolled away from its top, which is when the header gets a rule under
+/// it (the rows are cut flat against the header's edge otherwise). `offset_y` is the scroll
+/// handle's, which is zero at the top and negative below it.
+fn list_scrolled(offset_y: Pixels) -> bool {
+    offset_y < px(0.)
 }
 
 /// Whether a tab group draws the rail: the switch is on, the group is in the centre, and it
@@ -478,11 +546,12 @@ impl TabRail {
     }
 
     /// The header: the label "Terminals" on the left and `+` (the active panel's own title
-    /// suffix: OneTerm's New Terminal menu) on the right, with no rule under it; the collapsed
-    /// strip has the `+` alone, centred. No zoom button, no `...` menu (its tab list is the rail
-    /// itself), no dock toggle (the status bar and `Ctrl+Shift+B` own it) and no collapse button
-    /// (the status bar's, just left of the clock). The same 32 px line in both states, so the
-    /// rows below start at the same place.
+    /// suffix: OneTerm's New Terminal menu) on the right, with no rule under it until the list
+    /// is scrolled (then a 1 px `border` line, drawn over the header's bottom edge so it moves
+    /// nothing); the collapsed strip has the `+` alone, centred. No zoom button, no `...` menu
+    /// (its tab list is the rail itself), no dock toggle (the status bar and `Ctrl+Shift+B` own
+    /// it) and no collapse button (the status bar's, just left of the clock). The same 32 px
+    /// line in both states, so the rows below start at the same place.
     fn header(
         &self,
         group: &TabGroupContext,
@@ -491,6 +560,8 @@ impl TabRail {
         cx: &mut App,
     ) -> AnyElement {
         let muted = cx.theme().muted_foreground;
+        let border = cx.theme().border;
+        let scrolled = list_scrolled(self.scroll_handle.offset().y);
         let layout = if collapsed {
             TabRowLayout::Collapsed
         } else {
@@ -506,6 +577,7 @@ impl TabRail {
         };
         h_flex()
             .debug_selector(|| HEADER_SELECTOR.to_string())
+            .relative()
             .h(HEADER_HEIGHT)
             .flex_shrink_0()
             .items_center()
@@ -524,6 +596,18 @@ impl TabRail {
                     )
             })
             .children(suffix)
+            .when(scrolled, |this| {
+                this.child(
+                    div()
+                        .debug_selector(|| HEADER_RULE_SELECTOR.to_string())
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .h(px(1.))
+                        .bg(border),
+                )
+            })
             .into_any_element()
     }
 
@@ -579,9 +663,14 @@ impl TabRail {
             .then(|| group.drag_panel(ix, cx))
             .flatten();
         let theme = cx.theme();
-        let (foreground, active_foreground) = (theme.tab_foreground, theme.tab_active_foreground);
-        let (selected_fill, hover_fill) = row_fills(theme);
-        let grip_color = theme.muted_foreground;
+        let (hover, selected_paint) = (
+            row_paint(theme, RowState::Hover),
+            row_paint(theme, RowState::Selected),
+        );
+        // An unselected row whose context menu is open looks hovered until the menu goes.
+        let menu_open = TabMenuOpen::panel(cx) == Some(panel.panel_id(cx).as_u64());
+        let resting = row_paint(theme, RowState::resting(selected, menu_open));
+        let grip_color = resting.secondary;
         // Not `table_active_border`: OneTerm blanks that for the data tables after every theme
         // change, which made the pill vanish.
         let accent = oneterm_theme::selection_accent(cx);
@@ -647,7 +736,13 @@ impl TabRail {
                 }
             })
             .styles(|styles| {
-                styles.selected(|style| style.text_color(active_foreground).bg(selected_fill))
+                styles.selected(|style| {
+                    let style = style.text_color(selected_paint.text);
+                    match selected_paint.fill {
+                        Some(fill) => style.bg(fill),
+                        None => style,
+                    }
+                })
             })
             .relative()
             .w_full()
@@ -659,9 +754,12 @@ impl TabRail {
             .flex_shrink_0()
             .justify_start()
             .text_sm()
-            .text_color(foreground)
+            .text_color(resting.text)
             .group(hover_group.clone())
-            .hover(move |style| style.text_color(active_foreground))
+            // Not on the selected row: its title is already the strongest.
+            .when(!selected, |this| {
+                this.hover(move |style| style.text_color(hover.text))
+            })
             // A collapsed cell has no grip: the cell is what is dragged. Its icon, the cell's
             // content, starts the tab drag first and wins the press where it is.
             .when_some(drag.filter(|_| collapsed), |this, drag| {
@@ -717,7 +815,11 @@ impl TabRail {
                         .bottom_0()
                         .left_0()
                         .right_0()
-                        .group_hover(hover_group, move |style| style.bg(hover_fill)),
+                        .when_some(resting.fill, |this, fill| this.bg(fill))
+                        .group_hover(hover_group, move |style| match hover.fill {
+                            Some(fill) => style.bg(fill),
+                            None => style,
+                        }),
                 )
             })
             .child(title)
@@ -844,12 +946,11 @@ mod tests {
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
     }
 
-    /// Owner rework 7: selected > hover > idle in the dark and the light theme. The selected
-    /// fill must stand out from the rail and from the terminal (`tab.active.background` is the
-    /// terminal's own colour, which is why the rail does not use it); a hovered row, half of
-    /// that fill over the rail, sits between the rail and the selected row, never beyond it.
-    #[gpui::test]
-    fn selected_outranks_hover_outranks_idle_in_both_zed_themes(cx: &mut gpui::TestAppContext) {
+    /// Apply every embedded theme in turn and hand the theme, with its name, to `check`.
+    fn for_every_embedded_theme(
+        cx: &mut gpui::TestAppContext,
+        mut check: impl FnMut(&str, &gpui_component::Theme),
+    ) {
         use gpui_component::{ActiveTheme as _, Theme, ThemeRegistry};
 
         cx.update(|cx| {
@@ -860,32 +961,146 @@ mod tests {
             });
             cx.set_global(oneterm_settings::ui_config::UiConfigGlobal(config));
             oneterm_theme::init(cx);
-            for name in ["Zed One Dark", "Zed One Light"] {
-                let theme_config = ThemeRegistry::global(cx)
-                    .themes()
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| panic!("{name} is not registered"));
+            let themes: Vec<_> = ThemeRegistry::global(cx)
+                .themes()
+                .values()
+                .cloned()
+                .collect();
+            assert!(themes.len() >= 39, "the embedded themes are registered");
+            for theme_config in themes {
                 Theme::global_mut(cx).apply_config(&theme_config);
+                check(&theme_config.name, cx.theme());
+            }
+        });
+    }
 
-                let theme = cx.theme();
-                let (selected, hover) = row_fills(theme);
-                let (rail, terminal) = (*theme.tokens.tab_bar, theme.background);
-                assert_eq!(selected, theme.list_hover, "{name}");
-                assert_eq!(hover, theme.list_hover.opacity(0.5), "{name}");
-                let hovered = rail.blend(hover);
-                let (selected_vs_rail, hover_vs_rail) =
-                    (contrast(selected, rail), contrast(hovered, rail));
+    /// Owner rework 8: selected > hover > idle in every embedded theme, light and dark, and the
+    /// three steps are apart by something a person sees (the rework 7 fills were 5 to 6 levels
+    /// apart in Zed One Light and invisible in Aurora Light and Gruvbox Light).
+    #[gpui::test]
+    fn selected_outranks_hover_outranks_idle_in_every_embedded_theme(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        for_every_embedded_theme(cx, |name, theme| {
+            let rail = *theme.tokens.tab_bar;
+            let idle = row_paint(theme, RowState::Idle);
+            let hover = row_paint(theme, RowState::Hover);
+            let selected = row_paint(theme, RowState::Selected);
+            assert_eq!(idle.fill, None, "{name}: an idle row has no fill");
+            let (hover_fill, selected_fill) = (hover.fill.unwrap(), selected.fill.unwrap());
+            // The formula: foreground at 10 %, hover at 5 %.
+            assert_eq!(selected_fill, theme.foreground.opacity(0.10), "{name}");
+            assert!((hover_fill.a - 0.05).abs() < 1e-6, "{name}");
+            let (hovered, picked) = (rail.blend(hover_fill), rail.blend(selected_fill));
+            assert!(
+                contrast(hovered, rail) > 1.04 && contrast(picked, hovered) > 1.04,
+                "{name}: rail {:.3} hover {:.3} selected",
+                contrast(hovered, rail),
+                contrast(picked, hovered)
+            );
+            assert!(
+                contrast(picked, rail) > contrast(hovered, rail),
+                "{name}: selected is stronger than hover"
+            );
+        });
+    }
+
+    /// The two Zed themes are where the owner looked: in light the hovered and selected rows
+    /// are about 10 and 20 levels from the rail (`#e6e6e8` / `#dcdde1` were the targets), and in
+    /// dark hover is half the selected step.
+    #[gpui::test]
+    fn the_zed_one_themes_have_the_steps_the_owner_asked_for(cx: &mut gpui::TestAppContext) {
+        let mut seen = 0;
+        for_every_embedded_theme(cx, |name, theme| {
+            if !name.starts_with("Zed One") {
+                return;
+            }
+            seen += 1;
+            let channel = |color: gpui::Hsla| (gpui::Rgba::from(color).r * 255.).round() as i32;
+            let rail = *theme.tokens.tab_bar;
+            let fill = |state| rail.blend(row_paint(theme, state).fill.unwrap());
+            let (idle, hover, selected) = (
+                channel(rail),
+                channel(fill(RowState::Hover)),
+                channel(fill(RowState::Selected)),
+            );
+            let (hover_step, selected_step) = ((hover - idle).abs(), (selected - idle).abs());
+            eprintln!("{name}: rail {idle} hover {hover} selected {selected}");
+            assert!(
+                hover_step >= 7 && selected_step >= 12 && selected_step > hover_step + 3,
+                "{name}: steps {hover_step} / {selected_step}"
+            );
+            if name == "Zed One Light" {
                 assert!(
-                    selected_vs_rail > hover_vs_rail && hover_vs_rail > 1.0,
-                    "{name}: selected {selected_vs_rail:.3} > hover {hover_vs_rail:.3} > idle 1.0"
-                );
-                assert!(
-                    contrast(selected, terminal) > 1.05,
-                    "{name}: the selected row reads as a row, not as the terminal"
+                    (9..=12).contains(&hover_step) && (16..=22).contains(&selected_step),
+                    "{name}: hover {hover_step}, selected {selected_step}"
                 );
             }
         });
+        assert_eq!(seen, 2);
+    }
+
+    /// Owner rework 8: the hovered title is one step dimmer than the selected one, halfway from
+    /// the idle colour, in every theme.
+    #[gpui::test]
+    fn a_hovered_title_sits_between_the_idle_and_the_selected_title(cx: &mut gpui::TestAppContext) {
+        for_every_embedded_theme(cx, |name, theme| {
+            let text = |state| row_paint(theme, state).text;
+            let (idle, hover, selected) = (
+                luminance(text(RowState::Idle)),
+                luminance(text(RowState::Hover)),
+                luminance(text(RowState::Selected)),
+            );
+            assert_eq!(text(RowState::Idle), theme.tab_foreground, "{name}");
+            assert_eq!(
+                text(RowState::Selected),
+                theme.tab_active_foreground,
+                "{name}"
+            );
+            let (low, high) = (idle.min(selected), idle.max(selected));
+            assert!(
+                hover >= low - 1e-4 && hover <= high + 1e-4,
+                "{name}: hover {hover:.3} is not between {idle:.3} and {selected:.3}"
+            );
+            // Where the theme draws the two apart, hover is a step of its own.
+            if (idle - selected).abs() > 0.05 {
+                assert!(
+                    (hover - idle).abs() > 0.01 && (hover - selected).abs() > 0.01,
+                    "{name}: hover {hover:.3} is not its own step between {idle:.3} and {selected:.3}"
+                );
+            }
+        });
+    }
+
+    /// WCAG relative luminance of one colour, for the title-order test.
+    fn luminance(color: gpui::Hsla) -> f32 {
+        let rgba = gpui::Rgba::from(color);
+        let channel = |c: f32| {
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(rgba.r) + 0.7152 * channel(rgba.g) + 0.0722 * channel(rgba.b)
+    }
+
+    /// Owner rework 8: a row whose context menu is open keeps the hover look; the selected row
+    /// stays selected; an idle row with no menu has none.
+    #[test]
+    fn a_row_with_its_menu_open_looks_hovered_until_it_closes() {
+        assert_eq!(RowState::resting(false, false), RowState::Idle);
+        assert_eq!(RowState::resting(false, true), RowState::Hover);
+        assert_eq!(RowState::resting(true, false), RowState::Selected);
+        assert_eq!(RowState::resting(true, true), RowState::Selected);
+    }
+
+    /// Owner rework 8: the header's rule is for a list that has scrolled.
+    #[test]
+    fn the_header_rule_shows_only_while_the_list_is_scrolled() {
+        assert!(!list_scrolled(px(0.)));
+        assert!(list_scrolled(px(-1.)));
+        assert!(list_scrolled(px(-240.5)));
     }
 
     /// Collapsed is the 44 px strip for any preference and any group; expanded is the clamp.

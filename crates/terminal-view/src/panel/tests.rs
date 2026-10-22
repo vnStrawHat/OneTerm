@@ -1602,6 +1602,96 @@ fn a_right_click_hides_the_collapsed_cells_tooltip_until_the_pointer_returns(
     assert!(!hidden.get(), "the pointer coming back shows it again");
 }
 
+/// Owner rework 8 of `US-0196`: the tab's context menu says it is open (the vertical rail keeps
+/// the row highlighted meanwhile) and says it is gone again on Escape, and on a click outside; the id it records is the one the rail reads.
+#[gpui::test]
+fn a_tab_menu_records_that_it_is_open_until_it_is_dismissed(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    use oneterm_state::{TabMenuOpen, TabRowLayout};
+    use oneterm_terminal::SessionKind;
+
+    use crate::panel::tab_title::TAB_ROW_SELECTOR;
+
+    let (_, _, panel, cx) =
+        tab_row_window_with_panel(cx, TabRowLayout::Vertical, 220., SessionKind::Local);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let open = |cx: &mut VisualTestContext| cx.update(|_, cx| TabMenuOpen::panel(cx));
+    assert_eq!(open(cx), None);
+
+    // The rail asks the panel handle for its id; it is the entity's.
+    let id = panel.entity_id().as_u64();
+    let handle = panel_handle(panel.clone());
+    assert_eq!(cx.update(|_, cx| handle.panel_id(cx).as_u64()), id);
+
+    let row = cx.debug_bounds(TAB_ROW_SELECTOR).expect("the row is drawn");
+    let inside = row.origin + point(px(20.), px(10.));
+    let right_click = |cx: &mut VisualTestContext| {
+        cx.simulate_mouse_move(inside, None, Modifiers::none());
+        cx.simulate_mouse_down(inside, MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(inside, MouseButton::Right, Modifiers::none());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    };
+
+    right_click(cx);
+    assert_eq!(open(cx), Some(id), "the menu is built: this tab's is open");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(open(cx), None, "Escape dismisses it");
+
+    right_click(cx);
+    assert_eq!(open(cx), Some(id));
+    let away = point(px(700.), px(500.));
+    cx.simulate_mouse_move(away, None, Modifiers::none());
+    cx.simulate_click(away, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(open(cx), None, "a click outside dismisses it");
+
+    // A second right-click on the same tab replaces the open menu (the old one is released, not
+    // dismissed); the release must not clear the record of the menu that replaced it.
+    right_click(cx);
+    right_click(cx);
+    assert_eq!(open(cx), Some(id), "the replacing menu is the open one");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(open(cx), None);
+}
+
+/// Advisor pin, rework 8 fixes: a menu that goes with its window is released, never dismissed,
+/// and the record must still clear (`on_release` in `tab_context_menu`), or the next window's
+/// rail would read a panel id that no row matches but nothing ever resets.
+#[gpui::test]
+fn a_tab_menu_open_when_its_window_closes_clears_its_record(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    use oneterm_state::{TabMenuOpen, TabRowLayout};
+    use oneterm_terminal::SessionKind;
+
+    use crate::panel::tab_title::TAB_ROW_SELECTOR;
+
+    let (_, _, panel, cx) =
+        tab_row_window_with_panel(cx, TabRowLayout::Vertical, 220., SessionKind::Local);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let id = panel.entity_id().as_u64();
+    let row = cx.debug_bounds(TAB_ROW_SELECTOR).expect("the row is drawn");
+    let inside = row.origin + point(px(20.), px(10.));
+    cx.simulate_mouse_move(inside, None, Modifiers::none());
+    cx.simulate_mouse_down(inside, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(inside, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(cx.update(|_, cx| TabMenuOpen::panel(cx)), Some(id));
+
+    cx.update(|window, _| window.remove_window());
+    cx.run_until_parked();
+    drop(panel);
+    let app: &mut TestAppContext = cx;
+    assert_eq!(
+        app.update(|cx| TabMenuOpen::panel(cx)),
+        None,
+        "the released menu cleared its record"
+    );
+}
+
 /// OSC 7 from the shell tells the panel to repaint, so the row's path is live.
 #[gpui::test]
 fn a_reported_directory_repaints_the_row(cx: &mut TestAppContext) {

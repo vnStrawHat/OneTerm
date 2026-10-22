@@ -30,7 +30,7 @@ use gpui_component::{
     v_flex,
 };
 use oneterm_core::{SessionDuplicateConfig, ShellKind};
-use oneterm_state::TabRowLayout;
+use oneterm_state::{TabMenuOpen, TabRowLayout};
 use oneterm_terminal::{ProgramState, TerminalLogState};
 use oneterm_theme::{AppIcon, notif_ext::notify};
 
@@ -657,7 +657,13 @@ pub(super) fn render_tab_strip(
     } else if vertical {
         // The rail draws the selected row's accent pill and the reorder grip itself, so this row
         // carries neither the top bar nor the strip's negative margin.
-        let path = cwd.map(|cwd| tab_cwd_label(cwd, muted));
+        // The selected row's fill is too dark for `muted.foreground` in some light themes.
+        let path_color = if is_active {
+            oneterm_theme::selected_row_secondary(cx.theme())
+        } else {
+            muted
+        };
+        let path = cwd.map(|cwd| tab_cwd_label(cwd, path_color));
         vertical_row_lines(chips, recording_dot, label, path, status_icon)
             .flex_1()
             .min_w_0()
@@ -919,6 +925,18 @@ fn tab_context_menu(
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    // The vertical rail keeps this tab's row highlighted while the menu is up: the menu's
+    // overlay takes the pointer, so the row stops being hovered (`US-0196` rework 8). The menu
+    // builder runs once per opening; the menu says when it is gone (Escape, a click outside, a
+    // chosen item), and a late close does not clear a newer menu's record.
+    let (tab, menu_id) = (panel.entity_id().as_u64(), cx.entity_id().as_u64());
+    TabMenuOpen::opened(tab, menu_id, cx);
+    cx.subscribe_self(move |_, _: &gpui::DismissEvent, cx| TabMenuOpen::closed(menu_id, cx))
+        .detach();
+    // A menu that goes without being dismissed (its window closes, or a newer menu replaces it)
+    // is released instead; the record is per menu, so a newer menu's record is left alone.
+    cx.on_release(move |_, cx| TabMenuOpen::closed(menu_id, cx))
+        .detach();
     let menu = menu
         .item(PopupMenuItem::new("Rename...").on_click({
             let panel = panel.clone();
