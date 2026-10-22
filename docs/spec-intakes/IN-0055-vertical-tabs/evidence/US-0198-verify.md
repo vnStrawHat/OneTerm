@@ -290,3 +290,36 @@ The pinning tests live in `scripts/test_check_theme_contrast.py` (new; not wired
 ### Still by hand (ui-verifier)
 
 The packet's open acceptance line: glyphs at 16 px light and dark, each status fill with the glyph readable, the bar on a selected filled cell, hover on a filled and an idle cell (and N2's grip glyph), the hover card still showing the status icon, the recording dot on a filled cell.
+
+## UI verification (rework 6) (head 996d5a11, ui-verifier, 2026-10-22)
+
+Screenshots `uivrw6-*` in the session scratchpad `uivrw6-shots\` (full-window PrintWindow shots with an ~8 px frame; the `z` files are nearest-neighbour crops of the rail; driver clicks are client coordinates, screenshot x = client x + 8). Binary: the coordinator's copy of the debug build. Private profile (scratch USERPROFILE + cwd).
+
+**Environment limit.** In this session every child shell dies at start (`conpty: conout read ended`, `committed text delivery failed: terminal session is closed`), so no OSC 7501 can be fed and no status fill can be shown.
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| 1a Command Prompt tab shows the cmd icon (window frame, title rule, `>_`) | PASS | `03z`, `10-Zed-One-Lightz` |
+| 1b Windows PowerShell and PowerShell 7 tabs show the PowerShell icon (slanted panel with `>_`), the two identical | PASS | `03z`, `05z` |
+| 1c Other shell (Git Bash with an explicit `program`) shows the generic `>_` terminal icon | PASS | `08-b-bash`, `09z` |
+| 1d Icons centred in the 44 px cell, consistent stroke style, legible at 16 px; dim when idle, bright when selected/hovered | PASS | `03z`, `05z` |
+| 1e Same in light themes: Zed One Light, Catppuccin Latte, Solarized Light, Everforest Light | PASS | `10`..`13` (`z` crops) |
+| 2 No position numbers, no status badge in any collapsed cell | PASS | `03`, `10`..`13` (idle only) |
+| 3 Status fills (working / blocked / done / error), glyph colour, 2 px bar on a selected filled cell, no hover tint on a filled cell, hover card status icon | NOT WALKED | shells do not run here (`07-working`, `09-b-working`: command typed, no fill, session closed); owner-only |
+| 4a Idle cell hover fill, drag-handle dots appear on hover | PASS | `04z`, `05z` |
+| 4b Hover card shows the row title ("PowerShell") | PASS | `04z` (idle: no status icon, as expected; card body has blank space below the title, unchanged by this rework as far as seen) |
+| 4c Click selects (accent bar moves) | PASS | `05z` |
+| 4d Right-click menu with Input Channel row, Escape closes | PASS | `06-rmenu`, `06b-esc` |
+| 4e Expanded rail unchanged (full-title rows) | PASS (idle only; status icon slot not seen without a status) | `20-expanded-1` |
+| 4f Horizontal strip unchanged | PASS | `20-strip-1` |
+| 5 Themes: dark (Zed One Dark), light (Zed One Light) icons; Catppuccin Latte / Everforest Light / Solarized Light icons | PASS; fills NOT WALKED | `03z`, `10`..`13` |
+
+### Defects
+None found in the walkable parts.
+
+Verdict: partly (icons, no numbers, regressions all PASS; status fills and glyph legibility on Working / Blocked / Done / Error cannot be seen without a running shell).
+
+### Owner-only checks
+- Feed `printf '\033]7501;state=working\007'` (and blocked / done / error) in a live Git Bash, PowerShell, or Windows cmd tab: fill colour per state, glyph colour readable on every fill, 2 px accent bar visible on a selected filled cell, no hover tint on a filled cell, hover card still shows the status icon.
+- Repeat in Catppuccin Latte, Everforest Light and Solarized Light (low-contrast fills), light and dark.
+- A split tab shows no fill.
