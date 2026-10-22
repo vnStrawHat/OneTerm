@@ -429,3 +429,37 @@ Build: debug binary copy at head e033390c, private profile (scratch USERPROFILE 
 ### Owner-only checks
 
 A tab with a directory (two lines); an empty-Space drop of a title-row or icon drag; real-host status icons; the card on a cell touching the window bottom.
+
+## Advisor re-review (rework 7)
+
+Coder head `5ec1b2b4` on `verify/in-0055-rework7` (since `7c92db85`: `d56dcd50` UI evidence, `3bc5023f` `BUG-0088` packet, `5ec1b2b4` findings 1-3 and 5). No conflict markers in `crates/`, `docs/` or `scripts/`.
+
+### Verdict: PASS
+
+### Gate (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, targeted)
+
+`cargo fmt --all -- --check` clean; `cargo clippy -p oneterm-theme -p oneterm-terminal-view -p oneterm-workspace --all-targets -- -D warnings` clean; `cargo test -p oneterm-theme --lib` 10 passed (the `BUG-0088` pin `the_list_style_override_reaches_the_tokens_the_kit_reads` now passes, plus the re-review test below); `-p oneterm-terminal-view --lib -- collapsed_cell` 8 passed; `-p oneterm-workspace --lib -- tab_rail` 40 passed; `-p oneterm-sftp-ui --lib` 77 passed; `check-english` passes. Disk 3.64 GB before, 3.57 GB after.
+
+### Finding 2 fix (`BUG-0088`, the override inside `Theme::update`)
+
+- **What `Theme::update` re-runs** (`reference/gpui-kit/crates/component/src/theme/mod.rs:298-335`): the closure, `tokens.reconcile` (only fields the closure changed, or tokens edited on their own, move; untouched fields keep both values), `apply_config` only when the mode changed or `reload_mode` (false for `update`), font resolution only when the fonts changed, `sync_base`, `refresh_windows`. The override changes mode, fonts and nothing else of the kind, so no theme file is reloaded over OneTerm's edits. Re-review test `crates/theme/src/theme.rs` `the_override_inside_theme_update_keeps_the_other_overrides`: after `apply_warning_legibility`, the `init` shape defaults (`radius` 4, `ScrollbarMode::Always`) and the Lilex mono font, running the override leaves all of them as they were and syncs `tokens.list_active` to `list_hover`. `selection_accent` is covered by the existing `the_selection_accent_survives_the_list_style_override` (`record_selection_accent` still runs before the edit, `theme.rs:76-77`).
+- **Observers and loops.** `Theme::update` ends in `Theme::global_mut`-style dirtying plus `refresh_windows`; the two `observe_global::<Theme>` observers are `UiConfig::observe_theme` (`crates/settings/src/ui_config.rs:413-431`, persists only when the theme name or font size changed, neither does) and the app menu refresh (`crates/workspace/src/layout/app_menus.rs:24-31`, rebuilds menu check states, writes no `Theme`). The old `global_mut` write already notified them, so nothing new fires and nothing writes back. `init` calls the override before any window exists; `refresh_windows` on no windows is a no-op.
+- **Readers expecting the old values.** `tokens.table_active`: the kit table's selected row and cell only (`table/state.rs:1443, 2106, 2279`), used by the two SFTP tables whose `render_tr` draws the selection itself: the overlay's removal is the intent. `tokens.list_active`: no reader outside the theme. The colours `list_active` / `table_active` were already overridden, so `ListItem` (`list_item.rs:259`) and the session tree see no change.
+- **`apply_warning_legibility`, left out of scope.** The packet says "no kit reader paints from a `warning` token": not exact. The kit's Button `Warning` variant reads `tokens.warning` / `warning_hover` / `warning_active` (`reference/gpui-kit/crates/component/src/button/button.rs:957-965`, at 0.1 to 0.4 opacity). OneTerm uses no Warning-variant button (grep: no `ButtonVariant::Warning` / `.warning()` in `crates/`), so there is no reader that matters today; the correction itself is unaffected by the override (tested). Pinned as current behaviour in the same test (`assert_ne!` on `tokens.warning`, flip when the correction moves into `Theme::update`). Info only; reword the packet's out-of-scope line to "no OneTerm surface reaches a kit reader of the `warning` token".
+
+### Finding 3 fix (the filled cell's own pill)
+
+- The status fill is `inset_0` (`crates/terminal-view/src/panel/tab_title.rs:513-518`): no notches. A selected filled cell draws a 3 px pill in the glyph colour, `left_0`, `top`/`bottom` = `ACCENT_BAR_INSET`, `rounded(1.5)` (`:521-532`), the same box the rail's pill has on the `Tab` (`tab_rail.rs:702-713`): the title element is `flex_1` + `h_full` inside a `Tab` with no padding, so the two pills share origin and height and the rail's pill lies exactly under the cell's; nothing of it shows past the fill. Unselected filled cell: no cell pill (`fill.filter(|_| selected)`), and the rail draws none; selected unfilled cell: the rail's accent pill as before. Test `a_selected_fill_covers_the_cell_and_carries_its_own_pill` asserts fill = row, pill geometry, and no pill when unselected.
+- Design note for the owner: on a filled selected cell the pill is now the glyph colour (near-black or near-white), not `selection_accent`; the alternative (repainting the accent pill after the title) would disappear on a `Working` fill wherever `primary` equals the accent, which is the case the coder avoided. Legibility of that pill follows the glyph's 3:1 rule already measured by the contrast script.
+
+### Records
+
+- `BUG-0088` under `IN-0042` (owner of the `US-0111` override contract) is the right home; `IN-0042` is closed, so the entry is marked as found after the round. Packet template sections present; status Planned + Implemented; acceptance items tick against the named tests; on-screen SFTP row check left to `ui-verifier`.
+- `US-0196` Rework 7 choices and evidence, the HLD rows row, `docs/gui-layout.md` (colours and collapsed-cell paragraphs), `tab_rail.rs:108-112` and the `US-0198` "after the review" note now match the code and withdraw the reset claim; the `#21252b` sample is kept as an unexplained observation, which is accurate.
+- `scripts/check-theme-contrast.py:146-149` names `list.hover.background` as OneTerm's selected-item colour and never repeated the reset claim; no change needed.
+
+### For the owner
+
+1. Reword the `BUG-0088` out-of-scope line (the kit's Warning button variant does read the token; OneTerm has no such button).
+2. Accept or reject the glyph-coloured pill on a filled selected cell (see the design note); `ui-verifier` should look at Working / Blocked / Done / Error selected cells in both themes.
+3. `ui-verifier`: a selected SFTP row (remote and local) shows `table_hover` only, in a dark and a light theme.

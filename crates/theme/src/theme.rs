@@ -645,4 +645,50 @@ mod tests {
             );
         });
     }
+
+    /// Advisor re-review (`BUG-0088`): the override now writes inside `Theme::update`, whose
+    /// reconcile and refresh must leave OneTerm's other edits alone: the `warning` legibility
+    /// correction, the shape defaults `init` sets through `global_mut` (radius, scrollbar mode)
+    /// and the mono font. Running the override after them changes none of them. The kit's
+    /// `tokens.warning` does not follow the correction (see the pinned assertion inside).
+    #[gpui::test]
+    fn the_override_inside_theme_update_keeps_the_other_overrides(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let registry = ThemeRegistry::global_mut(cx);
+            for (_, content) in EMBEDDED_THEME_FILES {
+                registry.load_themes_from_str(content).unwrap();
+            }
+            let config = ThemeRegistry::global(cx)
+                .themes()
+                .get("Default Light")
+                .unwrap()
+                .clone();
+            Theme::global_mut(cx).apply_config(&config);
+            {
+                let theme = Theme::global_mut(cx);
+                theme.radius = px(4.);
+                theme.scrollbar_mode = ScrollbarMode::Always;
+                theme.mono_font_family = "Lilex".into();
+            }
+            apply_warning_legibility(cx);
+            let warning = Theme::global(cx).warning;
+            apply_list_style_override(cx);
+            let theme = Theme::global(cx);
+            assert_eq!(theme.warning, warning, "the legibility correction survives");
+            // Pinned as it is: `apply_warning_legibility` still writes through `global_mut`, so
+            // the kit's `tokens.warning` keeps the file's colour (a sibling of `BUG-0088`; the
+            // only kit reader is the Warning button variant, which OneTerm does not use). Flip
+            // this to `assert_eq!` when the correction is moved into `Theme::update`.
+            assert_ne!(
+                theme.tokens.warning.color, warning,
+                "the token is not synced today; if it is, flip this assertion"
+            );
+            assert_eq!(theme.radius, px(4.));
+            assert_eq!(theme.scrollbar_mode, ScrollbarMode::Always);
+            assert_eq!(theme.mono_font_family.as_ref(), "Lilex");
+            assert_eq!(theme.list_active, theme.list_hover);
+            assert_eq!(theme.tokens.list_active.color, theme.list_hover);
+        });
+    }
 }
