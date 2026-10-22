@@ -789,9 +789,12 @@ fn close_scope_row(
         })
         .unwrap_or_default();
     let empty = victims.is_empty();
+    // A disabled row carries no click path: the kit's `confirm` ignores `disabled`.
     PopupMenuItem::new(label)
         .disabled(empty)
-        .on_click(move |_, window, cx| close_tabs(victims.clone(), window, cx))
+        .when(!empty, |item| {
+            item.on_click(move |_, window, cx| close_tabs(victims.clone(), window, cx))
+        })
 }
 
 /// The tab's right-click menu (`US-0116`). Every row acts on `panel` — the tab

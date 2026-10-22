@@ -46,6 +46,10 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+# `gpui_base::test_support::snapshots`: the drawn menu rows with their labels and bounds
+# (US-0201). The kit's feature, not gpui-base's alone: only `gpui-component`'s `test-support`
+# also implements its scroll traits for the observed wrapper the menu is drawn with.
+gpui-component = { workspace = true, features = ["test-support"] }
 oneterm-terminal = { workspace = true, features = ["test-support"] }
 
 # The real DirectWrite text system for the glyph cache's ASCII fast-path test (US-0146).

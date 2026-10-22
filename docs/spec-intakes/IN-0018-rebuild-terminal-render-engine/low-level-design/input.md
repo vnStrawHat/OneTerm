@@ -189,7 +189,11 @@ separator; Log submenu (only when `capabilities().logging` is `Some`: Start disa
 running, Stop disabled while not; async with a notification), separator; Close Terminal Tab
 (`ClosePanel`); Close Space (`CloseSpace`, only when `leaf_count() > 1`). When the session has
 ended (`MenuContext::session_alive` is false, `US-0201`) the Duplicate Session entry is a plain
-disabled row (no submenu) and the four Split items are disabled; nothing else changes. The wrapper div gets a
+disabled row (no submenu) and the four Split items are disabled; nothing else changes. **A disabled
+menu row carries no click path** (no `.action(..)`, no `.on_click(..)`; the builder uses
+`.disabled(d).when(!d, ..)`): the kit's `confirm` (Enter) ignores `disabled`, and hovering a greyed row
+selects it, so a row that kept either would still act on hover + Enter. This holds for every disabled row
+the menus build (Copy without a selection, Log Start/Stop, the splits, Duplicate Session). The wrapper div gets a
 stable `ElementId` so the menu state survives re-render.
 
 ## Interfaces

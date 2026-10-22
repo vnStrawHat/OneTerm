@@ -352,6 +352,8 @@ package in the Cargo registry / git checkout.
 | `gpui-base` | 0.7.3 | Apache-2.0 | crates.io |
 | `gpui-component` | 0.7.3 | Apache-2.0 | crates.io |
 | `gpui-component-macros` | 0.7.3 | Apache-2.0 | crates.io |
+| `gpui-fast` | 0.1.10 | Apache-2.0 | crates.io |
+| `gpui-fast-macros` | 0.1.10 | Apache-2.0 | crates.io |
 | `gpui-kit-assets` | 0.7.3 | Apache-2.0 | crates.io |
 | `gpui-pre` | 0.3.9 | Apache-2.0 | crates.io |
 | `gpui-pre-apple` | 0.3.9 | Apache-2.0 | crates.io |
@@ -753,6 +755,7 @@ package in the Cargo registry / git checkout.
 | `system-configuration` | 0.7.0 | MIT OR Apache-2.0 | crates.io |
 | `system-configuration-sys` | 0.6.0 | MIT OR Apache-2.0 | crates.io |
 | `taffy` | 0.13.0 | MIT | crates.io |
+| `taffy` | 0.14.0 | MIT | crates.io |
 | `tao-core-video-sys` | 0.2.0 | MIT | crates.io |
 | `tar` | 0.4.46 | MIT OR Apache-2.0 | crates.io |
 | `tauri-winrt-notification` | 0.7.3 | MIT OR Apache-2.0 | crates.io |
@@ -958,4 +961,4 @@ package in the Cargo registry / git checkout.
 | `zvariant_derive` | 5.12.0 | MIT | crates.io |
 | `zvariant_utils` | 3.4.0 | MIT | crates.io |
 
-_863 third-party packages._
+_866 third-party packages._

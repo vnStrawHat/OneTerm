@@ -5,7 +5,7 @@
 //! taking them as data keeps the builder callable from the wrapper's
 //! `context_menu` closure without borrowing the view across the call.
 
-use gpui::{App, Entity, FocusHandle, NoAction, WeakEntity, Window};
+use gpui::{App, Entity, FocusHandle, NoAction, WeakEntity, Window, prelude::FluentBuilder as _};
 use gpui_component::{
     WindowExt as _,
     menu::{PopupMenu, PopupMenuItem},
@@ -148,32 +148,33 @@ pub(crate) fn build_menu(
 
     menu = menu
         .separator()
-        .item(
-            edit_item(
-                "Copy",
-                Box::new(TerminalCopy),
-                ctx,
-                edit::copy_selection as edit::EditCommand,
-            )
-            .disabled(!ctx.has_selection),
-        )
+        .item(edit_item(
+            "Copy",
+            Box::new(TerminalCopy),
+            ctx,
+            edit::copy_selection as edit::EditCommand,
+            !ctx.has_selection,
+        ))
         .item(edit_item(
             "Paste",
             Box::new(TerminalPaste),
             ctx,
             edit::paste_clipboard,
+            false,
         ))
         .item(edit_item(
             "Select All",
             Box::new(TerminalSelectAll),
             ctx,
             edit::select_all,
+            false,
         ))
         .item(edit_item(
             "Clear",
             Box::new(TerminalClear),
             ctx,
             edit::clear_screen,
+            false,
         ))
         .separator();
 
@@ -184,20 +185,24 @@ pub(crate) fn build_menu(
                 submenu
                     .item(
                         PopupMenuItem::new("Start")
-                            .action(Box::new(NoAction {}))
                             .disabled(running)
-                            .on_click({
+                            .when(!running, |item| {
                                 let logging = logging.clone();
-                                move |_, window, cx| start_logging(logging.clone(), window, cx)
+                                item.action(Box::new(NoAction {}))
+                                    .on_click(move |_, window, cx| {
+                                        start_logging(logging.clone(), window, cx)
+                                    })
                             }),
                     )
                     .item(
                         PopupMenuItem::new("Stop")
-                            .action(Box::new(NoAction {}))
                             .disabled(!running)
-                            .on_click({
+                            .when(running, |item| {
                                 let logging = logging.clone();
-                                move |_, window, cx| stop_logging(logging.clone(), window, cx)
+                                item.action(Box::new(NoAction {}))
+                                    .on_click(move |_, window, cx| {
+                                        stop_logging(logging.clone(), window, cx)
+                                    })
                             }),
                     )
             })
@@ -240,12 +245,10 @@ pub(crate) fn build_menu(
 }
 
 /// The Duplicate Session row of a terminal whose session has ended: a plain disabled row, not a
-/// submenu (the shape of the tab menu's disabled "Input Channel" row). It keeps the action so
-/// the shortcut hint column does not change.
+/// submenu (the shape of the tab menu's disabled "Input Channel" row). It carries no action and
+/// no handler (the rule on [`split_item`]), so it shows no shortcut hint either.
 pub(crate) fn dead_duplicate_item() -> PopupMenuItem {
-    PopupMenuItem::new("Duplicate Session")
-        .action(Box::new(DuplicateSession))
-        .disabled(true)
+    PopupMenuItem::new("Duplicate Session").disabled(true)
 }
 
 /// One Duplicate Session destination. Only the first item carries the
@@ -298,6 +301,10 @@ pub(crate) fn split_items(
 }
 
 /// One "Split …" item.
+///
+/// A disabled menu row carries no click path: no action and no click handler. The kit's
+/// `confirm` (Enter) runs a row's handler or action without checking `disabled`, and hovering a
+/// greyed row selects it, so a disabled row that kept either would still act on hover + Enter.
 pub(crate) fn split_item(
     dir: SplitDir,
     panel: &WeakEntity<TerminalPanel>,
@@ -314,34 +321,39 @@ pub(crate) fn split_item(
     let panel = panel.clone();
     let f = focus.cloned();
     PopupMenuItem::new(label)
-        .action(action)
         .disabled(disabled)
-        .on_click(move |_, window, cx| {
-            if let Some(panel) = panel.upgrade() {
-                panel.update(cx, |p, cx| p.split_active_at(space_id, dir, window, cx));
-            }
-            if let Some(f) = &f {
-                window.focus(f, cx);
-            }
+        .when(!disabled, |item| {
+            item.action(action).on_click(move |_, window, cx| {
+                if let Some(panel) = panel.upgrade() {
+                    panel.update(cx, |p, cx| p.split_active_at(space_id, dir, window, cx));
+                }
+                if let Some(f) = &f {
+                    window.focus(f, cx);
+                }
+            })
         })
 }
 
 /// One edit command item: the action for the shortcut hint plus a click
-/// handler that runs the command and returns focus to the terminal.
+/// handler that runs the command and returns focus to the terminal. A disabled
+/// item carries neither (see the rule on [`split_item`]).
 fn edit_item(
     label: &'static str,
     action: Box<dyn gpui::Action>,
     ctx: &MenuContext,
     command: edit::EditCommand,
+    disabled: bool,
 ) -> PopupMenuItem {
     let session = ctx.session.clone();
     let origin = ctx.origin.clone();
     let f = ctx.focus.clone();
     PopupMenuItem::new(label)
-        .action(action)
-        .on_click(move |_, window, cx| {
-            command(&session, &origin, window, cx);
-            window.focus(&f, cx);
+        .disabled(disabled)
+        .when(!disabled, |item| {
+            item.action(action).on_click(move |_, window, cx| {
+                command(&session, &origin, window, cx);
+                window.focus(&f, cx);
+            })
         })
 }
 

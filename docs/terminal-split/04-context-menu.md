@@ -59,7 +59,9 @@ Close Space            ← only shown when the tab has > 1 Space
 - **A terminal whose session has ended** (`session.alive()` is false: the local shell exited, or
   the SSH link closed or dropped) shows the four Split rows and **Duplicate Session**
   **disabled** (`US-0201`); Duplicate Session is then a plain disabled row with no submenu, the
-  shape of the tab menu's disabled "Input Channel" row. Every other row is unchanged. This is
+  shape of the tab menu's disabled "Input Channel" row. Every other row is unchanged. The greyed
+  rows carry no action and no click handler, so they show no shortcut hint and hover + Enter or a
+  click does nothing (the kit's Enter path ignores `disabled`). This is
   the terminal area's menu only: the empty-Space menu below keeps its Splits enabled (it has no
   terminal), and the key-bound `Split*` / `DuplicateSession` actions and the tab menu's
   "Duplicate" are not refused.
