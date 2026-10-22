@@ -307,8 +307,9 @@ PICKED_GLYPH_FILLS: tuple[str, ...] = (
 PICKED_GLYPH = "background|foreground (glyph)"
 # The picked glyph still reads below `GLYPH_FLOOR` on these (variant, fill) pairs: the better of
 # the theme's own `background` and `foreground` cannot reach 3:1 on that fill. Recorded so the
-# check gates every other pair and every other variant; they print on each run, and retuning
-# those themes' status fills is the owner's decision. Delete an entry when the theme is fixed.
+# check gates every other pair and every other variant; they print on each run. The owner
+# accepted them on 2026-10-22 and no theme is retuned. Delete an entry when the theme is fixed
+# (a stale entry fails the run).
 KNOWN_BELOW: frozenset[tuple[str, str]] = frozenset({
     ("Catppuccin Latte", "primary.background"),      # 2.61:1
     ("Everforest Light", "primary.background"),      # 2.81:1
@@ -810,7 +811,7 @@ def main() -> int:
     for file_name, name, mode, fg_token, bg_token, ratio, floor in known:
         print(
             f"check-theme-contrast: KNOWN {name} ({mode}): status glyph on {bg_token} is "
-            f"{ratio:.2f}:1 (floor {floor}:1), awaiting the owner"
+            f"{ratio:.2f}:1 (floor {floor}:1), accepted by the owner 2026-10-22"
         )
     print(summary(pairings(), len(measured), len(known), secondary, comparisons()))
     return 0
