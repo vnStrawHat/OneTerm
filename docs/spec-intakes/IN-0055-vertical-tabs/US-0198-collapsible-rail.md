@@ -13,7 +13,7 @@ Created: 2026-10-21
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -156,6 +156,29 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-
   - [ ] On screen, by `ui-verifier`: placement and spacing next to the clock in two themes, the tooltip, an elevated window, a narrow window (the centre breadcrumb still gives way first).
 - **Gate.** `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`): all checks passed; `cargo build -p oneterm-app` debug binary built.
 - **Documentation.** `docs/gui-layout.md` ("Collapsing", Status bar), `high-level-design.md` (wireframes, anatomy, collapse step).
+
+### Rework 5 2026-10-21 (owner): a separator before the clock, and a full-information hover card on a collapsed cell
+
+Acceptance rework of this packet (reopened, not a new BUG). Owner requests, 2026-10-21 (translated from Vietnamese): (1) "Add a separator between Collapse/Expand Tabs and the clock." (3) "While collapsed, hovering a tab shows the tab's full information like when expanded." Request 4 (hover background of every rail row) is recorded in the `US-0196` Rework 5 entry because that packet owns the row look. (The owner's request 2 is `US-0199`, `IN-0022`.)
+
+**Outcome.**
+
+- *Separator.* The status bar draws a vertical separator between the Collapse / Expand Tabs button and the clock, only while the button is shown. It is the bar's own `separator()` (1 x 12 px, `cx.theme().border`) that already divides the centre region from the right group and the right group's items, so the left group now reads `[button] | [clock]`. The kit `Divider` was not used: the bar's separator is the one shape every other divider in the bar has, and it is a plain `div` with a theme token. The centre budget's chrome constant `TABS_TOGGLE_CHROME` grows by the separator's 1 px and one more 8 px gap of the left region: 28 -> 37 px.
+- *Hover card.* The collapsed cell's title-only tooltip is replaced by a hover card with the same content as the expanded vertical row: line 1 the channel chips, the recording dot and the title; line 2 the directory (the status bar's `breadcrumb_label`, cut at its start) with the OSC 7501 status icon at the end. The card is the kit's `Tooltip::element` (popover fill, `popover.foreground`, `border`, shadow), 220 px wide in all (`VerticalTabs::DEFAULT_WIDTH`, the default rail width; the kit's tooltip chrome is 18 px, so the content is 202 px). Its content is built by the same function the expanded row uses (`vertical_row_lines` in `tab_title.rs`), rebuilt from the live panel on each frame the card is shown, so a working icon or a changing directory is current. A right-press still hides the card until the pointer comes back to the cell (`CellTooltip` / `tab_tooltip_hidden` unchanged).
+
+**Choices left open by the requests.**
+
+- *Surface of the card.* The kit tooltip's popover surface, not the rail's, so the muted directory on `popover.background` is the pair `check-theme-contrast.py` already measures (`muted.foreground` and the warning bell are listed on that surface); no new surface.
+- *Width.* 220 px fixed; a long title or directory is cut by the same ellipsis rules as the expanded row (the title at its end, the directory at its start).
+- *Status icon's own tooltip inside the card.* Kept (the same element), it is never reached because the pointer is on the cell.
+
+**Acceptance.**
+
+- [x] With Vertical Tabs on, a separator sits between the button and the clock (test: `toggle.right() + 8 + 1 + 8 == clock.left()`); with it off there is neither.
+- [x] The centre budget accounts for the separator (the constant equals button + separator + two gaps).
+- [x] The hover card is built from the same function as the expanded row (test draws the card: title, directory below it, status icon on line 2, width. The channel chips and the recording dot come from the same `tab_chips` / `recording_dot` helpers the expanded row uses, but the card test does not drive a channel or a log, so they are not pinned there).
+- [x] Status bar separators sit only between drawn items (ui-verifier D2, 2026-10-22). Cause: `build_status_bar` drew the two centre separators and the two right-group separators unconditionally, so an empty cwd and branch (a tab with no shell, a non-repository) left two dangling after the clock; it was already so on main. Now the centre's leading separator needs the cwd or the branch, the middle one needs both, and the right group's follow the network and resource figures that are drawn (test `separators_only_sit_between_drawn_items`; the width budget still counts the full set, which only under-uses the room).
+- [ ] On screen, by `ui-verifier`: separator in two themes, the card on a collapsed cell with chips / a long directory / the status icon, hidden while the context menu is open.
 
 ### Gaps
 

@@ -24,7 +24,9 @@ the view's channel and calls `registry.close(channel)`.
 entries, ids `join_input_channel_a`..`_e`, `leave_input_channel`, `close_input_channel`,
 group `"Input Channel"`, `default: None`, context `None`.
 
-### Context menu (`input/menu.rs`)
+### Context menu (`panel/channel_menu.rs`; moved by `US-0199`)
+
+> Amended by `US-0199`: the submenu is in the **tab's** context menu (`panel/tab_title.rs`, `tab_context_menu`), between Duplicate and Close, not in the terminal's (`input/menu.rs`), and it acts on the tab's active Space; `MenuContext` has none of the fields below. The entries, labels and conditions are unchanged.
 
 `MenuContext` gains:
 

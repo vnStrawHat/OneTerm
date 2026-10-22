@@ -1,5 +1,5 @@
-//! Status bar — left: the Collapse / Expand Tabs button (only while Vertical Tabs is on) and
-//! the clock; centre: breadcrumb + git status; right: the network speed, the CPU/memory
+//! Status bar — left: the Collapse / Expand Tabs button and a separator (only while Vertical Tabs
+//! is on) and the clock; centre: breadcrumb + git status; right: the network speed, the CPU/memory
 //! indicator and the right-dock toggle.
 //!
 //! The clock, net-speed, breadcrumb, git-status, and resource entities are created once in
@@ -52,11 +52,17 @@ use crate::widgets::{StatusText, breadcrumb, datetime_clock, git_status, net_spe
 /// Everything in the bar that is not a label: the bar's padding, the gaps
 /// between its items, the four separators and the dock-toggle button.
 const BAR_CHROME: Pixels = px(116.);
-/// The Collapse / Expand Tabs button and the gap the left region puts after it: an `xsmall`
-/// icon button (`h_5`, so 20 px) and the region's 8 px gap.
-const TABS_TOGGLE_CHROME: Pixels = px(28.);
+/// The Collapse / Expand Tabs button and what the left region puts after it: an `xsmall` icon
+/// button (`h_5`, so 20 px), the region's 8 px gap, the 1 px separator and another 8 px gap.
+const TABS_TOGGLE_CHROME: Pixels = px(37.);
 /// Names the Collapse / Expand Tabs button in the debug-bounds map. A no-op outside test builds.
 const TABS_TOGGLE_SELECTOR: &str = "oneterm-status-tabs-toggle";
+/// Names the status bar's separators in the debug-bounds map. A no-op outside test builds.
+const SEPARATOR_TOGGLE: &str = "oneterm-status-sep-toggle";
+const SEPARATOR_CENTRE_LEAD: &str = "oneterm-status-sep-centre-lead";
+const SEPARATOR_CENTRE_MID: &str = "oneterm-status-sep-centre-mid";
+const SEPARATOR_AFTER_NET: &str = "oneterm-status-sep-after-net";
+const SEPARATOR_AFTER_RESOURCE: &str = "oneterm-status-sep-after-resource";
 /// One indicator's leading icon and the gap after it.
 const ICON_CHROME: Pixels = px(16.);
 /// The path keeps at least this much before the branch starts giving way.
@@ -256,12 +262,25 @@ fn build_status_bar(
     breadcrumb.read(cx).set_budget(budgets.path);
     git_status.read(cx).set_budget(budgets.git);
 
-    let separator = || div().w(px(1.)).h(px(12.)).bg(cx.theme().border);
+    // A separator sits only between two items that are drawn: an indicator with no label (no
+    // cwd yet, no repository, no network figure) takes its separator with it. `name` tells the
+    // debug-bounds map which one it is. A no-op outside test builds.
+    let separator = |name: &'static str| {
+        div()
+            .debug_selector(move || name.to_string())
+            .w(px(1.))
+            .h(px(12.))
+            .bg(cx.theme().border)
+    };
+    let (net_shown, resource_shown) = (visible[1].is_some(), visible[2].is_some());
+    let (crumb_shown, git_shown) = (visible[3].is_some(), visible[4].is_some());
 
     StatusBar::new()
         // Sync the top border color with the Dock border (cx.theme().border)
         .border_color(cx.theme().border)
-        .when_some(toggle, |bar, toggle| bar.left(toggle))
+        .when_some(toggle, |bar, toggle| {
+            bar.left(toggle).left(separator(SEPARATOR_TOGGLE))
+        })
         .left(clock)
         // The centre region is `flex-1` with a zero basis, so these two are the
         // only indicators the window can squeeze (`US-0112`).
@@ -272,15 +291,21 @@ fn build_status_bar(
                 .items_center()
                 .gap_2()
                 .overflow_hidden()
-                .child(separator())
+                .when(crumb_shown || git_shown, |this| {
+                    this.child(separator(SEPARATOR_CENTRE_LEAD))
+                })
                 .child(breadcrumb)
-                .child(separator())
+                .when(crumb_shown && git_shown, |this| {
+                    this.child(separator(SEPARATOR_CENTRE_MID))
+                })
                 .child(git_status),
         )
         .right(net_speed)
-        .right(separator())
+        .when(net_shown, |bar| bar.right(separator(SEPARATOR_AFTER_NET)))
         .right(resource)
-        .right(separator())
+        .when(resource_shown, |bar| {
+            bar.right(separator(SEPARATOR_AFTER_RESOURCE))
+        })
         .right(
             Button::new("toggle-right-dock")
                 .ghost()
@@ -435,6 +460,18 @@ mod tests {
             window: &mut Window,
             cx: &mut gpui::App,
         ) -> Entity<StatusText> {
+            item_if(true, id, text, shorten, window, cx)
+        }
+
+        /// Same, with no label at all when `shown` is false (an indicator with nothing to say).
+        fn item_if(
+            shown: bool,
+            id: &'static str,
+            text: &'static str,
+            shorten: Shorten,
+            window: &mut Window,
+            cx: &mut gpui::App,
+        ) -> Entity<StatusText> {
             StatusText::new_entity(
                 id,
                 Duration::from_secs(3600),
@@ -443,28 +480,46 @@ mod tests {
                     copyable: false,
                     shorten,
                 },
-                Box::new(move |_| Some(Label::from(text.to_string()))),
+                Box::new(move |_| shown.then(|| Label::from(text.to_string()))),
                 window,
                 cx,
             )
         }
 
         fn host(embed: Embed, cx: &mut TestAppContext) -> (Entity<Host>, &mut VisualTestContext) {
+            host_with(embed, [true; 3], cx)
+        }
+
+        /// `labelled` says whether the network, cwd and branch indicators have anything to show.
+        fn host_with(
+            embed: Embed,
+            labelled: [bool; 3],
+            cx: &mut TestAppContext,
+        ) -> (Entity<Host>, &mut VisualTestContext) {
+            let [net, crumb, branch] = labelled;
             cx.update(gpui_component::init);
             cx.add_window_view(|window, cx| {
                 let budget = || Rc::new(Cell::new(px(f32::MAX)));
                 let dock_area = cx.new(|cx| DockArea::new("status-test", None, window, cx));
                 let items = [
                     item("clock", "2026-09-29 10:00:00", Shorten::Never, window, cx),
-                    item("net", "0 B/s", Shorten::Never, window, cx),
-                    item(
+                    item_if(net, "net", "0 B/s", Shorten::Never, window, cx),
+                    item_if(
+                        crumb,
                         "crumb",
                         r"C:\Users\me",
                         Shorten::PathTail(budget()),
                         window,
                         cx,
                     ),
-                    item("git", "main", Shorten::HeadFirst(budget()), window, cx),
+                    item_if(
+                        branch,
+                        "git",
+                        "main",
+                        Shorten::HeadFirst(budget()),
+                        window,
+                        cx,
+                    ),
                     item("res", "CPU 0.2%  MEM 57.0 MB", Shorten::Never, window, cx),
                 ];
                 Host {
@@ -520,10 +575,11 @@ mod tests {
                 bar.left() + px(8.),
                 "first in the left group"
             );
+            // The left group's 8 px gap, the 1 px separator, the gap again.
             assert_eq!(
-                toggle.right() + px(8.),
+                toggle.right() + px(8.) + px(1.) + px(8.),
                 clock.left(),
-                "just before the clock"
+                "a separator between the button and the clock"
             );
 
             // Collapsing and expanding: the writer is the setter, and the button follows it.
@@ -547,6 +603,46 @@ mod tests {
             });
             draw(cx);
             assert!(cx.debug_bounds(TABS_TOGGLE_SELECTOR).is_none());
+        }
+
+        /// A separator sits only between two drawn items: with no cwd, no repository and no
+        /// network figure (an empty Space, a tab whose shell failed) none is left dangling after
+        /// the clock or before the resource figure.
+        #[gpui::test]
+        fn separators_only_sit_between_drawn_items(cx: &mut TestAppContext) {
+            use super::super::{
+                SEPARATOR_AFTER_NET, SEPARATOR_AFTER_RESOURCE, SEPARATOR_CENTRE_LEAD,
+                SEPARATOR_CENTRE_MID,
+            };
+
+            let drawn = |cx: &mut VisualTestContext, names: &[&'static str]| -> Vec<bool> {
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+                names.iter().map(|n| cx.debug_bounds(n).is_some()).collect()
+            };
+            let all = [
+                SEPARATOR_CENTRE_LEAD,
+                SEPARATOR_CENTRE_MID,
+                SEPARATOR_AFTER_NET,
+                SEPARATOR_AFTER_RESOURCE,
+            ];
+
+            let (_host, full) = host_with(Embed::Workspace, [true, true, true], cx);
+            assert_eq!(drawn(full, &all), [true; 4], "every item drawn");
+
+            let (_host, bare) = host_with(Embed::Workspace, [false, false, false], cx);
+            assert_eq!(
+                drawn(bare, &all),
+                [false, false, false, true],
+                "only the clock, the resource figure and the dock button are left: one \
+                 separator, between the last two"
+            );
+
+            let (_host, lone) = host_with(Embed::Workspace, [false, false, true], cx);
+            assert_eq!(
+                drawn(lone, &all),
+                [true, false, false, true],
+                "one separator leads into the lone centre item"
+            );
         }
 
         /// The workspace's embed, and its accessibility branch, lay the bar out

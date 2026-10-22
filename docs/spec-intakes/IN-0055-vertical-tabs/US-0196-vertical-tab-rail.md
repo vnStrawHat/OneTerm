@@ -270,6 +270,22 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner requests, 2026
 
 **Documentation.** `docs/gui-layout.md` "Vertical tabs" (anatomy, header, scrolling, collapsing) and the Status bar section, `high-level-design.md` (wireframes, rail anatomy, zoom row, collapse step), this entry.
 
+## Rework 5 2026-10-21 (owner): a hover background on every rail row
+
+Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-10-21 (translated from Vietnamese): "When hovering a vertical tab, I want that tab's background to change colour as a highlight. Today only the title text changes." The other rework 5 requests (status bar separator, the collapsed cell's hover card) are in the `US-0198` Rework 5 entry.
+
+**Root cause.** The row's own `.hover(text_color)` (`tab_rail.rs`) set only the text colour; nothing ever gave the row a hover background. (The row is `gpui_base::Tab`, whose `render`, `reference/gpui-kit/crates/base/src/tabs.rs:150-182`, registers no hover style of its own. An earlier version of this record said the kit's `Tab` replaced the row's hover style; that was wrong, and a second `hover` on one element would trip gpui's debug assertion, `div.rs:842-848`.) A second `hover` therefore cannot carry the fill, which is why it is a child that follows the row's hover group.
+
+**Outcome.** Every unselected row of the rail, expanded or collapsed, gets the theme's list hover fill (`theme.list_hover`, the colour the session tree and SFTP rows use for hover) across the whole row, behind the content. It is a first child of the row, an `absolute` fill that is transparent until the row's hover group is hovered (`group_hover`), so it needs no second `hover` on the row. The selected row keeps its active background and accent bar (no hover fill is added to it, so hovering it changes nothing); the 1 px divider is the row's own bottom border and the fill sits inside it, so the divider stays. The grip, number, badges and text are drawn after the fill.
+
+**Contrast.** The fill is translucent over the rail's `tab_bar.background`, and the row's text is `tab.active.foreground` (the kit's hover text colour) and `muted.foreground` (directory, grip). The OSC 7501 bell (`warning`) is a non-text glyph. At 4.5:1 on the hover fill it fails in 11 built-in variants (worst 4.0:1), and a weaker fill still failed 2. **Owner ruling, 2026-10-21 (F2):** the bell is measured as a non-text glyph at WCAG 1.4.11's 3:1 on **every** surface it is drawn on, one rule and not a per-surface exception: `check-theme-contrast.py` has a `GLYPH_SURFACES` tier (`GLYPH_FLOOR = 3.0`) with `warning.background` on `tab_bar.background`, `tab.background`, `tab.active.background` and `tab_bar.hover.background`. Its text uses (title bar suffix, notes, notifications) stay at 4.5:1 in `SURFACES`. `--report` and the failure summary name both floors, and the self-test drives `rows()` with a bell fixture (about 3.4:1 passes its glyph row, about 2.4:1 fails it) to pin the tier itself. AGENTS.md does not enumerate the bell and is unchanged. `scripts/check-theme-contrast.py` gets a new surface, `tab_bar.hover.background` (= `list.hover.background` composited over `tab_bar.background`), listed for `tab.active.foreground` and `muted.foreground`; the hierarchy rule therefore also compares `tab.active.foreground` against `muted.foreground` on it.
+
+**Acceptance.**
+
+- [x] An unselected row (expanded and collapsed) has the hover fill element; the selected row does not (workspace test).
+- [x] The contrast check measures the hover surface in every built-in theme and passes.
+- [ ] On screen, by `ui-verifier`: hovering a row in two themes, the active row unchanged, the divider and accent bar visible, collapsed cells likewise.
+
 ## Handoff
 
 Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0196` in the intake. `US-0197` (resize, `clamp_tab_rail_width`, done) and `US-0198` (collapse) build on `tab_rail.rs` and the stored `vertical_tabs` fields.
