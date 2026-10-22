@@ -119,43 +119,47 @@ fn the_panel_reads_the_shell_from_its_terminal(cx: &mut TestAppContext) {
     }
 }
 
-/// Each state maps to the colour its icon had, with the matching foreground; idle has none.
+/// Each state fills with the colour its icon had, and the glyph is the better of the theme's
+/// `background` and `foreground` on it; idle has no fill. A themed pair that reads poorly (the
+/// themes' own `*_foreground`) is never used.
 #[gpui::test]
 fn each_state_has_its_own_fill_and_none_for_idle(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     cx.update(|cx| {
         let theme = cx.theme();
-        assert_eq!(
-            collapsed_fill(ProgramState::Working, theme),
-            Some((theme.primary, theme.primary_foreground))
-        );
-        assert_eq!(
-            collapsed_fill(ProgramState::Blocked, theme),
-            Some((theme.warning, theme.warning_foreground))
-        );
-        assert_eq!(
-            collapsed_fill(ProgramState::Done, theme),
-            Some((theme.success, theme.success_foreground))
-        );
-        assert_eq!(
-            collapsed_fill(ProgramState::Error, theme),
-            Some((theme.danger, theme.danger_foreground))
-        );
-        assert_eq!(collapsed_fill(ProgramState::Idle, theme), None);
         let fills: Vec<_> = [
-            ProgramState::Working,
-            ProgramState::Blocked,
-            ProgramState::Done,
-            ProgramState::Error,
+            (ProgramState::Working, theme.primary),
+            (ProgramState::Blocked, theme.warning),
+            (ProgramState::Done, theme.success),
+            (ProgramState::Error, theme.danger),
         ]
-        .map(|state| collapsed_fill(state, theme).unwrap().0)
-        .into();
+        .into_iter()
+        .map(|(state, token)| {
+            let (fill, glyph) = collapsed_fill(state, theme).expect("a reported state fills");
+            assert_eq!(fill, token, "{state:?}");
+            assert!(
+                glyph == theme.background || glyph == theme.foreground,
+                "{state:?}: the glyph is a theme token"
+            );
+            fill
+        })
+        .collect();
+        assert_eq!(collapsed_fill(ProgramState::Idle, theme), None);
         for (i, a) in fills.iter().enumerate() {
             assert!(
                 fills[i + 1..].iter().all(|b| a != b),
                 "the four states read apart"
             );
         }
+        // A dark fill gets the light token and a light one the dark token, whatever the theme.
+        let mut theme = theme.clone();
+        theme.background = gpui::hsla(0., 0., 0.05, 1.);
+        theme.foreground = gpui::hsla(0., 0., 0.95, 1.);
+        theme.primary = gpui::hsla(0.6, 0.6, 0.15, 1.);
+        theme.danger = gpui::hsla(0.0, 0.3, 0.85, 1.);
+        let glyph = |state| collapsed_fill(state, &theme).unwrap().1;
+        assert_eq!(glyph(ProgramState::Working), theme.foreground);
+        assert_eq!(glyph(ProgramState::Error), theme.background);
     });
 }
 

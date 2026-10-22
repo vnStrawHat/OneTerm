@@ -201,19 +201,25 @@ pub(super) fn shell_icon(config: Option<&SessionDuplicateConfig>) -> AppIcon {
 }
 
 /// The background of a collapsed cell and the colour of its glyph for the tab's OSC 7501 state
-/// (`US-0198` rework 6): the tokens [`tab_status_icon`] draws the state's icon in, with their
-/// `*_foreground` pair. `None` (idle, or nothing reported) leaves the cell as it is.
+/// (`US-0198` rework 6): the tokens [`tab_status_icon`] draws the state's icon in. The glyph is
+/// whichever of the theme's `background` and `foreground` reads better on the fill (owner
+/// ruling, 2026-10-22: the themes' own `*_foreground` tokens were below 3:1 in 23 of 39 variants,
+/// so none is used). `None` (idle, or nothing reported) leaves the cell as it is.
 pub(super) fn collapsed_fill(
     status: ProgramState,
     theme: &gpui_component::Theme,
 ) -> Option<(gpui::Hsla, gpui::Hsla)> {
-    match status {
-        ProgramState::Working => Some((theme.primary, theme.primary_foreground)),
-        ProgramState::Blocked => Some((theme.warning, theme.warning_foreground)),
-        ProgramState::Done => Some((theme.success, theme.success_foreground)),
-        ProgramState::Error => Some((theme.danger, theme.danger_foreground)),
-        ProgramState::Idle => None,
-    }
+    let fill = match status {
+        ProgramState::Working => theme.primary,
+        ProgramState::Blocked => theme.warning,
+        ProgramState::Done => theme.success,
+        ProgramState::Error => theme.danger,
+        ProgramState::Idle => return None,
+    };
+    Some((
+        fill,
+        oneterm_theme::legible_on(fill, [theme.background, theme.foreground]),
+    ))
 }
 
 /// The tab's OSC 7501 status icon (owner's icon set, `IN-0049`): a rotating
@@ -495,7 +501,13 @@ pub(super) fn render_tab_strip(
     // strip the same menu state.
     let title_row_id = SharedString::from(format!("tab-title-{panel_entity:?}"));
 
-    let recording_dot = show_recording.then(|| recording_dot(recording_color));
+    // The recording dot is `danger`, which a collapsed cell's status fill can be, so on a filled
+    // cell it takes the glyph's colour.
+    let fill = collapsed
+        .then(|| status.and_then(|status| collapsed_fill(status, cx.theme())))
+        .flatten();
+    let dot_color = fill.map_or(recording_color, |(_, glyph)| glyph);
+    let recording_dot = show_recording.then(|| recording_dot(dot_color));
     let label = tab_title_label()
         .id(title_label_id)
         .debug_selector(|| TAB_LABEL_SELECTOR.to_string())
@@ -512,7 +524,6 @@ pub(super) fn render_tab_strip(
         .child(tab_label);
 
     let row = if collapsed {
-        let fill = status.and_then(|status| collapsed_fill(status, cx.theme()));
         collapsed_row(panel.tab_shell_icon(cx), fill, is_active, recording_dot)
     } else if vertical {
         // The rail draws the selected row's accent bar and the reorder grip itself, so this row

@@ -282,11 +282,6 @@ SURFACES: dict[str, tuple[str, ...]] = {
 #                        (`tab_bar.hover.background`, the list hover fill over the bar,
 #                        `crates/workspace/src/layout/workspace/tab_rail.rs`). Its text uses
 #                        are in `SURFACES` above, at 4.5:1.
-#   <status>.foreground  the shell icon of a collapsed rail cell, on the cell's status fill
-#                        (`US-0198` rework 6, `collapsed_fill` in
-#                        `crates/terminal-view/src/panel/tab_title.rs`): Working `primary`,
-#                        Blocked `warning`, Done `success`, Error `danger`, each with its own
-#                        `*_foreground`. The glyph is the only thing drawn on the fill.
 GLYPH_SURFACES: dict[str, tuple[str, ...]] = {
     "warning.background": (
         "tab_bar.background",
@@ -296,19 +291,31 @@ GLYPH_SURFACES: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# The collapsed cell's glyph on its status fill, measured at `GLYPH_FLOOR` like the tier above
-# but ADVISORY: a failure is printed and does not fail the check. The shipped themes were never
-# tuned for these pairs (the kit gives most of them the built-in green/red or an unrelated
-# `primary.foreground`), so about a third of the pairs read below 3:1 today; retuning the themes
-# is the owner's decision (`US-0198` rework 6). Move a pair into `GLYPH_SURFACES` once the
-# themes clear it, and it gates.
-ADVISORY_GLYPH_SURFACES: dict[str, tuple[str, ...]] = {
-    "primary.foreground": ("primary.background",),
-    "warning.foreground": ("warning.background",),
-    "success.foreground": ("success.background",),
-    "danger.foreground": ("danger.background",),
-}
-ADVISORY = " (glyph, advisory)"
+# The collapsed tab cell's glyph on its status fill (`US-0198` rework 6, `collapsed_fill` in
+# `crates/terminal-view/src/panel/tab_title.rs`): the fill is the theme's `primary`, `warning`,
+# `success` or `danger`, and the glyph (and the recording dot on it) is whichever of the theme's
+# `background` and `foreground` reads better on it (`oneterm_theme::legible_on`, owner ruling
+# 2026-10-22; the themes' own `*_foreground` tokens were below 3:1 in 23 of 39 variants). So the
+# measure is the better of the two against each fill, held to `GLYPH_FLOOR`, and the row is
+# `background|foreground (glyph)` on the fill.
+PICKED_GLYPH_FILLS: tuple[str, ...] = (
+    "primary.background",
+    "warning.background",
+    "success.background",
+    "danger.background",
+)
+PICKED_GLYPH = "background|foreground (glyph)"
+# The picked glyph still reads below `GLYPH_FLOOR` on these (variant, fill) pairs: the better of
+# the theme's own `background` and `foreground` cannot reach 3:1 on that fill. Recorded so the
+# check gates every other pair and every other variant; they print on each run, and retuning
+# those themes' status fills is the owner's decision. Delete an entry when the theme is fixed.
+KNOWN_BELOW: frozenset[tuple[str, str]] = frozenset({
+    ("Catppuccin Latte", "primary.background"),      # 2.61:1
+    ("Everforest Light", "primary.background"),      # 2.81:1
+    ("Everforest Light", "success.background"),      # 2.84:1
+    ("Everforest Light", "danger.background"),       # 2.66:1
+    ("Solarized Light", "success.background"),       # 2.99:1
+})
 
 # The hierarchy rule, as (primary, secondary) pairs. On every surface both tokens are drawn
 # on -- the intersection of their `SURFACES` entries -- the primary token's ratio must be
@@ -374,10 +381,6 @@ FALLBACKS: dict[str, str | tuple] = {
     "secondary.foreground": "foreground",                                # schema.rs:819
     "table.head.foreground": "muted.foreground",                         # schema.rs:1006
     "muted.foreground": ("blend", "muted.background", "foreground", 0.7),  # schema.rs:777-779
-    # The status foregrounds a theme leaves out take its own `primary.foreground`.
-    "success.foreground": "primary.foreground",                          # schema.rs:840
-    "warning.foreground": "primary.foreground",                          # schema.rs:883
-    "danger.foreground": "primary.foreground",                           # schema.rs:931
 }
 
 # What the kit shows for a status background a theme omits: the built-in palette of the
@@ -506,9 +509,8 @@ def pairings() -> int:
         for surfaces in (
             *SURFACES.values(),
             *GLYPH_SURFACES.values(),
-            *ADVISORY_GLYPH_SURFACES.values(),
         )
-    )
+    ) + len(variants()) * len(PICKED_GLYPH_FILLS)
 
 
 def comparisons() -> int:
@@ -528,12 +530,14 @@ def rows(
         for table, floor, suffix in (
             (SURFACES, FLOOR, ""),
             (GLYPH_SURFACES, GLYPH_FLOOR, " (glyph)"),
-            (ADVISORY_GLYPH_SURFACES, GLYPH_FLOOR, ADVISORY),
         ):
             for fg_token, surfaces in table.items():
                 measured = [(bg, measure(colors, fg_token, bg)) for bg in surfaces]
                 bg, ratio = min(measured, key=lambda item: item[1])
                 out.append((file_name, name, mode, fg_token + suffix, bg, ratio, floor))
+        for fill in PICKED_GLYPH_FILLS:
+            ratio = max(measure(colors, token, fill) for token in ("background", "foreground"))
+            out.append((file_name, name, mode, PICKED_GLYPH, fill, ratio, GLYPH_FLOOR))
     return out
 
 
@@ -671,8 +675,8 @@ def main() -> int:
     self_test(quiet=True)
     measured = rows()
     below = [row for row in measured if row[5] < row[6]]
-    failures = [row for row in below if not row[3].endswith(ADVISORY)]
-    advisory = [row for row in below if row[3].endswith(ADVISORY)]
+    known = [row for row in below if row[3] == PICKED_GLYPH and (row[1], row[4]) in KNOWN_BELOW]
+    failures = [row for row in below if row not in known]
     inverted = inversions()
     inverted_comparisons = sum(row[7] for row in inverted)
     secondary = HIERARCHY[0][1]
@@ -724,15 +728,14 @@ def main() -> int:
             )
         return 1
 
-    if advisory:
+    for file_name, name, mode, fg_token, bg_token, ratio, floor in known:
         print(
-            f"check-theme-contrast: ADVISORY {len(advisory)} status-fill glyph row(s) in "
-            f"{len({row[1] for row in advisory})} variant(s) below {GLYPH_FLOOR}:1 "
-            "(not a failure; --report lists them, the themes are the owner's to retune)"
+            f"check-theme-contrast: KNOWN {name} ({mode}): status glyph on {bg_token} is "
+            f"{ratio:.2f}:1 (floor {floor}:1), awaiting the owner"
         )
     print(
         f"check-theme-contrast: {pairings()} foreground/surface pairings across "
-        f"{len(measured)} token/variant rows, all >= {FLOOR}:1 (gating glyphs >= {GLYPH_FLOOR}:1); "
+        f"{len(measured)} token/variant rows, all >= {FLOOR}:1 (glyphs >= {GLYPH_FLOOR}:1); "
         f"primary text out-reads "
         f"{secondary} on all {comparisons()} shared-surface comparisons"
     )
