@@ -928,10 +928,14 @@ fn tab_context_menu(
     // The vertical rail keeps this tab's row highlighted while the menu is up: the menu's
     // overlay takes the pointer, so the row stops being hovered (`US-0196` rework 8). The menu
     // builder runs once per opening; the menu says when it is gone (Escape, a click outside, a
-    // chosen item), and a late close does not clear a newer tab's record.
-    let tab = panel.entity_id().as_u64();
-    TabMenuOpen::opened(tab, cx);
-    cx.subscribe_self(move |_, _: &gpui::DismissEvent, cx| TabMenuOpen::closed(tab, cx))
+    // chosen item), and a late close does not clear a newer menu's record.
+    let (tab, menu_id) = (panel.entity_id().as_u64(), cx.entity_id().as_u64());
+    TabMenuOpen::opened(tab, menu_id, cx);
+    cx.subscribe_self(move |_, _: &gpui::DismissEvent, cx| TabMenuOpen::closed(menu_id, cx))
+        .detach();
+    // A menu that goes without being dismissed (its window closes, or a newer menu replaces it)
+    // is released instead; the record is per menu, so a newer menu's record is left alone.
+    cx.on_release(move |_, cx| TabMenuOpen::closed(menu_id, cx))
         .detach();
     let menu = menu
         .item(PopupMenuItem::new("Rename...").on_click({

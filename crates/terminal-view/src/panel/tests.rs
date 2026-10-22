@@ -1646,6 +1646,15 @@ fn a_tab_menu_records_that_it_is_open_until_it_is_dismissed(cx: &mut TestAppCont
     cx.simulate_click(away, Modifiers::none());
     cx.run_until_parked();
     assert_eq!(open(cx), None, "a click outside dismisses it");
+
+    // A second right-click on the same tab replaces the open menu (the old one is released, not
+    // dismissed); the release must not clear the record of the menu that replaced it.
+    right_click(cx);
+    right_click(cx);
+    assert_eq!(open(cx), Some(id), "the replacing menu is the open one");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(open(cx), None);
 }
 
 /// OSC 7 from the shell tells the panel to repaint, so the row's path is live.

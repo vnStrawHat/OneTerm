@@ -513,3 +513,28 @@ Informational, not defects: (a) the header reads `scroll_handle.offset()` before
 ### For the owner
 
 The three steps and the hover versus selected title in a dark and a light theme on screen (the `ui-verifier` walk); whether the lighter dark selected row (`#33373b`) still reads as intended; the menu-open highlight after choosing an item from the menu.
+
+## UI verification (rework 8)
+
+Build: scratchpad `r8bin\oneterm.exe` (head 210d7fc0 per coordinator), private profile per run, 1280x800. Screenshots: `...\scratchpad\r8shots\r8-*.png`. Fills/titles measured from pixels (client x = shot x - 8). Desktop was usable (rendering worked; LogonUI/LockApp processes exist but PrintWindow was not black).
+
+| # | Item | Result | Evidence |
+|---|------|--------|----------|
+| 1 | Zed One Dark steps (rail/hover/selected) | PASS: #1e2227 / #292c31 / #32363b (expected #282c31 / #33373b, 1 level off, rounding). Titles #8f96a3 / #c7cad1 / #ffffff | r8-03, r8-04 |
+| 1 | Zed One Light steps | PASS: #f0f0f1 / #e7e7e8 / #dedee0 exact. Titles #5d677a / #4a505e / #383a42 exact; hover vs selected clearly distinct | r8-32, r8-33, r8-34 |
+| 1 | Hover title dimmer than selected; hovering selected row changes nothing | PASS both themes | r8-04, r8-33 |
+| 2 | Right-click unselected row keeps fill + hover title while menu open | PASS dark and light | r8-05, r8-34 |
+| 2 | Gone after Escape / click elsewhere / choosing Rename... (dialog dims everything, row idle after Cancel) | PASS | r8-07, r8-08, r8-09, r8-10, r8-35 |
+| 2 | Second right-click while first menu open: only the second highlighted | PASS | r8-06 |
+| 3 | 17 tabs: no line at top; 1 px border-colour line (#3e4451, x 8..227, y 65) when scrolled; gone at top; header crop pixel-identical (label and + unmoved) | PASS | r8-11, r8-12/13, r8-14, r8-15 |
+| 4 | Selected row with directory line, light theme | NOT WALKED: no cwd reaches the rail in the private profile (typed OSC 7 prompt did not take; terminal text not rendered in this driver) |  |
+| 5 | Collapsed strip: same fill steps (dark #292c31/#32363b; light #e7e7e8/#dedee0), menu-open cell stays highlighted, gone after Escape | PASS | r8-21, r8-22, r8-23, r8-36..38 |
+| 5 | Collapsed drag split: icon drag shows the ghost over the terminal area; cell edge drag reorders with blue drop line | PASS (as before) | r8-24, r8-26 |
+| 6 | Aurora Light: #f1f5f9 / #e5e9ed / #dadee3, titles #334155 / #212c3f / #0f172a, readable | PASS | r8-4x-aurora-hover |
+| 6 | Solarized Dark: #032f3b / #103944 / #1c434b, titles #93a1a1 / #c8cbc2 / #fdf6e3, menu-open row highlighted, readable | PASS | r8-4x-sold-hover, r8-5x-sold-rmenu |
+
+Defects: none found.
+
+Notes: dark fills are 1 level off the coder's quoted hex (rounding), harmless. Aurora/Solarized right-click only walked expanded for menu-open; no separate collapsed walk in those two.
+
+Owner-only / not walked: item 4 (needs a real shell reporting its directory, e.g. PowerShell/OSC 7 in the owner's profile); real hover with a physical mouse (posted messages only); keyboard-only focus of rail rows; IME.
