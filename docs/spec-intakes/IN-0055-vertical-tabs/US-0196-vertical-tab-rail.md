@@ -286,6 +286,39 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner request, 2026-
 - [x] The contrast check measures the hover surface in every built-in theme and passes.
 - [ ] On screen, by `ui-verifier`: hovering a row in two themes, the active row unchanged, the divider and accent bar visible, collapsed cells likewise.
 
+## Rework 7 2026-10-22 (owner): visual polish of the expanded rail
+
+Acceptance rework of this packet (reopened, not a new BUG), together with `US-0198` Rework 7 (the collapsed strip). A design walkthrough of the running build measured, in Zed One Dark: rail `#1E2227`, terminal `#23272E`, the selected row filled with the terminal's own colour (so it read as the page, not as a row), the hover fill `#2C313C` *lighter* than the selected one, an idle title in a muted tone, a 2 px accent bar, rows of 64 px with 36 px of nothing when the tab has no directory, a 1 px divider under every row (the selected row boxed by two), the reorder grip at x 3..9 touching the title at x 12, a header that is a lone `+`. In Zed One Light the hovered row (`#E5E5E6`) was darker than the selected one (`#FAFAFA`) and the idle title blue-grey. Screenshots: the scratchpad `vt-walk\` (`vtw-04-15tabs.png`, `vtw-09-zoom-rows.png`, `vtw-20-light-expanded.png`; `vtw-40-mock-proposal.png` is a hand-drawn target, whose shell icon in every row and close `x` the owner did **not** choose).
+
+**Owner choices (implemented as given).**
+
+1. **Rows are 48 px**: 6 px top and bottom padding, line 1 = 20 px (the title), line 2 = 16 px (the directory, `text_xs`, `muted.foreground`). A tab with **no directory** has no blank second line: line 1 is vertically centred in the 48 px. The status icon stays at the right end of line 2 when there is a directory and sits at the right end of the centred line 1 when there is none. The row is padded 14 px on the left and 10 px on the right (the title no longer starts under the grip).
+2. **The selected row stands out**: selected > hover > idle in both themes. Selected fill = `Theme::list_active`; hover fill = `Theme::list_hover` at 50 % alpha over the rail; a selected row takes no hover fill. The accent is a **3 px rounded pill inset 8 px top and bottom** on the left edge, in `selection_accent`. No divider or border boxes the selected row.
+3. **No row dividers.** The 1 px bottom border and `TabRowLayout::VERTICAL_ROW_DIVIDER` are deleted; only the rail's own right border remains (a drop line still draws on the edge a dragged tab will land). **The grip is a hover-only overlay** at the far left (an 8 px wide absolute strip, its glyph ink at about x 2..6): it reserves no column and the title starts at 14 px.
+4. **The header has a label**: "Terminals" on the left (`text_xs`, `muted.foreground`, not upper-cased: no other header in the chrome is), the `+` on the right as a 24 x 24 ghost button (the kit's `Size::Small`; the terminal panel's `title_suffix` takes it while a rail draws it, the strip keeps `xsmall`), and **no bottom border**. The collapsed strip's header is the `+` alone, centred.
+5. and 6. are the collapsed strip's: `US-0198` Rework 7.
+
+**Choices the request left open.**
+
+- *Which token is the selected fill.* `tab.active.background` equals the terminal's `background` in both Zed One themes, so it cannot make the row stand out from the page. `list.active.background` is the kit's "selected list item" token, but OneTerm overwrites `Theme::list_active` with `list_hover` after every theme application (`apply_list_style_override`: the session tree and the SFTP rows show selection as hover), so at run time the selected fill reads `list_hover`, which in both Zed One themes is `#2c313c` (dark) and `#e5e5e6` (light): visibly different from the rail (`#1e2227`, `#f0f0f1`) and from the terminal (`#23272e`, `#fafafa`). The rail reads `list_active` (the selected-item token, so a future change to the override moves it) and takes hover as `list_hover` at **half alpha**, which by construction lies between the rail and the selected fill in every theme where `list_hover` is the selected colour: selected > hover > idle holds for any such theme, not only these two. A test applies both Zed One themes and checks the order against the rail.
+- *Contrast.* `scripts/check-theme-contrast.py` gets a `tab_bar.selected.background` surface (`list.hover.background` over `tab_bar.background`, since that is what `list_active` holds) for `tab.active.foreground`, `muted.foreground` and the bell glyph, and `tab_bar.hover.background` is now the hover colour **at 50 %** over the bar. Results are in Evidence.
+- *Idle title colour.* `tab.foreground` is kept. Zed One Light has no neutral muted token: `muted.foreground`, `tab.foreground` and the sidebar's text are all `#5d677a` (blue-grey), and `foreground` `#383a42` is the selected title's colour. A computed grey would be a colour the theme did not choose, and retuning a theme is not this packet's to do (owner rule), so the idle title stays the theme's own `tab.foreground`.
+- *The grip glyph is centred on the whole 48 px row*, not on line 1 (the row has one line when there is no directory, and the overlay is a strip the full height of the row).
+- *Dead code removed*: `TabRowLayout::VERTICAL_ROW_DIVIDER`, `vertical_first_line_centre`, `report_cell_fill` / `take_cell_fill` (they told the rail what colour the collapsed cell filled itself with, only to colour the grip glyph on it; the collapsed cell has no grip any more) and `grip_glyph_color`.
+
+**Acceptance.**
+
+- [ ] Rows are 48 px; with a directory the lines are 20 + 16 px between 6 px of padding; without one, line 1 is centred in the row (tests, `oneterm-state` and `oneterm-terminal-view`, on a drawn frame).
+- [ ] The status icon is at line 2's right end with a directory and at line 1's right end without one (test).
+- [ ] No divider: the title element is as tall as the row, rows touch (workspace test); `VERTICAL_ROW_DIVIDER` is gone.
+- [ ] The selected fill is `list_active`, the hover fill `list_hover` at 50 %, and in Zed One Dark and Zed One Light selected is stronger than hover, which is stronger than the rail (workspace test with both themes applied); the selected row draws no hover fill.
+- [ ] The accent is a 3 px pill inset 8 px top and bottom (workspace test on the drawn bounds).
+- [ ] The grip is an overlay: the title starts at the row's left padding and not after a grip column; the reorder drag still starts from it (workspace tests).
+- [ ] The header has the "Terminals" label on the left, the `+` on the right, no bottom border, and the collapsed header is the `+` alone (workspace tests); the `+` is 24 px in a rail and 20 px in the strip (terminal-view unit test of the size rule).
+- [ ] `scripts/check-theme-contrast.py` measures the new selected and hover surfaces; results and any failure reported, no theme retuned.
+- [ ] Full `pwsh scripts/ci-local.ps1` passes; `cargo build -p oneterm-app` builds.
+- [ ] On screen, by `ui-verifier`: rows, selected / hover / idle in a dark and a light theme, the pill, the grip overlay on hover, the header, with and without a directory.
+
 ## Handoff
 
 Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0196` in the intake. `US-0197` (resize, `clamp_tab_rail_width`, done) and `US-0198` (collapse) build on `tab_rail.rs` and the stored `vertical_tabs` fields.
