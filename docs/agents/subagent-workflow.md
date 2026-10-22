@@ -47,7 +47,7 @@ the agent, its model and its effort in the report of every dispatch (owner rule,
 
 | Agent | Model | Effort | Does | Resumed for |
 | --- | --- | --- | --- | --- |
-| **advisor** | opus | high | review (a spec on the architect's request; a packet's code diff and tests, with pinned tests and an evidence file), risk analysis, research | follow-up questions, targeted re-review |
+| **advisor** | fable | medium | review (a spec on the architect's request; a packet's code diff and tests, with pinned tests and an evidence file), risk analysis, research | follow-up questions, targeted re-review |
 | **architect** | opus | high | the spec: Spec Intake, HLD, LLDs for the high-risk lane, DEC candidates, packet list, numbered owner questions, scenario walkthrough; may request an advisor spec review; no cargo | reconciling records after an owner ruling |
 | **coder** | sonnet | high | one packet from its spec: records-first commit, code, unit tests, the in-worktree quality gate, evidence; reports whether the change is UI-visible | **rework** after a review (same worktree, cherry-picks the reviewer's tests) |
 | **coder-lite** | sonnet | low | small tasks: configuration, formatting, environment setup, running the quality gate or a build and reporting its evidence, doc reconciliation, mechanical fixes | — |
@@ -62,8 +62,10 @@ UAC elevation, real SSH hosts, physical keys, sleep/resume, taskbar).
 
 ### Why these models
 
-- **opus/high for advisor and architect**: judgement over 10-20 documents plus code, and a
-  wrong design or a missed risk in a secrets feature costs more than the model saving.
+- **opus/high for architect**: judgement over 10-20 documents plus code, and a wrong design
+  costs more than the model saving.
+- **fable/medium for advisor** (owner change, 2026-10-22): reviews, risk analysis and research
+  stay with a strong model; the pinned tests and the ui-verifier walk back its findings.
 - **sonnet/high for coder**: the spec and the LLD already decide the shape; the coder needs
   care and a full gate, and the advisor's code review plus the ui-verifier catch what it misses.
 - **sonnet/low for coder-lite**: scripted, mechanical tasks.
