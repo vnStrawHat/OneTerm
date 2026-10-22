@@ -215,3 +215,55 @@ Binary copy built from `081b425f` (UI identical to `dbacc969`), desktop unlocked
 - Input Channel on a live split tab and the pane frame of a joined channel (no split tab can be made here; the joined tab was inactive so no frame is visible).
 - D1 with a working PowerShell 7.
 - Keyboard-only access to the menu, elevated window, physical-key behaviour.
+
+## Advisor re-review 2
+
+Date: 2026-10-22. Reviewed head: `15f6b19f` (`179ff17f` UI evidence, `15f6b19f` D1, D2 and
+the two script nits), same branch. No conflict markers in `crates/`, `docs/`, `scripts/`.
+
+**Verdict: PASS.** One informational note, nothing blocking.
+
+Gate: `cargo clippy -p oneterm-terminal-view -p oneterm-workspace -p oneterm-settings -p oneterm-state --all-targets -- -D warnings`
+clean; `cargo test` on the same four: settings 56, state 77, terminal-view 419 (3 ignored),
+workspace 112 (3 ignored), all pass; `check-theme-contrast.py` 1755 pairings / 429 rows at
+their floor; `--self-test` passes; `check-english.py` 1144 files; `check-doc-paths.py` 219
+paths. Disk D at 6.3 GB free after the run.
+
+**D1, the disabled row, against IN-0022.** `channel_menu.rs:92-103,138-147`: the only
+condition is `active_view()` being `None` (a `SpaceTree::new_empty` tab, `terminal_panel.rs:274-276`,
+or an emptied Space); then the row is drawn disabled between the same two separators, so
+every tab's menu has one shape. Membership needs a view and its session (`registry.join(id,
+channel, session, ..)`), so an empty Space really cannot join: the rule follows the data.
+An exited session keeps its view, so it may join and stay a member; that is the behaviour
+IN-0022 already had (nothing evicts a member on `SessionEvent::Exited`, `view.rs:417-424`;
+only `shutdown` leaves, `view.rs:486`), and a broadcast reaching it is a failed write
+logged once per delivery through `report_generated_input` (`crates/terminal/src/session.rs:64-68`,
+`log::warn`), no notification, no panic, the origin unaffected (`fan_out_..` tests in
+`crates/state`, including a dead member). So the rule is safe and consistent with the intake.
+Test `only_a_tab_without_a_terminal_loses_the_channel_submenu` pins both halves.
+
+**D2, separators only between drawn items.** `statusbar.rs:265-309`. Walked every
+combination: left group is `[toggle] | clock` (both always drawn when the toggle is, so its
+separator is unconditional, correct); centre leads with a separator only when the cwd or
+the branch has text and puts the middle one only when both do, so `clock | cwd | branch`,
+`clock | cwd`, `clock | branch`, `clock` are all right; right group puts a separator after
+the network figure only when it is drawn and after the resource figure only when it is, and
+the dock button is always last, so `net | res | btn`, `net | btn`, `res | btn`, `btn` are
+all right. The test covers all-on, all-off and branch-only through `item_if` (a `None`
+label, the same path production takes for an empty cwd). The width budget still counts the
+four separators in `BAR_CHROME` when some are hidden, which only leaves room unused; the
+record says so.
+
+**Script nits.** `--report` summary names both floors. The self-test now runs a fixture
+through `rows(only=..)` and checks that the glyph row carries `GLYPH_FLOOR`, the text row
+`FLOOR`, that a bell near 3.4:1 passes the glyph row and would fail the text floor, and
+that one near 2.4:1 fails; `rows()` keeps its default path for `main()`. Meaningful.
+
+**Records.** US-0199 acceptance and Plan state the D1 rule and its cause; `gui-layout.md`
+and `terminal-split.md` say "disabled while the tab's active Space holds no terminal";
+US-0198 lists D2 with the cause and the test name. All match the code.
+
+Info, not blocking: a channel member whose process exits stays a member until its tab is
+closed (pre-existing, not introduced here). If the owner wants exited members out of the
+fan-out, that is a one-line `leave_channel` in the `Exited` arm plus a test, as a separate
+packet.
