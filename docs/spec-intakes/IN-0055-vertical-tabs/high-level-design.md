@@ -195,9 +195,10 @@ Vertical, collapsed (`US-0198`, 44 px):
 +----+------------------------------------
 | [+]|
 |----|
-|▌ 1⟳|  ← 44 x 44 cell: position number centred; status icon as a top-right badge,
-|  2 |     recording dot top-left (`US-0198`); hover card: the expanded row's content;
-|● 3 |     click / middle-click / right-click as expanded; chips and cwd not drawn
+|▌>_ |  ← 44 x 44 cell: the shell's icon centred (cmd / PowerShell / generic terminal);
+| ▒▒ |     the OSC 7501 state is the cell's background, no badge (rework 6, 2026-10-22);
+|● >_|     recording dot top-left; hover card: the expanded row's content (with its
+        status icon); click / middle-click / right-click as expanded; chips and cwd not drawn
 +----+
 ```
 

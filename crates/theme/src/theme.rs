@@ -131,6 +131,18 @@ fn contrast(a: Hsla, b: Hsla) -> f32 {
     (hi + 0.05) / (lo + 0.05)
 }
 
+/// Whichever of two theme colours reads better on `fill` (the higher WCAG contrast ratio; the
+/// first wins a tie). A glyph on a status colour the theme did not choose it for (the collapsed
+/// tab cell, `US-0198`) takes `[background, foreground]`, so it is light on a dark fill and
+/// dark on a light one in every theme, with no colour of its own.
+pub fn legible_on(fill: Hsla, candidates: [Hsla; 2]) -> Hsla {
+    if contrast(candidates[1], fill) > contrast(candidates[0], fill) {
+        candidates[1]
+    } else {
+        candidates[0]
+    }
+}
+
 /// `warning`, darkened or lightened until it reads on every surface OneTerm
 /// draws it on — or unchanged, when it already does.
 ///
@@ -318,6 +330,24 @@ pub fn init(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A dark fill takes the light token, a light fill the dark one, and the ratio is the
+    /// WCAG one (black on white is 21:1), whichever order the tokens come in.
+    #[test]
+    fn the_glyph_colour_is_the_better_of_two_tokens() {
+        let (dark, light) = (gpui::hsla(0., 0., 0.05, 1.), gpui::hsla(0., 0., 0.95, 1.));
+        let green = gpui::hsla(0.38, 0.6, 0.45, 1.);
+        let darker = gpui::hsla(0.38, 0.6, 0.1, 1.);
+        assert_eq!(legible_on(darker, [dark, light]), light);
+        assert_eq!(legible_on(darker, [light, dark]), light);
+        assert_eq!(legible_on(light, [dark, light]), dark);
+        assert_eq!(legible_on(light, [light, dark]), dark);
+        // A mid green: black reads better than white on it (about 7.5:1 against 2.3:1).
+        assert_eq!(legible_on(green, [light, dark]), dark);
+        assert!((contrast(gpui::black(), gpui::white()) - 21.0).abs() < 0.01);
+        // A tie goes to the first candidate.
+        assert_eq!(legible_on(green, [dark, dark]), dark);
+    }
 
     #[test]
     fn every_embedded_theme_file_parses() {

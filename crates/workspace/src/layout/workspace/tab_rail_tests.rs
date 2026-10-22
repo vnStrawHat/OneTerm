@@ -1147,10 +1147,9 @@ fn the_setter_collapses_the_rail_to_a_strip_and_expands_it(cx: &mut TestAppConte
     assert_eq!(report.removed.get(), 0, "no panel was rebuilt");
 }
 
-/// A cell asks the panel for its collapsed layout with the tab's 1-based position, and a click
-/// on it selects the tab.
+/// A cell asks the panel for its collapsed layout, and a click on it selects the tab.
 #[gpui::test]
-fn a_collapsed_cell_is_built_with_its_position_and_a_click_selects_it(cx: &mut TestAppContext) {
+fn a_collapsed_cell_is_built_collapsed_and_a_click_selects_it(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
@@ -1163,8 +1162,8 @@ fn a_collapsed_cell_is_built_with_its_position_and_a_click_selects_it(cx: &mut T
     );
     assert_eq!(
         report.title_layout.get(),
-        Some(TabRowLayout::Collapsed(3)),
-        "the last cell drawn is the third"
+        Some(TabRowLayout::Collapsed),
+        "the cells are drawn in the collapsed layout"
     );
     cx.update(|_, cx| {
         assert_eq!(TabRowLayout::current(cx), TabRowLayout::Horizontal);

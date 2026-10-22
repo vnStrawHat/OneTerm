@@ -20,6 +20,7 @@ use crate::panel::{PanelSpec, TerminalPanel};
 use crate::space::{CloseOutcome, SplitDir};
 use crate::terminal_view::TerminalView;
 
+mod collapsed_cell;
 mod tab_menu_and_card;
 
 /// The scroll estimate must count the rows the menu really emits, in both modes
@@ -1013,7 +1014,7 @@ fn the_close_following_row_names_the_direction_of_the_layout() {
         "Close Tabs Below"
     );
     assert_eq!(
-        close_following_label(TabRowLayout::Collapsed(2)),
+        close_following_label(TabRowLayout::Collapsed),
         "Close Tabs Below"
     );
 }
@@ -1052,7 +1053,7 @@ impl gpui::Render for TabRowHost {
             oneterm_state::TabRowLayout::Vertical => {
                 oneterm_state::TabRowLayout::VERTICAL_ROW_HEIGHT
             }
-            oneterm_state::TabRowLayout::Collapsed(_) => 44.,
+            oneterm_state::TabRowLayout::Collapsed => 44.,
         };
         gpui::div()
             .size_full()
@@ -1412,91 +1413,6 @@ fn the_rows_directory_is_the_status_bars(cx: &mut TestAppContext) {
     }
 }
 
-/// The collapsed rail's cell (`US-0198`) is the tab's position with the status icon as a corner
-/// badge: no title, directory or close button, the number centred in the cell and follows the
-/// position it was given.
-#[gpui::test]
-fn a_collapsed_cell_shows_the_position_and_the_status_badge_only(cx: &mut TestAppContext) {
-    use gpui::px;
-    use oneterm_state::TabRowLayout;
-    use oneterm_terminal::SessionKind;
-
-    use crate::panel::tab_title::{
-        TAB_CLOSE_SELECTOR, TAB_CWD_SELECTOR, TAB_LABEL_SELECTOR, TAB_NUMBER_SELECTOR,
-        TAB_ROW_SELECTOR, TAB_STATUS_SELECTOR,
-    };
-
-    let (_, probe, cx) =
-        tab_row_window_of_width(cx, TabRowLayout::Collapsed(7), 44., SessionKind::Local);
-    probe.set_cwd(Some(std::path::PathBuf::from("Z:/oneterm-test/x")));
-    cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
-    let row = cx
-        .debug_bounds(TAB_ROW_SELECTOR)
-        .expect("the cell is drawn");
-    let number = cx
-        .debug_bounds(TAB_NUMBER_SELECTOR)
-        .expect("the position is drawn");
-    assert_eq!((row.size.width, row.size.height), (px(44.), px(44.)));
-    assert!(
-        (number.center().x - row.center().x).abs() <= px(1.)
-            && (number.center().y - row.center().y).abs() <= px(1.),
-        "the number {number:?} is centred in the cell {row:?}"
-    );
-    for (selector, what) in [
-        (TAB_LABEL_SELECTOR, "title"),
-        (TAB_CWD_SELECTOR, "directory"),
-        (TAB_CLOSE_SELECTOR, "close button"),
-        (TAB_STATUS_SELECTOR, "status icon without a status"),
-    ] {
-        assert!(cx.debug_bounds(selector).is_none(), "no {what} in the cell");
-    }
-
-    // A status is a badge in the top-right corner, clear of the number.
-    report_done(&probe, cx);
-    cx.update(|window, cx| window.draw(cx).clear(cx));
-    let status = cx
-        .debug_bounds(TAB_STATUS_SELECTOR)
-        .expect("the status badge is drawn");
-    assert!(status.right() <= row.right() && status.top() >= row.top());
-    assert!(
-        status.center().x > row.center().x && status.center().y < row.center().y,
-        "the badge {status:?} sits in the top-right corner of {row:?}"
-    );
-    assert!(
-        status.left() >= number.right(),
-        "the badge {status:?} does not cover the number {number:?}"
-    );
-}
-
-/// The number is the position the rail gave the cell.
-#[gpui::test]
-fn a_collapsed_cell_draws_the_position_it_is_given(cx: &mut TestAppContext) {
-    use oneterm_state::TabRowLayout;
-    use oneterm_terminal::SessionKind;
-
-    use crate::panel::tab_title::TAB_NUMBER_SELECTOR;
-
-    let mut width_of = |position: usize| {
-        let (_, _, cx) = tab_row_window_of_width(
-            cx,
-            TabRowLayout::Collapsed(position),
-            44.,
-            SessionKind::Local,
-        );
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-        cx.debug_bounds(TAB_NUMBER_SELECTOR)
-            .expect("the position is drawn")
-            .size
-            .width
-    };
-    let (one, ten) = (width_of(1), width_of(10));
-    assert!(
-        ten > one,
-        "two digits are wider than one: {ten:?} vs {one:?}"
-    );
-}
-
 /// The cell's tooltip would stay over the menu a right-click opens, so a right press hides it
 /// until the pointer comes back to the cell (`US-0198` UI defect U1).
 #[gpui::test]
@@ -1510,7 +1426,7 @@ fn a_right_click_hides_the_collapsed_cells_tooltip_until_the_pointer_returns(
     use crate::panel::tab_title::TAB_ROW_SELECTOR;
 
     let (_, _, panel, cx) =
-        tab_row_window_with_panel(cx, TabRowLayout::Collapsed(1), 44., SessionKind::Local);
+        tab_row_window_with_panel(cx, TabRowLayout::Collapsed, 44., SessionKind::Local);
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let row = cx
         .debug_bounds(TAB_ROW_SELECTOR)
@@ -1583,16 +1499,12 @@ fn the_horizontal_row_is_content_sized_as_before(cx: &mut TestAppContext) {
     );
 }
 
-/// The working icon spins in the strip, the vertical row and the collapsed cell alike: each
-/// draw of a live row asks for the next frame.
+/// The working icon spins in the strip and the vertical row alike: each draw of a live row asks
+/// for the next frame. (The collapsed cell has no icon: its state is its background.)
 #[gpui::test]
 fn the_working_icon_animates_in_every_row_layout(cx: &mut TestAppContext) {
     use oneterm_state::TabRowLayout;
-    for layout in [
-        TabRowLayout::Horizontal,
-        TabRowLayout::Vertical,
-        TabRowLayout::Collapsed(1),
-    ] {
+    for layout in [TabRowLayout::Horizontal, TabRowLayout::Vertical] {
         let (_, probe, cx) = tab_row_window(cx, layout);
         probe
             .emit(oneterm_terminal::SessionEvent::ProgramStatus(Some(
