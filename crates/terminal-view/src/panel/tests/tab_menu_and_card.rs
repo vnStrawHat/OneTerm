@@ -158,3 +158,42 @@ fn the_collapsed_cells_hover_card_has_the_expanded_rows_content(cx: &mut TestApp
     );
     assert!(title.size.width <= px(202.), "{title:?}");
 }
+
+/// A tab with no terminal (the shell failed to spawn, or its Space was emptied) has no submenu
+/// to offer (its row is shown disabled), while a tab whose process has exited still has its
+/// terminal and therefore the live submenu.
+#[gpui::test]
+fn only_a_tab_without_a_terminal_loses_the_channel_submenu(cx: &mut TestAppContext) {
+    use oneterm_terminal::SessionEvent;
+
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(InputChannelRegistry::init);
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "A");
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_spec(session_spec(session, "A"), window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+
+    let entries = |cx: &mut VisualTestContext| panel.read_with(cx, |p, cx| p.channel_entries(cx));
+    assert!(entries(cx).is_some());
+
+    probe
+        .emit(SessionEvent::Exited(Some(0)))
+        .expect("event channel must accept the exit");
+    cx.run_until_parked();
+    assert!(
+        entries(cx).is_some(),
+        "an exited session is still a terminal and offers the submenu"
+    );
+
+    panel.update(cx, |panel, cx| {
+        panel.tree = crate::space::SpaceTree::new_empty(cx.focus_handle());
+    });
+    assert!(
+        entries(cx).is_none(),
+        "a tab with no terminal offers none (its row is disabled)"
+    );
+}

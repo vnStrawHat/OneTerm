@@ -89,7 +89,9 @@ impl TerminalPanel {
     }
 
     /// The submenu's entries for this tab; `None` while the active Space holds no terminal
-    /// (an empty Space cannot join a channel).
+    /// (an empty Space cannot join a channel), which [`channel_submenu`] shows as a disabled row.
+    /// Only the absence of a terminal view decides this: a session that has exited keeps its
+    /// view, so the tab still offers the submenu.
     pub(super) fn channel_entries(&self, cx: &App) -> Option<Vec<ChannelMenuItem>> {
         self.active_view()?;
         Some(channel_menu_items(
@@ -127,8 +129,12 @@ impl TerminalPanel {
     }
 }
 
-/// Add the "Input Channel" submenu for `panel` to a tab's menu, after a separator. Nothing is
-/// added for a tab whose active Space is empty.
+/// Add the "Input Channel" submenu for `panel` to a tab's menu, after a separator.
+///
+/// A tab whose active Space holds no terminal (the shell failed to spawn, or its Space was
+/// emptied) cannot join a channel (`IN-0022`), but its menu keeps the same shape: the row is
+/// there, disabled, with no submenu. A terminal whose process has exited is still a terminal and
+/// gets the live submenu.
 pub(super) fn channel_submenu(
     menu: PopupMenu,
     panel: Entity<TerminalPanel>,
@@ -136,7 +142,9 @@ pub(super) fn channel_submenu(
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     let Some(items) = panel.read(cx).channel_entries(cx) else {
-        return menu;
+        return menu
+            .separator()
+            .item(PopupMenuItem::new("Input Channel").disabled(true));
     };
     menu.separator()
         .submenu("Input Channel", window, cx, move |submenu, _, _| {

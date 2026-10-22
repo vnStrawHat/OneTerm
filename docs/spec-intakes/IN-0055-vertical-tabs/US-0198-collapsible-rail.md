@@ -177,6 +177,7 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner requests, 2026
 - [x] With Vertical Tabs on, a separator sits between the button and the clock (test: `toggle.right() + 8 + 1 + 8 == clock.left()`); with it off there is neither.
 - [x] The centre budget accounts for the separator (the constant equals button + separator + two gaps).
 - [x] The hover card is built from the same function as the expanded row (test draws the card: title, directory below it, status icon on line 2, width. The channel chips and the recording dot come from the same `tab_chips` / `recording_dot` helpers the expanded row uses, but the card test does not drive a channel or a log, so they are not pinned there).
+- [x] Status bar separators sit only between drawn items (ui-verifier D2, 2026-10-22). Cause: `build_status_bar` drew the two centre separators and the two right-group separators unconditionally, so an empty cwd and branch (a tab with no shell, a non-repository) left two dangling after the clock; it was already so on main. Now the centre's leading separator needs the cwd or the branch, the middle one needs both, and the right group's follow the network and resource figures that are drawn (test `separators_only_sit_between_drawn_items`; the width budget still counts the full set, which only under-uses the room).
 - [ ] On screen, by `ui-verifier`: separator in two themes, the card on a collapsed cell with chips / a long directory / the status icon, hidden while the context menu is open.
 
 ### Gaps

@@ -476,13 +476,15 @@ def comparisons() -> int:
     return len(variants()) * sum(len(shared_surfaces(*pair)) for pair in HIERARCHY)
 
 
-def rows() -> list[tuple[str, str, str, str, str, float, float]]:
+def rows(
+    only: list[tuple[str, str, str, dict[str, str]]] | None = None,
+) -> list[tuple[str, str, str, str, str, float, float]]:
     """(file, variant, mode, fg token, worst surface, worst ratio, its floor) per checked token.
 
     A glyph token is its own row (`token (glyph)`), measured at `GLYPH_FLOOR`.
     """
     out = []
-    for file_name, name, mode, colors in variants():
+    for file_name, name, mode, colors in variants() if only is None else only:
         for table, floor, suffix in ((SURFACES, FLOOR, ""), (GLYPH_SURFACES, GLYPH_FLOOR, " (glyph)")):
             for fg_token, surfaces in table.items():
                 measured = [(bg, measure(colors, fg_token, bg)) for bg in surfaces]
@@ -586,11 +588,19 @@ def self_test(quiet: bool = False) -> int:
     only_popover = dict(upright, **{"popover.foreground": "#767676"})
     found = inversions([("fixture.json", "Fixture", "light", only_popover)])
     assert [row[3] for row in found] == ["popover.foreground"], found
-    # The glyph tier is a lower floor, not a skipped check: 3.5:1 passes it and fails the text
-    # floor, and 2.5:1 fails both.
-    bell = {"background": "#ffffff", "tab_bar.background": "#ffffff"}
-    assert GLYPH_FLOOR <= measure(dict(bell, **{"warning.background": "#8a8a8a"}), "warning.background", "tab_bar.background") < FLOOR
-    assert measure(dict(bell, **{"warning.background": "#a0a0a0"}), "warning.background", "tab_bar.background") < GLYPH_FLOOR
+    # The glyph tier is a lower floor, not a skipped check, and `rows()` applies it to the glyph
+    # row alone: a bell at about 3.4:1 on its worst surface passes its own row and would fail the text floor, about 2.4:1 fails it.
+    fixture = {"background": "#ffffff", "foreground": "#000000", "border": "#cccccc",
+               "muted.background": "#eeeeee", "accent.background": "#dddddd",
+               "secondary.background": "#eeeeee"}
+    for bell, passes in (("#808080", True), ("#a8a8a8", False)):
+        measured = rows([("fixture.json", "Fixture", "light", dict(fixture, **{"warning.background": bell}))])
+        glyph = [row for row in measured if row[3] == "warning.background (glyph)"]
+        text = [row for row in measured if row[3] == "warning.background"]
+        assert len(glyph) == 1 and len(text) == 1, measured
+        assert glyph[0][6] == GLYPH_FLOOR and text[0][6] == FLOOR, "each tier carries its floor"
+        assert (glyph[0][5] >= glyph[0][6]) is passes, glyph
+        assert glyph[0][5] < FLOOR, "a 3:1-class bell would fail the text floor"
     # A token with no value and no kit fallback is reported, not a traceback.
     try:
         stops({"background": "#000000"}, "muted.foreground")
@@ -624,7 +634,10 @@ def main() -> int:
         for file_name, name, mode, fg_token, bg_token, ratio, floor in measured:
             mark = "FAIL" if ratio < floor else "ok  "
             print(f"{mark} {name:<{width}} {mode:<5} {fg_token:<22} on {bg_token:<24} {ratio:5.2f}:1")
-        print(f"\n{len(measured)} measurements, {len(failures)} below {FLOOR}:1")
+        print(
+            f"\n{len(measured)} measurements, {len(failures)} below their floor "
+            f"({FLOOR}:1 text, {GLYPH_FLOOR}:1 glyph)"
+        )
         for file_name, name, mode, fg_token, bg_token, hi, lo, count in inverted:
             print(
                 f"INVERTED {name:<{width}} {mode:<5} {fg_token:<22} worst on "
