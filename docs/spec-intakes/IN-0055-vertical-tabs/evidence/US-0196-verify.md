@@ -538,3 +538,36 @@ Defects: none found.
 Notes: dark fills are 1 level off the coder's quoted hex (rounding), harmless. Aurora/Solarized right-click only walked expanded for menu-open; no separate collapsed walk in those two.
 
 Owner-only / not walked: item 4 (needs a real shell reporting its directory, e.g. PowerShell/OSC 7 in the owner's profile); real hover with a physical mouse (posted messages only); keyboard-only focus of rail rows; IME.
+
+## Advisor re-review (rework 8 fixes)
+
+Coder head `1ca06507` (on top of the advisor's `44cc12ae`), same worktree, branch `verify/in-0055-rework8` fast-forwarded, 2026-10-22. Scope: finding 1 (the menu record cleared on release, now keyed per menu) and finding 2 (records).
+
+### Verdict: PASS
+
+### Gate (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, one crate per command)
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p oneterm-state --lib` | 78 passed |
+| `cargo test -p oneterm-terminal-view --lib -- tab_menu` | 10 passed; with the advisor's pin below, `-- a_tab_menu`: 2 passed |
+| `cargo clippy -p oneterm-terminal-view / oneterm-state / oneterm-workspace --all-targets -- -D warnings` | clean |
+| `cargo fmt --all -- --check`, `check-english.py`, `check-doc-paths.py` | pass |
+
+### The record, attacked
+
+The record is now `(panel id, menu entity id)`; `closed(menu)` clears only when the open menu is that entity (`crates/state/src/tab_menu_open.rs:33-45`), and the menu builder registers both a `DismissEvent` subscription and `cx.on_release` for its own entity id (`crates/terminal-view/src/panel/tab_title.rs:931-939`).
+
+1. *Same-tab re-right-click.* The kit's `open_menu` drops the old `menu_view` first and builds the new menu in a deferred frame (`context_menu.rs:450-456, 459-475`). Whichever order the old menu's release and the new menu's `opened` run in, the outcome is the new record: release first clears and `opened` re-records; `opened` first and the stale release is a different menu id and is ignored. Pinned by the coder's two consecutive right-clicks in `a_tab_menu_records_that_it_is_open_until_it_is_dismissed`.
+2. *`DismissEvent` then release of the same menu.* Two `closed(menu)` calls; the second finds no record for that id and is a no-op.
+3. *Release after a newer menu on another tab.* Different menu id, ignored (the state test covers both the other-tab and the same-tab replacement).
+4. *Can it stick?* Only if a `PopupMenu` entity is neither dismissed nor released, which is an entity leak; the kit's dismiss subscription holds `shared_state` weakly for exactly that reason (`context_menu.rs:504-519`), the builder's two closures capture only two `u64`s, and `subscribe_self` holds the entity weakly. No cycle through OneTerm's code.
+5. *Window close (the untested path).* Pinned on the verify branch: `a_tab_menu_open_when_its_window_closes_clears_its_record` (`crates/terminal-view/src/panel/tests.rs`) right-clicks the row, removes the window, and asserts the record is `None`. It fails at the assertion with the `on_release` line removed and passes with it, so the pin is live.
+
+### Records
+
+`docs/gui-layout.md` "Colours" bullet now states the hover title, the selected row's `tab_bar.selected.foreground` for grip and directory and that the strip's hovered tab keeps `tab.active.foreground`; the HLD "Row content", grip and "grip, cwd line 2" colour-table rows carry the same. Both match `row_paint` and `selected_row_secondary`. One wording nit, not a defect: both say the record is cleared "on the menu's dismissal"; it is also cleared on the menu's release now (`tab_title.rs:936-939`), which the packet's review paragraph records.
+
+### For the owner
+
+Nothing new beyond the rework 8 list.
