@@ -174,3 +174,124 @@ Observations (Info): (a) the key binding Ctrl+Shift+Right still splits a dead te
 - Live shell: splits enabled and Duplicate Session submenu (In New Tab, Into Space #N, Split Right/Down).
 - A shell that exits while the menu is open (row state at open time vs. live).
 - SSH session drop (Closed without Exited) shows the same disabled rows.
+
+---
+
+# Advisor re-review (rework 1: no click path on a disabled row, window test)
+
+Date: 2026-10-22. Reviewed head: `fbc8a1ea` (two commits on my `962e1979`): `4838fea5` (the
+ui-verifier section above, cherry-picked) and `fbc8a1ea` (the fix, the rule applied to the other
+disabled rows, the window tests, the `test-support` dev-dependency, `Cargo.lock`,
+`THIRD-PARTY-NOTICES.md`, the records). Same worktree, `verify/us-0201`.
+
+## Verdict
+
+**PASS.** Finding 1 is fixed at the root and the fix is proven on a window with a positive
+control; finding 2 is applied to every other disabled row that carried a handler; the records
+match the code. The dev-only `test-support` feature is acceptable (below): the three new
+`Cargo.lock` rows are never compiled, not even for the tests. Keep the window test. One Low
+note (R1) on the gate, one Info (R2) on the notices list.
+
+## Gate, re-run one crate per command
+
+| Command | Result |
+| --- | --- |
+| `cargo clean -p oneterm-terminal-view` then `cargo test -p oneterm-terminal-view` | 431 passed, 3 ignored (the first run against the shared `target` reported the two new tests failing; a clean rebuild of the crate passes, see R1) |
+| `cargo clippy -p oneterm-terminal-view --all-targets -- -D warnings` | clean |
+| `cargo fmt --all -- --check` | clean |
+| `python scripts/verify-dependency-graph.py` | 20 packages pass |
+| `cargo package -p oneterm-vt --allow-dirty --list \| python scripts/verify-dependency-graph.py --package-list -` | package set passes, reaches nothing outside `crates/vt` |
+| `python scripts/third-party-notices.py --check` | up to date |
+| `python scripts/check-ignored-tests.py` | 19 ignored tests, all recorded |
+| `python scripts/check-english.py`, `check-doc-paths.py` | 1151 files / 219 paths pass |
+| `cargo deny check licenses bans advisories` (0.20.2) | licenses ok, bans ok (`multiple-versions = "warn"` covers `taffy` 0.13 + 0.14); advisories FAIL on `RUSTSEC-2026-0382` (certificate verification, `rustls-webpki` under `reqwest` / `tokio-rustls`), which fails identically on `main` @ `52f7aa49` and is unrelated to this packet |
+
+`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`, the worktree's own `target`.
+
+## The dependency question
+
+The deviation: `crates/terminal-view/Cargo.toml` dev-dependency
+`gpui-component = { workspace = true, features = ["test-support"] }`, which puts `gpui-fast
+0.1.10`, `gpui-fast-macros 0.1.10` and `taffy 0.14.0` into `Cargo.lock` (+3 in the notices).
+
+- **What the feature is.** `gpui-component-0.7.3/Cargo.toml`: `test-support = ["gpui/test-support",
+  "gpui-base/test-support", "gpui-fast?/test-support"]`; `gpui-base-0.7.3`: `test-support =
+  ["gpui/test-support", "gpui-fast?/test-support"]`. `gpui-fast` is an optional dependency of
+  both (their `gpui-fast` feature, which nothing here enables), and the `?` is a weak feature
+  reference: it enables `gpui-fast/test-support` only if `gpui-fast` is already on.
+- **Why it is in the lockfile anyway.** Cargo records an optional dependency named by a weak
+  feature in `Cargo.lock` even when it is not activated (rust-lang/cargo issue 10801); the
+  dependency lists of `gpui-base` and `gpui-component` in the lock gained `gpui-fast` for that
+  reason, and `taffy 0.14` is `gpui-fast`'s own layout crate.
+- **Is it compiled?** No. `cargo tree --workspace -e normal -i gpui-fast` and `-i taffy@0.14.0`
+  print nothing, and so does `cargo tree -p oneterm-terminal-view -e normal,dev,build -i
+  gpui-fast`: the crate is not in the test graph either. Release builds, `oneterm-app`, and
+  the `oneterm-vt` package (no gpui at all; the package-list check passes) are untouched.
+- **Licences.** `gpui-fast` / `gpui-fast-macros` Apache-2.0 (longbridge/gpui-fast), `taffy`
+  MIT; both already in `deny.toml`'s allow list (`licenses ok`).
+- **Policy.** `docs/agents/dependencies.md` §"Adding a dependency" is about a new workspace
+  declaration; this adds none (a feature on a dependency the workspace already declares) and
+  the lock growth is a resolver artefact, so no table row, no issue. The notices file is
+  regenerated as line 124 asks. `crate-dependency-rules.md` R1-R12 are unaffected
+  (`verify-dependency-graph.py` passes).
+- **Recommendation: keep.** The window test is the only automated proof that the rows the
+  menu greys do nothing on the kit's Enter path, and its positive control shows the harness
+  reaches `confirm`. The cost is three never-built rows in the lock and the notices. If the
+  owner prefers a clean lock, the alternative is to drop the window test and keep only the
+  row-model test (`disabled_rows_carry_no_click_path`), which pins the fix but not the kit
+  path; not recommended.
+
+## The attack list
+
+1. **Does the Enter path of the window test exercise `confirm`?** Yes. The control
+   `a_live_terminals_split_row_splits_on_hover_and_enter` drives the same hover +
+   `simulate_keystrokes("enter")` on a live "Split Right" and `leaf_count()` goes 1 to 2; the
+   only route from Enter to `split_active_at` is `PopupMenu::confirm` (`popup_menu.rs:861-892`,
+   the `enter` binding at `:23`) running the row's handler. The dead test then drives the same
+   path plus a `simulate_click` on each of the five rows and asserts one Space and zero
+   `DuplicateSession` dispatches at the host's `on_action`. Mutation reproduced: with
+   `.when(true, ..)` in `split_item` (the click path back on a disabled row) exactly
+   `disabled_rows_carry_no_click_path` and
+   `a_dead_terminals_menu_greys_split_and_duplicate_and_they_do_nothing` fail ("Split Right
+   carries a click path while disabled"; "the disabled \"Split Right\" row split the tab"),
+   the other five menu tests pass; restored, all pass.
+
+2. **Do the other disabled rows lose only their hint?** Yes. Copy: `edit_item(.., disabled)`
+   (`menu.rs:340-357`) drops the `TerminalCopy` action and the handler only when
+   `!has_selection`; the live row is unchanged and the key binding itself lives on the
+   terminal's key context, not on the menu row. Log Start / Stop (`menu.rs:185-209`) carried
+   `NoAction` (no hint to lose). `close_scope_row` (`panel/tab_title.rs:789-800`) never had an
+   action. Paste / Select All / Clear pass `false`.
+
+3. **Any other disabled row in `crates/terminal-view` with a click path?** None. Sweep of every
+   `.disabled(` in non-test sources: `menu.rs:188,199,251,324,351` (all `.when(!d, ..)` or no
+   path), `channel_menu.rs:147` ("Input Channel", no path), `tab_title.rs:794` (fixed),
+   `terminal_panel.rs:82` (the "SSH Sessions" heading, an element item with no handler) and
+   `:792` ("No saved sessions", no path).
+
+4. **Records.** `04-context-menu.md:59-67`, IN-0018 LLD `input.md:190-196`, the packet
+   (Scope, Acceptance, Plan rule, Evidence) and the rustdoc on `split_item` /
+   `dead_duplicate_item` all state the one rule and match the code. The packet's status block
+   is "Reopened (acceptance rework)" with "Implemented" ticked; consistent with a rework
+   awaiting merge.
+
+## Findings
+
+- **R1, Low, process.** The first `cargo test -p oneterm-terminal-view` in this worktree after
+  the coder's commits reported `disabled_rows_carry_no_click_path` and the dead-terminal
+  window test failing with the pre-fix messages, while the sources on disk were the fixed
+  ones; `touch menu.rs` (or `cargo clean -p oneterm-terminal-view`) and a rebuild passed, and
+  the mutation check proved the binary now tracks the source. A stale fingerprint in the
+  shared `target` (the worktree-clobber note in the project memory), not a product defect;
+  recorded so the next reviewer who sees the pre-fix message rebuilds before filing it.
+- **R2, Info, notices.** `THIRD-PARTY-NOTICES.md` now lists `gpui-fast`, `gpui-fast-macros` and
+  `taffy 0.14.0` although nothing links them: `scripts/third-party-notices.py` reads the
+  `cargo metadata` resolve, which carries the weak-feature rows the lock carries, while
+  `cargo tree` prunes them. Over-inclusive, harmless; a note in the script or a prune of
+  packages `cargo tree -e normal,build` does not reach would remove the three rows. Not
+  this packet.
+
+## Still by hand
+
+Unchanged: a live shell's menu (splits enabled, Duplicate Session submenu) and a real SSH drop;
+the ui-verifier could not walk either here.
