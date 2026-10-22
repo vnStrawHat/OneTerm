@@ -141,11 +141,19 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #                          on that fill, because `muted.foreground` is listed there too.
     #   tab_bar.hover.background  the same rail row under the pointer, which now also gets the
     #                          list hover fill over the bar (owner rework 5 of `US-0196`;
-    #                          `tab_rail.rs`, the `group_hover` fill)
+    #                          `tab_rail.rs`, the `group_hover` fill), at half strength since
+    #                          owner rework 7 so that it never outranks the selected row
+    #   tab_bar.selected.background  the selected rail row since owner rework 7: `list.hover.background`,
+    #                          OneTerm's selected-item colour (`crates/theme/src/theme.rs:69-77`;
+    #                          `tab.active.background` is the terminal's own colour, which cannot
+    #                          make the row stand out)
+    #   tab.active.background  stays for the horizontal strip's active tab and the rail's drag
+    #                          preview chip
     "tab.active.foreground": (
         "tab.active.background",
         "tab_bar.background",
         "tab_bar.hover.background",
+        "tab_bar.selected.background",
     ),
     # `accent.foreground` -- the label of a hovered or selected menu row, which swaps both
     # fill and text (kit `menu/menu_item.rs:115-120`): every OneTerm popup menu -- the tab
@@ -221,6 +229,7 @@ SURFACES: dict[str, tuple[str, ...]] = {
         "table.hover.background",
         "tab_bar.background",
         "tab_bar.hover.background",
+        "tab_bar.selected.background",
         "tab.active.background",
     ),
     # `tab.foreground` -- an inactive tab label, drawn on the strip; `tab.background` is
@@ -278,7 +287,8 @@ SURFACES: dict[str, tuple[str, ...]] = {
 #   warning.background   the tab title's "waiting for you" bell (OSC 7501 `blocked`,
 #                        `crates/terminal-view/src/panel/tab_title.rs`): on an inactive tab
 #                        (`tab_bar.background`, `tab.background`), the selected tab
-#                        (`tab.active.background`) and a vertical-rail row under the pointer
+#                        (`tab.active.background`; in the rail `tab_bar.selected.background`)
+#                        and a vertical-rail row under the pointer
 #                        (`tab_bar.hover.background`, the list hover fill over the bar,
 #                        `crates/workspace/src/layout/workspace/tab_rail.rs`). Its text uses
 #                        are in `SURFACES` above, at 4.5:1.
@@ -288,6 +298,7 @@ GLYPH_SURFACES: dict[str, tuple[str, ...]] = {
         "tab.background",
         "tab.active.background",
         "tab_bar.hover.background",
+        "tab_bar.selected.background",
     ),
 }
 
@@ -337,6 +348,7 @@ PARENTS: dict[str, str] = {
     "tab.background": "tab_bar.background",
     "tab.active.background": "tab_bar.background",
     "tab_bar.hover.background": "tab_bar.background",
+    "tab_bar.selected.background": "tab_bar.background",
     "accent.background": "popover.background",
     "list.even.background": "list.background",
     "list.hover.background": "list.background",
@@ -370,8 +382,11 @@ FALLBACKS: dict[str, str | tuple] = {
     "table.hover.background": "list.hover.background",                   # schema.rs:1009
     "table.head.background": "list.head.background",                     # schema.rs:1005
     "tab_bar.background": "background",                                  # schema.rs:998
-    # Not a kit token: the rail row's hover fill is `list.hover.background`, drawn over the bar.
-    "tab_bar.hover.background": "list.hover.background",
+    # Not kit tokens. The rail row's hover fill is `list.hover.background` at half alpha, drawn
+    # over the bar; its selected fill is `list.hover.background` itself, OneTerm's
+    # selected-item colour (owner rework 7 of `US-0196`).
+    "tab_bar.hover.background": ("alpha", "list.hover.background", 0.5),
+    "tab_bar.selected.background": "list.hover.background",
     "tab.background": "background",                                      # schema.rs:995
     "tab.active.background": "background",                               # schema.rs:996
     "tab.foreground": "foreground",                                      # schema.rs:1000

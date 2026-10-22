@@ -341,3 +341,125 @@ Defects: none blocking.
 Not walked: OSC 7501 icon and animation, cwd line, centre breadcrumb yielding to the buttons (no cwd without a live shell), hover-only states beyond tooltips, High-DPI.
 
 Owner-only checks: with a real shell, narrow the window until the breadcrumb is long and confirm it truncates before touching the new button and the clock; check the OSC 7501 icon and cwd line in a row; try keyboard focus on the status bar button.
+
+## Advisor code review (rework 7)
+
+Coder head `e033390c` (three commits on `main` @ `4272956d`), reviewed on `verify/in-0055-rework7` in the coder's worktree with its target reused. Covers `US-0196` Rework 7 and `US-0198` Rework 7 together (one diff).
+
+### Verdict: PASS, with one record correction required (finding 1) and one pre-existing latent bug pinned (finding 2)
+
+No defect in the rework's own code blocks acceptance. The records state a root cause that does not reproduce; the owner's question about `list_active` has a different answer than the packet gives.
+
+### Gate (one crate set per command, `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`)
+
+- `cargo clippy -p oneterm-workspace -p oneterm-terminal-view -p oneterm-state --all-targets -- -D warnings`: clean.
+- `cargo test -p oneterm-state --lib`: 77 passed. `cargo test -p oneterm-workspace --lib -- tab_rail`: 40 passed (41 with the advisor test). `cargo test -p oneterm-terminal-view --lib -- panel::tests` and `-- hover_card right_press`: all passed (the six hover-card tests included). `cargo test -p oneterm-theme --lib`: 8 passed, 1 failed, the failure being the advisor pin of finding 2.
+- `python scripts/check-theme-contrast.py`: 2028 pairings, 702 hierarchy comparisons, the five accepted `KNOWN_BELOW` rows, nothing new; `--self-test` passed. `cargo fmt --all -- --check` and `python scripts/check-english.py` pass.
+- Disk: 4.33 GB free before, 3.83 GB after (the `oneterm-theme` lib-test profile rebuilt `gpui-component`); no `cargo clean`.
+
+### Findings
+
+1. **Medium, records.** The packet (`US-0196` Rework 7 "Choices the request left open" and "Defect found by the coder's own screenshot"), the HLD rows row, `docs/gui-layout.md` (colours paragraph), `crates/workspace/src/layout/workspace/tab_rail.rs:110-111` and the comment in `scripts/check-theme-contrast.py` all state that "a theme change after OneTerm's list-style override resets `Theme::list_active`". That does not reproduce. Every theme path the app has re-applies `apply_list_style_override` right after the change: `oneterm_theme::init` (`crates/theme/src/theme.rs:238-239`, `288-289`, `316`), `SwitchThemeMode` (`251-252`), the Appearance page (`crates/settings-ui/src/appearance.rs:85-86`, `162-163`); `UiConfig::observe_theme` (`crates/settings/src/ui_config.rs:413`) only persists; nothing in `crates/` or the kit calls `Theme::sync_system_appearance`. The kit's `Theme::edit` reconcile (`reference/gpui-kit/crates/component/src/theme/theme_color.rs:371-386`) leaves an untouched field alone. Advisor test `crates/theme/src/theme.rs` `list_active_is_list_hover_after_every_app_theme_path` drives all four paths (init, `Theme::change` + override, `apply_config` + override, `Theme::update`) and passes: `list_active == list_hover` after each. The `#21252b` sample of the first build (a fifth of the way from the rail to `list_hover`, which is exactly the kit's `clamp_alpha(..., 0.2)` of `list_active` at `schema.rs:1025-1043`) is therefore unexplained by the stated cause; the first build (`cc1f73a1`) read `theme.list_active` (the colour, not the token), which the override does set. Reading `list_hover` remains the right choice for the stated owner decision (selected = `list_hover`) and for the proven reason that `tab.active.background` equals the terminal's `background` in both Zed One themes. Fix shape: in the five places, replace the reset claim with "`list_hover` is the owner's choice; `list_active` is the kit's token for the same thing but is clamped to 0.2 alpha by `apply_config` and the override's write does not reach the kit's `tokens` (finding 2), so the rail reads the colour it means directly"; drop "a theme change resets it" and "found by sampling pixels" as a root cause, or re-sample the first build before keeping it.
+
+2. **Low, pre-existing latent bug (out of this packet; new BUG candidate), pinned.** `apply_list_style_override` (`crates/theme/src/theme.rs:69-78`) writes `Theme::list_active`, `table_active` and `table_active_border` through `Theme::global_mut`, i.e. the `colors` only. GPUI Kit 0.7 paints the data table's selected row and selected cell from `cx.theme().tokens.table_active` (`reference/gpui-kit/crates/component/src/table/state.rs:2279`, `:2106`, `:1443`), and `tokens` are synced from `colors` only inside `Theme::update` (`theme/mod.rs:298-335`). So after every theme application the kit's token keeps its own derivation at 0.2 alpha and the SFTP tables (`row_selectable(true)`, `crates/sftp-ui/src/panel.rs:152`, `local_pane.rs:500`) get the kit's overlay on top of OneTerm's `render_tr` highlight, which the comment at `crates/sftp-ui/src/table_delegate.rs:339-341` believes is disabled. `tokens.list_active` is likewise left at the clamped value (no kit reader outside the theme today; `ListItem` reads the colour). Pinned by `crates/theme/src/theme.rs` `the_list_style_override_reaches_the_tokens_the_kit_reads`, which fails on this head (`tokens.table_active.color.a` is 0.2, expected 0). Fix shape: perform the override's writes inside `Theme::update(cx, |theme| { ... })` so the kit's reconcile copies them to the tokens (keep `record_selection_accent` before it), or set `theme.tokens.table_active` / `tokens.list_active` alongside the colours.
+
+3. **Low, visual (this packet).** A selected collapsed cell with a status fill now shows two 3 x 8 px notches of plain row background at its top-left and bottom-left: the fill still starts at `ACCENT_BAR_WIDTH` (`crates/terminal-view/src/panel/tab_title.rs:511-519`, `left(px(3.))` when selected) because the pill is painted before the title (`tab_rail.rs:702-713` then `:722`), while the pill itself is now inset 8 px top and bottom. Fix shape: paint the pill after the title (`.child(title)` then the pill child) and let the fill run the cell's full width, so the pill sits on the fill as it does on the selected fill. Not pinned: the layout is the owner's to choose.
+
+4. **Info.** Collapsed-cell drag split: correct by test (`a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon`), and the gpui dispatch order makes the icon's `DragTerminalTab` win where it is (innermost listener first, `stop_propagation` in `start_tab_drag`). Discoverability: the open-hand cursor is set on the whole cell (`tab_rail.rs:664-666`), including the 16 px icon whose drag goes somewhere else; the packet records the icon-vs-margin question as open for the owner. No action.
+
+### The coder's attack list, verified
+
+- **Token mapping and alpha compositing (script vs runtime).** Runtime: the base `Tab` is unstyled (`reference/gpui-kit/crates/base/src/tabs.rs:150-176`, no default background), so a hovered row is `list_hover.opacity(0.5)` over `tab_bar` and the selected row is `list_hover` over `tab_bar`; `Hsla::opacity` multiplies alpha. Script: `tab_bar.hover.background = ("alpha", "list.hover.background", 0.5)` multiplies the stops' alpha and `surface()` composites over `PARENTS` = `tab_bar.background`; `tab_bar.selected.background = list.hover.background` over the same parent. The two models agree. The workspace test `selected_outranks_hover_outranks_idle_in_both_zed_themes` applies the real theme configs rather than the override.
+- **Selected-row hover suppression.** The `group_hover` fill child exists only for `!selected` (`tab_rail.rs:716-731`); the row's own `hover` sets text colour only. Verified by `an_unselected_row_has_a_hover_fill_over_the_whole_row` (no fill on row 0, fill equals the row on row 1).
+- **Drop line without dividers.** `DropEdge::Above` is `border_t_2`, `Below` `border_b_2`, in `drag_border` on the row itself (`tab_rail.rs:677-681`); the row has no other border now, so the old `border_b_0` is rightly gone. The absolute children (pill, hover fill, grip) are positioned in the padding box, so the 2 px line stays visible above or below them. Order and slot are tested; the line's look is for the ui-verifier.
+- **Grip overlay vs title drag.** The grip is an 8 px absolute strip painted after the title (`tab_rail.rs:598-630`, `:723`), so its `DragPanel` listener runs first in the bubble phase and takes x 0..8; x 8..14 is the title row's own padding and starts the tab drag. The glyph box is shifted 2 px left so its dots fall at about x 1..7. Verified by `the_grip_overlays_the_row_and_no_divider_cuts_it` and `the_title_row_drags_into_a_space_and_only_the_grip_reorders`.
+- **Hover card placement.** gpui-pre 0.3.9 puts a tooltip at `mouse_position + (1, 1)` (`window.rs:3816-3817`), reads the pointer at build time (`elements/div.rs:3928`, the same call the builder reads), flips only by the root's measured size (`window.rs:3823-3845`), and clears the tooltip on a press or a wheel scroll (`div.rs:3745-3750`, `:3795-3800`), so a scrolled strip rebuilds the card with fresh cell bounds. With a `size_0` root the flip never fires: the card can leave the window only if the window is narrower than 44 + 7 + 280 = 331 px (the minimum is 640, `crates/app/src/window.rs:38-41`) and vertically it stays within 1 px of the 44 px cell. Positions are logical pixels throughout, so DPI does not enter. Verified by the two coder tests plus the advisor test `the_hover_card_is_not_drawn_while_a_right_press_hides_it` (the `hidden` flag path through the new `CellTooltip`).
+- **Header at 140 px.** Advisor test `the_header_label_and_the_plus_fit_the_narrowest_rail`: at the floor the label ends at least 4 px before the 24 px `+`, the `+` keeps its 8 px right inset, the label starts at the row's 14 px.
+- **Dead code.** `VERTICAL_ROW_DIVIDER`, `vertical_first_line_centre`, `report_cell_fill` / `take_cell_fill`, `grip_glyph_color` and the `CellFill` global are gone from code and tests; no reference remains in `crates/` (grep). Clippy is clean, so no unused import.
+- **Tests.** Not constant swaps: the rail tests assert the title element's full width and height, the pill's inset, the fill equal to the row, the label and the 24 px `+`; the terminal-view tests assert centring without a directory, line centres with one, the 16 px icon, the card's one and two line heights and the 280 px cap; the probe cell was remodelled on the real one (icon-only tab drag).
+- **Records.** `US-0196` / `US-0198` Rework 7, the HLD and `docs/gui-layout.md` match the code except finding 1 and one stale sentence: `docs/gui-layout.md:149` still says "The fill never lies under the 2 px accent bar of the selected cell" (3 px pill now; see also finding 3).
+
+### Tests added (verify branch)
+
+- `crates/theme/src/theme.rs`: `list_active_is_list_hover_after_every_app_theme_path` (passes; finding 1), `the_list_style_override_reaches_the_tokens_the_kit_reads` (fails; finding 2 pin).
+- `crates/workspace/src/layout/workspace/tab_rail_tests.rs`: `the_header_label_and_the_plus_fit_the_narrowest_rail` (passes).
+- `crates/terminal-view/src/panel/tests/tab_menu_and_card.rs`: `the_hover_card_is_not_drawn_while_a_right_press_hides_it` (passes).
+
+### For the owner
+
+1. Finding 1: have the coder correct the five records (and the two code comments) before merge; decide whether the first build's pixel sample is re-taken or dropped.
+2. Finding 2: open a BUG for the override not reaching the kit's tokens (SFTP selected-row overlay), outside this intake.
+3. Finding 3: say whether the pill should sit on a full-width status fill (notches gone) or the notches are acceptable.
+4. ui-verifier: the drop line on rows without dividers (above and below, on the selected row too), the selected filled cell's corners, the card at the bottom-most cell of an overflowing strip.
+
+## UI verification (rework 7)
+
+Build: debug binary copy at head e033390c, private profile (scratch USERPROFILE and cwd), Zed One Dark and Zed One Light, window 1280x800 (shot x = client x + 8). Measured with pixels. Screenshots (prefix `uivrw7-`): `C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\vt-rework7-walk`.
+
+| Item | Result | Evidence |
+|---|---|---|
+| Rows 48 px, line 1 centred without a directory | PASS (y66..113 = 48 px; title ink centre 138.5 vs row centre 137.5) | d01, d03 |
+| No row dividers | PASS (rows touch; only the rail's right border #3e4451) | d02, d15 |
+| Selected > hover > idle, dark | PASS: rail #1e2227, hover #252a32, selected #2c313c; idle title #8f96a3, hover and selected title #ffffff | d03 |
+| Selected > hover > idle, light | PASS but weak: rail #f0f0f1, hover #eaeaeb, selected #e5e5e6; idle title #5d677a, hover and selected #383a42 | l02 |
+| Hover on the selected row changes nothing | PASS (fill stays #2c313c dark / #e5e5e6 light) | d03, l02 |
+| 3 px pill, inset 8 px | PASS (x client 0..2, y 74..105 in a 66..113 row, #528bff) | d01 |
+| Grip: hover-only overlay, far left, clear of title | PASS (ink x client 1..6, y centred on the row; title ink starts client 15; 8 px gap) | d03, d03z |
+| Drag from x 0 and x 4 reorders; drop line drawn | PASS (blue 3 px line on the row boundary) | d04, d05 |
+| Title-row drag is the tab drag, not a reorder | PASS as far as walkable (different ghost, no reorder); dropping into an empty Space NOT WALKED (no empty Space made) | d06 |
+| Header "Terminals" + 24 px `+`, no bottom border | PASS (label x client 13..64, `+` glyph centred 198.5; no line under the header) | d03z |
+| Header at 140 px | PASS (label and `+` both fit, no clipping) | d07-narrow140 |
+| Collapsed: icon 16 px, centred, no grip | PASS (ink 15 x 12 px, centred on the 43 px cell both axes; no grip in cells) | d08 |
+| Card: 6 px gap, centred, rounded, shadow, one line | PASS (border x58 vs strip border x51 = 6 px; card centre y equals cell centre; dark and light; first and last cell) | d09, d17, l03 |
+| Right-click hides the card, menu opens | PASS | d10 |
+| Cell-margin drag reorders; icon drag is the tab drag | PASS | d11, d12, d13, d14 |
+| Click selects (expanded, collapsed), context menu, status bar toggle | PASS | d10, d18, d16 |
+| Two-line row with a directory, status icon at line 2's end | NOT WALKED: no directory reaches the rail in a private profile (no OSC 7 from the shells; typed input did not render in the pane) | |
+| Card clipped for the cell at the window bottom | NOT WALKED: 15 cells fit without reaching the bottom (last cell y682..725 of 763) | d17 |
+| 15 tabs, both themes | PASS (list scrolls; the top row is cut by the header edge) | d15, l04 |
+
+### Defects
+
+1. LOW, light theme, rows and cells. The three steps are 5 to 6 levels apart (#f0f0f1 / #eaeaeb / #e5e5e6), so a hovered row is almost invisible and the selected row reads mainly through the pill and the darker title. Steps: hover any idle row in Zed One Light (l02).
+2. LOW, dark theme, same rows. Steps are 7 levels (#1e2227 / #252a32 / #2c313c); hover is visible but faint (d19).
+3. LOW, hover and selected share the full-strength title colour (#ffffff dark, #383a42 light), so only the fill and the pill tell them apart, and the idle to hover change is a large jump.
+4. LOW, a right-clicked row (menu open) keeps the bright title but loses the hover fill (d18).
+5. INFO, with the header border gone a scrolled row is cut flat under the header (d15, l04 at y66).
+
+### Owner-only checks
+
+A tab with a directory (two lines); an empty-Space drop of a title-row or icon drag; real-host status icons; the card on a cell touching the window bottom.
+
+## Advisor re-review (rework 7)
+
+Coder head `5ec1b2b4` on `verify/in-0055-rework7` (since `7c92db85`: `d56dcd50` UI evidence, `3bc5023f` `BUG-0088` packet, `5ec1b2b4` findings 1-3 and 5). No conflict markers in `crates/`, `docs/` or `scripts/`.
+
+### Verdict: PASS
+
+### Gate (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, targeted)
+
+`cargo fmt --all -- --check` clean; `cargo clippy -p oneterm-theme -p oneterm-terminal-view -p oneterm-workspace --all-targets -- -D warnings` clean; `cargo test -p oneterm-theme --lib` 10 passed (the `BUG-0088` pin `the_list_style_override_reaches_the_tokens_the_kit_reads` now passes, plus the re-review test below); `-p oneterm-terminal-view --lib -- collapsed_cell` 8 passed; `-p oneterm-workspace --lib -- tab_rail` 40 passed; `-p oneterm-sftp-ui --lib` 77 passed; `check-english` passes. Disk 3.64 GB before, 3.57 GB after.
+
+### Finding 2 fix (`BUG-0088`, the override inside `Theme::update`)
+
+- **What `Theme::update` re-runs** (`reference/gpui-kit/crates/component/src/theme/mod.rs:298-335`): the closure, `tokens.reconcile` (only fields the closure changed, or tokens edited on their own, move; untouched fields keep both values), `apply_config` only when the mode changed or `reload_mode` (false for `update`), font resolution only when the fonts changed, `sync_base`, `refresh_windows`. The override changes mode, fonts and nothing else of the kind, so no theme file is reloaded over OneTerm's edits. Re-review test `crates/theme/src/theme.rs` `the_override_inside_theme_update_keeps_the_other_overrides`: after `apply_warning_legibility`, the `init` shape defaults (`radius` 4, `ScrollbarMode::Always`) and the Lilex mono font, running the override leaves all of them as they were and syncs `tokens.list_active` to `list_hover`. `selection_accent` is covered by the existing `the_selection_accent_survives_the_list_style_override` (`record_selection_accent` still runs before the edit, `theme.rs:76-77`).
+- **Observers and loops.** `Theme::update` ends in `Theme::global_mut`-style dirtying plus `refresh_windows`; the two `observe_global::<Theme>` observers are `UiConfig::observe_theme` (`crates/settings/src/ui_config.rs:413-431`, persists only when the theme name or font size changed, neither does) and the app menu refresh (`crates/workspace/src/layout/app_menus.rs:24-31`, rebuilds menu check states, writes no `Theme`). The old `global_mut` write already notified them, so nothing new fires and nothing writes back. `init` calls the override before any window exists; `refresh_windows` on no windows is a no-op.
+- **Readers expecting the old values.** `tokens.table_active`: the kit table's selected row and cell only (`table/state.rs:1443, 2106, 2279`), used by the two SFTP tables whose `render_tr` draws the selection itself: the overlay's removal is the intent. `tokens.list_active`: no reader outside the theme. The colours `list_active` / `table_active` were already overridden, so `ListItem` (`list_item.rs:259`) and the session tree see no change.
+- **`apply_warning_legibility`, left out of scope.** The packet says "no kit reader paints from a `warning` token": not exact. The kit's Button `Warning` variant reads `tokens.warning` / `warning_hover` / `warning_active` (`reference/gpui-kit/crates/component/src/button/button.rs:957-965`, at 0.1 to 0.4 opacity). OneTerm uses no Warning-variant button (grep: no `ButtonVariant::Warning` / `.warning()` in `crates/`), so there is no reader that matters today; the correction itself is unaffected by the override (tested). Pinned as current behaviour in the same test (`assert_ne!` on `tokens.warning`, flip when the correction moves into `Theme::update`). Info only; reword the packet's out-of-scope line to "no OneTerm surface reaches a kit reader of the `warning` token".
+
+### Finding 3 fix (the filled cell's own pill)
+
+- The status fill is `inset_0` (`crates/terminal-view/src/panel/tab_title.rs:513-518`): no notches. A selected filled cell draws a 3 px pill in the glyph colour, `left_0`, `top`/`bottom` = `ACCENT_BAR_INSET`, `rounded(1.5)` (`:521-532`), the same box the rail's pill has on the `Tab` (`tab_rail.rs:702-713`): the title element is `flex_1` + `h_full` inside a `Tab` with no padding, so the two pills share origin and height and the rail's pill lies exactly under the cell's; nothing of it shows past the fill. Unselected filled cell: no cell pill (`fill.filter(|_| selected)`), and the rail draws none; selected unfilled cell: the rail's accent pill as before. Test `a_selected_fill_covers_the_cell_and_carries_its_own_pill` asserts fill = row, pill geometry, and no pill when unselected.
+- Design note for the owner: on a filled selected cell the pill is now the glyph colour (near-black or near-white), not `selection_accent`; the alternative (repainting the accent pill after the title) would disappear on a `Working` fill wherever `primary` equals the accent, which is the case the coder avoided. Legibility of that pill follows the glyph's 3:1 rule already measured by the contrast script.
+
+### Records
+
+- `BUG-0088` under `IN-0042` (owner of the `US-0111` override contract) is the right home; `IN-0042` is closed, so the entry is marked as found after the round. Packet template sections present; status Planned + Implemented; acceptance items tick against the named tests; on-screen SFTP row check left to `ui-verifier`.
+- `US-0196` Rework 7 choices and evidence, the HLD rows row, `docs/gui-layout.md` (colours and collapsed-cell paragraphs), `tab_rail.rs:108-112` and the `US-0198` "after the review" note now match the code and withdraw the reset claim; the `#21252b` sample is kept as an unexplained observation, which is accurate.
+- `scripts/check-theme-contrast.py:146-149` names `list.hover.background` as OneTerm's selected-item colour and never repeated the reset claim; no change needed.
+
+### For the owner
+
+1. Reword the `BUG-0088` out-of-scope line (the kit's Warning button variant does read the token; OneTerm has no such button).
+2. Accept or reject the glyph-coloured pill on a filled selected cell (see the design note); `ui-verifier` should look at Working / Blocked / Done / Error selected cells in both themes.
+3. `ui-verifier`: a selected SFTP row (remote and local) shows `table_hover` only, in a dark and a light theme.

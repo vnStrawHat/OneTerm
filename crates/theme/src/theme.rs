@@ -66,15 +66,23 @@ const EMBEDDED_THEME_FILES: &[(&str, &str)] = &[
 /// `apply_config` / `Theme::change` reset `list_active` + `list_active_border`
 /// from the theme JSON (or fallback), so this must be called again after each
 /// theme switch.
+///
+/// The writes go through [`Theme::update`], not `Theme::global_mut`: the kit paints a table's
+/// selected row from `Theme::tokens.table_active` (and a list's from `tokens.list_active`), which
+/// it syncs from the colours only inside `update`. Written through `global_mut` the tokens kept
+/// the kit's own 0.2-alpha derivation, so the SFTP tables drew the kit's selection overlay on top
+/// of their own highlight (`BUG-0088`).
 pub fn apply_list_style_override(cx: &mut App) {
+    // Before the edit: this reads the theme's own `table_active_border`, which the edit blanks.
     record_selection_accent(cx);
-    let theme = Theme::global_mut(cx);
-    theme.list_active = theme.list_hover;
-    theme.list_active_border = gpui::transparent_black();
-    // DataTable selected-row overlay: disable both bg and border so the highlight
-    // is drawn by `render_tr` (= `table_hover`, like hover, no border).
-    theme.table_active = gpui::transparent_black();
-    theme.table_active_border = gpui::transparent_black();
+    Theme::update(cx, |theme| {
+        theme.list_active = theme.list_hover;
+        theme.list_active_border = gpui::transparent_black();
+        // DataTable selected-row overlay: disable both bg and border so the highlight
+        // is drawn by `render_tr` (= `table_hover`, like hover, no border).
+        theme.table_active = gpui::transparent_black();
+        theme.table_active_border = gpui::transparent_black();
+    });
 }
 
 /// The theme's own `table.active.border`, kept for the surfaces that mean "this one is
@@ -556,5 +564,131 @@ mod tests {
         assert!(registry.themes().contains_key("Zed One Dark"));
         assert!(registry.themes().contains_key("Zed One Light"));
         assert!(registry.themes().len() >= EMBEDDED_THEME_FILES.len());
+    }
+
+    /// Advisor check (`US-0196` rework 7). The packet records that "a theme change after
+    /// OneTerm's list-style override resets `Theme::list_active`", which is why the rail reads
+    /// `list_hover`. Every theme path the app has (start-up `init`, `SwitchTheme`,
+    /// `SwitchThemeMode`, the Appearance page, and any `Theme::update`) re-applies the override
+    /// right after the change, so `list_active` is `list_hover` after each of them. This test
+    /// passing means the record's root cause is not what happened in the running build.
+    #[gpui::test]
+    fn list_active_is_list_hover_after_every_app_theme_path(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        use oneterm_settings::{UiConfig, ui_config::UiConfigGlobal};
+
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let config = cx.new(|_| UiConfig {
+                persist_blocked: true,
+                ..UiConfig::default()
+            });
+            cx.set_global(UiConfigGlobal(config));
+            let same = |cx: &App, step: &str| {
+                let theme = Theme::global(cx);
+                assert_eq!(theme.list_active, theme.list_hover, "{step}");
+            };
+            // Start-up.
+            init(cx);
+            same(cx, "after init");
+            // `SwitchThemeMode` / the Appearance page's mode switch.
+            Theme::change(gpui_component::ThemeMode::Light, None, cx);
+            apply_list_style_override(cx);
+            apply_warning_legibility(cx);
+            same(cx, "after Theme::change + override");
+            // `SwitchTheme` / the Appearance page's theme picker.
+            let dark = ThemeRegistry::global(cx)
+                .themes()
+                .get("Zed One Dark")
+                .unwrap()
+                .clone();
+            Theme::global_mut(cx).apply_config(&dark);
+            apply_list_style_override(cx);
+            apply_warning_legibility(cx);
+            same(cx, "after apply_config + override");
+            // Any later `Theme::update` (the kit's reconcile path) keeps it.
+            Theme::update(cx, |theme| theme.font_size = px(15.));
+            same(cx, "after Theme::update");
+        });
+    }
+
+    /// Advisor pin (`US-0196` rework 7 verify, finding 1). GPUI Kit 0.7 draws the data table's
+    /// selected row from `Theme::tokens.table_active` (`table/state.rs:2279`, `:2106`) and the
+    /// kit's `Theme::edit` only syncs `tokens` from `colors` inside `Theme::update`.
+    /// `apply_list_style_override` writes `colors` through `Theme::global_mut`, so the tokens
+    /// keep the kit's own 0.2-alpha derivation and the SFTP tables (row-selectable) get the
+    /// kit's overlay on top of OneTerm's own `render_tr` highlight. The override must reach the
+    /// tokens as well (run it inside `Theme::update`, or set `tokens.*` alongside).
+    #[gpui::test]
+    fn the_list_style_override_reaches_the_tokens_the_kit_reads(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let registry = ThemeRegistry::global_mut(cx);
+            for (_, content) in EMBEDDED_THEME_FILES {
+                registry.load_themes_from_str(content).unwrap();
+            }
+            let config = ThemeRegistry::global(cx)
+                .themes()
+                .get("Zed One Dark")
+                .unwrap()
+                .clone();
+            Theme::global_mut(cx).apply_config(&config);
+            apply_list_style_override(cx);
+            let theme = Theme::global(cx);
+            assert_eq!(
+                theme.tokens.table_active.color.a, 0.,
+                "the table token the kit paints the selected row with is blanked too"
+            );
+            assert_eq!(
+                theme.tokens.list_active.color, theme.list_hover,
+                "the list token follows the override"
+            );
+        });
+    }
+
+    /// Advisor re-review (`BUG-0088`): the override now writes inside `Theme::update`, whose
+    /// reconcile and refresh must leave OneTerm's other edits alone: the `warning` legibility
+    /// correction, the shape defaults `init` sets through `global_mut` (radius, scrollbar mode)
+    /// and the mono font. Running the override after them changes none of them. The kit's
+    /// `tokens.warning` does not follow the correction (see the pinned assertion inside).
+    #[gpui::test]
+    fn the_override_inside_theme_update_keeps_the_other_overrides(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let registry = ThemeRegistry::global_mut(cx);
+            for (_, content) in EMBEDDED_THEME_FILES {
+                registry.load_themes_from_str(content).unwrap();
+            }
+            let config = ThemeRegistry::global(cx)
+                .themes()
+                .get("Default Light")
+                .unwrap()
+                .clone();
+            Theme::global_mut(cx).apply_config(&config);
+            {
+                let theme = Theme::global_mut(cx);
+                theme.radius = px(4.);
+                theme.scrollbar_mode = ScrollbarMode::Always;
+                theme.mono_font_family = "Lilex".into();
+            }
+            apply_warning_legibility(cx);
+            let warning = Theme::global(cx).warning;
+            apply_list_style_override(cx);
+            let theme = Theme::global(cx);
+            assert_eq!(theme.warning, warning, "the legibility correction survives");
+            // Pinned as it is: `apply_warning_legibility` still writes through `global_mut`, so
+            // the kit's `tokens.warning` keeps the file's colour (a sibling of `BUG-0088`; the
+            // only kit reader is the Warning button variant, which OneTerm does not use). Flip
+            // this to `assert_eq!` when the correction is moved into `Theme::update`.
+            assert_ne!(
+                theme.tokens.warning.color, warning,
+                "the token is not synced today; if it is, flip this assertion"
+            );
+            assert_eq!(theme.radius, px(4.));
+            assert_eq!(theme.scrollbar_mode, ScrollbarMode::Always);
+            assert_eq!(theme.mono_font_family.as_ref(), "Lilex");
+            assert_eq!(theme.list_active, theme.list_hover);
+            assert_eq!(theme.tokens.list_active.color, theme.list_hover);
+        });
     }
 }

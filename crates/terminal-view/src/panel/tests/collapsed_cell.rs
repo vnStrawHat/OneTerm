@@ -191,6 +191,8 @@ fn a_collapsed_cell_is_the_shell_icon_on_the_status_fill(cx: &mut TestAppContext
         .debug_bounds(TAB_SHELL_ICON_SELECTOR)
         .expect("the shell icon is drawn");
     assert_eq!((row.size.width, row.size.height), (px(44.), px(44.)));
+    // Owner rework 7: 16 px (`size_4`), not the 14 px of `small`.
+    assert_eq!((icon.size.width, icon.size.height), (px(16.), px(16.)));
     assert!(
         (icon.center().x - row.center().x).abs() <= px(1.)
             && (icon.center().y - row.center().y).abs() <= px(1.),
@@ -219,9 +221,6 @@ fn a_collapsed_cell_is_the_shell_icon_on_the_status_fill(cx: &mut TestAppContext
         ProgramState::Error,
     ] {
         report(&probe, Some(state), cx);
-        let reported = cx.update(|_, cx| TabRowLayout::take_cell_fill(cx));
-        let expected = cx.update(|_, cx| collapsed_fill(state, cx.theme()).map(|(fill, _)| fill));
-        assert_eq!(reported, expected, "{state:?}: the rail is told the fill");
         let fill = cx
             .debug_bounds(TAB_FILL_SELECTOR)
             .unwrap_or_else(|| panic!("{state:?}: the cell is filled"));
@@ -235,17 +234,15 @@ fn a_collapsed_cell_is_the_shell_icon_on_the_status_fill(cx: &mut TestAppContext
         cx.debug_bounds(TAB_FILL_SELECTOR).is_none(),
         "a cleared state removes the fill"
     );
-    assert_eq!(
-        cx.update(|_, cx| TabRowLayout::take_cell_fill(cx)),
-        None,
-        "an idle cell reports no fill to the rail"
-    );
 }
 
-/// The fill of the selected cell starts after the rail's accent bar; an unselected one reaches
-/// the cell's edge.
+/// Owner rework 7 review: the fill of a cell reaches its whole width, selected or not (no notches
+/// left at the corners of the old 3 px strip), and a selected filled cell draws its own accent pill
+/// over the fill, inset 8 px top and bottom, which an unselected one does not.
 #[gpui::test]
-fn a_selected_fill_leaves_the_accent_bar_its_own_background(cx: &mut TestAppContext) {
+fn a_selected_fill_covers_the_cell_and_carries_its_own_pill(cx: &mut TestAppContext) {
+    use crate::panel::tab_title::TAB_FILL_PILL_SELECTOR;
+
     let (_, probe, panel, cx) =
         tab_row_window_with_panel(cx, TabRowLayout::Collapsed, 44., SessionKind::Local);
     report(&probe, Some(ProgramState::Working), cx);
@@ -261,12 +258,23 @@ fn a_selected_fill_leaves_the_accent_bar_its_own_background(cx: &mut TestAppCont
             .expect("the cell is filled")
     };
     let selected = set_active(true, cx);
+    assert_eq!(selected, row, "the fill covers the whole cell");
+    let pill = cx
+        .debug_bounds(TAB_FILL_PILL_SELECTOR)
+        .expect("a selected filled cell draws its pill");
+    assert_eq!(pill.left(), row.left());
+    assert_eq!(pill.size.width, px(TabRowLayout::ACCENT_BAR_WIDTH));
+    assert_eq!(pill.top() - row.top(), px(TabRowLayout::ACCENT_BAR_INSET));
     assert_eq!(
-        selected.left() - row.left(),
-        px(TabRowLayout::ACCENT_BAR_WIDTH)
+        row.bottom() - pill.bottom(),
+        px(TabRowLayout::ACCENT_BAR_INSET)
     );
     let unselected = set_active(false, cx);
-    assert_eq!(unselected.left(), row.left());
+    assert_eq!(unselected, row);
+    assert!(
+        cx.debug_bounds(TAB_FILL_PILL_SELECTOR).is_none(),
+        "an unselected cell has no pill of its own"
+    );
 }
 
 /// The expanded row and the strip keep their status icon, and draw no fill.

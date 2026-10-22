@@ -726,11 +726,13 @@ impl Panel for TerminalPanel {
     fn title_suffix(
         &mut self,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
         let btn = Button::new("add-shell-tab")
             .icon(IconName::Plus)
-            .xsmall()
+            .with_size(super::tab_title::new_tab_button_size(
+                oneterm_state::TabRowLayout::current(cx),
+            ))
             .ghost()
             .tab_stop(false)
             .tooltip("New Terminal")

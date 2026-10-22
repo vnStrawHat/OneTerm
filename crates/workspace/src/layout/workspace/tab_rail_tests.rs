@@ -19,7 +19,8 @@ use oneterm_state::{TabRowLayout, panel_names};
 
 use super::tab_rail::{
     COLLAPSED_ROW_HEIGHT, EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, HANDLE_SELECTOR,
-    HEADER_SELECTOR, HOVER_SELECTOR, LIST_SELECTOR, RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
+    HEADER_LABEL_SELECTOR, HEADER_SELECTOR, HOVER_SELECTOR, LIST_SELECTOR, PILL_SELECTOR,
+    RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
 };
 use super::{MAIN_DOCK_VERSION, dock_skin};
 
@@ -98,14 +99,34 @@ impl Panel for Probe {
         (!self.title_row).then(|| self.label.clone())
     }
 
+    // Like the real row: the content (here the whole row) starts the tab drag; in a collapsed
+    // cell only the 16 px icon does and the rest of the cell is the rail's.
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.report
-            .title_layout
-            .set(Some(TabRowLayout::current(cx)));
+        let layout = TabRowLayout::current(cx);
+        self.report.title_layout.set(Some(layout));
         let started = self.report.title_drags.clone();
         let label = self.label.clone();
         let selector = format!("probe-row-{label}");
         let status = format!("probe-status-{label}");
+        if layout == TabRowLayout::Collapsed {
+            return div()
+                .flex_1()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .id(SharedString::from(selector.clone()))
+                        .debug_selector(move || selector.clone())
+                        .size_4()
+                        .on_drag(ProbeDrag, move |drag, _, _, cx| {
+                            started.set(started.get() + 1);
+                            cx.new(|_| drag.clone())
+                        }),
+                )
+                .into_any_element();
+        }
         h_flex()
             .id(SharedString::from(selector.clone()))
             .debug_selector(move || selector.clone())
@@ -125,11 +146,12 @@ impl Panel for Probe {
                     .debug_selector(move || status.clone())
                     .size_4(),
             )
+            .into_any_element()
     }
 
-    // Like the terminal panel: the header's `+`.
+    // Like the terminal panel: the header's `+` (a 24 px ghost button in the rail).
     fn title_suffix(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<impl IntoElement> {
-        Some(div().debug_selector(|| PLUS_SELECTOR.to_string()).size_5())
+        Some(div().debug_selector(|| PLUS_SELECTOR.to_string()).size_6())
     }
 
     // Like the terminal panel: the toolbar offers zoom (the rail draws no button for it), and
@@ -455,7 +477,7 @@ fn the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it(cx: &mut TestAppC
         .collect();
     assert!(row(3, cx).is_none(), "no row beyond the tabs");
     for pair in rows.windows(2) {
-        assert_eq!(pair[0].size.height, px(64.), "twice the strip's 32 px");
+        assert_eq!(pair[0].size.height, px(48.), "6 + 20 + 16 + 6");
         assert_eq!(pair[0].size.height, ROW_HEIGHT);
         assert_eq!(pair[1].top(), pair[0].bottom(), "rows stack");
     }
@@ -467,10 +489,6 @@ fn the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it(cx: &mut TestAppC
     // Rows span the list.
     let list = bounds_of(LIST_SELECTOR, cx).unwrap();
     assert_eq!(rows[0].right(), list.right());
-    // A 1 px divider sits on each row's bottom edge, inside the 64 px: the row's content box
-    // (the grip is as tall as it) is one pixel shorter.
-    let grip = bounds_of(format!("{GRIP_SELECTOR}-0"), cx).expect("the grip column");
-    assert_eq!(grip.size.height, ROW_HEIGHT - px(1.));
 
     assert_eq!(centre_tabs(&window.area, cx).1, 0);
     cx.simulate_click(rows[2].center(), Modifiers::none());
@@ -482,19 +500,43 @@ fn the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it(cx: &mut TestAppC
     );
 }
 
-/// The reorder grip's glyph is centred on the title line (line 1 of the two-line row), not on
-/// the whole 64 px row, and the header keeps the strip's 32 px.
+/// Owner rework 7: the reorder grip is an overlay on the row's left edge that takes no room (the
+/// title element is as wide and as tall as the row: no grip column, no divider cutting it), its
+/// glyph is centred on the row's height, and the header keeps the strip's 32 px.
 #[gpui::test]
-fn the_grip_glyph_sits_on_the_title_line_and_the_header_keeps_its_height(cx: &mut TestAppContext) {
+fn the_grip_overlays_the_row_and_no_divider_cuts_it(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
-    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+    set_centre(&window.area, &terminals(&["a", "b"]), true, &report, cx);
 
     let row = row(0, cx).unwrap();
+    let title = bounds_of("probe-row-a", cx).expect("the title element");
+    assert_eq!(
+        title.left(),
+        row.left(),
+        "no column is reserved for the grip"
+    );
+    assert_eq!(title.size.width, row.size.width);
+    assert_eq!(
+        title.size.height, row.size.height,
+        "no border or divider takes a pixel of the row"
+    );
+
+    let grip = bounds_of(format!("{GRIP_SELECTOR}-0"), cx).expect("the grip");
+    assert_eq!((grip.left(), grip.top()), (row.left(), row.top()));
+    assert_eq!(
+        (grip.size.width, grip.size.height),
+        (px(8.), row.size.height)
+    );
     let glyph = bounds_of(format!("{GRIP_GLYPH_SELECTOR}-0"), cx).expect("the grip glyph");
     assert_eq!(
-        glyph.center().y - row.top(),
-        px(TabRowLayout::vertical_first_line_centre())
+        glyph.center().y,
+        row.center().y,
+        "the glyph is centred on the row"
+    );
+    assert!(
+        glyph.left() < row.left() && glyph.right() <= row.left() + px(12.),
+        "the glyph's box sits over the row's first 12 px, its dots in the first 6: {glyph:?}"
     );
     let rail = bounds_of(RAIL_SELECTOR, cx).unwrap();
     assert_eq!(
@@ -504,8 +546,41 @@ fn the_grip_glyph_sits_on_the_title_line_and_the_header_keeps_its_height(cx: &mu
     );
 }
 
+/// Owner rework 7: the accent is a 3 px rounded pill on the selected row's left edge, inset 8 px
+/// from its top and bottom, not a bar the row's height; the others have none.
+#[gpui::test]
+fn the_selected_row_has_an_inset_accent_pill(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+
+    for collapsed in [false, true] {
+        cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(collapsed, cx));
+        settle(cx);
+        let selected = row(0, cx).unwrap();
+        let pill = bounds_of(format!("{PILL_SELECTOR}-0"), cx).expect("the selected row's pill");
+        assert_eq!(pill.left(), selected.left(), "collapsed: {collapsed}");
+        assert_eq!(pill.size.width, px(3.), "collapsed: {collapsed}");
+        assert_eq!(
+            pill.top() - selected.top(),
+            px(8.),
+            "collapsed: {collapsed}"
+        );
+        assert_eq!(
+            selected.bottom() - pill.bottom(),
+            px(8.),
+            "collapsed: {collapsed}"
+        );
+        assert!(
+            bounds_of(format!("{PILL_SELECTOR}-1"), cx).is_none(),
+            "an unselected row has no pill, collapsed: {collapsed}"
+        );
+    }
+}
+
 /// Owner rework 5 of `US-0196`: every unselected row has a hover fill over the whole row, behind
-/// its content, expanded and collapsed; the selected row has none (it keeps its active fill).
+/// its content, expanded and collapsed; the selected row has none (it keeps its own, stronger
+/// fill). No divider is left of the row (rework 7), so the fill reaches its bottom edge.
 #[gpui::test]
 fn an_unselected_row_has_a_hover_fill_over_the_whole_row(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
@@ -517,18 +592,10 @@ fn an_unselected_row_has_a_hover_fill_over_the_whole_row(cx: &mut TestAppContext
         settle(cx);
         let row = row(1, cx).unwrap();
         let fill = bounds_of(format!("{HOVER_SELECTOR}-1"), cx).expect("the unselected row's fill");
-        assert_eq!(fill.left(), row.left(), "collapsed: {collapsed}");
-        assert_eq!(fill.right(), row.right(), "collapsed: {collapsed}");
-        assert_eq!(fill.top(), row.top(), "collapsed: {collapsed}");
-        // The row's own 1 px divider stays outside the fill.
-        assert_eq!(
-            fill.bottom() + px(1.),
-            row.bottom(),
-            "collapsed: {collapsed}"
-        );
+        assert_eq!(fill, row, "collapsed: {collapsed}");
         assert!(
             bounds_of(format!("{HOVER_SELECTOR}-0"), cx).is_none(),
-            "the selected row keeps its active fill, collapsed: {collapsed}"
+            "the selected row takes no hover fill, collapsed: {collapsed}"
         );
     }
 }
@@ -627,7 +694,7 @@ fn forty_tabs_scroll_and_the_active_one_is_brought_into_view(cx: &mut TestAppCon
     assert!(first.top() >= list.top() && first.bottom() <= list.bottom());
     assert!(
         last.bottom() > list.bottom(),
-        "40 rows of 64 px do not fit the list ({list:?}), so the last is out of view"
+        "40 rows of 48 px do not fit the list ({list:?}), so the last is out of view"
     );
 
     let (panels, _) = centre_tabs(&window.area, cx);
@@ -647,15 +714,17 @@ fn forty_tabs_scroll_and_the_active_one_is_brought_into_view(cx: &mut TestAppCon
     assert_eq!(centre_tabs(&window.area, cx).1, 39);
 }
 
-/// The header holds the `+` alone, on the right, with no zoom button even though the panel
-/// offers one; zoom keeps the rail (it is the group's chrome) and the header as it was.
+/// The header holds the "Terminals" label on the left and the `+` on the right, with no zoom
+/// button even though the panel offers one; zoom keeps the rail (it is the group's chrome) and
+/// the header as it was.
 #[gpui::test]
-fn the_header_holds_only_the_plus_on_the_right_and_zoom_keeps_it(cx: &mut TestAppContext) {
+fn the_header_holds_the_label_and_the_plus_and_zoom_keeps_it(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
     let header = bounds_of(HEADER_SELECTOR, cx).expect("the header");
     let plus = bounds_of(PLUS_SELECTOR, cx).expect("the `+`");
+    let label = bounds_of(HEADER_LABEL_SELECTOR, cx).expect("the label");
     assert_eq!(header.size.height, px(32.));
     // 8 px of padding, then the right edge of the header's content.
     assert_eq!(
@@ -663,9 +732,21 @@ fn the_header_holds_only_the_plus_on_the_right_and_zoom_keeps_it(cx: &mut TestAp
         header.right() - px(8.),
         "the `+` is right-aligned"
     );
+    assert_eq!((plus.size.width, plus.size.height), (px(24.), px(24.)));
     assert!(
-        plus.left() > header.center().x,
-        "nothing else sits left of it"
+        (plus.center().y - header.center().y).abs() < px(1.),
+        "the `+` is centred in the header"
+    );
+    // The label starts where the rows' titles do and ends before the `+`.
+    assert_eq!(
+        label.left() - header.left(),
+        px(TabRowLayout::VERTICAL_ROW_PADDING_LEFT)
+    );
+    assert!(label.right() < plus.left(), "{label:?} {plus:?}");
+    assert!(
+        label.size.height < header.size.height
+            && (label.center().y - header.center().y).abs() < px(1.),
+        "the label is a small line centred in the header: {label:?}"
     );
 
     let node = centre_node(&window.area, cx);
@@ -1138,9 +1219,14 @@ fn the_setter_collapses_the_rail_to_a_strip_and_expands_it(cx: &mut TestAppConte
         (f32::from(plus.center().x) - f32::from(rail.center().x)).abs() <= 1.,
         "the `+` {plus:?} is centred in the strip {rail:?}"
     );
+    assert!(
+        bounds_of(HEADER_LABEL_SELECTOR, cx).is_none(),
+        "the collapsed header has no label"
+    );
 
     cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(false, cx));
     settle(cx);
+    assert!(bounds_of(HEADER_LABEL_SELECTOR, cx).is_some());
     assert!(!is_collapsed(&window, cx));
     assert_eq!(rail_width(cx), 300., "the preference comes back");
     assert!(bounds_of(HANDLE_SELECTOR, cx).is_some());
@@ -1176,10 +1262,14 @@ fn a_collapsed_cell_is_built_collapsed_and_a_click_selects_it(cx: &mut TestAppCo
     assert_eq!(centre_tabs(&window.area, cx).1, 2);
 }
 
-/// Collapsed, the title row's own drag and the grip's reorder still start from the right place:
-/// the cell's content drags the tab, and the grip (a 12 px overlay on its left edge) reorders.
+/// Owner rework 7: a collapsed cell has no grip, and the cell itself is what is dragged to
+/// reorder. Its content, the shell icon, still starts the tab drag that an empty Space accepts
+/// (the title element's drag wins where the icon is); every other pixel of the cell starts the
+/// rail's reorder.
 #[gpui::test]
-fn a_collapsed_cell_keeps_the_content_drag_and_the_grip_reorder(cx: &mut TestAppContext) {
+fn a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon(
+    cx: &mut TestAppContext,
+) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
@@ -1192,25 +1282,40 @@ fn a_collapsed_cell_keeps_the_content_drag_and_the_grip_reorder(cx: &mut TestApp
     );
     let (original, _) = centre_tabs(&window.area, cx);
     let target = row(2, cx).unwrap().center();
+    for ix in 0..3 {
+        assert!(
+            bounds_of(format!("{GRIP_SELECTOR}-{ix}"), cx).is_none(),
+            "a collapsed cell has no grip"
+        );
+    }
 
-    let title = bounds_of("probe-row-a", cx).expect("the title row fills the cell");
-    drag_to(title.center() + point(px(8.), px(0.)), target, cx);
+    // The icon: the tab drag starts, and dropping it on another cell reorders nothing.
+    let icon = bounds_of("probe-row-a", cx).expect("the cell's content is its icon");
+    assert_eq!((icon.size.width, icon.size.height), (px(16.), px(16.)));
+    drag_to(icon.center(), target, cx);
     assert!(has_active_drag(cx), "the cell's content starts a drag");
-    assert_eq!(report.title_drags.get(), 1, "it is the title row's drag");
+    assert_eq!(report.title_drags.get(), 1, "it is the title's drag");
     release(target, cx);
     assert_eq!(centre_tabs(&window.area, cx).0, original);
 
-    let grip = bounds_of(format!("{GRIP_SELECTOR}-2"), cx).expect("a grip per cell");
-    assert_eq!(grip.size.width, px(12.));
+    // The cell outside the icon, its left and right margins: the reorder drag starts, not the
+    // title's, and the tab lands in the slot of the cell it is dropped on.
+    let cell = row(2, cx).unwrap();
     let first = row(0, cx).unwrap().center();
-    drag_to(grip.center(), first, cx);
-    assert!(has_active_drag(cx), "the grip starts a drag");
-    assert_eq!(report.title_drags.get(), 1, "not the title row's drag");
+    drag_to(point(cell.left() + px(3.), cell.center().y), first, cx);
+    assert!(has_active_drag(cx), "the cell's margin starts a drag");
+    assert_eq!(report.title_drags.get(), 1, "not the title's drag");
     release(first, cx);
     assert_eq!(
         centre_tabs(&window.area, cx).0,
         vec![original[2], original[0], original[1]]
     );
+    let cell = row(1, cx).unwrap();
+    let last = row(2, cx).unwrap().center();
+    drag_to(point(cell.right() - px(3.), cell.center().y), last, cx);
+    assert!(has_active_drag(cx), "the right margin too");
+    release(last, cx);
+    assert_eq!(report.title_drags.get(), 1, "never the title's drag");
 }
 
 /// Turning the Vertical Tabs switch off keeps the collapsed state, and on again returns to the
@@ -1326,7 +1431,7 @@ fn forty_collapsed_cells_scroll_without_a_gutter_and_reveal_the_active_one(
 
 /// Advisor pin (`US-0198` verify, finding 1): the scroll offset is kept in pixels across a
 /// collapse or an expand, so with many tabs the active row would leave the viewport when the
-/// row height changes (44 -> 64 px here). The rail re-reveals the active row when the layout
+/// row height changes (44 -> 48 px here). The rail re-reveals the active row when the layout
 /// flips.
 #[gpui::test]
 fn expanding_the_rail_keeps_the_active_row_in_view(cx: &mut TestAppContext) {
@@ -1412,4 +1517,46 @@ fn a_click_across_a_cell_of_an_overflowing_collapsed_rail_selects_it(cx: &mut Te
             "the list did not scroll"
         );
     }
+}
+
+/// Advisor check (`US-0196` rework 7): at the rail's 140 px floor the header still holds the
+/// "Terminals" label left of the 24 px `+` with a gap between them, and the first row's title
+/// starts at the same 14 px the label does.
+#[gpui::test]
+fn the_header_label_and_the_plus_fit_the_narrowest_rail(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), true, &report, cx);
+    window.config.update(cx, |config, cx| {
+        config.vertical_tabs.width = 140;
+        cx.notify();
+    });
+    cx.update(|_, cx| cx.refresh_windows());
+    settle(cx);
+    assert_eq!(rail_width(cx), 140.);
+
+    let header = bounds_of(HEADER_SELECTOR, cx).expect("the header");
+    let label = bounds_of(HEADER_LABEL_SELECTOR, cx).expect("the label");
+    let plus = bounds_of(PLUS_SELECTOR, cx).expect("the `+`");
+    assert_eq!(
+        header.size.width,
+        px(139.),
+        "the rail's width inside its border"
+    );
+    assert!(
+        label.right() + px(4.) <= plus.left(),
+        "the label {label:?} ends clear of the `+` {plus:?}"
+    );
+    assert_eq!(plus.right(), header.right() - px(8.));
+    let title = bounds_of("probe-row-a", cx).expect("the first row's title");
+    assert_eq!(
+        header.left(),
+        title.left(),
+        "the header and the rows share the rail's edge"
+    );
+    assert_eq!(
+        label.left() - header.left(),
+        px(TabRowLayout::VERTICAL_ROW_PADDING_LEFT),
+        "the label starts where a row's content does"
+    );
 }
