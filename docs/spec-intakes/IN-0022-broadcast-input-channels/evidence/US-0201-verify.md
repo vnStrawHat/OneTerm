@@ -1,0 +1,143 @@
+# Advisor code review (US-0201)
+
+Date: 2026-10-22. Reviewed head: `809106f8` (two commits on `main` @ `52f7aa49`): `237d872b`
+(the packet), `809106f8` (the code and the four doc edits). Verify branch `verify/us-0201` in the
+coder's worktree; this file and the two pinning tests are the only additions.
+
+## Verdict
+
+**FAIL.** One Medium defect (finding 1): the rows the menu shows as disabled still run on
+hover + Enter, so a dead terminal's greyed "Split Right" splits the tab and the greyed
+"Duplicate Session" dispatches `DuplicateSession`. Reproduced on a window with the product's own
+row and pinned by two `should_panic` tests. The fix is three lines in `menu.rs`; the wiring, the
+liveness read, the placeholder menu, the menu-only decision and the records are all sound.
+
+## Gate, re-run one crate per command
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p oneterm-terminal-view` | 430 passed, 3 ignored (428 before the two pins) |
+| `cargo clippy -p oneterm-terminal-view --all-targets -- -D warnings` | clean |
+| `cargo fmt --all -- --check` | clean |
+| `python scripts/check-english.py` | 1150 files pass |
+| `python scripts/check-doc-paths.py` | 219 paths pass |
+
+`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`, the worktree's own `target`.
+
+## The brief's attack list
+
+1. **Is `alive()` read at right-click time, or could the menu be cached stale?** Read at
+   right-click time. The kit rebuilds the menu on every open: `open_menu`
+   (`reference/gpui-kit/crates/component/src/menu/context_menu.rs:416-476`) clears
+   `menu_view`, then `PopupMenu::build` in a deferred callback calls the builder closure
+   again. The closure (`crates/terminal-view/src/terminal_view/render.rs:362-365`) reads
+   `session.read(cx).alive()` on each call. A session that dies while the menu is open keeps
+   the live rows until the menu is reopened, which is the same window every other row has
+   (Copy's selection, Log's running flag).
+
+2. **Are the rows truly disabled in the kit?** Mouse: yes. `MenuItemElement::render`
+   (`reference/gpui-kit/crates/component/src/menu/menu_item.rs:119-133`) only attaches
+   `on_click` when `!disabled`, and `PopupMenu::render_item` (`popup_menu.rs:1326-1331`)
+   does the same. Keyboard: **no**, see finding 1. `on_hover` is attached whether or not the
+   row is disabled (`menu_item.rs:116-118`), it sets `selected_index = Some(ix)`
+   (`popup_menu.rs:1243-1254`), and `confirm` (`popup_menu.rs:861-892`, the Enter binding)
+   runs the item's handler or dispatches its action with no `disabled` check. Arrow keys are
+   safe (`select_up` / `select_down` filter on `is_clickable()`, which excludes disabled
+   rows, `popup_menu.rs:228-242`), with one kit oddity: `select_down` from no selection
+   picks index 0 unconditionally (`:943-946`); index 0 is "New Terminal" in both of our
+   menus, so no exposure here. A disabled `Submenu` would be safe on Enter (`confirm` has
+   `_ => {}`), which is why the dead Duplicate Session row, now a plain `Item`, is the one
+   that became reachable. The pinned crates.io `gpui-component-0.7.3` matches the reference
+   on all of these lines (diffed).
+
+3. **Placeholder menu.** Unaffected: `crates/terminal-view/src/space/render.rs:314` passes
+   `false`, and the placeholder has no session to read. The kit still renders those rows
+   enabled.
+
+4. **Menu-only decision.** Sound and consistently recorded (packet Plan and Evidence,
+   `docs/terminal-split/04-context-menu.md:59-65`, `IN-0018` LLD `input.md:190-192`,
+   `docs/gui-layout.md:180`). The reasoning holds: `duplicate_session_to` is the tab menu's
+   "Duplicate" reconnect path for a dropped SSH tab, and `split_active_at` is shared with the
+   placeholder (an empty Space has no view). Nothing in the four docs contradicts the code.
+   The two older records that describe Duplicate Session as unconditional
+   (`IN-0003`, `IN-0006` HLD) are history and need no edit.
+
+5. **Owning intake.** IN-0022 is acceptable: the rule is the liveness model US-0199 / US-0200
+   built, and the row shape is US-0199's. The natural alternative (IN-0003, the Duplicate
+   Session contract, or the terminal-split docs) would have split the liveness rule across
+   two intakes; the owning docs for the menu layout were updated regardless.
+
+6. **The untested `build_menu` branch.** Reviewed by hand: `menu.rs:106-145` picks
+   `dead_duplicate_item()` when `!ctx.session_alive` and passes `!ctx.session_alive` to
+   `split_items`; nothing else in the builder reads the flag. The coder's two tests pin the
+   helpers' output. For a wiring test, see finding 4.
+
+## Findings
+
+1. **Medium, defect. A disabled Split row and the disabled Duplicate Session row still act
+   on hover + Enter.** `crates/terminal-view/src/input/menu.rs:318-328` (`split_item`
+   attaches `.on_click(...)` and the `Split*` action regardless of `disabled`) and
+   `menu.rs:245-250` (`dead_duplicate_item` keeps the `DuplicateSession` action on purpose,
+   "so the shortcut hint column does not change"). Kit side: `menu_item.rs:116-118` (hover is
+   registered on a disabled row), `popup_menu.rs:861-892` (`confirm` runs the handler or
+   dispatches the action without checking `disabled`). User path: right-click a dead
+   terminal, move the pointer onto the greyed "Split Right", press Enter: the tab splits.
+   On "Duplicate Session": `dispatch_confirm_action` focuses the action context and
+   dispatches `DuplicateSession`, which `TerminalPanel` handles on the active Space, i.e. the
+   dead one. Reproduced: `input::menu_tests::defect_1_hover_then_enter_splits_through_a_disabled_split_row`
+   (a window hosting the product's `split_item(.., disabled = true)` for a `TerminalPanel`
+   whose fake session is dead; right-click, hover the row, Enter; `leaf_count()` goes 1 to 2:
+   "hover + Enter left 2 Spaces"). Pinned with `should_panic` together with the row-model
+   test `defect_1_disabled_rows_still_carry_their_click_path` (a disabled `split_item` or
+   `dead_duplicate_item` carries a handler or an action).
+   **Fix shape (product, three lines):** in `split_item` attach the action and the
+   `on_click` only when `!disabled` (an `if disabled { item } else { item.action(..).on_click(..) }`
+   around the builder chain); in `dead_duplicate_item` drop `.action(..)`. A row with
+   neither has nothing for `confirm` to run, whatever `selected_index` says. The shortcut
+   hint disappears from the greyed rows, which is what a disabled row should show anyway;
+   the column is laid out per row, so nothing else moves. Then drop the two `should_panic`
+   attributes and the `defect_1_` prefixes (the second test flips green; the first proves
+   the window path). Update the rustdoc at `menu.rs:242-244` and the packet Plan bullet that
+   gives the hint-column rationale. Kit side, worth an upstream note but not a blocker:
+   `confirm` should honour `disabled`, `MenuItemElement` should not register `on_hover` on a
+   disabled row, and `select_down` from no selection should pick the first clickable row.
+
+2. **Low, pre-existing, info only.** The same kit hole reaches every other disabled row that
+   keeps a handler: Copy without a selection (`menu.rs:158`, a no-op copy), Log Start while
+   running / Stop while not (`menu.rs:188,197`, the controller's own guards apply), and
+   `panel/tab_title.rs:793`. The US-0199 "Input Channel" row (`channel_menu.rs:147`) and
+   "No saved sessions" (`terminal_panel.rs:792`) carry nothing and are safe. Not this
+   packet; a follow-up BUG if the owner wants the rule "a disabled row carries no click
+   path" applied everywhere, or the upstream fix.
+
+3. **Low, record.** `US-0201-disable-split-and-duplicate-on-dead-terminal.md` Plan ("the
+   action stays so the shortcut hint column does not change") and `menu.rs:242-244` state
+   the rationale finding 1 overturns; rewrite both with the fix. The IN-0022 packet row is
+   already ticked `[x]` and the packet reads "Implemented" before merge; the coordinator's
+   merge step should confirm that with `harness story` after the rework.
+
+4. **Low, test gap, with a shape.** The `build_menu` wiring is not unit-tested because
+   `PopupMenu::menu_items` is `pub(crate)` in the kit. Two routes exist, neither taken here:
+   (a) the kit's headless observation API, `gpui_base::test_support::snapshots(window)`
+   (`reference/gpui-kit/crates/base/src/test_support.rs:174-189`), lists every drawn
+   `MenuItemElement` with its label and bounds; it is behind the `test-support` feature of
+   `gpui-base`, which this crate's dev-dependencies do not enable (a one-line Cargo.toml
+   change). With it, a window test can right-click a host that renders `build_menu` with a
+   dead `FakeTerminalSession`, assert the labels (a "Duplicate Session" row and the four
+   Splits present), and click each by bounds asserting `leaf_count()` stays 1 and no
+   `DuplicateSession` reaches an `on_action` listener on the host. Note `MenuItemElement`
+   publishes no accessibility disabled flag, so `ElementSnapshot::disabled()` is `None`
+   there; the test must be behavioural, which only becomes meaningful after finding 1 is
+   fixed. (b) A pure "row model" function is not worth it: the branch is two reads of one
+   flag. Recommendation: (a), in the rework or as a follow-up; the ui-verifier walk covers
+   the shape meanwhile.
+
+## What the owner must still check by hand
+
+- On screen (the ui-verifier walk): a dead tab's area menu shows the four Splits and
+  "Duplicate Session" greyed, Duplicate Session without a submenu arrow, every other row as
+  before; a live tab's menu unchanged; the empty-Space menu's Splits still enabled.
+- Finding 1 by hand, before and after the fix: hover the greyed "Split Right" on a dead
+  tab and press Enter.
+- A real SSH drop (not only a local exit): the area menu greys the rows after the
+  "SSH connection closed" banner; only the fake session was used here.
