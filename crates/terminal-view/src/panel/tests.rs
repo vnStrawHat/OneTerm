@@ -1907,3 +1907,164 @@ fn the_working_icon_animates_in_every_row_layout(cx: &mut TestAppContext) {
         );
     }
 }
+
+/// A stand-in for a non-terminal dock panel (SFTP, session tree) in the drop tests below.
+struct ForeignPanel {
+    focus_handle: gpui::FocusHandle,
+}
+
+impl gpui_component::dock::BasePanel for ForeignPanel {
+    fn panel_name(&self) -> &'static str {
+        "foreign"
+    }
+}
+
+impl gpui_component::dock::Panel for ForeignPanel {
+    fn title(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+        gpui::div()
+            .id("foreign-tab")
+            .debug_selector(|| "foreign-tab".to_string())
+            .px_2()
+            .child("Foreign")
+    }
+}
+
+impl gpui::EventEmitter<gpui_component::dock::PanelEvent> for ForeignPanel {}
+
+impl gpui::Focusable for ForeignPanel {
+    fn focus_handle(&self, _: &gpui::App) -> gpui::FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl gpui::Render for ForeignPanel {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::Styled as _;
+        gpui::div().size_full()
+    }
+}
+
+/// PIN (advisor, `US-0196` rework 9, defect 1): a `DragPanel` of a NON-terminal panel dropped on
+/// an empty Space is swallowed by the Space's `on_drop::<DragPanel>`. gpui takes the active drag
+/// and stops propagation before any type check can decline it (`gpui-pre-0.3.9
+/// src/elements/div.rs:2905-2931`; a `can_drop` predicate that returns `false` also consumes
+/// the drag), so the dock's own merge or split of the centre, which ran on `main` for that
+/// drop, never does. Here a foreign tab of the centre group is dropped on the right edge zone
+/// of the content, over the empty Space: the dock would split the centre (two groups). Flip
+/// the final assertion to `2` once the Space forwards or declines the drop in a way the dock
+/// still sees.
+#[gpui::test]
+fn pin_a_foreign_dock_panel_dropped_on_an_empty_space_is_swallowed_by_it(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    use gpui_component::dock::{BasePanelView as _, PaneRef};
+
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AppState::init);
+
+    let (session, _) = FakeTerminalSession::boxed(24, 80, "terminal");
+    let handed = Rc::new(RefCell::new(None));
+    let handed_in = handed.clone();
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        // The kit's skin, so the strip (and the foreign tab's drag) is drawn.
+        let (dock_area, _skin) =
+            gpui_component::dock::DockSkin::dock_area("foreign-drop-test", None, window, cx);
+        let terminal =
+            cx.new(|cx| TerminalPanel::from_spec(session_spec(session, "Terminal"), window, cx));
+        let foreign = cx.new(|cx| ForeignPanel {
+            focus_handle: cx.focus_handle(),
+        });
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.set_center(
+                DockLayout::tabs()
+                    .panel_view(panel_handle(terminal.clone()), cx)
+                    .panel_view(panel_handle(foreign.clone()), cx),
+                window,
+                cx,
+            );
+        });
+        oneterm_state::AppState::global(cx).update(cx, |state, _| {
+            state.dock_area = Some(dock_area.downgrade());
+        });
+        *handed_in.borrow_mut() = Some((dock_area.clone(), terminal, foreign));
+        Root::new(dock_area, window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    let (dock_area, terminal, _foreign) = handed.borrow().clone().expect("the window was built");
+    cx.run_until_parked();
+
+    // The terminal tab is displayed and split: its right half is an empty Space.
+    let terminal_id = cx.update(|_, cx| terminal.panel_id(cx));
+    dock_area.update_in(cx, |area, window, cx| {
+        area.select_panel(terminal_id, window, cx)
+    });
+    terminal.update_in(cx, |panel, window, cx| {
+        let active = panel.tree.active();
+        panel.split_active_at(active, SplitDir::Right, window, cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let groups = |cx: &mut VisualTestContext| {
+        dock_area.read_with(cx, |area, _| {
+            let mut tabs = 0;
+            area.layout(DockPlacement::Center)
+                .expect("a centre layout")
+                .root()
+                .walk(&mut |node| tabs += usize::from(matches!(node.kind(), PaneRef::Tabs { .. })));
+            tabs
+        })
+    };
+    assert_eq!(groups(cx), 1);
+
+    // Drag the foreign tab onto the empty Space, in the content's right edge zone (x > 65 %),
+    // where the dock's drop would split the centre to the right.
+    let tab = cx
+        .debug_bounds("foreign-tab")
+        .expect("the foreign tab is drawn in the strip");
+    let area = dock_area.read_with(cx, |area, _| area.bounds());
+    let space = point(
+        area.left() + area.size.width * 0.85,
+        area.top() + area.size.height * 0.5,
+    );
+    cx.simulate_mouse_down(tab.center(), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        tab.center() + point(px(0.), px(6.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(space, MouseButton::Left, Modifiers::none());
+    assert!(
+        cx.update(|_, cx| cx.has_active_drag()),
+        "the foreign tab starts the dock's drag"
+    );
+    cx.simulate_mouse_up(space, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+
+    assert!(
+        !cx.update(|_, cx| cx.has_active_drag()),
+        "the drop ended the drag"
+    );
+    assert_eq!(
+        terminal.read_with(cx, |panel, _| panel.empty_space_destinations().len()),
+        1,
+        "the empty Space took nothing (a foreign panel is not a terminal)"
+    );
+    // The defect: on `main` this drop split the centre into two groups; now the Space eats it
+    // and the dock never sees the drop.
+    assert_eq!(
+        groups(cx),
+        1,
+        "PIN: the dock's own drop did not run; flip to 2 when the Space lets the dock see it"
+    );
+}

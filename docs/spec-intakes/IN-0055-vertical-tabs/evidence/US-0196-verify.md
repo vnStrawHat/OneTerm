@@ -571,3 +571,46 @@ The record is now `(panel id, menu entity id)`; `closed(menu)` clears only when 
 ### For the owner
 
 Nothing new beyond the rework 8 list.
+
+## Advisor review (rework 9)
+
+Coder head `e3a9bf85` (base `main` @ `f4d042a2`), the coder's worktree, branch `verify/in-0055-rework9`, 2026-10-23. Scope: owner rework 9 (the whole expanded row reorders, the grip is gone, an empty Space accepts a terminal tab's `DragPanel`).
+
+### Verdict: PASS with one defect (Minor, owner decision) and observations
+
+Nothing moves, closes or orphans a session; the owner's ruling is implemented as stated; the collapsed strip's tests pass unedited; records were committed before the code (`821e2857` packet, `94a9ceba` code, `e3a9bf85` docs). The one defect is a side effect the coder already named as weak point 2 and documented; it is pinned here so it is not lost.
+
+### Gate (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, one crate per command)
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p oneterm-terminal-view --lib` | 442 passed, 3 ignored (443 with the pin below) |
+| `cargo test -p oneterm-workspace --lib` | 121 passed, 3 ignored |
+| `cargo clippy -p oneterm-workspace -p oneterm-terminal-view -p oneterm-state -p oneterm-theme --all-targets -- -D warnings` | clean (the `--all-targets` run on `oneterm-terminal-view` repeated after the pin: clean) |
+| `python scripts/check-english.py`, `check-doc-paths.py`, `check-theme-contrast.py` | pass (contrast: the two known glyph rows the owner accepted 2026-10-22) |
+
+### The coder's attack list, verified
+
+1. **Cue mismatch over an empty Space.** Confirmed from the kit: `TabGroup::on_panel_drag_move` (`gpui-base-0.7.3/src/dock/tab_group.rs:517-537`) syncs the split placeholder for every `DragPanel` inside the content frame, whatever child is under the pointer, and OneTerm's skin draws it. The Space's own `drop_target` fill is drawn over it. On release the Space's `on_drop` is innermost and runs first (`gpui-pre-0.3.9/src/elements/div.rs:2905-2931`, `stop_propagation` after the listener), so the drop is always the move into the Space; the placeholder lies near an edge. The coder's claim that no placeholder outlives the drop holds: `TabGroup::context` hands a skin the indicator only while `cx.has_active_drag()` (`tab_group.rs:287-289`), and the stale `drop_indicator` is replaced at the next drag's first move (`sync_drop_placeholder`, `restart` on a new session id, `tab_group.rs:571-573`). UX only; for the ui-verifier.
+2. **A foreign `DragPanel` is swallowed: defect 1 below.** `can_drop` cannot decline it: gpui `take()`s `cx.active_drag` before it runs the predicate, and a `false` drops the taken drag on the floor (`div.rs:2915-2929`), so the dock's content `on_drop` sees no drag either way. There is no public read of the active drag's value at render time (`App::active_drag` is `pub(crate)`, `app.rs:822`; only `has_active_drag()` is public), so the hooks cannot be registered conditionally on the drag's kind either.
+3. **Row dropped on a live terminal.** The kit's content `on_drop` moves the **whole panel** (`InsertTarget::Split` / `Tabs`, `tab_group.rs:627-660`) through `DockArea::move_panel`, which "never tells the panel it was removed" (`dock_area.rs:478-479`): no Space is emptied, no session is touched. Within its own group with no edge placement it is a no-op (`tab_group.rs:641-647`). The leaf move into an empty Space removes the emptied source tab only when `has_no_terminals()` (`spaces.rs:280-288`) and the coder's test asserts `close_calls() == 0`. No data-loss path.
+4. **Gestures.** The vertical row's title element registers no `on_drag` (`tab_title.rs:645`), so the kit `Tab`'s `on_drag(DragPanel)` (`tab_rail.rs:718-721`) is the only drag and nothing competes for the press. Click selection and the 2 px drag threshold are gpui's (`div.rs:52, 2982`); double-click rename (`tab_title.rs:627-631`) and middle-click close (`tab_title.rs:772-779`, left-only drag) are on the title row's children, which get the press before the `Tab`. Not re-walked on screen here.
+5. **Edges.** Below the last row, cross-rail and lone-tab paths are the kit's and the pre-rework tests re-pointed from the grip to the row still pin them. One consequence worth knowing (observation 2 below): a terminal tab that is the dock's only visible panel is not draggable at all (`TabGroup::draggable`, `tab_group.rs:454-456`), so, unlike rework 8, its row can no longer be dragged into its own empty Space.
+
+### Findings
+
+1. **Minor (regression vs. `main`, owner decision): a non-terminal panel's `DragPanel` dropped on an empty Space is swallowed; the dock's merge or split does not run.** `crates/terminal-view/src/space/render.rs:297-309` registers `on_drop::<DragPanel>` on every empty Space; `handle_panel_drop` (`crates/terminal-view/src/panel/spaces.rs:224-234`) ignores a non-terminal panel, but by then gpui has consumed the drag and stopped propagation. On `main` the same drop (an SFTP or session panel dragged over the centre and released over an empty Space) merged into or split the centre group. **Pinned**: `pin_a_foreign_dock_panel_dropped_on_an_empty_space_is_swallowed_by_it` (`crates/terminal-view/src/panel/tests.rs:1966`): a real `DockSkin` dock area, a terminal tab split so its right half is empty, a foreign tab of the same group dragged by gesture onto the content's right edge zone over that Space; the centre stays one group. With the Space's `on_drop::<DragPanel>` removed the same test fails with `left: 2` (the dock split the centre), so the pin is live. Flip it to `2` when fixed. Fix shapes, smallest first: (a) accept the swallow and record it as a rule in `03-drag-drop.md` section 6 (the merged SFTP tab would have hidden the rail anyway, rail rule "every panel a terminal panel"); (b) forward it: when `dragged_by` is `None`, call `DockArea::move_panel(drag.panel(), InsertTarget::Tabs { node, ix: None, activate: true }, ..)`, which needs the Space's own group `NodeId` (not public on `DockArea` today; the skin's `render_active_panel` has `TabGroupContext::node()` and could publish it per panel id through `oneterm_state`); (c) a kit change so `can_drop == false` restores `cx.active_drag`. (a) is the lazy answer and probably the right one.
+
+### Observations (no defect)
+
+1. **The horizontal strip's edge drag changed too.** The Space's `DragPanel` hook does not know who started the drag: a strip tab dragged by its edge (outside the label, the kit's own `on_drag`) and released over an empty Space of another tab now moves its active terminal into that Space; on `main` it merged or split the centre. The code comment names it (`spaces.rs:221`); `03-drag-drop.md` section 6 says "an empty Space accepts that payload as well" without naming the strip. The owner ruled the strip "unchanged"; this is the one way it is not. Arguably better behaviour; the owner should know.
+2. **A lone terminal tab cannot be dragged into its own empty Space any more** (point 5 above). The move it loses is pointless (the only terminal from Space 1 to Space 2), so no action is suggested.
+3. **`AppIcon::GripVertical` / `grip-vertical.svg` unused.** A generated `pub` enum variant: no warning, no cost beyond the asset bytes. Leaving it is fine; a later tidy may delete the SVG (the intake's "one new icon" line, `IN-0055.md:115-116`, would then go too).
+4. **Records.** Packet, HLD rows, `docs/gui-layout.md`, `03-drag-drop.md` section 6, `07-roadmap-risks.md` R1/R2 and `IN-0055.md` agree with the code; `RowPaint::secondary`, the `GRIP_*` selectors and the contrast script's grip comment are gone everywhere. `IN-0055.md:251` "a 12 px leading grip" is the original design text, amended inline, acceptable. The three gestures the owner asked for (title, status icon, left edge) each move a tab in `the_whole_expanded_row_is_the_reorder_drag`.
+5. **Crate rules.** No new dependency edge; `oneterm-terminal-view` already consumed `gpui_component::dock`. R1-R12 unaffected.
+
+### For the owner
+
+- Decide finding 1: keep the swallow (then a one-line rule in `03-drag-drop.md` section 6) or forward it.
+- Observation 1: is the strip's edge-drag-into-Space change wanted? It is live now with vertical tabs off.
+- On screen (ui-verifier): the placeholder-vs-fill cue near a Space edge (attack 1), reorder from title / status icon / left edge, drop below the last row, a row onto a live terminal (split or merge, nothing closed), the collapsed strip unchanged, no grip on hover.
