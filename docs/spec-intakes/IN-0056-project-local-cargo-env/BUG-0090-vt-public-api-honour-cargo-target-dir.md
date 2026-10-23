@@ -88,10 +88,10 @@ Python checks and the two `vt-public-api.py` runs below; `pwsh scripts/ci-local.
 $ python -m unittest scripts/test_check_english.py scripts/test_check_ignored_tests.py -> Ran 5 tests, OK
 $ python scripts/check-english.py   -> passed for 1164 files
 $ python scripts/check-doc-paths.py -> passed for 219 current paths in 12 documents
-$ CARGO_TARGET_DIR=D:\TrungKFC-Research\Rust\myTerm2	arget python scripts/vt-public-api.py --check --no-doc
+$ CARGO_TARGET_DIR=D:\TrungKFC-Research\Rust\myTerm2\target python scripts/vt-public-api.py --check --no-doc
 public API surface unchanged (public-api.windows.txt)
 $ (CARGO_TARGET_DIR unset, from the worktree) python scripts/vt-public-api.py --check --no-doc
-no rustdoc output at D:\TrungKFC-Research\Rust\myTerm2\.claude\worktreesgent-aa73d81329828948d	arget\doc\oneterm_vt
+no rustdoc output at D:\TrungKFC-Research\Rust\myTerm2\.claude\worktreesgent-aa73d81329828948d\target\doc\oneterm_vt
 ```
 
 Full gate (`pwsh scripts/ci-local.ps1`): pending, waiting for the shared target to be free.
