@@ -70,3 +70,49 @@ version cells. Everything else in the note stands.
 
 - The packet's walk list, plus notes 3 and 6 above.
 - Refresh the shared `reference/gpui-kit` to `v0.8.0` after merge (the worktree clone is gitignored).
+
+## UI verification (Windows, real input)
+
+Verifier: ui-verifier, 2026-10-23, head `6f249840`, binary `scratchpad/r12bin/oneterm.exe` (kit 0.8.0), private
+profile (`USERPROFILE` + cwd in scratch, 41 saved sessions in 8 groups, loopback `sftp-dev-server` on :2299),
+SendInput driver with wheel and unicode text. Screenshots: `scratchpad/r12w-shots/r12w-*.png`.
+
+**Walk ABORTED at the SFTP step: the Windows desktop locked (LogonUI appeared in session 1, `CopyFromScreen`
+"The handle is invalid").** My app and server pids were stopped. Not all items walked; verdict is partial.
+Note: a LogonUI in session 21 (another session) was already present at the start; session 1 had none until the lock.
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1 | SFTP dual pane (loopback, 86 remote rows, 62 local rows) | PASS | |
+| 1a | Home / End select first / last row, remote pane (row bg 37,41,49 vs 35,39,46 on the first / last row) | PASS | 15, 16, m4 |
+| 1b | Home / End, local pane | PASS | 17, 18, 23, 24, m6 |
+| 1c | Wheel scrolls each pane (remote down 6 / up 3 notches consistent; local down 5), the other pane stays put | PASS | 19, 20, 22, m5, m6 |
+| 1d | Row click selects; double-click navigates into a dir | NOT WALKED (lock hit during the double-click shot; click verified, double-click unverified) | |
+| 2 | Session tree (41 sessions) | PARTLY | |
+| 2a | Wheel scrolls the long tree smoothly | PASS | 03 |
+| 2b | Left-click a group toggles it (collapse and expand) | PASS | 04, 05, m1 |
+| 2c | Click a session selects it (subtle row highlight); double-click opens the connect dialog; connect + host-key dialog + toast "Connected to ..." work | PASS | 06, 09, 10, 11 |
+| 2d | Enter / Delete on the selected session | NOT APPLICABLE as written: `delete_session` / `open_session` have no default key binding (`key_bindings_actions.rs`, `default: None`), so both keys did nothing, as before the bump (no baseline run). Delete is reachable from the context menu only; that path NOT WALKED | 07, 08 |
+| 2e | Press-and-drag-away leaves selection and expansion alone | NOT WALKED | |
+| 2f | Right-click menu and wheel over it | NOT WALKED | |
+| 3 | Settings window (Select dropdowns, long page wheel, search) | NOT WALKED | |
+| 4 | Strip "..." menu, no Zoom row (Vertical Tabs OFF) | NOT WALKED | |
+| 5 | Rename Tab dialog, startup-command textarea wheel, toast dismiss | NOT WALKED. Toast "Connected to ..." did appear (11) and was gone after about 5 s (12) | 11, 12 |
+| 6 | Rail and strip reorder drags | NOT WALKED | |
+| 7 | Light / dark regressions, icons, clipped text | NOT WALKED for light; dark main window, rail, session panel, status bar, dual-pane SFTP all looked correct with no missing icons | 01, 02, 13 |
+
+### Observations (no defect against the bump)
+
+1. The dual-pane SFTP view inside the 480 px right dock is cramped: headers "Date Modified" and the Remote path
+   field clip. The dock cannot be widened beyond about 560 px by dragging. Likely pre-existing layout, not a 0.8.0 effect
+   (not compared with a baseline).
+2. Group rows show no selection highlight after a click; sessions do. Not compared with 0.7.3.
+
+### Defects
+
+None found in the walked items.
+
+### Owner-only / still to walk (needs an unlocked desktop)
+
+Items 1d, 2d (context menu Delete), 2e, 2f, 3, 4, 5, 6 and the light theme of 7. Re-run with the same profile
+(`scratchpad/r12w-cwd`, `r12w-home`) once the desktop stays unlocked.
