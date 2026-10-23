@@ -765,10 +765,10 @@ fn the_header_has_a_rule_only_while_the_list_is_scrolled(cx: &mut TestAppContext
 }
 
 /// The header holds the "Terminals" label on the left and the `+` on the right, with no zoom
-/// button even though the panel offers one; zoom keeps the rail (it is the group's chrome) and
-/// the header as it was.
+/// button even though the panel offers one; a zoom asked for anyway is released (see
+/// `a_zoom_cannot_trap_the_rail`) and the rail and the header stay as they were.
 #[gpui::test]
-fn the_header_holds_the_label_and_the_plus_and_zoom_keeps_it(cx: &mut TestAppContext) {
+fn the_header_holds_the_label_and_the_plus_and_a_zoom_changes_nothing(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
@@ -808,10 +808,76 @@ fn the_header_holds_the_label_and_the_plus_and_zoom_keeps_it(cx: &mut TestAppCon
     settle(cx);
     assert!(
         bounds_of(RAIL_SELECTOR, cx).is_some(),
-        "the zoomed group keeps its rail"
+        "the rail is still drawn after a zoom"
     );
     assert_eq!(bounds_of(PLUS_SELECTOR, cx), Some(plus), "and its header");
-    assert!(window.area.read_with(cx, |area, _| area.is_zoomed()));
+}
+
+/// Owner test failure of rework 9 (2026-10-23): the owner's centre group was zoomed (`Shift+Esc`,
+/// saved in `docks.json` and restored on every start), and the kit refuses to drag from or drop
+/// on a zoomed group, so neither a reorder nor a drop into a Space worked; the rail has no zoom
+/// button to get out, and a lone centre group looks the same zoomed or not. A group that draws
+/// the rail is therefore never left zoomed, however the zoom was asked for (the key binding and
+/// the restored `zoomed_panel` both end in `set_zoomed_in`), and the reorder works afterwards.
+#[gpui::test]
+fn a_zoom_cannot_trap_the_rail(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        false,
+        &report,
+        cx,
+    );
+    let node = centre_node(&window.area, cx);
+    cx.update(|w, app| {
+        window
+            .area
+            .update(app, |area, cx| area.set_zoomed_in(node, w, cx))
+    });
+    settle(cx);
+    assert!(
+        !window.area.read_with(cx, |area, _| area.is_zoomed()),
+        "the rail has no way to zoom out, so a zoom under it is released"
+    );
+
+    let (original, _) = centre_tabs(&window.area, cx);
+    let from = row(0, cx).unwrap().center();
+    let onto = row(1, cx).unwrap().center();
+    drag_to(from, onto, cx);
+    assert!(has_active_drag(cx), "the row can be dragged again");
+    release(onto, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[1], original[0], original[2]],
+        "and the drop reorders"
+    );
+}
+
+/// The release is the rail's rule only: the strip keeps its zoom button, so a zoom stays there,
+/// and the switch that turns the rail on releases the zoom the strip made.
+#[gpui::test]
+fn the_strip_keeps_its_zoom_and_turning_the_rail_on_releases_it(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, false);
+    let report = Report::default();
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
+    let node = centre_node(&window.area, cx);
+    cx.update(|w, app| {
+        window
+            .area
+            .update(app, |area, cx| area.set_zoomed_in(node, w, cx))
+    });
+    settle(cx);
+    assert!(
+        window.area.read_with(cx, |area, _| area.is_zoomed()),
+        "the strip keeps a zoom: its button is the way out"
+    );
+    set_vertical(&window.config, true, cx);
+    assert!(
+        !window.area.read_with(cx, |area, _| area.is_zoomed()),
+        "the rail has no way out, so turning it on releases the zoom"
+    );
 }
 
 /// Owner rework 9: the whole expanded row is the reorder drag (`DragPanel`) wherever the press
