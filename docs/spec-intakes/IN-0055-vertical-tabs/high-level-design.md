@@ -30,7 +30,7 @@ OneTermWorkspace (layout/workspace/mod.rs:562-594)        column: title bar / do
     │       │     │                           chips · ● · status icon · label · ×
     │       │     │                           (vertical row, two lines: chips · ● · label / cwd · status icon, no ×)
     │       │     │                           drag: none (the kit tab / rail row is the DragPanel)   menu: Rename/Duplicate/Close...
-    │       │     └── suffix: `+` (title_suffix) · zoom · `...` · right-dock toggle
+    │       │     └── suffix: `+` (title_suffix) · `...` · right-dock toggle
     │       └── content_frame → active TerminalPanel (cached) → Space tree
     └── Right: tabs → SshClientPanel (its group draws no tab bar: owns_header, dock_skin.rs:105-110)
 ```

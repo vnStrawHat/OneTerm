@@ -87,7 +87,7 @@ Changed: `docs/gui-layout.md` (`## Zoom` rewritten as the removal, the panel-tra
 - [x] Workspace: delete `zoomed_panel`, the restore, the observer's zoom mirror, the save argument; delete the zoom-trap release and its tests (or re-point the ones that guard the strip).
 - [x] Persistence: `DockDocument` ignores a stored `zoomed_panel` and writes none; tests for both, the fixture test re-pointed.
 - [x] Tests: nothing can zoom (workspace); legacy file loads unzoomed and saves without it (state and workspace); `toggle_zoom` override ignored (settings-ui).
-- [ ] Docs, gate, debug binary.
+- [x] Docs, gate, debug binary.
 
 Choices left open by the request, decided here:
 

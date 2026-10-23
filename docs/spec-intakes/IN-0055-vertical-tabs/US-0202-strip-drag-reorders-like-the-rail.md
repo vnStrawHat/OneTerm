@@ -77,7 +77,7 @@ Changed: `docs/terminal-split/03-drag-drop.md` (sections 1 to 3, 4's head and 6 
 - [x] Records commit: this packet and the intake entry.
 - [x] `render_tab_strip` starts no drag; delete `DragTerminalTab`, `start_tab_drag`, the Space's handler and `handle_tab_drop` if no source remains (checked: `grep DragTerminalTab crates` found the strip's row and the collapsed icon as the only sources, the latter removed by `US-0198` rework 8; the payload's only other uses were the Space's handler, `handle_tab_drop` and tests).
 - [x] Tests: the strip's title reorders (workspace), the terminal-view strip-row test asserts no tab drag from any part of the row; the tests that named `DragTerminalTab` are re-pointed or deleted with it (`tab_drop_onto_occupied_space_keeps_source_terminal` is deleted: the occupied-Space guard is now asserted by `a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal`, with the session-not-closed check moved there).
-- [ ] Docs, gate.
+- [x] Docs, gate.
 
 Choices left open by the request, decided here:
 
