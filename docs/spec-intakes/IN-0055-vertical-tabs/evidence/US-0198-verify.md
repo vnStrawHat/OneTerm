@@ -370,3 +370,31 @@ Reviewed: `ebc10543` on `verify/in-0055-rework6` (after `da11e0c5`: `1989df8c` U
 ### Still by hand (ui-verifier)
 
 The grip glyph on a hovered filled cell in a light and a dark theme (the UI walk at `1989df8c` predates N2).
+
+## Advisor review (US-0198 rework 8, US-0202, US-0203)
+
+Reviewed: `018eccd5` on `verify/in-0055-drag-zoom` (base `d2d15e03`), 2026-10-23, in worktree `agent-ab6a00f0423e3f789`. Rework 8 is commits `d4133dbc` (packet) and `98269539` (code); the records commit precedes the code commit. The sibling packets are in `US-0202-verify.md` and `US-0203-verify.md`.
+
+### Verdict
+
+**PASS.** The collapsed cell has one drag zone. `collapsed_row` takes no `icon_id` / `drag` (`crates/terminal-view/src/panel/tab_title.rs:491-497`) and the icon div is plain content (`:530-535`); `render_tab_strip` builds no payload for any layout (`:618-620`); the rail's `on_drag(drag, reorder)` on the cell (`crates/workspace/src/layout/workspace/tab_rail.rs:716-722`) is the only drag. The owner's "sometimes reorders, sometimes not" has the cause the packet names (the 16 x 16 icon in the middle of a 44 px cell started `DragTerminalTab`, which no reorder target accepts); the five other candidates the packet checked read the same in the code.
+
+### Gate re-run (one crate per command, `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`, the worktree's `target`)
+
+| Check | Result |
+|---|---|
+| `cargo test -p oneterm-workspace --lib` | 124 passed, 3 ignored |
+| `cargo test -p oneterm-terminal-view --lib` | 444 passed, 3 ignored |
+| `cargo test -p oneterm-settings --lib` / `-p oneterm-settings-ui --lib` | 56 / 60 passed (1 ignored) |
+| `cargo test -p oneterm-app` | 26 passed |
+| `cargo test -p oneterm-state --lib` / `-p oneterm-session-ui --lib` / `-p oneterm-sftp-ui --lib` / `-p oneterm-actions --lib` | 79 / 102 (1 ignored) / 78 / 4 passed |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `check-english.py` (1157 files), `check-doc-paths.py` (219 paths) | passed |
+
+### Attacked
+
+1. **Any pixel of the cell that is not the drag.** `the_whole_collapsed_cell_is_the_reorder_drag` (`tab_rail_tests.rs:1467-1522`) drags from the icon centre and eight points at 4 % / 96 % of the cell's width and height, each through the real skin, and asserts the reorder. `no_part_of_a_collapsed_cell_starts_a_tab_drag_of_its_own` (`crates/terminal-view/src/panel/tests.rs:1478-1500`) is on the real cell. Nothing else in the cell carries `on_drag` (`tab_title.rs:491-547`).
+2. **Drop targets.** An empty Space takes the cell's `DragPanel` through `TerminalPanel::dragged_by` / `handle_panel_drop` (`crates/terminal-view/src/panel/spaces.rs:197-220`); an occupied Space and an unknown panel id change nothing and close no session (`tests.rs:697-718`, `source_probe.close_calls() == 0` both before and after the real move, `:737-740`).
+3. **Records.** Packet section "Rework 8" lists cause, ruling, acceptance and findings; `docs/gui-layout.md:154` and the HLD rows say the same. The ui-verifier item (real input, many grab points) is open, as the packet says.
+
+No defect. Still by hand: the `SendInput` walk on a collapsed rail, which the coder could not run (console session locked).
