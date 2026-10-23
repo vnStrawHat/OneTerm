@@ -11,7 +11,7 @@ Created: 2026-10-23
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [x] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
