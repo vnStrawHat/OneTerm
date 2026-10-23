@@ -17,6 +17,7 @@ use gpui_component::h_flex;
 use oneterm_settings::{UiConfig, VerticalTabs, ui_config::UiConfigGlobal};
 use oneterm_state::{TabRowLayout, panel_names};
 
+use super::dock_skin::DROP_INDICATOR_SELECTOR;
 use super::tab_rail::{
     COLLAPSED_ROW_HEIGHT, EMPTY_SELECTOR, HANDLE_SELECTOR, HEADER_LABEL_SELECTOR,
     HEADER_RULE_SELECTOR, HEADER_SELECTOR, HOVER_SELECTOR, LIST_SELECTOR, PILL_SELECTOR,
@@ -910,6 +911,55 @@ fn a_row_dropped_on_a_content_that_takes_it_changes_nothing_in_the_dock(cx: &mut
     assert_eq!(report.content_drops.get(), 1, "the content took the drop");
     assert_eq!(centre_tabs(&window.area, cx).0, original);
     assert_eq!(groups(cx), 1, "the dock did not split the centre");
+}
+
+/// Owner ruling 2026-10-23: terminal content takes no dock drop, so the kit's split placeholder
+/// is not drawn over it while a tab is dragged (it tinted a Space the drop would not go to);
+/// over the content of any other panel it is, as the kit draws it.
+#[gpui::test]
+fn the_split_placeholder_is_drawn_over_other_content_but_not_over_a_terminal(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+
+    // A control: two SFTP tabs (a group of their own kind keeps the kit's strip), one dragged
+    // by its strip tab to the content's centre: the placeholder is drawn.
+    set_centre(
+        &window.area,
+        &[(panel_names::SFTP, "one"), (panel_names::SFTP, "two")],
+        false,
+        &report,
+        cx,
+    );
+    let tab = bounds_of("dock-tab-0", cx).expect("the strip tab");
+    let content = report.bounds.get().center();
+    drag_to(tab.center(), content, cx);
+    settle(cx);
+    assert!(has_active_drag(cx));
+    assert!(
+        bounds_of(DROP_INDICATOR_SELECTOR, cx).is_some(),
+        "the kit draws its placeholder over a non-terminal panel's content"
+    );
+    release(content, cx);
+
+    // Terminal tabs in the rail: nothing is drawn over the terminal.
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        false,
+        &report,
+        cx,
+    );
+    let content = report.bounds.get().center();
+    drag_to(row(0, cx).unwrap().center(), content, cx);
+    settle(cx);
+    assert!(has_active_drag(cx));
+    assert!(
+        bounds_of(DROP_INDICATOR_SELECTOR, cx).is_none(),
+        "no split placeholder over a terminal"
+    );
+    release(content, cx);
 }
 
 /// A row dropped below the last row goes to the last slot.
