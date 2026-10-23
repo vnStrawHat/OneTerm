@@ -89,7 +89,17 @@ Recipe from the brief (two `cargo build -p oneterm-theme` runs, worktree then ma
 
 ### PROOF
 
-Pending: cargo is held until the coordinator releases the shared target.
+```text
+$env CARGO_TARGET_DIR=D:\TrungKFC-Research\Rust\myTerm2\target, CARGO_INCREMENTAL=0, CARGO_BUILD_JOBS=4
+$ cargo build -p oneterm-theme   (worktree)  -> Finished dev in 1m 58s
+$ cargo build -p oneterm-theme   (main)      -> Finished dev in 0.51s, no cargo clean
+$ pwsh scripts/ci-local.ps1 -> fmt, clippy, tests, ignored tests, vt steps, cargo doc all passed;
+  stopped at `vt-public-api.py --check --no-doc`: it looks in <worktree>/target/doc (BUG-0090,
+  not in this branch's base). Steps after it were not run here.
+```
+
+The main checkout does not contain this fix, so its build above shows the shared target is not
+poisoned by the worktree build, not that the new code builds there.
 
 ### Gaps
 
