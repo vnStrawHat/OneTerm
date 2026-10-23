@@ -129,7 +129,7 @@ OneTerm/
 │   │   └── tests/fixtures/persistence/ # vault-v1.json (made by an independent implementation) + invalid cases
 │   │
 │   ├── theme/                      # `oneterm-theme` — theme registry + AppIcon (has build.rs)
-│   │   ├── build.rs                # Sets ONETERM_UI_ICONS_DIR for the icon_named! macro
+│   │   ├── build.rs                # Checks assets/icons, re-runs on change (icon_named!)
 │   │   ├── assets/icons/           # OneTerm SVG icons (auto-generate AppIcon variants)
 │   │   ├── themes/                 # 24 built-in JSON themes (2 Zed + 22 gpui-component)
 │   │   └── src/{lib.rs, theme.rs, icon.rs, notif_ext.rs}   # notif_ext.rs = theme-tinted notifications

@@ -31,8 +31,8 @@ use gpui::{
 use gpui_component::{Icon, IconNamed, icon_named};
 
 // Generate `AppIcon` enum from SVG files in `assets/icons/`.
-// The `$ONETERM_UI_ICONS_DIR` env var is set by `build.rs`.
-icon_named!(AppIcon, "$ONETERM_UI_ICONS_DIR", [Debug, PartialEq, Eq]);
+// The path is relative to this crate's manifest dir; `build.rs` re-runs when it changes.
+icon_named!(AppIcon, "assets/icons", [Debug, PartialEq, Eq]);
 
 /// Allows `AppIcon` to be used directly as an element: `div().child(AppIcon::Terminal)`.
 impl RenderOnce for AppIcon {
