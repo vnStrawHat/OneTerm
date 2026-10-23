@@ -37,10 +37,10 @@ no longer matches the graph.
 
 ## Acceptance
 
-- [ ] `cargo deny check advisories` passes.
-- [ ] The vault (`oneterm-vault`) and SSH (`oneterm-ssh`) tests pass.
-- [ ] `python scripts/third-party-notices.py --check` passes.
-- [ ] `pwsh scripts/ci-local.ps1 --full` green.
+- [x] `cargo deny check advisories` passes.
+- [x] The vault (`oneterm-vault`) and SSH (`oneterm-ssh`) tests pass.
+- [x] `python scripts/third-party-notices.py --check` passes.
+- [x] `pwsh scripts/ci-local.ps1 --full` green.
 
 ## Documentation
 
@@ -77,11 +77,11 @@ None.
   `cargo test -p oneterm-vault -p oneterm-ssh`; `pwsh scripts/ci-local.ps1 --full`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
+- [x] Unit proof
 - [ ] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
@@ -90,11 +90,26 @@ Verify command: `pwsh scripts/ci-local.ps1 --full`.
 
 ### PROOF
 
-(filled after the run)
+```text
+$ cargo update -p ctutils
+    Updating ctutils v0.4.2 -> v0.4.5          (Cargo.lock only)
+$ cargo deny check advisories
+advisories ok
+$ python scripts/third-party-notices.py --check   (before)  -> stale
+$ python scripts/third-party-notices.py && ... --check      -> up to date
+$ pwsh scripts/ci-local.ps1 --full
+ci-local: all checks passed.
+  cargo deny check licenses bans advisories -> advisories ok, bans ok, licenses ok
+  test results summed over every gate step: 141 sections / 5155 passed / 0 failed / 33 ignored
+```
 
 ### Gaps
 
-(filled after the run)
+- `scripts/vt-public-api.py --no-doc` reads `<repo>/target/doc`, but the SessionStart hook
+  points `CARGO_TARGET_DIR` at the root target shared with `main`, so inside a worktree the
+  step failed until the generated `oneterm_vt` rustdoc was copied into the worktree's
+  `target/doc`. Environment issue, not caused by this change; not fixed here.
+- No other advisory appeared (`advisories ok`).
 
 ## Handoff
 

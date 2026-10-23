@@ -236,7 +236,7 @@ package in the Cargo registry / git checkout.
 | `crypto-primes` | 0.7.2 | Apache-2.0 OR MIT | crates.io |
 | `ctor` | 1.0.13 | Apache-2.0 OR MIT | crates.io |
 | `ctr` | 0.10.1 | MIT OR Apache-2.0 | crates.io |
-| `ctutils` | 0.4.2 | Apache-2.0 OR MIT | crates.io |
+| `ctutils` | 0.4.5 | Apache-2.0 OR MIT | crates.io |
 | `curve25519-dalek` | 5.0.0 | BSD-3-Clause | crates.io |
 | `curve25519-dalek-derive` | 0.1.1 | MIT/Apache-2.0 | crates.io |
 | `dashmap` | 6.2.1 | MIT | crates.io |
