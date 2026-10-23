@@ -1471,12 +1471,12 @@ fn the_strip_row_still_drags_the_tab_into_a_space(cx: &mut TestAppContext) {
     assert_eq!(dropped.get(), 1, "it is the tab drag a Space accepts");
 }
 
-/// The collapsed cell is unchanged: its 16 px shell icon drags the tab into an empty Space and the
-/// rest of the cell starts no drag of its own (the rail's reorder drag takes it there).
+/// A collapsed cell starts no tab drag of its own anywhere, the 16 px shell icon included: the
+/// whole cell is the rail's reorder drag (`DragPanel`), which an empty Space accepts too
+/// (`US-0198` rework 8; the icon used to start the tab drag, so a drag reordered or not by where
+/// the press landed).
 #[gpui::test]
-fn the_collapsed_cell_icon_still_drags_the_tab_and_the_rest_of_the_cell_does_not(
-    cx: &mut TestAppContext,
-) {
+fn no_part_of_a_collapsed_cell_starts_a_tab_drag_of_its_own(cx: &mut TestAppContext) {
     use crate::panel::tab_title::{TAB_ROW_SELECTOR, TAB_SHELL_ICON_SELECTOR};
     use gpui::{point, px};
     use oneterm_state::TabRowLayout;
@@ -1495,8 +1495,11 @@ fn the_collapsed_cell_icon_still_drags_the_tab_and_the_rest_of_the_cell_does_not
         !drag_to_space(point(cell.left() + px(2.), cell.center().y), cx),
         "the cell outside its icon starts no drag of its own"
     );
-    assert!(drag_to_space(icon.center(), cx), "the icon starts a drag");
-    assert_eq!(dropped.get(), 1, "it is the tab drag a Space accepts");
+    assert!(
+        !drag_to_space(icon.center(), cx),
+        "nor does the icon: it is plain content of the cell"
+    );
+    assert_eq!(dropped.get(), 0, "no tab drag reached a Space");
 }
 
 /// A vertical row has no close button; with no directory its status icon ends the one centred

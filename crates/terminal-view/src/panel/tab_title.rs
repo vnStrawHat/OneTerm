@@ -482,8 +482,8 @@ impl Render for CellTooltip {
 /// badge and nothing animates: the state is the background. The title, directory, channel chips
 /// and status icon are the hover card's ([`tab_hover_card`]).
 ///
-/// The icon is the cell's content, so it starts the tab drag (`drag`, which an empty Space
-/// accepts); the rest of the cell belongs to the rail, which starts its reorder drag there.
+/// The icon is plain content: the whole cell, icon included, is the rail's reorder drag
+/// (`DragPanel`), which an empty Space accepts too (`US-0198` rework 8).
 ///
 /// The fill is an absolute child over the whole cell, painted over the rail's hover fill (so a
 /// filled cell takes no hover tint) and over the rail's accent pill, which a `Working` fill
@@ -494,8 +494,6 @@ fn collapsed_row(
     fill: Option<(gpui::Hsla, gpui::Hsla)>,
     selected: bool,
     recording: Option<gpui::Stateful<Div>>,
-    icon_id: SharedString,
-    drag: Option<DragTerminalTab>,
 ) -> Div {
     let glyph = Icon::new(icon).with_size(Size::Medium);
     let glyph = match fill {
@@ -532,11 +530,9 @@ fn collapsed_row(
         }))
         .child(
             div()
-                .id(icon_id)
                 .debug_selector(|| TAB_SHELL_ICON_SELECTOR.to_string())
                 .flex()
-                .child(glyph)
-                .when_some(drag, |this, drag| this.on_drag(drag, start_tab_drag)),
+                .child(glyph),
         )
         .children(recording.map(|dot| {
             div()
@@ -633,28 +629,20 @@ pub(super) fn render_tab_strip(
         })
         .child(tab_label);
 
-    // What an empty Space accepts from here. A collapsed cell starts it from its icon only and the
-    // strip's tab from the whole row; a rail row starts none (the whole row is the rail's reorder
-    // drag, `DragPanel`, which an empty Space accepts too, `US-0196` rework 9).
-    let tab_drag = tab_panel.as_ref().map(|_| DragTerminalTab {
-        panel: panel_weak.clone(),
-        title: drag_title.clone(),
-    });
-    let (cell_drag, row_drag) = match layout {
-        TabRowLayout::Collapsed => (tab_drag, None),
-        TabRowLayout::Vertical => (None, None),
-        TabRowLayout::Horizontal => (None, tab_drag),
-    };
+    // What an empty Space accepts from here. A rail row and a collapsed cell start none (the
+    // whole row or cell is the rail's reorder drag, `DragPanel`, which an empty Space accepts
+    // too, `US-0196` rework 9, `US-0198` rework 8); the strip's tab starts it from the whole row.
+    let row_drag = (layout == TabRowLayout::Horizontal)
+        .then(|| {
+            tab_panel.as_ref().map(|_| DragTerminalTab {
+                panel: panel_weak.clone(),
+                title: drag_title.clone(),
+            })
+        })
+        .flatten();
 
     let row = if collapsed {
-        collapsed_row(
-            panel.tab_shell_icon(cx),
-            fill,
-            is_active,
-            recording_dot,
-            SharedString::from(format!("tab-cell-icon-{panel_entity:?}")),
-            cell_drag,
-        )
+        collapsed_row(panel.tab_shell_icon(cx), fill, is_active, recording_dot)
     } else if vertical {
         // The rail draws the selected row's accent pill and starts the row's reorder drag itself,
         // so this row carries neither the top bar, nor the strip's negative margin, nor a drag.

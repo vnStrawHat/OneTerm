@@ -264,11 +264,11 @@ Acceptance rework of this packet (still reopened, not a new BUG). Owner report, 
 
 **Acceptance.**
 
-- [ ] A drag that starts on the shell icon, on the cell's margin and on the corner of a collapsed cell reorders (workspace test, a probe cell with an icon element that carries no drag of its own; it replaces `a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon`).
-- [ ] No gesture on a collapsed cell starts a `DragTerminalTab` (terminal-view test).
-- [ ] A collapsed cell dragged onto an empty Space moves the terminal in (the rework 9 path, `a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal`, unchanged).
+- [x] A drag that starts on the shell icon, on the cell's margin, on its top and bottom edges and in each corner of a collapsed cell reorders (workspace test `the_whole_collapsed_cell_is_the_reorder_drag`, a probe cell whose icon element carries no drag of its own; it replaces `a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon`).
+- [x] No gesture on a collapsed cell starts a `DragTerminalTab`, the icon included (terminal-view test `no_part_of_a_collapsed_cell_starts_a_tab_drag_of_its_own` on the real cell, which replaces `the_collapsed_cell_icon_still_drags_the_tab_and_the_rest_of_the_cell_does_not`; the icon used to start the tab drag, so it fails on the previous code).
+- [x] A collapsed cell dragged onto an empty Space moves the terminal in (the rework 9 path, `a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal`, unchanged).
 - [ ] Real input: many attempts at different grab points on a collapsed rail all reorder (coder's `SendInput` walk, findings recorded below).
-- [ ] `docs/gui-layout.md`, the HLD rows and `docs/terminal-split/03-drag-drop.md` say the same.
+- [x] `docs/gui-layout.md`, the HLD rows and `docs/terminal-split/03-drag-drop.md` say the same.
 - [ ] Full `pwsh scripts/ci-local.ps1` passes.
 - [ ] On screen, by `ui-verifier`.
 

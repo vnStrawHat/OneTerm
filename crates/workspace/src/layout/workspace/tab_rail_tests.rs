@@ -35,8 +35,8 @@ struct Report {
     bounds: Rc<Cell<Bounds<Pixels>>>,
     /// How many times the panel was taken out of its group (a rebuild would do this).
     removed: Rc<Cell<usize>>,
-    /// How many times its title row started its own drag (the horizontal strip's row and a
-    /// collapsed cell's icon do; a vertical row does not).
+    /// How many times its title row started its own drag (the horizontal strip's row does; a
+    /// vertical row and a collapsed cell do not).
     title_drags: Rc<Cell<usize>>,
     /// How many dock drags were dropped on its content, as an empty Space accepts them.
     content_drops: Rc<Cell<usize>>,
@@ -103,9 +103,9 @@ impl Panel for Probe {
         (!self.title_row).then(|| self.label.clone())
     }
 
-    // Like the real row: the strip's row starts the tab drag from its whole content; in a
-    // collapsed cell only the 16 px icon does; a vertical row starts none, and the whole row is
-    // the rail's reorder drag (`US-0196` rework 9).
+    // Like the real row: the strip's row starts the tab drag from its whole content; a vertical
+    // row and a collapsed cell start none, and the whole row or cell is the rail's reorder drag
+    // (`US-0196` rework 9, `US-0198` rework 8).
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let layout = TabRowLayout::current(cx);
         self.report.title_layout.set(Some(layout));
@@ -124,11 +124,7 @@ impl Panel for Probe {
                     div()
                         .id(SharedString::from(selector.clone()))
                         .debug_selector(move || selector.clone())
-                        .size_4()
-                        .on_drag(ProbeDrag, move |drag, _, _, cx| {
-                            started.set(started.get() + 1);
-                            cx.new(|_| drag.clone())
-                        }),
+                        .size_4(),
                 )
                 .into_any_element();
         }
@@ -1464,14 +1460,13 @@ fn a_collapsed_cell_is_built_collapsed_and_a_click_selects_it(cx: &mut TestAppCo
     assert_eq!(centre_tabs(&window.area, cx).1, 2);
 }
 
-/// Owner rework 7: a collapsed cell has no grip, and the cell itself is what is dragged to
-/// reorder. Its content, the shell icon, still starts the tab drag that an empty Space accepts
-/// (the title element's drag wins where the icon is); every other pixel of the cell starts the
-/// rail's reorder.
+/// Owner rework 8 (2026-10-23, "sometimes it reorders, sometimes not"): the whole collapsed cell
+/// is the reorder drag, the 16 px shell icon in its middle included (the icon used to start the
+/// tab drag, which reorders nothing, so a drag worked or not by where the press landed). Presses
+/// on the icon, near each edge and in a corner all start the rail's drag and land the tab in the
+/// slot of the cell they are dropped on; none starts the title's own drag.
 #[gpui::test]
-fn a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon(
-    cx: &mut TestAppContext,
-) {
+fn the_whole_collapsed_cell_is_the_reorder_drag(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
@@ -1483,34 +1478,53 @@ fn a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon(
         cx,
     );
     let (original, _) = centre_tabs(&window.area, cx);
-    let target = row(2, cx).unwrap().center();
-    // The icon: the tab drag starts, and dropping it on another cell reorders nothing.
     let icon = bounds_of("probe-row-a", cx).expect("the cell's content is its icon");
     assert_eq!((icon.size.width, icon.size.height), (px(16.), px(16.)));
-    drag_to(icon.center(), target, cx);
-    assert!(has_active_drag(cx), "the cell's content starts a drag");
-    assert_eq!(report.title_drags.get(), 1, "it is the title's drag");
-    release(target, cx);
-    assert_eq!(centre_tabs(&window.area, cx).0, original);
 
-    // The cell outside the icon, its left and right margins: the reorder drag starts, not the
-    // title's, and the tab lands in the slot of the cell it is dropped on.
-    let cell = row(2, cx).unwrap();
-    let first = row(0, cx).unwrap().center();
-    drag_to(point(cell.left() + px(3.), cell.center().y), first, cx);
-    assert!(has_active_drag(cx), "the cell's margin starts a drag");
-    assert_eq!(report.title_drags.get(), 1, "not the title's drag");
-    release(first, cx);
+    // The icon, dropped on the last cell: the first tab goes after it.
+    let last = row(2, cx).unwrap().center();
+    drag_to(icon.center(), last, cx);
+    assert!(has_active_drag(cx), "the icon starts a drag");
+    release(last, cx);
     assert_eq!(
         centre_tabs(&window.area, cx).0,
-        vec![original[2], original[0], original[1]]
+        vec![original[1], original[2], original[0]],
+        "a drag from the icon reorders"
     );
-    let cell = row(1, cx).unwrap();
-    let last = row(2, cx).unwrap().center();
-    drag_to(point(cell.right() - px(3.), cell.center().y), last, cx);
-    assert!(has_active_drag(cx), "the right margin too");
-    release(last, cx);
-    assert_eq!(report.title_drags.get(), 1, "never the title's drag");
+
+    // Every other grab point of a cell, dropped on the first cell: the left and right margins,
+    // the top and bottom edges and the four corners. Each drag takes the last cell to the front,
+    // so the tab under test is always the one in the last cell.
+    let first = row(0, cx).unwrap().center();
+    for (dx, dy) in [
+        (0.04, 0.5),
+        (0.96, 0.5),
+        (0.5, 0.04),
+        (0.5, 0.96),
+        (0.04, 0.04),
+        (0.96, 0.04),
+        (0.04, 0.96),
+        (0.96, 0.96),
+    ] {
+        let before = centre_tabs(&window.area, cx).0;
+        let cell = row(2, cx).unwrap();
+        let grab = point(
+            cell.left() + cell.size.width * dx,
+            cell.top() + cell.size.height * dy,
+        );
+        drag_to(grab, first, cx);
+        assert!(
+            has_active_drag(cx),
+            "grabbing at ({dx}, {dy}) starts a drag"
+        );
+        release(first, cx);
+        assert_eq!(
+            centre_tabs(&window.area, cx).0,
+            vec![before[2], before[0], before[1]],
+            "grabbing at ({dx}, {dy}) reorders"
+        );
+    }
+    assert_eq!(report.title_drags.get(), 0, "never the title's own drag");
 }
 
 /// Turning the Vertical Tabs switch off keeps the collapsed state, and on again returns to the

@@ -112,7 +112,7 @@ GPUI Kit exposes `DragPanel`, but it represents a dock-level panel move. Accepti
 it blindly would couple Space ownership to the dock's tab/group editing rules and could move a
 whole `TerminalPanel` instead of one active terminal leaf. `DragTerminalTab` is a
 stable OneTerm payload with exactly the source and preview data this operation needs, and the
-horizontal strip's tab and the collapsed rail's icon still start it.
+horizontal strip's tab still starts it.
 
 **Amended 2026-10-23** (`US-0196` owner rework 9): a vertical-rail row is dragged whole, as the
 dock's `DragPanel` (that is how a row reorders), so an empty Space accepts that payload as well.
