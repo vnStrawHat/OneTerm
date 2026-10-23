@@ -641,3 +641,36 @@ D3 (info) Drag in the horizontal strip did not reorder in either build under the
 - Cursor shape on an expanded row (arrow) and on the collapsed icon (open hand).
 - Horizontal strip reorder with a real mouse (labels and edge).
 - Real-mouse feel of the drag threshold and drop line during a fast drag; light theme and other themes were not walked.
+
+## Advisor re-review (rework 9, no split by drop)
+
+Coder head `33abb3e2` (`895e4d39` code, `33abb3e2` docs; on top of the advisor's `1303c8fc`), same worktree, branch `verify/in-0055-rework9` fast-forwarded, 2026-10-23. Scope: the owner ruling "no split by drop" (a `DragPanel` released on non-empty terminal content must not split or merge the centre) and the placeholder suppression.
+
+### Verdict: PASS
+
+### Gate (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, one crate per command)
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p oneterm-terminal-view --lib` | 443 passed, 3 ignored (444 with the pin below) |
+| `cargo test -p oneterm-workspace --lib` | 122 passed, 3 ignored |
+| `cargo clippy -p oneterm-workspace -p oneterm-terminal-view --all-targets -- -D warnings` | clean (terminal-view repeated after the pin: clean) |
+| `cargo fmt --all -- --check`, `check-english.py`, `check-doc-paths.py` | pass |
+
+### The mechanisms, attacked
+
+1. **Does the empty Space stay innermost?** Yes, by gpui's dispatch: mouse listeners are run in reverse registration order in the bubble phase (`gpui-pre-0.3.9/src/window.rs:5957-5963`) and an element registers its listeners before its children paint, so the Space placeholder's `on_drop::<DragPanel>` (`crates/terminal-view/src/space/render.rs:304-309`) runs before the panel root's catch-all (`crates/terminal-view/src/panel/terminal_panel.rs:603`) and before the kit's content frame. The coder's test proved the block for a foreign panel only; **pinned for a terminal tab by gesture**: `verify_the_empty_space_still_wins_over_the_terminal_root_catch_all` (`crates/terminal-view/src/panel/tests.rs`, kit `DockSkin`, two terminal tabs, the source's strip tab dragged by its padding): released on the live terminal's left edge zone, the centre stays one group and the source keeps tab and terminal; released on the empty Space, the terminal moves in, the emptied tab is removed and `close_calls() == 0`. With the catch-all removed the first half fails with `left: 2` (the dock split), so the pin is live.
+2. **Rail and strip reorder unaffected.** The rail is drawn by `render_tab_bar` in the group frame and the content frame carries a margin, not padding, so the rail lies outside both the kit's drop region and the panel root (`dock_skin.rs:189-199`); the rows' and the strip tabs' `on_drop` call `drop_panel` directly. The re-pointed reorder tests pass unchanged.
+3. **Right dock, mixed groups, other windows.** Terminal panels live only in the centre, so the catch-all is never in a dock. In a mixed group the rule follows the displayed panel: SFTP shown, the kit's placeholder and drop run as before (the test's control); a terminal shown, both are off, which is the owner's rule. A `DragPanel` from another window resolves through the one `AppState.dock_area`; `DockArea::move_panel` refuses a panel it does not own (`dock_area.rs:486-490`) and `dragged_by` returns `None`, so nothing moves either way (pre-existing).
+4. **Can `terminal_content` go stale?** No. One `OneTermTabGroupSkin` per `TabGroup` (`dock_area.rs:1131-1132`, the renderer is built when the group is cached), and base calls `frame` and then asks for the indicator inside the same `TabGroup::render` (`tab_group.rs:684-690, 752-754`), so the `Cell` is always the value of the render it is read in. An active-panel change mid-drag re-renders the group and `frame` recomputes it. The kit's `drop_indicator` state is still tracked and only its drawing is suppressed; it is never drawn without an active drag (`tab_group.rs:287-289`) and the next drag restarts it (`:571-573`), as recorded in the first review.
+5. **The `#[cfg(test)]` wrapper.** It wraps the kit's placeholder in an absolute `size_full` div so a test can find it (`dock_skin.rs:233-242`). The shipped path returns the kit's element unwrapped; what differs under test is one extra positioned box of the content frame's size, which does not change the suppression decision (the `return None` is before it) and leaves the placeholder's own absolute geometry relative to a box equal to the content frame. The test asserts presence only. Acceptable; if the placeholder's position is ever asserted, give the kit's element the selector instead.
+6. **Other drag kinds.** The catch-all is typed `DragPanel` only; `DragTerminalTab` (strip label, collapsed icon) and the kit's `AnyDrag` items are untouched. Files dropped on a terminal (`ExternalPaths`) are a different type and reach their own handler.
+
+### Records
+
+Packet section "Rework 9 after the reviews", `docs/gui-layout.md` Reorder bullet, HLD "Reorder / move between groups" row and `docs/terminal-split/03-drag-drop.md` section 6 all state the rule, name the two mechanisms and record the strip's edge-drag-into-Space as kept (the first review's observation 1); the advisor's pin was renamed and extended rather than deleted, with the control noted. No `IN-0055.md` change was needed.
+
+### For the owner
+
+- On screen (ui-verifier): a row released on a non-empty terminal (edge zones and middle) changes nothing and no placeholder tints the content; the empty Space still highlights and takes the drop; the horizontal strip's edge drag with a real mouse.
+- Nothing else is open from this round.

@@ -2074,3 +2074,123 @@ fn a_foreign_dock_panel_dropped_on_terminal_content_never_splits_the_centre(
     drop_at(0.5, cx);
     assert_eq!(groups(cx), 1, "nor did a drop in the middle merge anything");
 }
+
+/// Advisor pin (`US-0196` rework 9, "no split by drop"): with the terminal panel's catch-all
+/// `on_drop::<DragPanel>` on its root, a terminal tab's `DragPanel` dragged by gesture from the
+/// strip is (1) swallowed on a terminal that holds a session, in the edge zone where the dock
+/// would have split, and (2) still taken by the empty Space, which is deeper than the root and
+/// so asked first. Both halves go through gpui's dispatch, not through `handle_panel_drop`.
+#[gpui::test]
+fn verify_the_empty_space_still_wins_over_the_terminal_root_catch_all(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    use gpui_component::dock::{BasePanelView as _, PaneRef};
+
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AppState::init);
+
+    let (target_session, _) = FakeTerminalSession::boxed(24, 80, "target");
+    let (source_session, source_probe) = FakeTerminalSession::boxed(24, 80, "source");
+    let handed = Rc::new(RefCell::new(None));
+    let handed_in = handed.clone();
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let (dock_area, _skin) =
+            gpui_component::dock::DockSkin::dock_area("space-wins-test", None, window, cx);
+        let target = cx
+            .new(|cx| TerminalPanel::from_spec(session_spec(target_session, "Target"), window, cx));
+        let source = cx
+            .new(|cx| TerminalPanel::from_spec(session_spec(source_session, "Source"), window, cx));
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.set_center(
+                DockLayout::tabs()
+                    .panel_view(panel_handle(target.clone()), cx)
+                    .panel_view(panel_handle(source.clone()), cx),
+                window,
+                cx,
+            );
+        });
+        oneterm_state::AppState::global(cx).update(cx, |state, _| {
+            state.dock_area = Some(dock_area.downgrade());
+        });
+        *handed_in.borrow_mut() = Some((dock_area.clone(), target, source));
+        Root::new(dock_area, window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    let (dock_area, target, source) = handed.borrow().clone().expect("the window was built");
+    cx.run_until_parked();
+
+    let (target_id, source_id) = cx.update(|_, cx| (target.panel_id(cx), source.panel_id(cx)));
+    dock_area.update_in(cx, |area, window, cx| {
+        area.select_panel(target_id, window, cx)
+    });
+    let empty = target.update_in(cx, |panel, window, cx| {
+        let active = panel.tree.active();
+        panel.split_active_at(active, SplitDir::Right, window, cx);
+        panel.empty_space_destinations()[0]
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let groups = |cx: &mut VisualTestContext| {
+        dock_area.read_with(cx, |area, _| {
+            let mut tabs = 0;
+            area.layout(DockPlacement::Center)
+                .expect("a centre layout")
+                .root()
+                .walk(&mut |node| tabs += usize::from(matches!(node.kind(), PaneRef::Tabs { .. })));
+            tabs
+        })
+    };
+    let area = dock_area.read_with(cx, |area, _| area.bounds());
+    // The kit's strip tab for the source: its leading padding (the row inside it starts the
+    // strip's `DragTerminalTab`, the padding the dock's `DragPanel`).
+    let drop_at = |fraction: f32, cx: &mut VisualTestContext| {
+        let tab = cx
+            .debug_bounds("dock-tab-1")
+            .expect("the source's strip tab is drawn");
+        let from = point(tab.left() + px(3.), tab.center().y);
+        let to = point(
+            area.left() + area.size.width * fraction,
+            area.top() + area.size.height * 0.5,
+        );
+        cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(
+            from + point(px(0.), px(6.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+        assert!(
+            cx.update(|_, cx| cx.has_active_drag()),
+            "the tab's padding starts a drag"
+        );
+        cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+    };
+
+    // (1) On the live terminal, left edge zone: blocked. The source keeps its terminal and its
+    // tab, the centre stays one group.
+    drop_at(0.15, cx);
+    assert_eq!(groups(cx), 1, "no split under a terminal");
+    assert!(
+        dock_area.read_with(cx, |area, _| area.panel(source_id).is_some())
+            && source.read_with(cx, |panel, _| panel.tree.active_terminal().is_some()),
+        "a blocked drop moves nothing"
+    );
+    assert!(target.read_with(cx, |panel, _| panel.tree.leaf_terminal(empty).is_none()));
+
+    // (2) On the empty Space, right half: the Space is deeper than the panel root, so it is asked
+    // first and the terminal moves in; the emptied source tab goes, its session lives on.
+    drop_at(0.85, cx);
+    assert!(
+        target.read_with(cx, |panel, _| panel.tree.leaf_terminal(empty).is_some()),
+        "the empty Space took the dragged tab's terminal"
+    );
+    assert!(
+        dock_area.read_with(cx, |area, _| area.panel(source_id).is_none()),
+        "the emptied source tab is removed"
+    );
+    assert_eq!(groups(cx), 1);
+    assert_eq!(source_probe.close_calls(), 0, "moved, not closed");
+}
