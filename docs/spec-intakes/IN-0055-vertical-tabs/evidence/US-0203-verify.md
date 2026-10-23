@@ -70,3 +70,26 @@ No Maximize / Minimize button in the strip toolbar and no "Zoom" row in the `...
 ### Still by hand (owner / ui-verifier)
 
 `cargo test -p oneterm-terminal-view` and clippy on this head (the three strip-menu tests, including the pinned one, which is expected to fail until D1 is fixed), then the full gate before merge. On screen: with Vertical Tabs off, the `...` menu shows the tab rows only, the active tab ticked, a row click switches tabs, Esc closes the menu and focus returns to the strip; the terminal's right-click context menu and the SFTP pane menus are unchanged after opening the `...` menu once; the same in a second window if one is open.
+
+## Rework D1 re-review
+
+- Scope: `git diff dff31acc 23c8bb87` (one commit, `23c8bb87`, the fixes for D1-D3 above) on `verify/in-0055-drag-zoom`, 2026-10-23. Read only; no cargo, no GUI. The coder's gate (`ci-local.ps1`, 2570 passed, 0 failed) is recorded in the packet and not reproduced here.
+- Read: `crates/terminal-view/src/panel/tab_title.rs:962-1049`, `panel/tests/tab_menu_and_card.rs:486-500`, `US-0203-remove-zoom.md:131-137`; kit `gpui-component-0.7.3/src/lib.rs:127, 155-163`; `rust-i18n-macro` `src/lib.rs:515`; Rust 1.94.1 `library/test/src/lib.rs:625-640`.
+
+### Verdict
+
+**PASS.** All three fixes are correct and minimal. One correction to my own D1: its cross-test reach was over-stated (see 1).
+
+### Each fix, attacked
+
+1. **D1, is the slot cleared on every test path?** `strip_menu_rows` now disarms unconditionally after reading the rows (`tab_menu_and_card.rs:496-498`), on both the observer and the control path, so the two existing walks and the pinned test leave nothing. A panic before that line (`expect("the strip is drawn")`, `:479`) would skip it; that does not matter, and neither did the original hazard as much as I said: libtest runs every test on a freshly spawned thread (`library/test/src/lib.rs:630-634`, `thread::Builder::new().name(...).spawn`), so a `thread_local!` never crosses from one test to the next. The real residue on `b0944bff` was a strong `Entity<TerminalPanel>` (with its fake session) held until the test thread exited, plus the dormant hazard of a stale closure reading a dead entity if anything ever did take it. Both are gone: the closure holds a `WeakEntity` (`tab_title.rs:968`), and `strip_menu` returns the menu as the kit built it when `upgrade()` fails (`:1028-1030`). `#[gpui::test]` iterations within one test do share the thread, and the disarm covers that too. The D1 severity should be read as Low in hindsight; the fix stands as the right shape regardless.
+2. **D1, could a weak upgrade succeed for a stale panel in another window?** Only while the panel entity still lives in the same `App`, and only if something takes the slot after the arm's own menu. In production the arm and the take are the same `cx.new` (`dropdown_menu.rs:131-133` builds, `app.rs:3235-3239` queues `EntityCreated`, flushed at the end of the same update), so the slot is never stale. Without the observer the slot is simply overwritten on each open (`*slot.borrow_mut() = Some(...)`, `tab_title.rs:969-971`), so at most one closure exists, naming the panel of the last `...` menu opened; nothing can take it because `init` is the only installer and runs once at startup. Windows do not enter: `strip_menu` reads the panel and its group (`:1031-1041`), not window state, and a `WeakEntity` of a dropped `App` upgrades to `None` (its ref-count table is gone). No path rebuilds a menu as another panel's tab list.
+3. **D3, is "the kit's `t!` table is not reachable from our crate" true?** Essentially yes. `t!` is `rust_i18n`'s macro and expands to `crate::_rust_i18n_translate(...)` of the *calling* crate; OneTerm has no `rust-i18n` dependency and no `i18n!` table (grep of `Cargo.toml` and `crates/`), so `t!("Dock.Close")` cannot be written here. Precisely: the kit's generated `pub fn _rust_i18n_translate` (`rust-i18n-macro/src/lib.rs:515`, emitted into `gpui_component` by `lib.rs:127`) and `gpui_component::locale()` / `set_locale()` (`lib.rs:155-163`) are technically callable, so the table is reachable through an underscore-prefixed generated function that is not a supported API. Not worth taking: OneTerm never calls `set_locale`, so the kit's own rows are English too, and the literal matches every other Close row in the file. The comment at `tab_title.rs:1042-1044` is accurate enough; no change asked.
+
+### Defects
+
+None.
+
+### Still by hand (owner / ui-verifier)
+
+Unchanged from the D1 review: the on-screen walk of the `...` menu with Vertical Tabs off (tab rows only, active ticked, row click switches, Esc closes and focus returns), the terminal and SFTP context menus unchanged after opening it, and the same in a second window.
