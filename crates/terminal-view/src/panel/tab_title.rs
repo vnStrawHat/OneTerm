@@ -962,7 +962,10 @@ pub(super) fn tab_list_menu(
     panel: &TerminalPanel,
     cx: &mut Context<TerminalPanel>,
 ) -> PopupMenu {
-    let entity = cx.entity();
+    // A weak handle: an armed rebuild that nothing takes (no observer installed, as in a test
+    // that never ran `init`) must not keep the panel alive, and one that outlives its panel
+    // leaves the menu as the kit built it.
+    let entity = cx.entity().downgrade();
     STRIP_MENU.with(|slot| {
         *slot.borrow_mut() = Some(Box::new(move |menu, _, cx| strip_menu(menu, &entity, cx)));
     });
@@ -1010,13 +1013,23 @@ pub(super) fn strip_menu_is_armed() -> bool {
     STRIP_MENU.with(|slot| slot.borrow().is_some())
 }
 
+/// Drop an armed rebuild nobody took, so one test's walk cannot rewrite another test's menu on
+/// the same thread.
+#[cfg(test)]
+pub(super) fn disarm_strip_menu() {
+    STRIP_MENU.with(|slot| slot.borrow_mut().take());
+}
+
 /// The `...` menu of a tab strip as OneTerm wants it: the tab list, and Close when the group
 /// lets the displayed tab close.
 fn strip_menu(
     menu: PopupMenu,
-    panel: &Entity<TerminalPanel>,
+    panel: &WeakEntity<TerminalPanel>,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    let Some(panel) = panel.upgrade() else {
+        return menu;
+    };
     let app: &App = cx;
     let tab = panel.read(app);
     let menu = tab_list_rows(menu, tab, panel.entity_id(), app);
@@ -1026,6 +1039,9 @@ fn strip_menu(
         .and_then(|group| group.upgrade())
         .is_some_and(|group| group.read(app).is_closable(app));
     if closable {
+        // The kit's own row says `t!("Dock.Close")`, a `rust_i18n` lookup in the kit's crate with
+        // its own locale table that this crate cannot reach; the English word it resolves to is
+        // the one every other Close row in this file uses.
         menu.separator().menu("Close", Box::new(ClosePanel))
     } else {
         menu

@@ -486,13 +486,17 @@ fn strip_menu_rows(cx: &mut TestAppContext, override_installed: bool) -> Vec<Str
     for _ in 0..3 {
         draw(cx);
     }
-    cx.update(|window, _| {
+    let rows = cx.update(|window, _| {
         gpui_base::test_support::snapshots(window)
             .into_iter()
             .filter(|element| element.role() == Some(gpui::Role::MenuItem))
             .filter_map(|element| Some(element.label()?.to_string()))
             .collect()
-    })
+    });
+    // Without the observer nothing took the rebuild the menu armed; leave none for the next test
+    // on this thread.
+    crate::panel::tab_title::disarm_strip_menu();
+    rows
 }
 
 /// `US-0203` (ui-verifier D1): the strip's `...` menu kept a greyed "Zoom In" row, which the kit
