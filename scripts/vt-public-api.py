@@ -56,13 +56,15 @@ that fires on one teaches people to regenerate without reading.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DOC_ROOT = ROOT / "target" / "doc" / "oneterm_vt"
+# The SessionStart hook shares one CARGO_TARGET_DIR across worktrees (BUG-0090).
+DOC_ROOT = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "doc" / "oneterm_vt"
 SURFACE_WINDOWS = ROOT / "crates" / "vt" / "public-api.windows.txt"
 SURFACE_UNIX = ROOT / "crates" / "vt" / "public-api.unix.txt"
 # The only module whose items are allowed to differ between the two snapshots.

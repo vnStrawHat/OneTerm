@@ -19,5 +19,5 @@ finally {
     $env:RUSTDOCFLAGS = $previous
 }
 
-$index = Join-Path (Get-Location) "target/doc/oneterm_vt/guide/index.html"
+$index = Join-Path ($(if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path (Get-Location) "target" })) "doc/oneterm_vt/guide/index.html"
 Write-Host "file:///$($index -replace '\\', '/')"
