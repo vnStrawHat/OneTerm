@@ -42,6 +42,8 @@ are:
 | Quit | `quit` | `ctrl-q` | 107 | `^Q` — XON, resume output |
 | Open Settings | `open_settings` | `ctrl-,` | 116 | nothing in practice |
 
+*Amended 2026-10-23 (`US-0203`): the Zoom Active Panel row no longer exists; panel zoom was removed, so the table's first row is history.*
+
 `^S` and `^Q` are the sharpest: a user who presses `Ctrl-S` inside `less`, `vim` or a
 serial console expects flow control, and instead gets a dialog. `Ctrl-G` is the abort key in
 readline and Emacs. `Ctrl-Space` is set-mark, and on a machine with a Vietnamese, Chinese,

@@ -87,26 +87,15 @@ pub(crate) fn load_layout(
 
 /// Save the dock state to a file.
 ///
-/// `zoomed_panel`: name of the panel currently zoomed (fullscreen) — injected into the
-/// JSON value of `docks.json` (field `zoomed_panel`). `None` → removes the field (no panel zoomed).
-/// Does not modify the `DockAreaState` struct.
+/// Writes no `zoomed_panel`: panel zoom is gone (`US-0203`) and the document drops the field.
 /// `trigger`: a string describing what triggered the write (e.g. "debounce", "on_app_quit",
-/// "on_close", "zoom_in", "zoom_out", "reset_center_only", "reset_default_layout").
-pub(crate) fn save_state(
-    state: &DockAreaState,
-    zoomed_panel: Option<&str>,
-    trigger: &str,
-) -> Result<()> {
-    save_state_to(&state_file(), state, zoomed_panel, trigger)
+/// "on_close", "reset_center_only", "reset_default_layout").
+pub(crate) fn save_state(state: &DockAreaState, trigger: &str) -> Result<()> {
+    save_state_to(&state_file(), state, trigger)
 }
 
 /// [`save_state`] against an explicit document path (tests use an isolated file).
-pub(crate) fn save_state_to(
-    path: &Path,
-    state: &DockAreaState,
-    zoomed_panel: Option<&str>,
-    trigger: &str,
-) -> Result<()> {
+pub(crate) fn save_state_to(path: &Path, state: &DockAreaState, trigger: &str) -> Result<()> {
     // M4 (`DEC-0019`): an elevated window writes no configuration, so the one
     // writer of `docks.json` stays the unelevated instance and an elevated
     // session leaves the user's layout — under over-the-shoulder elevation, the
@@ -129,11 +118,8 @@ pub(crate) fn save_state_to(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     // Debounced saves fire on every layout change; keep them out of the info log (ERR-11).
-    log::debug!(
-        "Save layout [trigger={trigger}] → zoomed_panel={zoomed_panel:?}, right_dock_open={right_dock_open}",
-    );
+    log::debug!("Save layout [trigger={trigger}] → right_dock_open={right_dock_open}");
     let mut next_document = DockDocument::from_dock_state(&state)?;
-    next_document.zoomed_panel = zoomed_panel.map(str::to_owned);
     let outcome = update_dock_document_at(path, move |current| {
         next_document.sftp_table_state = current.sftp_table_state.take();
         *current = next_document;
@@ -174,8 +160,8 @@ fn persistence_compatible_state(state: &DockAreaState) -> DockAreaState {
 }
 
 /// Persist a background snapshot and retain an actionable diagnostic on failure.
-pub(crate) fn save_state_logged(state: &DockAreaState, zoomed_panel: Option<&str>, trigger: &str) {
-    if let Err(error) = save_state(state, zoomed_panel, trigger) {
+pub(crate) fn save_state_logged(state: &DockAreaState, trigger: &str) {
+    if let Err(error) = save_state(state, trigger) {
         log::error!("failed to persist dock state [trigger={trigger}]: {error:#}");
     }
 }
@@ -253,7 +239,7 @@ mod tests {
 
         // Unelevated first, so the test can tell "refused" apart from "this
         // fixture never wrote anything anyway".
-        super::save_state_to(&path, &state, None, "test").expect("the ordinary write succeeds");
+        super::save_state_to(&path, &state, "test").expect("the ordinary write succeeds");
         assert!(
             path.exists(),
             "fixture: an ordinary window writes the layout"
@@ -261,7 +247,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
 
         let _restricted = RestrictedElevation::new();
-        super::save_state_to(&path, &state, None, "test").expect("a refusal is not an error");
+        super::save_state_to(&path, &state, "test").expect("a refusal is not an error");
         assert!(
             !path.exists(),
             "an elevated window must write no dock layout"
@@ -272,7 +258,6 @@ mod tests {
     fn one_term_fields_roundtrip_with_dock_state() {
         let state = DockAreaState::default();
         let mut document = DockDocument::from_dock_state(&state).unwrap();
-        document.zoomed_panel = Some("session".into());
         document.sftp_table_state = Some(SftpTableState {
             column_widths: HashMap::from([("name".into(), 320.0)]),
             column_visibility: HashMap::from([("permissions".into(), false)]),
@@ -283,7 +268,6 @@ mod tests {
         let restored: DockDocument = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.dock_state::<DockAreaState>().unwrap(), state);
-        assert_eq!(restored.zoomed_panel.as_deref(), Some("session"));
         assert_eq!(
             restored.sftp_table_state.unwrap().column_widths.get("name"),
             Some(&320.0)

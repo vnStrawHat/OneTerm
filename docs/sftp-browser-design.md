@@ -169,7 +169,7 @@ impl Panel for SftpPanel {
     fn panel_name(&self) -> &'static str { "sftp" }
     fn title(&mut self, ...) -> impl IntoElement { "SFTP Browser" }
     fn closable(&self) -> bool { true }
-    fn zoomable(&self) -> Option<PanelControl> { Some(PanelControl::Both) }
+    fn zoomable(&self) -> bool { false } // no panel zoom (`US-0203`)
 }
 
 impl Render for SftpPanel {
@@ -1310,13 +1310,13 @@ Invariants:
 
 ### 4.15. Dual-pane mode — Local + Remote (IN-0025)
 
-The expand button in the section title (`Panel::title_suffix`, the terminal tab's Maximize / Minimize icons) zooms the
-hosting `SshClientPanel` dock node — the browser fills the workspace like a zoomed
-terminal tab, the Session section is hidden — and splits it into a Local pane (left)
-and the Remote pane (right) in an `h_resizable` group above the shared transfer queue;
-collapsed (the same button, or any other zoom-out) is the docked single remote pane
-described above. `SftpExpandedChanged` and the base `Panel::set_zoomed` hook keep the
-two states in step. The Local pane
+The expand button in the section title (`Panel::title_suffix`, Maximize / Minimize icons)
+hides the Session section of the hosting `SshClientPanel` and splits the browser into a Local pane (left)
+and the Remote pane (right) in an `h_resizable` group above the shared transfer queue,
+inside the right dock at the width the dock has (amended 2026-10-23, `US-0203`: the
+button no longer zooms the dock, there is no panel zoom; it used to make the browser fill the
+workspace); collapsed (the same button) is the docked single remote pane
+described above. `SftpExpandedChanged` keeps the panel and the browser in step. The Local pane
 (`crates/sftp-ui/src/local_pane.rs`) is a `std::fs` browser on the background
 executor with its own `DataTable` (Name / Size / Date Modified, the same order and
 the same widths as the remote table's default set), path box, back,

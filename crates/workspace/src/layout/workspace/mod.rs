@@ -162,8 +162,6 @@ pub struct OneTermWorkspace {
     /// the user's width back (`US-0113`).
     preferred_right_dock_width: gpui::Pixels,
 
-    /// Name of the panel currently zoomed (fullscreen), mirrored into docks.json.
-    zoomed_panel: Option<String>,
     /// Set once the exit-time layout write has run, so the two exit hooks
     /// (`on_app_quit` while the window is still open, `on_release` when the
     /// window closes) do not write the same document twice.
@@ -202,11 +200,10 @@ impl OneTermWorkspace {
             cx.notify();
         });
 
-        // Read docks.json once (PERF-27): the zoomed panel name must be taken
-        // BEFORE the layout is reset (the center always resets, and reset_*
-        // rewrites docks.json without the zoom), and the same document feeds
-        // the layout load. An unreadable file is left to the first save:
-        // `dock_persistence` — the document owner — quarantines it there.
+        // Read docks.json once (PERF-27); the document feeds the layout load. An unreadable
+        // file is left to the first save: `dock_persistence` — the document owner —
+        // quarantines it there. A saved `zoomed_panel` (panel zoom is gone, `US-0203`) is
+        // dropped by that read and never restored.
         //
         // M1 (`DEC-0019`, `IN-0043` MAJ-2): an elevated window does not read it
         // at all. `load_layout` restores the **side docks by name**, so a saved
@@ -216,17 +213,13 @@ impl OneTermWorkspace {
         // that is already there. Gating the builders was necessary and not
         // sufficient: the restore is the path every user who has run OneTerm
         // once actually takes. An elevated window therefore gets the fixed
-        // default layout, every time, with no saved zoom and no saved width.
+        // default layout, every time, with no saved width.
         let document = startup_dock_document(elevated, || {
             persistence::read_dock_document().unwrap_or_else(|error| {
                 log::warn!("{error}; using the default layout");
                 None
             })
         });
-        let saved_zoom = document
-            .as_ref()
-            .and_then(|document| document.zoomed_panel.clone());
-
         let loaded = document
             .and_then(|document| persistence::load_layout(&dock_area, &document, window, cx).ok())
             .is_some();
@@ -245,16 +238,6 @@ impl OneTermWorkspace {
         }
 
         cx.observe_in(&dock_area, window, move |this, dock_area, window, cx| {
-            let zoomed_panel = dock_area
-                .read(cx)
-                .zoomed_group()
-                .and_then(|node| {
-                    oneterm_state::dock_util::panel_name_for_tab_node(dock_area.read(cx), node, cx)
-                })
-                .map(str::to_owned);
-            if this.zoomed_panel != zoomed_panel {
-                this.zoomed_panel = zoomed_panel;
-            }
             this.record_right_dock_choice(&dock_area, cx);
             this.track_preferred_right_dock_width(&dock_area, window, cx);
             this.save_layout(&dock_area, window, cx);
@@ -313,16 +296,10 @@ impl OneTermWorkspace {
             last_layout_state: None,
             _save_layout_task: None,
             preferred_right_dock_width,
-            zoomed_panel: None,
             layout_saved_on_exit: false,
             fps_hud: None,
             right_dock_kind: None,
         };
-
-        // Restore zoom (fullscreen) for the panel matching the saved name.
-        if let Some(name) = saved_zoom {
-            me.restore_zoom(&name, window, cx);
-        }
 
         // The right dock follows the active tab's kind (`IN-0054`): set it now
         // for whatever the workspace shows, then whenever the kind changes.
@@ -463,7 +440,7 @@ impl OneTermWorkspace {
             self.preferred_right_dock_width,
         );
         log::info!("save_layout_on_exit [trigger={trigger}] → writing dock state before quit");
-        persistence::save_state_logged(&state, self.zoomed_panel.as_deref(), trigger);
+        persistence::save_state_logged(&state, trigger);
     }
 
     /// Debounce the save by 2s, skip when the state is unchanged.
@@ -491,21 +468,13 @@ impl OneTermWorkspace {
                     return;
                 }
                 this.last_layout_state = Some(state.clone());
-                let zoomed_name = this.zoomed_panel.clone();
                 cx.background_executor()
                     .spawn(async move {
-                        persistence::save_state_logged(&state, zoomed_name.as_deref(), "debounce");
+                        persistence::save_state_logged(&state, "debounce");
                     })
                     .detach();
             });
         }));
-    }
-
-    /// Restore zoom for the tab group whose active panel matches `name`.
-    fn restore_zoom(&self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if restore_zoom_in_dock(&self.dock_area, name, window, cx) {
-            log::info!("Restored zoom for panel \"{name}\"");
-        }
     }
 
     /// Bind global key bindings for the workspace.
@@ -542,24 +511,6 @@ pub(crate) fn right_dock_prefs_after_toggle(
         next.set(is_local, open);
         next
     })
-}
-
-/// Restore zoom for the tab group whose active panel matches `name`.
-fn restore_zoom_in_dock(
-    dock_area: &Entity<DockArea>,
-    name: &str,
-    window: &mut Window,
-    cx: &mut App,
-) -> bool {
-    let target =
-        oneterm_state::dock_util::find_tab_node_by_panel_name(dock_area.read(cx), name, cx);
-    let Some(node) = target else {
-        return false;
-    };
-    dock_area.update(cx, |dock_area, cx| {
-        dock_area.set_zoomed_in(node, window, cx)
-    });
-    dock_area.read(cx).zoomed_group() == Some(node)
 }
 
 impl Render for OneTermWorkspace {

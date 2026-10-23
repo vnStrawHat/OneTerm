@@ -152,25 +152,6 @@ impl OneTermTabGroupSkin {
             group.panels().iter().map(|panel| panel.panel_name(cx)),
         )
     }
-
-    /// A group that draws the rail is never left zoomed. The rail has no zoom button (owner
-    /// rework 4), a lone centre group looks the same zoomed or not, and the kit refuses to drag
-    /// from or drop on a zoomed group, so a stray `ToggleZoom` (saved in `docks.json` and
-    /// restored on every start) silently killed reorder and the drop into a Space, with no way
-    /// out (`US-0196` rework 9, owner test failure). Every way into a zoom ends in a frame of
-    /// this group, so this is the one place that lets go of it; the dock's own zoom of another
-    /// group (the right dock's SFTP browser) is not this group's and is left alone. Deferred:
-    /// the dock area is mid-render here.
-    fn release_zoom(&self, node: NodeId, window: &mut Window, cx: &mut App) {
-        let area = self.area.clone();
-        window.defer(cx, move |window, cx| {
-            _ = area.update(cx, |area, cx| {
-                if area.zoomed_group() == Some(node) {
-                    area.set_zoomed_out(window, cx);
-                }
-            });
-        });
-    }
 }
 
 impl TabGroupRenderer for OneTermTabGroupSkin {
@@ -178,9 +159,6 @@ impl TabGroupRenderer for OneTermTabGroupSkin {
         // Base calls `frame`, `render_tab_bar` and `content_frame` in that order within one
         // render, so the rail rule and the width are settled here and the other two read them.
         let draws = self.draws_rail(group, cx);
-        if draws && group.is_zoomed() {
-            self.release_zoom(group.node(), window, cx);
-        }
         self.terminal_content.set(
             group
                 .active_panel()

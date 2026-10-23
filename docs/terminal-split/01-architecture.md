@@ -25,7 +25,7 @@ TerminalPanel
 ```
 
 `TerminalPanel` keeps all its existing `Panel` responsibilities (tab title, close
-button, `set_active`, zoom). Only the **body** it renders changes: instead of one
+button, `set_active`; zoom was removed by `US-0203`). Only the **body** it renders changes: instead of one
 `LocalTerminalView`, it renders the Space tree (see [05](05-rendering-theme.md)).
 
 ## 2. The tree model

@@ -11,7 +11,7 @@ use gpui::{
 };
 use gpui_component::dock::{
     DockArea, DockLayout, DockPlacement, DragPanel, PaneRef, Panel, PanelControl, PanelEvent,
-    PanelId, panel_handle,
+    PanelId, ToggleZoom, panel_handle,
 };
 use gpui_component::h_flex;
 use oneterm_settings::{UiConfig, VerticalTabs, ui_config::UiConfigGlobal};
@@ -39,6 +39,10 @@ struct Report {
     content_drops: Rc<Cell<usize>>,
     /// What the row layout was while its title was built.
     title_layout: Rc<Cell<Option<TabRowLayout>>>,
+    /// Whether the probe lets the dock zoom it. No OneTerm panel does (`US-0203`), so the default
+    /// is the real answer; a control test turns it on to see what the kit does for a panel that
+    /// does.
+    zoomable: Rc<Cell<bool>>,
 }
 
 /// The probe's header `+`.
@@ -82,6 +86,10 @@ impl gpui_base::dock::Panel for Probe {
 
     fn on_removed(&mut self, _: &mut Window, _: &mut Context<Self>) {
         self.report.removed.set(self.report.removed.get() + 1);
+    }
+
+    fn zoomable(&self, _: &App) -> bool {
+        self.report.zoomable.get()
     }
 }
 
@@ -136,8 +144,9 @@ impl Panel for Probe {
         Some(div().debug_selector(|| PLUS_SELECTOR.to_string()).size_6())
     }
 
-    // Like the terminal panel: the toolbar offers zoom (the rail draws no button for it), and
-    // the content frame adds no top padding for several tabs.
+    // Asks for the zoom control in the toolbar, as the terminal panel did before `US-0203`; the
+    // kit draws it only for a panel whose base `zoomable()` agrees, which is what the tests pin.
+    // The content frame adds no top padding for several tabs.
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         Some(PanelControl::Both)
     }
@@ -740,11 +749,9 @@ fn the_header_has_a_rule_only_while_the_list_is_scrolled(cx: &mut TestAppContext
     );
 }
 
-/// The header holds the "Terminals" label on the left and the `+` on the right, with no zoom
-/// button even though the panel offers one; a zoom asked for anyway is released (see
-/// `a_zoom_cannot_trap_the_rail`) and the rail and the header stay as they were.
+/// The header holds the "Terminals" label on the left and the `+` on the right, nothing else.
 #[gpui::test]
-fn the_header_holds_the_label_and_the_plus_and_a_zoom_changes_nothing(cx: &mut TestAppContext) {
+fn the_header_holds_the_label_and_the_plus(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
@@ -774,85 +781,55 @@ fn the_header_holds_the_label_and_the_plus_and_a_zoom_changes_nothing(cx: &mut T
             && (label.center().y - header.center().y).abs() < px(1.),
         "the label is a small line centred in the header: {label:?}"
     );
-
-    let node = centre_node(&window.area, cx);
-    cx.update(|w, app| {
-        window
-            .area
-            .update(app, |area, cx| area.set_zoomed_in(node, w, cx))
-    });
-    settle(cx);
-    assert!(
-        bounds_of(RAIL_SELECTOR, cx).is_some(),
-        "the rail is still drawn after a zoom"
-    );
-    assert_eq!(bounds_of(PLUS_SELECTOR, cx), Some(plus), "and its header");
 }
 
-/// Owner test failure of rework 9 (2026-10-23): the owner's centre group was zoomed (`Shift+Esc`,
-/// saved in `docks.json` and restored on every start), and the kit refuses to drag from or drop
-/// on a zoomed group, so neither a reorder nor a drop into a Space worked; the rail has no zoom
-/// button to get out, and a lone centre group looks the same zoomed or not. A group that draws
-/// the rail is therefore never left zoomed, however the zoom was asked for (the key binding and
-/// the restored `zoomed_panel` both end in `set_zoomed_in`), and the reorder works afterwards.
+/// `US-0203`: nothing can zoom. The kit asks the displayed panel's base `zoomable()` before it
+/// draws a zoom control, accepts `ToggleZoom` or `DockArea::set_zoomed_in`, so a panel that answers
+/// no (every OneTerm panel does, pinned in each panel's crate) has no control and cannot be zoomed
+/// by any route. The control case, a panel that answers yes, proves the checks can see a zoom.
 #[gpui::test]
-fn a_zoom_cannot_trap_the_rail(cx: &mut TestAppContext) {
-    let (window, cx) = rail_window(cx, true);
-    let report = Report::default();
-    set_centre(
-        &window.area,
-        &terminals(&["a", "b", "c"]),
-        false,
-        &report,
-        cx,
-    );
-    let node = centre_node(&window.area, cx);
-    cx.update(|w, app| {
-        window
-            .area
-            .update(app, |area, cx| area.set_zoomed_in(node, w, cx))
-    });
-    settle(cx);
-    assert!(
-        !window.area.read_with(cx, |area, _| area.is_zoomed()),
-        "the rail has no way to zoom out, so a zoom under it is released"
-    );
+fn a_panel_that_will_not_zoom_has_no_zoom_control_and_cannot_be_zoomed(cx: &mut TestAppContext) {
+    const ZOOM_CONTROL: &str = "dock-tab-bar-zoom-control";
 
-    let (original, _) = centre_tabs(&window.area, cx);
-    let from = row(0, cx).unwrap().center();
-    let onto = row(1, cx).unwrap().center();
-    drag_to(from, onto, cx);
-    assert!(has_active_drag(cx), "the row can be dragged again");
-    release(onto, cx);
-    assert_eq!(
-        centre_tabs(&window.area, cx).0,
-        vec![original[1], original[0], original[2]],
-        "and the drop reorders"
-    );
-}
-
-/// The release is the rail's rule only: the strip keeps its zoom button, so a zoom stays there,
-/// and the switch that turns the rail on releases the zoom the strip made.
-#[gpui::test]
-fn the_strip_keeps_its_zoom_and_turning_the_rail_on_releases_it(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, false);
+    let zoom_in = |window: &RailWindow, cx: &mut VisualTestContext| {
+        let node = centre_node(&window.area, cx);
+        cx.update(|w, app| {
+            window
+                .area
+                .update(app, |area, cx| area.set_zoomed_in(node, w, cx))
+        });
+        settle(cx);
+        window.area.read_with(cx, |area, _| area.is_zoomed())
+    };
+
+    // Control: a panel that allows it gets the toolbar button and the dock zooms.
+    let zoomable = Report::default();
+    zoomable.zoomable.set(true);
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &zoomable, cx);
+    assert!(
+        bounds_of(ZOOM_CONTROL, cx).is_some(),
+        "control: the kit draws its zoom control for a zoomable panel"
+    );
+    assert!(zoom_in(&window, cx), "control: the dock zooms it");
+    cx.update(|w, app| {
+        window
+            .area
+            .update(app, |area, cx| area.set_zoomed_out(w, cx))
+    });
+    settle(cx);
+
+    // Every OneTerm panel answers no: no control, and neither the dock nor the key binding's
+    // action zooms it.
     let report = Report::default();
     set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
-    let node = centre_node(&window.area, cx);
-    cx.update(|w, app| {
-        window
-            .area
-            .update(app, |area, cx| area.set_zoomed_in(node, w, cx))
-    });
+    assert!(bounds_of(ZOOM_CONTROL, cx).is_none(), "no zoom control");
+    assert!(!zoom_in(&window, cx), "the dock refuses a zoom");
+    cx.dispatch_action(ToggleZoom);
     settle(cx);
     assert!(
-        window.area.read_with(cx, |area, _| area.is_zoomed()),
-        "the strip keeps a zoom: its button is the way out"
-    );
-    set_vertical(&window.config, true, cx);
-    assert!(
         !window.area.read_with(cx, |area, _| area.is_zoomed()),
-        "the rail has no way out, so turning it on releases the zoom"
+        "ToggleZoom zooms nothing"
     );
 }
 
@@ -1073,8 +1050,7 @@ fn a_row_dropped_below_the_last_row_moves_the_tab_to_the_end(cx: &mut TestAppCon
     );
 }
 
-/// A zoomed group is neither draggable nor droppable, as on the strip; and a lone tab has
-/// nowhere to go.
+/// A lone tab has nowhere to go.
 #[gpui::test]
 fn a_lone_tab_has_nothing_to_reorder(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);

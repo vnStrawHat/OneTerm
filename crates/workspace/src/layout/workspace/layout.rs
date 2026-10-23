@@ -22,7 +22,7 @@ pub(crate) fn reset_center_only(
         let state = super::state_with_preferred_width(state, preferred_right_dock_width);
         cx.background_executor()
             .spawn(async move {
-                super::persistence::save_state_logged(&state, None, "reset_center_only");
+                super::persistence::save_state_logged(&state, "reset_center_only");
             })
             .detach();
     }
@@ -129,7 +129,7 @@ pub(crate) fn reset_default_layout(
     if let Some(state) = saved_state {
         cx.background_executor()
             .spawn(async move {
-                super::persistence::save_state_logged(&state, None, "reset_default_layout");
+                super::persistence::save_state_logged(&state, "reset_default_layout");
             })
             .detach();
     }

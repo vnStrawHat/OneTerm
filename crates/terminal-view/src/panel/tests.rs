@@ -1198,6 +1198,26 @@ fn the_close_following_row_names_the_direction_of_the_layout() {
     );
 }
 
+/// `US-0203`: panel zoom is gone. The kit's defaults are "zoomable" and "a zoom row in the `...`
+/// menu", so the panel has to answer no to both (base then refuses a zoom however it is asked).
+#[gpui::test]
+fn the_terminal_panel_offers_no_zoom(cx: &mut TestAppContext) {
+    use gpui_component::dock::Panel as _;
+    use oneterm_state::TabRowLayout;
+
+    let (_, _, panel, cx) = tab_row_window_with_panel(
+        cx,
+        TabRowLayout::Horizontal,
+        220.,
+        oneterm_terminal::SessionKind::Local,
+    );
+    cx.update(|_, cx| {
+        let panel = panel.read(cx);
+        assert!(!gpui_base::dock::Panel::zoomable(panel, cx));
+        assert!(panel.zoom_control(cx).is_none());
+    });
+}
+
 /// A tab row drawn by hand beside a drop target, to see which gestures on the row start a drag
 /// of their own (the kit's `Tab` and the rail's row, which start the dock's `DragPanel`, are not
 /// part of this host: nothing here may start one).

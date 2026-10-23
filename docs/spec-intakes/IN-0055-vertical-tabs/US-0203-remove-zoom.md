@@ -10,8 +10,8 @@ Created: 2026-10-23
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -44,13 +44,13 @@ Persistence: a `docks.json` that holds `zoomed_panel` (every file written by an 
 
 ## Acceptance
 
-- [ ] No OneTerm panel can be zoomed: each answers `zoomable() == false` and offers no zoom control; with the real dock skin and a strip, no zoom control is drawn, and `ToggleZoom` and `DockArea::set_zoomed_in` leave `is_zoomed()` false (workspace test; `set_zoomed_in` is refused by base because the displayed panel is not zoomable).
-- [ ] `Settings -> Key Bindings` has no "Zoom Active Panel" row, `toggle_zoom` is not in the elevated-window policy tables, and no keystroke dispatches `ToggleZoom`; a `ui_config.json` that still holds a `toggle_zoom` override loads and the id is ignored (test).
-- [ ] A `docks.json` with `zoomed_panel` (the 0.5.2 fixture, and a document written with the field) loads: the layout is restored, nothing is zoomed, the field is not an error and not kept; a save writes no `zoomed_panel` (`oneterm-state` and `oneterm-workspace` tests; the fixture test is re-pointed).
-- [ ] `OneTermWorkspace` has no zoom state and writes none: `save_state*` take no zoom argument.
-- [ ] The SSH Client panel has no dock zoom; the SFTP expand toggle still switches the browser to its Local + Remote view (its tests unchanged).
-- [ ] The zoom-trap release, `release_zoom`, and the tests that exist only for it are deleted; the reorder tests of the rail still pass.
-- [ ] Docs say the same; no live doc names a zoom control, the `shift-escape` binding or `zoomed_panel` as current behaviour (history documents keep it).
+- [x] No OneTerm panel can be zoomed: `TerminalPanel`, `SessionPanel` and `SftpPanel` answer `zoomable() == false` with no zoom control (tests `the_terminal_panel_offers_no_zoom`, `the_session_panel_offers_no_zoom`, `the_sftp_panel_offers_no_zoom`; `SshClientPanel` answers the same in code, **not pinned by a test**: its constructor needs the vault and the saved-session store, which `oneterm-app` has no test support for); with the real dock skin and a strip, a probe that answers no has no zoom control, `DockArea::set_zoomed_in` and `ToggleZoom` leave `is_zoomed()` false, and a control probe that answers yes shows the button and zooms (`a_panel_that_will_not_zoom_has_no_zoom_control_and_cannot_be_zoomed`).
+- [x] `Settings -> Key Bindings` has no "Zoom Active Panel" row, `toggle_zoom` is not in the elevated-window policy tables, and nothing is bound to `shift-escape` (`no_action_zooms_a_panel`); a `ui_config.json` that still holds a `toggle_zoom` override loads, the id is ignored and the next save leaves it out (`a_saved_toggle_zoom_override_is_ignored`).
+- [x] A `docks.json` with `zoomed_panel` (the 0.5.2, v0 and v1 fixtures, and a hand-written v2 document) loads: the layout is restored, nothing is zoomed, the field is not an error and not kept as a layout field; a save writes no `zoomed_panel` (`oneterm-state` `a_stored_zoomed_panel_loads_and_is_not_written_back` and the fixture reads; `oneterm-workspace` `pre_migration_fixture_loads_and_saves_without_semantic_drift`, re-pointed: it loads the 0.5.2 fixture unzoomed and the saved file has no `zoomed_panel`).
+- [x] `OneTermWorkspace` has no zoom state and writes none: the `zoomed_panel` field, `restore_zoom`, `restore_zoom_in_dock` and the dock observer's mirror are deleted, and `save_state`, `save_state_to` and `save_state_logged` take no zoom argument.
+- [x] The SSH Client panel has no dock zoom (`on_sftp_expanded`, `set_zoomed` and the `zoomable` override that said yes are gone); the SFTP expand toggle still switches the browser to its Local + Remote view (the sftp-ui tests are unchanged and pass; the expand tooltip no longer says "across the workspace").
+- [x] The zoom-trap release, `release_zoom`, and the tests that exist only for it (`a_zoom_cannot_trap_the_rail`, `the_strip_keeps_its_zoom_and_turning_the_rail_on_releases_it`) are deleted; the reorder tests of the rail still pass.
+- [x] Docs say the same; no live doc names a zoom control, the `shift-escape` binding or `zoomed_panel` as current behaviour (history documents keep it).
 - [ ] Full `pwsh scripts/ci-local.ps1` passes.
 - [ ] On screen, by `ui-verifier`: no Maximize / Minimize button in the strip toolbar, no "Zoom" row in the `...` menu, `Shift+Esc` does nothing, the SFTP expand toggle in the right dock, a profile whose `docks.json` holds `zoomed_panel` starts unzoomed.
 
@@ -72,7 +72,7 @@ Reason: zoom stops being a feature; each live statement of it is removed or rewr
 
 ### Reconciliation
 
-Filled in at the end.
+Changed: `docs/gui-layout.md` (`## Zoom` rewritten as the removal, the panel-trait bullets, the header bullet, the rail's "never left zoomed" bullet deleted, the persistence list, the source map), `docs/agents/persistence.md` (`docks.json` row), `docs/agents/structure.md` (a `zoom` module that does not exist), `docs/sftp-browser-design.md` (4.15 and the panel snippet), `README.md` (the SFTP and status-bar lines), the HLD (Zoom row, `frame` bullet, header row), `docs/terminal-split/01`, `02`, `06`, `07` (the zoom mentions), `DEC-0018` (an amendment line under its table), `US-0196` (rework 9's trap marked superseded), `IN-0055.md` (this packet's entry). Unchanged and still valid: `docs/agents/crate-dependency-rules.md` (no edge moved).
 
 ## Context
 
@@ -81,12 +81,12 @@ Filled in at the end.
 
 ## Plan
 
-- [ ] Records commit: this packet and the intake entry.
-- [ ] Panels: `zoomable` false, no zoom control, in the four panels; delete the `SshClientPanel` zoom code and `set_zoomed` hook.
-- [ ] Binding: delete the `toggle_zoom` row, the elevated policy entries and tests.
-- [ ] Workspace: delete `zoomed_panel`, the restore, the observer's zoom mirror, the save argument; delete the zoom-trap release and its tests (or re-point the ones that guard the strip).
-- [ ] Persistence: `DockDocument` ignores a stored `zoomed_panel` and writes none; tests for both, the fixture test re-pointed.
-- [ ] Tests: nothing can zoom (workspace); legacy file loads unzoomed and saves without it (state and workspace); `toggle_zoom` override ignored (settings-ui).
+- [x] Records commit: this packet and the intake entry.
+- [x] Panels: `zoomable` false, no zoom control, in the four panels; delete the `SshClientPanel` zoom code and `set_zoomed` hook.
+- [x] Binding: delete the `toggle_zoom` row, the elevated policy entries and tests.
+- [x] Workspace: delete `zoomed_panel`, the restore, the observer's zoom mirror, the save argument; delete the zoom-trap release and its tests (or re-point the ones that guard the strip).
+- [x] Persistence: `DockDocument` ignores a stored `zoomed_panel` and writes none; tests for both, the fixture test re-pointed.
+- [x] Tests: nothing can zoom (workspace); legacy file loads unzoomed and saves without it (state and workspace); `toggle_zoom` override ignored (settings-ui).
 - [ ] Docs, gate, debug binary.
 
 Choices left open by the request, decided here:
@@ -114,7 +114,13 @@ No decision record: it removes a feature on the owner's instruction and records 
 
 ## Evidence and Gaps
 
-Filled in at the end.
+- **Removed.** `zoomable() == false` and `zoom_control() == None` in `TerminalPanel`, `SessionPanel`, `SftpPanel` and `SshClientPanel`; the `toggle_zoom` bindable row and its two `elevated_policy` entries; `OneTermWorkspace::{zoomed_panel, restore_zoom}` and `restore_zoom_in_dock`; the `zoomed_panel` argument of `save_state`, `save_state_to` and `save_state_logged`; `OneTermTabGroupSkin::release_zoom` and its `frame` hook; `SshClientPanel::on_sftp_expanded`'s dock zoom, its `set_zoomed` hook and its `dock_area` field; `dock_util::{find_tab_node_by_panel_name, panel_name_for_tab_node}` (their only callers were the zoom restore and the zoom mirror).
+- **Persistence.** `DockDocument::zoomed_panel` is replaced by a private, never-serialized `_legacy_zoomed_panel` (`#[serde(rename = "zoomed_panel", skip_serializing)]`), so a stored zoom is taken out of the flattened dock fields at every read (the typed read, the shared update transaction and the straight `from_str` alike) and no write carries it. No schema bump. An elevated window never read it anyway (`startup_dock_document`).
+- **Tests.** `oneterm-state` 79 passed; `oneterm-actions` 4; `oneterm-settings-ui` 60 passed, 1 ignored; `oneterm-workspace` 124 passed, 3 ignored; `oneterm-terminal-view` 444 passed, 3 ignored; `oneterm-sftp-ui` 78; `oneterm-session-ui` 102 passed, 1 ignored; `oneterm-app` 26. The existing `dock_persistence` tests that used `zoomed_panel` as a marker now use a dock field (`mark` / `marker`).
+- **The zoom-trap release is dead, not kept.** `draws && group.is_zoomed()` needed a group that could be zoomed; none can: base refuses `set_zoomed(true)` for a displayed panel whose `zoomable()` is false (`reference/gpui-kit/crates/base/src/dock/tab_group.rs` `set_zoomed`), the component's `ToggleZoom` handler refuses when the control is `None`, and the startup restore is gone. The control probe in `a_panel_that_will_not_zoom_...` shows the kit does zoom a panel that says yes, so the refusal asserted for the real answer is the load-bearing one.
+- **Gate.** Recorded with the last commit of this worktree (`pwsh scripts/ci-local.ps1`).
+
+Gaps: `SshClientPanel`'s `zoomable() == false` is not pinned by a test (see Acceptance). The kit's own `ToggleZoom` action and `set_zoomed_in` still exist in the dependency; they are unreachable from a OneTerm panel but a future panel that forgets to answer `zoomable() == false` would inherit the kit default (zoomable, a menu row). On-screen check by `ui-verifier`.
 
 ## Handoff
 

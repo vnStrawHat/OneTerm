@@ -663,6 +663,12 @@ impl gpui_base::dock::Panel for TerminalPanel {
         false
     }
 
+    /// Panel zoom is gone (`US-0203`). The kit's defaults are "zoomable" and "a zoom row in the
+    /// `...` menu", so this answers no, and base refuses a zoom however it is asked for.
+    fn zoomable(&self, _: &App) -> bool {
+        false
+    }
+
     fn on_added_to(
         &mut self,
         tab_panel: WeakEntity<TabGroup>,
@@ -709,7 +715,7 @@ impl Panel for TerminalPanel {
     }
 
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
-        Some(PanelControl::Both)
+        None
     }
 
     /// Rows this panel adds to the tab bar's `...` menu, above the kit's own

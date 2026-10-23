@@ -98,7 +98,7 @@ The newly active leaf is focused (`focus_handle.focus(window, cx)`); if it is a
 | Close an empty Space | Removes it, no session to close; collapse as usual. |
 | Close the only Space | `LastSpaceClosed` → remove the tab when siblings exist; otherwise retain it as one empty placeholder. |
 | Session exits on its own (`Exited`) inside a Space | The Space stays open showing the terminal's exit state, exactly as a single terminal does today; the user closes it via Close Space. *(No auto-close — matches current tab behavior.)* |
-| Zoom (tab fullscreen) while split | Unchanged — zoom targets the containing `TabGroup`; the whole tab (with its tree) zooms as one unit. |
+| Zoom (tab fullscreen) while split | Removed (`US-0203`): there is no panel zoom. It used to target the containing `TabGroup` and zoom the whole tab (with its tree) as one unit. |
 
 ## 6. Active-Space tracking source of truth
 

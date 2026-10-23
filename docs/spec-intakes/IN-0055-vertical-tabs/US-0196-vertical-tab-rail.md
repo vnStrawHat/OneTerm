@@ -454,6 +454,8 @@ Weak points now: (1) is closed by the placeholder rule; (2) is the rule; (3) is 
 
 **Tests.** `oneterm-workspace`: `a_zoom_cannot_trap_the_rail` (a zoom on a rail group is released and the row drag then starts and reorders; failed before the fix), `the_strip_keeps_its_zoom_and_turning_the_rail_on_releases_it` (failed before the fix), and `the_header_holds_the_label_and_the_plus_and_a_zoom_changes_nothing` (was `..._zoom_keeps_it`).
 
+**Superseded 2026-10-23 by `US-0203`:** panel zoom was removed entirely (owner), so nothing can zoom, the release in `OneTermTabGroupSkin::frame` was deleted as unreachable, and `a_zoom_cannot_trap_the_rail` and `the_strip_keeps_its_zoom_and_turning_the_rail_on_releases_it` went with it (`a_panel_that_will_not_zoom_has_no_zoom_control_and_cannot_be_zoomed` replaces them).
+
 **Evidence (coder).** `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, worktree `target`): all checks passed. After the last edit: `oneterm-workspace --lib` 124 passed, 3 ignored; `oneterm-terminal-view --lib` 444 passed, 3 ignored. `cargo build -p oneterm-app` builds (`target\debug\oneterm.exe`). Open: on screen, by `ui-verifier` and the owner: with the owner's own profile (a saved zoom), reorder and the drop of a row into a free Space, collapsed and expanded, with a real mouse.
 
 ## Handoff

@@ -862,6 +862,17 @@ impl SshSessionStore {
         cx.set_global(SshSessionStoreGlobal(entity));
     }
 
+    /// Install an empty, never-written global store, for a test that needs a panel and not the
+    /// user's saved sessions (the real [`Self::init`] reads `ssh_session.json` and needs the vault).
+    #[cfg(test)]
+    pub(crate) fn install_empty_for_test(cx: &mut App) {
+        let entity = cx.new(|_| Self {
+            persist_blocked: true,
+            ..Self::with_document(LoadedSessions::empty().document)
+        });
+        cx.set_global(SshSessionStoreGlobal(entity));
+    }
+
     /// A reset wipes every saved password before `vault.json` goes
     /// (`DEC-0021`). `VaultState` must already be installed (`app::init` runs
     /// `VaultState::init` first): without it a reset would silently leave every

@@ -39,8 +39,7 @@ use super::table_delegate::SftpTableDelegate;
 // ── SftpPanel ────────────────────────────────────────────────
 
 /// Emitted when the browser expands into the Local + Remote layout or
-/// collapses back. The hosting right-dock panel zooms the dock in step, so
-/// an expanded browser fills the workspace like a zoomed terminal tab.
+/// collapses back. The hosting right-dock panel shows only the browser while it is expanded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SftpExpandedChanged {
     pub expanded: bool,
@@ -751,6 +750,12 @@ impl gpui_base::dock::Panel for SftpPanel {
     fn closable(&self, _: &App) -> bool {
         true
     }
+
+    /// Panel zoom is gone (`US-0203`). The kit's defaults are "zoomable" and "a zoom row in the
+    /// `...` menu", so this answers no, and base refuses a zoom however it is asked for.
+    fn zoomable(&self, _: &App) -> bool {
+        false
+    }
 }
 
 impl Panel for SftpPanel {
@@ -759,7 +764,7 @@ impl Panel for SftpPanel {
     }
 
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
-        Some(PanelControl::Both)
+        None
     }
 
     /// The expand/collapse toggle at the trailing end of the "SFTP Browser"
@@ -783,6 +788,24 @@ mod tests {
 
     use super::SftpPanel;
     use crate::test_backend::FakeSftpBackend;
+
+    /// `US-0203`: panel zoom is gone. The kit's defaults are "zoomable" and "a zoom row in the
+    /// `...` menu", so the panel has to answer no to both. Its expand toggle is the browser's own
+    /// layout switch and zooms nothing.
+    #[gpui::test]
+    fn the_sftp_panel_offers_no_zoom(cx: &mut TestAppContext) {
+        use gpui_component::dock::Panel as _;
+
+        cx.update(gpui_component::init);
+        cx.update(oneterm_state::AppState::init);
+        cx.update(crate::browser_state::SftpBrowserStore::init);
+        let (panel, cx) = cx.add_window_view(|window, cx| SftpPanel::new(window, cx));
+        cx.update(|_, cx| {
+            let panel = panel.read(cx);
+            assert!(!gpui_base::dock::Panel::zoomable(panel, cx));
+            assert!(panel.zoom_control(cx).is_none());
+        });
+    }
 
     /// M1: the width the kit reports on mouse-up reaches the delegate, so the
     /// next `column()` — which `refresh` is what forces the kit to re-read —

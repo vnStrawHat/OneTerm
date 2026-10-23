@@ -64,7 +64,7 @@ Run the quality gate after each step: `cargo fmt --all -- --check`,
 | R4 | **Re-subscription churn**: title/stat subscriptions must follow the active leaf. | Central `SpaceActivated` event; drop+recreate the `Subscription` on activation (06 §2). |
 | R5 | **`ResizableState` identity**: recreating states on re-render loses sizes. | One `Entity<ResizableState>` per `Split` node, created once, reused via `with_state` (05 §1). |
 | R6 | **Grafting a split source on drop** (source tab itself split). | MVP moves only the source's active leaf (03 §5); full-subtree graft deferred. |
-| R7 | **Zoom + split interaction**. | Zoom targets the containing `TabGroup`; the whole Space tree zooms as one — no special handling, but test it. |
+| R7 | **Zoom + split interaction**. | Moot since `US-0203` removed panel zoom. It targeted the containing `TabGroup`, and the whole Space tree zoomed as one. |
 
 ## 4. Resolved decisions (previously open)
 

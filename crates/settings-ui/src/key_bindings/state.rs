@@ -386,6 +386,40 @@ mod tests {
         assert!(conflicting_action(&effective, first.id, "").is_none());
     }
 
+    /// `US-0203`: a profile saved while the zoom action existed holds a `toggle_zoom` override.
+    /// `init_state` walks the rebindable actions and looks each one up in the saved map, so the
+    /// stale id has no row to land on and is dropped, not an error and not bound to anything;
+    /// the next save of the bindings leaves it out.
+    #[gpui::test]
+    fn a_saved_toggle_zoom_override_is_ignored(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let config = cx.new(|_| UiConfig {
+                key_bindings: HashMap::from([
+                    ("toggle_zoom".to_owned(), "ctrl-alt-z".to_owned()),
+                    ("quit".to_owned(), "ctrl-alt-q".to_owned()),
+                ]),
+                persist_blocked: true,
+                ..UiConfig::default()
+            });
+            cx.set_global(oneterm_settings::ui_config::UiConfigGlobal(config));
+            init_state(cx);
+            let effective = KeyBindingsState::global(cx).read(cx).effective.clone();
+            assert!(!effective.contains_key("toggle_zoom"));
+            assert!(
+                effective
+                    .values()
+                    .all(|keystroke| keystroke != "ctrl-alt-z"),
+                "the stale override binds nothing"
+            );
+            assert_eq!(effective["quit"], "ctrl-alt-q", "the other overrides stand");
+            assert_eq!(
+                overrides_from_effective(&effective),
+                HashMap::from([("quit".to_owned(), "ctrl-alt-q".to_owned())]),
+                "and the next save writes only what is bound"
+            );
+        });
+    }
+
     /// `effective` as `init_state` builds it: `override.or(default)`.
     fn effective_with(overrides: &[(&str, &str)]) -> HashMap<String, String> {
         BINDABLE_ACTIONS
