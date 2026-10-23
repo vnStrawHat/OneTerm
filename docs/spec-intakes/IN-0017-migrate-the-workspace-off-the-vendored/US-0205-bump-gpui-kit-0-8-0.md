@@ -51,14 +51,14 @@ Research: [`research-gpui-kit-0-8-0.md`](research-gpui-kit-0-8-0.md).
 
 ## Acceptance
 
-- [ ] `Cargo.toml` kit lines are `"0.8"`; `gpui` / `gpui_platform` stay `"0.3"` and resolve `0.3.9`.
+- [x] `Cargo.toml` kit lines are `"0.8"`; `gpui` / `gpui_platform` stay `"0.3"` and resolve `0.3.9`.
 - [ ] `cargo tree -i` shows one version each: `gpui-pre` / `gpui-pre-platform` 0.3.9,
   `gpui-base` / `gpui-component` / `gpui-component-macros` / `gpui-kit-assets` 0.8.0.
 - [ ] Only the kit layer (and what 0.8.0 adds or drops under it) moves in `Cargo.lock`; `gpui-fast`
   and `gpui-fast-macros` leave it.
-- [ ] `reference/gpui-kit` sits at `v0.8.0`; the three doc citations name `v0.8.0`.
-- [ ] `THIRD-PARTY-NOTICES.md` regenerated; `python scripts/third-party-notices.py --check` passes.
-- [ ] `cargo deny check licenses bans advisories` clean (or only a failure that also fails on the base commit, recorded).
+- [x] `reference/gpui-kit` sits at `v0.8.0`; the three doc citations name `v0.8.0`.
+- [x] `THIRD-PARTY-NOTICES.md` regenerated; `python scripts/third-party-notices.py --check` passes.
+- [x] `cargo deny check licenses bans advisories` clean (or only a failure that also fails on the base commit, recorded).
 - [ ] `force_width_copy_matches_gpui` passes (dependencies.md § 4 step 4; `gpui-pre` unchanged).
 - [ ] Full gate (`pwsh scripts/ci-local.ps1 --full`) green.
 - [ ] The strip "..." menu still has no zoom row: the tests in
@@ -102,9 +102,9 @@ Before completion: list docs changed; DEC-0006 rules re-read, expected unchanged
 ## Plan
 
 - [x] Records first (this packet, the `IN-0017` entry).
-- [ ] Manifest to `"0.8"`; `cargo update -p gpui-base -p gpui-component -p gpui-component-macros -p gpui-kit-assets` (+ nothing else); inspect the lock diff.
-- [ ] Re-vendor `reference/gpui-kit` at `v0.8.0`; update the three doc citations and the `dependencies.md` table.
-- [ ] Regenerate notices; `cargo deny`.
+- [x] Manifest to `"0.8"`; `cargo update -p gpui-base -p gpui-component -p gpui-component-macros -p gpui-kit-assets` (+ nothing else); inspect the lock diff.
+- [x] Re-vendor `reference/gpui-kit` at `v0.8.0`; update the three doc citations and the `dependencies.md` table.
+- [x] Regenerate notices; `cargo deny`.
 - [ ] Build, fix any fallout, run the gate, record counts.
 - [ ] Build the debug binary for ui-verifier.
 
@@ -127,4 +127,24 @@ ui-verifier walk of the list under Acceptance.
 
 ## Evidence and Gaps
 
-Pending.
+Prepared before any build (file operations and `cargo update` only):
+
+- `cargo update -p gpui-base -p gpui-component -p gpui-component-macros -p gpui-kit-assets`: exactly those four
+  packages moved 0.7.3 -> 0.8.0 (version + checksum, 8 lines of `Cargo.lock`); nothing else moved.
+  `cargo tree -q -i <pkg> --depth 0`: `gpui-pre` / `gpui-pre-platform` 0.3.9, the four kit packages 0.8.0, one version each.
+- `gpui-fast` / `gpui-fast-macros` do **not** leave `Cargo.lock` (a lock file keeps optional dependencies) and do not
+  leave `THIRD-PARTY-NOTICES.md` (`cargo metadata`, which the notices script reads, still lists the optional
+  edge from `gpui-base` / `gpui-component`). They are, however, out of the real build graph:
+  `cargo tree --target all -e all --workspace -i gpui-fast` prints nothing and no `gpui-base` feature
+  `gpui-fast` is active. The notices over-report them (conservative); `--check` passes. The script was not changed
+  (pure bump); the dispatch line "leave the lock" is met in the build graph only.
+- `reference/gpui-kit`: shallow clone of `longbridge/gpui-kit` at `v0.8.0` inside this worktree (gitignored;
+  tag `v0.8.0`, crate version 0.8.0). The shared checkout needs the same refresh.
+- `cargo deny check licenses bans advisories`: advisories ok, bans ok, licenses ok (3 `license-exception-not-encountered`
+  warnings, as before).
+- `python scripts/third-party-notices.py --check`, `verify-dependency-graph.py`, `check-doc-paths.py`, `check-english.py`: pass.
+- Doc citations updated: `docs/agents/dependencies.md` (intro, table, section 2 snippet, section 5), `docs/agents/structure.md`,
+  `docs/terminal-backend.md`, `docs/gui-layout.md` line 40 ("GPUI Kit 0.7 `Settings` widget" -> "GPUI Kit `Settings` widget").
+  Left per Q4: "the 0.7.3 kit" history wording; the `crates/theme/src/theme.rs` pin comment and `.claude/agents/coder.md` still say 0.7.
+
+Build, gate and walk: pending.
