@@ -11,4 +11,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export RUSTDOCFLAGS="-D warnings"
 cargo doc -p oneterm-vt --no-deps --all-features
-echo "file://$(pwd)/target/doc/oneterm_vt/guide/index.html"
+echo "file://${CARGO_TARGET_DIR:-$(pwd)/target}/doc/oneterm_vt/guide/index.html"
