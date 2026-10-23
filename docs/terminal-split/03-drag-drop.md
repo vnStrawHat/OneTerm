@@ -47,7 +47,8 @@ already holds a terminal is **not** droppable — this keeps the interaction
 unambiguous (no edge-aware split-on-drop) and matches the mental model "split to make
 an empty slot, then fill it".
 
-Only the empty placeholder wrapper registers the drop hooks:
+Only the empty placeholder wrapper registers the drop hooks (shown for `DragTerminalTab`; it registers the
+same pair for the dock's `DragPanel` of a terminal tab, §6):
 
 ```rust
 // Empty-Space placeholder only (Terminal leaves do NOT get these):
@@ -105,12 +106,23 @@ The MVP behavior is well-defined for the primary use case (source = single-termi
 tab): the source becomes empty → the source tab closes → its terminal now lives in
 the target Space.
 
-## 6. Why not use the dock's `DragPanel`?
+## 6. The dock's `DragPanel`, and why `DragTerminalTab` stays
 
-GPUI Kit 0.6 exposes `DragPanel`, but it represents a dock-level panel move. Accepting
-it would couple Space ownership to the dock's tab/group editing rules and could move a
+GPUI Kit exposes `DragPanel`, but it represents a dock-level panel move. Accepting
+it blindly would couple Space ownership to the dock's tab/group editing rules and could move a
 whole `TerminalPanel` instead of one active terminal leaf. `DragTerminalTab` is a
-stable OneTerm payload with exactly the source and preview data this operation needs.
+stable OneTerm payload with exactly the source and preview data this operation needs, and the
+horizontal strip's tab and the collapsed rail's icon still start it.
+
+**Amended 2026-10-23** (`US-0196` owner rework 9): a vertical-rail row is dragged whole, as the
+dock's `DragPanel` (that is how a row reorders), so an empty Space accepts that payload as well.
+The risk above is handled, not waived: `TerminalPanel::dragged_by` resolves the drag's panel id
+through the workspace dock area and accepts it only if it is a `TerminalPanel` (an SFTP or a
+session panel is neither highlighted nor moved), and `handle_panel_drop` runs the very move of
+§4 on the resolved tab, so only its active terminal leaf moves. Still only an `Empty` Space is a
+target. Because an empty Space's drop is innermost, it also bypasses the dock's own handling of
+that drag (merge or split of the centre); the dock draws its split placeholder only while a
+drag is active, so none outlives the drop.
 
 ## 7. Reference APIs used
 
