@@ -93,3 +93,70 @@ None.
 ### Still by hand (owner / ui-verifier)
 
 Unchanged from the D1 review: the on-screen walk of the `...` menu with Vertical Tabs off (tab rows only, active ticked, row click switches, Esc closes and focus returns), the terminal and SFTP context menus unchanged after opening it, and the same in a second window.
+
+## UI verification, real input (ui-verifier, sonnet/medium), build 018eccd5 and D1 build b0944bff
+
+Covers US-0198 rework 8, US-0202 and US-0203. Screenshots are kept in the coordinator's session scratchpad (r10w-shots), not in the repo.
+
+## UI verification (real input)
+
+Binary r10bin/oneterm.exe (built 018eccd5), SendInput driver, private profiles r10w-*, dark theme (Zed One Dark), 1600x918 client. Screenshots: scratchpad\r10w-shots\ (prefix by item: e1/e2 rail expanded, c1-c3 collapsed, h3-h6 strip, f font, z/k zoom+settings, s SFTP, q zoomed_panel). Pids spawned and stopped: 44704, 64752, 28360, 40892 (the last quit by its own close button).
+
+| # | Item | Result | Evidence |
+|---|------|--------|----------|
+| 1 | Rail collapsed: reorder from icon, top margin, left edge, right edge, TL/BR corners, bottom edge | PASS | c1-sheet3.png (">_" cell moved top/bottom on each of 7 drags) |
+| 1 | Collapsed drop on empty Space moves terminal in, emptied tab closes | PASS | c2-space2-mid.png (blue Space fill), c2-space2-after.png |
+| 1 | Collapsed drop on live terminal (centre, bottom, left edge zone, right edge zone) | PASS: no split, no move | c3-l3-mid.png, c3-l4-after.png |
+| 2 | Rail expanded: reorder from title, subtitle, top margin, bottom edge, TL corner | PASS | e1b-after, e1-sheet.png, e1-sheet2.png, e1-sheet3.png |
+| 2 | Expanded drop on empty Space moves terminal in | PASS | e2-space-mid.png, e2-space-after.png |
+| 2 | Expanded drop on live terminal (4 positions incl. top bar of the area) | PASS | e2-live-sheet.png |
+| 3 | Strip: reorder by title, left padding, right padding, top edge, bottom edge, with drop line | PASS | h3-sheet.png, h3-sheet2.png |
+| 3 | Strip drop on empty Space moves terminal in | PASS | h4-space-mid.png, h4-space-after.png |
+| 3 | Strip drop on live terminal (4 positions) | PASS | h5-sheet.png |
+| 3 | x closes; double-click on label opens "Rename Tab" dialog | PASS | h6-sheet.png |
+| 4 | No zoom button in tab bar / dock headers; no "Zoom" row in tab menu or terminal context menu; Shift+Esc inert; Settings search "zoom" finds nothing | PARTLY | m1.png, m2.png, z01.png, k2.png; see D1 |
+| 5 | docks.json copy with zoomed_panel starts unzoomed, drag works, saved docks.json has no zoomed_panel | PASS | q-sheet.png; docks.json after quit has keys schema_version, center, right_dock, version |
+| 6 | SFTP Expand shows dual pane inside the dock width; Collapse restores Session | PASS (no connection, "No SFTP connection" state only) | s1.png, s2c.png |
+| 7 | Ctrl+= grows, Ctrl+- shrinks, Ctrl+0 resets font | PASS | f-sheet.png |
+
+### Defects
+
+1. **D1 (Low-Medium) Disabled "Zoom In" row in the tab-list menu.** Horizontal strip, click the "..." button right of "+" in the tab bar (z5c.png): the menu shows Terminal Tabs list, a separator and a greyed "Zoom In". Expected: no zoom row anywhere (US-0203). Likely the kit's own overflow menu entry, not removed. Repro: Vertical Tabs off, open the "..." menu. (Not seen with the dock's right-hand toggle.)
+2. **D2 (Low, not reproduced) First rail drag after launch did nothing.** Expanded rail, very first drag of the session (title of row 1 to row 4, e1-title.png) changed nothing; the same drag later (e1b) and 40+ others reordered. May be first-focus/threshold timing of my driver; one occurrence, could not repeat.
+
+### Observations (not defects)
+
+- The rail's right 4 px edge is the width resizer (US-0197): a drag from x=262 resizes the rail, it is not a reorder zone. Right-margin points (x 252-255) were not testable on the 140 px rail I accidentally made; left, top, bottom and corners inside the rail reorder.
+- SFTP expanded in the dock width is cramped, as ruled (Local pane toolbar "Local C" and the Date column clip); left as the owner ruled.
+- Strip drag preview chip truncates "PowerShell 7" to "PowerSh..." (cosmetic).
+- Empty-Space hover fill is bright accent blue with dimmed hint text (h4-space-mid.png); legible as a drop cue.
+
+### Owner-only / not walked
+
+- Light theme and other dark variants of the drop cue (walked dark only).
+- Real SFTP host content in the expanded dual pane (no connection made).
+- Right-margin reorder zone of the expanded rail at full 266 px width (resizer overlaps the last 4 px).
+- Touch/pen, IME, sleep/resume, UAC elevation.
+
+## Re-walk D1 (build r11bin, head b0944bff)
+
+Fresh profiles r10w-cwd-h2 (Vertical Tabs off) and r10w-cwd-v2 (on); pids 14024 and 91520, both stopped.
+
+| Item | Result | Evidence |
+|------|--------|----------|
+| (a) "..." menu lists the tab list only, no Zoom row | PASS | w4sheet.png (3 shots after the click, header "Terminal Tabs", cmd.exe, PowerShell, PowerShell 7 with a check on the active one) |
+| (a) No visible flash of a Zoom row | PASS with a caveat: the earliest shot is about 0.3 s after the click, so a single-frame flash cannot be ruled out | w4-1..3.png |
+| (a) Mouse pick activates the tab | PASS | w5-mouse.png (cmd.exe active) |
+| (a) Keyboard pick (Down, Enter) activates the tab | PASS: three Down presses highlight PowerShell, Enter activates it | w6sheet.png |
+| (a) Esc closes the menu | PASS | w5-esc.png |
+| (b) Strip tab right-click: Rename, Duplicate, Input Channel, Close, Close Others, Close to the Right | PASS | x123.png |
+| (b) Terminal right-click: New Terminal, Duplicate Session, Split x4, Copy/Paste/Select All/Clear, Log | PASS | x123.png |
+| (b) Session list right-click: New Session | PASS | x123.png |
+| (b) SFTP panel menu (the vertical-dots button): New Folder, Upload, Rename, Delete, Refresh; SFTP row right-click: Open, Upload, Rename, Delete, New Folder, Refresh | PASS | x56.png |
+| (b) Rail context menu: Rename, Duplicate, Input Channel, Close, Close Others, Close Tabs Below | PASS | v1-railmenu.png |
+| (c) Strip reorder drag (PowerShell 7 to first) | PASS | y1-sheet.png |
+| (c) Rail reorder drag (PowerShell 7 to first) | PASS | y2-sheet.png |
+
+Defects: none. D1 is fixed.
+
+Observation (Low, kit behaviour, not new): in the "..." menu the first Down press highlights nothing; the second highlights the first tab.
