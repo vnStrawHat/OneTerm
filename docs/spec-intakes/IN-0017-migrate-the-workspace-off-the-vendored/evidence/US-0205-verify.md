@@ -1,0 +1,145 @@
+# US-0205 verify — advisor code review
+
+Date: 2026-10-23
+Reviewer: advisor (read-only: no cargo, no GUI, no test run; the shared `target/` was busy)
+Range: `git diff 2dc3e1f0 bd11fa32` on branch `worktree-agent-a3006be724356a35a`
+Owner rulings applied: IN-0017 home, pure bump, Windows-only walk, keep "0.7.3 kit" history wording, no upstream request about the zoom row.
+
+## Verdict: PASS with defects
+
+The manifest, lock, notices and the three tag citations are correct and complete; no OneTerm source
+changes and none are needed. The defects are records only (the packet inherits a wrong claim from the
+research note) plus one stale version citation outside the packet's listed scope.
+
+## What was checked and how
+
+| Attack item | Method | Result |
+|---|---|---|
+| (a) lock diff | `git diff` of `Cargo.lock`; sha256 of the four `.crate` files in `.cargo-home/registry/cache` against the lock checksums (python, no cargo) | Exactly 8 lines moved (version + checksum of `gpui-base`, `gpui-component`, `gpui-component-macros`, `gpui-kit-assets`); all four checksums match the downloaded crates; the dependency lists of those four entries are byte-identical between 0.7.3 and 0.8.0 |
+| (a) feature sets | `diff` of `crates/{base,component,assets}/Cargo.toml` between the `v0.7.3` checkout (main) and the `v0.8.0` clone (worktree); the registry manifests `gpui-base-0.7.3/Cargo.toml:89-93` and `gpui-component-0.7.3/Cargo.toml:308-312` | No `default` feature in either tag; `gpui-fast` is `optional = true` in **both** 0.7.3 and 0.8.0 (base, component, assets). The only manifest change is the new optional `syntect` feature. OneTerm never had `gpui-fast` on, so no fast path is lost |
+| (b) docs | `python scripts/check-english.py`, `python scripts/check-doc-paths.py`; grep for `0.7` in the cited docs and `crates/theme/src/theme.rs` | Both checks pass. `dependencies.md` intro, table, section 2 snippet, section 5 tag; `structure.md:230`; `terminal-backend.md:1257` all say 0.8 / `v0.8.0`. `gui-layout.md:40` rewording is a generic reference, not the Q4 history wording (`:59`, `:73` kept). The `theme.rs:629` pin comment is history (the test passed under 0.8.0). `.claude/agents/coder.md:8` still says "gpui-component 0.7" (defect 2) |
+| (c) notices | `scripts/third-party-notices.py:181-197` (`reachable_from` prunes dev edges only); `THIRD-PARTY-NOTICES.md:964` count | Count unchanged at 866; only the four version cells moved. `gpui-fast` / `gpui-fast-macros` were listed at 0.7.3 too (optional-off then as well), so the over-report is pre-existing, not introduced here. Apache-2.0, already allow-listed: no licence-compliance problem. Policy: `dependencies.md:89` calls the file "the default graph"; that holds for workspace-member features but `cargo metadata`'s resolve keeps optional deps of registry packages, which the script cannot see (`dep_kinds` carries `kind` and `target` only). Not a defect of this packet; see note 4 |
+| (d) `PopupMenu::rebuild` | `diff` of `component/src/menu/popup_menu.rs` and `component/src/dock/tab_panel.rs` between tags | `rebuild` (`popup_menu.rs:755-766` at v0.8.0) is unchanged; the only menu change is that item click handlers now receive the real `ClickEvent` instead of a default one. `tab_panel.rs` still appends the zoom row unconditionally; its diff is `DockToggleEvent` wiring and tests. The `tab_title.rs:983-1010` strip keeps its semantics |
+| (e) release notes | `reference/gpui-kit/release-notes.md` at `v0.8.0` (worktree clone), full breaking-changes section plus the component list | See note 3: the kit `Tree` (Session panel) changed in two ways the research did not name |
+
+## Defects
+
+1. **Low — packet records carry an unmeetable acceptance line.** `US-0205-bump-gpui-kit-0-8-0.md`
+   Scope ("`gpui-fast` and `gpui-fast-macros` leave the lock") and Acceptance ("`gpui-fast` and
+   `gpui-fast-macros` leave it", left unticked) restate research section 1.7 / 2.1 / 5, which said
+   `gpui-fast` was mandatory at 0.7.3. It was optional at both tags (registry manifests cited above);
+   the release note's "optional again" is relative to the kit's `main` between tags, not to 0.7.3.
+   The coder's evidence paragraph already says this correctly. Fix shape: reword both lines to "only
+   the four kit packages move; `gpui-fast` / `gpui-fast-macros` stay as optional, inactive entries,
+   as at 0.7.3" and tick them; tick the `cargo tree -i` line too (the evidence records the run).
+   The research note is corrected by this file (section "Research corrections").
+2. **Low — stale version citation.** `.claude/agents/coder.md:8` says "gpui-component 0.7 at
+   `reference/gpui-kit`". Fix shape: "0.8". Coordinator-owned file; one word.
+
+## Notes (not defects)
+
+3. **Session tree behaviour the research under-weighted.** `gpui_base::tree` at v0.8.0 moves entry
+   select / toggle from mouse-down to click (`base/src/tree.rs:471-475`, PR 3567: "a press that is
+   dragged away leaves the entry alone"; content click handlers run first and see the previous
+   selection) and `gpui_component::tree` wraps the list in `ScrollBounce` (`component/src/tree.rs:125-129`),
+   so the wheel over the Session tree is now owned by the wrapper (bounce itself stays off on
+   Windows). OneTerm's rows (`crates/session-ui/src/tree_render.rs:208-230`, `:289-326`) keep their
+   own mouse-down handlers for highlight and right / middle selection, and the double-click path
+   reads the store by id, not the selection, so no code change is needed. Add to the Windows walk:
+   wheel-scroll a long Session tree; left-click a group toggles it; click a session then Enter /
+   Delete act on that session; press-and-drag-away leaves selection and expansion alone.
+4. **Notices over-report** (coder's weakest point 1): acceptable, pre-existing, and outside a pure
+   bump. If the owner wants the file to match the linked graph, that is its own packet (filter the
+   `cargo metadata` walk against `cargo tree -e normal,build --prefix none`), not this one.
+5. **Nested-context-menu rule** (coder's weakest point 3): it is a change to the kit's
+   `TestWindowExt` test harness (`right_click` opens only the innermost menu); OneTerm implements no
+   `TestWindowExt`, so the strip-menu tests are not exposed and no further proof is owed.
+6. **Textarea wheel capture** (PR 3484): a wheel over a multi-line text input that can scroll no longer
+   reaches the page around it. Worth one row in the walk on a dialog that has a textarea (startup
+   command, `IN-0051`).
+7. No pinned test added: no code defect was found, and the review ran no cargo.
+
+## Research corrections
+
+`research-gpui-kit-0-8-0.md` section 1.7, 2.1 (`gpui-fast` row), 2.2 #2 and section 5 (notices row):
+`gpui-fast` 0.1.10 is an optional, inactive dependency at **both** 0.7.3 and 0.8.0; it does not leave
+`Cargo.lock` or `THIRD-PARTY-NOTICES.md`, and the notices regeneration changes only the four kit
+version cells. Everything else in the note stands.
+
+## Still to check by hand (owner / ui-verifier, Windows)
+
+- The packet's walk list, plus notes 3 and 6 above.
+- Refresh the shared `reference/gpui-kit` to `v0.8.0` after merge (the worktree clone is gitignored).
+
+## UI verification (Windows, real input)
+
+Verifier: ui-verifier, 2026-10-23, head `6f249840`, binary `scratchpad/r12bin/oneterm.exe` (kit 0.8.0), private
+profile (`USERPROFILE` + cwd in scratch, 41 saved sessions in 8 groups, loopback `sftp-dev-server` on :2299),
+SendInput driver with wheel and unicode text. Screenshots: `scratchpad/r12w-shots/r12w-*.png`.
+
+**Walk ABORTED at the SFTP step: the Windows desktop locked (LogonUI appeared in session 1, `CopyFromScreen`
+"The handle is invalid").** My app and server pids were stopped. Not all items walked; verdict is partial.
+Note: a LogonUI in session 21 (another session) was already present at the start; session 1 had none until the lock.
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1 | SFTP dual pane (loopback, 86 remote rows, 62 local rows) | PASS | |
+| 1a | Home / End select first / last row, remote pane (row bg 37,41,49 vs 35,39,46 on the first / last row) | PASS | 15, 16, m4 |
+| 1b | Home / End, local pane | PASS | 17, 18, 23, 24, m6 |
+| 1c | Wheel scrolls each pane (remote down 6 / up 3 notches consistent; local down 5), the other pane stays put | PASS | 19, 20, 22, m5, m6 |
+| 1d | Row click selects; double-click navigates into a dir | NOT WALKED (lock hit during the double-click shot; click verified, double-click unverified) | |
+| 2 | Session tree (41 sessions) | PARTLY | |
+| 2a | Wheel scrolls the long tree smoothly | PASS | 03 |
+| 2b | Left-click a group toggles it (collapse and expand) | PASS | 04, 05, m1 |
+| 2c | Click a session selects it (subtle row highlight); double-click opens the connect dialog; connect + host-key dialog + toast "Connected to ..." work | PASS | 06, 09, 10, 11 |
+| 2d | Enter / Delete on the selected session | NOT APPLICABLE as written: `delete_session` / `open_session` have no default key binding (`key_bindings_actions.rs`, `default: None`), so both keys did nothing, as before the bump (no baseline run). Delete is reachable from the context menu only; that path NOT WALKED | 07, 08 |
+| 2e | Press-and-drag-away leaves selection and expansion alone | NOT WALKED | |
+| 2f | Right-click menu and wheel over it | NOT WALKED | |
+| 3 | Settings window (Select dropdowns, long page wheel, search) | NOT WALKED | |
+| 4 | Strip "..." menu, no Zoom row (Vertical Tabs OFF) | NOT WALKED | |
+| 5 | Rename Tab dialog, startup-command textarea wheel, toast dismiss | NOT WALKED. Toast "Connected to ..." did appear (11) and was gone after about 5 s (12) | 11, 12 |
+| 6 | Rail and strip reorder drags | NOT WALKED | |
+| 7 | Light / dark regressions, icons, clipped text | NOT WALKED for light; dark main window, rail, session panel, status bar, dual-pane SFTP all looked correct with no missing icons | 01, 02, 13 |
+
+### Observations (no defect against the bump)
+
+1. The dual-pane SFTP view inside the 480 px right dock is cramped: headers "Date Modified" and the Remote path
+   field clip. The dock cannot be widened beyond about 560 px by dragging. Likely pre-existing layout, not a 0.8.0 effect
+   (not compared with a baseline).
+2. Group rows show no selection highlight after a click; sessions do. Not compared with 0.7.3.
+
+### Defects
+
+None found in the walked items.
+
+### Owner-only / still to walk (needs an unlocked desktop)
+
+Items 1d, 2d (context menu Delete), 2e, 2f, 3, 4, 5, 6 and the light theme of 7. Re-run with the same profile
+(`scratchpad/r12w-cwd`, `r12w-home`) once the desktop stays unlocked.
+
+### Re-walk (desktop unlocked), same build and private profile
+
+Screenshots `scratchpad/r12w-shots/r12w-30..83`. Previous items 1a-1c, 2a-2c stand.
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1d | SFTP row double-click enters a directory (path becomes `/dir-1`) | PASS | 47 |
+| 2d | Enter / Delete keys on a selected session | NOT A BUMP EFFECT: no default key binding (`default: None`), so the keys do nothing; Delete from the context menu was walked instead | 07, 08 |
+| 2e | Press-and-drag-away from a session row and a group row (to the terminal): session not selected, group stays expanded | PASS | 32 |
+| 2f | Right-click menu (Open, Properties, Duplicate, Move to Group submenu, New Session, Delete); wheel over it does not scroll the tree behind; Esc closes menu and submenu | PASS | 33, 34, 35, 36 |
+| 2g | Context-menu Delete opens the confirmation naming the right-clicked session; confirming removes it and shows the toast "SSH session deleted." | PASS | 37, 40 |
+| 3 | Settings: Select opens, wheel scrolls its list (page behind stays), keyboard Down + Enter picks (Fahrenheit), mouse pick (Light), Esc closes; long page scrolls with the wheel; search "font" filters to General > UI Font Size and Terminal; clearing restores | PASS | 51-59, 82 |
+| 4 | Strip "..." menu (Vertical Tabs off): "Terminal Tabs" header and tab rows only, no Zoom row; mouse pick activates the tab; keyboard pick works; Esc closes. Tab right-click menu also has no Zoom row | PASS | 65, 71, 73, 74 |
+| 5 | Rename Tab dialog opens, takes text, Esc cancels. Toasts "Connected to ..." and "SSH session deleted." appear and dismiss. Edit SSH Session dialog: wheel over the form scrolls the form (not the page); Advanced expands | PASS. The startup-command dialog with a multi-line input does not exist at this head (no startup-command UI or multi-line input in `crates/`), so the textarea-wheel check is NOT APPLICABLE | 38, 41, 75, 78, 79 |
+| 6 | Rail reorder drag (Vertical Tabs on): ghost card shown, order changes; strip reorder drag: ghost shown, dropped tab moves to first | PASS | 61-63, 80, 81 |
+| 7 | Light theme (Zed One Light): main window title bar, strip, session tree, status bar, terminal, and the Settings window all render with readable text, no missing icons, no clipping | PASS | 82, 83 |
+
+### Observations (not defects against the bump)
+
+1. First Down in the strip "..." menu highlights nothing visible; the second Down lands on the first row (kit menu focus; not compared with 0.7.3).
+2. Once, a click on a dialog button right after the dialog opened was ignored (Delete confirm, shot 38/39); a second click worked. Not reproduced for other dialogs.
+3. Once, after a failed connect (host key changed, new loopback server key) and Esc, a retry showed "Connected to bravo-host-1" instead of the session double-clicked (loop-sftp); an immediate repeat connected the right session (46). Cause unclear (possibly my stray click while a modal was changing); not reproduced.
+4. In the Fahrenheit theme the context-menu Delete row (danger colour) is very dark on black and looks disabled; a theme contrast matter, not a kit change.
+5. Narrow-dock dual-pane SFTP clipping (earlier observation 1) unchanged.
+
+Verdict: the UI meets the walk list; no defects found. Owner-only: UAC/real hosts untouched; startup-command textarea wheel (feature absent).
