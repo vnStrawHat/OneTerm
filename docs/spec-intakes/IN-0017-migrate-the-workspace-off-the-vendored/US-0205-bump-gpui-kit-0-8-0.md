@@ -36,7 +36,7 @@ Research: [`research-gpui-kit-0-8-0.md`](research-gpui-kit-0-8-0.md).
   on the kit layers only); any compile or behaviour fix-up 0.8.0 forces (expected none);
   `reference/gpui-kit` re-vendored at tag `v0.8.0`; tag citations in `docs/agents/dependencies.md`,
   `docs/agents/structure.md` (~line 230) and `docs/terminal-backend.md` (~line 1257);
-  `THIRD-PARTY-NOTICES.md` regenerated (`gpui-fast` and `gpui-fast-macros` leave the lock);
+  `THIRD-PARTY-NOTICES.md` regenerated (only the four kit packages move; `gpui-fast` / `gpui-fast-macros` stay as optional, inactive entries, as at 0.7.3);
   `cargo deny check licenses bans advisories`.
 - [x] Out of scope (owner ruling Q2, pure bump): adopting any 0.8.0 feature — `DataTable::fit_col`
   and double-click auto-fit, `DockToggleEvent`, `ScrollableMask::vertical_wheel`, `fixed_cols_border`,
@@ -52,10 +52,10 @@ Research: [`research-gpui-kit-0-8-0.md`](research-gpui-kit-0-8-0.md).
 ## Acceptance
 
 - [x] `Cargo.toml` kit lines are `"0.8"`; `gpui` / `gpui_platform` stay `"0.3"` and resolve `0.3.9`.
-- [ ] `cargo tree -i` shows one version each: `gpui-pre` / `gpui-pre-platform` 0.3.9,
+- [x] `cargo tree -i` shows one version each: `gpui-pre` / `gpui-pre-platform` 0.3.9,
   `gpui-base` / `gpui-component` / `gpui-component-macros` / `gpui-kit-assets` 0.8.0.
-- [ ] Only the kit layer (and what 0.8.0 adds or drops under it) moves in `Cargo.lock`; `gpui-fast`
-  and `gpui-fast-macros` leave it.
+- [x] Only the four kit packages move in `Cargo.lock`; `gpui-fast` / `gpui-fast-macros` stay as
+  optional, inactive entries, as at 0.7.3.
 - [x] `reference/gpui-kit` sits at `v0.8.0`; the three doc citations name `v0.8.0`.
 - [x] `THIRD-PARTY-NOTICES.md` regenerated; `python scripts/third-party-notices.py --check` passes.
 - [x] `cargo deny check licenses bans advisories` clean (or only a failure that also fails on the base commit, recorded).
@@ -67,7 +67,12 @@ Research: [`research-gpui-kit-0-8-0.md`](research-gpui-kit-0-8-0.md).
 - [ ] ui-verifier Windows walk (Q3): SFTP table Home / End select the first / last row and the wheel
   works in both panes; Session tree context-menu wheel; Settings `Select` dropdowns and a long
   settings page scroll; tab-strip "..." menu (tab rows only, no zoom row); one dialog; one toast;
-  rail and strip drag-reorder smoke.
+  rail and strip drag-reorder smoke. Added after the advisor review: (a) Session tree: wheel-scroll a
+  long tree; left-click a group toggles it; click a session then Enter / Delete act on it;
+  press-and-drag-away leaves selection and expansion alone (the kit `Tree` moved select / toggle from
+  mouse-down to click and wrapped the tree in `ScrollBounce`); (b) a dialog with a multi-line text
+  input (the startup command dialog, `IN-0051`): the wheel over the textarea scrolls the textarea,
+  not the page.
 
 ## Documentation
 
@@ -137,7 +142,7 @@ Prepared before any build (file operations and `cargo update` only):
   edge from `gpui-base` / `gpui-component`). They are, however, out of the real build graph:
   `cargo tree --target all -e all --workspace -i gpui-fast` prints nothing and no `gpui-base` feature
   `gpui-fast` is active. The notices over-report them (conservative); `--check` passes. The script was not changed
-  (pure bump); the dispatch line "leave the lock" is met in the build graph only.
+  (pure bump). The research claim that they would leave the lock was wrong: they were already optional at 0.7.3.
 - `reference/gpui-kit`: shallow clone of `longbridge/gpui-kit` at `v0.8.0` inside this worktree (gitignored;
   tag `v0.8.0`, crate version 0.8.0). The shared checkout needs the same refresh.
 - `cargo deny check licenses bans advisories`: advisories ok, bans ok, licenses ok (3 `license-exception-not-encountered`
