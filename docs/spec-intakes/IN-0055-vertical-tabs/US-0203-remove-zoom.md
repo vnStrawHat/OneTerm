@@ -51,7 +51,7 @@ Persistence: a `docks.json` that holds `zoomed_panel` (every file written by an 
 - [x] The SSH Client panel has no dock zoom (`on_sftp_expanded`, `set_zoomed` and the `zoomable` override that said yes are gone); the SFTP expand toggle still switches the browser to its Local + Remote view (the sftp-ui tests are unchanged and pass; the expand tooltip no longer says "across the workspace").
 - [x] The zoom-trap release, `release_zoom`, and the tests that exist only for it (`a_zoom_cannot_trap_the_rail`, `the_strip_keeps_its_zoom_and_turning_the_rail_on_releases_it`) are deleted; the reorder tests of the rail still pass.
 - [x] Docs say the same; no live doc names a zoom control, the `shift-escape` binding or `zoomed_panel` as current behaviour (history documents keep it).
-- [ ] Full `pwsh scripts/ci-local.ps1` passes.
+- [x] Full `pwsh scripts/ci-local.ps1` passes.
 - [ ] On screen, by `ui-verifier`: no Maximize / Minimize button in the strip toolbar, no "Zoom" row in the `...` menu, `Shift+Esc` does nothing, the SFTP expand toggle in the right dock, a profile whose `docks.json` holds `zoomed_panel` starts unzoomed.
 
 ## Documentation
@@ -105,11 +105,11 @@ No decision record: it removes a feature on the owner's instruction and records 
 `cargo test -p oneterm-state`, `-p oneterm-workspace`, `-p oneterm-settings-ui`, `-p oneterm-actions`, `-p oneterm-app` (and `-p oneterm-sftp-ui` / `-p oneterm-session-ui` / `-p oneterm-terminal-view`, which only lose an override); the three `--ignored --test-threads=1` lines (the elevation policy tests are in them); fmt; clippy; `python scripts/check-doc-paths.py`, `check-english.py`; the full `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`); the debug app for `ui-verifier`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
@@ -118,7 +118,8 @@ No decision record: it removes a feature on the owner's instruction and records 
 - **Persistence.** `DockDocument::zoomed_panel` is replaced by a private, never-serialized `_legacy_zoomed_panel` (`#[serde(rename = "zoomed_panel", skip_serializing)]`), so a stored zoom is taken out of the flattened dock fields at every read (the typed read, the shared update transaction and the straight `from_str` alike) and no write carries it. No schema bump. An elevated window never read it anyway (`startup_dock_document`).
 - **Tests.** `oneterm-state` 79 passed; `oneterm-actions` 4; `oneterm-settings-ui` 60 passed, 1 ignored; `oneterm-workspace` 124 passed, 3 ignored; `oneterm-terminal-view` 444 passed, 3 ignored; `oneterm-sftp-ui` 78; `oneterm-session-ui` 102 passed, 1 ignored; `oneterm-app` 26. The existing `dock_persistence` tests that used `zoomed_panel` as a marker now use a dock field (`mark` / `marker`).
 - **The zoom-trap release is dead, not kept.** `draws && group.is_zoomed()` needed a group that could be zoomed; none can: base refuses `set_zoomed(true)` for a displayed panel whose `zoomable()` is false (`reference/gpui-kit/crates/base/src/dock/tab_group.rs` `set_zoomed`), the component's `ToggleZoom` handler refuses when the control is `None`, and the startup restore is gone. The control probe in `a_panel_that_will_not_zoom_...` shows the kit does zoom a panel that says yes, so the refusal asserted for the real answer is the load-bearing one.
-- **Gate.** Recorded with the last commit of this worktree (`pwsh scripts/ci-local.ps1`).
+- **Gate.** `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, the worktree's own `target`), run once on the final tree of the three packets (after `US-0203`): all checks passed. `cargo test --workspace` 2567 passed, 0 failed, 19 ignored; the three `--ignored --test-threads=1` lines (`oneterm-workspace` 3, `oneterm-session-ui` 1, `oneterm-settings-ui` 1) passed; `oneterm-vt` `vt-paranoid` 869, `regex` 882, `no-default-features` 829 passed; `check-ignored-tests.py`, `verify-dependency-graph.py`, `check-doc-paths.py` (219 paths), `check-english.py` (1157 files), `check-theme-contrast.py` (2067 pairings, the five accepted `KNOWN_BELOW` rows unchanged) and the notices check passed. A comment-only edit followed (`tab_rail.rs`, one test doc line); `cargo fmt --check` and `cargo build -p oneterm-app` were re-run after it. Debug binary: `target\debug\oneterm.exe` in the worktree.
+- **Real binary, no input.** A scratch profile (cwd and `USERPROFILE` in the scratchpad) holding the 0.5.2 fixture as `target/docks.json` (it stores `"zoomed_panel": "terminal"`) and a `ui_config.json` with a stale `toggle_zoom` override: the debug build started, ran 12 s, and its next `docks.json` had no `zoomed_panel`; the `ui_config.json` was left as it was (it is rewritten, without the stale id, the next time the bindings are saved). The pid was stopped.
 
 Gaps: `SshClientPanel`'s `zoomable() == false` is not pinned by a test (see Acceptance). The kit's own `ToggleZoom` action and `set_zoomed_in` still exist in the dependency; they are unreachable from a OneTerm panel but a future panel that forgets to answer `zoomable() == false` would inherit the kit default (zoomable, a menu row). On-screen check by `ui-verifier`.
 

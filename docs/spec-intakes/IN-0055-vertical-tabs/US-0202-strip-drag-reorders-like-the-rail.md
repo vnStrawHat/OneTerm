@@ -45,7 +45,7 @@ After this packet and `US-0198` rework 8 nothing starts `DragTerminalTab` any mo
 - [x] A strip tab dragged by its title onto an empty Space moves its active terminal in and removes the emptied tab (`verify_the_empty_space_still_wins_over_the_terminal_root_catch_all`, now grabbing the tab by its title, with real terminal panels; the move itself is `a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal`), and dropped on a Space that holds a terminal it changes nothing (the same test, first half, and `a_foreign_dock_panel_dropped_on_terminal_content_never_splits_the_centre`).
 - [x] `DragTerminalTab`, `start_tab_drag`, the Space's `DragTerminalTab` drag-over / drop handler and `TerminalPanel::handle_tab_drop` are deleted (no source remained after `US-0198` rework 8 and this packet); `cargo clippy` is clean (no dead code).
 - [x] The docs say the same.
-- [ ] Full `pwsh scripts/ci-local.ps1` passes.
+- [x] Full `pwsh scripts/ci-local.ps1` passes.
 - [ ] On screen, by `ui-verifier`: drag a strip tab by its title to reorder; drag it onto an empty Space.
 
 ## Documentation
@@ -93,18 +93,18 @@ No decision record: it applies the rule `US-0196` rework 9 already set for the r
 `cargo test -p oneterm-terminal-view`, `-p oneterm-workspace`; fmt; clippy; the full `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`); a walk of the debug build with `SendInput` on a window the coder spawns (a drag by the title, many grab points); the debug app for `ui-verifier`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
 - **Tests.** `oneterm-terminal-view --lib` 443 passed, 3 ignored (was 444: the occupied-Space test went into the panel-drop test); `oneterm-workspace --lib` 125 passed, 3 ignored. New or re-pointed: `the_strip_row_starts_no_tab_drag_of_its_own` (label, row edge and status icon of the real strip row start no drag; replaces `the_strip_row_still_drags_the_tab_into_a_space`), `a_strip_tab_dragged_by_its_title_reorders` (workspace, real skin), and the real-dock test `verify_the_empty_space_still_wins_over_the_terminal_root_catch_all` grabs the tab by its title for the drop that fills the Space. The probe panel in `tab_rail_tests.rs` lost its own drag, so it mirrors the real row in every layout.
 - **Real input.** Not walked by the coder: the machine's console session was at the Windows lock screen (`LogonUI` running, idle more than a day) for the whole run, so `SendInput` could not reach a window; see the report. The gpui tests above drive the real dispatch with simulated mouse events.
-- **Gate.** Recorded with `US-0203`, the last packet of this worktree (one `pwsh scripts/ci-local.ps1` run at the end).
+- **Gate.** `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, the worktree's own `target`), run once on the final tree of the three packets (after `US-0203`): all checks passed. `cargo test --workspace` 2567 passed, 0 failed, 19 ignored; the three `--ignored --test-threads=1` lines (`oneterm-workspace` 3, `oneterm-session-ui` 1, `oneterm-settings-ui` 1) passed; `oneterm-vt` `vt-paranoid` 869, `regex` 882, `no-default-features` 829 passed; `check-ignored-tests.py`, `verify-dependency-graph.py`, `check-doc-paths.py` (219 paths), `check-english.py` (1157 files), `check-theme-contrast.py` (2067 pairings, the five accepted `KNOWN_BELOW` rows unchanged) and the notices check passed. A comment-only edit followed (`tab_rail.rs`, one test doc line); `cargo fmt --check` and `cargo build -p oneterm-app` were re-run after it. Debug binary: `target\debug\oneterm.exe` in the worktree.
 
 Gaps: on-screen check by `ui-verifier` (strip drag by the title in two themes; a drop onto an empty Space; the drop line between strip tabs).
 

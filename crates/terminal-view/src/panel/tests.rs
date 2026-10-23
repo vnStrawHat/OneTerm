@@ -1414,7 +1414,7 @@ fn drag_to_space(from: gpui::Point<gpui::Pixels>, cx: &mut VisualTestContext) ->
 
 /// In the vertical rail the row fills the width it is given and starts no drag of its own: the
 /// whole row is the rail's reorder drag (`DragPanel`, started by the rail's `Tab` around it, which
-/// an empty Space accepts too), so nothing on the row may start the `DragTerminalTab` that would
+/// an empty Space accepts too), so nothing on the row may start a drag of its own that would
 /// win the press (`IN-0055` drag priority, `US-0196` rework 9).
 #[gpui::test]
 fn the_vertical_row_fills_its_width_and_starts_no_drag_of_its_own(cx: &mut TestAppContext) {
