@@ -690,3 +690,46 @@ Horizontal strip reorder: still not observed with the driver (same as the r8 bas
 
 Defects: none new. D2 resolved.
 Owner-only: horizontal strip reorder with a real mouse; dragging a real SSH/SFTP tab over terminal content; cursor shapes.
+
+## Advisor review (zoom trap fix)
+
+Reviewed `2fb450f8` (base `d7e77fd3`) on `verify/in-0055-zoom`, in the coder's worktree, 2026-10-23.
+
+### Verdict: PASS
+
+The root cause is real and the fix is in the one place every way into a zoom passes through. Four observations, none blocking; none is a behaviour the owner's report depends on.
+
+### Gate (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, one crate per command)
+
+- `cargo test -p oneterm-workspace --lib`: 124 passed, 0 failed, 3 ignored.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- `python scripts/check-english.py`: 1155 files pass. `python scripts/check-doc-paths.py`: 219 paths pass.
+
+### The root cause, verified
+
+- `TabGroup::is_locked = constraints.is_locked() || self.zoomed`; `draggable` and `droppable` both read it (`reference/gpui-kit/crates/base/src/dock/tab_group.rs:441-460`). A zoomed group starts no `DragPanel` and takes no drop. Confirmed.
+- The kit's `ToggleZoom` handler zooms in whenever the panel offers a zoom control (`reference/gpui-kit/crates/component/src/dock/tab_panel.rs:704-714`); `TerminalPanel` offers one for the strip, so `Shift+Esc` zooms a rail group although the rail draws no button. Confirmed.
+- `OneTermWorkspace::new` restores `zoomed_panel` through `restore_zoom_in_dock` -> `DockArea::set_zoomed_in` (`crates/workspace/src/layout/workspace/mod.rs:322-325, 548-562`). Confirmed. So the owner's `"zoomed_panel": "terminal"` re-zoomed the centre on every start.
+
+### The fix, attacked
+
+1. **Loop / flicker / re-entrancy.** `frame` is called inside `TabGroup::render` for the zoomed view too (the area renders the zoomed group entity, `dock_area.rs:1565-1566`), so the hook does fire while zoomed. `window.defer` runs after the draw, outside any entity update; `set_zoomed_out` -> `set_zoom(None)` clears the area's flag and the group's (`dock_area.rs:759-773, 780-797`), notifies once, and the next frame sees `is_zoomed() == false`, so no second release is scheduled. The group's `ZoomOut` event is delivered after the update and hits `set_zoom`'s early return (`:760`). Converges in one extra frame; nothing runs every frame while unzoomed.
+2. **Racing another group's zoom.** The closure re-checks `area.zoomed_group() == Some(node)` when it runs (`dock_skin.rs:168`), so a zoom moved to another group in between is left alone. One `DockArea` per window and a `WeakEntity` per skin: a second window is independent.
+3. **Right dock SFTP zoom.** `draws_rail` requires the node to be in the centre tree (`dock_skin.rs:139-150`); while the SSH Client group is zoomed the centre group is not rendered at all, so its `frame` never runs. Untouched. `SshClientPanel::on_sftp_expanded` already uses the same deferred `set_zoomed_in` / `set_zoomed_out` pattern (`crates/app/src/ssh_client_panel.rs:112-131`), so the shape is the established one.
+4. **Focus.** `set_zoom` moves no focus; `TerminalPanel` has no `set_zoomed` override (the kit default is a no-op), so the spawned `panel.set_zoomed(true)` then `(false)` pair is harmless.
+5. **Persistence.** `DockArea::load` resets `zoomed = None` (`dock_area.rs:824`), so the restore is the only re-zoom. At startup `last_layout_state` is `None`, so the first debounced save (2 s after the observer fires on the release) writes `zoomed_panel: None` (`mod.rs:470-503`, `persistence.rs:136`); the exit saves use `self.zoomed_panel`, which the observer set to `None`. The owner's file is repaired on the first start that draws a frame. A window that never draws a frame before exit (minimised at start) keeps the zoom in the file for one more run and heals on the next.
+6. **Elevated window.** Does not read `docks.json` (`mod.rs:66`), so nothing to restore; `toggle_zoom` is allowed (`crates/actions/src/elevated_policy.rs:85`), the release runs, and the save is refused by `write_refusal` as before. Writes nothing.
+7. **Place.** The alternative, `TerminalPanel::zoomable() == false` under the rail, would stop both `ToggleZoom` and the restore (`set_zoomed` refuses an unzoomable panel, `tab_group.rs:396-398`) without a render-path hook, but the panel does not know whether its group is a centre all-terminal group, and it cannot release a zoom made on the strip before the switch. The skin already owns the rail rule and the switch flips live through it, so `frame` is the smallest place that covers all three ways in. Accepted.
+8. **Tests.** `a_zoom_cannot_trap_the_rail` drives the same `set_zoomed_in` the restore uses and then proves the drag starts and the drop reorders; `the_strip_keeps_its_zoom_and_turning_the_rail_on_releases_it` pins the strip control and the switch path. The first one's assertion `!is_zoomed()` cannot pass on `d7e77fd3`, where the old test asserted the opposite.
+
+### Observations (no defect blocks acceptance)
+
+- **O1 (Low, cosmetic, not pinned).** The packet and `gui-layout.md` say the one frame of zoomed state is "identical to the unzoomed one for a lone centre group". That holds only with the right dock closed and one centre group: a zoomed group fills the area (`dock_area.rs:1565`), so with the right dock open, or two Spaces as two centre groups, `Shift+Esc` under the rail shows one frame without the dock or the sibling group, then puts it back. One frame at 60 Hz; the owner may see a blink. Fix shape, if wanted: nothing cheap in OneTerm's layer (the kit's `ToggleZoom` handler is inside `inner.frame`); the honest fix is to word the records so they do not claim identity. Unpinned: a pin needs a single-frame capture of a right-dock selector the test file does not have.
+- **O2 (Low, pre-existing, out of this packet).** `save_layout` skips the write when the dump is unchanged (`mod.rs:489-491`) but `zoomed_panel` is not part of the dump (`dock_area.rs:895-905`), so a zoom change alone is written only by the exit hooks. For this fix it means: a user whose file already holds `zoomed_panel` and who switches Vertical Tabs on mid-session keeps the stale value on disk until exit; a crash before exit leaves it, and the next start heals it (item 5). Worth a BUG if the owner wants the strip's zoom saved promptly; not this packet's.
+- **O3 (Low, records).** `docs/gui-layout.md` Reorder bullet still ends "A zoomed group is neither draggable nor droppable ... as with the strip" (`gui-layout.md:154`), which the new Zoom bullet two lines down makes moot for the rail; and `US-0196-vertical-tab-rail.md:242` (rework 4 record) still states "a zoomed group (restored from docks.json) is not stranded" and "the rail keeps drawing in a zoomed group as before", the very claim rework 9 disproved. A one-line "superseded 2026-10-23" marker on line 242 and a trim of the Reorder sentence would keep the records consistent; `:112` names the retired test `zoom keeps the rail` in the test tally.
+- **O4 (Low, coverage).** No test runs the actual startup path (a document with `zoomed_panel: "terminal"`, Vertical Tabs on, `OneTermWorkspace::new`) through to a saved document without `zoomed_panel`. The unit test covers the same `set_zoomed_in` call and the coder's real-input reproduction covers the file; acceptable, noted for the owner's manual check.
+
+### For the owner
+
+- With your own profile (the file that held `zoomed_panel`): start, confirm an expanded row reorders and drops into a free Space, collapsed cell too; then check `target/docks.json` has no `zoomed_panel` after about two seconds or after exit.
+- Press `Shift+Esc` in the rail with the right dock open and say whether the one-frame blink (O1) is acceptable.
