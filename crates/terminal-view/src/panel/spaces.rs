@@ -12,9 +12,7 @@ use oneterm_state::AppState;
 use super::TerminalPanel;
 use super::duplicate::{Unplaced, close_unplaced};
 use super::terminal_panel::DEFAULT_TAB_TITLE;
-use crate::space::{
-    CloseOutcome, DragTerminalTab, SpaceContent, SpaceId, SpaceLeaf, SpaceTree, SplitDir,
-};
+use crate::space::{CloseOutcome, SpaceContent, SpaceId, SpaceLeaf, SpaceTree, SplitDir};
 use crate::terminal_view::TerminalView;
 
 impl TerminalPanel {
@@ -195,20 +193,6 @@ impl TerminalPanel {
         Some(view)
     }
 
-    /// Handle a Terminal Tab dropped onto empty Space `target`: move the source
-    /// tab's active terminal into this Space.
-    pub(crate) fn handle_tab_drop(
-        &mut self,
-        target: SpaceId,
-        drag: &DragTerminalTab,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(source) = drag.panel.upgrade() {
-            self.move_tab_into(target, source, window, cx);
-        }
-    }
-
     /// The terminal tab a dock drag carries: the panel the dock area holds under the drag's id,
     /// if it is a terminal panel (an SFTP or a session panel dragged over a Space is not ours to
     /// move).
@@ -218,9 +202,9 @@ impl TerminalPanel {
         panel.downcast::<Self>().ok()
     }
 
-    /// Same for the dock's own drag of a rail row or a strip tab's edge (`DragPanel`), resolved by
-    /// [`Self::dragged_by`]; any other kind of panel is ignored. Only the tab's active terminal
-    /// moves, exactly as for [`Self::handle_tab_drop`].
+    /// Handle a Terminal Tab dropped onto empty Space `target`: the dock's own drag of a strip
+    /// tab, a rail row or a collapsed cell (`DragPanel`), resolved by [`Self::dragged_by`]; any
+    /// other kind of panel is ignored. Only the tab's active terminal moves.
     pub(crate) fn handle_panel_drop(
         &mut self,
         target: SpaceId,
@@ -267,7 +251,7 @@ impl TerminalPanel {
             // Cannot happen after the guard above; if it ever does, hand the
             // terminal back to the source's active (just emptied) Space rather
             // than destroying the user's session.
-            log::error!("handle_tab_drop: target Space is no longer empty; restoring source");
+            log::error!("move_tab_into: target Space is no longer empty; restoring source");
             if is_self {
                 self.restore_dropped_view(view, window, cx);
             } else {
@@ -289,7 +273,7 @@ impl TerminalPanel {
         cx.notify();
     }
 
-    /// Put a terminal view taken by `handle_tab_drop` back into this panel's
+    /// Put a terminal view taken by `move_tab_into` back into this panel's
     /// active Space (the one `take_active_terminal_view` just emptied). Last
     /// resort only — the drop path guards the destination before taking.
     fn restore_dropped_view(
@@ -301,7 +285,7 @@ impl TerminalPanel {
         let home = self.tree.active();
         if let Err(view) = self.place_view(home, view, window, cx) {
             // Nowhere left to place it: release the session explicitly.
-            log::error!("handle_tab_drop: source Space is no longer empty; closing terminal");
+            log::error!("move_tab_into: source Space is no longer empty; closing terminal");
             view.update(cx, |view, cx| view.shutdown(cx));
             cx.notify();
         }

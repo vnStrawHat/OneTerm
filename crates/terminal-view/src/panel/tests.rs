@@ -632,52 +632,6 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
-fn tab_drop_onto_occupied_space_keeps_source_terminal(cx: &mut TestAppContext) {
-    // Regression (CORR-03): dropping a tab onto a Space that is not empty must
-    // not take the source terminal out of its tree and shut it down.
-    cx.update(gpui_component::init);
-    cx.update(crate::init);
-    cx.update(oneterm_settings::TerminalSettings::init);
-
-    let (target_session, _) = FakeTerminalSession::boxed(24, 80, "target");
-    let (target, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_spec(session_spec(target_session, "Target"), window, cx)
-    });
-    let cx: &mut VisualTestContext = cx;
-
-    let (source_session, source_probe) = FakeTerminalSession::boxed(24, 80, "source");
-    let source = cx.update(|window, cx| {
-        cx.new(|cx| TerminalPanel::from_spec(session_spec(source_session, "Source"), window, cx))
-    });
-    cx.run_until_parked();
-
-    let source_view = source.read_with(cx, |panel, _| {
-        panel
-            .tree
-            .active_terminal()
-            .expect("source panel must own a terminal")
-    });
-    let drag = crate::space::DragTerminalTab {
-        panel: source.downgrade(),
-        title: "Source".into(),
-    };
-
-    target.update_in(cx, |panel, window, cx| {
-        let occupied = panel.tree.active();
-        assert!(panel.tree.leaf_terminal(occupied).is_some());
-        panel.handle_tab_drop(occupied, &drag, window, cx);
-    });
-    cx.run_until_parked();
-
-    assert_eq!(source_probe.close_calls(), 0);
-    assert!(source_view.read_with(cx, |view, _| view.alive));
-    let still_in_source = source.read_with(cx, |panel, _| {
-        panel.tree.active_terminal().as_ref() == Some(&source_view)
-    });
-    assert!(still_in_source, "source terminal must stay in its Space");
-}
-
 /// `US-0196` rework 9: a vertical-rail row is dragged whole as the dock's `DragPanel`, and an empty
 /// Space accepts it. The terminal tab it names (found through the dock area) gives its active
 /// terminal to the Space and, left with none, is removed; a drag the dock does not know and a
@@ -744,7 +698,8 @@ fn a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal(cx: &mut Te
     target.update_in(cx, |panel, window, cx| {
         panel.handle_panel_drop(empty, &unknown, window, cx)
     });
-    // A Space that holds a terminal is not a drop target (CORR-03).
+    // A Space that holds a terminal is not a drop target (CORR-03): the drop must neither take the
+    // source's terminal nor close its session.
     target.update_in(cx, |panel, window, cx| {
         panel.handle_panel_drop(occupied, &drag, window, cx)
     });
@@ -752,6 +707,11 @@ fn a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal(cx: &mut Te
     assert!(
         still_in_source(cx),
         "neither drop took the source's terminal"
+    );
+    assert_eq!(
+        source_probe.close_calls(),
+        0,
+        "and neither closed its session"
     );
     assert_eq!(
         target.read_with(cx, |panel, _| panel.empty_space_destinations()),
@@ -1238,8 +1198,9 @@ fn the_close_following_row_names_the_direction_of_the_layout() {
     );
 }
 
-/// A tab row drawn by hand beside a drop target for `DragTerminalTab`, to see which gestures
-/// on the row start that drag.
+/// A tab row drawn by hand beside a drop target, to see which gestures on the row start a drag
+/// of their own (the kit's `Tab` and the rail's row, which start the dock's `DragPanel`, are not
+/// part of this host: nothing here may start one).
 struct TabRowHost {
     _dock_area: gpui::Entity<DockArea>,
     panel: gpui::Entity<TerminalPanel>,
@@ -1289,9 +1250,12 @@ impl gpui::Render for TabRowHost {
                     .h(gpui::px(height))
                     .child(row),
             )
-            .child(gpui::div().id("space-drop").flex_1().on_drop(
-                move |_: &crate::space::DragTerminalTab, _, _| dropped.set(dropped.get() + 1),
-            ))
+            .child(
+                gpui::div()
+                    .id("space-drop")
+                    .flex_1()
+                    .on_drop(move |_: &DragPanel, _, _| dropped.set(dropped.get() + 1)),
+            )
     }
 }
 
@@ -1460,15 +1424,30 @@ fn the_vertical_row_fills_its_width_and_starts_no_drag_of_its_own(cx: &mut TestA
     assert_eq!(dropped.get(), 0, "no tab drag reached a Space");
 }
 
-/// The strip's tab is unchanged: its content drags the tab into an empty Space.
+/// The strip's row starts no tab drag of its own either (`US-0202`): the whole tab is the kit's
+/// reorder drag, which an empty Space accepts too, so nothing on the row (the label first of all)
+/// may start a drag that would win the press and reorder nothing.
 #[gpui::test]
-fn the_strip_row_still_drags_the_tab_into_a_space(cx: &mut TestAppContext) {
+fn the_strip_row_starts_no_tab_drag_of_its_own(cx: &mut TestAppContext) {
+    use gpui::{point, px};
     use oneterm_state::TabRowLayout;
 
-    let (dropped, _, cx) = tab_row_window(cx, TabRowLayout::Horizontal);
-    let label = drawn_row(cx).label;
-    assert!(drag_to_space(label.center(), cx), "the label starts a drag");
-    assert_eq!(dropped.get(), 1, "it is the tab drag a Space accepts");
+    let (dropped, probe, cx) = tab_row_window(cx, TabRowLayout::Horizontal);
+    let shown = drawn_row(cx);
+    assert!(
+        !drag_to_space(shown.label.center(), cx),
+        "the label starts no drag of its own"
+    );
+    // Its leading edge, and (once a status shows) the status icon in front of the label.
+    let edge = point(shown.row.left() + px(2.), shown.row.center().y);
+    assert!(!drag_to_space(edge, cx), "nor does the row's edge");
+    report_done(&probe, cx);
+    let status = drawn_row(cx).status.expect("the status icon is drawn");
+    assert!(
+        !drag_to_space(status.center(), cx),
+        "nor does the status icon"
+    );
+    assert_eq!(dropped.get(), 0, "no drag reached the Space");
 }
 
 /// A collapsed cell starts no tab drag of its own anywhere, the 16 px shell icon included: the
@@ -2146,13 +2125,18 @@ fn verify_the_empty_space_still_wins_over_the_terminal_root_catch_all(cx: &mut T
         })
     };
     let area = dock_area.read_with(cx, |area, _| area.bounds());
-    // The kit's strip tab for the source: its leading padding (the row inside it starts the
-    // strip's `DragTerminalTab`, the padding the dock's `DragPanel`).
-    let drop_at = |fraction: f32, cx: &mut VisualTestContext| {
+    // The kit's strip tab for the source, grabbed by its leading padding or by its title (the
+    // middle of the tab): both start the dock's `DragPanel`, the row inside the tab starts none
+    // of its own (`US-0202`).
+    let drop_at = |fraction: f32, by_title: bool, cx: &mut VisualTestContext| {
         let tab = cx
             .debug_bounds("dock-tab-1")
             .expect("the source's strip tab is drawn");
-        let from = point(tab.left() + px(3.), tab.center().y);
+        let from = if by_title {
+            tab.center()
+        } else {
+            point(tab.left() + px(3.), tab.center().y)
+        };
         let to = point(
             area.left() + area.size.width * fraction,
             area.top() + area.size.height * 0.5,
@@ -2166,7 +2150,7 @@ fn verify_the_empty_space_still_wins_over_the_terminal_root_catch_all(cx: &mut T
         cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
         assert!(
             cx.update(|_, cx| cx.has_active_drag()),
-            "the tab's padding starts a drag"
+            "the tab starts a drag (by title: {by_title})"
         );
         cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
         cx.run_until_parked();
@@ -2174,7 +2158,7 @@ fn verify_the_empty_space_still_wins_over_the_terminal_root_catch_all(cx: &mut T
 
     // (1) On the live terminal, left edge zone: blocked. The source keeps its terminal and its
     // tab, the centre stays one group.
-    drop_at(0.15, cx);
+    drop_at(0.15, false, cx);
     assert_eq!(groups(cx), 1, "no split under a terminal");
     assert!(
         dock_area.read_with(cx, |area, _| area.panel(source_id).is_some())
@@ -2184,8 +2168,9 @@ fn verify_the_empty_space_still_wins_over_the_terminal_root_catch_all(cx: &mut T
     assert!(target.read_with(cx, |panel, _| panel.tree.leaf_terminal(empty).is_none()));
 
     // (2) On the empty Space, right half: the Space is deeper than the panel root, so it is asked
-    // first and the terminal moves in; the emptied source tab goes, its session lives on.
-    drop_at(0.85, cx);
+    // first and the terminal moves in, from the tab's title as from its padding; the emptied
+    // source tab goes, its session lives on.
+    drop_at(0.85, true, cx);
     assert!(
         target.read_with(cx, |panel, _| panel.tree.leaf_terminal(empty).is_some()),
         "the empty Space took the dragged tab's terminal"

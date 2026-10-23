@@ -10,8 +10,8 @@ Created: 2026-10-23
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -40,11 +40,11 @@ After this packet and `US-0198` rework 8 nothing starts `DragTerminalTab` any mo
 
 ## Acceptance
 
-- [ ] On the strip, a drag that starts on the title (the label), on the status icon, on the chips and on the tab's padding all start the reorder `DragPanel`; none starts a `DragTerminalTab` (terminal-view test on the real tab row, workspace test on a probe that mirrors it).
-- [ ] A strip tab dragged by its title and dropped on another tab reorders (workspace test on the real dock skin, strip layout).
-- [ ] A strip tab dragged by its title onto an empty Space moves its active terminal in and removes the emptied tab (the existing `a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal`), and dropped on a Space that holds a terminal it changes nothing (the existing `a_foreign_dock_panel_dropped_on_terminal_content_never_splits_the_centre` rule).
-- [ ] `DragTerminalTab` and its Space handler are deleted when no source remains; `cargo clippy` is clean (no dead code).
-- [ ] The docs say the same.
+- [x] On the strip, a drag that starts on the title (the label), on the status icon and on the row's edge starts no drag of its own (terminal-view test `the_strip_row_starts_no_tab_drag_of_its_own` on the real tab row), so the kit tab's `DragPanel` is what the press starts; the real dock with real terminal tabs starts it from the title and from the padding (`verify_the_empty_space_still_wins_over_the_terminal_root_catch_all`).
+- [x] A strip tab dragged by its title and dropped on another tab reorders (workspace test `a_strip_tab_dragged_by_its_title_reorders`, the real dock skin, strip layout; the same test drops it on content that takes the drop and the dock is unchanged).
+- [x] A strip tab dragged by its title onto an empty Space moves its active terminal in and removes the emptied tab (`verify_the_empty_space_still_wins_over_the_terminal_root_catch_all`, now grabbing the tab by its title, with real terminal panels; the move itself is `a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal`), and dropped on a Space that holds a terminal it changes nothing (the same test, first half, and `a_foreign_dock_panel_dropped_on_terminal_content_never_splits_the_centre`).
+- [x] `DragTerminalTab`, `start_tab_drag`, the Space's `DragTerminalTab` drag-over / drop handler and `TerminalPanel::handle_tab_drop` are deleted (no source remained after `US-0198` rework 8 and this packet); `cargo clippy` is clean (no dead code).
+- [x] The docs say the same.
 - [ ] Full `pwsh scripts/ci-local.ps1` passes.
 - [ ] On screen, by `ui-verifier`: drag a strip tab by its title to reorder; drag it onto an empty Space.
 
@@ -65,7 +65,7 @@ Reason: the contract "a Space accepts `DragTerminalTab` from the strip's title" 
 
 ### Reconciliation
 
-Filled in at the end.
+Changed: `docs/terminal-split/03-drag-drop.md` (sections 1 to 3, 4's head and 6 rewritten around the dock's `DragPanel`; the payload's history is kept in a paragraph), `05-rendering-theme.md`, `07-roadmap-risks.md` (the tree listing, step 6, R1, R2), `docs/gui-layout.md` (Reorder bullet), the HLD (diagram, the two drag rows), `IN-0055.md` (this packet's entry, the follow-up line). Unchanged and still valid: `docs/agents/structure.md` (names no payload), `docs/agents/crate-dependency-rules.md` (no edge moved).
 
 ## Context
 
@@ -74,9 +74,9 @@ Filled in at the end.
 
 ## Plan
 
-- [ ] Records commit: this packet and the intake entry.
-- [ ] `render_tab_strip` starts no drag; delete `DragTerminalTab`, `start_tab_drag`, the Space's handler and `handle_tab_drop` if no source remains (check first).
-- [ ] Tests: the strip's title reorders (workspace), the terminal-view strip-row test asserts no tab drag from any part of the row; the tests that named `DragTerminalTab` are re-pointed or deleted with it.
+- [x] Records commit: this packet and the intake entry.
+- [x] `render_tab_strip` starts no drag; delete `DragTerminalTab`, `start_tab_drag`, the Space's handler and `handle_tab_drop` if no source remains (checked: `grep DragTerminalTab crates` found the strip's row and the collapsed icon as the only sources, the latter removed by `US-0198` rework 8; the payload's only other uses were the Space's handler, `handle_tab_drop` and tests).
+- [x] Tests: the strip's title reorders (workspace), the terminal-view strip-row test asserts no tab drag from any part of the row; the tests that named `DragTerminalTab` are re-pointed or deleted with it (`tab_drop_onto_occupied_space_keeps_source_terminal` is deleted: the occupied-Space guard is now asserted by `a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal`, with the session-not-closed check moved there).
 - [ ] Docs, gate.
 
 Choices left open by the request, decided here:
@@ -102,7 +102,11 @@ No decision record: it applies the rule `US-0196` rework 9 already set for the r
 
 ## Evidence and Gaps
 
-Filled in at the end.
+- **Tests.** `oneterm-terminal-view --lib` 443 passed, 3 ignored (was 444: the occupied-Space test went into the panel-drop test); `oneterm-workspace --lib` 125 passed, 3 ignored. New or re-pointed: `the_strip_row_starts_no_tab_drag_of_its_own` (label, row edge and status icon of the real strip row start no drag; replaces `the_strip_row_still_drags_the_tab_into_a_space`), `a_strip_tab_dragged_by_its_title_reorders` (workspace, real skin), and the real-dock test `verify_the_empty_space_still_wins_over_the_terminal_root_catch_all` grabs the tab by its title for the drop that fills the Space. The probe panel in `tab_rail_tests.rs` lost its own drag, so it mirrors the real row in every layout.
+- **Real input.** Not walked by the coder: the machine's console session was at the Windows lock screen (`LogonUI` running, idle more than a day) for the whole run, so `SendInput` could not reach a window; see the report. The gpui tests above drive the real dispatch with simulated mouse events.
+- **Gate.** Recorded with `US-0203`, the last packet of this worktree (one `pwsh scripts/ci-local.ps1` run at the end).
+
+Gaps: on-screen check by `ui-verifier` (strip drag by the title in two themes; a drop onto an empty Space; the drop line between strip tabs).
 
 ## Handoff
 

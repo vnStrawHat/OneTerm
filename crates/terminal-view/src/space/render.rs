@@ -1,11 +1,10 @@
 //! Rendering of the Space tree: nested resizable groups, the bordered frame
-//! around each Space, the empty-Space placeholder (drop target + context menu),
-//! and the [`DragTerminalTab`] payload dragged from a tab title onto a Space.
+//! around each Space, and the empty-Space placeholder (drop target + context menu).
 
 use gpui::{
     AnyElement, App, Axis, Context, Div, ElementId, Entity, Hsla, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Render, Role, SharedString,
-    StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div, px,
+    IntoElement, MouseButton, ParentElement as _, Role, StatefulInteractiveElement as _,
+    Styled as _, WeakEntity, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, Sizable as _,
@@ -21,35 +20,6 @@ use super::tree::{SpaceContent, SpaceId, SpaceLeaf, SpaceNode, SpaceTree};
 use crate::input::menu::split_items;
 use crate::panel::TerminalPanel;
 use crate::theme::{channel_chip, channel_color};
-
-/// Payload dragged from a Terminal Tab title onto an empty Space.
-///
-/// GPUI Kit exposes its native `DragPanel`, but terminal Spaces use a
-/// terminal-specific payload so the drop handler can move a Space-tree view and
-/// render a terminal-title preview without coupling to dock internals. The strip's
-/// tab and the collapsed rail's icon start this one; a vertical-rail row is dragged
-/// whole as a `DragPanel`, which an empty Space accepts as well (it resolves the
-/// terminal tab behind it and runs the same move).
-#[derive(Clone)]
-pub(crate) struct DragTerminalTab {
-    /// The source terminal panel being dragged.
-    pub panel: WeakEntity<TerminalPanel>,
-    /// The tab label — shown in the small drag preview.
-    pub title: SharedString,
-}
-
-impl Render for DragTerminalTab {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .bg(cx.theme().background)
-            .border_1()
-            .border_color(cx.theme().border)
-            .text_color(cx.theme().foreground)
-            .child(self.title.clone())
-    }
-}
 
 impl SpaceTree {
     /// Render the whole tree for `panel`. `channels` is the panel's registry
@@ -245,8 +215,8 @@ fn activate_space(
     }
 }
 
-/// Render the empty-Space placeholder: centered hint text, a drop target for
-/// [`DragTerminalTab`] and for the dock's `DragPanel` of a terminal tab, and its own
+/// Render the empty-Space placeholder: centered hint text, a drop target for the dock's
+/// `DragPanel` of a terminal tab (a strip tab, a rail row or a collapsed cell), and its own
 /// context menu.
 fn render_placeholder(
     leaf: &SpaceLeaf,
@@ -283,17 +253,10 @@ fn render_placeholder(
         .child("or split, or drag a terminal tab here")
         // Clicking the placeholder activates this Space.
         .on_mouse_down(MouseButton::Left, activate_space(panel.clone(), id))
-        // Visual affordance while a valid tab-drag hovers this empty Space.
-        .drag_over::<DragTerminalTab>(|this, _, _, cx| this.bg(cx.theme().tokens.drop_target))
-        // Drop → move the dragged tab's terminal into this Space.
-        .on_drop({
-            let panel = panel.clone();
-            move |drag: &DragTerminalTab, window, cx| {
-                let _ = panel.update(cx, |p, cx| p.handle_tab_drop(id, drag, window, cx));
-            }
-        })
-        // The same, for the dock's own drag of a terminal tab: a vertical-rail row, which is
-        // dragged whole (`DragPanel`). Another kind of panel gets neither the fill nor a move.
+        // Visual affordance while a terminal tab's drag hovers this empty Space, and the drop
+        // that moves its terminal in. The dock's own drag is the only one (a strip tab, a rail
+        // row and a collapsed cell all start it); another kind of panel gets neither the fill
+        // nor a move.
         .drag_over::<DragPanel>(|this, drag, _, cx| {
             if TerminalPanel::dragged_by(drag, cx).is_some() {
                 this.bg(cx.theme().tokens.drop_target)

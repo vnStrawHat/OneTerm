@@ -11,16 +11,16 @@ As shipped (the design originally targeted the pre-restructure `crates/ui/src/vi
 crates/terminal-view/src/
 ├── panel/                   # TerminalPanel holds a SpaceTree; methods retarget to the active Space (06)
 │   ├── terminal_panel.rs    # TerminalPanel + PanelSpec + TerminalPanel::open, Panel/title impls
-│   ├── ops.rs               # split_active_at / close_space / new_terminal_here / set_active_space / handle_tab_drop
+│   ├── ops.rs               # split_active_at / close_space / new_terminal_here / set_active_space / handle_panel_drop
 │   ├── actions.rs           # context-menu action handlers (Split R/L/U/D, Close Space, …) + Render
 │   └── title.rs             # tab-title resolution
 └── space/                   # the split "Space" pane tree
-    ├── mod.rs               # re-exports (SpaceTree, SpaceId, SplitContext, SplitDir, DragTerminalTab…)
+    ├── mod.rs               # re-exports (SpaceTree, SpaceId, SplitContext, SplitDir…)
     ├── tree.rs              # SpaceTree + SplitContext: split/close/active/fill
     ├── node.rs              # SpaceNode / SpaceLeaf / SpaceSplit + tree ops (find, collapse)
     ├── ops.rs               # split() / close() / active-selection logic (02)
     ├── render.rs            # recursive render → nested h/v_resizable + borders/highlight (05)
-    ├── drag.rs              # DragTerminalTab payload (03)
+    ├── drag.rs              # (no payload of its own since `US-0202`: the dock's `DragPanel`, 03)
     └── placeholder.rs       # empty-Space placeholder + its context menu (04 §3, 05 §5)
 ```
 
@@ -43,9 +43,10 @@ re-parents existing views and calls existing `TerminalSession` methods).
 5. **Close Space + New Terminal Here.** Close Space menu item + collapse +
    last-Space-closes-tab (02, 06 §4); "New Terminal Here" in the empty-Space menu
    spawns a local shell in place (04 §3).
-6. **Drag a tab into an empty Space.** `space/drag.rs`: `DragTerminalTab` on the tab
-   title, **empty**-Space drop targets only, move-on-drop (03). **Prototype the drag
-   precedence first** (see risk R1).
+6. **Drag a tab into an empty Space.** The tab's own drag (the dock's `DragPanel`; the
+   original design used a private `DragTerminalTab` on the tab title, removed by `US-0202`),
+   **empty**-Space drop targets only, move-on-drop (03). **Prototype the drag precedence
+   first** (see risk R1).
 7. **Polish (post-MVP).** Keyboard shortcuts (04 §5), full-subtree graft on drop
    (03 §5), persistence (§6).
 
@@ -57,8 +58,8 @@ Run the quality gate after each step: `cargo fmt --all -- --check`,
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | **Drag precedence**: the terminal title's `on_drag` competes with the dock tab wrapper's native drag. | The terminal-specific builder stops propagation when the gesture starts on the title; a dedicated grip remains the fallback (the vertical rail tried one and dropped it, `US-0196` rework 9: its row is dragged whole as a `DragPanel`). |
-| R2 | **Native `DragPanel` has dock-level semantics**, not Space-leaf ownership semantics. | Keep the OneTerm-owned `DragTerminalTab` payload (03). Amended 2026-10-23: an empty Space also accepts a terminal tab's `DragPanel` (a vertical-rail row), resolved to its `TerminalPanel` and moved leaf-wise by the same code (03 §6). |
+| R1 | **Drag precedence**: the terminal title's `on_drag` competes with the dock tab wrapper's native drag. | Resolved by having no second drag (`US-0196` rework 9, `US-0198` rework 8, `US-0202`): the title starts none, and the whole tab, row or cell is the dock's `DragPanel`, which both reorders and fills an empty Space. A grip was tried and dropped. |
+| R2 | **Native `DragPanel` has dock-level semantics**, not Space-leaf ownership semantics. | An empty Space accepts a terminal tab's `DragPanel`, resolved to its `TerminalPanel` and moved leaf-wise (03 §6). The original design kept a OneTerm-owned `DragTerminalTab` payload instead; it was removed by `US-0202` once nothing started it. |
 | R3 | **Space frame vs resize handle overlap**: the handle shares the pane edge and may obscure the outer border. | Keep the outer border neutral and reserve a 1px inner gutter in layout for selection. The handle may cover the outer pixel but cannot erase the active gutter; do not add a content overlay. `resizable/panel.rs` warns against `overflow_hidden` on panels — do not set it. |
 | R4 | **Re-subscription churn**: title/stat subscriptions must follow the active leaf. | Central `SpaceActivated` event; drop+recreate the `Subscription` on activation (06 §2). |
 | R5 | **`ResizableState` identity**: recreating states on re-render loses sizes. | One `Entity<ResizableState>` per `Split` node, created once, reused via `with_state` (05 §1). |

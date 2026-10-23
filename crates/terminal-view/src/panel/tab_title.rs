@@ -36,7 +36,6 @@ use oneterm_theme::{AppIcon, notif_ext::notify};
 
 use super::TerminalPanel;
 use super::channel_menu::channel_submenu;
-use crate::space::DragTerminalTab;
 use crate::theme::channel_chip;
 
 impl TerminalPanel {
@@ -552,19 +551,7 @@ pub(super) fn new_tab_button_size(layout: TabRowLayout) -> Size {
     }
 }
 
-/// Start dragging a tab: the preview is the title chip, and the payload is what an empty Space
-/// accepts.
-fn start_tab_drag(
-    drag: &DragTerminalTab,
-    _: Point<Pixels>,
-    _: &mut Window,
-    cx: &mut App,
-) -> Entity<DragTerminalTab> {
-    cx.stop_propagation();
-    cx.new(|_| drag.clone())
-}
-
-/// Build the tab-strip row for `panel`: active bar, drag source, middle-click
+/// Build the tab-strip row for `panel`: active bar, middle-click
 /// close, recording dot, status icon, the (double-click to rename) label, and
 /// the × button. The vertical rail's row (`IN-0055`, `US-0196` rework) has two
 /// lines and no ×: the label after the chips and the dot, then the current
@@ -597,7 +584,6 @@ pub(super) fn render_tab_strip(
     let cwd = vertical.then(|| panel.tab_cwd(cx)).flatten();
     let chips = tab_chips(panel, cx);
     let tab_label = panel.tab_label(cx);
-    let drag_title: SharedString = tab_label.clone().into();
     let rename_title = tab_label.clone();
     let menu_title = tab_label.clone();
     let menu_panel = panel_entity.clone();
@@ -628,18 +614,6 @@ pub(super) fn render_tab_strip(
             }
         })
         .child(tab_label);
-
-    // What an empty Space accepts from here. A rail row and a collapsed cell start none (the
-    // whole row or cell is the rail's reorder drag, `DragPanel`, which an empty Space accepts
-    // too, `US-0196` rework 9, `US-0198` rework 8); the strip's tab starts it from the whole row.
-    let row_drag = (layout == TabRowLayout::Horizontal)
-        .then(|| {
-            tab_panel.as_ref().map(|_| DragTerminalTab {
-                panel: panel_weak.clone(),
-                title: drag_title.clone(),
-            })
-        })
-        .flatten();
 
     let row = if collapsed {
         collapsed_row(panel.tab_shell_icon(cx), fill, is_active, recording_dot)
@@ -756,9 +730,6 @@ pub(super) fn render_tab_strip(
                     window.refresh();
                 })
         })
-        // Drag the strip's tab into an empty Space with the terminal-specific
-        // payload consumed by Space-tree drop targets.
-        .when_some(row_drag, |this, drag| this.on_drag(drag, start_tab_drag))
         // Middle-click on a tab → close that tab.
         .on_mouse_down(MouseButton::Middle, {
             let panel = panel_entity.clone();

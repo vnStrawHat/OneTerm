@@ -6,8 +6,8 @@ use std::rc::Rc;
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, Modifiers, MouseButton, ParentElement as _, Pixels,
-    Point, Render, SharedString, StatefulInteractiveElement as _, Styled as _, TestAppContext,
-    VisualTestContext, Window, div, point, prelude::FluentBuilder as _, px,
+    Point, Render, SharedString, Styled as _, TestAppContext, VisualTestContext, Window, div,
+    point, px,
 };
 use gpui_component::dock::{
     DockArea, DockLayout, DockPlacement, DragPanel, PaneRef, Panel, PanelControl, PanelEvent,
@@ -35,9 +35,6 @@ struct Report {
     bounds: Rc<Cell<Bounds<Pixels>>>,
     /// How many times the panel was taken out of its group (a rebuild would do this).
     removed: Rc<Cell<usize>>,
-    /// How many times its title row started its own drag (the horizontal strip's row does; a
-    /// vertical row and a collapsed cell do not).
-    title_drags: Rc<Cell<usize>>,
     /// How many dock drags were dropped on its content, as an empty Space accepts them.
     content_drops: Rc<Cell<usize>>,
     /// What the row layout was while its title was built.
@@ -56,16 +53,6 @@ struct Probe {
     title_row: bool,
     report: Report,
     focus_handle: FocusHandle,
-}
-
-/// The payload of the probe title row's own drag, standing in for `DragTerminalTab`.
-#[derive(Clone)]
-struct ProbeDrag;
-
-impl Render for ProbeDrag {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_4()
-    }
 }
 
 impl Probe {
@@ -103,13 +90,12 @@ impl Panel for Probe {
         (!self.title_row).then(|| self.label.clone())
     }
 
-    // Like the real row: the strip's row starts the tab drag from its whole content; a vertical
-    // row and a collapsed cell start none, and the whole row or cell is the rail's reorder drag
-    // (`US-0196` rework 9, `US-0198` rework 8).
+    // Like the real row: no layout starts a drag of its own on the title; the strip's tab, the
+    // rail's row and a collapsed cell are all the dock's `DragPanel` (`US-0196` rework 9,
+    // `US-0198` rework 8, `US-0202`).
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let layout = TabRowLayout::current(cx);
         self.report.title_layout.set(Some(layout));
-        let started = self.report.title_drags.clone();
         let label = self.label.clone();
         let selector = format!("probe-row-{label}");
         let status = format!("probe-status-{label}");
@@ -134,12 +120,6 @@ impl Panel for Probe {
             .flex_1()
             .h_full()
             .items_center()
-            .when(layout == TabRowLayout::Horizontal, |this| {
-                this.on_drag(ProbeDrag, move |drag, _, _, cx| {
-                    started.set(started.get() + 1);
-                    cx.new(|_| drag.clone())
-                })
-            })
             .child(div().flex_1().child(label))
             // Like the real row's trailing status icon: plain row content.
             .child(
@@ -878,8 +858,7 @@ fn the_strip_keeps_its_zoom_and_turning_the_rail_on_releases_it(cx: &mut TestApp
 
 /// Owner rework 9: the whole expanded row is the reorder drag (`DragPanel`) wherever the press
 /// lands, on the title, on its trailing status icon and on the row's left edge where the grip
-/// used to be, and the vertical row starts no drag of its own (the strip's row does, and a
-/// collapsed cell's icon, see the other tests).
+/// used to be; no title element of the row starts a drag of its own.
 #[gpui::test]
 fn the_whole_expanded_row_is_the_reorder_drag(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
@@ -929,11 +908,6 @@ fn the_whole_expanded_row_is_the_reorder_drag(cx: &mut TestAppContext) {
         original,
         "the left edge reorders"
     );
-    assert_eq!(
-        report.title_drags.get(),
-        0,
-        "no gesture on a vertical row starts the title's own drag"
-    );
 }
 
 /// Owner rework 9: a row dragged onto the terminal area is the dock's `DragPanel`, and what lies
@@ -973,6 +947,54 @@ fn a_row_dropped_on_a_content_that_takes_it_changes_nothing_in_the_dock(cx: &mut
     assert_eq!(report.content_drops.get(), 1, "the content took the drop");
     assert_eq!(centre_tabs(&window.area, cx).0, original);
     assert_eq!(groups(cx), 1, "the dock did not split the centre");
+}
+
+/// `US-0202` (owner, 2026-10-23): the horizontal strip behaves like the rail. Dragging a strip tab
+/// by its title (the label, which used to start a drag of its own that reordered nothing) is the
+/// kit's reorder drag: dropped on another tab it lands in that tab's slot, and dropped on content
+/// that takes it (the probe stands in for an empty Space) it changes nothing in the dock.
+#[gpui::test]
+fn a_strip_tab_dragged_by_its_title_reorders(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, false);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        true,
+        &report,
+        cx,
+    );
+    assert!(
+        bounds_of(RAIL_SELECTOR, cx).is_none(),
+        "the strip, not the rail"
+    );
+    let (original, _) = centre_tabs(&window.area, cx);
+
+    // By the title, onto the second tab: a forward drop lands after the hovered tab.
+    let title = bounds_of("probe-row-a", cx).expect("the title is drawn in the strip");
+    let onto = bounds_of("dock-tab-1", cx)
+        .expect("the second strip tab")
+        .center();
+    drag_to(title.center(), onto, cx);
+    assert!(has_active_drag(cx), "the title starts a drag");
+    release(onto, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[1], original[0], original[2]],
+        "a drag by the title reorders"
+    );
+
+    // By the title onto content that takes the drop: nothing moves in the dock.
+    let title = bounds_of("probe-row-c", cx).expect("the last title");
+    let content = report.bounds.get().center();
+    drag_to(title.center(), content, cx);
+    assert!(has_active_drag(cx));
+    release(content, cx);
+    assert_eq!(report.content_drops.get(), 1, "the content took the drop");
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[1], original[0], original[2]]
+    );
 }
 
 /// Owner ruling 2026-10-23: terminal content takes no dock drop, so the kit's split placeholder
@@ -1524,7 +1546,6 @@ fn the_whole_collapsed_cell_is_the_reorder_drag(cx: &mut TestAppContext) {
             "grabbing at ({dx}, {dy}) reorders"
         );
     }
-    assert_eq!(report.title_drags.get(), 0, "never the title's own drag");
 }
 
 /// Turning the Vertical Tabs switch off keeps the collapsed state, and on again returns to the
