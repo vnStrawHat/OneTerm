@@ -418,6 +418,26 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner report, 2026-1
 
 **Weak points (for the reviewer and the UI walk).** (1) While a row hovers an empty Space the kit's split placeholder (a half or the whole of the content, by pointer zone) is drawn under the Space's own `drop_target` fill, and the drop is a move into the Space whatever zone it shows: the two cues can disagree near an edge. (2) A `DragPanel` of a non-terminal panel dropped on an empty Space is consumed by the Space's drop (gpui takes the drag before the type check can decline), so the dock's merge or split does not happen there. (3) Dropping a row on a non-empty terminal area splits or merges the centre as the strip's edge always did; the strip's label never did. (4) The grip's root cause is reasoned from the code and the earlier walks, not reproduced.
 
+### Rework 9 after the reviews (2026-10-23): "no split by drop"
+
+Advisor PASS with one Minor, ui-verifier partly PASS (`evidence/US-0196-verify.md`, "Advisor review (rework 9)" and "UI verification (rework 9)": expanded reorder, Space drop and the collapsed strip PASS; the horizontal strip's reorder is not confirmable with posted messages, an owner check).
+
+**Owner ruling, 2026-10-23 ("Chan tach").** Dropping a dragged tab (`DragPanel`) on a **non-empty** terminal must not split or merge the dock's centre (ui-verifier D2: an early release made a second group with its own rail). Only an empty Space (a terminal tab moves into it) and the rail or strip (reorder) accept the drop. One rule for the expanded row, the collapsed cell and the strip's edge drag: terminal content never splits the dock by a drop. This supersedes weak point 3 above and turns the advisor's Defect 1 (a non-terminal panel's drag swallowed by an empty Space) into the rule, fix shape (a): documented, not forwarded.
+
+**How the block is done.** `TerminalPanel`'s root element takes `on_drop::<DragPanel>` and does nothing. gpui gives a drop to the consumer closest to the pointer and takes the drag before it asks anything (`gpui-pre-0.3.9 src/elements/div.rs:2905-2931`), so the dock's content-frame handler never runs for a drop on a terminal panel; an empty Space, being inside the panel, is still innermost and still moves the terminal in. No kit or gpui change. Foreign panels (SFTP, session) dropped on a terminal tab's content, empty Space or not, do nothing. The strip's edge drag dropped on an empty Space moves the terminal in (advisor observation 1; kept, documented in `docs/terminal-split/03-drag-drop.md` section 6).
+
+**How the placeholder is done.** `TabGroup::on_panel_drag_move` keeps tracking the pointer and sets the group's `drop_indicator` for any `DragPanel` over the content; that state is private to the kit and cannot be switched off. What the skin controls is the drawing: `OneTermTabGroupSkin::frame` (which base calls before it asks for the indicator) notes whether the group's active panel is a terminal, and `render_drop_indicator` returns nothing in that case. So no kit split placeholder tints a Space during such a drag (ui-verifier D1), and an empty Space shows only its own `drop_target` fill. Other panels keep the kit's placeholder (the control in the test). This does not touch base or the kit.
+
+**Acceptance (rework 9 after review).**
+
+- [x] A foreign tab dropped on the empty Space, and on a terminal that holds a session in the left edge zone and in the middle, leaves the centre one group (terminal-view test `a_foreign_dock_panel_dropped_on_terminal_content_never_splits_the_centre`, which replaces the advisor's pin `pin_a_foreign_dock_panel_dropped_on_an_empty_space_is_swallowed_by_it`; with the terminal panel's handler removed the second drop makes two groups and the test fails).
+- [x] The kit's split placeholder is drawn over another panel's content and not over a terminal's (workspace test `the_split_placeholder_is_drawn_over_other_content_but_not_over_a_terminal`; the SFTP control proves the selector sees it).
+- [x] The earlier tests are unchanged: a row dropped on content that takes it leaves the dock alone, an empty Space still takes a terminal tab, the collapsed strip's tests pass.
+- [x] `docs/gui-layout.md`, the HLD rows, `docs/terminal-split/03-drag-drop.md` section 6 state the rule.
+- [ ] On screen, by `ui-verifier`: a row released on a non-empty terminal (edge zones and middle) changes nothing; no tint on a neighbouring Space while hovering an empty Space; the horizontal strip's edge drag with a real mouse.
+
+Weak points now: (1) is closed by the placeholder rule; (2) is the rule; (3) is closed by the block. Left: the kit's drop state is still tracked and only its drawing is suppressed; a group that displays a terminal and later something else shows the placeholder again, as intended.
+
 **Verification plan.** `cargo test -p oneterm-workspace`, `-p oneterm-terminal-view`, `-p oneterm-state`, `-p oneterm-theme` (comment only), `python scripts/check-theme-contrast.py` (comment only), the full `pwsh scripts/ci-local.ps1`; a smoke launch of the debug build with a private profile for `ui-verifier`.
 
 ## Handoff

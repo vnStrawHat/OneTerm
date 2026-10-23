@@ -121,8 +121,19 @@ through the workspace dock area and accepts it only if it is a `TerminalPanel` (
 session panel is neither highlighted nor moved), and `handle_panel_drop` runs the very move of
 §4 on the resolved tab, so only its active terminal leaf moves. Still only an `Empty` Space is a
 target. Because an empty Space's drop is innermost, it also bypasses the dock's own handling of
-that drag (merge or split of the centre); the dock draws its split placeholder only while a
-drag is active, so none outlives the drop.
+that drag (merge or split of the centre). **Amended again 2026-10-23 (owner ruling, "no split by
+drop"): terminal content never splits or merges the dock by a drop.** The `TerminalPanel` root
+consumes every `DragPanel` released on its content with a handler that does nothing (gpui
+hands a drop to the consumer closest to the pointer and takes the drag before asking anything,
+so a `can_drop` predicate cannot decline and the dock's handler never runs), and an empty Space
+is the only inside consumer that acts. So: a terminal tab's drag (an expanded row, a collapsed
+cell, or the strip's edge drag, all `DragPanel`) dropped on an empty Space moves the terminal
+in, on anything else of a terminal tab's content does nothing; another panel kind's drag (SFTP,
+session) dropped on a terminal tab's content, empty Space or not, does nothing. This is the
+rule, not a defect: a swallowed drop beats an accidental second group with its own rail.
+OneTerm's tab-group skin also draws no split placeholder while the group displays a terminal
+(it would promise a split the drop does not do), and the dock's own filter by an active drag
+leaves none behind after a drop.
 
 ## 7. Reference APIs used
 

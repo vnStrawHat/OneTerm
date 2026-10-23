@@ -614,3 +614,30 @@ Nothing moves, closes or orphans a session; the owner's ruling is implemented as
 - Decide finding 1: keep the swallow (then a one-line rule in `03-drag-drop.md` section 6) or forward it.
 - Observation 1: is the strip's edge-drag-into-Space change wanted? It is live now with vertical tabs off.
 - On screen (ui-verifier): the placeholder-vs-fill cue near a Space edge (attack 1), reorder from title / status icon / left edge, drop below the last row, a row onto a live terminal (split or merge, nothing closed), the collapsed strip unchanged, no grip on hover.
+
+# UI verification (rework 9) - US-0196, IN-0055
+
+Binary: scratchpad r9bin\oneterm.exe (built 2026-10-22 22:21 ff.), private profile (scratch USERPROFILE + cwd, vertical_tabs on). Driver: posted messages (press, 12 moves, hold 1.6 s, release); no SendInput. Screenshots: scratchpad\r9shots\r9-*.png.
+Note: r9bin needs the x64\OpenConsole.exe folder next to conpty.dll (copied from the worktree target\debug); without it every shell dies at once (blank terminals, splits disabled). Not an app defect.
+
+## Per item
+1. Expanded reorder: PASS. Title drag (r9-03a), status-icon area x=205 forward drop lands after hovered row (r9-03b), far-left edge x=10 (r9-03c), backward drop lands before (r9-03a), drop below last row appends (r9-03d, slot highlight). Preview chip + drop line shown each time. Lone tab: no chip, no drag (r9-41).
+2. No grip on hover: PASS (r9-04-hover). Pointer shape (arrow) NOT WALKED (posted messages cannot read the cursor): owner check.
+3. Drag to Space:
+   - Row onto an empty Space: PASS (r9-08 mid/after, r9-10, r9-12). Space fills solid blue, terminal moves in, emptied source tab closes, session alive (live PS prompt).
+   - Own tab's empty Space: PASS, nothing changes, nothing lost (r9-12).
+   - Cue conflict: in the centre the whole Space is one flat bright blue (placeholder text dimmed under it). At the edge zone (r9-10 mid) the Space is still fully blue but the sibling Space above (not the target) is tinted blue, i.e. the kit's split placeholder is drawn over a different Space than the one that takes the drop. See D1.
+   - Row onto a NON-empty terminal (r9-11): the dock splits the centre: the dragged tab becomes its own group with its own rail beside the other, giving two Terminals rails side by side. No terminal lost (4 terminals visible), but the layout changes. See D2.
+4. Click selects (r9-13), right-click menu (Rename, Duplicate, Input Channel, Close, Close Others, Close Tabs Below) with menu-open highlight on the row (r9-15), Rename... opens dialog (r9-16), double-click on the LABEL opens Rename Tab dialog (r9-17c; double-click in the gap between title and directory lines does not), middle-click closes the row (r9-19), dragging from the label reorders and opens no rename dialog (r9-18): PASS.
+5. Collapsed strip: PASS / unchanged vs rework 8 build (baseline r9-24). Cell-edge drag reorders (r9-21), no grip, icon drag onto an empty Space moves the terminal and closes the source tab (r9-23). A collapsed-cell drag dropped on a non-empty terminal splits the centre exactly like rework 8 (r9-22, r9-24): pre-existing, same as D2.
+6. Horizontal strip: NOT CONFIRMED, identical to rework 8. With posted messages the label (and tab padding) drag shows the preview chip but no reorder happens in either r9 (r9-33..r9-40) or the r8 baseline (r9-36, r9-38, r9-39); no drop indicator. Cannot tell a driver limitation from a real defect: owner check.
+
+## Defects
+D1 (minor, cosmetic) Expanded row dragged over an empty Space near an edge: kit split placeholder tints a neighbouring Space, the target Space fills solid blue; the two cues disagree (the drop is a move into the Space regardless). Steps: split down on a split tab, drag a row to the right edge of the empty Space, hold (r9-10 mid). Packet weak point 1.
+D2 (medium, behaviour) Dropping a row on a non-empty terminal splits the dock centre into two groups with two Terminals rails (r9-11 after); the only cue while hovering is a faint tint, so a user aiming at a Space (or letting go early) can create a second rail by accident. Packet weak point 3, by design for the owner to accept or ask to suppress. No terminal lost.
+D3 (info) Drag in the horizontal strip did not reorder in either build under the posted-message driver (see item 6).
+
+## Owner-only checks
+- Cursor shape on an expanded row (arrow) and on the collapsed icon (open hand).
+- Horizontal strip reorder with a real mouse (labels and edge).
+- Real-mouse feel of the drag threshold and drop line during a fast drag; light theme and other themes were not walked.
