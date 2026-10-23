@@ -1003,6 +1003,13 @@ pub(crate) fn override_strip_menu(cx: &mut App) {
     .detach();
 }
 
+/// Whether a rebuild is armed and not yet taken (the `US-0203` rework D1 review pins that a walk
+/// with no rebuild installed leaves none behind).
+#[cfg(test)]
+pub(super) fn strip_menu_is_armed() -> bool {
+    STRIP_MENU.with(|slot| slot.borrow().is_some())
+}
+
 /// The `...` menu of a tab strip as OneTerm wants it: the tab list, and Close when the group
 /// lets the displayed tab close.
 fn strip_menu(

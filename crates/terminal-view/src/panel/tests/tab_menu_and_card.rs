@@ -521,3 +521,18 @@ fn without_the_rebuild_the_kits_strip_menu_still_has_its_zoom_row(cx: &mut TestA
         "control: the kit's menu has its zoom row: {rows:?}"
     );
 }
+
+/// Pinned by the advisor (`US-0203` rework D1 review, defect 1), not run by the advisor: opening
+/// the `...` menu with no rebuild installed arms the one-shot in `tab_list_menu` and nothing takes
+/// it, so it stays armed in this thread's local with a strong handle to the panel. The next
+/// `PopupMenu` created on the same thread with the rebuild installed, in another test, is then
+/// rewritten as this panel's tab list through an entity of a dropped `App`. Passes once the slot is
+/// disarmed when no observer takes it (or the helper clears it after the control walk).
+#[gpui::test]
+fn the_control_walk_leaves_no_strip_menu_rebuild_armed(cx: &mut TestAppContext) {
+    let _ = strip_menu_rows(cx, false);
+    assert!(
+        !crate::panel::tab_title::strip_menu_is_armed(),
+        "the one-shot rebuild is still armed after a walk with no observer installed"
+    );
+}
