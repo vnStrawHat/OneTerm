@@ -22,13 +22,12 @@ use gpui::{
 };
 use gpui_base::{Tab, Tabs};
 use gpui_component::{
-    ActiveTheme as _, ElementExt as _, Icon, Sizable as _,
+    ActiveTheme as _, ElementExt as _,
     dock::{BasePanelView, DragPanel, PanelHandle, PanelId, TabGroupContext},
     h_flex,
 };
 use oneterm_settings::{UiConfig, VerticalTabs};
 use oneterm_state::{TabMenuOpen, TabRowLayout, panel_names};
-use oneterm_theme::AppIcon;
 
 /// The narrowest and widest a rail may be, and the share of its own tab group's width it may
 /// take: the right dock's share (`RIGHT_DOCK_MAX_SHARE`), so a split centre or an open dock
@@ -66,8 +65,6 @@ pub(super) const RAIL_SELECTOR: &str = "oneterm-tab-rail";
 pub(super) const LIST_SELECTOR: &str = "oneterm-tab-rail-list";
 pub(super) const ROW_SELECTOR: &str = "oneterm-tab-rail-row";
 pub(super) const HEADER_SELECTOR: &str = "oneterm-tab-rail-header";
-pub(super) const GRIP_SELECTOR: &str = "oneterm-tab-rail-grip";
-pub(super) const GRIP_GLYPH_SELECTOR: &str = "oneterm-tab-rail-grip-glyph";
 pub(super) const HEADER_LABEL_SELECTOR: &str = "oneterm-tab-rail-header-label";
 /// The 1 px rule under the header while the list is scrolled.
 pub(super) const HEADER_RULE_SELECTOR: &str = "oneterm-tab-rail-header-rule";
@@ -92,12 +89,6 @@ pub(super) const ROW_HEIGHT: Pixels = px(TabRowLayout::VERTICAL_ROW_HEIGHT);
 /// A cell of the collapsed rail: a square as wide as the strip (the shell icon needs no second
 /// line).
 pub(super) const COLLAPSED_ROW_HEIGHT: Pixels = px(VerticalTabs::COLLAPSED_WIDTH as f32);
-/// The reorder grip: a strip on the row's left edge that is drawn over the row and takes no
-/// room from it, so the title never starts under it.
-const GRIP_WIDTH: Pixels = px(8.);
-/// How far the glyph's box (`Icon::xsmall`, 12 px) starts left of the grip's edge: the six dots
-/// of the glyph occupy the middle of their box, so this puts them in the grip's 0..6 px.
-const GRIP_GLYPH_SHIFT: f32 = 2.;
 const ACCENT_BAR_WIDTH: Pixels = px(TabRowLayout::ACCENT_BAR_WIDTH);
 const ACCENT_BAR_INSET: Pixels = px(TabRowLayout::ACCENT_BAR_INSET);
 /// How hard the selected row's fill is: the theme's `foreground` at this alpha over the rail.
@@ -141,8 +132,6 @@ struct RowPaint {
     fill: Option<gpui::Hsla>,
     /// The title.
     text: gpui::Hsla,
-    /// The secondary text: the reorder grip (the directory line is the panel's own).
-    secondary: gpui::Hsla,
 }
 
 /// How a rail row is painted in `state`, from the theme's tokens only.
@@ -156,27 +145,23 @@ struct RowPaint {
 /// filled with it would read as the page.
 ///
 /// Titles: idle `tab.foreground`, selected `tab.active.foreground`, hover halfway between them,
-/// one step dimmer than selected. Secondary text is `muted.foreground`, except on the selected
-/// fill, which it cannot always read on ([`oneterm_theme::selected_row_secondary`]).
+/// one step dimmer than selected. The directory line's colour is the panel's own
+/// ([`oneterm_theme::selected_row_secondary`] on the selected fill).
 fn row_paint(theme: &gpui_component::Theme, state: RowState) -> RowPaint {
-    let muted = theme.muted_foreground;
     match state {
         RowState::Idle => RowPaint {
             fill: None,
             text: theme.tab_foreground,
-            secondary: muted,
         },
         RowState::Hover => RowPaint {
             fill: Some(theme.foreground.opacity(HOVER_FILL_STRENGTH)),
             text: theme
                 .tab_foreground
                 .blend(theme.tab_active_foreground.opacity(HOVER_TEXT_SHARE)),
-            secondary: muted,
         },
         RowState::Selected => RowPaint {
             fill: Some(theme.foreground.opacity(SELECTED_FILL_STRENGTH)),
             text: theme.tab_active_foreground,
-            secondary: oneterm_theme::selected_row_secondary(theme),
         },
     }
 }
@@ -611,7 +596,8 @@ impl TabRail {
             .into_any_element()
     }
 
-    /// The row for the panel at `place.ix`: the grip, then the panel's own tab element.
+    /// The row for the panel at `place.ix`: the panel's own tab element, which is also the
+    /// reorder drag's handle.
     fn row(
         &self,
         group: &TabGroupContext,
@@ -670,7 +656,6 @@ impl TabRail {
         // An unselected row whose context menu is open looks hovered until the menu goes.
         let menu_open = TabMenuOpen::panel(cx) == Some(panel.panel_id(cx).as_u64());
         let resting = row_paint(theme, RowState::resting(selected, menu_open));
-        let grip_color = resting.secondary;
         // Not `table_active_border`: OneTerm blanks that for the data tables after every theme
         // change, which made the pill vanish.
         let accent = oneterm_theme::selection_accent(cx);
@@ -686,40 +671,6 @@ impl TabRail {
                 })
             }
         };
-
-        // An expanded row's reorder grip: a strip over the row's left edge, drawn after the
-        // title so it takes the press there, reserving no room (a collapsed cell has none: the
-        // whole cell outside its icon is the handle).
-        let grip = (!collapsed).then(|| {
-            div()
-                .id(("tab-rail-grip", ix))
-                .debug_selector(move || format!("{GRIP_SELECTOR}-{ix}"))
-                .absolute()
-                .left_0()
-                .top_0()
-                .bottom_0()
-                .w(GRIP_WIDTH)
-                .flex()
-                .items_center()
-                .when_some(drag.clone(), |this, drag| {
-                    this.cursor_grab()
-                        .child(
-                            div()
-                                .id(("tab-rail-grip-glyph", ix))
-                                .debug_selector(move || format!("{GRIP_GLYPH_SELECTOR}-{ix}"))
-                                .flex_shrink_0()
-                                .ml(-px(GRIP_GLYPH_SHIFT))
-                                .opacity(0.)
-                                .group_hover(hover_group.clone(), |style| style.opacity(1.))
-                                .child(
-                                    Icon::new(AppIcon::GripVertical)
-                                        .xsmall()
-                                        .text_color(grip_color),
-                                ),
-                        )
-                        .on_drag(drag, reorder.clone())
-                })
-        });
 
         Tab::new(("tab-rail-row", ix))
             .debug_selector(move || format!("{ROW_SELECTOR}-{ix}"))
@@ -760,10 +711,13 @@ impl TabRail {
             .when(!selected, |this| {
                 this.hover(move |style| style.text_color(hover.text))
             })
-            // A collapsed cell has no grip: the cell is what is dragged. Its icon, the cell's
-            // content, starts the tab drag first and wins the press where it is.
-            .when_some(drag.filter(|_| collapsed), |this, drag| {
-                this.cursor_grab().on_drag(drag, reorder)
+            // The whole row is what is dragged to reorder (the dock's `DragPanel`: onto another
+            // row, below the last, into another group, or out onto an empty Space of a terminal
+            // tab). A collapsed cell's icon, the cell's content, starts the tab drag first and
+            // wins the press where it is; the cell keeps its open hand, a row its pointer.
+            .when_some(drag, |this, drag| {
+                this.when(collapsed, |this| this.cursor_grab())
+                    .on_drag(drag, reorder)
             })
             .when(droppable, |this| {
                 this.drag_over::<DragPanel>({
@@ -823,12 +777,11 @@ impl TabRail {
                 )
             })
             .child(title)
-            .children(grip)
             .into_any_element()
     }
 }
 
-/// The preview that follows the cursor while a row is dragged by its grip. The kit's own
+/// The preview that follows the cursor while a row is dragged. The kit's own
 /// preview has private fields, so the rail draws the same small chip itself.
 struct RailDragPreview {
     panel: Arc<dyn BasePanelView>,

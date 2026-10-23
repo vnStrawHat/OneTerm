@@ -5,7 +5,10 @@ use std::sync::{Arc, Mutex};
 use gpui::{AppContext as _, Focusable as _, TestAppContext, VisualTestContext};
 use gpui_component::{
     Root,
-    dock::{DockArea, DockLayout, Panel as _, PanelView, panel_handle},
+    dock::{
+        DockArea, DockLayout, DockPlacement, DragPanel, Panel as _, PanelId, PanelView,
+        panel_handle,
+    },
 };
 use oneterm_core::{
     AppError, InputChannel, LocalShellConfig, Result, SessionDuplicateConfig, SshConfig,
@@ -675,6 +678,106 @@ fn tab_drop_onto_occupied_space_keeps_source_terminal(cx: &mut TestAppContext) {
     assert!(still_in_source, "source terminal must stay in its Space");
 }
 
+/// `US-0196` rework 9: a vertical-rail row is dragged whole as the dock's `DragPanel`, and an empty
+/// Space accepts it. The terminal tab it names (found through the dock area) gives its active
+/// terminal to the Space and, left with none, is removed; a drag the dock does not know and a
+/// Space that is not empty move nothing.
+#[gpui::test]
+fn a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AppState::init);
+
+    let (target_session, _) = FakeTerminalSession::boxed(24, 80, "target");
+    let (source_session, source_probe) = FakeTerminalSession::boxed(24, 80, "source");
+    let handed = Rc::new(RefCell::new(None));
+    let handed_in = handed.clone();
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let dock_area = cx.new(|cx| DockArea::new("panel-drop-test", None, window, cx));
+        let target = cx
+            .new(|cx| TerminalPanel::from_spec(session_spec(target_session, "Target"), window, cx));
+        let source = cx
+            .new(|cx| TerminalPanel::from_spec(session_spec(source_session, "Source"), window, cx));
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.set_center(
+                DockLayout::tabs()
+                    .panel_view(panel_handle(target.clone()), cx)
+                    .panel_view(panel_handle(source.clone()), cx),
+                window,
+                cx,
+            );
+        });
+        oneterm_state::AppState::global(cx).update(cx, |state, _| {
+            state.dock_area = Some(dock_area.downgrade());
+        });
+        *handed_in.borrow_mut() = Some((dock_area.clone(), target, source));
+        Root::new(dock_area, window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    let (dock_area, target, source) = handed.borrow().clone().expect("the window was built");
+    cx.run_until_parked();
+
+    let group = dock_area.read_with(cx, |area, _| {
+        area.layout(DockPlacement::Center)
+            .expect("a centre layout")
+            .root()
+            .id()
+    });
+    let source_id = cx.update(|_, cx| {
+        use gpui_component::dock::BasePanelView as _;
+        source.panel_id(cx)
+    });
+    let drag = DragPanel::new(source_id, group);
+    let (occupied, empty) = target.update_in(cx, |panel, window, cx| {
+        let occupied = panel.tree.active();
+        panel.split_active_at(occupied, SplitDir::Right, window, cx);
+        (occupied, panel.empty_space_destinations()[0])
+    });
+    let still_in_source = |cx: &mut VisualTestContext| {
+        source.read_with(cx, |panel, _| panel.tree.active_terminal().is_some())
+            && dock_area.read_with(cx, |area, _| area.panel(source_id).is_some())
+    };
+
+    // A drag of a panel the dock does not hold: nothing happens.
+    let unknown = DragPanel::new(PanelId::from_u64(u64::MAX), group);
+    target.update_in(cx, |panel, window, cx| {
+        panel.handle_panel_drop(empty, &unknown, window, cx)
+    });
+    // A Space that holds a terminal is not a drop target (CORR-03).
+    target.update_in(cx, |panel, window, cx| {
+        panel.handle_panel_drop(occupied, &drag, window, cx)
+    });
+    cx.run_until_parked();
+    assert!(
+        still_in_source(cx),
+        "neither drop took the source's terminal"
+    );
+    assert_eq!(
+        target.read_with(cx, |panel, _| panel.empty_space_destinations()),
+        vec![empty]
+    );
+
+    // The real drop: the terminal moves, the emptied tab goes, the session lives on.
+    target.update_in(cx, |panel, window, cx| {
+        panel.handle_panel_drop(empty, &drag, window, cx)
+    });
+    cx.run_until_parked();
+    assert!(
+        target.read_with(cx, |panel, _| panel.tree.leaf_terminal(empty).is_some()),
+        "the empty Space now holds the dragged tab's terminal"
+    );
+    assert!(
+        dock_area.read_with(cx, |area, _| area.panel(source_id).is_none()),
+        "the emptied source tab is removed from the dock"
+    );
+    assert_eq!(
+        source_probe.close_calls(),
+        0,
+        "the session was moved, not closed"
+    );
+}
+
 /// The tab icon reads the sole terminal's status, and a split tab shows none
 /// (owner ruling, `IN-0049`). Selecting the tab acknowledges a result.
 #[gpui::test]
@@ -1307,55 +1410,93 @@ fn report_done(
     cx.run_until_parked();
 }
 
-/// In the vertical rail the row fills the width it is given, and the gestures that start a
-/// drag are the same as on the strip: the row's content drags the tab (landing on an empty
-/// Space), the `x` starts nothing (`IN-0055` drag priority).
-#[gpui::test]
-fn the_vertical_row_fills_its_width_and_only_its_content_drags_the_tab(cx: &mut TestAppContext) {
+/// Press at `from`, move past the drag threshold and on to the drop target below the row, and
+/// release there; whether a drag was running just before the release.
+fn drag_to_space(from: gpui::Point<gpui::Pixels>, cx: &mut VisualTestContext) -> bool {
     use gpui::{Modifiers, MouseButton, point, px};
+
+    let space = point(px(300.), px(200.));
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        from + point(px(0.), px(6.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(space, MouseButton::Left, Modifiers::none());
+    let dragging = cx.update(|_, cx| cx.has_active_drag());
+    cx.simulate_mouse_up(space, MouseButton::Left, Modifiers::none());
+    dragging
+}
+
+/// In the vertical rail the row fills the width it is given and starts no drag of its own: the
+/// whole row is the rail's reorder drag (`DragPanel`, started by the rail's `Tab` around it, which
+/// an empty Space accepts too), so nothing on the row may start the `DragTerminalTab` that would
+/// win the press (`IN-0055` drag priority, `US-0196` rework 9).
+#[gpui::test]
+fn the_vertical_row_fills_its_width_and_starts_no_drag_of_its_own(cx: &mut TestAppContext) {
+    use gpui::{point, px};
     use oneterm_state::TabRowLayout;
 
-    let (dropped, _, cx) = tab_row_window(cx, TabRowLayout::Vertical);
+    let (dropped, probe, cx) = tab_row_window(cx, TabRowLayout::Vertical);
     let row = drawn_row(cx).row;
     assert_eq!(
         row.size.width,
         px(220.),
         "the vertical row fills the rail's width"
     );
-    let space = point(px(300.), px(200.));
 
-    // The row's content starts the tab drag, and dropping it on a Space lands it.
     let content = point(row.left() + px(60.), row.center().y);
-    cx.simulate_mouse_down(content, MouseButton::Left, Modifiers::none());
-    cx.simulate_mouse_move(
-        content + point(px(0.), px(6.)),
-        MouseButton::Left,
-        Modifiers::none(),
-    );
-    cx.simulate_mouse_move(space, MouseButton::Left, Modifiers::none());
-    assert!(
-        cx.update(|_, cx| cx.has_active_drag()),
-        "the row's content starts a drag"
-    );
-    cx.simulate_mouse_up(space, MouseButton::Left, Modifiers::none());
-    assert_eq!(dropped.get(), 1, "it is the tab drag a Space accepts");
-
-    // The right end of the row, where the strip has its `x`, is row content too: it starts
-    // the same tab drag.
+    assert!(!drag_to_space(content, cx), "the row's content starts none");
+    // The right end of the row, where the strip has its `x` (and a status icon sits), too.
+    report_done(&probe, cx);
     let end = point(row.right() - px(10. + 8.), row.center().y);
-    cx.simulate_mouse_down(end, MouseButton::Left, Modifiers::none());
-    cx.simulate_mouse_move(
-        end + point(px(0.), px(6.)),
-        MouseButton::Left,
-        Modifiers::none(),
-    );
-    cx.simulate_mouse_move(space, MouseButton::Left, Modifiers::none());
     assert!(
-        cx.update(|_, cx| cx.has_active_drag()),
-        "the trailing end of a vertical row drags the tab"
+        !drag_to_space(end, cx),
+        "neither does the trailing end of a vertical row"
     );
-    cx.simulate_mouse_up(space, MouseButton::Left, Modifiers::none());
-    assert_eq!(dropped.get(), 2);
+    // And the left edge, where the rail's grip used to be.
+    let edge = point(row.left() + px(2.), row.center().y);
+    assert!(!drag_to_space(edge, cx), "nor does the left edge");
+    assert_eq!(dropped.get(), 0, "no tab drag reached a Space");
+}
+
+/// The strip's tab is unchanged: its content drags the tab into an empty Space.
+#[gpui::test]
+fn the_strip_row_still_drags_the_tab_into_a_space(cx: &mut TestAppContext) {
+    use oneterm_state::TabRowLayout;
+
+    let (dropped, _, cx) = tab_row_window(cx, TabRowLayout::Horizontal);
+    let label = drawn_row(cx).label;
+    assert!(drag_to_space(label.center(), cx), "the label starts a drag");
+    assert_eq!(dropped.get(), 1, "it is the tab drag a Space accepts");
+}
+
+/// The collapsed cell is unchanged: its 16 px shell icon drags the tab into an empty Space and the
+/// rest of the cell starts no drag of its own (the rail's reorder drag takes it there).
+#[gpui::test]
+fn the_collapsed_cell_icon_still_drags_the_tab_and_the_rest_of_the_cell_does_not(
+    cx: &mut TestAppContext,
+) {
+    use crate::panel::tab_title::{TAB_ROW_SELECTOR, TAB_SHELL_ICON_SELECTOR};
+    use gpui::{point, px};
+    use oneterm_state::TabRowLayout;
+
+    let (dropped, _, cx) = tab_row_window(cx, TabRowLayout::Collapsed);
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let cell = cx
+        .debug_bounds(TAB_ROW_SELECTOR)
+        .expect("the cell is drawn");
+    let icon = cx
+        .debug_bounds(TAB_SHELL_ICON_SELECTOR)
+        .expect("the cell shows the shell icon");
+
+    assert!(
+        !drag_to_space(point(cell.left() + px(2.), cell.center().y), cx),
+        "the cell outside its icon starts no drag of its own"
+    );
+    assert!(drag_to_space(icon.center(), cx), "the icon starts a drag");
+    assert_eq!(dropped.get(), 1, "it is the tab drag a Space accepts");
 }
 
 /// A vertical row has no close button; with no directory its status icon ends the one centred
@@ -1431,7 +1572,7 @@ fn the_vertical_row_shows_the_title_then_the_directory_and_the_status(cx: &mut T
     assert_eq!(
         unknown.label.left() - unknown.row.left(),
         px(TabRowLayout::VERTICAL_ROW_PADDING_LEFT),
-        "the content starts at the left padding, clear of the grip overlay"
+        "the content starts at the left padding, clear of the accent pill"
     );
 
     probe.set_cwd(Some(std::path::PathBuf::from("Z:/oneterm-test/src/panel")));

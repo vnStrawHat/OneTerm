@@ -3,8 +3,7 @@
 //! the active-session publish into `AppState`.
 
 use gpui::{AppContext as _, Context, Entity, Window};
-use gpui_component::dock::DockPlacement;
-use gpui_component::dock::panel_handle;
+use gpui_component::dock::{DockPlacement, DragPanel, panel_handle};
 use gpui_component::notification::NotificationType;
 use gpui_component::resizable::ResizableState;
 
@@ -205,9 +204,43 @@ impl TerminalPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(source) = drag.panel.upgrade() else {
-            return;
-        };
+        if let Some(source) = drag.panel.upgrade() {
+            self.move_tab_into(target, source, window, cx);
+        }
+    }
+
+    /// The terminal tab a dock drag carries: the panel the dock area holds under the drag's id,
+    /// if it is a terminal panel (an SFTP or a session panel dragged over a Space is not ours to
+    /// move).
+    pub(crate) fn dragged_by(drag: &DragPanel, cx: &gpui::App) -> Option<Entity<Self>> {
+        let dock_area = dock_area(cx)?;
+        let panel = dock_area.read(cx).panel(drag.panel())?.view();
+        panel.downcast::<Self>().ok()
+    }
+
+    /// Same for the dock's own drag of a rail row or a strip tab's edge (`DragPanel`), resolved by
+    /// [`Self::dragged_by`]; any other kind of panel is ignored. Only the tab's active terminal
+    /// moves, exactly as for [`Self::handle_tab_drop`].
+    pub(crate) fn handle_panel_drop(
+        &mut self,
+        target: SpaceId,
+        drag: &DragPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(source) = Self::dragged_by(drag, cx) {
+            self.move_tab_into(target, source, window, cx);
+        }
+    }
+
+    /// Move `source`'s active terminal into the empty Space `target` of this tab.
+    fn move_tab_into(
+        &mut self,
+        target: SpaceId,
+        source: Entity<TerminalPanel>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Verify the destination BEFORE taking the terminal out of the source:
         // once taken, a failed `fill_empty` would leave the live session
         // orphaned. Everything below runs synchronously on the UI thread, so a
