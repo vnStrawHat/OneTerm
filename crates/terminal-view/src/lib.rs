@@ -26,6 +26,7 @@ use oneterm_state::panel_names;
 /// the app aggregator, which also passes [`status_metrics`] to
 /// `AppServices::install`.
 pub fn init(cx: &mut App) {
+    panel::override_strip_menu(cx);
     register_panel(cx, panel_names::TERMINAL, |context, window, cx| {
         panel_handle(TerminalPanel::open(
             PanelSpec::DefaultShell {

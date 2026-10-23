@@ -22,6 +22,7 @@ use gpui_component::{
     ActiveTheme as _, ElementExt as _, Icon, IconName, Sizable as _, Size, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{DialogButtonProps, DialogFooter},
+    dock::ClosePanel,
     h_flex,
     input::{Input, InputState},
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
@@ -947,9 +948,11 @@ pub(super) fn close_following_label(layout: TabRowLayout) -> &'static str {
 /// one marked, clicking a row shows that tab (`US-0116`, `F11`/`F13`).
 ///
 /// It lives in the `...` menu because that is the one menu a panel can add rows
-/// to, above the kit's own separator (`component/src/dock/tab_panel.rs:333-337`),
-/// and because the menu
-/// otherwise held a single row duplicating the zoom button beside it.
+/// to. The kit appends its own separator, a "Zoom In" row (greyed, since panel zoom
+/// is gone, `US-0203`) and, for a closable panel, a Close row after what a panel adds
+/// (`component/src/dock/tab_panel.rs`, `render_toolbar`), and offers no way to leave the zoom
+/// row out. So this also arms [`override_strip_menu`], which rebuilds the menu once it exists
+/// with the tab list and Close alone.
 ///
 /// `panel` is the group's active panel and is already borrowed by the caller
 /// (`Panel::dropdown_menu` takes `&mut self`), so its own row must not read it
@@ -959,7 +962,76 @@ pub(super) fn tab_list_menu(
     panel: &TerminalPanel,
     cx: &mut Context<TerminalPanel>,
 ) -> PopupMenu {
-    let panel_id = cx.entity_id();
+    let entity = cx.entity();
+    STRIP_MENU.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move |menu, _, cx| strip_menu(menu, &entity, cx)));
+    });
+    tab_list_rows(menu, panel, cx.entity_id(), cx).separator()
+}
+
+/// What a `...` menu rebuild builds: the menu to put in the one that just opened.
+type StripMenuBuild = Box<dyn FnOnce(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
+
+thread_local! {
+    /// Armed by [`tab_list_menu`], which the kit calls while it builds the `...` menu, and taken
+    /// by [`override_strip_menu`] when that menu's entity has been created, right after: the
+    /// kit builds and opens one menu at a time, so what is armed belongs to the menu that
+    /// appears next.
+    static STRIP_MENU: std::cell::RefCell<Option<StripMenuBuild>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Make the tab strip's `...` menu the tab list and Close only, with no zoom row (`US-0203`).
+///
+/// The kit builds the menu as the panel's rows, a separator, a "Zoom In" row and Close, in one
+/// closure it never lets a panel see the end of, and `PopupMenu` has no way to drop one row. What
+/// it does offer is `rebuild`, which replaces every row of an existing menu, and gpui offers
+/// `observe_new`, which hands over each new menu as the effect of its creation. Together they
+/// reach the one menu [`tab_list_menu`] armed. The menu shows the kit's rows for the frame it is
+/// created in and ours from the next. No kit code is changed.
+pub(crate) fn override_strip_menu(cx: &mut App) {
+    cx.observe_new(
+        |menu: &mut PopupMenu, window: Option<&mut Window>, cx: &mut Context<PopupMenu>| {
+            let Some(build) = STRIP_MENU.with(|slot| slot.borrow_mut().take()) else {
+                return;
+            };
+            if let Some(window) = window {
+                menu.rebuild(window, cx, build);
+            }
+        },
+    )
+    .detach();
+}
+
+/// The `...` menu of a tab strip as OneTerm wants it: the tab list, and Close when the group
+/// lets the displayed tab close.
+fn strip_menu(
+    menu: PopupMenu,
+    panel: &Entity<TerminalPanel>,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let app: &App = cx;
+    let tab = panel.read(app);
+    let menu = tab_list_rows(menu, tab, panel.entity_id(), app);
+    let closable = tab
+        .tab_panel
+        .as_ref()
+        .and_then(|group| group.upgrade())
+        .is_some_and(|group| group.read(app).is_closable(app));
+    if closable {
+        menu.separator().menu("Close", Box::new(ClosePanel))
+    } else {
+        menu
+    }
+}
+
+/// The rows of the tab list, with no separator after them.
+fn tab_list_rows(
+    menu: PopupMenu,
+    panel: &TerminalPanel,
+    panel_id: EntityId,
+    cx: &App,
+) -> PopupMenu {
     let Some((tabs, _)) = tabs_of(panel, panel_id, cx) else {
         return menu;
     };
@@ -981,7 +1053,7 @@ pub(super) fn tab_list_menu(
             },
         ));
     }
-    menu.separator()
+    menu
 }
 
 /// Open the rename-tab dialog for a terminal panel. An empty title keeps the
