@@ -11,7 +11,7 @@ Created: 2026-10-23
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [x] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -42,8 +42,8 @@ panics: `failed to read '...\.claude\worktrees\agent-...\crates\theme\assets/ico
 
 ## Acceptance
 
-- [ ] `cargo build -p oneterm-theme` from the worktree, then from the main checkout, both pass with one shared target and no `cargo clean`.
-- [ ] `pwsh scripts/ci-local.ps1` green in the worktree.
+- [x] `cargo build -p oneterm-theme` from the worktree, then from the main checkout, both pass with one shared target and no `cargo clean`.
+- [x] `pwsh scripts/ci-local.ps1` green in the worktree.
 
 ## Documentation
 
@@ -78,11 +78,11 @@ None.
 Recipe from the brief (two `cargo build -p oneterm-theme` runs, worktree then main), then the full gate.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
@@ -96,6 +96,15 @@ $ cargo build -p oneterm-theme   (main)      -> Finished dev in 0.51s, no cargo 
 $ pwsh scripts/ci-local.ps1 -> fmt, clippy, tests, ignored tests, vt steps, cargo doc all passed;
   stopped at `vt-public-api.py --check --no-doc`: it looks in <worktree>/target/doc (BUG-0090,
   not in this branch's base). Steps after it were not run here.
+```
+
+After merging main (BUG-0090) into the branch, same env:
+
+```text
+$ pwsh scripts/ci-local.ps1 -> ci-local: all checks passed.
+  cargo test --workspace and the later cargo test steps: 5155 tests passed in total, 0 failed
+  dependency graph: 20 workspace packages; doc paths: 219 current paths in 12 documents;
+  English check: 1166 files; unittest runs: 2 + 3 tests OK
 ```
 
 The main checkout does not contain this fix, so its build above shows the shared target is not
