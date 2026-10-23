@@ -375,6 +375,42 @@ Acceptance rework of this packet (reopened, not a new BUG). Owner ruling, 2026-1
 
 **Review of rework 8 (2026-10-22).** Advisor PASS with two Low findings and ui-verifier PASS with no UI defects (`evidence/US-0196-verify.md`, "Advisor code review (rework 8)" and "UI verification (rework 8)"). Fixes: (1) `TabMenuOpen` is also cleared when the menu entity is released (a menu replaced or abandoned without a dismissal), and the record is now per menu (panel id plus the menu's entity id), so the release of a replaced menu never clears the record of the menu that replaced it, also on the same tab; test `a_tab_menu_records_that_it_is_open_until_it_is_dismissed` right-clicks the same tab twice; (2) records: the `docs/gui-layout.md` "Colours" bullet and the HLD "Row content", grip and colour-table rows now state the rework 8 colours (hover title, `tab_bar.selected.foreground`).
 
+## Rework 9 2026-10-23 (owner): the whole expanded row reorders; the grip is gone
+
+Acceptance rework of this packet (reopened, not a new BUG). Owner report, 2026-10-23: "tabs can no longer be reordered like before"; the owner does not see the 8 px hover-only grip at the left edge of an expanded row.
+
+**Owner ruling.** In the **expanded** rail, dragging the **whole row** reorders tabs (as the horizontal strip did). To move a tab into a Space the user drags the row out of the rail and drops it on the terminal area (the existing Space drop targets). The 8 px grip is removed. The **collapsed** strip stays exactly as it is (the shell icon drags the tab into a Space, the rest of the cell reorders).
+
+**Outcome.**
+
+1. An expanded row starts the kit's `DragPanel` from any pixel of it (title, chips, directory line, status icon, padding), the drag the collapsed cell already starts outside its icon. The row's own `DragTerminalTab` drag is gone in the vertical layout (it is kept for the collapsed cell's icon and for the horizontal strip).
+2. The grip, its glyph, its `GRIP_*` selectors and the row paint's `secondary` colour (which only the grip read) are deleted. The reorder drop line, the drop slot below the last row and the drag preview chip are unchanged.
+3. An **empty Space accepts a dragged terminal tab in either payload**: the strip's and the collapsed icon's `DragTerminalTab`, and now the dock's `DragPanel` of a terminal panel. The panel behind a `DragPanel` is resolved through the workspace dock area (`DockArea::panel(PanelId)`, public API, already used by `spaces.rs`), the same terminal-leaf move runs (`handle_tab_drop` body), and a `DragPanel` of any other panel kind is neither highlighted nor accepted.
+
+**Choices the request left open.**
+
+- **Option (a), not (b).** Weighed: (a) the row starts `DragPanel` and the empty Space also accepts `DragPanel`; (b) keep the row's `DragTerminalTab` and make the rail accept it for reorder. (b) needs the shell to name `DragTerminalTab` (`pub(crate)` in `oneterm-terminal-view`, R4), so the payload would move into a shared crate with an erased panel handle; it also loses everything the kit's `DragPanel` gives the rail today: a drop between two rails of a split centre, a split of the centre by dragging to a content edge (the UI walk of `US-0196` used it), the drop placeholder flight and the preview size. (a) changes two small places and keeps all of that. What (a) costs: `docs/terminal-split/03-drag-drop.md` § 6 rejected accepting `DragPanel` in a Space because it "could move a whole `TerminalPanel` instead of one active terminal leaf". That risk is answered here, not ignored: the accepted `DragPanel` is resolved to its terminal panel and goes through the **same** leaf move as `DragTerminalTab` (only the active terminal leaf moves; the Space still has to be empty), and the doc is amended.
+- **What the dock does with a `DragPanel` over the terminal area, and how this stays consistent with the strip.** The kit's content frame tracks every `DragPanel` over it and, on release, merges into the group (centre zone: a no-op for the dragged panel's own group) or splits the centre (edge zones). That is what a strip tab dragged by its edge (outside its label) does today, and what a rail row dragged by the old grip did; (a) leaves it as it is. The strip's label drag (`DragTerminalTab`) never triggered it, so a label drag onto a **non-empty** Space still does nothing; the rail row now behaves as the strip's edge does there. Recorded as a known difference from the strip's label, not hidden.
+- **The drop indicator after a drop on an empty Space.** The group keeps its `drop_indicator` until a drag move outside its bounds or its own `on_drop` clears it, and an empty Space's `on_drop` (innermost, so it wins and stops the content frame's) bypasses both: the translucent split placeholder would stay on screen. `OneTermTabGroupSkin::render_drop_indicator` draws it only while a drag is active (`cx.has_active_drag()`); the frame after any drop has none. Base is not touched.
+- **No grab cursor on an expanded row.** A whole row that is also a click target keeps the default cursor (the strip's tab has the same); the collapsed cell keeps its open hand.
+- **`grip-vertical.svg` and `AppIcon::GripVertical` stay**: the icon is a generated enum variant of the shared set; deleting an asset is not this packet's. `TabRowLayout::VERTICAL_ROW_PADDING_LEFT` (14 px) stays: the accent pill (3 px) still needs the clearance and the header label starts at the same x.
+
+**Why the owner could not see the grip.** Not a rework 8 regression and no layer over it: it was the row's last child (drawn after the hover fill and the title) and the ui-verifier saw it on hover in reworks 7 and 8; it was undiscoverable by design (six dots of `muted.foreground` in the far 8 px, shown only on hover, overlapping the selected row's pill). From the code and the earlier walks; not reproduced on the owner's machine.
+
+**Acceptance.**
+
+- [ ] An expanded row starts the reorder drag (`DragPanel`) from its title, from its trailing status icon and from its padding; no row starts a `DragTerminalTab` in the vertical layout (workspace test with a probe panel that mirrors the real row; terminal-view test on the real row).
+- [ ] Dropping an expanded row on another row reorders (forward lands after, backward before), below the last row appends, a lone tab has nothing to reorder, a zoomed group is neither draggable nor droppable (the existing tests, re-pointed from the grip to the row).
+- [ ] There is no grip: no `GRIP_*` selector, no glyph, no cursor change on an expanded row (workspace test).
+- [ ] Dropping a terminal row's `DragPanel` on an empty Space moves its active terminal into it and removes the emptied source tab; a `DragPanel` of another panel kind is ignored; dropping on a non-empty Space moves nothing (terminal-view tests on a real dock area).
+- [ ] No drop indicator is drawn once the drag is over; one is drawn while a `DragPanel` hovers the content (workspace test).
+- [ ] The collapsed strip is unchanged: its tests pass unedited (`a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon` and the collapsed-cell module).
+- [ ] `docs/gui-layout.md`, the HLD rows, `docs/terminal-split/03-drag-drop.md`, the intake and this packet say the same thing.
+- [ ] Full `pwsh scripts/ci-local.ps1` passes; the debug app builds.
+- [ ] On screen, by `ui-verifier`: reorder by dragging the title area and the status icon of a row (drop line and preview chip), the drop below the last row, drag a row onto an empty Space and onto a terminal, the collapsed strip unchanged, no grip on hover.
+
+**Verification plan.** `cargo test -p oneterm-workspace`, `-p oneterm-terminal-view`, `-p oneterm-state`, `-p oneterm-theme` (comment only), `python scripts/check-theme-contrast.py` (comment only), the full `pwsh scripts/ci-local.ps1`; a smoke launch of the debug build with a private profile for `ui-verifier`.
+
 ## Handoff
 
 Implemented and gate-green; `ui-verifier` next (debug binary `target\debug\oneterm.exe` in this worktree). After acceptance tick `US-0196` in the intake. `US-0197` (resize, `clamp_tab_rail_width`, done) and `US-0198` (collapse) build on `tab_rail.rs` and the stored `vertical_tabs` fields.
