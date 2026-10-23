@@ -116,3 +116,30 @@ None found in the walked items.
 
 Items 1d, 2d (context menu Delete), 2e, 2f, 3, 4, 5, 6 and the light theme of 7. Re-run with the same profile
 (`scratchpad/r12w-cwd`, `r12w-home`) once the desktop stays unlocked.
+
+### Re-walk (desktop unlocked), same build and private profile
+
+Screenshots `scratchpad/r12w-shots/r12w-30..83`. Previous items 1a-1c, 2a-2c stand.
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1d | SFTP row double-click enters a directory (path becomes `/dir-1`) | PASS | 47 |
+| 2d | Enter / Delete keys on a selected session | NOT A BUMP EFFECT: no default key binding (`default: None`), so the keys do nothing; Delete from the context menu was walked instead | 07, 08 |
+| 2e | Press-and-drag-away from a session row and a group row (to the terminal): session not selected, group stays expanded | PASS | 32 |
+| 2f | Right-click menu (Open, Properties, Duplicate, Move to Group submenu, New Session, Delete); wheel over it does not scroll the tree behind; Esc closes menu and submenu | PASS | 33, 34, 35, 36 |
+| 2g | Context-menu Delete opens the confirmation naming the right-clicked session; confirming removes it and shows the toast "SSH session deleted." | PASS | 37, 40 |
+| 3 | Settings: Select opens, wheel scrolls its list (page behind stays), keyboard Down + Enter picks (Fahrenheit), mouse pick (Light), Esc closes; long page scrolls with the wheel; search "font" filters to General > UI Font Size and Terminal; clearing restores | PASS | 51-59, 82 |
+| 4 | Strip "..." menu (Vertical Tabs off): "Terminal Tabs" header and tab rows only, no Zoom row; mouse pick activates the tab; keyboard pick works; Esc closes. Tab right-click menu also has no Zoom row | PASS | 65, 71, 73, 74 |
+| 5 | Rename Tab dialog opens, takes text, Esc cancels. Toasts "Connected to ..." and "SSH session deleted." appear and dismiss. Edit SSH Session dialog: wheel over the form scrolls the form (not the page); Advanced expands | PASS. The startup-command dialog with a multi-line input does not exist at this head (no startup-command UI or multi-line input in `crates/`), so the textarea-wheel check is NOT APPLICABLE | 38, 41, 75, 78, 79 |
+| 6 | Rail reorder drag (Vertical Tabs on): ghost card shown, order changes; strip reorder drag: ghost shown, dropped tab moves to first | PASS | 61-63, 80, 81 |
+| 7 | Light theme (Zed One Light): main window title bar, strip, session tree, status bar, terminal, and the Settings window all render with readable text, no missing icons, no clipping | PASS | 82, 83 |
+
+### Observations (not defects against the bump)
+
+1. First Down in the strip "..." menu highlights nothing visible; the second Down lands on the first row (kit menu focus; not compared with 0.7.3).
+2. Once, a click on a dialog button right after the dialog opened was ignored (Delete confirm, shot 38/39); a second click worked. Not reproduced for other dialogs.
+3. Once, after a failed connect (host key changed, new loopback server key) and Esc, a retry showed "Connected to bravo-host-1" instead of the session double-clicked (loop-sftp); an immediate repeat connected the right session (46). Cause unclear (possibly my stray click while a modal was changing); not reproduced.
+4. In the Fahrenheit theme the context-menu Delete row (danger colour) is very dark on black and looks disabled; a theme contrast matter, not a kit change.
+5. Narrow-dock dual-pane SFTP clipping (earlier observation 1) unchanged.
+
+Verdict: the UI meets the walk list; no defects found. Owner-only: UAC/real hosts untouched; startup-command textarea wheel (feature absent).
