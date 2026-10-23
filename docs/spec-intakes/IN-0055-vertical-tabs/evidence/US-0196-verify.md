@@ -674,3 +674,19 @@ Packet section "Rework 9 after the reviews", `docs/gui-layout.md` Reorder bullet
 
 - On screen (ui-verifier): a row released on a non-empty terminal (edge zones and middle) changes nothing and no placeholder tints the content; the empty Space still highlights and takes the drop; the horizontal strip's edge drag with a real mouse.
 - Nothing else is open from this round.
+
+# UI re-walk (rework 9, no split by drop)
+
+Binary r9bbin\oneterm.exe (33abb3e2), private profile, posted-message drags. Shots: scratchpad\r9bshots\r9b-*.png.
+
+1. No split/merge on drop on a non-empty terminal: PASS.
+   - Expanded row, released at left edge (r9b-01), middle (r9b-02), bottom edge (r9b-03): no tint, no placeholder, one group, nothing lost, order unchanged.
+   - Collapsed cell, icon to right edge (r9b-09), cell edge to middle (r9b-10): same.
+   - Horizontal strip (Vertical Tabs off), tab edge dragged to terminal (r9b-12): same.
+2. Empty Space near an edge (r9b-05): only the Space's own blue fill, no tint on neighbouring Space or terminal; drop moves the terminal in and the source tab closes. D1 fixed.
+3. SFTP / Session tab over terminal: NOT WALKED. The right-dock Session and SFTP Browser headers show no drag chip under the driver (r9b-15, r9b-16), and no SSH tab without a server. Dock placeholder over a non-terminal area: NOT WALKED (same reason).
+4. Expanded reorder by title (r9b-06) and left edge (r9b-07): PASS. Collapsed reorder (r9b-11): PASS.
+Horizontal strip reorder: still not observed with the driver (same as the r8 baseline, see first report): owner check.
+
+Defects: none new. D2 resolved.
+Owner-only: horizontal strip reorder with a real mouse; dragging a real SSH/SFTP tab over terminal content; cursor shapes.
