@@ -82,7 +82,6 @@ const ALLOWED_WHEN_ELEVATED: &[&str] = &[
     // A view overlay; in an elevated window it shows but is not saved (M4).
     "toggle_fps",
     "toggle_gutter",
-    "toggle_zoom",
 ];
 
 /// Whether `action_id` may run in an elevated window.
@@ -185,7 +184,6 @@ mod tests {
             "open_settings",
             "about",
             "quit",
-            "toggle_zoom",
         ] {
             assert_eq!(
                 action_classified_for_elevated_window(id),

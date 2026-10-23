@@ -6,12 +6,12 @@ use std::rc::Rc;
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, Modifiers, MouseButton, ParentElement as _, Pixels,
-    Point, Render, SharedString, StatefulInteractiveElement as _, Styled as _, TestAppContext,
-    VisualTestContext, Window, div, point, prelude::FluentBuilder as _, px,
+    Point, Render, SharedString, Styled as _, TestAppContext, VisualTestContext, Window, div,
+    point, px,
 };
 use gpui_component::dock::{
     DockArea, DockLayout, DockPlacement, DragPanel, PaneRef, Panel, PanelControl, PanelEvent,
-    PanelId, panel_handle,
+    PanelId, ToggleZoom, panel_handle,
 };
 use gpui_component::h_flex;
 use oneterm_settings::{UiConfig, VerticalTabs, ui_config::UiConfigGlobal};
@@ -35,13 +35,14 @@ struct Report {
     bounds: Rc<Cell<Bounds<Pixels>>>,
     /// How many times the panel was taken out of its group (a rebuild would do this).
     removed: Rc<Cell<usize>>,
-    /// How many times its title row started its own drag (the horizontal strip's row and a
-    /// collapsed cell's icon do; a vertical row does not).
-    title_drags: Rc<Cell<usize>>,
     /// How many dock drags were dropped on its content, as an empty Space accepts them.
     content_drops: Rc<Cell<usize>>,
     /// What the row layout was while its title was built.
     title_layout: Rc<Cell<Option<TabRowLayout>>>,
+    /// Whether the probe lets the dock zoom it. No OneTerm panel does (`US-0203`), so the default
+    /// is the real answer; a control test turns it on to see what the kit does for a panel that
+    /// does.
+    zoomable: Rc<Cell<bool>>,
 }
 
 /// The probe's header `+`.
@@ -56,16 +57,6 @@ struct Probe {
     title_row: bool,
     report: Report,
     focus_handle: FocusHandle,
-}
-
-/// The payload of the probe title row's own drag, standing in for `DragTerminalTab`.
-#[derive(Clone)]
-struct ProbeDrag;
-
-impl Render for ProbeDrag {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_4()
-    }
 }
 
 impl Probe {
@@ -96,6 +87,10 @@ impl gpui_base::dock::Panel for Probe {
     fn on_removed(&mut self, _: &mut Window, _: &mut Context<Self>) {
         self.report.removed.set(self.report.removed.get() + 1);
     }
+
+    fn zoomable(&self, _: &App) -> bool {
+        self.report.zoomable.get()
+    }
 }
 
 impl Panel for Probe {
@@ -103,13 +98,12 @@ impl Panel for Probe {
         (!self.title_row).then(|| self.label.clone())
     }
 
-    // Like the real row: the strip's row starts the tab drag from its whole content; in a
-    // collapsed cell only the 16 px icon does; a vertical row starts none, and the whole row is
-    // the rail's reorder drag (`US-0196` rework 9).
+    // Like the real row: no layout starts a drag of its own on the title; the strip's tab, the
+    // rail's row and a collapsed cell are all the dock's `DragPanel` (`US-0196` rework 9,
+    // `US-0198` rework 8, `US-0202`).
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let layout = TabRowLayout::current(cx);
         self.report.title_layout.set(Some(layout));
-        let started = self.report.title_drags.clone();
         let label = self.label.clone();
         let selector = format!("probe-row-{label}");
         let status = format!("probe-status-{label}");
@@ -124,11 +118,7 @@ impl Panel for Probe {
                     div()
                         .id(SharedString::from(selector.clone()))
                         .debug_selector(move || selector.clone())
-                        .size_4()
-                        .on_drag(ProbeDrag, move |drag, _, _, cx| {
-                            started.set(started.get() + 1);
-                            cx.new(|_| drag.clone())
-                        }),
+                        .size_4(),
                 )
                 .into_any_element();
         }
@@ -138,12 +128,6 @@ impl Panel for Probe {
             .flex_1()
             .h_full()
             .items_center()
-            .when(layout == TabRowLayout::Horizontal, |this| {
-                this.on_drag(ProbeDrag, move |drag, _, _, cx| {
-                    started.set(started.get() + 1);
-                    cx.new(|_| drag.clone())
-                })
-            })
             .child(div().flex_1().child(label))
             // Like the real row's trailing status icon: plain row content.
             .child(
@@ -160,8 +144,9 @@ impl Panel for Probe {
         Some(div().debug_selector(|| PLUS_SELECTOR.to_string()).size_6())
     }
 
-    // Like the terminal panel: the toolbar offers zoom (the rail draws no button for it), and
-    // the content frame adds no top padding for several tabs.
+    // Asks for the zoom control in the toolbar, as the terminal panel did before `US-0203`; the
+    // kit draws it only for a panel whose base `zoomable()` agrees, which is what the tests pin.
+    // The content frame adds no top padding for several tabs.
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         Some(PanelControl::Both)
     }
@@ -764,11 +749,9 @@ fn the_header_has_a_rule_only_while_the_list_is_scrolled(cx: &mut TestAppContext
     );
 }
 
-/// The header holds the "Terminals" label on the left and the `+` on the right, with no zoom
-/// button even though the panel offers one; a zoom asked for anyway is released (see
-/// `a_zoom_cannot_trap_the_rail`) and the rail and the header stay as they were.
+/// The header holds the "Terminals" label on the left and the `+` on the right, nothing else.
 #[gpui::test]
-fn the_header_holds_the_label_and_the_plus_and_a_zoom_changes_nothing(cx: &mut TestAppContext) {
+fn the_header_holds_the_label_and_the_plus(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
@@ -798,92 +781,61 @@ fn the_header_holds_the_label_and_the_plus_and_a_zoom_changes_nothing(cx: &mut T
             && (label.center().y - header.center().y).abs() < px(1.),
         "the label is a small line centred in the header: {label:?}"
     );
-
-    let node = centre_node(&window.area, cx);
-    cx.update(|w, app| {
-        window
-            .area
-            .update(app, |area, cx| area.set_zoomed_in(node, w, cx))
-    });
-    settle(cx);
-    assert!(
-        bounds_of(RAIL_SELECTOR, cx).is_some(),
-        "the rail is still drawn after a zoom"
-    );
-    assert_eq!(bounds_of(PLUS_SELECTOR, cx), Some(plus), "and its header");
 }
 
-/// Owner test failure of rework 9 (2026-10-23): the owner's centre group was zoomed (`Shift+Esc`,
-/// saved in `docks.json` and restored on every start), and the kit refuses to drag from or drop
-/// on a zoomed group, so neither a reorder nor a drop into a Space worked; the rail has no zoom
-/// button to get out, and a lone centre group looks the same zoomed or not. A group that draws
-/// the rail is therefore never left zoomed, however the zoom was asked for (the key binding and
-/// the restored `zoomed_panel` both end in `set_zoomed_in`), and the reorder works afterwards.
+/// `US-0203`: nothing can zoom. The kit asks the displayed panel's base `zoomable()` before it
+/// draws a zoom control, accepts `ToggleZoom` or `DockArea::set_zoomed_in`, so a panel that answers
+/// no (every OneTerm panel does, pinned in each panel's crate) has no control and cannot be zoomed
+/// by any route. The control case, a panel that answers yes, proves the checks can see a zoom.
 #[gpui::test]
-fn a_zoom_cannot_trap_the_rail(cx: &mut TestAppContext) {
-    let (window, cx) = rail_window(cx, true);
-    let report = Report::default();
-    set_centre(
-        &window.area,
-        &terminals(&["a", "b", "c"]),
-        false,
-        &report,
-        cx,
-    );
-    let node = centre_node(&window.area, cx);
-    cx.update(|w, app| {
-        window
-            .area
-            .update(app, |area, cx| area.set_zoomed_in(node, w, cx))
-    });
-    settle(cx);
-    assert!(
-        !window.area.read_with(cx, |area, _| area.is_zoomed()),
-        "the rail has no way to zoom out, so a zoom under it is released"
-    );
+fn a_panel_that_will_not_zoom_has_no_zoom_control_and_cannot_be_zoomed(cx: &mut TestAppContext) {
+    const ZOOM_CONTROL: &str = "dock-tab-bar-zoom-control";
 
-    let (original, _) = centre_tabs(&window.area, cx);
-    let from = row(0, cx).unwrap().center();
-    let onto = row(1, cx).unwrap().center();
-    drag_to(from, onto, cx);
-    assert!(has_active_drag(cx), "the row can be dragged again");
-    release(onto, cx);
-    assert_eq!(
-        centre_tabs(&window.area, cx).0,
-        vec![original[1], original[0], original[2]],
-        "and the drop reorders"
-    );
-}
-
-/// The release is the rail's rule only: the strip keeps its zoom button, so a zoom stays there,
-/// and the switch that turns the rail on releases the zoom the strip made.
-#[gpui::test]
-fn the_strip_keeps_its_zoom_and_turning_the_rail_on_releases_it(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, false);
+    let zoom_in = |window: &RailWindow, cx: &mut VisualTestContext| {
+        let node = centre_node(&window.area, cx);
+        cx.update(|w, app| {
+            window
+                .area
+                .update(app, |area, cx| area.set_zoomed_in(node, w, cx))
+        });
+        settle(cx);
+        window.area.read_with(cx, |area, _| area.is_zoomed())
+    };
+
+    // Control: a panel that allows it gets the toolbar button and the dock zooms.
+    let zoomable = Report::default();
+    zoomable.zoomable.set(true);
+    set_centre(&window.area, &terminals(&["a", "b"]), false, &zoomable, cx);
+    assert!(
+        bounds_of(ZOOM_CONTROL, cx).is_some(),
+        "control: the kit draws its zoom control for a zoomable panel"
+    );
+    assert!(zoom_in(&window, cx), "control: the dock zooms it");
+    cx.update(|w, app| {
+        window
+            .area
+            .update(app, |area, cx| area.set_zoomed_out(w, cx))
+    });
+    settle(cx);
+
+    // Every OneTerm panel answers no: no control, and neither the dock nor the key binding's
+    // action zooms it.
     let report = Report::default();
     set_centre(&window.area, &terminals(&["a", "b"]), false, &report, cx);
-    let node = centre_node(&window.area, cx);
-    cx.update(|w, app| {
-        window
-            .area
-            .update(app, |area, cx| area.set_zoomed_in(node, w, cx))
-    });
+    assert!(bounds_of(ZOOM_CONTROL, cx).is_none(), "no zoom control");
+    assert!(!zoom_in(&window, cx), "the dock refuses a zoom");
+    cx.dispatch_action(ToggleZoom);
     settle(cx);
     assert!(
-        window.area.read_with(cx, |area, _| area.is_zoomed()),
-        "the strip keeps a zoom: its button is the way out"
-    );
-    set_vertical(&window.config, true, cx);
-    assert!(
         !window.area.read_with(cx, |area, _| area.is_zoomed()),
-        "the rail has no way out, so turning it on releases the zoom"
+        "ToggleZoom zooms nothing"
     );
 }
 
 /// Owner rework 9: the whole expanded row is the reorder drag (`DragPanel`) wherever the press
 /// lands, on the title, on its trailing status icon and on the row's left edge where the grip
-/// used to be, and the vertical row starts no drag of its own (the strip's row does, and a
-/// collapsed cell's icon, see the other tests).
+/// used to be; no title element of the row starts a drag of its own.
 #[gpui::test]
 fn the_whole_expanded_row_is_the_reorder_drag(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
@@ -933,11 +885,6 @@ fn the_whole_expanded_row_is_the_reorder_drag(cx: &mut TestAppContext) {
         original,
         "the left edge reorders"
     );
-    assert_eq!(
-        report.title_drags.get(),
-        0,
-        "no gesture on a vertical row starts the title's own drag"
-    );
 }
 
 /// Owner rework 9: a row dragged onto the terminal area is the dock's `DragPanel`, and what lies
@@ -977,6 +924,54 @@ fn a_row_dropped_on_a_content_that_takes_it_changes_nothing_in_the_dock(cx: &mut
     assert_eq!(report.content_drops.get(), 1, "the content took the drop");
     assert_eq!(centre_tabs(&window.area, cx).0, original);
     assert_eq!(groups(cx), 1, "the dock did not split the centre");
+}
+
+/// `US-0202` (owner, 2026-10-23): the horizontal strip behaves like the rail. Dragging a strip tab
+/// by its title (the label, which used to start a drag of its own that reordered nothing) is the
+/// kit's reorder drag: dropped on another tab it lands in that tab's slot, and dropped on content
+/// that takes it (the probe stands in for an empty Space) it changes nothing in the dock.
+#[gpui::test]
+fn a_strip_tab_dragged_by_its_title_reorders(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, false);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        true,
+        &report,
+        cx,
+    );
+    assert!(
+        bounds_of(RAIL_SELECTOR, cx).is_none(),
+        "the strip, not the rail"
+    );
+    let (original, _) = centre_tabs(&window.area, cx);
+
+    // By the title, onto the second tab: a forward drop lands after the hovered tab.
+    let title = bounds_of("probe-row-a", cx).expect("the title is drawn in the strip");
+    let onto = bounds_of("dock-tab-1", cx)
+        .expect("the second strip tab")
+        .center();
+    drag_to(title.center(), onto, cx);
+    assert!(has_active_drag(cx), "the title starts a drag");
+    release(onto, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[1], original[0], original[2]],
+        "a drag by the title reorders"
+    );
+
+    // By the title onto content that takes the drop: nothing moves in the dock.
+    let title = bounds_of("probe-row-c", cx).expect("the last title");
+    let content = report.bounds.get().center();
+    drag_to(title.center(), content, cx);
+    assert!(has_active_drag(cx));
+    release(content, cx);
+    assert_eq!(report.content_drops.get(), 1, "the content took the drop");
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[1], original[0], original[2]]
+    );
 }
 
 /// Owner ruling 2026-10-23: terminal content takes no dock drop, so the kit's split placeholder
@@ -1055,8 +1050,7 @@ fn a_row_dropped_below_the_last_row_moves_the_tab_to_the_end(cx: &mut TestAppCon
     );
 }
 
-/// A zoomed group is neither draggable nor droppable, as on the strip; and a lone tab has
-/// nowhere to go.
+/// A lone tab has nowhere to go.
 #[gpui::test]
 fn a_lone_tab_has_nothing_to_reorder(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
@@ -1464,14 +1458,13 @@ fn a_collapsed_cell_is_built_collapsed_and_a_click_selects_it(cx: &mut TestAppCo
     assert_eq!(centre_tabs(&window.area, cx).1, 2);
 }
 
-/// Owner rework 7: a collapsed cell has no grip, and the cell itself is what is dragged to
-/// reorder. Its content, the shell icon, still starts the tab drag that an empty Space accepts
-/// (the title element's drag wins where the icon is); every other pixel of the cell starts the
-/// rail's reorder.
+/// Owner rework 8 (2026-10-23, "sometimes it reorders, sometimes not"): the whole collapsed cell
+/// is the reorder drag, the 16 px shell icon in its middle included (the icon used to start the
+/// tab drag, which reorders nothing, so a drag worked or not by where the press landed). Presses
+/// on the icon, near each edge and in a corner all start the rail's drag and land the tab in the
+/// slot of the cell they are dropped on; none starts the title's own drag.
 #[gpui::test]
-fn a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon(
-    cx: &mut TestAppContext,
-) {
+fn the_whole_collapsed_cell_is_the_reorder_drag(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     cx.update(|_, cx| UiConfig::set_vertical_tabs_collapsed(true, cx));
@@ -1483,34 +1476,52 @@ fn a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon(
         cx,
     );
     let (original, _) = centre_tabs(&window.area, cx);
-    let target = row(2, cx).unwrap().center();
-    // The icon: the tab drag starts, and dropping it on another cell reorders nothing.
     let icon = bounds_of("probe-row-a", cx).expect("the cell's content is its icon");
     assert_eq!((icon.size.width, icon.size.height), (px(16.), px(16.)));
-    drag_to(icon.center(), target, cx);
-    assert!(has_active_drag(cx), "the cell's content starts a drag");
-    assert_eq!(report.title_drags.get(), 1, "it is the title's drag");
-    release(target, cx);
-    assert_eq!(centre_tabs(&window.area, cx).0, original);
 
-    // The cell outside the icon, its left and right margins: the reorder drag starts, not the
-    // title's, and the tab lands in the slot of the cell it is dropped on.
-    let cell = row(2, cx).unwrap();
-    let first = row(0, cx).unwrap().center();
-    drag_to(point(cell.left() + px(3.), cell.center().y), first, cx);
-    assert!(has_active_drag(cx), "the cell's margin starts a drag");
-    assert_eq!(report.title_drags.get(), 1, "not the title's drag");
-    release(first, cx);
+    // The icon, dropped on the last cell: the first tab goes after it.
+    let last = row(2, cx).unwrap().center();
+    drag_to(icon.center(), last, cx);
+    assert!(has_active_drag(cx), "the icon starts a drag");
+    release(last, cx);
     assert_eq!(
         centre_tabs(&window.area, cx).0,
-        vec![original[2], original[0], original[1]]
+        vec![original[1], original[2], original[0]],
+        "a drag from the icon reorders"
     );
-    let cell = row(1, cx).unwrap();
-    let last = row(2, cx).unwrap().center();
-    drag_to(point(cell.right() - px(3.), cell.center().y), last, cx);
-    assert!(has_active_drag(cx), "the right margin too");
-    release(last, cx);
-    assert_eq!(report.title_drags.get(), 1, "never the title's drag");
+
+    // Every other grab point of a cell, dropped on the first cell: the left and right margins,
+    // the top and bottom edges and the four corners. Each drag takes the last cell to the front,
+    // so the tab under test is always the one in the last cell.
+    let first = row(0, cx).unwrap().center();
+    for (dx, dy) in [
+        (0.04, 0.5),
+        (0.96, 0.5),
+        (0.5, 0.04),
+        (0.5, 0.96),
+        (0.04, 0.04),
+        (0.96, 0.04),
+        (0.04, 0.96),
+        (0.96, 0.96),
+    ] {
+        let before = centre_tabs(&window.area, cx).0;
+        let cell = row(2, cx).unwrap();
+        let grab = point(
+            cell.left() + cell.size.width * dx,
+            cell.top() + cell.size.height * dy,
+        );
+        drag_to(grab, first, cx);
+        assert!(
+            has_active_drag(cx),
+            "grabbing at ({dx}, {dy}) starts a drag"
+        );
+        release(first, cx);
+        assert_eq!(
+            centre_tabs(&window.area, cx).0,
+            vec![before[2], before[0], before[1]],
+            "grabbing at ({dx}, {dy}) reorders"
+        );
+    }
 }
 
 /// Turning the Vertical Tabs switch off keeps the collapsed state, and on again returns to the

@@ -36,9 +36,12 @@ pub struct DockDocument {
     /// Fields owned by gpui-component's dock layout model.
     #[serde(flatten)]
     dock_fields: BTreeMap<String, Value>,
-    /// Name of the currently zoomed panel.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub zoomed_panel: Option<String>,
+    /// The name of the zoomed panel that builds before `US-0203` wrote here. Panel zoom is gone,
+    /// so the value is read only to be dropped: this field takes the key out of `dock_fields`
+    /// (where the flatten would carry it into the next write as if it were layout) and is never
+    /// serialized, so a save writes no `zoomed_panel` and a file that holds one still loads.
+    #[serde(default, rename = "zoomed_panel", skip_serializing)]
+    _legacy_zoomed_panel: Option<Value>,
     /// Persisted SFTP table column widths and visibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sftp_table_state: Option<SftpTableState>,
@@ -53,7 +56,7 @@ impl Default for DockDocument {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
             dock_fields: BTreeMap::new(),
-            zoomed_panel: None,
+            _legacy_zoomed_panel: None,
             sftp_table_state: None,
         }
     }
@@ -282,7 +285,11 @@ mod tests {
             )),
             Some(("ssh_client_panel", gpui::px(443.), true))
         );
-        assert_eq!(document.zoomed_panel.as_deref(), Some("terminal"));
+        // The fixture stored `zoomed_panel: "terminal"`: read, not kept as a layout field.
+        assert!(
+            !document.dock_fields.contains_key("zoomed_panel"),
+            "a stored zoom must not ride along as a dock field"
+        );
         let sftp = document
             .sftp_table_state
             .as_ref()
@@ -300,7 +307,6 @@ mod tests {
             right_dock_open: true,
         };
         let mut document = DockDocument::from_dock_state(&state).unwrap();
-        document.zoomed_panel = Some("session".into());
         document.sftp_table_state = Some(SftpTableState {
             column_widths: HashMap::from([("name".into(), 240.0)]),
             column_visibility: HashMap::from([("owner".into(), false)]),
@@ -311,7 +317,6 @@ mod tests {
         let restored: DockDocument = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.dock_state::<TestDockState>().unwrap(), state);
-        assert_eq!(restored.zoomed_panel.as_deref(), Some("session"));
         assert_eq!(
             restored.sftp_table_state.unwrap().column_widths.get("name"),
             Some(&240.0)
@@ -323,19 +328,31 @@ mod tests {
 mod persistence_tests {
     use super::*;
 
+    /// A value the document carries, so a test can tell one write from another (the zoomed panel
+    /// used to play this part).
+    fn mark(document: &mut DockDocument, value: &str) {
+        document
+            .dock_fields
+            .insert("marker".into(), Value::String(value.into()));
+    }
+
+    fn marker(document: &DockDocument) -> Option<&str> {
+        document.dock_fields.get("marker").and_then(Value::as_str)
+    }
+
     #[test]
     fn explicit_path_updates_are_isolated_and_atomic() {
         let directory = temp_directory("document-test");
         let path = directory.join("docks.json");
         update_dock_document_at(&path, |document| {
-            document.zoomed_panel = Some("terminal".into());
+            mark(document, "terminal");
             Ok(())
         })
         .unwrap();
         let restored = read_dock_document_from(&path)
             .unwrap()
             .expect("document exists");
-        assert_eq!(restored.zoomed_panel.as_deref(), Some("terminal"));
+        assert_eq!(marker(&restored), Some("terminal"));
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
         std::fs::write(&path, b"not-json").unwrap();
         assert!(matches!(
@@ -356,7 +373,7 @@ mod persistence_tests {
         std::fs::write(&path, b"{ not json").unwrap();
 
         let outcome = update_dock_document_at(&path, |document| {
-            document.zoomed_panel = Some("terminal".into());
+            mark(document, "terminal");
             Ok(())
         })
         .unwrap();
@@ -370,13 +387,13 @@ mod persistence_tests {
         let restored = read_dock_document_from(&path)
             .unwrap()
             .expect("document exists");
-        assert_eq!(restored.zoomed_panel.as_deref(), Some("terminal"));
+        assert_eq!(marker(&restored), Some("terminal"));
         assert_eq!(restored.schema_version, CURRENT_SCHEMA_VERSION);
 
         // A well-formed document that is not a dock document is recovered too.
         std::fs::write(&path, b"[1, 2, 3]").unwrap();
         let outcome = update_dock_document_at(&path, |document| {
-            document.zoomed_panel = Some("sftp".into());
+            mark(document, "sftp");
             Ok(())
         })
         .unwrap();
@@ -389,7 +406,7 @@ mod persistence_tests {
         let restored = read_dock_document_from(&path)
             .unwrap()
             .expect("document exists");
-        assert_eq!(restored.zoomed_panel.as_deref(), Some("sftp"));
+        assert_eq!(marker(&restored), Some("sftp"));
         assert!(restored.sftp_table_state.is_none());
 
         // Subsequent updates on the healthy document are plain updates.
@@ -410,7 +427,8 @@ mod persistence_tests {
             .unwrap()
             .expect("document exists");
         assert_eq!(legacy.schema_version, CURRENT_SCHEMA_VERSION);
-        assert_eq!(legacy.zoomed_panel.as_deref(), Some("terminal"));
+        // The fixture's `zoomed_panel` is dropped on read and absent from the next write.
+        assert!(!legacy.dock_fields.contains_key("zoomed_panel"));
         update_dock_document_at(&path, |_| Ok(())).unwrap();
         let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
@@ -466,7 +484,7 @@ mod persistence_tests {
             Some(std::path::Path::new(r"C:\Users\example\projects"))
         );
         // The dock layout itself is untouched by the migration.
-        assert_eq!(document.zoomed_panel.as_deref(), Some("terminal"));
+        assert!(!document.dock_fields.is_empty());
     }
 
     /// The migration reaches a version-less document too (it is older than v1),
@@ -517,6 +535,55 @@ mod persistence_tests {
         let first = std::fs::read_to_string(&path).unwrap();
         update_dock_document_at(&path, |_| Ok(())).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+    }
+
+    /// `US-0203`: panel zoom is gone. A document that still stores `zoomed_panel` (every file an
+    /// older build wrote while a panel was zoomed) loads, the field is neither an error nor kept
+    /// as a layout field, and the next write carries none.
+    #[test]
+    fn a_stored_zoomed_panel_loads_and_is_not_written_back() {
+        let directory = temp_directory("legacy-zoom");
+        let path = directory.join("docks.json");
+        std::fs::write(
+            &path,
+            br#"{"schema_version":2,"right_dock_open":true,"zoomed_panel":"terminal"}"#,
+        )
+        .unwrap();
+
+        let document = read_dock_document_from(&path)
+            .expect("a legacy zoom is not an error")
+            .expect("document exists");
+        assert_eq!(
+            document.dock_fields.keys().collect::<Vec<_>>(),
+            vec!["right_dock_open"],
+            "the zoom is not a layout field"
+        );
+
+        update_dock_document_at(&path, |_| Ok(())).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("zoomed_panel"), "{written}");
+        let reread: Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(reread["right_dock_open"], true, "the layout is kept");
+
+        // The older shapes load the same way: the v0 and v1 fixtures also hold a zoom.
+        for fixture in [
+            &include_bytes!("../tests/fixtures/persistence/docks-v0.json")[..],
+            &include_bytes!("../tests/fixtures/persistence/docks-v1.json")[..],
+        ] {
+            std::fs::write(&path, fixture).unwrap();
+            assert!(
+                std::str::from_utf8(fixture)
+                    .unwrap()
+                    .contains("zoomed_panel")
+            );
+            read_dock_document_from(&path).unwrap().unwrap();
+            update_dock_document_at(&path, |_| Ok(())).unwrap();
+            assert!(
+                !std::fs::read_to_string(&path)
+                    .unwrap()
+                    .contains("zoomed_panel")
+            );
+        }
     }
 
     /// A document from a future version is refused rather than read with
@@ -585,7 +652,6 @@ mod persistence_tests {
                             document
                                 .dock_fields
                                 .insert(format!("worker-{worker}-{round}"), Value::Bool(true));
-                            document.zoomed_panel = Some(format!("worker-{worker}"));
                             Ok(())
                         })
                         .unwrap();
@@ -602,7 +668,6 @@ mod persistence_tests {
             .unwrap()
             .expect("document exists");
         assert_eq!(restored.dock_fields.len(), 8 * 5);
-        assert!(restored.zoomed_panel.is_some());
         assert_eq!(restored.schema_version, CURRENT_SCHEMA_VERSION);
     }
 
@@ -611,14 +676,14 @@ mod persistence_tests {
         let directory = temp_directory("backup");
         let path = directory.join("docks.json");
         update_dock_document_at(&path, |document| {
-            document.zoomed_panel = Some("first".into());
+            mark(document, "first");
             Ok(())
         })
         .unwrap();
         let first = std::fs::read_to_string(&path).unwrap();
 
         update_dock_document_at(&path, |document| {
-            document.zoomed_panel = Some("second".into());
+            mark(document, "second");
             Ok(())
         })
         .unwrap();
@@ -626,17 +691,17 @@ mod persistence_tests {
         let backup = read_dock_document_from(&directory.join("docks.bak"))
             .unwrap()
             .expect("document exists");
-        assert_eq!(backup.zoomed_panel.as_deref(), Some("first"));
+        assert_eq!(marker(&backup), Some("first"));
         assert_eq!(
             std::fs::read_to_string(directory.join("docks.bak")).unwrap(),
             first
         );
         assert_eq!(
-            read_dock_document_from(&path)
-                .unwrap()
-                .expect("document exists")
-                .zoomed_panel
-                .as_deref(),
+            marker(
+                &read_dock_document_from(&path)
+                    .unwrap()
+                    .expect("document exists")
+            ),
             Some("second")
         );
     }
@@ -646,7 +711,7 @@ mod persistence_tests {
         let directory = temp_directory("quarantine-backup");
         let path = directory.join("docks.json");
         update_dock_document_at(&path, |document| {
-            document.zoomed_panel = Some("good".into());
+            mark(document, "good");
             Ok(())
         })
         .unwrap();
@@ -655,7 +720,7 @@ mod persistence_tests {
         std::fs::write(&path, b"{ truncated").unwrap();
 
         let outcome = update_dock_document_at(&path, |document| {
-            document.zoomed_panel = Some("recovered".into());
+            mark(document, "recovered");
             Ok(())
         })
         .unwrap();
@@ -666,20 +731,20 @@ mod persistence_tests {
         let quarantined = quarantined.expect("invalid file is moved aside");
         assert_eq!(std::fs::read(&quarantined).unwrap(), b"{ truncated");
         assert_eq!(
-            read_dock_document_from(&directory.join("docks.bak"))
-                .unwrap()
-                .expect("document exists")
-                .zoomed_panel
-                .as_deref(),
+            marker(
+                &read_dock_document_from(&directory.join("docks.bak"))
+                    .unwrap()
+                    .expect("document exists")
+            ),
             Some("good"),
             "the last good backup survives quarantine"
         );
         assert_eq!(
-            read_dock_document_from(&path)
-                .unwrap()
-                .expect("document exists")
-                .zoomed_panel
-                .as_deref(),
+            marker(
+                &read_dock_document_from(&path)
+                    .unwrap()
+                    .expect("document exists")
+            ),
             Some("recovered")
         );
     }
@@ -689,7 +754,7 @@ mod persistence_tests {
         let directory = temp_directory("idempotent");
         let path = directory.join("docks.json");
         update_dock_document_at(&path, |document| {
-            document.zoomed_panel = Some("terminal".into());
+            mark(document, "terminal");
             Ok(())
         })
         .unwrap();

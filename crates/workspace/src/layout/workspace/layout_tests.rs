@@ -17,8 +17,8 @@ use oneterm_state::panel_names;
 use super::test_panels::{NamedPanel, register_test_panels};
 use super::{
     DEFAULT_RIGHT_DOCK_WIDTH, MAIN_DOCK_VERSION, OneTermWorkspace, clamp_right_dock_width, layout,
-    persistence, restore_zoom_in_dock, right_dock_open_on_kind_change,
-    right_dock_prefs_after_toggle, set_right_dock_open, startup_dock_document,
+    persistence, right_dock_open_on_kind_change, right_dock_prefs_after_toggle,
+    set_right_dock_open, startup_dock_document,
 };
 
 /// Removes the per-test directory when the test ends — on failure too.
@@ -344,7 +344,6 @@ fn pre_migration_fixture_loads_and_saves_without_semantic_drift(cx: &mut TestApp
     )
     .unwrap();
     let expected: DockAreaState = document.dock_state().unwrap();
-    let expected_zoom = document.zoomed_panel.clone().expect("fixture zoom");
     let expected_sftp = document
         .sftp_table_state
         .clone()
@@ -355,9 +354,9 @@ fn pre_migration_fixture_loads_and_saves_without_semantic_drift(cx: &mut TestApp
         dock_area.update(cx, |dock_area, cx| {
             dock_area.load(expected.clone(), window, cx).unwrap();
         });
-        assert!(restore_zoom_in_dock(&dock_area, &expected_zoom, window, cx));
     });
-    assert!(dock_area.read_with(cx, |dock_area, _| dock_area.is_zoomed()));
+    // The fixture stores `zoomed_panel: "terminal"`: panel zoom is gone, so loading it zooms nothing.
+    assert!(!dock_area.read_with(cx, |dock_area, _| dock_area.is_zoomed()));
 
     let dumped = dock_area.read_with(cx, |dock_area, cx| dock_area.dump(cx));
     let mut expected_center = serde_json::to_value(&expected.center).unwrap();
@@ -383,14 +382,22 @@ fn pre_migration_fixture_loads_and_saves_without_semantic_drift(cx: &mut TestApp
         include_bytes!("../../../../state/src/fixtures/docks-0.5.2.json"),
     )
     .unwrap();
-    persistence::save_state_to(&path, &dumped, Some(&expected_zoom), "fixture-roundtrip").unwrap();
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("zoomed_panel"),
+        "fixture: the stored file holds a zoom"
+    );
+    persistence::save_state_to(&path, &dumped, "fixture-roundtrip").unwrap();
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("zoomed_panel"),
+        "a save writes no zoom"
+    );
     let stored_document = read_dock_document_from(&path)
         .unwrap()
         .expect("saved document");
-    assert_eq!(
-        stored_document.zoomed_panel.as_deref(),
-        Some(expected_zoom.as_str())
-    );
     // Reading the saved document migrates its SFTP column layout (docks.json
     // v1 -> v2, US-0124): the widths go and only the columns the user hid by
     // hand survive. The fixture hides `owner` and shows `permissions`, so one
@@ -440,16 +447,11 @@ fn load_reset_center_and_save_round_trip(cx: &mut TestAppContext) {
         dock_area.toggle_dock(DockPlacement::Right, window, cx);
         dock_area.dump(cx)
     });
-    persistence::save_state_to(&path, &saved, Some(panel_names::TERMINAL), "test-first-run")
-        .unwrap();
+    persistence::save_state_to(&path, &saved, "test-first-run").unwrap();
 
     let document = read_dock_document_from(&path)
         .unwrap()
         .expect("document exists");
-    assert_eq!(
-        document.zoomed_panel.as_deref(),
-        Some(panel_names::TERMINAL)
-    );
 
     let (target, cx) = cx.add_window_view(|window, cx| {
         DockArea::new("layout-test-2", Some(MAIN_DOCK_VERSION), window, cx)
@@ -476,11 +478,10 @@ fn load_reset_center_and_save_round_trip(cx: &mut TestAppContext) {
         (333., false, panel_names::SSH_CLIENT.to_string())
     );
 
-    persistence::save_state_to(&path, &reset, None, "test-reset").unwrap();
+    persistence::save_state_to(&path, &reset, "test-reset").unwrap();
     let written = read_dock_document_from(&path)
         .unwrap()
         .expect("document exists");
-    assert_eq!(written.zoomed_panel, None);
     let written_state = written.dock_state::<DockAreaState>().unwrap();
     assert_eq!(written_state.center, reset.center);
     assert_eq!(
@@ -515,7 +516,7 @@ fn load_layout_builds_no_center_panel_and_the_reset_builds_one(cx: &mut TestAppC
         dock_area.set_dock(DockPlacement::Right, right, window, cx);
         dock_area.dump(cx)
     });
-    persistence::save_state_to(&path, &saved, None, "test-two-center-terminals").unwrap();
+    persistence::save_state_to(&path, &saved, "test-two-center-terminals").unwrap();
     let document = read_dock_document_from(&path)
         .unwrap()
         .expect("document exists");
@@ -541,15 +542,12 @@ fn load_layout_builds_no_center_panel_and_the_reset_builds_one(cx: &mut TestAppC
 }
 
 /// BUG-0054 (independent verification): the persisted centre is a *split* of
-/// two tab groups, each holding a terminal, and the document also names a
-/// zoomed panel that only lives in that centre. Loading must build none of
-/// them and must not panic on the resulting empty centre; the zoom restore
-/// must find nothing before the reset and the reset's own terminal after it.
-/// The right dock must survive the load untouched, panel name included.
+/// two tab groups, each holding a terminal. Loading must build none of them
+/// and must not panic on the resulting empty centre; the reset then builds
+/// exactly one terminal. The right dock must survive the load untouched, panel
+/// name included.
 #[gpui::test]
-fn load_layout_drops_a_split_centre_and_still_restores_zoom_after_the_reset(
-    cx: &mut TestAppContext,
-) {
+fn load_layout_drops_a_split_centre_and_the_reset_builds_one_terminal(cx: &mut TestAppContext) {
     let dir = temp_dir("split-centre");
     let path = dir.0.join("docks.json");
 
@@ -574,13 +572,7 @@ fn load_layout_drops_a_split_centre_and_still_restores_zoom_after_the_reset(
     });
     // The fixture really is a split of two tab groups, not a single group.
     assert_eq!(saved.center.children.len(), 2);
-    persistence::save_state_to(
-        &path,
-        &saved,
-        Some(panel_names::TERMINAL),
-        "test-split-centre",
-    )
-    .unwrap();
+    persistence::save_state_to(&path, &saved, "test-split-centre").unwrap();
     let document = read_dock_document_from(&path)
         .unwrap()
         .expect("document exists");
@@ -614,21 +606,10 @@ fn load_layout_drops_a_split_centre_and_still_restores_zoom_after_the_reset(
         (464., true, panel_names::SESSION.to_string())
     );
 
-    // Nothing to zoom into yet, and asking must not panic.
-    let zoomed_before =
-        cx.update(|window, cx| restore_zoom_in_dock(&target, panel_names::TERMINAL, window, cx));
-    assert!(!zoomed_before);
-    assert!(!target.read_with(cx, |dock_area, _| dock_area.is_zoomed()));
-
     cx.update(|window, cx| layout::apply_center_reset(target.downgrade(), window, cx))
         .expect("dock area alive");
     assert_eq!(builds.get(), 1, "the reset builds exactly one terminal");
-    let zoomed_after =
-        cx.update(|window, cx| restore_zoom_in_dock(&target, panel_names::TERMINAL, window, cx));
-    assert!(
-        zoomed_after,
-        "the saved zoom name must resolve against the reset centre"
-    );
+    assert!(!target.read_with(cx, |dock_area, _| dock_area.is_zoomed()));
 }
 
 /// `DEC-0022`: a `docks.json` saved while the Agent Panel existed names
@@ -651,7 +632,7 @@ fn a_saved_agent_panel_right_dock_is_replaced_by_the_ssh_client_panel(cx: &mut T
         dock_area.set_dock(DockPlacement::Right, right, window, cx);
         dock_area.dump(cx)
     });
-    persistence::save_state_to(&path, &saved, Some("agent_panel"), "test-agent-panel").unwrap();
+    persistence::save_state_to(&path, &saved, "test-agent-panel").unwrap();
     let document = read_dock_document_from(&path)
         .unwrap()
         .expect("document exists");
@@ -671,8 +652,6 @@ fn a_saved_agent_panel_right_dock_is_replaced_by_the_ssh_client_panel(cx: &mut T
             .contains("agent_panel"),
         "the next save must not carry the withdrawn panel"
     );
-    // The saved zoom names a panel that no longer exists: nothing to zoom.
-    assert!(!cx.update(|window, cx| restore_zoom_in_dock(&target, "agent_panel", window, cx)));
 }
 
 // ── The elevated window's layout (`IN-0043` M1) ──────────────────────────

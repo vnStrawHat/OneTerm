@@ -61,15 +61,6 @@ fn make_binding<A: Action>(ks: &str, action: A, context: Option<&str>) -> Option
 pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
     // ── App / workspace ───────────────────────────────────────────
     BindableAction {
-        id: "toggle_zoom",
-        label: "Zoom Active Panel",
-        group: "App Menu",
-        default: Some("shift-escape"),
-        context: None,
-        make: |ks, ctx| make_binding(ks, gpui_component::dock::ToggleZoom, ctx),
-        name_fn: <gpui_component::dock::ToggleZoom as Action>::name_for_type,
-    },
-    BindableAction {
         id: "close_panel",
         label: "Close Panel",
         group: "App Menu",
@@ -541,8 +532,30 @@ mod tests {
         assert_eq!(default_for("close_panel"), Some("ctrl-w"));
         assert_eq!(default_for("new_terminal_tab"), Some("ctrl-t"));
         // Not in DEC-0018's scope, and no fifth default moved.
-        assert_eq!(default_for("toggle_zoom"), Some("shift-escape"));
         assert_eq!(default_for("open_settings"), Some("ctrl-,"));
+    }
+
+    /// `US-0203`: panel zoom is gone, so there is no "Zoom Active Panel" row and nothing is bound
+    /// to `shift-escape` (its old default).
+    #[test]
+    fn no_action_zooms_a_panel() {
+        assert!(
+            BINDABLE_ACTIONS
+                .iter()
+                .all(|action| action.id != "toggle_zoom" && action.label != "Zoom Active Panel"),
+            "the zoom action is not rebindable any more"
+        );
+        assert!(
+            BINDABLE_ACTIONS
+                .iter()
+                .all(|action| action.default != Some("shift-escape")),
+            "nothing takes over the old zoom key"
+        );
+        assert_eq!(
+            oneterm_actions::action_classified_for_elevated_window("toggle_zoom"),
+            None,
+            "the elevated-window policy no longer lists it"
+        );
     }
 
     /// The bare-`Ctrl` defaults `DEC-0018` accepted as exceptions, with the

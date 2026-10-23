@@ -15,7 +15,6 @@ mod render;
 mod tests;
 mod tree;
 
-pub(crate) use render::DragTerminalTab;
 pub(crate) use tree::{
     CloseOutcome, SpaceContent, SpaceId, SpaceLeaf, SpaceTree, SplitContext, SplitDir,
 };

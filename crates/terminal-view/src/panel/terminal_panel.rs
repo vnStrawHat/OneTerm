@@ -663,6 +663,12 @@ impl gpui_base::dock::Panel for TerminalPanel {
         false
     }
 
+    /// Panel zoom is gone (`US-0203`). The kit's defaults are "zoomable" and "a zoom row in the
+    /// `...` menu", so this answers no, and base refuses a zoom however it is asked for.
+    fn zoomable(&self, _: &App) -> bool {
+        false
+    }
+
     fn on_added_to(
         &mut self,
         tab_panel: WeakEntity<TabGroup>,
@@ -709,14 +715,12 @@ impl Panel for TerminalPanel {
     }
 
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
-        Some(PanelControl::Both)
+        None
     }
 
-    /// Rows this panel adds to the tab bar's `...` menu, above the kit's own
-    /// separator: the tab list, so a tab that does not fit the strip is still
-    /// reachable (`US-0116`). The kit's zoom and close rows below it are its
-    /// own — their wording and their presence are not ours to change (see
-    /// `docs/gui-layout.md`).
+    /// Rows this panel puts in the tab bar's `...` menu: the tab list, so a tab that does not
+    /// fit the strip is still reachable (`US-0116`). The kit appends a zoom row after them,
+    /// which `tab_title::override_strip_menu` takes out again (`US-0203`).
     fn dropdown_menu(
         &mut self,
         menu: gpui_component::menu::PopupMenu,

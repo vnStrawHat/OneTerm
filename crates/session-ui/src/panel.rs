@@ -282,6 +282,12 @@ impl gpui_base::dock::Panel for SessionPanel {
     fn closable(&self, _: &App) -> bool {
         true
     }
+
+    /// Panel zoom is gone (`US-0203`). The kit's defaults are "zoomable" and "a zoom row in the
+    /// `...` menu", so this answers no, and base refuses a zoom however it is asked for.
+    fn zoomable(&self, _: &App) -> bool {
+        false
+    }
 }
 
 impl Panel for SessionPanel {
@@ -290,7 +296,7 @@ impl Panel for SessionPanel {
     }
 
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
-        Some(PanelControl::Both)
+        None
     }
 
     /// "+" at the trailing end of the "Session" title — a way to add a session
@@ -310,5 +316,28 @@ impl Panel for SessionPanel {
                 .tooltip("New Session")
                 .on_click(|_, window, cx| open_session_dialog(window, cx, None, false)),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::TestAppContext;
+    use gpui_component::dock::Panel as _;
+
+    use super::SessionPanel;
+    use crate::session_state::SshSessionStore;
+
+    /// `US-0203`: panel zoom is gone. The kit's defaults are "zoomable" and "a zoom row in the
+    /// `...` menu", so the panel has to answer no to both.
+    #[gpui::test]
+    fn the_session_panel_offers_no_zoom(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(SshSessionStore::install_empty_for_test);
+        let (panel, cx) = cx.add_window_view(|window, cx| SessionPanel::new(window, cx));
+        cx.update(|_, cx| {
+            let panel = panel.read(cx);
+            assert!(!gpui_base::dock::Panel::zoomable(panel, cx));
+            assert!(panel.zoom_control(cx).is_none());
+        });
     }
 }

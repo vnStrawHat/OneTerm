@@ -22,6 +22,7 @@ use gpui_component::{
     ActiveTheme as _, ElementExt as _, Icon, IconName, Sizable as _, Size, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{DialogButtonProps, DialogFooter},
+    dock::ClosePanel,
     h_flex,
     input::{Input, InputState},
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
@@ -36,7 +37,6 @@ use oneterm_theme::{AppIcon, notif_ext::notify};
 
 use super::TerminalPanel;
 use super::channel_menu::channel_submenu;
-use crate::space::DragTerminalTab;
 use crate::theme::channel_chip;
 
 impl TerminalPanel {
@@ -482,8 +482,8 @@ impl Render for CellTooltip {
 /// badge and nothing animates: the state is the background. The title, directory, channel chips
 /// and status icon are the hover card's ([`tab_hover_card`]).
 ///
-/// The icon is the cell's content, so it starts the tab drag (`drag`, which an empty Space
-/// accepts); the rest of the cell belongs to the rail, which starts its reorder drag there.
+/// The icon is plain content: the whole cell, icon included, is the rail's reorder drag
+/// (`DragPanel`), which an empty Space accepts too (`US-0198` rework 8).
 ///
 /// The fill is an absolute child over the whole cell, painted over the rail's hover fill (so a
 /// filled cell takes no hover tint) and over the rail's accent pill, which a `Working` fill
@@ -494,8 +494,6 @@ fn collapsed_row(
     fill: Option<(gpui::Hsla, gpui::Hsla)>,
     selected: bool,
     recording: Option<gpui::Stateful<Div>>,
-    icon_id: SharedString,
-    drag: Option<DragTerminalTab>,
 ) -> Div {
     let glyph = Icon::new(icon).with_size(Size::Medium);
     let glyph = match fill {
@@ -532,11 +530,9 @@ fn collapsed_row(
         }))
         .child(
             div()
-                .id(icon_id)
                 .debug_selector(|| TAB_SHELL_ICON_SELECTOR.to_string())
                 .flex()
-                .child(glyph)
-                .when_some(drag, |this, drag| this.on_drag(drag, start_tab_drag)),
+                .child(glyph),
         )
         .children(recording.map(|dot| {
             div()
@@ -556,19 +552,7 @@ pub(super) fn new_tab_button_size(layout: TabRowLayout) -> Size {
     }
 }
 
-/// Start dragging a tab: the preview is the title chip, and the payload is what an empty Space
-/// accepts.
-fn start_tab_drag(
-    drag: &DragTerminalTab,
-    _: Point<Pixels>,
-    _: &mut Window,
-    cx: &mut App,
-) -> Entity<DragTerminalTab> {
-    cx.stop_propagation();
-    cx.new(|_| drag.clone())
-}
-
-/// Build the tab-strip row for `panel`: active bar, drag source, middle-click
+/// Build the tab-strip row for `panel`: active bar, middle-click
 /// close, recording dot, status icon, the (double-click to rename) label, and
 /// the × button. The vertical rail's row (`IN-0055`, `US-0196` rework) has two
 /// lines and no ×: the label after the chips and the dot, then the current
@@ -601,7 +585,6 @@ pub(super) fn render_tab_strip(
     let cwd = vertical.then(|| panel.tab_cwd(cx)).flatten();
     let chips = tab_chips(panel, cx);
     let tab_label = panel.tab_label(cx);
-    let drag_title: SharedString = tab_label.clone().into();
     let rename_title = tab_label.clone();
     let menu_title = tab_label.clone();
     let menu_panel = panel_entity.clone();
@@ -633,28 +616,8 @@ pub(super) fn render_tab_strip(
         })
         .child(tab_label);
 
-    // What an empty Space accepts from here. A collapsed cell starts it from its icon only and the
-    // strip's tab from the whole row; a rail row starts none (the whole row is the rail's reorder
-    // drag, `DragPanel`, which an empty Space accepts too, `US-0196` rework 9).
-    let tab_drag = tab_panel.as_ref().map(|_| DragTerminalTab {
-        panel: panel_weak.clone(),
-        title: drag_title.clone(),
-    });
-    let (cell_drag, row_drag) = match layout {
-        TabRowLayout::Collapsed => (tab_drag, None),
-        TabRowLayout::Vertical => (None, None),
-        TabRowLayout::Horizontal => (None, tab_drag),
-    };
-
     let row = if collapsed {
-        collapsed_row(
-            panel.tab_shell_icon(cx),
-            fill,
-            is_active,
-            recording_dot,
-            SharedString::from(format!("tab-cell-icon-{panel_entity:?}")),
-            cell_drag,
-        )
+        collapsed_row(panel.tab_shell_icon(cx), fill, is_active, recording_dot)
     } else if vertical {
         // The rail draws the selected row's accent pill and starts the row's reorder drag itself,
         // so this row carries neither the top bar, nor the strip's negative margin, nor a drag.
@@ -768,9 +731,6 @@ pub(super) fn render_tab_strip(
                     window.refresh();
                 })
         })
-        // Drag the strip's tab into an empty Space with the terminal-specific
-        // payload consumed by Space-tree drop targets.
-        .when_some(row_drag, |this, drag| this.on_drag(drag, start_tab_drag))
         // Middle-click on a tab → close that tab.
         .on_mouse_down(MouseButton::Middle, {
             let panel = panel_entity.clone();
@@ -988,9 +948,11 @@ pub(super) fn close_following_label(layout: TabRowLayout) -> &'static str {
 /// one marked, clicking a row shows that tab (`US-0116`, `F11`/`F13`).
 ///
 /// It lives in the `...` menu because that is the one menu a panel can add rows
-/// to, above the kit's own separator (`component/src/dock/tab_panel.rs:333-337`),
-/// and because the menu
-/// otherwise held a single row duplicating the zoom button beside it.
+/// to. The kit appends its own separator, a "Zoom In" row (greyed, since panel zoom
+/// is gone, `US-0203`) and, for a closable panel, a Close row after what a panel adds
+/// (`component/src/dock/tab_panel.rs`, `render_toolbar`), and offers no way to leave the zoom
+/// row out. So this also arms [`override_strip_menu`], which rebuilds the menu once it exists
+/// with the tab list and Close alone.
 ///
 /// `panel` is the group's active panel and is already borrowed by the caller
 /// (`Panel::dropdown_menu` takes `&mut self`), so its own row must not read it
@@ -1000,7 +962,99 @@ pub(super) fn tab_list_menu(
     panel: &TerminalPanel,
     cx: &mut Context<TerminalPanel>,
 ) -> PopupMenu {
-    let panel_id = cx.entity_id();
+    // A weak handle: an armed rebuild that nothing takes (no observer installed, as in a test
+    // that never ran `init`) must not keep the panel alive, and one that outlives its panel
+    // leaves the menu as the kit built it.
+    let entity = cx.entity().downgrade();
+    STRIP_MENU.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move |menu, _, cx| strip_menu(menu, &entity, cx)));
+    });
+    tab_list_rows(menu, panel, cx.entity_id(), cx).separator()
+}
+
+/// What a `...` menu rebuild builds: the menu to put in the one that just opened.
+type StripMenuBuild = Box<dyn FnOnce(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
+
+thread_local! {
+    /// Armed by [`tab_list_menu`], which the kit calls while it builds the `...` menu, and taken
+    /// by [`override_strip_menu`] when that menu's entity has been created, right after: the
+    /// kit builds and opens one menu at a time, so what is armed belongs to the menu that
+    /// appears next.
+    static STRIP_MENU: std::cell::RefCell<Option<StripMenuBuild>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Make the tab strip's `...` menu the tab list and Close only, with no zoom row (`US-0203`).
+///
+/// The kit builds the menu as the panel's rows, a separator, a "Zoom In" row and Close, in one
+/// closure it never lets a panel see the end of, and `PopupMenu` has no way to drop one row. What
+/// it does offer is `rebuild`, which replaces every row of an existing menu, and gpui offers
+/// `observe_new`, which hands over each new menu as the effect of its creation. Together they
+/// reach the one menu [`tab_list_menu`] armed. The menu shows the kit's rows for the frame it is
+/// created in and ours from the next. No kit code is changed.
+pub(crate) fn override_strip_menu(cx: &mut App) {
+    cx.observe_new(
+        |menu: &mut PopupMenu, window: Option<&mut Window>, cx: &mut Context<PopupMenu>| {
+            let Some(build) = STRIP_MENU.with(|slot| slot.borrow_mut().take()) else {
+                return;
+            };
+            if let Some(window) = window {
+                menu.rebuild(window, cx, build);
+            }
+        },
+    )
+    .detach();
+}
+
+/// Whether a rebuild is armed and not yet taken (the `US-0203` rework D1 review pins that a walk
+/// with no rebuild installed leaves none behind).
+#[cfg(test)]
+pub(super) fn strip_menu_is_armed() -> bool {
+    STRIP_MENU.with(|slot| slot.borrow().is_some())
+}
+
+/// Drop an armed rebuild nobody took, so one test's walk cannot rewrite another test's menu on
+/// the same thread.
+#[cfg(test)]
+pub(super) fn disarm_strip_menu() {
+    STRIP_MENU.with(|slot| slot.borrow_mut().take());
+}
+
+/// The `...` menu of a tab strip as OneTerm wants it: the tab list, and Close when the group
+/// lets the displayed tab close.
+fn strip_menu(
+    menu: PopupMenu,
+    panel: &WeakEntity<TerminalPanel>,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let Some(panel) = panel.upgrade() else {
+        return menu;
+    };
+    let app: &App = cx;
+    let tab = panel.read(app);
+    let menu = tab_list_rows(menu, tab, panel.entity_id(), app);
+    let closable = tab
+        .tab_panel
+        .as_ref()
+        .and_then(|group| group.upgrade())
+        .is_some_and(|group| group.read(app).is_closable(app));
+    if closable {
+        // The kit's own row says `t!("Dock.Close")`, a `rust_i18n` lookup in the kit's crate with
+        // its own locale table that this crate cannot reach; the English word it resolves to is
+        // the one every other Close row in this file uses.
+        menu.separator().menu("Close", Box::new(ClosePanel))
+    } else {
+        menu
+    }
+}
+
+/// The rows of the tab list, with no separator after them.
+fn tab_list_rows(
+    menu: PopupMenu,
+    panel: &TerminalPanel,
+    panel_id: EntityId,
+    cx: &App,
+) -> PopupMenu {
     let Some((tabs, _)) = tabs_of(panel, panel_id, cx) else {
         return menu;
     };
@@ -1022,7 +1076,7 @@ pub(super) fn tab_list_menu(
             },
         ));
     }
-    menu.separator()
+    menu
 }
 
 /// Open the rename-tab dialog for a terminal panel. An empty title keeps the

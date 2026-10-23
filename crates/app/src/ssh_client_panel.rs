@@ -9,11 +9,11 @@
 //! chrome-free right dock while the GPUI Base layout tree remains a normal,
 //! serializable tab-group layout.
 //!
-//! Expanding the SFTP Browser (IN-0025) behaves like zooming a terminal tab:
-//! this panel zooms its right-dock node so the browser fills the workspace
-//! and hides the Session section while expanded; collapsing (or any other
-//! zoom-out) restores the split. Both directions stay in sync through
-//! [`SftpExpandedChanged`] and the base `Panel::set_zoomed` hook.
+//! Expanding the SFTP Browser (IN-0025) hides the Session section and gives the
+//! browser the whole dock, with its Local + Remote layout; collapsing restores the
+//! split. [`SftpExpandedChanged`] keeps the two in step. The dock itself is never
+//! zoomed: panel zoom is gone (`US-0203`), so an expanded browser is as wide as the
+//! dock the user has dragged.
 //!
 //! This crate (`oneterm-app`) is the only crate allowed to depend on more than
 //! one feature (R9 in `docs/agents/crate-dependency-rules.md`), so the composite
@@ -37,7 +37,7 @@ use gpui_component::{
 };
 use oneterm_session_ui::SessionPanel;
 use oneterm_sftp_ui::{SftpExpandedChanged, SftpPanel};
-use oneterm_state::{dock_util, panel_names};
+use oneterm_state::panel_names;
 
 /// Combined right-dock panel for SSH Client Mode: a vertical resizable split of
 /// [`SessionPanel`] (top) + [`SftpPanel`] (bottom), each with its own header.
@@ -53,9 +53,7 @@ pub(crate) struct SshClientPanel {
     _dock_focus_subscription: Subscription,
     session: Entity<SessionPanel>,
     sftp: Entity<SftpPanel>,
-    dock_area: gpui::WeakEntity<DockArea>,
-    /// `true` while the SFTP Browser is expanded: the dock node is zoomed and
-    /// only the SFTP section is rendered.
+    /// `true` while the SFTP Browser is expanded: only the SFTP section is rendered.
     sftp_expanded: bool,
     _sftp_subscription: Subscription,
 }
@@ -72,8 +70,9 @@ impl SshClientPanel {
         let sftp_subscription = cx.subscribe_in(
             &sftp,
             window,
-            |this, _, event: &SftpExpandedChanged, window, cx| {
-                this.on_sftp_expanded(event.expanded, window, cx);
+            |this, _, event: &SftpExpandedChanged, _, cx| {
+                this.sftp_expanded = event.expanded;
+                cx.notify();
             },
         );
         let dock_focus_handle = cx.focus_handle();
@@ -90,46 +89,9 @@ impl SshClientPanel {
             _dock_focus_subscription: dock_focus_subscription,
             session,
             sftp,
-            dock_area,
             sftp_expanded: false,
             _sftp_subscription: sftp_subscription,
         }
-    }
-
-    /// The SFTP Browser expanded or collapsed: zoom this panel's dock node in
-    /// step (expanded = zoomed, like a terminal tab) and re-render.
-    ///
-    /// The dock update is deferred: zooming asks the tab group whether this
-    /// panel is `zoomable`, which reads this entity — not allowed while it is
-    /// being updated by this very handler.
-    fn on_sftp_expanded(&mut self, expanded: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.sftp_expanded = expanded;
-        cx.notify();
-        let Some(dock_area) = self.dock_area.upgrade() else {
-            return;
-        };
-        window.defer(cx, move |window, cx| {
-            let node = dock_util::find_tab_node_by_panel_name(
-                dock_area.read(cx),
-                panel_names::SSH_CLIENT,
-                cx,
-            );
-            let zoomed = dock_area.read(cx).zoomed_group();
-            log::debug!(
-                "SshClientPanel: sftp expanded={expanded}, node={node:?}, zoomed={zoomed:?}"
-            );
-            dock_area.update(cx, |dock_area, cx| match (expanded, node) {
-                (true, Some(node)) if zoomed != Some(node) => {
-                    dock_area.set_zoomed_in(node, window, cx);
-                }
-                // Only give the dock back when it is *this* node that fills it; a
-                // zoom onto another group is what collapsed the browser.
-                (false, Some(node)) if zoomed == Some(node) => {
-                    dock_area.set_zoomed_out(window, cx);
-                }
-                _ => {}
-            });
-        });
     }
 }
 
@@ -234,21 +196,9 @@ impl gpui_base::dock::Panel for SshClientPanel {
         false
     }
 
-    /// Zoomable so the SFTP Browser can fill the workspace; the dock skin
-    /// hides this panel's tab bar, so the browser's own toggle drives it.
+    /// Panel zoom is gone (`US-0203`); the kit's default would let the dock zoom this node.
     fn zoomable(&self, _: &App) -> bool {
-        true
-    }
-
-    /// Any zoom change of this node — the browser's toggle, a `ToggleZoom`
-    /// action, a zoom onto another group, or the restored zoom at startup —
-    /// keeps the SFTP Browser's expanded state in step.
-    fn set_zoomed(&mut self, zoomed: bool, _window: &mut Window, cx: &mut Context<Self>) {
-        log::debug!("SshClientPanel: dock zoom = {zoomed}");
-        if self.sftp.read(cx).expanded() != zoomed {
-            self.sftp
-                .update(cx, |sftp, cx| sftp.set_expanded(zoomed, cx));
-        }
+        false
     }
 
     fn dump(&self, _cx: &App) -> PanelState {
@@ -284,7 +234,7 @@ impl Render for SshClientPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = cx.theme().background;
 
-        // Expanded SFTP Browser: the zoomed node shows only that section.
+        // Expanded SFTP Browser: only that section is shown.
         if self.sftp_expanded {
             return div()
                 .id("ssh-client-panel")

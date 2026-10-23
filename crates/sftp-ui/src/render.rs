@@ -103,9 +103,9 @@ impl Render for SftpPanel {
 
 impl SftpPanel {
     /// The expand/collapse toggle, shown at the trailing end of the panel
-    /// title (`Panel::title_suffix`) like the terminal tab's zoom button and
-    /// with its icons: expanding fills the workspace with the Local + Remote
-    /// layout, collapsing docks the remote browser again.
+    /// title (`Panel::title_suffix`): expanding shows the Local + Remote layout
+    /// in the dock (there is no panel zoom, `US-0203`), collapsing returns to the
+    /// remote browser alone.
     pub(crate) fn render_expand_button(&self, cx: &mut Context<Self>) -> Button {
         let expanded = self.expanded();
         Button::new("sftp-expand")
@@ -123,7 +123,7 @@ impl SftpPanel {
             .tooltip(if expanded {
                 "Collapse: back to the docked remote browser"
             } else {
-                "Expand: Local + Remote files across the workspace"
+                "Expand: Local + Remote files side by side"
             })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.set_expanded(!expanded, cx);
@@ -131,8 +131,8 @@ impl SftpPanel {
     }
 
     /// Render when there is no SFTP connection. While expanded the Local pane
-    /// stays usable (the toggle lives in the panel title, so a zoomed browser
-    /// never traps the user without a way back to the dock).
+    /// stays usable (the toggle lives in the panel title, so an expanded browser
+    /// never traps the user without a way back to the remote-only view).
     fn render_no_connection(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let placeholder = div()
             .flex_1()

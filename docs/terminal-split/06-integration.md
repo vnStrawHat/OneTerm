@@ -114,5 +114,5 @@ active `TerminalPanel` is resolved via the focused panel in the `DockArea` (same
   untouched (no new dock/tab). The Space tree is invisible to the dock layer.
 - The terminal view internals (`element/`, `cell/`, `theme/`, IME, mouse) — a leaf
   hosts the exact same `LocalTerminalView`.
-- Zoom, persistence of dock layout, statusbar structure — unchanged (the statusbar
+- Persistence of dock layout, statusbar structure — unchanged (zoom was removed by `US-0203`; the statusbar
   just reads the active Space instead of the single view, §2).

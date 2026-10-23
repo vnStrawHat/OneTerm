@@ -425,3 +425,118 @@ fn the_hover_card_is_not_drawn_while_a_right_press_hides_it(cx: &mut TestAppCont
     let (card, _) = drawn_card(cx);
     assert!(card.size.width > px(0.), "the card is back");
 }
+
+/// Open the `...` menu of a real kit tab strip holding two terminal tabs and read the labels of
+/// the rows it draws. `override_installed` runs `crate::init`, which installs the rebuild of that
+/// menu (`US-0203`); without it the kit's own menu is what opens.
+fn strip_menu_rows(cx: &mut TestAppContext, override_installed: bool) -> Vec<String> {
+    use gpui::{Modifiers, point, px};
+    use gpui_component::{
+        Root,
+        dock::{DockLayout, DockSkin, panel_handle},
+    };
+
+    cx.update(gpui_component::init);
+    if override_installed {
+        cx.update(crate::init);
+    }
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AppState::init);
+
+    let (first_session, _) = FakeTerminalSession::boxed(24, 80, "first");
+    let (second_session, _) = FakeTerminalSession::boxed(24, 80, "second");
+    let handed = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let handed_in = handed.clone();
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let (dock_area, _skin) = DockSkin::dock_area("strip-menu-test", None, window, cx);
+        let first =
+            cx.new(|cx| TerminalPanel::from_spec(session_spec(first_session, "First"), window, cx));
+        let second = cx
+            .new(|cx| TerminalPanel::from_spec(session_spec(second_session, "Second"), window, cx));
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.set_center(
+                DockLayout::tabs()
+                    .panel_view(panel_handle(first), cx)
+                    .panel_view(panel_handle(second), cx),
+                window,
+                cx,
+            );
+        });
+        *handed_in.borrow_mut() = Some(dock_area.clone());
+        Root::new(dock_area, window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    let dock_area = handed.borrow().clone().expect("the window was built");
+    let draw = |cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    };
+    draw(cx);
+    draw(cx);
+
+    // The strip's `...` button is the last control of the bar, 8 px of padding from its end.
+    let area = dock_area.read_with(cx, |area, _| area.bounds());
+    let tab = cx.debug_bounds("dock-tab-1").expect("the strip is drawn");
+    cx.simulate_click(
+        point(area.right() - px(18.), tab.center().y),
+        Modifiers::none(),
+    );
+    // The menu is drawn as the kit built it; a rebuild is an effect of its creation and shows
+    // in the next frame.
+    for _ in 0..3 {
+        draw(cx);
+    }
+    let rows = cx.update(|window, _| {
+        gpui_base::test_support::snapshots(window)
+            .into_iter()
+            .filter(|element| element.role() == Some(gpui::Role::MenuItem))
+            .filter_map(|element| Some(element.label()?.to_string()))
+            .collect()
+    });
+    // Without the observer nothing took the rebuild the menu armed; leave none for the next test
+    // on this thread.
+    crate::panel::tab_title::disarm_strip_menu();
+    rows
+}
+
+/// `US-0203` (ui-verifier D1): the strip's `...` menu kept a greyed "Zoom In" row, which the kit
+/// appends after a panel's rows and gives a panel no way to omit. With the rebuild installed the
+/// menu lists the tabs and nothing else (the terminal panel is not closable, so no Close row).
+#[gpui::test]
+fn the_strip_ellipsis_menu_has_the_tab_list_and_no_zoom_row(cx: &mut TestAppContext) {
+    let rows = strip_menu_rows(cx, true);
+    assert!(
+        rows.len() >= 2,
+        "the menu opened and lists the two tabs: {rows:?}"
+    );
+    assert!(
+        rows.iter().all(|row| !row.contains("Zoom")),
+        "no zoom row: {rows:?}"
+    );
+}
+
+/// The control for the test above: without the rebuild the kit's own menu opens with its zoom
+/// row, so the click does reach the menu and the rows are read.
+#[gpui::test]
+fn without_the_rebuild_the_kits_strip_menu_still_has_its_zoom_row(cx: &mut TestAppContext) {
+    let rows = strip_menu_rows(cx, false);
+    assert!(
+        rows.iter().any(|row| row.contains("Zoom In")),
+        "control: the kit's menu has its zoom row: {rows:?}"
+    );
+}
+
+/// Pinned by the advisor (`US-0203` rework D1 review, defect 1), not run by the advisor: opening
+/// the `...` menu with no rebuild installed arms the one-shot in `tab_list_menu` and nothing takes
+/// it, so it stays armed in this thread's local with a strong handle to the panel. The next
+/// `PopupMenu` created on the same thread with the rebuild installed, in another test, is then
+/// rewritten as this panel's tab list through an entity of a dropped `App`. Passes once the slot is
+/// disarmed when no observer takes it (or the helper clears it after the control walk).
+#[gpui::test]
+fn the_control_walk_leaves_no_strip_menu_rebuild_armed(cx: &mut TestAppContext) {
+    let _ = strip_menu_rows(cx, false);
+    assert!(
+        !crate::panel::tab_title::strip_menu_is_armed(),
+        "the one-shot rebuild is still armed after a walk with no observer installed"
+    );
+}

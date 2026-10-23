@@ -112,7 +112,7 @@ v_flex()
     // context menu for empty Space (see 04 §3)
 ```
 
-The placeholder is the **only** drop target for `DragTerminalTab` — terminal leaves
+The placeholder is the **only** drop target for a terminal tab's `DragPanel` — terminal leaves
 are not droppable ([03](03-drag-drop.md) §3). It also carries the empty-Space context
 menu, including **New Terminal Here** ([04](04-context-menu.md) §3).
 

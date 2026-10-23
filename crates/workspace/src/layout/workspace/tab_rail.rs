@@ -713,8 +713,9 @@ impl TabRail {
             })
             // The whole row is what is dragged to reorder (the dock's `DragPanel`: onto another
             // row, below the last, into another group, or out onto an empty Space of a terminal
-            // tab). A collapsed cell's icon, the cell's content, starts the tab drag first and
-            // wins the press where it is; the cell keeps its open hand, a row its pointer.
+            // tab). Nothing inside the row or the cell (the collapsed cell's icon included) starts
+            // a drag of its own, so every pixel of it is this drag (`US-0198` rework 8); the cell
+            // keeps its open hand, a row its pointer.
             .when_some(drag, |this, drag| {
                 this.when(collapsed, |this| this.cursor_grab())
                     .on_drag(drag, reorder)

@@ -66,7 +66,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 
 - Browse remote directories with breadcrumbs and sortable columns
 - Upload / download, rename / delete, create folders, view properties
-- Expand the browser across the workspace (like zooming a terminal tab) into a dual-pane Local + Remote view: browse local folders, upload / download with a click, a double-click, or drag & drop between the panes
+- Expand the browser into a dual-pane Local + Remote view in the right dock: browse local folders, upload / download with a click, a double-click, or drag & drop between the panes
 - Transfer queue with progress bars and cancellation
 - Sync the browser to the active SSH session CWD via OSC 7
 
@@ -86,7 +86,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 
 - Zed-style workspace with a flexible DockArea, left / right / bottom docks, and center tabs
 - Multiple concurrent sessions across tabs
-- Title bar, menu bar, status bar (clock, cwd breadcrumb, git branch/dirty state of the local shell, network speed, CPU/memory), zoom, and quick close
+- Title bar, menu bar, status bar (clock, cwd breadcrumb, git branch/dirty state of the local shell, network speed, CPU/memory), and quick close
 - Remembers dock layout across sessions (`docks.json`)
 
 ### ⚙️ Settings & theming

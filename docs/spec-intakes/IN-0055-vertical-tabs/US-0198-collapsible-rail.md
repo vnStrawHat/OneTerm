@@ -248,6 +248,34 @@ Not pinned by a test: that gpui really shows the card at the spot the drawn test
 
 A selected collapsed cell with a status fill showed two 3 x 8 px notches of plain background at its top-left and bottom-left corners: the fill started 3 px in (to leave the rail's accent bar its own background) but the pill is now inset 8 px top and bottom. The fill now covers the whole cell. The rail's pill is under the fill, and a `Working` fill (`primary`) can be the pill's own colour, so a selected filled cell draws its **own pill over the fill in the glyph colour** (`legible_on(fill, [background, foreground])`, the pick the glyph and recording dot already make, held to 3:1 for every variant and fill by `check-theme-contrast.py`), with the same 3 px width and 8 px inset. An unselected cell has none. Test: `a_selected_fill_covers_the_cell_and_carries_its_own_pill` replaces `a_selected_fill_leaves_the_accent_bar_its_own_background`.
 
+### Rework 8 2026-10-23 (owner): the whole collapsed cell reorders
+
+Acceptance rework of this packet (still reopened, not a new BUG). Owner report, 2026-10-23: on the collapsed rail "sometimes it reorders, sometimes not".
+
+**Cause (from the code, before any change).** The cell has two drag zones (rework 7): the 16 px shell icon starts OneTerm's `DragTerminalTab` (only an empty Space accepts it, so on any other target it does nothing visible), and the rest of the 43 x 44 px cell starts the kit's `DragPanel` (reorder). Whether a drag reorders depends on whether the press landed on the icon (the centre 16 x 16 of a 44 px cell, where a person naturally grabs) or on the margin. Since rework 9 of `US-0196` an expanded row is one whole-row `DragPanel` that an empty Space also accepts, so the two-zone split no longer serves a purpose.
+
+**Owner ruling.** The whole cell starts `DragPanel`, like an expanded row: dragging it reorders; dropping it on an empty Space moves the terminal in (`handle_panel_drop` / `move_tab_into`, rework 9); dropping it on non-empty terminal content does nothing. The icon has no drag of its own.
+
+**Outcome.**
+
+- `collapsed_row` no longer takes a drag; the icon is plain content. `render_tab_strip` passes none for a collapsed cell.
+- The rail's `DragPanel` covers every pixel of the cell, the icon included.
+- Anything else that could make the collapsed reorder intermittent is looked for on a real window with `SendInput` (drag threshold on a 44 px cell, the hover card, the cell's mouse handlers, the drop target between cells, `is_last_panel`); findings under "Evidence".
+
+**Acceptance.**
+
+- [x] A drag that starts on the shell icon, on the cell's margin, on its top and bottom edges and in each corner of a collapsed cell reorders (workspace test `the_whole_collapsed_cell_is_the_reorder_drag`, a probe cell whose icon element carries no drag of its own; it replaces `a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon`).
+- [x] No gesture on a collapsed cell starts a `DragTerminalTab`, the icon included (terminal-view test `no_part_of_a_collapsed_cell_starts_a_tab_drag_of_its_own` on the real cell, which replaces `the_collapsed_cell_icon_still_drags_the_tab_and_the_rest_of_the_cell_does_not`; the icon used to start the tab drag, so it fails on the previous code).
+- [x] A collapsed cell dragged onto an empty Space moves the terminal in (the rework 9 path, `a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal`, unchanged).
+- [ ] Real input: many attempts at different grab points on a collapsed rail all reorder (coder's `SendInput` walk). **Not done by the coder**: the machine's console session was at the Windows lock screen for the whole run (`LogonUI` running, session idle for more than a day), so `SendInput` could not reach a window; the gpui test with 9 grab points stands in, and the walk is for `ui-verifier`.
+- [x] `docs/gui-layout.md`, the HLD rows and `docs/terminal-split/03-drag-drop.md` say the same.
+- [x] Full `pwsh scripts/ci-local.ps1` passes (below).
+- [ ] On screen, by `ui-verifier`.
+
+**Findings: is anything else making the collapsed reorder intermittent?** Read in the code and in gpui's source (`gpui-pre-0.3.9 src/elements/div.rs`), not reproduced on a screen (see above). The two-zone split is the cause: an icon press started `DragTerminalTab` (nothing visible happens on any target but an empty Space) and a margin press started `DragPanel`, and the icon is the centre of a 44 px cell, where a person grabs. Checked and **not** a cause: (1) the drag threshold is 2 px (`DRAG_THRESHOLD`), not scaled by the cell; (2) a press arms a drag only if the element's own hitbox is hovered, and nothing occludes the strip: the hover card is a paint-only tooltip placed 6 px right of the strip, and a press clears it; (3) the cell's own mouse handlers act on the right press (hide the card) and the middle press (close) only, the left press is the drag's; (4) the cells are contiguous (no gap between drop targets) and the drop line is a border inside the fixed 44 px height, so the layout does not move under a drag; (5) `is_draggable` is false only for the lone tab of the dock, a locked group and (until `US-0203`) a zoomed group, the trap `US-0196` rework 9 found. One residual that is by design and not a defect: a drag that starts and ends inside the same cell, or a drop on the cell the tab already occupies, changes nothing.
+
+**Evidence (coder, rework 8).** `pwsh scripts/ci-local.ps1` (`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=2`, the worktree's own `target`), run once on the final tree of the three packets (after `US-0203`): all checks passed. `cargo test --workspace` 2567 passed, 0 failed, 19 ignored; the three `--ignored --test-threads=1` lines (`oneterm-workspace` 3, `oneterm-session-ui` 1, `oneterm-settings-ui` 1) passed; `oneterm-vt` `vt-paranoid` 869, `regex` 882, `no-default-features` 829 passed; `check-ignored-tests.py`, `verify-dependency-graph.py`, `check-doc-paths.py` (219 paths), `check-english.py` (1157 files), `check-theme-contrast.py` (2067 pairings, the five accepted `KNOWN_BELOW` rows unchanged) and the notices check passed. A comment-only edit followed (`tab_rail.rs`, one test doc line); `cargo fmt --check` and `cargo build -p oneterm-app` were re-run after it. Debug binary: `target\debug\oneterm.exe` in the worktree.
+
 ### Gaps
 
 - Not pinned by a test: the tooltip text on a cell (gpui exposes no way to read a shown tooltip in a test) and the recording dot's place; both are plain code in `render_tab_strip` / `collapsed_row`.
