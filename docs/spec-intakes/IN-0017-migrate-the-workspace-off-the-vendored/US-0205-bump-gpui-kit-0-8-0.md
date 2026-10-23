@@ -11,7 +11,7 @@ Created: 2026-10-23
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [x] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -59,9 +59,9 @@ Research: [`research-gpui-kit-0-8-0.md`](research-gpui-kit-0-8-0.md).
 - [x] `reference/gpui-kit` sits at `v0.8.0`; the three doc citations name `v0.8.0`.
 - [x] `THIRD-PARTY-NOTICES.md` regenerated; `python scripts/third-party-notices.py --check` passes.
 - [x] `cargo deny check licenses bans advisories` clean (or only a failure that also fails on the base commit, recorded).
-- [ ] `force_width_copy_matches_gpui` passes (dependencies.md § 4 step 4; `gpui-pre` unchanged).
-- [ ] Full gate (`pwsh scripts/ci-local.ps1 --full`) green.
-- [ ] The strip "..." menu still has no zoom row: the tests in
+- [x] `force_width_copy_matches_gpui` passes (dependencies.md § 4 step 4; `gpui-pre` unchanged).
+- [x] Full gate (`pwsh scripts/ci-local.ps1 --full`) green.
+- [x] The strip "..." menu still has no zoom row: the tests in
   `crates/terminal-view/src/panel/tests/tab_menu_and_card.rs` pass, checked against the 0.8.0 rule
   "nested context menus open only the innermost".
 - [ ] ui-verifier Windows walk (Q3): SFTP table Home / End select the first / last row and the wheel
@@ -105,8 +105,8 @@ Before completion: list docs changed; DEC-0006 rules re-read, expected unchanged
 - [x] Manifest to `"0.8"`; `cargo update -p gpui-base -p gpui-component -p gpui-component-macros -p gpui-kit-assets` (+ nothing else); inspect the lock diff.
 - [x] Re-vendor `reference/gpui-kit` at `v0.8.0`; update the three doc citations and the `dependencies.md` table.
 - [x] Regenerate notices; `cargo deny`.
-- [ ] Build, fix any fallout, run the gate, record counts.
-- [ ] Build the debug binary for ui-verifier.
+- [x] Build, fix any fallout, run the gate, record counts.
+- [x] Build the debug binary for ui-verifier.
 
 ## Decisions
 
@@ -118,11 +118,11 @@ None new; DEC-0006 covers an ordinary version bump.
 ui-verifier walk of the list under Acceptance.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
@@ -147,4 +147,19 @@ Prepared before any build (file operations and `cargo update` only):
   `docs/terminal-backend.md`, `docs/gui-layout.md` line 40 ("GPUI Kit 0.7 `Settings` widget" -> "GPUI Kit `Settings` widget").
   Left per Q4: "the 0.7.3 kit" history wording; the `crates/theme/src/theme.rs` pin comment and `.claude/agents/coder.md` still say 0.7.
 
-Build, gate and walk: pending.
+Build and gate (after merging main `2dc3e1f0`, which was conflict-free; head `09ab82c5` at gate time):
+
+- `CARGO_BUILD_JOBS=4 pwsh scripts/ci-local.ps1 --full` on Windows, 2026-10-23: every step passed ("ci-local: all checks
+  passed", exit 0), including both clippy runs, `cargo test --workspace`, the three `--ignored --test-threads=1` lines,
+  the `oneterm-vt` feature runs, `vt-public-api.py` checks, notices `--check`, and `cargo deny check licenses bans
+  advisories` (advisories ok, bans ok, licenses ok).
+- Totals over the `cargo test --workspace` run: 141 test suites, 5155 passed, 0 failed, 33 ignored (US-0149 had 4819 passed).
+- Source fallout: none. No OneTerm source file changed; the 0.8.0 breaking changes reach nothing the code calls.
+- `force_width_copy_matches_gpui` ran in the workspace test run and passed (`gpui-pre` unchanged at 0.3.9).
+- Nested-context-menu rule (kit 0.8.0: nested context menus open only the innermost) against
+  `crates/terminal-view/src/panel/tests/tab_menu_and_card.rs` and the `tab_menu_open` tests: all pass unchanged, including
+  `the_session_panel_offers_no_zoom` and `the_sftp_panel_offers_no_zoom`. Those tests assert panel/menu content, so a pass
+  shows the strip menu content is unchanged; the interactive nesting is for the ui-verifier walk.
+- `cargo build -p oneterm-app` (debug) succeeded; `oneterm.exe`, `conpty.dll` and `x64\OpenConsole.exe` copied to the
+  `r12bin` scratchpad folder for the ui-verifier.
+- Gaps: the ui-verifier Windows walk (acceptance last line) has not run, so E2E proof stays open; Linux / macOS wait for CI.
