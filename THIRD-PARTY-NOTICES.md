@@ -349,12 +349,12 @@ package in the Cargo registry / git checkout.
 | `gpu-allocator` | 0.28.0 | MIT OR Apache-2.0 | crates.io |
 | `gpu-descriptor` | 0.3.2 | MIT OR Apache-2.0 | crates.io |
 | `gpu-descriptor-types` | 0.2.0 | MIT OR Apache-2.0 | crates.io |
-| `gpui-base` | 0.7.3 | Apache-2.0 | crates.io |
-| `gpui-component` | 0.7.3 | Apache-2.0 | crates.io |
-| `gpui-component-macros` | 0.7.3 | Apache-2.0 | crates.io |
+| `gpui-base` | 0.8.0 | Apache-2.0 | crates.io |
+| `gpui-component` | 0.8.0 | Apache-2.0 | crates.io |
+| `gpui-component-macros` | 0.8.0 | Apache-2.0 | crates.io |
 | `gpui-fast` | 0.1.10 | Apache-2.0 | crates.io |
 | `gpui-fast-macros` | 0.1.10 | Apache-2.0 | crates.io |
-| `gpui-kit-assets` | 0.7.3 | Apache-2.0 | crates.io |
+| `gpui-kit-assets` | 0.8.0 | Apache-2.0 | crates.io |
 | `gpui-pre` | 0.3.9 | Apache-2.0 | crates.io |
 | `gpui-pre-apple` | 0.3.9 | Apache-2.0 | crates.io |
 | `gpui-pre-collections` | 0.3.9 | Apache-2.0 | crates.io |

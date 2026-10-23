@@ -6,15 +6,15 @@
 
 ## 1. Locked dependency families
 
-The workspace consumes the published GPUI Kit 0.7 release family from crates.io. The package aliases in the root manifest preserve the existing Rust import paths.
+The workspace consumes the published GPUI Kit 0.8 release family from crates.io. The package aliases in the root manifest preserve the existing Rust import paths.
 
 | Workspace name | Package | Requirement | Resolved version | Policy |
 |---|---|---:|---:|---|
-| `gpui` | `gpui-pre` | `0.3` | `0.3.9` | Move with `gpui_platform`. GPUI Kit 0.7.3 pins `gpui-pre =0.3.9`. |
+| `gpui` | `gpui-pre` | `0.3` | `0.3.9` | Move with `gpui_platform`. GPUI Kit 0.8.0 pins `gpui-pre =0.3.9`. |
 | `gpui_platform` | `gpui-pre-platform` | `0.3` | `0.3.9` | Move with `gpui`; app crate only, plus the test-only exception in § 2. |
-| `gpui-base` | `gpui-base` | `0.7` | `0.7.3` | Move with all GPUI Kit 0.7 layers. |
-| `gpui-component` | `gpui-component` | `0.7` | `0.7.3` | Move with all GPUI Kit 0.7 layers. |
-| `gpui-kit-assets` | `gpui-kit-assets` | `0.7` | `0.7.3` | Move with all GPUI Kit 0.7 layers; app crate only. |
+| `gpui-base` | `gpui-base` | `0.8` | `0.8.0` | Move with all GPUI Kit 0.8 layers. |
+| `gpui-component` | `gpui-component` | `0.8` | `0.8.0` | Move with all GPUI Kit 0.8 layers. |
+| `gpui-kit-assets` | `gpui-kit-assets` | `0.8` | `0.8.0` | Move with all GPUI Kit 0.8 layers; app crate only. |
 
 There is **no terminal-engine dependency**. OneTerm's VT engine is `oneterm-vt`
 (`crates/vt`, `IN-0029`), first-party code with no third-party engine behind it; the
@@ -41,9 +41,9 @@ gpui = { package = "gpui-pre", version = "0.3" }
 gpui_platform = { package = "gpui-pre-platform", version = "0.3", features = [
     "font-kit", "x11", "wayland", "runtime_shaders",
 ] }
-gpui-base = "0.7"
-gpui-component = "0.7"
-gpui-kit-assets = "0.7"
+gpui-base = "0.8"
+gpui-component = "0.8"
+gpui-kit-assets = "0.8"
 ```
 
 A UI crate normally declares only what it directly imports:
@@ -129,7 +129,7 @@ Treat a GPUI upgrade as one reviewed dependency change:
 
 > When researching GPUI or GPUI Kit APIs, patterns, themes, icons, skills, or examples, inspect `reference/gpui-kit` first. Use web search only for a known issue/PR or when the pinned reference does not contain the needed information, and state that gap.
 
-The local tree is a clean checkout of `longbridge/gpui-kit` tag `v0.7.3`, matching the GPUI Kit layers resolved by `Cargo.lock`. Use `srcwalk` for code navigation before raw searches.
+The local tree is a clean checkout of `longbridge/gpui-kit` tag `v0.8.0`, matching the GPUI Kit layers resolved by `Cargo.lock`. Use `srcwalk` for code navigation before raw searches.
 
 ```bash
 srcwalk overview --scope reference/gpui-kit/crates/component/src --symbols
