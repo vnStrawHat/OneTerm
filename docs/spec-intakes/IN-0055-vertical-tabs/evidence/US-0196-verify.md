@@ -733,3 +733,16 @@ The root cause is real and the fix is in the one place every way into a zoom pas
 
 - With your own profile (the file that held `zoomed_panel`): start, confirm an expanded row reorders and drops into a free Space, collapsed cell too; then check `target/docks.json` has no `zoomed_panel` after about two seconds or after exit.
 - Press `Shift+Esc` in the rail with the right dock open and say whether the one-frame blink (O1) is acceptable.
+
+# UI verification (zoom trap fix) - r9cbin (2fb450f8)
+
+Profile: scratch cwd target\ with a COPY of the owner's docks.json (zoomed_panel "terminal") + ui_config; real input via SendInput (drv.ps1 plus an rclick copy r9c-drv.ps1). Shots: scratchpad\r9c-sh\r9c-*.png.
+
+1. Owner state, vertical on: PASS. Started zoomed docks.json; the rail was usable at once, scratch target\docks.json holds no zoomed_panel after startup. Expanded: row reorder by title (r9c-02), row into a free Space moves the terminal and closes the source tab (r9c-04). Collapsed: cell reorder (r9c-07), icon into a free Space (r9c-09b; the first attempt only focused, the second moved it).
+2. Shift+Esc under the rail (r9c-10..12): rail unchanged in four shots (each ~1 s apart, so a one-frame flash cannot be seen from here), drag still works after. Flash: owner check.
+3. Vertical off with the same docks.json: strip starts ZOOMED (r9c-20). Zoom button unzooms (r9c-21) and zooms again (r9c-25); both PASS. Strip reorder with SendInput and no zoom: PASS when the drag starts on the tab's edge/padding (r9c-28 left edge, r9c-29 right padding); it does NOT reorder when it starts on the tab LABEL (r9c-24, chip only). So my earlier posted-message "no reorder" was the label case, not zoom (those profiles were not zoomed). See D1.
+4. Zoom on strip then switch Vertical Tabs on live: NOT WALKED (needs Settings toggle). Covered indirectly: startup with zoomed docks and vertical on released the zoom (item 1).
+5. Drop on a non-empty terminal: PASS, nothing changes (r9c-05).
+
+Defects
+D1 (medium, pre-existing, horizontal strip): a drag that starts on the tab label never reorders (it is the Space-move drag), only a drag that starts on the tab padding/edge does. A user dragging by the title sees a chip and nothing on release. Same in the rework 8 build.
