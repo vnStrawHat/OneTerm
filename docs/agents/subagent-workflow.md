@@ -128,12 +128,17 @@ next packet … → intake close → owner manual walks → platform proof from 
 - **Resume, do not respawn**: an agent can be resumed only while its worktree exists. Keep
   implementer and verifier worktrees until the packet merges.
 - **Shared worktree when disk is short**: the verifier works in the implementer's finished
-  worktree on its own branch; the two never run at the same time. Never point two agents at
-  one `target` from two different paths (build scripts bake the path).
-- **One builder per 20 GB free** with `CARGO_INCREMENTAL=0`; the coordinator checks `df`
-  before every dispatch and tells the agent the stop threshold.
-- **`CARGO_BUILD_JOBS`**: 3 on `main`, 2 in worktrees, 1 as a fallback; a rustc
-  `0xc0000409` is memory, not code — wait and retry at fewer jobs.
+  worktree on its own branch; the two never run at the same time.
+- **One `target/` for every worktree** (`US-0204`, owner ruling 2026-10-23): the SessionStart
+  hook points `CARGO_TARGET_DIR` at the root `target/`, so dependencies build once and cargo
+  serialises builds across worktrees with its lock. The clobber this used to cause
+  (E0463 / E0786 on workspace crates, build scripts and `env!("CARGO_MANIFEST_DIR")` baking a
+  worktree path) is accepted; when it recurs, `cargo clean -p <workspace crates>` and report
+  it to the owner. Agents build with `CARGO_INCREMENTAL=0`; the coordinator checks `df`
+  before every dispatch (the hook warns under 20 GB) and tells the agent the stop threshold.
+- **`CARGO_BUILD_JOBS`**: the hook caps it from RAM (4 on the 32 GB box; 6 ran out of memory in the full test build); briefs may set it
+  lower (2 in worktrees, 1 as a fallback), never higher; a rustc `0xc0000409` is memory, not
+  code — wait and retry at fewer jobs.
 - **Every brief carries the safety rules verbatim**: never kill, close or enumerate
   `oneterm.exe` by name or title (the owner works inside it); GUI walks only on the agent's
   own pid with a private `USERPROFILE`; scoped searches; no `rm -rf` without a guard path;

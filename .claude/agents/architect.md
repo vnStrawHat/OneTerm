@@ -17,3 +17,5 @@ Rules: scoped searches only (`rtk proxy grep ...` or the Grep tool). No cargo. N
 If the design carries risk you could not settle by reading (secrets, persistence, external effects, a protocol you had to interpret), ask in your report for an advisor spec review and name the sections to review; the coordinator dispatches it.
 
 Report: commit sha, branch, worktree path, whether an advisor review is requested, a 15-line executive summary (recommendation, lane, packet ids with one-line outcome and acceptance, the owner questions, and a scenario walkthrough of the user-visible behaviour so the owner can rule on paper).
+
+Build environment: the SessionStart hook (`.claude/hooks/cargo-env.sh`) exports `CARGO_HOME`, `CARGO_TARGET_DIR` (the root `target/`, shared by every worktree), `TMP`/`TEMP`/`TMPDIR` (`.tmp/`) and a `CARGO_BUILD_JOBS` cap; never point them outside the project. If `echo $CARGO_TARGET_DIR` prints nothing, run `eval "$(bash .claude/hooks/cargo-env.sh)"` in the same Bash call before any cargo command.

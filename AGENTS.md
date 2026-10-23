@@ -35,6 +35,16 @@ Guide for AI agents (and contributors) when working with the **OneTerm** project
 - **Rootless / disk-wide searches** — `find /`, `grep -r /`, `rg` from the FS root, or any tool called without an explicit scope. **ALWAYS pass a concrete directory path** (e.g. `find crates/terminal-view/src -name '*.rs'`, `grep -rn 'foo' crates/`). This is a hard rule — see Core principle 7.
 
 
+### 3.1b. Build environment (hook)
+
+The SessionStart hook `.claude/hooks/cargo-env.sh` (`US-0204`) resolves the main checkout, also
+from a `.claude/worktrees/*` worktree, and exports for every Bash call: `CARGO_HOME` →
+`.cargo-home/`, `CARGO_TARGET_DIR` → the root `target/` (one build cache for every worktree),
+`TMP`/`TEMP`/`TMPDIR` → `.tmp/`, and `CARGO_BUILD_JOBS` capped from RAM. Never override them
+with paths outside the project. A shell that missed the hook (`echo $CARGO_TARGET_DIR` prints
+nothing): `eval "$(bash .claude/hooks/cargo-env.sh)"` in the same Bash call. The hook warns
+when the drive has under 20 GB free. The PowerShell tool does not receive the hook's exports.
+
 ### 3.2. Learning the GPUI Kit API — read the reference first
 
 Before writing UI code, inspect `.\reference\gpui-kit\` with `srcwalk` first. See [`docs/agents/dependencies.md` § 5](docs/agents/dependencies.md) for the detailed lookup table. **Do not** use web search for GPUI Kit unless the pinned reference is missing the required information.

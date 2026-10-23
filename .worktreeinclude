@@ -1,0 +1,2 @@
+# Untracked files copied into every new worktree (gitignore syntax).
+.claude/settings.local.json

@@ -200,6 +200,10 @@ debug = "limited"
 split-debuginfo = "unpacked"
 
 [profile.dev.package]
+# No debuginfo for any third-party crate: they are never stepped through in a
+# debugger, and their debug sections dominated `target/` and link time (US-0204).
+# `"*"` matches non-workspace packages only; first-party crates keep `debug = "limited"`.
+"*" = { debug = false }
 # Third-party hot crates are always optimized in dev: they rarely change (no
 # rebuild cost) and are never stepped through in a debugger.
 gpui-pre = { opt-level = 3 }
@@ -234,6 +238,7 @@ blake2 = { opt-level = 3 }
 inherits = "dev"
 
 [profile.fast-dev.package]
+"*" = { debug = false }
 gpui-pre = { opt-level = 3 }
 gpui-pre-platform = { opt-level = 3 }
 smol = { opt-level = 3 }

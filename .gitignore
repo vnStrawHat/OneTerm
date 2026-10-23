@@ -1,6 +1,9 @@
 # Build output
 target/
 target*/
+# Project-local cargo registry and temp files set by .claude/hooks/cargo-env.sh (US-0204)
+/.cargo-home/
+/.tmp/
 # Local research clone of GPUI Kit (docs/agents/dependencies.md §5)
 reference/
 # Release staging output of scripts/build-release.*
@@ -20,6 +23,8 @@ harness.db*
 .pi/
 .claude/*
 !.claude/agents/
+!.claude/hooks/
+!.claude/settings.json
 .cargo/
 .exe/
 /*.exe
