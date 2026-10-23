@@ -248,6 +248,30 @@ Not pinned by a test: that gpui really shows the card at the spot the drawn test
 
 A selected collapsed cell with a status fill showed two 3 x 8 px notches of plain background at its top-left and bottom-left corners: the fill started 3 px in (to leave the rail's accent bar its own background) but the pill is now inset 8 px top and bottom. The fill now covers the whole cell. The rail's pill is under the fill, and a `Working` fill (`primary`) can be the pill's own colour, so a selected filled cell draws its **own pill over the fill in the glyph colour** (`legible_on(fill, [background, foreground])`, the pick the glyph and recording dot already make, held to 3:1 for every variant and fill by `check-theme-contrast.py`), with the same 3 px width and 8 px inset. An unselected cell has none. Test: `a_selected_fill_covers_the_cell_and_carries_its_own_pill` replaces `a_selected_fill_leaves_the_accent_bar_its_own_background`.
 
+### Rework 8 2026-10-23 (owner): the whole collapsed cell reorders
+
+Acceptance rework of this packet (still reopened, not a new BUG). Owner report, 2026-10-23: on the collapsed rail "sometimes it reorders, sometimes not".
+
+**Cause (from the code, before any change).** The cell has two drag zones (rework 7): the 16 px shell icon starts OneTerm's `DragTerminalTab` (only an empty Space accepts it, so on any other target it does nothing visible), and the rest of the 43 x 44 px cell starts the kit's `DragPanel` (reorder). Whether a drag reorders depends on whether the press landed on the icon (the centre 16 x 16 of a 44 px cell, where a person naturally grabs) or on the margin. Since rework 9 of `US-0196` an expanded row is one whole-row `DragPanel` that an empty Space also accepts, so the two-zone split no longer serves a purpose.
+
+**Owner ruling.** The whole cell starts `DragPanel`, like an expanded row: dragging it reorders; dropping it on an empty Space moves the terminal in (`handle_panel_drop` / `move_tab_into`, rework 9); dropping it on non-empty terminal content does nothing. The icon has no drag of its own.
+
+**Outcome.**
+
+- `collapsed_row` no longer takes a drag; the icon is plain content. `render_tab_strip` passes none for a collapsed cell.
+- The rail's `DragPanel` covers every pixel of the cell, the icon included.
+- Anything else that could make the collapsed reorder intermittent is looked for on a real window with `SendInput` (drag threshold on a 44 px cell, the hover card, the cell's mouse handlers, the drop target between cells, `is_last_panel`); findings under "Evidence".
+
+**Acceptance.**
+
+- [ ] A drag that starts on the shell icon, on the cell's margin and on the corner of a collapsed cell reorders (workspace test, a probe cell with an icon element that carries no drag of its own; it replaces `a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon`).
+- [ ] No gesture on a collapsed cell starts a `DragTerminalTab` (terminal-view test).
+- [ ] A collapsed cell dragged onto an empty Space moves the terminal in (the rework 9 path, `a_dragged_dock_panel_dropped_on_an_empty_space_moves_its_terminal`, unchanged).
+- [ ] Real input: many attempts at different grab points on a collapsed rail all reorder (coder's `SendInput` walk, findings recorded below).
+- [ ] `docs/gui-layout.md`, the HLD rows and `docs/terminal-split/03-drag-drop.md` say the same.
+- [ ] Full `pwsh scripts/ci-local.ps1` passes.
+- [ ] On screen, by `ui-verifier`.
+
 ### Gaps
 
 - Not pinned by a test: the tooltip text on a cell (gpui exposes no way to read a shown tooltip in a test) and the recording dot's place; both are plain code in `render_tab_strip` / `collapsed_row`.
