@@ -32,7 +32,7 @@ impl TabRowLayout {
     pub const VERTICAL_ROW_HEIGHT: f32 = 48.0;
     /// Padding above the first line and below the second.
     pub const VERTICAL_ROW_PADDING: f32 = 6.0;
-    /// Padding left of the row's content: clear of the accent pill and the grip overlay.
+    /// Padding left of the row's content: clear of the accent pill.
     pub const VERTICAL_ROW_PADDING_LEFT: f32 = 14.0;
     /// Padding right of the row's content.
     pub const VERTICAL_ROW_PADDING_RIGHT: f32 = 10.0;
@@ -106,7 +106,7 @@ mod tests {
                 + TabRowLayout::VERTICAL_SECOND_LINE_HEIGHT,
             TabRowLayout::VERTICAL_ROW_HEIGHT
         );
-        // The title starts clear of the pill (3 px) and of the 8 px grip overlay.
+        // The title starts clear of the pill (3 px).
         assert!(TabRowLayout::VERTICAL_ROW_PADDING_LEFT > 8.0);
         // The pill is shorter than the row and leaves room above and below it.
         assert!(

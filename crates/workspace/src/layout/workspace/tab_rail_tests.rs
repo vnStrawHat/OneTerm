@@ -7,20 +7,21 @@ use gpui::{
     App, AppContext as _, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, Modifiers, MouseButton, ParentElement as _, Pixels,
     Point, Render, SharedString, StatefulInteractiveElement as _, Styled as _, TestAppContext,
-    VisualTestContext, Window, div, point, px,
+    VisualTestContext, Window, div, point, prelude::FluentBuilder as _, px,
 };
 use gpui_component::dock::{
-    DockArea, DockLayout, DockPlacement, PaneRef, Panel, PanelControl, PanelEvent, PanelId,
-    panel_handle,
+    DockArea, DockLayout, DockPlacement, DragPanel, PaneRef, Panel, PanelControl, PanelEvent,
+    PanelId, panel_handle,
 };
 use gpui_component::h_flex;
 use oneterm_settings::{UiConfig, VerticalTabs, ui_config::UiConfigGlobal};
 use oneterm_state::{TabRowLayout, panel_names};
 
+use super::dock_skin::DROP_INDICATOR_SELECTOR;
 use super::tab_rail::{
-    COLLAPSED_ROW_HEIGHT, EMPTY_SELECTOR, GRIP_GLYPH_SELECTOR, GRIP_SELECTOR, HANDLE_SELECTOR,
-    HEADER_LABEL_SELECTOR, HEADER_RULE_SELECTOR, HEADER_SELECTOR, HOVER_SELECTOR, LIST_SELECTOR,
-    PILL_SELECTOR, RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
+    COLLAPSED_ROW_HEIGHT, EMPTY_SELECTOR, HANDLE_SELECTOR, HEADER_LABEL_SELECTOR,
+    HEADER_RULE_SELECTOR, HEADER_SELECTOR, HOVER_SELECTOR, LIST_SELECTOR, PILL_SELECTOR,
+    RAIL_SELECTOR, ROW_HEIGHT, ROW_SELECTOR,
 };
 use super::{MAIN_DOCK_VERSION, dock_skin};
 
@@ -34,8 +35,11 @@ struct Report {
     bounds: Rc<Cell<Bounds<Pixels>>>,
     /// How many times the panel was taken out of its group (a rebuild would do this).
     removed: Rc<Cell<usize>>,
-    /// How many times its title row started its own drag.
+    /// How many times its title row started its own drag (the horizontal strip's row and a
+    /// collapsed cell's icon do; a vertical row does not).
     title_drags: Rc<Cell<usize>>,
+    /// How many dock drags were dropped on its content, as an empty Space accepts them.
+    content_drops: Rc<Cell<usize>>,
     /// What the row layout was while its title was built.
     title_layout: Rc<Cell<Option<TabRowLayout>>>,
 }
@@ -99,8 +103,9 @@ impl Panel for Probe {
         (!self.title_row).then(|| self.label.clone())
     }
 
-    // Like the real row: the content (here the whole row) starts the tab drag; in a collapsed
-    // cell only the 16 px icon does and the rest of the cell is the rail's.
+    // Like the real row: the strip's row starts the tab drag from its whole content; in a
+    // collapsed cell only the 16 px icon does; a vertical row starts none, and the whole row is
+    // the rail's reorder drag (`US-0196` rework 9).
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let layout = TabRowLayout::current(cx);
         self.report.title_layout.set(Some(layout));
@@ -133,13 +138,14 @@ impl Panel for Probe {
             .flex_1()
             .h_full()
             .items_center()
-            .on_drag(ProbeDrag, move |drag, _, _, cx| {
-                started.set(started.get() + 1);
-                cx.new(|_| drag.clone())
+            .when(layout == TabRowLayout::Horizontal, |this| {
+                this.on_drag(ProbeDrag, move |drag, _, _, cx| {
+                    started.set(started.get() + 1);
+                    cx.new(|_| drag.clone())
+                })
             })
             .child(div().flex_1().child(label))
-            // Like the real row's trailing status icon: plain row content, so a drag that starts
-            // on it is the row's own.
+            // Like the real row's trailing status icon: plain row content.
             .child(
                 div()
                     .id("probe-status")
@@ -177,9 +183,12 @@ impl Render for Probe {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         use gpui_component::ElementExt as _;
         let bounds = self.report.bounds.clone();
+        let drops = self.report.content_drops.clone();
         div()
             .size_full()
             .on_prepaint(move |measured, _, _| bounds.set(measured))
+            // An empty Space takes a dragged terminal tab this way.
+            .on_drop(move |_: &DragPanel, _, _| drops.set(drops.get() + 1))
     }
 }
 
@@ -500,11 +509,11 @@ fn the_rail_has_one_stacked_row_per_tab_and_a_click_selects_it(cx: &mut TestAppC
     );
 }
 
-/// Owner rework 7: the reorder grip is an overlay on the row's left edge that takes no room (the
-/// title element is as wide and as tall as the row: no grip column, no divider cutting it), its
-/// glyph is centred on the row's height, and the header keeps the strip's 32 px.
+/// Owner rework 7 and 9: the title element is as wide and as tall as the row (no column is
+/// reserved at its edge, no border or divider takes a pixel), the header keeps the strip's 32 px,
+/// and there is no grip: the left edge of the row is the row.
 #[gpui::test]
-fn the_grip_overlays_the_row_and_no_divider_cuts_it(cx: &mut TestAppContext) {
+fn the_title_fills_the_row_and_nothing_cuts_it(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     set_centre(&window.area, &terminals(&["a", "b"]), true, &report, cx);
@@ -514,29 +523,12 @@ fn the_grip_overlays_the_row_and_no_divider_cuts_it(cx: &mut TestAppContext) {
     assert_eq!(
         title.left(),
         row.left(),
-        "no column is reserved for the grip"
+        "no column is reserved at the edge"
     );
     assert_eq!(title.size.width, row.size.width);
     assert_eq!(
         title.size.height, row.size.height,
         "no border or divider takes a pixel of the row"
-    );
-
-    let grip = bounds_of(format!("{GRIP_SELECTOR}-0"), cx).expect("the grip");
-    assert_eq!((grip.left(), grip.top()), (row.left(), row.top()));
-    assert_eq!(
-        (grip.size.width, grip.size.height),
-        (px(8.), row.size.height)
-    );
-    let glyph = bounds_of(format!("{GRIP_GLYPH_SELECTOR}-0"), cx).expect("the grip glyph");
-    assert_eq!(
-        glyph.center().y,
-        row.center().y,
-        "the glyph is centred on the row"
-    );
-    assert!(
-        glyph.left() < row.left() && glyph.right() <= row.left() + px(12.),
-        "the glyph's box sits over the row's first 12 px, its dots in the first 6: {glyph:?}"
     );
     let rail = bounds_of(RAIL_SELECTOR, cx).unwrap();
     assert_eq!(
@@ -822,11 +814,12 @@ fn the_header_holds_the_label_and_the_plus_and_zoom_keeps_it(cx: &mut TestAppCon
     assert!(window.area.read_with(cx, |area, _| area.is_zoomed()));
 }
 
-/// Drag priority (`IN-0055` HLD § Interactions): the title row's own drag wins over the row's
-/// reorder drag (also from the trailing status icon, which is row content), and only the grip
-/// starts the reorder.
+/// Owner rework 9: the whole expanded row is the reorder drag (`DragPanel`) wherever the press
+/// lands, on the title, on its trailing status icon and on the row's left edge where the grip
+/// used to be, and the vertical row starts no drag of its own (the strip's row does, and a
+/// collapsed cell's icon, see the other tests).
 #[gpui::test]
-fn the_title_row_drags_into_a_space_and_only_the_grip_reorders(cx: &mut TestAppContext) {
+fn the_whole_expanded_row_is_the_reorder_drag(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     set_centre(
@@ -837,52 +830,141 @@ fn the_title_row_drags_into_a_space_and_only_the_grip_reorders(cx: &mut TestAppC
         cx,
     );
     let (original, _) = centre_tabs(&window.area, cx);
-    let target = row(2, cx).unwrap().center();
 
-    // The title row: its own drag starts, and dropping it on another row reorders nothing.
+    // The title of the first row onto the second row: a forward drop lands after the hovered row.
     let title = bounds_of("probe-row-a", cx).expect("the title row is drawn in the rail");
-    drag_to(title.origin + point(px(20.), px(10.)), target, cx);
-    assert!(has_active_drag(cx), "the title row starts a drag");
+    let onto = row(1, cx).unwrap().center();
+    drag_to(title.origin + point(px(20.), px(10.)), onto, cx);
+    assert!(has_active_drag(cx), "the title starts a drag");
+    release(onto, cx);
     assert_eq!(
-        report.title_drags.get(),
-        1,
-        "it is the title row's own drag"
+        centre_tabs(&window.area, cx).0,
+        vec![original[1], original[0], original[2]],
+        "the title reorders"
     );
-    release(target, cx);
+
+    // The trailing status icon is row content too: `a` is now the second row, dropped on the third.
+    let status = bounds_of("probe-status-a", cx).unwrap();
+    let onto = row(2, cx).unwrap().center();
+    drag_to(status.center(), onto, cx);
+    assert!(has_active_drag(cx), "the status icon starts the same drag");
+    release(onto, cx);
+    assert_eq!(
+        centre_tabs(&window.area, cx).0,
+        vec![original[1], original[2], original[0]],
+        "the status icon reorders"
+    );
+
+    // The row's left edge, where the 8 px grip used to be, is the row: dropped on the first row,
+    // the tab goes back to the front.
+    let edge = row(2, cx).unwrap();
+    let onto = row(0, cx).unwrap().center();
+    drag_to(point(edge.left() + px(2.), edge.center().y), onto, cx);
+    assert!(has_active_drag(cx), "the left edge starts the drag");
+    release(onto, cx);
     assert_eq!(
         centre_tabs(&window.area, cx).0,
         original,
-        "no reorder from the title row"
+        "the left edge reorders"
     );
-
-    // The trailing status icon is part of the title row: its drag is the row's own, and it
-    // reorders nothing either.
-    let status = bounds_of("probe-status-a", cx).unwrap();
-    drag_to(status.center(), target, cx);
-    assert!(has_active_drag(cx), "the status icon is row content");
-    assert_eq!(report.title_drags.get(), 2, "it is the title row's drag");
-    release(target, cx);
-    assert_eq!(centre_tabs(&window.area, cx).0, original);
-
-    // The grip starts the reorder drag, not the title row's, and dropping it on a row moves
-    // the tab to that slot.
-    let grip = bounds_of(format!("{GRIP_SELECTOR}-2"), cx).expect("a grip per row");
-    let first = row(0, cx).unwrap().center();
-    drag_to(grip.center(), first, cx);
-    assert!(has_active_drag(cx), "the grip starts a drag");
-    assert_eq!(report.title_drags.get(), 2, "not the title row's drag");
-    release(first, cx);
-    let (reordered, _) = centre_tabs(&window.area, cx);
     assert_eq!(
-        reordered,
-        vec![original[2], original[0], original[1]],
-        "the dragged tab took the slot of the row it was dropped on"
+        report.title_drags.get(),
+        0,
+        "no gesture on a vertical row starts the title's own drag"
     );
 }
 
-/// A row dragged by its grip and dropped below the last row goes to the last slot.
+/// Owner rework 9: a row dragged onto the terminal area is the dock's `DragPanel`, and what lies
+/// innermost under the pointer takes the drop: an empty Space accepting a terminal tab (the probe's
+/// content stands in for it) is not overridden by the dock's own merge or split of the centre, so
+/// the tab order and the number of groups stay as they were.
 #[gpui::test]
-fn a_grip_drag_dropped_below_the_last_row_moves_the_tab_to_the_end(cx: &mut TestAppContext) {
+fn a_row_dropped_on_a_content_that_takes_it_changes_nothing_in_the_dock(cx: &mut TestAppContext) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        true,
+        &report,
+        cx,
+    );
+    let (original, _) = centre_tabs(&window.area, cx);
+    let groups = |cx: &mut VisualTestContext| {
+        window.area.read_with(cx, |area, _| {
+            let mut tabs = 0;
+            area.layout(DockPlacement::Center)
+                .expect("centre layout")
+                .root()
+                .walk(&mut |node| tabs += usize::from(matches!(node.kind(), PaneRef::Tabs { .. })));
+            tabs
+        })
+    };
+    assert_eq!(groups(cx), 1);
+
+    // An edge of the content is where the dock would split the centre.
+    let content = report.bounds.get();
+    let edge = point(content.right() - px(4.), content.center().y);
+    drag_to(row(0, cx).unwrap().center(), edge, cx);
+    assert!(has_active_drag(cx));
+    release(edge, cx);
+    assert_eq!(report.content_drops.get(), 1, "the content took the drop");
+    assert_eq!(centre_tabs(&window.area, cx).0, original);
+    assert_eq!(groups(cx), 1, "the dock did not split the centre");
+}
+
+/// Owner ruling 2026-10-23: terminal content takes no dock drop, so the kit's split placeholder
+/// is not drawn over it while a tab is dragged (it tinted a Space the drop would not go to);
+/// over the content of any other panel it is, as the kit draws it.
+#[gpui::test]
+fn the_split_placeholder_is_drawn_over_other_content_but_not_over_a_terminal(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx) = rail_window(cx, true);
+    let report = Report::default();
+
+    // A control: two SFTP tabs (a group of their own kind keeps the kit's strip), one dragged
+    // by its strip tab to the content's centre: the placeholder is drawn.
+    set_centre(
+        &window.area,
+        &[(panel_names::SFTP, "one"), (panel_names::SFTP, "two")],
+        false,
+        &report,
+        cx,
+    );
+    let tab = bounds_of("dock-tab-0", cx).expect("the strip tab");
+    let content = report.bounds.get().center();
+    drag_to(tab.center(), content, cx);
+    settle(cx);
+    assert!(has_active_drag(cx));
+    assert!(
+        bounds_of(DROP_INDICATOR_SELECTOR, cx).is_some(),
+        "the kit draws its placeholder over a non-terminal panel's content"
+    );
+    release(content, cx);
+
+    // Terminal tabs in the rail: nothing is drawn over the terminal.
+    set_centre(
+        &window.area,
+        &terminals(&["a", "b", "c"]),
+        false,
+        &report,
+        cx,
+    );
+    let content = report.bounds.get().center();
+    drag_to(row(0, cx).unwrap().center(), content, cx);
+    settle(cx);
+    assert!(has_active_drag(cx));
+    assert!(
+        bounds_of(DROP_INDICATOR_SELECTOR, cx).is_none(),
+        "no split placeholder over a terminal"
+    );
+    release(content, cx);
+}
+
+/// A row dropped below the last row goes to the last slot.
+#[gpui::test]
+fn a_row_dropped_below_the_last_row_moves_the_tab_to_the_end(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     set_centre(
@@ -894,11 +976,11 @@ fn a_grip_drag_dropped_below_the_last_row_moves_the_tab_to_the_end(cx: &mut Test
     );
     let (original, _) = centre_tabs(&window.area, cx);
 
-    let grip = bounds_of(format!("{GRIP_SELECTOR}-0"), cx).unwrap();
+    let from = row(0, cx).unwrap().center();
     let below = bounds_of(EMPTY_SELECTOR, cx)
         .expect("room below the last row")
         .center();
-    drag_to(grip.center(), below, cx);
+    drag_to(from, below, cx);
     assert!(has_active_drag(cx));
     release(below, cx);
     assert_eq!(
@@ -914,9 +996,9 @@ fn a_lone_tab_has_nothing_to_reorder(cx: &mut TestAppContext) {
     let (window, cx) = rail_window(cx, true);
     let report = Report::default();
     set_centre(&window.area, &terminals(&["only"]), false, &report, cx);
-    let grip = bounds_of(format!("{GRIP_SELECTOR}-0"), cx).unwrap();
+    let from = row(0, cx).unwrap().center();
     let below = bounds_of(EMPTY_SELECTOR, cx).unwrap().center();
-    drag_to(grip.center(), below, cx);
+    drag_to(from, below, cx);
     assert!(
         !has_active_drag(cx),
         "the last panel of the dock is not draggable"
@@ -942,9 +1024,7 @@ fn a_forward_reorder_lands_after_the_hovered_row_and_a_backward_one_before_it(
     let (original, _) = centre_tabs(&window.area, cx);
 
     // Forward: the first tab dropped on the second row ends up after it.
-    let from = bounds_of(format!("{GRIP_SELECTOR}-0"), cx)
-        .unwrap()
-        .center();
+    let from = row(0, cx).unwrap().center();
     let onto = row(1, cx).unwrap().center();
     drag_to(from, onto, cx);
     release(onto, cx);
@@ -954,9 +1034,7 @@ fn a_forward_reorder_lands_after_the_hovered_row_and_a_backward_one_before_it(
     );
 
     // Backward: the last tab dropped on the first row ends up before it.
-    let from = bounds_of(format!("{GRIP_SELECTOR}-2"), cx)
-        .unwrap()
-        .center();
+    let from = row(2, cx).unwrap().center();
     let onto = row(0, cx).unwrap().center();
     drag_to(from, onto, cx);
     release(onto, cx);
@@ -1340,13 +1418,6 @@ fn a_collapsed_cell_reorders_from_the_cell_and_drags_the_tab_from_its_icon(
     );
     let (original, _) = centre_tabs(&window.area, cx);
     let target = row(2, cx).unwrap().center();
-    for ix in 0..3 {
-        assert!(
-            bounds_of(format!("{GRIP_SELECTOR}-{ix}"), cx).is_none(),
-            "a collapsed cell has no grip"
-        );
-    }
-
     // The icon: the tab drag starts, and dropping it on another cell reorders nothing.
     let icon = bounds_of("probe-row-a", cx).expect("the cell's content is its icon");
     assert_eq!((icon.size.width, icon.size.height), (px(16.), px(16.)));

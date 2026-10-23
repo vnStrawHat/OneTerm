@@ -12,7 +12,7 @@ use gpui::{
     Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
     Styled as _, Subscription, WeakEntity, Window, div, px,
 };
-use gpui_component::dock::{ClosePanel, Panel, PanelControl, PanelEvent, TabGroup};
+use gpui_component::dock::{ClosePanel, DragPanel, Panel, PanelControl, PanelEvent, TabGroup};
 use gpui_component::{
     ActiveTheme as _, Colorize as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -595,6 +595,12 @@ impl Render for TerminalPanel {
             .id("terminal-panel")
             .size_full()
             .bg(cx.theme().background)
+            // A tab dragged out of the rail or the strip (the dock's `DragPanel`) dropped anywhere on
+            // the terminal area does nothing: the dock must not split or merge the centre under a
+            // terminal (owner ruling 2026-10-23). The consumer closest to the pointer takes the
+            // drop, so an empty Space's own handler still wins over this one, and gpui takes the
+            // drag before it asks anything, so the dock's content handler never sees it.
+            .on_drop(|_: &DragPanel, _, _| {})
             // Terminal context-menu action handlers — also fired by global key bindings.
             .on_action(cx.listener(|this, _: &ClosePanel, w, cx| this.close_tab(w, cx)))
             .on_action(cx.listener(|this, _: &DuplicateSession, w, cx| {

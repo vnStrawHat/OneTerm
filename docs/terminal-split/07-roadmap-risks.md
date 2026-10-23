@@ -57,8 +57,8 @@ Run the quality gate after each step: `cargo fmt --all -- --check`,
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | **Drag precedence**: the terminal title's `on_drag` competes with the dock tab wrapper's native drag. | The terminal-specific builder stops propagation when the gesture starts on the title; a dedicated grip remains the fallback. |
-| R2 | **Native `DragPanel` has dock-level semantics**, not Space-leaf ownership semantics. | Keep the OneTerm-owned `DragTerminalTab` payload (03). |
+| R1 | **Drag precedence**: the terminal title's `on_drag` competes with the dock tab wrapper's native drag. | The terminal-specific builder stops propagation when the gesture starts on the title; a dedicated grip remains the fallback (the vertical rail tried one and dropped it, `US-0196` rework 9: its row is dragged whole as a `DragPanel`). |
+| R2 | **Native `DragPanel` has dock-level semantics**, not Space-leaf ownership semantics. | Keep the OneTerm-owned `DragTerminalTab` payload (03). Amended 2026-10-23: an empty Space also accepts a terminal tab's `DragPanel` (a vertical-rail row), resolved to its `TerminalPanel` and moved leaf-wise by the same code (03 §6). |
 | R3 | **Space frame vs resize handle overlap**: the handle shares the pane edge and may obscure the outer border. | Keep the outer border neutral and reserve a 1px inner gutter in layout for selection. The handle may cover the outer pixel but cannot erase the active gutter; do not add a content overlay. `resizable/panel.rs` warns against `overflow_hidden` on panels — do not set it. |
 | R4 | **Re-subscription churn**: title/stat subscriptions must follow the active leaf. | Central `SpaceActivated` event; drop+recreate the `Subscription` on activation (06 §2). |
 | R5 | **`ResizableState` identity**: recreating states on re-render loses sizes. | One `Entity<ResizableState>` per `Split` node, created once, reused via `with_state` (05 §1). |

@@ -139,8 +139,8 @@ fn contrast(a: Hsla, b: Hsla) -> f32 {
     (hi + 0.05) / (lo + 0.05)
 }
 
-/// The secondary text of the selected row of the vertical tab rail (its directory line and
-/// reorder grip): `muted.foreground` halfway towards `tab.active.foreground`.
+/// The secondary text of the selected row of the vertical tab rail (its directory line):
+/// `muted.foreground` halfway towards `tab.active.foreground`.
 ///
 /// The selected row's fill is `foreground` at 10 % over the rail, which in a light theme can be
 /// too dark for `muted.foreground` itself (below 4.5:1 in several built-in variants; it is only

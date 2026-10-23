@@ -6,6 +6,7 @@
 //! group draws the [`tab_rail`](super::tab_rail) beside its content instead of the
 //! kit's strip above it.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -23,6 +24,10 @@ use oneterm_settings::UiConfig;
 use oneterm_state::panel_names;
 
 use super::tab_rail::{self, TabRail};
+
+/// Names the drop placeholder in the debug-bounds map. A no-op outside test builds.
+#[cfg(test)]
+pub(super) const DROP_INDICATOR_SELECTOR: &str = "oneterm-drop-indicator";
 
 pub(super) fn dock_area(
     id: impl Into<SharedString>,
@@ -105,6 +110,7 @@ impl DockAreaRenderer for OneTermDockSkin {
             inner: self.inner.tab_group_renderer(),
             area: self.area.clone(),
             rail: TabRail::new(),
+            terminal_content: Cell::new(false),
         })
     }
 }
@@ -114,6 +120,10 @@ struct OneTermTabGroupSkin {
     area: WeakEntity<DockArea>,
     /// The rail's scroll position and last displayed tab; unused while the strip is drawn.
     rail: TabRail,
+    /// Whether the panel this group displays is a terminal, worked out by `frame` (which base calls
+    /// before the drop indicator is asked for): a terminal's content takes no dock drop, so the
+    /// kit's split placeholder must not promise one.
+    terminal_content: Cell<bool>,
 }
 
 impl OneTermTabGroupSkin {
@@ -149,6 +159,11 @@ impl TabGroupRenderer for OneTermTabGroupSkin {
         // Base calls `frame`, `render_tab_bar` and `content_frame` in that order within one
         // render, so the rail rule and the width are settled here and the other two read them.
         let draws = self.draws_rail(group, cx);
+        self.terminal_content.set(
+            group
+                .active_panel()
+                .is_some_and(|panel| panel.panel_name(cx) == panel_names::TERMINAL),
+        );
         self.rail.begin_frame(draws, cx);
         let frame = self
             .inner
@@ -207,7 +222,25 @@ impl TabGroupRenderer for OneTermTabGroupSkin {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<AnyElement> {
-        self.inner.render_drop_indicator(indicator, window, cx)
+        // The terminal panel consumes a `DragPanel` released on its content (it neither splits nor
+        // merges the centre, `US-0196` rework 9), so no split placeholder is drawn over it either.
+        if self.terminal_content.get() {
+            return None;
+        }
+        let placeholder = self.inner.render_drop_indicator(indicator, window, cx);
+        // Lets a test ask a drawn frame whether the placeholder is there; same box as the content
+        // frame, so the placeholder's own position is unchanged.
+        #[cfg(test)]
+        let placeholder = placeholder.map(|placeholder| {
+            use gpui::{InteractiveElement as _, ParentElement as _, div};
+            div()
+                .debug_selector(|| DROP_INDICATOR_SELECTOR.to_string())
+                .absolute()
+                .size_full()
+                .child(placeholder)
+                .into_any_element()
+        });
+        placeholder
     }
 
     fn render_empty(

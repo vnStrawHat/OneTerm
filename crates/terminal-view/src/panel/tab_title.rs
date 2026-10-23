@@ -633,16 +633,17 @@ pub(super) fn render_tab_strip(
         })
         .child(tab_label);
 
-    // What an empty Space accepts. A collapsed cell starts it from its icon only; every other row
-    // starts it from the whole row.
+    // What an empty Space accepts from here. A collapsed cell starts it from its icon only and the
+    // strip's tab from the whole row; a rail row starts none (the whole row is the rail's reorder
+    // drag, `DragPanel`, which an empty Space accepts too, `US-0196` rework 9).
     let tab_drag = tab_panel.as_ref().map(|_| DragTerminalTab {
         panel: panel_weak.clone(),
         title: drag_title.clone(),
     });
-    let (cell_drag, row_drag) = if collapsed {
-        (tab_drag, None)
-    } else {
-        (None, tab_drag)
+    let (cell_drag, row_drag) = match layout {
+        TabRowLayout::Collapsed => (tab_drag, None),
+        TabRowLayout::Vertical => (None, None),
+        TabRowLayout::Horizontal => (None, tab_drag),
     };
 
     let row = if collapsed {
@@ -655,8 +656,8 @@ pub(super) fn render_tab_strip(
             cell_drag,
         )
     } else if vertical {
-        // The rail draws the selected row's accent pill and the reorder grip itself, so this row
-        // carries neither the top bar nor the strip's negative margin.
+        // The rail draws the selected row's accent pill and starts the row's reorder drag itself,
+        // so this row carries neither the top bar, nor the strip's negative margin, nor a drag.
         // The selected row's fill is too dark for `muted.foreground` in some light themes.
         let path_color = if is_active {
             oneterm_theme::selected_row_secondary(cx.theme())
@@ -767,7 +768,7 @@ pub(super) fn render_tab_strip(
                     window.refresh();
                 })
         })
-        // Drag the tab into an empty Space with the terminal-specific
+        // Drag the strip's tab into an empty Space with the terminal-specific
         // payload consumed by Space-tree drop targets.
         .when_some(row_drag, |this, drag| this.on_drag(drag, start_tab_drag))
         // Middle-click on a tab → close that tab.

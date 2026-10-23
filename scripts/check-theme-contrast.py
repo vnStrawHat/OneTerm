@@ -162,7 +162,7 @@ SURFACES: dict[str, tuple[str, ...]] = {
     # hover fill, and on it only.
     "tab_bar.hover.foreground": ("tab_bar.hover.background",),
     # `tab_bar.selected.foreground` -- not a kit token: the secondary text of the *selected* rail
-    # row (its directory line, `tab_title.rs`, and its reorder grip, `tab_rail.rs`), which is
+    # row (its directory line, `tab_title.rs`), which is
     # `muted.foreground` halfway towards `tab.active.foreground`
     # (`oneterm_theme::selected_row_secondary`, owner rework 8 of `US-0196`). The selected fill
     # is `foreground` at 10 %, which `muted.foreground` itself could not read on in several
@@ -225,8 +225,8 @@ SURFACES: dict[str, tuple[str, ...]] = {
     #   tab_bar.background / tab.active.background  the tab strip's subtitle and channel
     #                         chips, on an inactive and on the active tab
     #                         (`crates/terminal-view/src/panel/tab_title.rs:110`), the `x`
-    #                         close button, and the vertical rail's reorder grip
-    #                         (`crates/workspace/src/layout/workspace/tab_rail.rs`)
+    #                         close button, and the vertical row's directory line
+    #                         (the same file)
     "muted.foreground": (
         "background",
         "popover.background",
