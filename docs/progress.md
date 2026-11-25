@@ -46,6 +46,9 @@ story, with its tests and pictures, is in that repository's `docs/progress.md` a
   SFTP dock has lines under its header and rows and, as each pane of the expanded view,
   Go, Refresh and a menu of options (Sync CWD, Show hidden files) after its path. A user
   not given is asked for in an empty field.
+- 2026-11-25: the SFTP paths are underlined fields (the dock's and both panes'). In a
+  space two clicks select a word, three the line, and Shift and a click reaches from the
+  selection there is (Quadra's fix; `tests/select.rs`).
 - 2026-11-25: shell integration for a host's shell (a line typed unseen once it is open), so
   a remote space says its directory: the status bar, the space's header, Sync CWD. Git shows for a local space alone.
 
