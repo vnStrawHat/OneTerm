@@ -52,6 +52,12 @@ story, with its tests and pictures, is in that repository's `docs/progress.md` a
 - 2026-11-25: SFTP: more than one row chosen (Ctrl and Shift with a click) to download,
   upload or delete together; Open in terminal types `cd` to a folder into the shell; a
   mode is set from Properties (`Files::chmod`); Sync CWD and Show hidden files are kept.
+- 2026-11-25: 0.7.0 is released, by the release workflow (the user's word).
+- 2026-11-25: a connection lost is asked about, and Reconnect connects again in the same
+  space. A saved host has its own switch of shell integration. A command palette
+  (`Ctrl+Shift+P`): the app's commands, the tabs, the saved hosts, the theme.
+- 2026-11-25: a tab shows the input channels its spaces are in, in the rail, the folded
+  rail and the strip (a tab of one space showed none anywhere).
 - 2026-11-25: shell integration for a host's shell (a line typed unseen once it is open), so
   a remote space says its directory: the status bar, the space's header, Sync CWD. Git shows for a local space alone.
 
@@ -66,12 +72,9 @@ Built and tested without the real thing; each wants a look before it is relied o
 - Certificates unchecked (the network's setting): built, not exercised against a server
   with a bad certificate. Proxies: HTTP ones named `host:port` only; no SOCKS, no
   credentials in the address.
-- The workflows: neither `ci.yml` nor `release.yml` has run on GitHub. What they call was
-  run by hand on an export of the repository: the gate, cargo-deny 0.22.1 (all four
-  checks), and `scripts/build-release.sh`.
-- Shell integration over SSH against a real server: the engine's test sees the line arrive
-  with echo off, and the line was run in a bash of this machine (OSC 7 at each prompt), but
-  no real sshd, zsh or dash was typed it by this app.
+- Shell integration over SSH: the user saw Sync CWD follow the shell of a real server
+  (2026-11-25). Open in terminal has not been tried on one, nor a zsh or a dash as the
+  server's shell.
 - A real window's drag across monitors, DPI change and snap are checks by hand.
 
 ## Known limits

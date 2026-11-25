@@ -209,7 +209,11 @@ all spaces in tab to X (while a member) and Leave with all spaces in tab (while 
 It is disabled once the space's program ended. A member's header has a chip before its signal:
 a 14 px square, radius 3, its bold letter in 10 px on the channel's colour (the kit's
 `token::SERIES`, 1 to 5), read as "Channel A"; while it is the focused one of several, its ring
-takes that colour. A space made by a split or a duplicate is in no channel; a space leaves its
+takes that colour. Its tab shows the channel too, however the tabs are laid out (a tab of one
+space has no header to show a chip, and tabs of one channel are told from the tabs): in the rail's
+row and in the strip's tab a chip for each channel its spaces are in, A first, after its title
+and before its signal, read as "Tab in channel A"; in the folded rail a dot of 6 px of each
+channel's colour at the top right of its box. A space made by a split or a duplicate is in no channel; a space leaves its
 channel when its program ends or it closes. Membership is not saved.
 
 Links (Quadra's specs/18, "Input") open on Ctrl+click, or Open link in the menu, through the app's policy,
@@ -354,6 +358,14 @@ detail), the focus in it as it opens.
   Off, a shell gets none of it (Command Prompt then says no directory). A directory a bash
   says its own way (`/c/work`, `/cygdrive/c/work`, `/mnt/c/work`) is taken as the folder it
   is (`C:\work`), so a new space starts there.
+- **The command palette** (`Ctrl+Shift+P`, a key of the Keybindings page; the kit's
+  `command_palette`, hung under the top of the window; `palette.rs`): what is typed finds a row,
+  Enter runs it. Its rows, in groups: Commands (those of the keys: new tab, the splits, close the
+  space, next and previous space, duplicate the tab, quick connect, the SFTP dock, select all,
+  clear the scrollback, the text's size, lock, settings; each with the keys it is bound to now),
+  Go to tab (a row a tab, by its title), Connect to (a row a saved host, its address beside it:
+  a tab of its own, as the `+` menu's row), and Look (Theme: System, Dark, Light; the tabs in a
+  strip or in a rail). Locked, the keys do not open it.
 - **The `+` menu** has a search field wherever it opens, the rail's New terminal (expanded
   or folded) or the strip's `+` (`searched_menu`): what is typed keeps the shells, recent targets and hosts whose
   names or addresses hold it (whatever the case), and a typed target (`Target::parse`) is a
@@ -658,9 +670,19 @@ thread never waits on the network.
     with its line and file); Close (the focus; the space says `[connection closed: reason]`)
     and Retry (connects again from the start). A changed host key fails again until the known
     hosts are put right: there Close is the answer offered first, Retry beside it.
+  - **Connection lost** (`Ask::Lost`): a connection that ends once its shell was open, and not by
+    the shell's own exit (the network, a keepalive unanswered, the server gone), writes
+    `[connection closed: reason]` in its space and asks: `The connection to user@host was lost. Its
+    space stays as it was.`, the reason in an alert, Close and Reconnect. Reconnect connects again
+    from the start in the same space: its scrollback, its place among the spaces, its SFTP folder
+    and its transfers' list stay; what it asks (a password not saved, a user not given) it asks
+    again, and shell integration's line and the startup command are typed again. Close ends the
+    space as before (exit status 255). The dialog is the focused space's: one lost in a tab not
+    shown asks when its tab shows.
 - **The shell**: a PTY of `xterm-256color` of the space's size, `COLORTERM=truecolor`; a
   resize is a window change; the channel's exit status is the space's `[process exited N]`,
-  and a connection that drops is `[connection closed: reason]` and exit status 255.
+  and a connection that drops is `[connection closed: reason]` and, unless Reconnect is
+  answered (Connection lost, above), exit status 255.
   Keepalive every 30 s, given up after 3 unanswered. Connecting gives up after 20 s.
 - **Shell integration** (the setting of that name, as for a local shell; on): a server's
   shell cannot be started another way, so once it is open it is typed one line
@@ -673,8 +695,10 @@ thread never waits on the network.
   to accept), and starts with a space, which keeps it out of a history that leaves such
   lines out. So the status bar and the space's header show a remote space's directory, and
   Sync CWD has one to follow. A startup command is typed after it. A shell
-  that is no POSIX shell (fish, a Windows server's) answers the line with an error: the
-  setting is turned off for it. Off, a remote shell is typed nothing and says no directory
+  that is no POSIX shell (fish, a Windows server's) answers the line with an error: a
+  saved host has a switch of its own for it, Shell integration in its editor (on;
+  `ssh.hosts_without_shell_integration` names those where it is off), and the setting turns
+  it off for every shell. Off, a remote shell is typed nothing and says no directory
   unless its own files make it.
 - **Quick connect**: the `+` menu's item (`Ctrl+Shift+K`) opens a dialog (the kit's): "Open a
   one-off SSH session. It is not added to your hosts unless you tick Save as host.", Target (a
