@@ -182,7 +182,14 @@ fn path(model: &Model, d: Dock) -> impl View + use<> {
         }
     };
     let (submits, goes, again) = (model.clone(), model.clone(), model.clone());
-    let field = input(typed).mono().small().height(22.0).fill().label("Remote path").test_id("sftp-path");
+    let field = input(typed)
+        .mono()
+        .small()
+        .height(22.0)
+        .fill()
+        .underlined()
+        .label("Remote path")
+        .test_id("sftp-path");
     quadra_design::hstack()
         .padding_left(token::SPACE_LG)
         .padding_right(token::SPACE_SM)

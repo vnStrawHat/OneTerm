@@ -53,6 +53,7 @@ pub(super) fn pane(
         .small()
         .height(22.0)
         .fill()
+        .underlined()
         .label(format!("{} path", side.label))
         .on_submit(move |words| go(words.trim().to_string()));
     let bar = quadra_design::hstack()

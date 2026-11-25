@@ -850,7 +850,8 @@ thread never waits on the network.
   tab with a remote space (`Show prod-api-01`). Its header (28 px, 12 px semibold in the
   secondary colour): `SFTP`, the host in the third colour, and Zoom SFTP (an icon button: the
   expanded view), a line under it. Under it a bar of 28 px: the folder in a mono field of 22 px
-  (12 px), then Go to the typed path (Enter goes too), Refresh remote and Remote options (three
+  (12 px), underlined (the kit's second look of an input: a line under the text and no
+  box, so the bar is not a box in a box), then Go to the typed path (Enter goes too), Refresh remote and Remote options (three
   dots one over the other: a menu of Sync CWD and Show hidden files, each checked while
   on); then a header of the columns, a line under it (the user's request, 2026-11-24;
   `dock/list.rs`), as the expanded view's panes have: Name, Size (64 px), Modified (92 px) and
@@ -895,7 +896,7 @@ thread never waits on the network.
   gives SFTP the workspace; the spaces stay mounted and running, not displayed, and the
   title bar's chip adds `SFTP expanded`. Its header (28 px on the panel plane, 12 px): `SFTP`,
   the host, `ssh session keeps running` in the third colour, and Zoom out (in the accent). Two panes, Local at the left and Remote at the
-  right, each with a bar of 28 px: its label, its path in a mono field of 22 px, Go to the typed
+  right, each with a bar of 28 px: its label, its path in an underlined mono field of 22 px, Go to the typed
   path, Refresh and its options (Local options, Remote options: three dots one over the
   other, the menu the dock's bar has; Sync CWD is the Remote pane's alone: the remote folder
   goes to the focused space's directory when it is a remote path, in the dock too, while
