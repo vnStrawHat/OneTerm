@@ -138,7 +138,8 @@ pub(crate) fn tab_chips(tab: Tab) -> impl View {
     .container(row().shrink(0.0).display(there))
 }
 
-/// A folded tab's dots, at the top right of its box: 6 px of each channel's colour.
+/// A folded tab's dots, in the top right corner of its box, 2 px from its edges: 6 px of
+/// each channel's colour.
 pub(crate) fn tab_dots(tab: Tab) -> impl View {
     dynamic(move || {
         let dot = |c: u8| {
@@ -147,5 +148,5 @@ pub(crate) fn tab_dots(tab: Tab) -> impl View {
         };
         AnyView::new(of_tab(tab).into_iter().fold(row().gap(token::SPACE_XXS), |row, c| row.child(dot(c))))
     })
-    .container(div().absolute().top(4.0).right(4.0))
+    .container(div().absolute().top(2.0).right(2.0))
 }

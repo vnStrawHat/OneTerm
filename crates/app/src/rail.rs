@@ -254,8 +254,8 @@ fn tab_row(model: &Model, tab: Tab) -> impl View + use<> {
         .child(active_fill(on, 1.0, false))
         .child(marks::tab_icon(tab, 14.0, on, token::TEXT_3))
         .child(words)
-        .child(crate::channels::tab_chips(tab))
         .child(marks::tab_mark(tab))
+        .child(crate::channels::tab_chips(tab))
         .child(close_button(model, tab, on))
         .child(marks::progress_bar(tab, 0.0));
     context_menu(face, move || tab_menu(&menu, tab.id))

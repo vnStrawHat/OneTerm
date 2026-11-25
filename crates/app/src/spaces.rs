@@ -180,8 +180,8 @@ fn space_view(model: &Model, tab: Tab, space: Space) -> quadra::Div {
                 .text_color(move || if on() { token::TEXT } else { token::TEXT_2 })
                 .child(text(place).ellipsis()),
         )
-        .child(crate::channels::chip(space.channel))
         .child(crate::marks::header_signal(&s, model.prefs(), program_name(&s)))
+        .child(crate::channels::chip(space.channel))
         .child(text(move || exited.get().map(|code| format!("exited {code}")).unwrap_or_default()));
     // The focused space's ring is its border, so nothing lies over the terminal for the pointer.
     let channel = space.channel;

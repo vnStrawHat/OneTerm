@@ -206,14 +206,15 @@ replies are not sent. The space's menu has Input channel, a submenu: Channel A t
 space's own checked; choosing one joins it, leaving any other), then while a member Leave
 channel and Close channel X (every member leaves), then in a tab of more than one space Join
 all spaces in tab to X (while a member) and Leave with all spaces in tab (while one is a member).
-It is disabled once the space's program ended. A member's header has a chip before its signal:
+It is disabled once the space's program ended. A member's header has a chip after its signal
+(the user's decision, 2026-11-25: what the program says first, then the channel):
 a 14 px square, radius 3, its bold letter in 10 px on the channel's colour (the kit's
 `token::SERIES`, 1 to 5), read as "Channel A"; while it is the focused one of several, its ring
 takes that colour. Its tab shows the channel too, however the tabs are laid out (a tab of one
 space has no header to show a chip, and tabs of one channel are told from the tabs): in the rail's
-row and in the strip's tab a chip for each channel its spaces are in, A first, after its title
-and before its signal, read as "Tab in channel A"; in the folded rail a dot of 6 px of each
-channel's colour at the top right of its box. A space made by a split or a duplicate is in no channel; a space leaves its
+row and in the strip's tab a chip for each channel its spaces are in, A first, after its
+signal, read as "Tab in channel A"; in the folded rail a dot of 6 px of each
+channel's colour in the top right corner of its box, 2 px from its edges. A space made by a split or a duplicate is in no channel; a space leaves its
 channel when its program ends or it closes. Membership is not saved.
 
 Links (Quadra's specs/18, "Input") open on Ctrl+click, or Open link in the menu, through the app's policy,
