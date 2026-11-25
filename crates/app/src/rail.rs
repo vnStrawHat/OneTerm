@@ -4,8 +4,8 @@
 //! opens its menu, and rows drag to reorder.
 
 use quadra::{
-    Align, AnyView, Display, Length, MouseButton, NodeRef, PointerKind, Role, Side, Signal, State, View,
-    by_text, column, div, dynamic, each, row, signal, text,
+    Align, AnyView, Display, Length, MouseButton, NodeRef, Paint, PointerKind, Role, Side, Signal, State,
+    View, by_text, column, div, dynamic, each, row, signal, text,
 };
 use quadra_design::{
     MenuItem, context_menu, fonts, icon, icon_button, icons, input, searched_menu, token, tooltip,
@@ -178,12 +178,21 @@ pub(crate) fn active_fill(
         .child(bar)
 }
 
-/// Close tab: an × of 14 px in a box of 18, on the tab that shows.
-pub(crate) fn close_button(model: &Model, tab: Tab, on: impl Fn() -> bool + 'static) -> quadra::Div {
+/// Close tab: an × of 14 px in a box of 18 at the tab's end, `inset` px from its edge, seen
+/// while the pointer is over the tab (any tab: one that does not show closes without being
+/// shown first). It is a layer over the whole tab, clear until the pointer is over it (a
+/// style of the state: nothing is run or laid out again as the pointer passes), so it takes
+/// no room of the tab's; the box stands on the tab's own colour, and what it covers does not
+/// show through.
+pub(crate) fn close_button(
+    model: &Model,
+    tab: Tab,
+    on: impl Fn() -> bool + Copy + 'static,
+    inset: f32,
+) -> quadra::Div {
     let closes = model.clone();
-    row()
+    let face = row()
         .size(18.0, 18.0)
-        .shrink(0.0)
         .radius(token::RADIUS_SM)
         .align_items(Align::Center)
         .justify(quadra::Justify::Center)
@@ -191,16 +200,32 @@ pub(crate) fn close_button(model: &Model, tab: Tab, on: impl Fn() -> bool + 'sta
         .hover(|s| s.bg(token::PANEL_HOVER))
         .role(Role::Button)
         .label("Close tab")
-        .display(move || if on() { Display::Flex } else { Display::None })
         .on_click(move |e| {
             e.stop();
             closes.close_tab(tab.id);
         })
-        .child(icon(icons::X).size(14.0))
+        .child(icon(icons::X).size(14.0));
+    // The tab's colour: the editor's in the accent's tint while it shows, else the panel's
+    // under the pointer.
+    let ground = move || if on() { token::CANVAS } else { token::PANEL };
+    let tint =
+        move || -> Paint { if on() { token::ACCENT_TINT.into() } else { token::PANEL_HOVER.alpha(0.5) } };
+    let tinted = div().radius(token::RADIUS_SM).bg(tint).child(face);
+    row()
+        .absolute()
+        .left(0.0)
+        .top(0.0)
+        .bottom(0.0)
+        .right(inset)
+        .align_items(Align::Center)
+        .justify(quadra::Justify::End)
+        .opacity(0.0)
+        .hover(|s| s.opacity(1.0))
+        .child(div().radius(token::RADIUS_SM).bg(ground).child(tinted))
 }
 
-/// A tab's row: its icon, its title (and while it shows a second line and Close tab), its
-/// signal; the pressed editor colour and the accent bar while it shows.
+/// A tab's row: its icon, its title (and while it shows a second line), its signal, and
+/// under the pointer Close tab; the pressed editor colour and the accent bar while it shows.
 fn tab_row(model: &Model, tab: Tab) -> impl View + use<> {
     let active = model.active();
     let on = move || active.get() == tab.id;
@@ -256,7 +281,8 @@ fn tab_row(model: &Model, tab: Tab) -> impl View + use<> {
         .child(words)
         .child(marks::tab_mark(tab))
         .child(crate::channels::tab_chips(tab))
-        .child(close_button(model, tab, on))
         .child(marks::progress_bar(tab, 0.0));
+    // Over the row's end: 2 px past what stands there, 8 from the edge.
+    let face = face.child(close_button(model, tab, on, 6.0));
     context_menu(face, move || tab_menu(&menu, tab.id))
 }

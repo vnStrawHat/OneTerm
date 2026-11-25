@@ -108,8 +108,13 @@ width, no line between them (`panel_hover` at half under the pointer), 14 px fro
 remote; the third text colour unless active), the title, and at the end the tab's signal
 (below). The active row is the touch step (40 px) for its second line, the editor colour in the accent's tint (`accent_tint` over `canvas`) and one
 pixel wider (over the rail's line), its title semibold, an accent bar of 3 px on its left, a
-second line in 12 px and the secondary colour (`2 ssh · 1 local · 3 spaces`), and Close tab at
-its end. A tab with a progress has a
+second line in 12 px and the secondary colour (`2 ssh · 1 local · 3 spaces`). Close tab (an × of
+14 px in a box of 18) shows while the pointer is over a tab, the one that shows or another (the
+user's decision, 2026-11-25: it was on the tab that shows at all times, and took room from its
+title): it stands over the tab's end, 6 px from its edge, on the tab's own colour, and takes no
+room of the row's, so nothing moves as the pointer passes (a layer over the tab, clear until
+the pointer is over the tab: a style of the state, no code of the app runs); a tab that does
+not show closes without being shown first. A reader finds Close tab in every tab. A tab with a progress has a
 2 px accent bar along the row's bottom edge, as long as the progress. Then "New terminal" as one
 more row: in it, 4 px from its seams and 6 from its sides, a box of a dashed 1 px strong line
 (radius 6, the hover fill inside it) with a `+` 14 px from the rail's edge and `Ctrl-T` at its end; it opens the `+` menu at the rail's right. From P2 the SSH hosts follow: a heading "SSH hosts"
@@ -152,7 +157,7 @@ is when one has edits). Rows drag to reorder.
 strong line under the title bar, one tab per button split by strong lines (icon, title, then its signal: the state's icon,
 else the progress in mono in the accent with a 2 px bar along the tab's bottom, else a bell, else
 nothing), the active one on the pressed editor colour, semibold, an accent line of 3 px along
-its top and Close tab at its end; New terminal (`+`, the `+` menu under it) after the last, "Vertical tabs" (Switch to vertical tabs, a
+its top; Close tab under the pointer, as in the rail, 10 px from the tab's edge; New terminal (`+`, the `+` menu under it) after the last, "Vertical tabs" (Switch to vertical tabs, a
 panel icon and the word) at the end. The title bar's SSH hosts button opens the rail's hosts as
 a panel of 248 px at the left.
 

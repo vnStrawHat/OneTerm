@@ -1,4 +1,4 @@
-//! Close tab (specs/oneterm, "Rail"): the tab that shows has it at its end, in the rail and in the
+//! Close tab (specs/oneterm, "Rail"): each tab has it at its end, seen under the pointer, in the rail and in the
 //! strip; a press on it closes that tab and leaves the other one showing.
 
 use std::rc::Rc;
@@ -23,6 +23,12 @@ fn app(vertical: bool) -> Harness {
     h
 }
 
+/// The middle of Close tab of the `n`th tab.
+fn close_of(h: &Harness, n: usize) -> quadra::Point {
+    let closes = h.query(|n| n.semantics.role == Role::Button && n.semantics.name == "Close tab");
+    h.tree.window_rect(closes[n]).center()
+}
+
 fn tabs(h: &Harness) -> Vec<(String, bool)> {
     let found = std::cell::RefCell::new(Vec::new());
     h.query(|n| {
@@ -42,9 +48,18 @@ fn close_tab_closes_the_tab_that_shows_and_the_other_shows() {
         h.settle();
         assert_eq!(tabs(&h).len(), 2);
         let closes = h.query(|n| n.semantics.role == Role::Button && n.semantics.name == "Close tab");
-        assert_eq!(closes.len(), 1, "only the tab that shows has it");
+        assert_eq!(closes.len(), 2, "each tab has it");
         // A press of the pointer, so the row under the button hears it too, unless stopped.
-        let at = h.tree.window_rect(closes[0]).center();
+        let at = close_of(&h, 1);
+        h.click(at.x, at.y);
+        h.settle();
+        assert_eq!(tabs(&h), [("Terminal".to_string(), true)], "vertical: {vertical}");
+        // A tab that does not show closes without being shown: the one that shows stays.
+        h.key(Key::T, Mods::CTRL);
+        h.settle();
+        let shown = tabs(&h);
+        assert_eq!(shown.iter().map(|it| it.1).collect::<Vec<_>>(), [false, true]);
+        let at = close_of(&h, 0);
         h.click(at.x, at.y);
         h.settle();
         assert_eq!(tabs(&h), [("Terminal".to_string(), true)], "vertical: {vertical}");
@@ -143,8 +158,7 @@ fn the_window_stays_with_no_tab_and_says_how_to_open_one() {
         let mut h = app(vertical);
         h.key(Key::T, Mods::CTRL);
         h.settle();
-        let button = h.get_by_role(Role::Button, "Close tab").node();
-        let at = h.tree.window_rect(button).center();
+        let at = close_of(&h, 1);
         h.click(at.x, at.y);
         h.settle();
         // The last one by Ctrl+W.

@@ -241,7 +241,12 @@ fn closing_a_tab_or_the_window_with_changes_asks_first() {
         a.h.semantics()
     );
     let tabs = a.h.query(|n| n.semantics.role == Role::Tab).len();
-    a.h.get_by_role(Role::Button, "Close tab").click();
+    // Close tab of the tab that shows: the one in its box.
+    let shown = a.h.query(|n| n.semantics.role == Role::Tab && n.semantics.selected)[0];
+    let shown = a.h.tree.window_rect(shown);
+    let closes = a.h.query(|n| n.semantics.role == Role::Button && n.semantics.name == "Close tab");
+    let mine = closes.into_iter().find(|it| shown.contains(a.h.tree.window_rect(*it).center()));
+    assert!(a.h.tree.act(mine.expect("its Close tab"), &quadra_tree::SemanticAction::Click));
     a.h.settle();
     assert!(a.h.has_text("Save changes?"), "{}", a.h.semantics());
     a.h.get_by_role(Role::Button, "Cancel").click();

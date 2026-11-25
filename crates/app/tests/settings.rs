@@ -244,15 +244,18 @@ fn terminal_inks(h: &mut Harness) -> Vec<[f32; 4]> {
     let node = h.query(|n| n.semantics.role == Role::TextInput && n.semantics.name == "Terminal")[0];
     let rect = h.tree.window_rect(node);
     let scene = h.tree.scene();
-    let mut inks: Vec<([f32; 4], [f32; 4])> = h
-        .renderer
-        .steps()
-        .iter()
-        .filter_map(|step| match step {
-            Step::Layer { id, .. } => Some(scene.layer(*id).instances()),
-            _ => None,
-        })
-        .flatten()
+    // Each layer once: one drawn in several runs, around a layer over it, is named by each.
+    let mut layers = Vec::new();
+    for step in h.renderer.steps() {
+        if let Step::Layer { id, .. } = step
+            && !layers.contains(id)
+        {
+            layers.push(*id);
+        }
+    }
+    let mut inks: Vec<([f32; 4], [f32; 4])> = layers
+        .into_iter()
+        .flat_map(|id| scene.layer(id).instances())
         .filter(|i| {
             i.kind == Kind::Mono as u32 && rect.contains(quadra::Point::new(i.bounds[0], i.bounds[1]))
         })

@@ -1,6 +1,6 @@
 //! The horizontal variant of the tabs (specs/oneterm, "Rail"): a strip of 32 px and its line under
 //! the title bar, a tab a button split by lines (the one that shows on the pressed editor
-//! colour, semibold, an accent line along its top and Close tab; a progress is a bar along
+//! colour, semibold, an accent line along its top; Close tab under the pointer; a progress is a bar along
 //! its bottom), New terminal after the last, and "Vertical tabs" at the end.
 
 use quadra::{Align, MouseButton, PointerKind, Role, Signal, State, View, by_text, div, each, row, text};
@@ -90,7 +90,8 @@ fn tab_button(model: &Model, tab: Tab) -> impl View + use<> {
         .child(div().min_width(0.0).child(title(model, tab)))
         .child(crate::marks::tab_mark(tab))
         .child(crate::channels::tab_chips(tab))
-        .child(close_button(model, tab, on))
-        .child(crate::marks::progress_bar(tab, 0.0));
+        .child(crate::marks::progress_bar(tab, 0.0))
+        // Over the tab's end: 2 px past what stands there, 12 from the edge.
+        .child(close_button(model, tab, on, 10.0));
     context_menu(face, move || tab_menu(&menu, tab.id))
 }
