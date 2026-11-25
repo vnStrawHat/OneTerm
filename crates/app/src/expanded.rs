@@ -3,6 +3,7 @@
 //! canvas gives the layout; the kit's tokens and parts draw it.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use oneterm_ssh::Entry;
 use quadra::{Align, AnyView, Length, Role, Signal, View, by_text, column, div, dynamic, row, signal, text};
@@ -86,13 +87,14 @@ pub(crate) fn view(model: &Model, d: Dock) -> impl View + use<> {
                 }
             }));
         }
+        let order: Rc<Vec<String>> = Rc::new(all.iter().map(|it| it.name.clone()).collect());
         for entry in all {
             let (name, picks, opens) = (entry.name.clone(), entry.name.clone(), entry.clone());
-            let chosen = move || local.selected.with(|it| it.as_deref() == Some(&name));
+            let (chosen, order) = (move || local.picked.has(&name), order.clone());
             let line = line(&entry, None, false, chosen);
             let line = line.on_click(move |e| match (opens.dir, e.clicks) {
                 (true, 2) => local.load(local.dir.get_untracked().join(&opens.name)),
-                _ => local.selected.set(Some(picks.clone())),
+                _ => local.picked.click(&picks, e.mods, &order),
             });
             list = list.child(context_menu(line, crate::dock::local_menu(&locals_of, d, &entry)));
         }
@@ -117,14 +119,15 @@ pub(crate) fn view(model: &Model, d: Dock) -> impl View + use<> {
             }));
         }
         let locals = if compare.get() { local.entries.get() } else { Vec::new() };
+        let order: Rc<Vec<String>> = Rc::new(all.iter().map(|it| it.name.clone()).collect());
         for entry in all {
             let (name, picks, opens, goes) =
                 (entry.name.clone(), entry.name.clone(), entry.clone(), remotes.clone());
-            let chosen = move || d.selected.with(|it| it.as_deref() == Some(&name));
+            let (chosen, order) = (move || d.picked.has(&name), order.clone());
             let line = line(&entry, compared(&entry, &locals), true, chosen);
             let line = line.on_click(move |e| match (opens.dir, e.clicks) {
                 (true, 2) => d.load(&goes, Some(oneterm_ssh::join(&d.dir.get_untracked(), &opens.name))),
-                _ => d.selected.set(Some(picks.clone())),
+                _ => d.picked.click(&picks, e.mods, &order),
             });
             list = list.child(context_menu(line, crate::dock::remote_menu(&remotes, d, &entry)));
         }
@@ -161,17 +164,14 @@ pub(crate) fn view(model: &Model, d: Dock) -> impl View + use<> {
         icon_button(shape, name).variant(Variant::Secondary).size(quadra_design::Size::Md)
     };
     let upload = square(icons::ARROW_RIGHT, "Upload selected").on_click(move || {
-        if let Some(name) = local.selected.get_untracked() {
-            d.upload(&sends, vec![local.dir.get_untracked().join(name)]);
+        let dir = local.dir.get_untracked();
+        let paths: Vec<PathBuf> = local.picked.names().iter().map(|it| dir.join(it)).collect();
+        if !paths.is_empty() {
+            d.upload(&sends, paths);
         }
     });
     let download = square(icons::ARROW_LEFT, "Download selected").on_click(move || {
-        let name = d.selected.get_untracked();
-        let entry =
-            d.entries.with_untracked(|all| all.iter().find(|it| Some(&it.name) == name.as_ref()).cloned());
-        if let Some(entry) = entry {
-            d.download(&gets, &entry);
-        }
+        d.chosen().iter().for_each(|it| d.download(&gets, it));
     });
     let compares = square(icons::ARROW_RIGHT_LEFT, "Compare")
         .toggled(move || compare.get())

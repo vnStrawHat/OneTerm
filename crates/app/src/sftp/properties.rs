@@ -1,11 +1,12 @@
 //! An entry's properties (specs/oneterm, "M9 in detail"): asked of the server again, shown in a
-//! dialog as a description list.
+//! dialog as a description list; its permissions are boxes to tick, and Apply sets them.
 
 use oneterm_ssh::{Entry, join};
-use quadra::{AnyView, View, div, text};
-use quadra_design::{Notice, Tone, Variant, copyable, description_list, dialog, fonts};
+use quadra::{AnyView, View, div, text, untrack};
+use quadra_design::{Notice, Tone, Variant, checkbox, copyable, description_list, dialog, fonts};
 
 use super::Dock;
+use crate::dock::Ask;
 use crate::model::Model;
 use crate::panes::{size, when};
 
@@ -19,6 +20,9 @@ impl Dock {
             move |files| files.stat(&asked),
             move |dock, got| match got {
                 Ok(stat) => {
+                    for (at, on) in dock.ask.bits.iter().enumerate() {
+                        on.set(stat.mode >> (8 - at) & 1 == 1);
+                    }
                     dock.ask.stat.set(Some((path, stat)));
                     dock.ask.properties.set(true);
                 }
@@ -30,9 +34,26 @@ impl Dock {
     }
 }
 
-/// The dialog, Properties; it shows what was asked last.
-pub(crate) fn properties(d: Dock) -> impl View + use<> {
+/// The boxes' names for a reader and a test: who, then what.
+const BOXES: [&str; 9] =
+    ["mode-ur", "mode-uw", "mode-ux", "mode-gr", "mode-gw", "mode-gx", "mode-or", "mode-ow", "mode-ox"];
+
+/// The permission bits the nine boxes say, with the special bits `was` has (setuid, setgid,
+/// sticky: not the boxes' to change).
+fn ticked(ask: &Ask, was: u32) -> u32 {
+    let bits = ask.bits.iter().enumerate().fold(0, |all, (at, on)| all | (u32::from(on.get()) << (8 - at)));
+    (was & 0o7000) | bits
+}
+
+/// The dialog, Properties; it shows what was asked last. Apply sets the permissions ticked,
+/// while they are not the entry's.
+pub(crate) fn properties(model: &Model, d: Dock) -> impl View + use<> {
     let ask = d.ask;
+    let changed = move || {
+        let was = ask.stat.with(|it| it.as_ref().map_or(0, |it| it.1.mode));
+        Some(ticked(&ask, was)).filter(|it| *it != was & 0o7777)
+    };
+    let applies = model.clone();
     let body = move || {
         let (path, stat) = ask.stat.get_untracked().unwrap_or_default();
         let name = path.rsplit('/').next().unwrap_or_default().to_string();
@@ -44,20 +65,43 @@ pub(crate) fn properties(d: Dock) -> impl View + use<> {
         let bytes = if stat.dir { "-".into() } else { format!("{} ({} bytes)", size(stat.size), stat.size) };
         let plain = |it: String| AnyView::new(text(it).color(quadra_design::token::TEXT));
         let mono = |it: AnyView| AnyView::new(div().font_family(fonts::MONO).child(it));
+        // The permissions as they are ticked: the entry's until a box is changed.
+        let was = stat.mode;
+        let live = move || mode((was & !0o7777) | ticked(&ask, was));
+        // Read, Write and Execute for one of the three, as boxes in a row.
+        let boxes = |from: usize| {
+            let row = ["Read", "Write", "Execute"].into_iter().enumerate().fold(
+                quadra_design::hstack(),
+                |row, (at, name)| {
+                    row.child(checkbox(ask.bits[from + at]).label(name).test_id(BOXES[from + at]))
+                },
+            );
+            AnyView::new(row)
+        };
         let rows = [
             ("Name", plain(name)),
             ("Type", plain(kind)),
             ("Size", plain(bytes)),
             ("Modified", plain(when(stat.modified))),
             ("Accessed", plain(when(stat.accessed))),
-            ("Permissions", mono(plain(mode(stat.mode)))),
+            ("Permissions", mono(AnyView::new(text(live).color(quadra_design::token::TEXT)))),
+            ("Owner can", boxes(0)),
+            ("Group can", boxes(3)),
+            ("Others can", boxes(6)),
             ("Owner", plain(owner(stat.owner.as_deref(), stat.uid))),
             ("Group", plain(owner(stat.group.as_deref(), stat.gid))),
             ("Path", mono(copyable(path))),
         ];
         description_list(rows)
     };
-    dialog(ask.properties, "Properties", body).action("Close", Variant::Primary, || {})
+    dialog(ask.properties, "Properties", body)
+        .action("Close", Variant::Secondary, || {})
+        .action("Apply", Variant::Primary, move || {
+            if let (Some(mode), Some((path, _))) = (untrack(changed), ask.stat.get_untracked()) {
+                d.chmod(&applies, path, mode);
+            }
+        })
+        .disabled(move || changed().is_none())
 }
 
 /// `drwxr-xr-x (0755)`: [`letters`], then the octal.

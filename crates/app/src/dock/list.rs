@@ -2,6 +2,8 @@
 //! sorting by it, then `..` and the entries as rows. A column the dock is too narrow for is
 //! not shown.
 
+use std::rc::Rc;
+
 use oneterm_ssh::Entry;
 use quadra::{
     AnyView, Length, Paint, Position, Role, Signal, State, View, by_text, column, div, dynamic, signal, text,
@@ -75,11 +77,13 @@ pub(super) fn entries(model: &Model, d: Dock) -> impl View + use<> {
             let line = line(&entry, d, width).label("Parent folder");
             list = list.child(line.on_click(move |e| match e.clicks {
                 2 => d.load(&goes, Some(up.clone())),
-                _ => d.selected.set(Some("..".into())),
+                _ => d.picked.set(vec!["..".into()]),
             }));
         }
+        // The order shown: what a click with Shift reaches across.
+        let order: Rc<Vec<String>> = Rc::new(all.iter().take(SHOWN).map(|it| it.name.clone()).collect());
         for entry in all.iter().take(SHOWN) {
-            list = list.child(entry_row(&model, d, entry.clone(), width));
+            list = list.child(entry_row(&model, d, entry.clone(), width, order.clone()));
         }
         if all.len() > SHOWN {
             list = list.child(
@@ -100,7 +104,7 @@ pub(super) fn entries(model: &Model, d: Dock) -> impl View + use<> {
 /// of the accent at its left, a file's icon in the accent.
 fn line(entry: &Entry, d: Dock, width: Signal<f64>) -> quadra::Div {
     let (file, named) = (!entry.dir, entry.name.clone());
-    let picked = move || d.selected.with(|it| it.as_deref() == Some(named.as_str()));
+    let picked = move || d.picked.has(&named);
     let (tints, quiets, marks) = (picked.clone(), picked.clone(), picked.clone());
     let tint = move || -> Paint {
         match (file, tints()) {
@@ -137,13 +141,20 @@ fn line(entry: &Entry, d: Dock, width: Signal<f64>) -> quadra::Div {
         .child(said(letters(entry.mode), MODE.0).display(fits(width, MODE.1)))
 }
 
-/// A click chooses a row; two open a folder or download a file (a reader: the row's menu).
-fn entry_row(model: &Model, d: Dock, entry: Entry, width: Signal<f64>) -> impl View + use<> {
+/// A click chooses a row (with Ctrl one more, with Shift those up to it); two open a folder
+/// or download a file (a reader: the row's menu).
+fn entry_row(
+    model: &Model,
+    d: Dock,
+    entry: Entry,
+    width: Signal<f64>,
+    order: Rc<Vec<String>>,
+) -> impl View + use<> {
     let (opens, kept) = (model.clone(), entry.clone());
     let face = line(&entry, d, width).on_click(move |e| match (kept.dir, e.clicks) {
         (true, 2) => d.load(&opens, Some(oneterm_ssh::join(&d.dir.get_untracked(), &kept.name))),
         (false, 2) => d.download(&opens, &kept),
-        _ => d.selected.set(Some(kept.name.clone())),
+        _ => d.picked.click(&kept.name, e.mods, &order),
     });
     context_menu(face, menus::remote(model, d, &entry))
 }

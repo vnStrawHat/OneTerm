@@ -13,9 +13,12 @@ use quadra::{Scope, Signal, background, interval, signal, spawn, untrack};
 
 use crate::model::Model;
 
+mod act;
 mod edit;
 mod kept;
+mod picked;
 mod transfer;
+pub(crate) use picked::Picked;
 pub(crate) use transfer::Transfer;
 pub(crate) mod properties;
 pub(crate) mod upload;
@@ -35,11 +38,12 @@ pub(crate) struct Dock {
     pub transfers: Signal<Vec<Rc<Transfer>>>,
     /// Moves while transfers run, so their percentages show.
     pub tick: Signal<u32>,
-    /// The remote entry chosen in the expanded view.
-    pub selected: Signal<Option<String>>,
-    /// Whether names that start with `.` show.
+    /// The remote entries chosen, in the dock and in the expanded view.
+    pub picked: Picked,
+    /// Whether names that start with `.` show (kept: `sftp.show_hidden`).
     pub hidden: Signal<bool>,
-    /// Sync CWD: the remote folder goes where the focused space's shell is.
+    /// Sync CWD: the remote folder goes where the focused space's shell is (kept:
+    /// `sftp.sync_cwd`).
     pub follow: Signal<bool>,
     /// The column the remote entries are sorted by, in the dock and in the expanded view.
     pub sort: Signal<crate::panes::Sort>,
@@ -67,9 +71,9 @@ impl Dock {
             said: signal(String::new()),
             transfers: signal(Vec::new()),
             tick: signal(0),
-            selected: signal(None),
-            hidden: signal(false),
-            follow: signal(false),
+            picked: Picked::new(),
+            hidden: model.prefs().dock_hidden,
+            follow: model.prefs().dock_follow,
             sort: signal(crate::panes::Sort::default()),
             expanded: model.ui().expanded,
             local: Local::new(downloads(model)),
@@ -134,7 +138,7 @@ impl Dock {
             move |dock, got| match got {
                 _ if dock.at() != asked => {}
                 Ok((dir, entries)) => {
-                    dock.selected.set(None);
+                    dock.picked.set(Vec::new());
                     dock.dir.set(dir);
                     dock.entries.set(entries);
                     dock.said.set(String::new());
@@ -162,15 +166,6 @@ impl Dock {
         self.with_files(
             model,
             move |files| files.rename(&from, &to),
-            move |dock, got| dock.after(&again, got),
-        );
-    }
-
-    pub fn delete(&self, model: &Model, entry: &Entry) {
-        let (path, dir, again) = (join(&self.dir.get_untracked(), &entry.name), entry.dir, model.clone());
-        self.with_files(
-            model,
-            move |files| files.remove(&path, dir),
             move |dock, got| dock.after(&again, got),
         );
     }

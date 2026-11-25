@@ -66,6 +66,9 @@ pub struct Prefs {
     /// Whether the SFTP dock is open while a local tab shows, and while an SSH tab does.
     pub dock_local: Signal<bool>,
     pub dock_ssh: Signal<bool>,
+    /// The dock's Sync CWD and Show hidden files, kept as they were left.
+    pub dock_follow: Signal<bool>,
+    pub dock_hidden: Signal<bool>,
     /// The dock's width, dragged by its left edge.
     pub dock_width: Signal<f64>,
     /// What names a tab not renamed: the program's title (OSC 0/2) or a fixed label.
@@ -157,6 +160,8 @@ impl Prefs {
             rail_folded: s.value("tabs.rail_folded", false),
             dock_local: s.value("sftp.dock_open_local", false),
             dock_ssh: s.value("sftp.dock_open_ssh", true),
+            dock_follow: s.value("sftp.sync_cwd", false),
+            dock_hidden: s.value("sftp.show_hidden", false),
             dock_width: s.value("sftp.dock_width", 460.0),
             tab_title: s.choice("tabs.title", &TITLES),
             keepalive_on: s.value("ssh.keepalive", true),

@@ -14,6 +14,7 @@ use crate::locked::shown;
 use crate::model::Model;
 use crate::sftp::Dock;
 
+mod dialogs;
 mod grip;
 mod list;
 mod menus;
@@ -79,7 +80,7 @@ pub(crate) fn dock(model: &Model) -> impl View + use<> {
         .grow(grows)
         .display(shown(move || open.get()))
         .child(shows.container(row().min_width(quadra::Length::Px(0.0)).grow(grows)))
-        .child(menus::dialogs(model, d))
+        .child(dialogs::dialogs(model, d))
 }
 
 fn panel(model: &Model, d: Dock) -> impl View + use<> {

@@ -12,7 +12,7 @@ use quadra::{Scope, Signal, background, signal, spawn};
 pub(crate) struct Local {
     pub dir: Signal<PathBuf>,
     pub entries: Signal<Vec<Entry>>,
-    pub selected: Signal<Option<String>>,
+    pub picked: crate::sftp::Picked,
     /// Why the list is empty, or what failed.
     pub said: Signal<String>,
     owner: Scope,
@@ -23,7 +23,7 @@ impl Local {
         let local = Local {
             dir: signal(start.clone()),
             entries: signal(Vec::new()),
-            selected: signal(None),
+            picked: crate::sftp::Picked::new(),
             said: signal(String::new()),
             owner: Scope::current(),
         };
@@ -47,7 +47,7 @@ impl Local {
                     }
                     Err(why) => local.said.set(why),
                 }
-                local.selected.set(None);
+                local.picked.set(Vec::new());
             })
             .detach()
         });

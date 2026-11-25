@@ -15,7 +15,7 @@ struct Left {
     dir: String,
     entries: Vec<Entry>,
     said: String,
-    selected: Option<String>,
+    selected: Vec<String>,
     transfers: Vec<Rc<Transfer>>,
 }
 
@@ -38,7 +38,7 @@ impl Dock {
             dir: self.dir.get_untracked(),
             entries: self.entries.get_untracked(),
             said: self.said.get_untracked(),
-            selected: self.selected.get_untracked(),
+            selected: self.picked.names(),
             transfers: self.transfers.get_untracked(),
         };
         let live: Vec<u64> = model
@@ -71,7 +71,7 @@ impl Dock {
         self.dir.set(left.dir);
         self.entries.set(left.entries);
         self.said.set(left.said);
-        self.selected.set(left.selected);
+        self.picked.set(left.selected);
         self.transfers.set_always(left.transfers);
     }
 

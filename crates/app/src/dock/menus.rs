@@ -1,12 +1,12 @@
 //! The SFTP menus for the other button (specs/oneterm, "M9 in detail"), shared by the dock and the
-//! expanded view, and the dialogs they open: a new folder's name, a new name, a delete asked,
-//! an entry's properties.
+//! expanded view, and what their dialogs (`dialogs.rs`) ask about. A row among several
+//! chosen has the choice's menu.
 
 use std::rc::Rc;
 
 use oneterm_ssh::{Entry, Stat, join};
-use quadra::{Clipboard, Signal, View, div, signal, text, use_context};
-use quadra_design::{MenuItem, Variant, dialog, field, icons, input};
+use quadra::{Clipboard, Signal, signal, use_context};
+use quadra_design::{MenuItem, icons};
 
 use crate::model::Model;
 use crate::panes::Local;
@@ -20,9 +20,14 @@ pub(crate) struct Ask {
     pub delete: Signal<bool>,
     /// A file larger than editing takes without asking.
     pub large: Signal<bool>,
-    /// The entry renamed or deleted, and the name typed.
+    /// The entry renamed or edited, and the name typed.
     pub entry: Signal<Option<Entry>>,
     pub name: Signal<String>,
+    /// The entries Delete asks about.
+    pub many: Signal<Vec<Entry>>,
+    /// The permissions ticked in Properties: read, write and execute for the owner, the
+    /// group and the others, in that order.
+    pub bits: [Signal<bool>; 9],
     /// The properties shown, and the path they are of.
     pub properties: Signal<bool>,
     pub stat: Signal<Option<(String, Stat)>>,
@@ -43,6 +48,8 @@ impl Ask {
             large: no(),
             entry: signal(None),
             name,
+            many: signal(Vec::new()),
+            bits: std::array::from_fn(|_| no()),
             properties,
             stat,
             replace: no(),
@@ -73,6 +80,21 @@ fn copies(path: String) -> impl Fn() + 'static {
 pub(crate) fn remote(model: &Model, d: Dock, entry: &Entry) -> impl Fn() -> Vec<MenuItem> + use<> {
     let (model, entry, copy, editing) = (model.clone(), entry.clone(), clipboard(), Editing::here());
     move || {
+        // Among several chosen, the choice's menu: download them, delete them.
+        let many = d.chosen();
+        if many.len() > 1 && many.iter().any(|it| it.name == entry.name) {
+            let (gets, all, n) = (model.clone(), many.clone(), many.len());
+            return vec![
+                MenuItem::new(format!("Download {n} items"))
+                    .icon(icons::ARROW_DOWN)
+                    .on_select(move || all.iter().for_each(|it| d.download(&gets, it))),
+                MenuItem::separator(),
+                MenuItem::new(format!("Delete {n} items\u{2026}")).danger().on_select(move || {
+                    d.ask.many.set(many.clone());
+                    d.ask.delete.set(true);
+                }),
+            ];
+        }
         let path = join(&d.dir.get_untracked(), &entry.name);
         let (opens, (a, b, c)) = (model.clone(), (entry.clone(), entry.clone(), entry.clone()));
         let (stats, shown) = (model.clone(), entry.clone());
@@ -97,12 +119,16 @@ pub(crate) fn remote(model: &Model, d: Dock, entry: &Entry) -> impl Fn() -> Vec<
         });
         let mut items = vec![first];
         let (gets, whole) = (model.clone(), entry.clone());
+        let (shell, there) = (model.clone(), path.clone());
         match entry.dir {
-            true => items.push(
+            true => items.extend([
+                MenuItem::new("Open in terminal")
+                    .icon(icons::TERMINAL)
+                    .on_select(move || d.cd(&shell, &there)),
                 MenuItem::new("Download")
                     .icon(icons::ARROW_DOWN)
                     .on_select(move || d.download(&gets, &whole)),
-            ),
+            ]),
             false => items.push(edit),
         }
         items.extend([
@@ -121,7 +147,7 @@ pub(crate) fn remote(model: &Model, d: Dock, entry: &Entry) -> impl Fn() -> Vec<
                 .on_select(move || d.properties(&stats, &shown)),
             MenuItem::separator(),
             MenuItem::new("Delete\u{2026}").danger().on_select(move || {
-                d.ask.entry.set(Some(c.clone()));
+                d.ask.many.set(vec![c.clone()]);
                 d.ask.delete.set(true);
             }),
         ]);
@@ -133,9 +159,12 @@ pub(crate) fn remote(model: &Model, d: Dock, entry: &Entry) -> impl Fn() -> Vec<
 pub(crate) fn remote_area(model: &Model, d: Dock) -> impl Fn() -> Vec<MenuItem> + use<> {
     let model = model.clone();
     move || {
-        let again = model.clone();
+        let (again, shell) = (model.clone(), model.clone());
         vec![
             MenuItem::new("New folder\u{2026}").icon(icons::FOLDER).on_select(move || d.ask.folder()),
+            MenuItem::new("Open in terminal")
+                .icon(icons::TERMINAL)
+                .on_select(move || d.cd(&shell, &d.dir.get_untracked())),
             MenuItem::new("Refresh").on_select(move || d.refresh(&again)),
         ]
     }
@@ -145,7 +174,18 @@ pub(crate) fn remote_area(model: &Model, d: Dock) -> impl Fn() -> Vec<MenuItem> 
 pub(crate) fn local(model: &Model, d: Dock, entry: &Entry) -> impl Fn() -> Vec<MenuItem> + use<> {
     let (model, entry, local): (Model, Entry, Local) = (model.clone(), entry.clone(), d.local);
     move || {
-        let path = local.dir.get_untracked().join(&entry.name);
+        // Among several chosen, the choice's menu: upload them.
+        let (dir, names) = (local.dir.get_untracked(), local.picked.names());
+        if names.len() > 1 && names.contains(&entry.name) {
+            let (sends, n) = (model.clone(), names.len());
+            let paths: Vec<_> = names.iter().map(|it| dir.join(it)).collect();
+            return vec![
+                MenuItem::new(format!("Upload {n} items"))
+                    .icon(icons::ARROW_UP)
+                    .on_select(move || d.upload(&sends, paths.clone())),
+            ];
+        }
+        let path = dir.join(&entry.name);
         let (sends, at) = (model.clone(), path.clone());
         let first = match entry.dir {
             true => MenuItem::new("Open").icon(icons::FOLDER).on_select(move || local.load(at.clone())),
@@ -169,82 +209,4 @@ pub(crate) fn local(model: &Model, d: Dock, entry: &Entry) -> impl Fn() -> Vec<M
             ])
             .collect()
     }
-}
-
-/// The dialogs the menus open.
-pub(crate) fn dialogs(model: &Model, d: Dock) -> impl View + use<> {
-    let ask = d.ask;
-    let named = move || {
-        let name = ask.name.get_untracked();
-        let name = name.trim();
-        (!name.is_empty() && name != "." && name != ".." && !name.contains('/')).then(|| name.to_string())
-    };
-    let (makes, renames, deletes) = (model.clone(), model.clone(), model.clone());
-    let create: Rc<dyn Fn()> = Rc::new(move || {
-        if let Some(name) = named() {
-            d.mkdir(&makes, &name);
-        }
-    });
-    let rename: Rc<dyn Fn()> = Rc::new(move || {
-        if let (Some(name), Some(entry)) = (named(), ask.entry.get_untracked())
-            && name != entry.name
-        {
-            d.rename(&renames, &entry.name, &name);
-        }
-    });
-    // Enter does what the dialog that shows is for, and closes it.
-    let (creates, renames) = (create.clone(), rename.clone());
-    let body = move || {
-        let (creates, renames) = (creates.clone(), renames.clone());
-        let submit = move |_: &str| {
-            for (open, does) in [(ask.folder, &creates), (ask.rename, &renames)] {
-                if open.get_untracked() {
-                    does();
-                    open.set(false);
-                }
-            }
-        };
-        field("Name", input(ask.name).test_id("sftp-name").on_submit(submit))
-    };
-    // A question, or one field: the dialog of 360 (Quadra's specs/design/surfaces.md).
-    let folder = dialog(ask.folder, "New folder", body.clone())
-        .width(360.0)
-        .action("Cancel", Variant::Secondary, || {})
-        .action("Create", Variant::Primary, move || create());
-    let rename = dialog(ask.rename, "Rename", body)
-        .width(360.0)
-        .action("Cancel", Variant::Secondary, || {})
-        .action("Rename", Variant::Primary, move || rename());
-    let asked = move || {
-        let entry = ask.entry.get();
-        let name = entry.as_ref().map(|it| it.name.as_str()).unwrap_or_default();
-        let what = if entry.as_ref().is_some_and(|it| it.dir) { "the empty folder" } else { "the file" };
-        format!("Delete {what} {name} from the server? It cannot be undone.")
-    };
-    let delete = dialog(ask.delete, "Delete", move || text(asked))
-        .width(360.0)
-        .action("Cancel", Variant::Secondary, || {})
-        .action("Delete", Variant::Primary, move || {
-            if let Some(entry) = ask.entry.get_untracked() {
-                d.delete(&deletes, &entry);
-            }
-        })
-        .danger();
-    let (edits, editing) = (model.clone(), Editing::here());
-    let large = move || {
-        let entry = ask.entry.get();
-        let (name, size) = entry.as_ref().map(|it| (it.name.clone(), it.size)).unwrap_or_default();
-        format!("{name} is {}. Download it to edit anyway?", crate::panes::size(size))
-    };
-    let large = dialog(ask.large, "A large file", move || text(large))
-        .width(360.0)
-        .action("Cancel", Variant::Secondary, || {})
-        .action("Edit", Variant::Primary, move || {
-            if let Some(entry) = ask.entry.get_untracked() {
-                d.edit(&edits, &entry, &editing);
-            }
-        });
-    let properties = crate::sftp::properties::properties(d);
-    let replace = crate::sftp::upload::replace(model, d);
-    div().child(folder).child(rename).child(delete).child(large).child(properties).child(replace)
 }
