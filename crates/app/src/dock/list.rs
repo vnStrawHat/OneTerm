@@ -1,4 +1,4 @@
-//! The dock's list (specs/oneterm, "M9 in detail"): a header of the columns, a click on one
+//! The dock's list (specs/oneterm, "M9 in detail"): a header of the columns between two lines, a click on one
 //! sorting by it, then `..` and the entries as rows. A column the dock is too narrow for is
 //! not shown.
 
@@ -34,6 +34,7 @@ pub(super) fn header(model: &Model, d: Dock) -> impl View + use<> {
         .padding_right(token::SPACE_LG)
         .height(by_text(24.0))
         .shrink(0.0)
+        .border_top(1.0)
         .border_bottom(1.0)
         .border_color(token::LINE)
         .text_size(12.0)

@@ -853,7 +853,8 @@ thread never waits on the network.
   (12 px), underlined (the kit's second look of an input: a line under the text and no
   box, so the bar is not a box in a box), then Go to the typed path (Enter goes too), Refresh remote and Remote options (three
   dots one over the other: a menu of Sync CWD and Show hidden files, each checked while
-  on); then a header of the columns, a line under it (the user's request, 2026-11-24;
+  on); 6 px under the bar, so that the field's line and the header's stand apart, a header
+  of the columns between two lines, one over it and one under it (the user's request, 2026-11-24;
   `dock/list.rs`), as the expanded view's panes have: Name, Size (64 px), Modified (92 px) and
   Permissions (84 px), the last three at the right; a click on one sorts by it, again the
   other way, its label marked `↑` or `↓`, folders staying first, and the order is the
@@ -900,7 +901,7 @@ thread never waits on the network.
   path, Refresh and its options (Local options, Remote options: three dots one over the
   other, the menu the dock's bar has; Sync CWD is the Remote pane's alone: the remote folder
   goes to the focused space's directory when it is a remote path, in the dock too, while
-  the dock is open; Show hidden files is one switch for both panes and the dock); a header row (Name, Size 80 px, Modified 124 px, and in the Remote pane
+  the dock is open; Show hidden files is one switch for both panes and the dock); 6 px under the bar, a header row between two lines as the dock's (Name, Size 80 px, Modified 124 px, and in the Remote pane
   Permissions 92 px, a local file having none, those after the name at the right;
   a click sorts the pane by it, again the other way, its label marked `↑` or `↓`; folders stay
   first; each pane by name at first)

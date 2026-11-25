@@ -72,6 +72,8 @@ pub(super) fn pane(
         )
         .child(icon_button(icons::REFRESH_CW, side.again_name).on_click(again))
         .child(more);
+    // Room under the bar: the field's line and the header's stand apart.
+    let bar = column().shrink(0.0).padding_bottom(token::SPACE_SM).bg(token::PANEL).child(bar);
     let header = row()
         .gap(token::SPACE_LG)
         .padding_x(token::SPACE_LG)
@@ -81,6 +83,7 @@ pub(super) fn pane(
         .bg(token::PANEL)
         .text_size(12.0)
         .text_color(token::TEXT_2)
+        .border_top(1.0)
         .border_bottom(1.0)
         .border_color(token::LINE)
         .child(heading(div().grow(1.0), "Name", By::Name, sort))

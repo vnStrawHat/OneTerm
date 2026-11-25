@@ -190,16 +190,21 @@ fn path(model: &Model, d: Dock) -> impl View + use<> {
         .underlined()
         .label("Remote path")
         .test_id("sftp-path");
-    quadra_design::hstack()
+    let bar = quadra_design::hstack()
         .padding_left(token::SPACE_LG)
         .padding_right(token::SPACE_SM)
         .height(by_text(28.0))
         .shrink(0.0)
-        .display(shown(move || !d.dir.with(String::is_empty)))
         .child(field.on_submit(move |_| go(&submits)))
         .child(icon_button(icons::ARROW_RIGHT, "Go to the typed path").on_click(move || go(&goes)))
         .child(icon_button(icons::REFRESH_CW, "Refresh remote").on_click(move || d.refresh(&again)))
-        .child(more("Remote options", d, true))
+        .child(more("Remote options", d, true));
+    // Room under the bar: the field's line and the header's stand apart.
+    column()
+        .shrink(0.0)
+        .padding_bottom(token::SPACE_SM)
+        .display(shown(move || !d.dir.with(String::is_empty)))
+        .child(bar)
 }
 
 /// What the dock shows for a local space: why it is empty, and a button that shows the
