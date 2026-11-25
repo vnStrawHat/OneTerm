@@ -143,6 +143,13 @@ impl Files {
         runtime().block_on(self.sftp.rename(from, to)).map_err(said)
     }
 
+    /// Sets a path's permission bits (`0o644`); its kind is the server's to keep.
+    pub fn chmod(&self, path: &str, mode: u32) -> Result<(), String> {
+        let mut attrs = russh_sftp::protocol::FileAttributes::empty();
+        attrs.permissions = Some(mode & 0o7777);
+        runtime().block_on(self.sftp.set_metadata(path, attrs)).map_err(said)
+    }
+
     /// Removes a file, or an empty folder.
     pub fn remove(&self, path: &str, dir: bool) -> Result<(), String> {
         match dir {

@@ -11,16 +11,27 @@ pub struct Fs {
     pub root: PathBuf,
     open: HashMap<String, std::fs::File>,
     listed: HashMap<String, bool>,
+    /// The permission bits set on a path (`setstat`).
+    modes: HashMap<PathBuf, u32>,
     next: u32,
 }
 
 impl Fs {
     pub fn new(root: PathBuf) -> Fs {
-        Fs { root, open: HashMap::new(), listed: HashMap::new(), next: 0 }
+        Fs { root, open: HashMap::new(), listed: HashMap::new(), modes: HashMap::new(), next: 0 }
     }
 
     fn local(&self, path: &str) -> PathBuf {
         self.root.join(path.trim_start_matches('/'))
+    }
+
+    /// A path's attributes, with the permission bits it was set.
+    fn attrs_of(&self, path: &std::path::Path, meta: &std::fs::Metadata) -> FileAttributes {
+        let mut attrs = attrs(meta);
+        if let (Some(set), Some(mode)) = (self.modes.get(path), attrs.permissions) {
+            attrs.permissions = Some((mode & !0o7777) | set);
+        }
+        attrs
     }
 
     fn handle(&mut self) -> String {
@@ -77,7 +88,8 @@ impl russh_sftp::server::Handler for Fs {
         for entry in std::fs::read_dir(self.local(&handle)).map_err(failed)? {
             let entry = entry.map_err(failed)?;
             let meta = entry.metadata().map_err(failed)?;
-            files.push(File::new(entry.file_name().to_string_lossy(), attrs(&meta)));
+            let attrs = self.attrs_of(&entry.path(), &meta);
+            files.push(File::new(entry.file_name().to_string_lossy(), attrs));
         }
         Ok(Name { id, files })
     }
@@ -131,8 +143,20 @@ impl russh_sftp::server::Handler for Fs {
     }
 
     async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
-        let meta = std::fs::metadata(self.local(&path)).map_err(|_| StatusCode::NoSuchFile)?;
-        Ok(Attrs { id, attrs: attrs(&meta) })
+        let at = self.local(&path);
+        let meta = std::fs::metadata(&at).map_err(|_| StatusCode::NoSuchFile)?;
+        Ok(Attrs { id, attrs: self.attrs_of(&at, &meta) })
+    }
+
+    async fn setstat(&mut self, id: u32, path: String, attrs: FileAttributes) -> Result<Status, Self::Error> {
+        let at = self.local(&path);
+        if !at.exists() {
+            return Err(StatusCode::NoSuchFile);
+        }
+        if let Some(mode) = attrs.permissions {
+            self.modes.insert(at, mode & 0o7777);
+        }
+        Ok(ok(id))
     }
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
