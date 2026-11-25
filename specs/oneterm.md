@@ -81,8 +81,11 @@ the user's canvas "OneTerm" as revised on 2026-11-16 (the Quadra design language
 - **Status bar** (the chrome plane, a line over it, 12 px, groups split by 1×14 px lines):
   first Collapse tabs to icons (the rail's fold, an icon button in the accent); then the active
   space's cwd after a folder icon (a click copies it; a shell that has said none has no
-  group, as every group with nothing to say: no icon alone, no two lines side by side); git branch and changes after a branch
-  icon (M4: `main ↑2 M1`), a group of its own; a red dot of 8 px that blinks
+  group, as every group with nothing to say: no icon alone, no two lines side by side; a
+  remote space's is the server's, which its shell says through shell integration, "M7 in
+  detail"); git branch and changes after a branch
+  icon (M4: `main ↑2 M1`), a group of its own, of a local space alone (a server's directory
+  names no repository of this machine); a red dot of 8 px that blinks
   each half second while the focused space logs; then right the OSC 9;4 meter
   (M3: `build`, a 56 px line, the percentage), a remote space's network (P2; a local one shows
   nothing there, nor one not connected yet): what came and went in the last second, `↓ 12 KB/s ↑ 1.1 KB/s`, counted on
@@ -418,7 +421,7 @@ every terminal follows them as they are, its screen kept. Terminal: cursor shape
 blink, scrollback lines, the default local shell ("System default", the OS's; a shell found; or "Custom program": the
 program and its arguments typed, `terminal.shell_program`, `terminal.shell_args`), where new spaces start (active space's cwd,
 home, last used: the directory a local shell said last, kept across runs as
-`terminal.last_dir`, home when it is no longer there), Force links (`terminal.force_hyperlink`, on: `FORCE_HYPERLINK=1` for a new local shell), Shell integration (`terminal.shell_integration`, on; "M4 in detail"); Mouse & wheel: the context menu, copy on select, middle-click paste (all on),
+`terminal.last_dir`, home when it is no longer there), Force links (`terminal.force_hyperlink`, on: `FORCE_HYPERLINK=1` for a new local shell), Shell integration (`terminal.shell_integration`, on; "M4 in detail", and a host's shell: "M7 in detail"); Mouse & wheel: the context menu, copy on select, middle-click paste (all on),
 the wheel's speed (1, from 0.1 to 10), alternate scroll (on: arrows to a full-screen program),
 the view's `TermSettings` (Quadra's specs/18). A choice is saved as its words. Signals: OSC 7501 shown on tab and header / tab only / ignored; OSC 9;4 on tab, status bar; bell: badge and count / badge and sound (the system's
 default sound, at once for each bell however the space is looked at) / badge and flash (the
@@ -654,6 +657,20 @@ thread never waits on the network.
   resize is a window change; the channel's exit status is the space's `[process exited N]`,
   and a connection that drops is `[connection closed: reason]` and exit status 255.
   Keepalive every 30 s, given up after 3 unanswered. Connecting gives up after 20 s.
+- **Shell integration** (the setting of that name, as for a local shell; on): a server's
+  shell cannot be started another way, so once it is open it is typed one line
+  (`ssh/src/integrate.rs`, OneTerm 0.6's), and the PTY is asked for with echo off so that the
+  line is not seen; its last word, `stty echo`, turns echo on again. The line makes bash
+  (`PROMPT_COMMAND`, `PS0`, `B` at the end of `PS1`) and zsh (`precmd_functions`,
+  `preexec_functions`) say OSC 7 with the directory and OSC 133 `A`, `B`, `C` and `D` with the
+  status, the user's own hooks kept after OneTerm's; any other POSIX shell says its directory
+  once. It sets `COLORTERM=truecolor` too (an sshd passes on only the variables it is told
+  to accept), and starts with a space, which keeps it out of a history that leaves such
+  lines out. So the status bar and the space's header show a remote space's directory, and
+  Sync cwd with terminal has one to follow. A startup command is typed after it. A shell
+  that is no POSIX shell (fish, a Windows server's) answers the line with an error: the
+  setting is turned off for it. Off, a remote shell is typed nothing and says no directory
+  unless its own files make it.
 - **Quick connect**: the `+` menu's item (`Ctrl+Shift+K`) opens a dialog (the kit's): "Open a
   one-off SSH session. It is not added to your hosts unless you tick Save as host.", Target (a
   mono field with `ssh` inside it before the text) with what it accepts under it, Auth (Auto,

@@ -39,6 +39,9 @@ story, with its tests and pictures, is in that repository's `docs/progress.md` a
 - 2026-11-25: the app is a set of crates (`app`, `ssh`, `completion`, `vault`, `shots`) with
   its own scripts (the gate, the release asset), workflows (CI with the dependency policy,
   release) and specs, laid out as this repository.
+- 2026-11-25: shell integration for a host's shell (a line typed unseen once it is open), so
+  a remote space says its directory: the status bar, the space's header, Sync cwd with
+  terminal. Git shows for a local space alone.
 
 ## Not run yet
 
@@ -54,6 +57,9 @@ Built and tested without the real thing; each wants a look before it is relied o
 - The workflows: neither `ci.yml` nor `release.yml` has run on GitHub. What they call was
   run by hand on an export of the repository: the gate, cargo-deny 0.22.1 (all four
   checks), and `scripts/build-release.sh`.
+- Shell integration over SSH against a real server: the engine's test sees the line arrive
+  with echo off, and the line was run in a bash of this machine (OSC 7 at each prompt), but
+  no real sshd, zsh or dash was typed it by this app.
 - A real window's drag across monitors, DPI change and snap are checks by hand.
 
 ## Known limits

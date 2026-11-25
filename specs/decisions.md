@@ -23,6 +23,7 @@ the specs and the code follow it.
 | 2026-11-25 | Crates | A set of crates named as OneTerm 0.6's were where the part is the same: `app`, `ssh`, `completion`, `vault` (`oneterm.md`, "The repository") |
 | 2026-11-25 | The CI | It keeps the flow of OneTerm 0.6's, the dependency policy job (cargo-deny: licences, bans, advisories) included |
 | 2026-11-25 | Versions | The next release is 0.7.0, and the user bumps to it themselves: the manifest has the version last released (0.6.11), and the release workflow's bump writes the new one. Publishing a release, and making its tag, are the user's acts |
+| 2026-11-25 | A remote shell's directory | Shell integration reaches a host's shell as in OneTerm 0.6: a line typed unseen once the shell is open, under the one setting Shell integration |
 
 ## Dependencies
 
