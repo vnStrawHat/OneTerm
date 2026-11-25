@@ -164,12 +164,12 @@ fn a_user_not_given_is_asked() {
     write_user_key(&a.dir.join("keys/id_ed25519"));
     a.connect(&format!("127.0.0.1:{port}"));
     a.wait_for(&format!("No user was given for 127.0.0.1:{port}."));
-    let user = oneterm_ssh::os_user();
-    let filled = |n: &quadra_tree::SemanticNode| {
+    // Nothing is filled in for a host that names no user.
+    let empty = |n: &quadra_tree::SemanticNode| {
         n.semantics.test_id.as_deref() == Some("sign-in")
-            && n.semantics.value.as_deref() == Some(user.as_str())
+            && n.semantics.value.as_deref().unwrap_or_default().is_empty()
     };
-    assert_eq!(a.h.query(filled).len(), 1, "the OS's user filled in");
+    assert_eq!(a.h.query(empty).len(), 1, "an empty field: {}", a.h.semantics());
     a.sign_in("tester");
     a.wait(|a| a.screen().contains("welcome") && a.no_dialog(), "the shell");
     // The status bar: what crossed the network each second; the server's OSC 7 (echoed back

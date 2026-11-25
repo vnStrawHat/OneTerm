@@ -44,13 +44,8 @@ pub(crate) fn dialogs(model: &Model) -> impl View + use<> {
     effect(move || {
         let phase = following().map(|conn| conn.phase.get());
         let want = phase.as_ref().and_then(|it| which(it, opening_now()));
-        if want == Some(SIGN_IN) && !opens[SIGN_IN].get_untracked() {
-            let user = match &phase {
-                Some(Phase::Ask(Ask::User { user, .. })) => user.clone(),
-                _ => String::new(),
-            };
-            typed.set(user);
-        } else if want != Some(SIGN_IN) && !typed.with_untracked(String::is_empty) {
+        // The field opens empty, for a user too: a host saved without one names none.
+        if want != Some(SIGN_IN) && !typed.with_untracked(String::is_empty) {
             crate::vault::wipe(typed);
         }
         for (at, open) in opens.iter().enumerate() {
@@ -153,6 +148,8 @@ fn sign_in(
     submit: impl Fn() + 'static,
 ) -> quadra::Div {
     let Some((Phase::Ask(ask), _)) = asked else { return column() };
+    // What an empty answer is taken as: the OS's user, said as the field's placeholder.
+    let unless = if let Ask::User { user, .. } = &ask { user.clone() } else { String::new() };
     let (said, name, again, secret) = match ask {
         Ask::User { host, .. } => (format!("No user was given for {host}."), "User", false, false),
         Ask::Password { target, again } => (format!("Password for {target}"), "Password", again, true),
@@ -165,7 +162,7 @@ fn sign_in(
         "Passphrase" => "Wrong passphrase, please try again.",
         _ => "Permission denied, please try again.",
     };
-    let mut entry = input(typed).label(name).test_id("sign-in");
+    let mut entry = input(typed).label(name).test_id("sign-in").placeholder(&unless);
     if secret {
         entry = entry.password();
     }
