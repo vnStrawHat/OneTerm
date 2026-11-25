@@ -32,7 +32,7 @@ const fn binding(id: &'static str, name: &'static str, keys: &'static str, bind:
 }
 
 /// The actions, in the order of the page.
-pub(crate) const BINDINGS: [Binding; 27] = [
+pub(crate) const BINDINGS: [Binding; 28] = [
     binding("new_tab", "New tab", "ctrl-t", |k, s| k.bind(s, Command::NewTab)),
     binding("split", "Split the space", "ctrl-d", |k, s| k.bind(s, Command::Split)),
     binding("split_right", "Split right", "ctrl-shift-right", |k, s| {
@@ -47,6 +47,7 @@ pub(crate) const BINDINGS: [Binding; 27] = [
     binding("lock", "Lock", "ctrl-shift-l", |k, s| k.bind(s, Command::Lock)),
     binding("quick_connect", "Quick connect", "ctrl-shift-k", |k, s| k.bind(s, Command::QuickConnect)),
     binding("settings", "Settings", "ctrl-,", |k, s| k.bind(s, Command::Settings)),
+    binding("palette", "Command palette", "ctrl-shift-p", |k, s| k.bind(s, Command::Palette)),
     binding("dock", "SFTP dock", "ctrl-shift-b", |k, s| k.bind(s, Command::Dock)),
     binding("select_all", "Select all", "ctrl-shift-a", |k, s| k.bind(s, Command::SelectAll)),
     binding("find", "Find", "ctrl-f", |k, s| k.bind(s, crate::find::Find)),
@@ -90,6 +91,13 @@ pub(crate) fn keymap(keys: impl Fn(&str) -> Option<String>) -> Keymap {
         }
     }
     map
+}
+
+/// An action's name and the setting of its keys, by its id. Called while a view is built.
+pub(crate) fn bound(id: &str) -> Option<(&'static str, Signal<String>)> {
+    let settings = use_context::<Rc<Settings>>().unwrap_or_else(Settings::memory);
+    let b = BINDINGS.iter().find(|b| b.id == id)?;
+    Some((b.name, settings.value(&format!("keys.{}", b.id), b.keys.to_string())))
 }
 
 /// The setting of each action's keys, in the order of [`BINDINGS`].

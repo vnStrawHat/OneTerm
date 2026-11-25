@@ -8,6 +8,8 @@ use quadra::{Signal, signal};
 #[derive(Clone, Copy)]
 pub struct Ui {
     pub settings: Signal<bool>,
+    /// The command palette.
+    pub palette: Signal<bool>,
     pub connecting: Signal<bool>,
     pub adding: Signal<bool>,
     /// The hosts panel at the left while the tabs are in a strip.
@@ -36,6 +38,7 @@ impl Ui {
     pub(crate) fn new(net: crate::prefs::NetPrefs) -> Ui {
         Ui {
             settings: signal(false),
+            palette: signal(false),
             connecting: signal(false),
             adding: signal(false),
             hosts: signal(false),

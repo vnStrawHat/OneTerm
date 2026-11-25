@@ -25,6 +25,7 @@ mod marks;
 mod model;
 mod notify;
 mod page;
+mod palette;
 mod panes;
 mod prefs;
 mod rail;
@@ -190,6 +191,7 @@ impl OneTerm {
             .child(hostlist::add_dialog(&self.model))
             .child(vault::dialog(&self.model))
             .child(rail::rename_dialog(&self.model))
+            .child(palette::palette(&self.model))
     }
 }
 
@@ -232,6 +234,7 @@ fn run(model: &Model, command: Command, windows: Option<&quadra::Windows>) -> bo
             None => model.ui().settings.update(|on| *on = !*on),
         },
         Command::Dock => model.ui().dock.update(|on| *on = !*on),
+        Command::Palette => model.ui().palette.update(|on| *on = !*on),
         Command::SelectAll | Command::Clear => {
             let space = quadra::untrack(|| model.active_tab().and_then(|tab| tab.focused()));
             match (space, command) {
