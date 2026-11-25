@@ -852,8 +852,8 @@ thread never waits on the network.
   expanded view), a line under it. Under it a bar of 28 px: the folder in a mono field of 22 px
   (12 px), underlined (the kit's second look of an input: a line under the text and no
   box, so the bar is not a box in a box), then Go to the typed path (Enter goes too), Refresh remote and Remote options (three
-  dots one over the other: a menu of Sync CWD and Show hidden files, each checked while
-  on); 6 px under the bar, so that the field's line and the header's stand apart, a header
+  dots one over the other: a menu of Sync CWD and Show hidden files, each with its icon, a
+  link and an eye, while off and the check in its place while on); 6 px under the bar, so that the field's line and the header's stand apart, a header
   of the columns between two lines, one over it and one under it (the user's request, 2026-11-24;
   `dock/list.rs`), as the expanded view's panes have: Name, Size (64 px), Modified (92 px) and
   Permissions (84 px), the last three at the right; a click on one sorts by it, again the

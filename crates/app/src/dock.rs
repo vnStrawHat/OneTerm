@@ -137,11 +137,13 @@ fn panel(model: &Model, d: Dock) -> impl View + use<> {
 /// each checked while on.
 pub(crate) fn more(name: &'static str, d: Dock, remote: bool) -> MenuButton {
     menu_icon_button(MORE, name, move || {
-        let item = |label: &str, on: Signal<bool>| {
-            MenuItem::new(label).checked(on.get_untracked()).on_select(move || on.update(|on| *on = !*on))
+        // Its icon while off, the check in its place while on: no row stands bare.
+        let item = |label: &str, shape, on: Signal<bool>| {
+            let row = MenuItem::new(label).icon(shape).checked(on.get_untracked());
+            row.on_select(move || on.update(|on| *on = !*on))
         };
-        let sync = remote.then(|| item("Sync CWD", d.follow));
-        sync.into_iter().chain([item("Show hidden files", d.hidden)]).collect()
+        let sync = remote.then(|| item("Sync CWD", icons::LINK, d.follow));
+        sync.into_iter().chain([item("Show hidden files", icons::EYE, d.hidden)]).collect()
     })
 }
 
