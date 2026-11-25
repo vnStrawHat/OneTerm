@@ -425,7 +425,7 @@ colour with its normal and bright fields), the view's `TermLook` (Quadra's specs
 every terminal follows them as they are, its screen kept. Terminal: cursor shape and
 blink, scrollback lines, the default local shell ("System default", the OS's; a shell found; or "Custom program": the
 program and its arguments typed, `terminal.shell_program`, `terminal.shell_args`), where new spaces start (active space's cwd,
-home, last used: the directory a local shell said last, kept across runs as
+home, which is the default, last used: the directory a local shell said last, kept across runs as
 `terminal.last_dir`, home when it is no longer there), Force links (`terminal.force_hyperlink`, on: `FORCE_HYPERLINK=1` for a new local shell), Shell integration (`terminal.shell_integration`, on; "M4 in detail", and a host's shell: "M7 in detail"); Mouse & wheel: the context menu, copy on select, middle-click paste (all on),
 the wheel's speed (1, from 0.1 to 10), alternate scroll (on: arrows to a full-screen program),
 the view's `TermSettings` (Quadra's specs/18). A choice is saved as its words. Signals: OSC 7501 shown on tab and header / tab only / ignored; OSC 9;4 on tab, status bar; bell: badge and count / badge and sound (the system's
@@ -604,7 +604,7 @@ thread never waits on the network.
 - **Target**: `user@host`, `host:port`, `[user@]host -p port`, `-l user`, and a leading `ssh`
   are read by `Target::parse`; no port is 22; no user is an empty one, which `label` writes as
   `host` (so a saved host or a recent row without a user stays without one): connecting asks
-  for it, the OS's (`USERNAME`) filled in. The user answered is that connection's only (its
+  for it in an empty field whose placeholder is the OS's (`USERNAME`), taken when nothing is typed. The user answered is that connection's only (its
   space's header says it).
 - **The engine asks the app, never the terminal.** What it asks is an `Ask`, told with its
   progress through `told` (an `Event`: `Connecting(user@host)` for each hop it starts,
@@ -647,8 +647,8 @@ thread never waits on the network.
     key fingerprint:` over the fingerprint in mono 12 px, `Trusting it adds the key to
     known_hosts.`; Cancel and Trust and connect. The focus is on Cancel (the kit's first
     button), so Enter never trusts a key.
-  - **Sign in**, one field 28 px high: User (`No user was given for host.`, the OS's user in
-    it), Password (`Password for user@host`, dots), Passphrase (`Passphrase for key file`,
+  - **Sign in**, one field 28 px high: User (`No user was given for host.`, the field empty, the OS's user its
+    placeholder), Password (`Password for user@host`, dots), Passphrase (`Passphrase for key file`,
     dots); after a wrong one `Permission denied, please try again.` (or `Wrong passphrase,
     please try again.`) in the error colour over it. Cancel and Connect (`Enter`, also in the
     field). Nothing typed is kept: no password is stored.
@@ -672,7 +672,7 @@ thread never waits on the network.
   once. It sets `COLORTERM=truecolor` too (an sshd passes on only the variables it is told
   to accept), and starts with a space, which keeps it out of a history that leaves such
   lines out. So the status bar and the space's header show a remote space's directory, and
-  Sync cwd with terminal has one to follow. A startup command is typed after it. A shell
+  Sync CWD has one to follow. A startup command is typed after it. A shell
   that is no POSIX shell (fish, a Windows server's) answers the line with an error: the
   setting is turned off for it. Off, a remote shell is typed nothing and says no directory
   unless its own files make it.
@@ -849,12 +849,15 @@ thread never waits on the network.
   header says `local space · n/a`, the body why it is empty and a button that shows the first
   tab with a remote space (`Show prod-api-01`). Its header (28 px, 12 px semibold in the
   secondary colour): `SFTP`, the host in the third colour, and Zoom SFTP (an icon button: the
-  expanded view). Under it the folder in a mono field of 28 px (12 px) with Go to the typed path
-  after it (Enter goes too); then a header of the columns (the user's request, 2026-11-24;
+  expanded view), a line under it. Under it a bar of 28 px: the folder in a mono field of 22 px
+  (12 px), then Go to the typed path (Enter goes too), Refresh remote and Remote options (three
+  dots one over the other: a menu of Sync CWD and Show hidden files, each checked while
+  on); then a header of the columns, a line under it (the user's request, 2026-11-24;
   `dock/list.rs`), as the expanded view's panes have: Name, Size (64 px), Modified (92 px) and
   Permissions (84 px), the last three at the right; a click on one sorts by it, again the
   other way, its label marked `↑` or `↓`, folders staying first, and the order is the
-  expanded view's Remote pane's too. Then `..` and the entries as data rows (24 px): a folder
+  expanded view's Remote pane's too. Then `..` and the entries as data rows (24 px) with a line under each, as the expanded
+  view's have: a folder
   icon (blue) or a file icon, the name, and in mono 12 px in the third colour the size (none
   for a folder), when it changed (`Nov 16 10:52`) and its permissions (`drwxr-xr-x`, as the
   server says them: `Entry::mode`; sorted as a number). A dock made narrow keeps the name its
@@ -891,11 +894,12 @@ thread never waits on the network.
 - **The expanded view**: the dock's Zoom SFTP (and the title bar's Collapse SFTP, back)
   gives SFTP the workspace; the spaces stay mounted and running, not displayed, and the
   title bar's chip adds `SFTP expanded`. Its header (28 px on the panel plane, 12 px): `SFTP`,
-  the host, `ssh session keeps running` in the third colour, Sync cwd with terminal (the remote
-  pane goes to the focused space's directory when it is a remote path), Show hidden files (an
-  eye, toggled), and Zoom out (in the accent). Two panes, Local at the left and Remote at the
+  the host, `ssh session keeps running` in the third colour, and Zoom out (in the accent). Two panes, Local at the left and Remote at the
   right, each with a bar of 28 px: its label, its path in a mono field of 22 px, Go to the typed
-  path and Refresh; a header row (Name, Size 80 px, Modified 124 px, and in the Remote pane
+  path, Refresh and its options (Local options, Remote options: three dots one over the
+  other, the menu the dock's bar has; Sync CWD is the Remote pane's alone: the remote folder
+  goes to the focused space's directory when it is a remote path, in the dock too, while
+  the dock is open; Show hidden files is one switch for both panes and the dock); a header row (Name, Size 80 px, Modified 124 px, and in the Remote pane
   Permissions 92 px, a local file having none, those after the name at the right;
   a click sorts the pane by it, again the other way, its label marked `↑` or `↓`; folders stay
   first; each pane by name at first)

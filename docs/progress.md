@@ -42,9 +42,12 @@ story, with its tests and pictures, is in that repository's `docs/progress.md` a
 - 2026-11-25: the status bar is 28 px, lower than the title bar (32): the user's decision.
 - 2026-11-25: the status bar says the focused space's columns and rows before CPU and
   memory, following a resize (Quadra's `Session::grid`); a setting turns it off.
+- 2026-11-25: new spaces start in the home folder unless the setting says otherwise. The
+  SFTP dock has lines under its header and rows and, as each pane of the expanded view,
+  Go, Refresh and a menu of options (Sync CWD, Show hidden files) after its path. A user
+  not given is asked for in an empty field.
 - 2026-11-25: shell integration for a host's shell (a line typed unseen once it is open), so
-  a remote space says its directory: the status bar, the space's header, Sync cwd with
-  terminal. Git shows for a local space alone.
+  a remote space says its directory: the status bar, the space's header, Sync CWD. Git shows for a local space alone.
 
 ## Not run yet
 
