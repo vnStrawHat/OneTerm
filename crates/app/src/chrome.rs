@@ -1,4 +1,4 @@
-//! The window's title bar (specs/oneterm, "Window"): 38 px with the app's mark ("Locked" after it
+//! The window's title bar (specs/oneterm, "Window"): 32 px with the app's mark ("Locked" after it
 //! while locked), icon buttons of 22 px (SSH hosts with the tabs in a strip, the bells
 //! and notices with their count, Lock with the minutes before it locks, Settings), then the
 //! window's buttons; in the settings, Done.

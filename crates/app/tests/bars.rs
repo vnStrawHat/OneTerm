@@ -149,9 +149,9 @@ fn ram_is_the_private_working_set_and_its_tooltip_has_the_details() {
         a.h.semantics()
     );
     let card = a.h.tree.window_rect(a.h.tree.overlays().next().expect("the tooltip"));
-    // The status bar is the window's last 32 px, what it holds in the 22 of its middle: the
+    // The status bar is the window's last 28 px, what it holds in the 22 of its middle: the
     // card stands over that and covers none of it.
-    assert!(card.bottom() <= 700.0 - 27.0, "over the status bar's words: {card:?}");
+    assert!(card.bottom() <= 700.0 - 25.0, "over the status bar's words: {card:?}");
 }
 
 #[test]

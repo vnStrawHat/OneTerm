@@ -57,8 +57,10 @@ unexpectedly` with the report's name, whose Show report shows the report in the 
 
 Custom frame (`WindowOptions::custom_frame`), 1440×900 at most 85 % of the display, centred,
 at least 720×480 (`WindowOptions::min_size`; a smaller remembered place opens at it), its place
-remembered. Top to bottom: the title bar and, under the body, the status bar: each a bar
-of the design language (32 px). Colours are the kit's roles; the accent is the theme's. The look follows
+remembered. Top to bottom: the title bar, a bar of the design language (32 px), and, under the body,
+the status bar, lower than it (28 px, the user's decision of 2026-11-25: the title bar is
+the taller of the two). Both are the kit's (`titlebar`, `statusbar` and its `status_divider`),
+which carry their heights: the app writes neither. Colours are the kit's roles; the accent is the theme's. The look follows
 the user's canvas "OneTerm" as revised on 2026-11-16 (the Quadra design language: the UI face at
 14 px on 23 px lines, labels 12 px on 19, the kit's mono face for paths, numbers and keys).
 

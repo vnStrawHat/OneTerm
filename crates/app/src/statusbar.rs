@@ -1,4 +1,4 @@
-//! The status bar (specs/oneterm, "Window"): 30 px on the chrome plane, 12 px, its groups parted by
+//! The status bar (specs/oneterm, "Window"): the kit's bar (28 px on the chrome plane, 12 px), its groups parted by
 //! rules of 1×14: the rail's fold; the focused space's directory (a click copies it); git (a
 //! local space's); a
 //! red dot that blinks while it logs; at the right the progress, a remote space's network,
@@ -9,8 +9,8 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use quadra::{Align, Clipboard, Length, Role, Signal, View, by_text, div, interval, row, text, use_context};
-use quadra_design::{Variant, fonts, icon, icon_button, icons, token};
+use quadra::{Align, Clipboard, Length, Role, Signal, View, div, interval, row, text, use_context};
+use quadra_design::{Variant, fonts, icon, icon_button, icons, statusbar, token};
 
 use crate::locked::shown;
 use crate::model::Model;
@@ -36,8 +36,9 @@ fn groups(row_of: quadra::Div, all: Vec<(When, quadra::Div)>) -> quadra::Div {
     let mut line = row_of;
     for (i, (when, group)) in all.into_iter().enumerate() {
         let (before, me, ruled) = (whens[..i].to_vec(), when.clone(), when);
-        let rule = div().width(1.0).height(14.0).shrink(0.0).bg(token::LINE_STRONG);
-        line = line.child(rule.display(shown(move || ruled() && before.iter().any(|it| it()))));
+        line = line.child(
+            quadra_design::status_divider().display(shown(move || ruled() && before.iter().any(|it| it()))),
+        );
         line = line.child(group.display(shown(move || me())));
     }
     line
@@ -138,22 +139,9 @@ pub(crate) fn status_bar(model: &Model, clock: Signal<String>, now: Clock) -> im
             (when(open), part().child(sftp(model))),
         ],
     );
-    row()
-        .align_items(Align::Center)
-        .gap(token::SPACE_LG)
-        .padding_x(token::SPACE_MD)
-        .height(by_text(32.0))
-        .shrink(0.0)
-        .bg(token::STATUS_BG)
-        .border_top(1.0)
-        .border_color(token::LINE)
-        .text_size(12.0)
-        .text_color(token::TEXT_2)
-        .test_id("status")
-        .child(hidden)
-        .child(left_side)
-        .child(div().grow(1.0))
-        .child(right_side)
+    // The kit's bar: its height, its plane and its line are the design language's.
+    let label = |group: quadra::Div| group.text_color(token::TEXT_2);
+    statusbar().left(label(hidden)).left(label(left_side)).right(label(right_side))
 }
 
 /// Toggle SFTP panel, in the accent while the dock shows; zoomed in, it zooms out.
