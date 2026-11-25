@@ -16,22 +16,22 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-quadra = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-app = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-async = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-build = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-code = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-data = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-design = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-native-win = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-platform = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-prim = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-render = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-shell = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-term = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-testing = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-tree = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
-quadra-updater = { git = "https://github.com/vnStrawHat/Quadra", rev = "1a0629aff6609750628d6abcc729e966c4484d65" }
+quadra = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-app = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-async = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-build = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-code = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-data = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-design = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-native-win = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-platform = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-prim = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-render = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-shell = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-term = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-testing = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-tree = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
+quadra-updater = { git = "https://github.com/vnStrawHat/Quadra", rev = "7b937e37ab00cb76c9109ceb2404529eaaab9c43" }
 oneterm-app = { path = "crates/app" }
 oneterm-completion = { path = "crates/completion" }
 oneterm-ssh = { path = "crates/ssh" }

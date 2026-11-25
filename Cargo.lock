@@ -1362,7 +1362,7 @@ dependencies = [
 [[package]]
 name = "quadra"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-app",
  "quadra-async",
@@ -1378,7 +1378,7 @@ dependencies = [
 [[package]]
 name = "quadra-a11y"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-prim",
 ]
@@ -1386,7 +1386,7 @@ dependencies = [
 [[package]]
 name = "quadra-app"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-async",
  "quadra-platform",
@@ -1402,7 +1402,7 @@ dependencies = [
 [[package]]
 name = "quadra-async"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-platform",
  "quadra-reactive",
@@ -1411,12 +1411,12 @@ dependencies = [
 [[package]]
 name = "quadra-build"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 
 [[package]]
 name = "quadra-code"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-a11y",
  "quadra-async",
@@ -1436,7 +1436,7 @@ dependencies = [
 [[package]]
 name = "quadra-data"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-design",
  "quadra-layout",
@@ -1451,7 +1451,7 @@ dependencies = [
 [[package]]
 name = "quadra-design"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-app",
  "quadra-async",
@@ -1471,7 +1471,7 @@ dependencies = [
 [[package]]
 name = "quadra-headless"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-async",
  "quadra-layout",
@@ -1486,7 +1486,7 @@ dependencies = [
 [[package]]
 name = "quadra-layout"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-prim",
 ]
@@ -1494,7 +1494,7 @@ dependencies = [
 [[package]]
 name = "quadra-native-win"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -1510,7 +1510,7 @@ dependencies = [
 [[package]]
 name = "quadra-platform"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-a11y",
  "quadra-prim",
@@ -1519,17 +1519,17 @@ dependencies = [
 [[package]]
 name = "quadra-prim"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 
 [[package]]
 name = "quadra-reactive"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 
 [[package]]
 name = "quadra-render"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-prim",
 ]
@@ -1537,7 +1537,7 @@ dependencies = [
 [[package]]
 name = "quadra-shell"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-app",
  "quadra-async",
@@ -1550,7 +1550,7 @@ dependencies = [
 [[package]]
 name = "quadra-term"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "oneterm-vt",
  "polling",
@@ -1571,7 +1571,7 @@ dependencies = [
 [[package]]
 name = "quadra-testing"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-a11y",
  "quadra-async",
@@ -1587,7 +1587,7 @@ dependencies = [
 [[package]]
 name = "quadra-text"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-prim",
 ]
@@ -1595,7 +1595,7 @@ dependencies = [
 [[package]]
 name = "quadra-tree"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-a11y",
  "quadra-layout",
@@ -1610,7 +1610,7 @@ dependencies = [
 [[package]]
 name = "quadra-updater"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "miniz_oxide 0.9.1",
  "quadra-shell",
@@ -1620,7 +1620,7 @@ dependencies = [
 [[package]]
 name = "quadra-vector"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-prim",
 ]
@@ -1628,7 +1628,7 @@ dependencies = [
 [[package]]
 name = "quadra-view"
 version = "0.1.0"
-source = "git+https://github.com/vnStrawHat/Quadra?rev=1a0629aff6609750628d6abcc729e966c4484d65#1a0629aff6609750628d6abcc729e966c4484d65"
+source = "git+https://github.com/vnStrawHat/Quadra?rev=7b937e37ab00cb76c9109ceb2404529eaaab9c43#7b937e37ab00cb76c9109ceb2404529eaaab9c43"
 dependencies = [
  "quadra-async",
  "quadra-layout",
