@@ -1,7 +1,8 @@
 //! The editor space's scenes (specs/oneterm, "Editing in OneTerm"): a tab connected by a key to the
 //! engine's file server on 127.0.0.1 (never another host), its files under `.tmp/ssh-tests`;
 //! Edit… on a file of the dock opens it beside the terminal, then a line is typed, and in
-//! `edit-diff` the diff shows.
+//! `edit-diff` the diff shows. On the same server: `properties` (the file's Properties) and
+//! `lost` (the server drops the connection, and the dialog asks).
 
 use oneterm::{Launch, Model, Remote, remote_shell_with};
 use oneterm_ssh::testing::{folder, options, serve_files, trust, write_user_key};
@@ -12,7 +13,7 @@ use quadra_term::Session;
 
 use super::{Shots, click, pass, shows};
 
-pub const SCENES: [&str; 2] = ["edit", "edit-diff"];
+pub const SCENES: [&str; 4] = ["edit", "edit-diff", "properties", "lost"];
 
 const FILE: &str = "# The gateway's deployment\nservice: neo-gateway\nreplicas: 3\nimage:\n  name: neo-gateway\n  tag: 8e77d10\nports:\n  - 8080\n  - 9090 # metrics\nenv:\n  LOG_LEVEL: info\n  REGION: ap-southeast-1\n";
 
@@ -69,8 +70,19 @@ pub fn start(model: &Model, scene: &str, platform: &HeadlessPlatform, app: &mut 
     model.connect_to(Remote::new(target, Auth::Key(dir.join("id"))), false);
     model.ui().dock.set(true);
     until(platform, app, window, "deploy.yaml");
+    if scene == "lost" {
+        // The test server drops the connection when it is typed this.
+        if let Some(space) = model.active_tab().and_then(|tab| tab.focused()) {
+            space.session.write(b"drop");
+        }
+        return until(platform, app, window, "was lost");
+    }
     press(platform, app, window, "deploy.yaml", MouseButton::Right);
     pass(platform, app, 150);
+    if scene == "properties" {
+        click(platform, app, window, "Properties\u{2026}");
+        return until(platform, app, window, "Owner can");
+    }
     click(platform, app, window, "Edit\u{2026}");
     until(platform, app, window, "/home/deploy.yaml");
     pass(platform, app, 150);

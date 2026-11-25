@@ -9,7 +9,9 @@
 //! find bar over the focused space, a word typed), page-0 to page-10 (each page of the
 //! settings), and the
 //! Connect dialogs: ask-connecting, ask-host, ask-sign-in, ask-failed (`asks.rs`); the editor
-//! space: edit, edit-diff (`edits.rs`).
+//! space: edit, edit-diff, and on the same server properties (an entry's Properties) and lost
+//! (a connection lost) (`edits.rs`); palette (the command palette); channels,
+//! channels-folded and channels-strip (tabs in input channels, in each layout of the tabs).
 
 mod asks;
 mod edits;
@@ -33,7 +35,7 @@ use quadra_term::{Session, echo};
 
 type Shots = App<D3d11Renderer>;
 
-const SCENES: [&str; 15] = [
+const SCENES: [&str; 19] = [
     "main",
     "collapsed",
     "horizontal",
@@ -49,6 +51,10 @@ const SCENES: [&str; 15] = [
     "gutter",
     "usage",
     "find",
+    "palette",
+    "channels",
+    "channels-folded",
+    "channels-strip",
 ];
 
 /// Each page of the settings, by its place.
@@ -172,7 +178,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let sessions: NewSession = Rc::new(move |launch: oneterm::Launch| {
             let tested = launch.ssh.as_ref().is_some_and(|it| it.target.host == "127.0.0.1");
             let s = match tested {
-                true if scene.starts_with("edit") => edits::session(launch),
+                true if edits::SCENES.contains(scene) => edits::session(launch),
                 true => asks::session(launch),
                 false => echo(),
             };
@@ -181,7 +187,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
         let built: Rc<RefCell<Option<Model>>> = Rc::default();
         let tell = built.clone();
-        let vertical = *scene != "horizontal";
+        let vertical = !matches!(*scene, "horizontal" | "channels-strip");
         let options = WindowOptions::new("OneTerm").size(1440.0, 900.0).custom_frame();
         let window = app.open_window(options, move || {
             let settings = Settings::memory();
@@ -199,7 +205,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             settings.value("sftp.downloads", String::new()).set(local.display().to_string());
             provide(settings);
             // The app's folders in the project, for a file edited: downloaded there.
-            if scene.starts_with("edit") {
+            if edits::SCENES.contains(scene) {
                 let dirs = quadra::AppDirs::under(
                     &std::path::absolute(".tmp/shots/oneterm-app").unwrap_or_default(),
                 );
@@ -250,6 +256,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             "lock" => model.lock().lock_now(),
             "sftp" => model.ui().expanded.set(true),
             "collapsed" => model.prefs().rail_folded.set(true),
+            "palette" => model.ui().palette.set(true),
+            // Three tabs of one space in channels A, A and B, and a space of the first tab in A.
+            channels if channels.starts_with("channels") => {
+                let tabs = model.tabs().get_untracked();
+                for (tab, channel) in [(0, 0), (1, 0), (3, 0), (2, 1)] {
+                    tabs[tab].spaces.get_untracked()[0].channel.set(Some(channel));
+                }
+                model.prefs().rail_folded.set(channels == "channels-folded");
+            }
             "find" => {
                 for down in [true, false] {
                     let (key, mods) = (quadra_platform::Key::F, quadra_platform::Mods::CTRL);
@@ -271,7 +286,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     std::thread::sleep(Duration::from_millis(20));
                 }
             }
-            edit if edit.starts_with("edit") => edits::start(&model, edit, &platform, &mut app, window),
+            edit if edits::SCENES.contains(&edit) => edits::start(&model, edit, &platform, &mut app, window),
             _ => {}
         }
         pass(&platform, &mut app, 900);
