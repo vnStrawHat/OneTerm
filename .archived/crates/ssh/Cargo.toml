@@ -1,0 +1,36 @@
+[package]
+name = "oneterm-ssh"
+description = "SSH + SFTP implementation for OneTerm (russh)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+terminal-diagnostics = []
+# Function-level profiling sites (IN-0046). Off by default: without it every
+# `#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]` vanishes and
+# `hotpath` is not in the graph. Only `oneterm-app` turns measuring on.
+hotpath-profiling = ["dep:hotpath", "oneterm-terminal/hotpath-profiling"]
+
+[lints]
+workspace = true
+
+[dependencies]
+oneterm-core.workspace = true
+oneterm-terminal.workspace = true
+async-channel.workspace = true
+russh.workspace = true
+tokio.workspace = true
+log.workspace = true
+thiserror.workspace = true
+russh-sftp.workspace = true
+tokio-util.workspace = true
+hotpath = { workspace = true, optional = true }
+
+[dev-dependencies]
+oneterm-terminal = { workspace = true, features = ["test-support"] }
+rand.workspace = true
+futures.workspace = true

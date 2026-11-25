@@ -1,0 +1,27 @@
+{
+	"name": "Aurora Light",
+	"mode": "light",
+	"palette": {
+		"canvas": "#FFFFFF",
+		"panel": "#F8FAFC",
+		"tab_bg": "#F1F5F9",
+		"raised": "#E2E8F0",
+		"panel_hover": "#E2E8F0",
+		"raised_hover": "#E2E8F0",
+		"press": "#CBD5E1",
+		"overlay_bg": "#FFFFFF",
+		"line": "#E2E8F0",
+		"line_strong": "#E2E8F0",
+		"border_focused": "#0F172A",
+		"text": "#020617",
+		"text_2": "#5C6A7F",
+		"text_3": "#5C6A7F",
+		"text_on_accent": "#F8FAFC",
+		"warn": "#8C6B05",
+		"selection": "#55A0FC"
+	},
+	"editor": {
+		"foreground": "#020617",
+		"selection": "#55A0FC"
+	}
+}

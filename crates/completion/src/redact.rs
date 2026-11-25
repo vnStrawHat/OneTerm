@@ -1,28 +1,17 @@
-//! Secret-value redaction for the `memory` (history) source.
+//! Redaction: what is taken out of a line before the history keeps it (specs/completion, "History").
 //!
-//! Redaction runs **before** anything enters the in-RAM history ring
-//! (docs/auto-completion/08 §2): it keeps the command name and every option flag
-//! name but drops secret **values** (after `--password`, secret `KEY=VALUE`
-//! assignments, and standalone credential-shaped tokens). A cheap
-//! [`contains_secret`] guard also runs at suggestion time (defense in depth,
-//! docs 08 §5).
-//!
-//! Note: the architecture keeps this crate alacritty-free (depends only on
-//! `core`), so the control-char/length hygiene is implemented locally rather
-//! than pulling in `oneterm_terminal::security_policy`.
+//! The command and every flag stay; the values of secret flags, secret assignments, credentials
+//! in URLs and tokens shaped like keys go. `contains_secret` asks the same of a line at
+//! suggestion time, for what was recorded without redaction.
 
-#[path = "redact_detect.rs"]
 mod detect;
-#[cfg(test)]
-#[path = "redact_tests.rs"]
-mod tests;
 
 use detect::{
     command_name, is_command_secret_long_flag, is_secret_flag, is_secret_key, looks_like_secret,
     short_secret_flags, strip_url_userinfo,
 };
 
-/// Cap on a stored history line (defensive length bound).
+/// The longest line the history keeps, in bytes.
 const MAX_LINE_LEN: usize = 4096;
 
 /// Redact a raw command line into a form safe to store and suggest.
@@ -49,8 +38,7 @@ fn scrub_tokens(tokens: &[&str]) -> (Vec<String>, bool) {
     let mut drop_next_value = false;
     let (command, subcommand) = command_and_subcommand(tokens);
     let short_secret = short_secret_flags(&command, subcommand.as_deref());
-    let secret_flag =
-        |name: &str| is_secret_flag(name) || is_command_secret_long_flag(&command, name);
+    let secret_flag = |name: &str| is_secret_flag(name) || is_command_secret_long_flag(&command, name);
 
     for &tok in tokens {
         if drop_next_value {
@@ -89,11 +77,11 @@ fn scrub_tokens(tokens: &[&str]) -> (Vec<String>, bool) {
                 continue; // drop whole assignment
             }
             // Non-secret key but secret-shaped value → drop whole assignment.
-            if let Some((_k, v)) = tok.split_once('=') {
-                if looks_like_secret(v) {
-                    changed = true;
-                    continue;
-                }
+            if let Some((_k, v)) = tok.split_once('=')
+                && looks_like_secret(v)
+            {
+                changed = true;
+                continue;
             }
             out.push(tok.to_string());
             continue;
@@ -131,9 +119,7 @@ fn command_and_subcommand(tokens: &[&str]) -> (String, Option<String>) {
         .copied()
         .skip_while(|tok| split_assignment(tok).is_some() || *tok == "sudo" || *tok == "doas");
     let command = rest.next().map(command_name).unwrap_or_default();
-    let subcommand = rest
-        .find(|tok| !is_flag(tok))
-        .map(|tok| tok.to_ascii_lowercase());
+    let subcommand = rest.find(|tok| !is_flag(tok)).map(|tok| tok.to_ascii_lowercase());
     (command, subcommand)
 }
 
@@ -167,10 +153,10 @@ fn split_inline_flag(tok: &str) -> Option<(&str, &str)> {
     }
     // Windows `/FLAG:value`. Only treat ':' as a separator for `/`-flags so we
     // never split a Unix `-o` from a path like `-o/tmp` (rare) incorrectly.
-    if tok.starts_with('/') {
-        if let Some(idx) = tok.find(':') {
-            return Some((&tok[..idx], &tok[idx + 1..]));
-        }
+    if tok.starts_with('/')
+        && let Some(idx) = tok.find(':')
+    {
+        return Some((&tok[..idx], &tok[idx + 1..]));
     }
     None
 }
@@ -179,17 +165,13 @@ fn split_inline_flag(tok: &str) -> Option<(&str, &str)> {
 /// token is not a plain assignment.
 fn split_assignment(tok: &str) -> Option<(&str, &str)> {
     let (key, val) = tok.split_once('=')?;
-    if key.is_empty()
-        || !key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
         return None;
     }
     Some((key, val))
 }
 
-/// Control-char strip + length truncation (local hygiene layer).
+/// Without control characters (a tab is a blank), at most `MAX_LINE_LEN` bytes, trimmed.
 fn hygiene(s: &str) -> String {
     let mut out: String = s
         .chars()

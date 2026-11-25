@@ -1,0 +1,299 @@
+[workspace]
+members = [
+    "crates/app",
+    "crates/core",
+    "crates/terminal",
+    "crates/actions",
+    "crates/settings",
+    "crates/state",
+    "crates/theme",
+    "crates/workspace",
+    "crates/terminal-view",
+    "crates/sftp-ui",
+    "crates/session-ui",
+    "crates/settings-ui",
+    "crates/highlight",
+    "crates/update",
+    "crates/local-shell",
+    "crates/ssh",
+    "crates/completion",
+    "crates/tools",
+    "crates/vt",
+    "crates/vault",
+]
+resolver = "3"
+
+[workspace.package]
+# Single version source for every workspace crate, the release workflow, and the
+# macOS bundle. Read it with:
+#   awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml
+version = "0.6.11"
+publish = false
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/vnStrawHat/OneTerm"
+# Keep in sync with rust-toolchain.toml.
+rust-version = "1.96.0"
+
+[workspace.dependencies]
+# GPUI core — published as the gpui-pre family (see docs/agents/dependencies.md §1)
+gpui = { package = "gpui-pre", version = "0.3" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+# GPUI Kit layers move together as one release family.
+gpui-base = "0.8"
+gpui-component = "0.8"
+gpui-kit-assets = "0.8"
+
+# Internal crates
+oneterm-core = { path = "crates/core" }
+oneterm-terminal = { path = "crates/terminal" }
+oneterm-actions = { path = "crates/actions" }
+oneterm-settings = { path = "crates/settings" }
+oneterm-state = { path = "crates/state" }
+oneterm-theme = { path = "crates/theme" }
+oneterm-workspace = { path = "crates/workspace" }
+oneterm-terminal-view = { path = "crates/terminal-view" }
+oneterm-sftp-ui = { path = "crates/sftp-ui" }
+oneterm-session-ui = { path = "crates/session-ui" }
+oneterm-settings-ui = { path = "crates/settings-ui" }
+oneterm-highlight = { path = "crates/highlight" }
+oneterm-local-shell = { path = "crates/local-shell" }
+oneterm-update = { path = "crates/update" }
+oneterm-ssh = { path = "crates/ssh" }
+oneterm-completion = { path = "crates/completion" }
+oneterm-vault = { path = "crates/vault" }
+# `default-features = false` turns the engine's default-on `pty` feature off
+# for the workspace; `local-shell` and `tools` are the only members that name
+# `oneterm_vt::pty`, and each asks for it with `features = ["pty"]`. An
+# outside embedder still gets the transport by default.
+oneterm-vt = { path = "crates/vt", default-features = false }
+
+# SIMD byte scan for the VT parser's ground state (oneterm-vt).
+memchr = "2"
+# Terminal helpers: URL detect + OSC 52 base64
+aho-corasick = "1"
+regex = "1"
+base64 = "0.22"
+# Pixel buffers for gpui::RenderImage (Sixel images); core types only, no codecs.
+# Same major as the `image` GPUI resolves, so Cargo.lock keeps one copy.
+image = { version = "0.25", default-features = false }
+# Event channel (SessionEvent subscription) — keeps Tokio out of the public API
+async-channel = "2"
+# PTY polling (the `pty` feature's evented transport in oneterm-vt)
+polling = "3.8"
+log = "0.4"
+env_logger = "0.11"
+# Native exception/signal capture. Keep exact: callback safety is version-reviewed.
+crash-handler = "=0.8.0"
+# SSH client
+russh = { version = "0.63", default-features = false, features = ["ring", "flate2", "rsa"] }
+# SFTP subsystem for russh — opens an SFTP channel on the same SSH connection
+russh-sftp = "3.0"
+# Open a path in the OS default application (SFTP "Edit" workflow, OS-default mode).
+open = "5"
+# Filesystem watcher for the SFTP "Edit" workflow (detect local saves of the temp copy).
+notify = "7"
+# russh-keys was merged into russh >= 0.50
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "macros", "fs"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+rand = "0.10"
+# `futures::channel::oneshot` answers oneterm-state's vault operations; `futures::stream::once` feeds the in-process SSH agent server used by oneterm-ssh tests
+futures = "0.3"
+
+# Async / serialization / error
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+zeroize = { version = "1.8", features = ["derive"] }
+# Master-password vault (IN-0050, DEC-0021): Argon2id and AES-256-GCM. Both already
+# resolve in Cargo.lock through russh -> ssh-key, so the graph does not grow. Only
+# `oneterm-vault` may depend on them (scripts/dependency-graph-policy.json).
+# `default-features = false` keeps argon2 off the `password-hash` path: the vault calls
+# the raw KDF.
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "getrandom", "zeroize"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots", "system-proxy"] }
+semver = "1"
+sha2 = "0.10"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1"
+
+# UI helpers
+chrono = "0.4"
+# System resource monitoring (CPU/memory of the OneTerm process)
+sysinfo = "0.37"
+# Embedded theme JSON + icon assets (theme crate)
+rust-embed = "8.7"
+# Windows FFI (Ctrl handler, file locking / replace, DOOM-fire console mode, the `runas`
+# launch and the token query of the elevated instance — `IN-0043`). One version
+# for every first-party crate (0.61 moved `BOOL` to `windows_sys::core`, so the pin stays
+# on the 0.59 line); the feature set is the union of what they need.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
+    # PDH `GPU Engine` counters: the FPS HUD's GPU usage (`US-0151`).
+    "Win32_System_Performance",
+    # `GetProcessMemoryInfo`: the status bar's private working set (`US-0137`).
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+    # `SHELLEXECUTEINFOW` carries an `HKEY` field, so windows-sys gates the whole
+    # struct behind this feature. Nothing in OneTerm reads the registry
+    # (`IN-0043` resolves pwsh by scanning `%ProgramFiles%` for that reason).
+    "Win32_System_Registry",
+    # `CoInitializeEx` on the elevation helper thread: `ShellExecuteEx` delegates
+    # to COM shell extensions, so that thread needs its own apartment.
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Compile assets/oneterm.rc → embed app icon + version info into the exe (app build.rs).
+embed-resource = "3"
+# DOOM-fire diagnostic (crates/tools): terminal size detection on Unix.
+libc = "0.2"
+
+# ── oneterm-vt (IN-0029) ─────────────────────────────────────────────────────
+# All of these already resolved in Cargo.lock as transitive dependencies, so the
+# graph does not grow. `bitflags` and `rustc-hash` each resolve to two versions
+# (deny.toml:88 sets multiple-versions = "warn"); the engine pins the 2.x line.
+bitflags = "2"
+rustc-hash = "2"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+# Dev-only: property tests for the packed-cell round trips, and later for reflow.
+proptest = "1"
+# The adapter's lock (IN-0029 US-0081, HLD decision 7). Declared by `crates/terminal`,
+# never by the engine: `oneterm-vt` holds no lock and the embedder picks the strategy.
+parking_lot = "0.12"
+# Function-level time and allocation profiler (IN-0046). Optional everywhere and reached
+# only through each crate's `hotpath-profiling` feature, which `oneterm-app` fans out.
+hotpath = "0.26"
+
+[workspace.lints.clippy]
+# Preserve compatibility with upstream gpui-component (see reference/Cargo.toml)
+almost_complete_range = "allow"
+arc_with_non_send_sync = "allow"
+borrowed_box = "allow"
+dbg_macro = "deny"
+let_underscore_future = "allow"
+manual_is_multiple_of = "allow"
+map_entry = "allow"
+module_inception = "allow"
+non_canonical_partial_ord_impl = "allow"
+reversed_empty_ranges = "allow"
+single_range_in_vec_init = "allow"
+style = { level = "allow", priority = -1 }
+todo = "deny"
+type_complexity = "allow"
+useless_conversion = "allow"
+
+[profile.dev]
+codegen-units = 16
+debug = "limited"
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+# No debuginfo for any third-party crate: they are never stepped through in a
+# debugger, and their debug sections dominated `target/` and link time (US-0204).
+# `"*"` matches non-workspace packages only; first-party crates keep `debug = "limited"`.
+"*" = { debug = false }
+# Third-party hot crates are always optimized in dev: they rarely change (no
+# rebuild cost) and are never stepped through in a debugger.
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+smol = { opt-level = 3 }
+# The vault's Argon2id (IN-0050 US-0156): at opt-level 0 one unlock at the default
+# 64 MiB / 3 passes takes 1.4-3.7 s in a debug build against about 80 ms in release.
+# `blake2` is Argon2's inner hash. Applies to `test` as well, which inherits `dev`.
+argon2 = { opt-level = 3 }
+blake2 = { opt-level = 3 }
+
+# `fast-dev` — dev profile with OneTerm's own hot-path crates optimized too
+# (`cargo run -p oneterm-app --profile fast-dev`). Use it to run DOOM-fire and
+# other full-screen high-fps TUIs from a debug build: at opt-level = 0 the
+# per-frame cost is 20-100x slower, so the UI thread never returns to the
+# Windows message pump (window goes "Not Responding") and the render can't keep
+# pace with the pump.
+#
+# The hot path spans FOUR first-party crates, not just the terminal view:
+#   - oneterm-vt:        the parser + grid the PTY chunk is fed into.
+#   - oneterm-terminal-view: the ~13k-quad paint loop + box-drawing geometry + layout.
+#   - oneterm-terminal:  the per-frame snapshot refill, held under the terminal
+#                        lock — unoptimized this starves the PTY pump thread.
+#   - oneterm-local-shell / -ssh: the PTY pump loop + state locks.
+# Leaving any of these at opt-level = 0 leaves a slow link in the chain that
+# blocks the whole pipeline.
+#
+# These overrides deliberately live in a named profile rather than in `dev`
+# (BUILD-09): plain `dev` (and `test`, which inherits it) keeps first-party code
+# at opt-level = 0 for precise debugging and fast incremental rebuilds.
+[profile.fast-dev]
+inherits = "dev"
+
+[profile.fast-dev.package]
+"*" = { debug = false }
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+smol = { opt-level = 3 }
+argon2 = { opt-level = 3 }
+blake2 = { opt-level = 3 }
+# The VT engine (IN-0029 `US-0081`): the hot path runs through it, so it is
+# optimized here rather than left at `dev`'s opt-level = 0.
+oneterm-vt = { opt-level = 3 }
+oneterm-terminal-view = { opt-level = 3 }
+# The semantic scanner (`BUG-0071`): it runs once per logical line of the
+# viewport, and a logical line can be the whole viewport.
+#
+# The crate alone is not enough, and `US-0135` measured why: almost none of that
+# time is spent in `oneterm-highlight`'s own code. It is spent in the matchers it
+# calls — the Aho-Corasick keyword automaton and the regex DFAs — and `regex` is a
+# thin API layer over `regex-automata`, `regex-syntax` and `memchr`. With the
+# scanner crate optimized and those five left at `dev`'s opt-level = 0, an
+# 8 000-char scan ran 6-13x slower than `release` (CJK: 6.2 ms, worse than the
+# 4.14 ms that first put this line here). Optimizing the whole regex stack brings
+# `fast-dev` to 1.1-1.9x of `release` for a one-time ~14 s compile; they are
+# third-party, pinned, and never stepped through in a debugger, which is the same
+# rationale `[profile.dev.package]` above already states.
+oneterm-highlight = { opt-level = 3 }
+aho-corasick = { opt-level = 3 }
+memchr = { opt-level = 3 }
+regex = { opt-level = 3 }
+regex-automata = { opt-level = 3 }
+regex-syntax = { opt-level = 3 }
+oneterm-core = { opt-level = 3 }
+oneterm-terminal = { opt-level = 3 }
+oneterm-settings = { opt-level = 3 }
+oneterm-local-shell = { opt-level = 3 }
+oneterm-ssh = { opt-level = 3 }
+
+[profile.release]
+# Optimized for the distributable binary.
+# - lto = "fat" + codegen-units = 1: whole-program optimization and a smaller binary.
+# - panic = "unwind": keep the default because gpui / smol may rely on unwinding.
+# - debug = 0 + strip = "symbols": no debug info is generated and the symbol table is
+#   stripped for a smaller binary. Consequence: NO .pdb/.dSYM exists for a release, so
+#   release crash reports (docs/crash-reporting.md) carry unsymbolicated frames; the
+#   panic message + module offsets are still recorded. To symbolicate a release,
+#   switch to `debug = "line-tables-only"` + `split-debuginfo = "packed"` and publish
+#   the .pdb/.dSYM next to the archive (BUILD-08 follow-up).
+# - opt-level = 3 + overflow-checks = false: production semantics.
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = 0
+strip = "symbols"
+overflow-checks = false
+panic = "unwind"
+
+[profile.release.package]
+# GPUI/smol are expensive: always build them with opt-level 3 (including dependencies).
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+smol = { opt-level = 3 }

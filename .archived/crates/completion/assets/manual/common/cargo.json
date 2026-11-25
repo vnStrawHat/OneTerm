@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "cargo",
+  "options": ["--version", "--help", "--verbose", "--quiet"],
+  "subcommands": [
+    { "name": "build", "options": ["--release", "--target", "--workspace", "--all-targets"] },
+    { "name": "test",  "options": ["--release", "--workspace", "--no-run"] },
+    { "name": "run",   "options": ["--release", "--bin", "--example"] },
+    { "name": "clippy","options": ["--fix", "--workspace", "--all-targets"] },
+    { "name": "fmt",   "options": ["--all", "--check"] }
+  ]
+}

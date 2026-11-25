@@ -1,0 +1,91 @@
+[package]
+name = "oneterm-app"
+description = "Binary entry point for OneTerm."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[features]
+# Enable terminal render diagnostics across the terminal view + both backends.
+terminal-diagnostics = [
+    "oneterm-terminal-view/terminal-diagnostics",
+    "oneterm-local-shell/terminal-diagnostics",
+    "oneterm-ssh/terminal-diagnostics",
+]
+# Function-level time profiling with `hotpath` (IN-0046, US-0142). Developer-only and
+# off by default; see docs/spec-intakes/IN-0046-hotpath-profiling/high-level-design.md.
+# The report goes to stdout or to `HOTPATH_OUTPUT_PATH`; `HOTPATH_SHUTDOWN_MS=<ms>`
+# writes it and exits after that time.
+hotpath-profiling = [
+    "dep:hotpath",
+    "hotpath/hotpath",
+    "oneterm-terminal-view/hotpath-profiling",
+    "oneterm-local-shell/hotpath-profiling",
+    "oneterm-ssh/hotpath-profiling",
+    "oneterm-workspace/hotpath-profiling",
+    "oneterm-sftp-ui/hotpath-profiling",
+    "oneterm-session-ui/hotpath-profiling",
+]
+# The same sites, reporting bytes and allocation count instead of time. hotpath's
+# counting allocator wraps `OomResilientAlloc` (crates/app/src/oom.rs).
+hotpath-profiling-alloc = ["hotpath-profiling", "hotpath/hotpath-alloc"]
+
+# Shared logic — the bin shim calls `oneterm_app::run()`.
+[lib]
+name = "oneterm_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "oneterm"
+path = "src/bin/oneterm.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+oneterm-core.workspace = true
+oneterm-terminal.workspace = true
+oneterm-ssh.workspace = true
+oneterm-local-shell.workspace = true
+
+# UI layer: the feature-agnostic shell + the four feature crates + shared layers.
+oneterm-workspace.workspace = true
+oneterm-theme.workspace = true
+oneterm-settings.workspace = true
+oneterm-state.workspace = true
+oneterm-terminal-view.workspace = true
+oneterm-sftp-ui.workspace = true
+oneterm-session-ui.workspace = true
+oneterm-settings-ui.workspace = true
+# Crash-report dialog derives the GitHub issue URL from the updater repository constant.
+oneterm-update.workspace = true
+
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui-base.workspace = true
+gpui-component.workspace = true
+gpui-kit-assets.workspace = true
+
+anyhow.workspace = true
+# Worker -> foreground hop for the elevation launch (IN-0043): the `runas` call
+# pumps messages, so it must not run on the gpui thread.
+async-channel.workspace = true
+serde_json.workspace = true
+env_logger.workspace = true
+log.workspace = true
+chrono.workspace = true
+rand.workspace = true
+sysinfo.workspace = true
+crash-handler.workspace = true
+hotpath = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+# Compile assets/oneterm.rc → embed app icon + version info into the exe.
+embed-resource.workspace = true

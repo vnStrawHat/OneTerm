@@ -1,27 +1,17 @@
 [package]
 name = "oneterm-vault"
-description = "OneTerm's master-password vault: Argon2id key derivation, AES-256-GCM envelopes and the vault.json header (no GPUI)."
+description = "OneTerm's saved passwords: the vault's document and envelopes, sealing and opening (specs/oneterm)"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
-repository.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [lints]
 workspace = true
 
-[features]
-# Set-up and rewrap with explicit Argon2id parameters, so other crates' tests can
-# run at `KdfParams::FLOOR` (`US-0157`). Production code never enables it.
-test-support = []
-
 [dependencies]
-oneterm-core.workspace = true
-aes-gcm.workspace = true
-argon2.workspace = true
-base64.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
-zeroize.workspace = true
+# Argon2id alone, with no password-hash strings: the vault calls the function itself.
+argon2 = { version = "0.6", default-features = false, features = ["zeroize"] }
+quadra-data.workspace = true
+quadra-shell.workspace = true

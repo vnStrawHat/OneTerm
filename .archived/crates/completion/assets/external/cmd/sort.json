@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "generated": "2026-08-03",
+  "name": "sort",
+  "options": [
+    "/L",
+    "/M",
+    "/O",
+    "/R",
+    "/T"
+  ]
+}

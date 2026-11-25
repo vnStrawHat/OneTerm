@@ -1,0 +1,1331 @@
+//! `SshSession` — SSH client over russh + a process-shared Tokio runtime.
+//!
+//! The public API is sync (uses `block_on` for connect). All sessions share one
+//! bounded multi-thread runtime, so connection count does not create one worker
+//! thread per tab. Write/resize/close commands and outgoing events cross the
+//! sync/async boundary through `async_channel`.
+//!
+//! **Important**: `russh::client::Handle` must be kept alive — dropping it closes
+//! the connection. The handle is moved into `ssh_main_task` and held until the
+//! session closes.
+//!
+//! The SFTP channel is opened **before** spawning `ssh_main_task` (inside
+//! `block_on`) and split into its own object — no handle needed afterwards. The
+//! two channels (shell + sftp) share the same TCP connection, multiplexed by
+//! russh.
+//!
+//! See `docs/terminal-backend.md` §7, `docs/sftp-browser-design.md`.
+
+use std::cell::Cell;
+use std::future::Future;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::Duration;
+
+use russh::Pty;
+use russh::client;
+use russh::client::{AuthResult, KeyboardInteractiveAuthResponse};
+use russh::keys::{HashAlg, PrivateKey, load_secret_key};
+use russh::{MethodKind, MethodSet};
+use tokio_util::sync::CancellationToken;
+
+use oneterm_core::{
+    AppError, ConnectPhase, ConnectionCancellation, SshAuthMethod, SshConfig, SshKeepaliveConfig,
+    TerminalLogConfig,
+};
+use oneterm_terminal::{
+    ClipboardOrigin, GridSize, OscRouter, PtySession, PtySize, PtyTransport, ResizePolicy,
+    SessionEvent, SessionEventSink, SessionKind, SharedSessionState, SharedState,
+    TerminalSecurityPolicy, new_shared_terminal, ssh_log_identity,
+};
+
+use crate::agent::{local_agent_connector, request_agent_forwarding};
+use crate::counting_stream::CountingStream;
+use crate::handler::SshClientHandler;
+use crate::route::{JumpHandles, connect_hop, hop_error};
+use crate::sftp::{SftpCmd, SftpSession};
+use crate::sftp_task::sftp_task;
+use crate::task::ssh_main_task;
+use crate::transport::{Cmd, SSH_COMMAND_QUEUE_CAPACITY, SshListener, SshTransport};
+use crate::tunnel::{ForwardContext, ForwardTable, HANDLE_REQUEST_CAPACITY, start_forwards};
+
+/// DEC-0008: the grow-resize policy an SSH session hands the engine. The remote
+/// PTY reflows and repaints on its side, so a row grow pulls scrollback into the
+/// viewport top and the cursor follows it down — `KeepViewportTop` would leave
+/// the cursor where it is and add blank rows at the bottom.
+const SSH_RESIZE_POLICY: ResizePolicy = ResizePolicy::BottomAnchor;
+
+/// The channel half of an SSH session, whose asynchronous tasks run on the
+/// shared SSH runtime. `PtySession` owns one of these and everything else a
+/// terminal session does (`session_terminal.rs`).
+pub struct SshSession {
+    pub(crate) listener: SshListener,
+    pub(crate) state: SharedState,
+    /// SFTP session (None = server does not support SFTP).
+    pub(crate) sftp: Mutex<Option<Arc<SftpSession>>>,
+}
+
+impl SshSession {
+    /// The SSH channel transport (write / resize / close).
+    pub(crate) fn transport(&self) -> &SshTransport {
+        self.listener.transport()
+    }
+
+    /// Ask the SFTP task to stop and drop the handle, so a later `close()` or
+    /// drop is a no-op (no-op without SFTP).
+    pub(crate) fn close_sftp(&self) {
+        let sftp = self
+            .sftp
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(sftp) = sftp {
+            use oneterm_core::SftpBackend;
+            sftp.close();
+        }
+    }
+}
+
+impl Drop for SshSession {
+    /// Release the connection when the session is discarded without `close()`
+    /// (for example when connect succeeded after the user cancelled).
+    ///
+    /// `ssh_main_task` holds `cmd_tx` clones through `term`/`listener`, so the
+    /// command channel never closes on its own; the transport's closing flag is
+    /// the task's shutdown signal. `pty_close` sets it and is idempotent, so an
+    /// explicit `close()` followed by drop is fine.
+    fn drop(&mut self) {
+        if !self.transport().is_closing() {
+            log::info!("SshSession: dropped without close — requesting close");
+            if let Err(error) = self.transport().pty_close() {
+                log::debug!("SshSession: close on drop not delivered: {error}");
+            }
+        }
+        // Best effort: `sftp_task` also stops when the main task ends
+        // (ARCH-28), but the UI may still hold an `Arc<SftpSession>`.
+        self.close_sftp();
+    }
+}
+
+const CONNECT_DEADLINE: Duration = Duration::from_secs(60);
+const PHASE_DEADLINE: Duration = Duration::from_secs(20);
+// Transport-level keepalive detects a dead peer or a NAT that dropped the mapping
+// instead of leaving the tab hanging forever. Its policy is captured per connection.
+// Disable TTY echo while shell integration bootstraps the running shell.
+const SHELL_INTEGRATION_PTY_MODES: &[(Pty, u32)] = &[(Pty::ECHO, 0)];
+
+const SSH_RUNTIME_WORKERS: usize = 2;
+static SSH_RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> =
+    OnceLock::new();
+
+fn shared_runtime() -> oneterm_core::Result<&'static tokio::runtime::Runtime> {
+    match SSH_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(SSH_RUNTIME_WORKERS)
+            .enable_all()
+            .thread_name("ssh-runtime")
+            .build()
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(runtime) => Ok(runtime),
+        Err(error) => Err(AppError::Connect {
+            phase: ConnectPhase::Transport,
+            message: format!("failed to initialize shared SSH runtime: {error}"),
+        }),
+    }
+}
+
+/// `AppError::Connect` for a transport-level failure in `phase`.
+pub(crate) fn phase_error(phase: ConnectPhase, error: impl std::fmt::Display) -> AppError {
+    AppError::Connect {
+        phase,
+        message: error.to_string(),
+    }
+}
+
+/// Runs each step of a connection attempt under the per-phase deadline and
+/// the user's cancellation, remembering which phase is in flight so the
+/// overall deadline can name it.
+pub(crate) struct ConnectPhases {
+    cancellation: ConnectionCancellation,
+    current: Cell<ConnectPhase>,
+}
+
+impl ConnectPhases {
+    fn new(cancellation: ConnectionCancellation) -> Self {
+        Self {
+            cancellation,
+            current: Cell::new(ConnectPhase::Transport),
+        }
+    }
+
+    /// The phase most recently started.
+    fn current(&self) -> ConnectPhase {
+        self.current.get()
+    }
+
+    pub(crate) async fn run<T, F>(&self, phase: ConnectPhase, future: F) -> oneterm_core::Result<T>
+    where
+        F: Future<Output = oneterm_core::Result<T>>,
+    {
+        self.run_with_deadline(phase, future, PHASE_DEADLINE).await
+    }
+
+    /// Await `future` as `phase`: a timeout becomes `AppError::Connect`
+    /// naming the phase, a user cancellation `AppError::Cancelled` (woken by
+    /// `ConnectionCancellation::cancelled`, no polling — PERF-22).
+    async fn run_with_deadline<T, F>(
+        &self,
+        phase: ConnectPhase,
+        future: F,
+        deadline: Duration,
+    ) -> oneterm_core::Result<T>
+    where
+        F: Future<Output = oneterm_core::Result<T>>,
+    {
+        self.current.set(phase);
+        tokio::select! {
+            result = tokio::time::timeout(deadline, future) => {
+                result.map_err(|_| AppError::Connect {
+                    phase,
+                    message: format!("timed out after {} s", deadline.as_secs()),
+                })?
+            }
+            _ = self.cancellation.cancelled() => Err(AppError::Cancelled),
+        }
+    }
+}
+
+/// Connect over SSH to a server. Sync API — uses the shared runtime for connect.
+/// The runtime's bounded worker pool keeps all sessions' background tasks running.
+/// `security` is the user's policy for terminal-controlled side effects (SEC-08).
+pub fn connect(
+    mut cfg: SshConfig,
+    initial: PtySize,
+    scrollback_history: usize,
+    security: TerminalSecurityPolicy,
+    logging: TerminalLogConfig,
+    keepalive: SshKeepaliveConfig,
+) -> oneterm_core::Result<Box<dyn oneterm_terminal::TerminalSession>> {
+    log::info!(
+        "SshSession::connect: host={}, port={}, user={}, rows={}, cols={}",
+        cfg.host,
+        cfg.port,
+        cfg.username,
+        initial.rows,
+        initial.cols
+    );
+
+    let logging_identity = ssh_log_identity(&cfg.username, &cfg.host, cfg.port);
+    let runtime = shared_runtime()?;
+    let phases = ConnectPhases::new(cfg.cancellation.clone());
+
+    // Input must preserve FIFO ordering without dropping keystrokes when the UI
+    // produces a short burst. Control-flow failures remain observable when the
+    // receiver closes; tests use bounded transports to exercise saturation.
+    let (cmd_tx, cmd_rx) = async_channel::bounded::<Cmd>(SSH_COMMAND_QUEUE_CAPACITY);
+    let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4096);
+    // Warnings raised while forwards start reach the terminal as toasts.
+    let notify_tx = event_tx.clone();
+    let state = SharedSessionState::new_alive();
+
+    // SSH is remote: OSC 52 clipboard reads/writes default off.
+    let listener = OscRouter::with_security(
+        SshTransport::new(cmd_tx),
+        SessionEventSink::new(event_tx),
+        state.clone(),
+        ClipboardOrigin::Remote,
+        security,
+    );
+    // Cancelled by `ssh_main_task` on exit so the SFTP task, the forward
+    // listeners, and every relay die with the connection (ARCH-28).
+    let session_shutdown = CancellationToken::new();
+
+    let size = GridSize {
+        cols: initial.cols as usize,
+        lines: initial.rows as usize,
+    };
+    let term = new_shared_terminal(size, scrollback_history);
+
+    // ── Connect (block_on) ──────────────────────────────────────────
+    let connect_result = runtime.block_on(async {
+        let operation = async {
+            // ── Route: every jump hop, then the target ──────────────────
+            // Each hop's credential is moved out of the config so it is
+            // zeroized as soon as that hop is authenticated.
+            let hops = std::mem::take(&mut cfg.jump_hops);
+            let mut carriers = JumpHandles::default();
+            for hop in hops {
+                let label = hop.label();
+                log::info!("SshSession: connecting to jump host {label}");
+                let handler = SshClientHandler::new(hop.host, hop.port, hop.host_key_policy);
+                let handle = connect_hop(
+                    &phases,
+                    carriers.last(),
+                    handler,
+                    &hop.username,
+                    hop.auth,
+                    keepalive,
+                )
+                .await
+                .map_err(|error| hop_error(&label, error))?;
+                carriers.push(handle);
+            }
+            let target_auth = std::mem::replace(&mut cfg.auth, SshAuthMethod::None);
+            log::info!("SshSession: connecting to {}:{}", cfg.host, cfg.port);
+            let forward_table: ForwardTable = Arc::default();
+            let mut handler =
+                SshClientHandler::new(cfg.host.clone(), cfg.port, cfg.host_key_policy.clone())
+                    .with_forwards(forward_table.clone(), session_shutdown.clone());
+            if cfg.agent_forwarding {
+                handler = handler
+                    .with_agent_forwarding(local_agent_connector(), session_shutdown.clone());
+            }
+            let handle = connect_hop(
+                &phases,
+                carriers.last(),
+                handler,
+                &cfg.username,
+                target_auth,
+                keepalive,
+            )
+            .await?;
+
+            // ── Open channel + pty + shell ──────────────────────────────
+            let mut channel = phases
+                .run(ConnectPhase::ChannelOpen, async {
+                    handle
+                        .channel_open_session()
+                        .await
+                        .map_err(|e| phase_error(ConnectPhase::ChannelOpen, e))
+                })
+                .await?;
+            log::info!("SshSession: channel opened");
+
+            // ── Agent forwarding (opt-in per session, DEC-0011) ─────────
+            // A refusal (`AllowAgentForwarding no`) is a warning, not a failure.
+            if cfg.agent_forwarding {
+                let accepted = phases
+                    .run(
+                        ConnectPhase::ChannelOpen,
+                        request_agent_forwarding(&mut channel),
+                    )
+                    .await?;
+                if accepted {
+                    log::info!("SshSession: agent forwarding accepted");
+                } else {
+                    let message = format!(
+                        "The server refused agent forwarding for {}@{}:{}.",
+                        cfg.username, cfg.host, cfg.port
+                    );
+                    log::warn!("SshSession: {message}");
+                    if let Err(error) = notify_tx.try_send(SessionEvent::Notification(message)) {
+                        log::debug!("SshSession: agent forwarding warning not delivered: {error}");
+                    }
+                }
+            }
+
+            let pty_modes: &[(Pty, u32)] = if cfg.shell_integration {
+                SHELL_INTEGRATION_PTY_MODES
+            } else {
+                &[]
+            };
+
+            phases
+                .run(ConnectPhase::PtyRequest, async {
+                    channel
+                        .request_pty(
+                            false,
+                            "xterm-256color",
+                            initial.cols as u32,
+                            initial.rows as u32,
+                            0,
+                            0,
+                            pty_modes,
+                        )
+                        .await
+                        .map_err(|e| phase_error(ConnectPhase::PtyRequest, e))?;
+                    // Best-effort color env propagation (RFC 4254 §6.4). sshd
+                    // only applies these when AcceptEnv allows them and drops
+                    // the rest silently; want_reply = false keeps that case
+                    // harmless. The shell-integration bootstrap below re-exports
+                    // COLORTERM so truecolor is guaranteed when it is enabled.
+                    request_remote_shell_env(&channel).await?;
+                    Ok(())
+                })
+                .await?;
+            log::info!(
+                "SshSession: pty requested ({}x{})",
+                initial.cols,
+                initial.rows
+            );
+
+            // ── Shell integration (OSC 7 cwd) — shell login + bootstrap ──────
+            // Keep `request_shell(true)` so sshd/PAM still prints the normal login
+            // banner and MOTD / "Last login" output. When enabled, we request the PTY
+            // with ECHO off, then inject a bootstrap command that installs the OSC 7
+            // prompt hook in the running shell and re-enables echo.
+            phases
+                .run(ConnectPhase::ShellRequest, async {
+                    channel
+                        .request_shell(true)
+                        .await
+                        .map_err(|e| phase_error(ConnectPhase::ShellRequest, e))
+                })
+                .await?;
+            log::info!("SshSession: shell requested");
+
+            if cfg.shell_integration {
+                phases
+                    .run(ConnectPhase::ShellIntegration, async {
+                        send_shell_integration_bootstrap(&channel, &state).await
+                    })
+                    .await?;
+                log::info!("SshSession: shell integration bootstrap sent");
+            }
+
+            // ── Open SFTP channel (optional) ────────────────────────────
+            // Open it BEFORE spawning ssh_main_task because the handle is moved into
+            // the task. The SFTP channel is split into its own object — no handle needed.
+            let sftp_session = match phases
+                .run(ConnectPhase::SftpSetup, async {
+                    open_sftp(&handle, &state, session_shutdown.clone()).await
+                })
+                .await
+            {
+                Ok(sftp) => {
+                    log::info!("SshSession: SFTP channel opened");
+                    Some(sftp)
+                }
+                Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+                Err(e) => {
+                    log::warn!("SshSession: SFTP not available: {e} — terminal only");
+                    None
+                }
+            };
+
+            // ── Port forwards (before the handle moves into the task) ───
+            // A forward that cannot start warns and is skipped; the shell
+            // still opens (DEC-0011). Accepted connections ask the task for
+            // direct-tcpip channels through `open_tx`.
+            let (open_tx, open_rx) = tokio::sync::mpsc::channel(HANDLE_REQUEST_CAPACITY);
+            if !cfg.port_forwards.is_empty() {
+                let context = ForwardContext {
+                    open_tx,
+                    shutdown: session_shutdown.clone(),
+                    notify: notify_tx,
+                };
+                let bound =
+                    start_forwards(&cfg.port_forwards, &handle, &forward_table, &context).await;
+                log::info!(
+                    "SshSession: {} of {} forwards started ({} local listeners)",
+                    bound.len()
+                        + forward_table
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .len(),
+                    cfg.port_forwards.len(),
+                    bound.len()
+                );
+            }
+
+            // ── Start logging and spawn main SSH task ────────────────────
+            listener.logging().set_identity(logging_identity);
+            if logging.enabled
+                && let Err(error) = listener.logging().start(&logging)
+            {
+                log::warn!("SSH terminal automatic logging did not start: {error}");
+            }
+
+            // IMPORTANT: `handle` must be moved into the task — dropping it closes the
+            // connection.
+            tokio::spawn(ssh_main_task(
+                handle,
+                carriers,
+                channel,
+                term.clone(),
+                listener.clone(),
+                cmd_rx,
+                open_rx,
+                session_shutdown,
+            ));
+            log::info!("SshSession: main task spawned");
+
+            Ok::<_, AppError>(sftp_session)
+        };
+        tokio::time::timeout(CONNECT_DEADLINE, operation)
+            .await
+            .unwrap_or_else(|_| {
+                Err(AppError::Connect {
+                    phase: phases.current(),
+                    message: format!(
+                        "connection attempt timed out after {} s",
+                        CONNECT_DEADLINE.as_secs()
+                    ),
+                })
+            })
+    });
+
+    match connect_result {
+        Ok(sftp_session) => {
+            log::info!("SshSession: connect successful");
+            let session = PtySession::new(
+                term,
+                state.clone(),
+                event_rx,
+                SessionKind::Ssh,
+                SSH_RESIZE_POLICY,
+                SshSession {
+                    listener,
+                    state,
+                    sftp: Mutex::new(sftp_session),
+                },
+            );
+            Ok(Box::new(session) as Box<dyn oneterm_terminal::TerminalSession>)
+        }
+        Err(e) => {
+            log::error!("SshSession: connect failed: {e}");
+            Err(e)
+        }
+    }
+}
+
+/// The russh-sftp client configuration OneTerm's transfer budget depends on.
+///
+/// The two directions are pinned for opposite reasons, and neither field raises
+/// a limit past what the server allows:
+///
+/// - **Writes.** 3.0's defaults are not a drop-in: a new 32 KiB
+///   `max_write_packet_len` cuts the in-flight write budget 4x. Both write
+///   fields below restore the budget measured under russh-sftp 2.3.0
+///   (`IN-0036`, `US-0095` Change F).
+/// - **Reads.** `max_concurrent_reads` is 3.0's own default, deliberately, and
+///   is *not* a 2.3.0 value: 2.3.0 had no read-ahead at all. Since `IN-0037`
+///   retired OneTerm's striped download, that read-ahead is the transfer
+///   engine, so holding it down would be the regression rather than the fix.
+///
+/// `sftp_task::transfer::pipeline_budget_tests` measures every field here.
+pub(crate) fn sftp_config() -> russh_sftp::client::Config {
+    russh_sftp::client::Config {
+        // 3.0 added `max_write_packet_len` (32 KiB) as a *third* cap on every
+        // SSH_FXP_WRITE, on top of `max_packet_len` and the server's own
+        // `limits@openssh.com` reply. With OneTerm's 255 KiB chunks it is always
+        // the binding one, so a 5 MiB upload went from 21 packets of 261 120 B
+        // to 161 of 32 742 B: 2 088 960 bytes in flight down to 523 872, and
+        // SFTP throughput is in-flight bytes / RTT. Raising it to
+        // `max_packet_len` removes russh-sftp's extra cap only — the server's
+        // advertised write limit still clamps the packet (`fs/file.rs`
+        // `server_write_len`), as does a smaller server `packet_len`.
+        max_write_packet_len: 262_144,
+        // 2.3.0's value. With 255 KiB packets that is ~2 MiB in flight. 3.0's 16
+        // would double what OneTerm had; doubling it is a throughput change to
+        // decide on its own evidence, not something to inherit from a bump.
+        max_concurrent_writes: 8,
+        // 3.0's default, and since `IN-0037` the *only* read pipeline OneTerm
+        // has: a download reads one handle straight through and russh-sftp keeps
+        // this many READ packets on the wire (~16 x 256 KiB = 4.2 MB in flight,
+        // against the retired striping's 4 x 255 KiB = 1.04 MB). Lowering it
+        // back to 1 is the throughput regression `pipeline_budget_tests` guards.
+        // It is only safe this high because nothing seeks per chunk any more:
+        // `File::poll_seek` resets the read queue locally after the server has
+        // already served it, which is how striping plus read-ahead cost 9.3x the
+        // file size (`US-0095` Change G).
+        max_concurrent_reads: 16,
+        ..Default::default()
+    }
+}
+
+/// Open an SFTP channel on the same `handle` + spawn `sftp_task`.
+///
+/// Flow:
+/// 1. `handle.channel_open_session()` → new channel (same TCP connection)
+/// 2. `channel.request_subsystem("sftp")` → request the SFTP subsystem
+/// 3. `channel.into_stream()` → convert into `AsyncRead + AsyncWrite`
+/// 4. `russh_sftp::client::SftpSession::new_with_config(stream, sftp_config())`
+///    → SFTP handshake
+/// 5. Create the command channel `(cmd_tx, cmd_rx)`
+/// 6. `tokio::spawn(sftp_task(...))` — runs in the background
+/// 7. Return `Arc<SftpSession>` — bridge for the UI to call synchronously
+async fn open_sftp(
+    handle: &russh::client::Handle<SshClientHandler>,
+    state: &SharedState,
+    shutdown: CancellationToken,
+) -> oneterm_core::Result<Arc<SftpSession>> {
+    let sftp_error = |step: &str, error: &dyn std::fmt::Display| {
+        phase_error(ConnectPhase::SftpSetup, format!("{step}: {error}"))
+    };
+    // 1. Open a new channel on the same handle.
+    let channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| sftp_error("channel_open_session", &e))?;
+
+    // 2. Request SFTP subsystem.
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|e| sftp_error("request_subsystem", &e))?;
+
+    // 3. Convert channel → stream (AsyncRead + AsyncWrite).
+    //    Wrap with CountingStream to count rx/tx bytes — merged into the same
+    //    SharedState as the SSH shell channel → total network traffic.
+    let stream = CountingStream::new(channel.into_stream(), state.clone());
+
+    // 4. SFTP handshake — create the SftpChannel.
+    let sftp_channel = russh_sftp::client::SftpSession::new_with_config(stream, sftp_config())
+        .await
+        .map_err(|e| sftp_error("handshake", &e))?;
+
+    // 5. Create the command channel bridging sync (UI) → async (tokio task);
+    //    `alive` is the task's observable lifecycle state.
+    let (sftp_cmd_tx, sftp_cmd_rx) = async_channel::bounded::<SftpCmd>(64);
+    let alive = Arc::new(AtomicBool::new(true));
+
+    // 6. Spawn sftp_task — runs in the background on the same tokio runtime.
+    tokio::spawn(sftp_task(
+        sftp_channel,
+        sftp_cmd_rx,
+        alive.clone(),
+        shutdown,
+    ));
+
+    // 7. Return Arc<SftpSession> — the UI holds this handle.
+    Ok(SftpSession::new(sftp_cmd_tx, alive))
+}
+
+/// Password authentication with a keyboard-interactive fallback.
+///
+/// Servers configured with `PasswordAuthentication no` but
+/// `KbdInteractiveAuthentication yes` (the PAM default on several distributions)
+/// reject `password` and advertise `keyboard-interactive` instead. The fallback
+/// runs a single round: every prompt of the first info request is answered with
+/// the same password; a second info request or a prompt that echoes (so it is
+/// not a password prompt) aborts with an explicit error instead of guessing.
+pub(crate) async fn authenticate_with_password(
+    handle: &mut client::Handle<SshClientHandler>,
+    username: &str,
+    password: &str,
+) -> oneterm_core::Result<AuthResult> {
+    let auth_error = |e: russh::Error| phase_error(ConnectPhase::Authentication, e);
+    let result = handle
+        .authenticate_password(username, password)
+        .await
+        .map_err(auth_error)?;
+    let AuthResult::Failure {
+        remaining_methods, ..
+    } = &result
+    else {
+        return Ok(result);
+    };
+    if !remaining_methods.contains(&MethodKind::KeyboardInteractive) {
+        return Ok(result);
+    }
+    log::info!("SshSession: password rejected; falling back to keyboard-interactive");
+    let response = handle
+        .authenticate_keyboard_interactive_start(username, None)
+        .await
+        .map_err(auth_error)?;
+    let prompts = match response {
+        KeyboardInteractiveAuthResponse::Success => return Ok(AuthResult::Success),
+        KeyboardInteractiveAuthResponse::Failure {
+            remaining_methods,
+            partial_success,
+        } => {
+            return Ok(AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            });
+        }
+        KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => prompts,
+    };
+    if prompts.iter().any(|prompt| prompt.echo) {
+        return Err(phase_error(
+            ConnectPhase::Authentication,
+            "keyboard-interactive authentication asked for input other than a password; interactive prompts are not supported",
+        ));
+    }
+    let responses = prompts.iter().map(|_| password.to_string()).collect();
+    match handle
+        .authenticate_keyboard_interactive_respond(responses)
+        .await
+        .map_err(auth_error)?
+    {
+        KeyboardInteractiveAuthResponse::Success => Ok(AuthResult::Success),
+        KeyboardInteractiveAuthResponse::Failure {
+            remaining_methods,
+            partial_success,
+        } => Ok(AuthResult::Failure {
+            remaining_methods,
+            partial_success,
+        }),
+        KeyboardInteractiveAuthResponse::InfoRequest { .. } => Err(phase_error(
+            ConnectPhase::Authentication,
+            "keyboard-interactive authentication requested a second round of prompts; interactive prompts are not supported",
+        )),
+    }
+}
+
+/// User-facing message for a rejected authentication attempt, naming the
+/// methods the server still accepts so a wrong method choice is diagnosable.
+pub(crate) fn authentication_failure_message(
+    remaining_methods: &MethodSet,
+    partial_success: bool,
+) -> String {
+    let mut message = String::from("rejected by the server");
+    if partial_success {
+        message.push_str(" (the server accepted this method but requires another one)");
+    }
+    if remaining_methods.is_empty() {
+        return message;
+    }
+    let methods: Vec<&str> = remaining_methods.iter().map(<&str>::from).collect();
+    message.push_str("; the server accepts: ");
+    message.push_str(&methods.join(", "));
+    message
+}
+
+/// Env variables pushed to the remote shell before `request_shell` (RFC 4254
+/// §6.4). Mirrors the local-shell contract in `oneterm_core`'s `base_env()`.
+const REMOTE_SHELL_ENV: [(&str, &str); 3] = [
+    ("COLORTERM", "truecolor"),
+    ("TERM_PROGRAM", "OneTerm"),
+    // Every crate shares the workspace version, so this is OneTerm's.
+    ("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION")),
+];
+
+/// Send [`REMOTE_SHELL_ENV`] on the shell channel. Failures surface as
+/// `PtyRequest` connect errors — with `want_reply = false` this only happens
+/// if the channel/connection is already gone.
+async fn request_remote_shell_env(
+    channel: &russh::Channel<russh::client::Msg>,
+) -> Result<(), AppError> {
+    for (name, value) in REMOTE_SHELL_ENV {
+        channel
+            .set_env(false, name, value)
+            .await
+            .map_err(|e| phase_error(ConnectPhase::PtyRequest, e))?;
+    }
+    Ok(())
+}
+
+/// Bootstrap command injected after `request_shell(true)` to install the OSC 7
+/// and OSC 133 prompt hooks in the running shell without showing the script
+/// itself. The leading export guarantees `COLORTERM=truecolor` even on servers
+/// whose sshd ignores env requests (default OpenSSH `AcceptEnv LANG LC_*`).
+///
+/// Unlike a local shell, which OneTerm can only reach through environment
+/// variables, this line is *typed into a running shell* — so it can define
+/// functions, and both branches emit the full OSC 133 set (`US-0136`):
+///
+/// * zsh — `precmd_functions` for `D;<code>` + OSC 7 + `A`, `preexec_functions`
+///   for `C`, and `B` appended to the live `PS1`. The array assignments sit
+///   inside an `eval` because a POSIX `sh` parses the whole line before running
+///   any of it and `name=(...)` is a syntax error there.
+/// * bash — `PROMPT_COMMAND` for `D` + OSC 7 + `A`, `PS0` for `C`, and `B`
+///   appended to the live `PS1`.
+///
+/// Both append rather than replace: the `case` guard keeps OneTerm's function
+/// first in an existing `PROMPT_COMMAND`, `precmd_functions` keeps the user's
+/// entries, and `PS1` is extended, not overwritten. `__oneterm_precmd` restores
+/// `$?` so whatever runs after it still sees the user's exit status. Any other
+/// shell (`dash`, `ash`) reaches neither branch and gets what it got before:
+/// the one-shot OSC 7 + `A` from the final `__oneterm_precmd` call.
+///
+/// Two details are easy to get wrong and were (`US-0136` MAJ-1, MED-1):
+///
+/// * bash's `B` goes into `PS1` as the four **raw bytes**
+///   `\001 ESC ]133;B BEL \002`, never as `__oneterm_mark`'s ST-terminated
+///   output and never as backslash escapes. `\001`/`\002` are what bash's
+///   `\[`/`\]` expand to, so the mark carries nothing prompt expansion can
+///   touch: an `ESC \` next to `\]` merged into `\\` and printed a stray `]`
+///   (`US-0136` MAJ-1), and a leading `\[` was swallowed by a user `PS1` ending
+///   in a lone backslash (NEW-MIN-1). `printf` builds them rather than `$'…'`,
+///   which a POSIX `sh` cannot parse and this whole line must parse everywhere.
+///   zsh is unaffected — it expands no backslashes in a prompt — so its `%{…%}`
+///   group still carries `__oneterm_mark`'s bytes.
+/// * the closing `__oneterm_precmd` (the one that paints the first prompt's
+///   OSC 7 and `A`) **clears the seen flag again**. Without that it consumes
+///   the guard itself and the first prompt the user ever sees reports a `D` for
+///   a command they never ran.
+const SHELL_INTEGRATION_BOOTSTRAP: &str = r#"export COLORTERM=truecolor; __oneterm_mark() { printf '\033]133;%s\033\\' "$1"; }; __oneterm_precmd() { __oneterm_status=$?; if [ -n "${__oneterm_seen-}" ]; then __oneterm_mark "D;$__oneterm_status"; fi; __oneterm_seen=1; printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-$(hostname)}" "$PWD"; __oneterm_mark A; return $__oneterm_status; }; __oneterm_preexec() { __oneterm_mark C; }; if [ -n "${ZSH_VERSION-}" ]; then eval 'precmd_functions=(__oneterm_precmd $precmd_functions); preexec_functions=($preexec_functions __oneterm_preexec)'; PS1="$PS1%{$(__oneterm_mark B)%}"; elif [ -n "${BASH_VERSION-}" ]; then case ";${PROMPT_COMMAND:-};" in *";__oneterm_precmd;"*) ;; *) PROMPT_COMMAND="__oneterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;; esac; PS0="$(__oneterm_mark C)"; PS1="$PS1$(printf '\001\033]133;B\007\002')"; fi; __oneterm_precmd; __oneterm_seen=; stty echo 2>/dev/null"#;
+
+/// Send the shell-integration bootstrap after the shell is open.
+async fn send_shell_integration_bootstrap(
+    channel: &russh::Channel<russh::client::Msg>,
+    state: &SharedState,
+) -> oneterm_core::Result<()> {
+    let payload = format!("{SHELL_INTEGRATION_BOOTSTRAP}\r");
+    channel
+        .data(payload.as_bytes())
+        .await
+        .map_err(|e| phase_error(ConnectPhase::ShellIntegration, e))?;
+    state.add_tx_bytes(payload.len() as u64);
+    Ok(())
+}
+
+/// Pick the RSA signature hash from the server's `server-sig-algs` answer
+/// (`russh::client::Handle::best_supported_rsa_hash`).
+///
+/// `None` = extension not advertised, `Some(None)` = advertised without any
+/// `rsa-sha2-*`. Both fall back to SHA-512 — passing `None` to
+/// `PrivateKeyWithHashAlg` would sign with legacy SHA-1 `ssh-rsa`, which modern
+/// servers refuse and which is no longer considered safe.
+pub(crate) fn rsa_hash_alg(advertised: Option<Option<HashAlg>>) -> Option<HashAlg> {
+    advertised.flatten().or(Some(HashAlg::Sha512))
+}
+
+/// Load a private key from a file, decrypting with the passphrase if needed.
+pub(crate) fn load_private_key(
+    path: &std::path::Path,
+    passphrase: Option<&str>,
+) -> oneterm_core::Result<PrivateKey> {
+    load_secret_key(path, passphrase).map_err(|e| {
+        phase_error(
+            ConnectPhase::Authentication,
+            format!("failed to load key {}: {e}", path.display()),
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn phase_wait_stops_when_cancelled() {
+        let cancellation = ConnectionCancellation::default();
+        cancellation.cancel();
+
+        let phases = ConnectPhases::new(cancellation);
+        let error = phases
+            .run_with_deadline(
+                ConnectPhase::ChannelOpen,
+                async {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    Ok(())
+                },
+                Duration::from_secs(1),
+            )
+            .await
+            .expect_err("cancelled phase must fail");
+
+        assert!(matches!(error, AppError::Cancelled), "{error}");
+    }
+
+    /// PERF-22: a cancellation raised while a phase is in flight wakes the
+    /// phase promptly (no 25 ms poll loop) and reports `Cancelled`.
+    #[tokio::test]
+    async fn phase_wait_wakes_on_late_cancellation() {
+        let cancellation = ConnectionCancellation::default();
+        let phases = ConnectPhases::new(cancellation.clone());
+        let canceller = tokio::spawn({
+            let cancellation = cancellation.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                cancellation.cancel();
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let error = phases
+            .run_with_deadline(
+                ConnectPhase::PtyRequest,
+                async {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    Ok(())
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .expect_err("cancelled phase must fail");
+        canceller.await.expect("canceller task");
+
+        assert!(matches!(error, AppError::Cancelled), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "cancellation must not wait for the deadline"
+        );
+    }
+
+    #[test]
+    fn shared_runtime_is_reused_across_many_workers() {
+        let runtime = shared_runtime().expect("shared SSH runtime must initialize");
+        let expected = runtime as *const tokio::runtime::Runtime as usize;
+        let handles: Vec<_> = (0..32)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    let runtime = shared_runtime().expect("shared SSH runtime must exist");
+                    runtime.block_on(async { tokio::task::yield_now().await });
+                    runtime as *const tokio::runtime::Runtime as usize
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            assert_eq!(handle.join().expect("runtime worker must finish"), expected);
+        }
+    }
+
+    use crate::test_support::{connect_trusting_loopback, spawn_server};
+
+    fn detached_session() -> (
+        PtySession<SshSession>,
+        SshListener,
+        async_channel::Receiver<Cmd>,
+    ) {
+        let (cmd_tx, cmd_rx) = async_channel::bounded::<Cmd>(4);
+        let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4);
+        let state = SharedSessionState::new_alive();
+        let listener = OscRouter::new(
+            SshTransport::new(cmd_tx),
+            SessionEventSink::new(event_tx),
+            state.clone(),
+            ClipboardOrigin::Remote,
+        );
+        let term = new_shared_terminal(
+            GridSize {
+                cols: 80,
+                lines: 24,
+            },
+            oneterm_terminal::DEFAULT_SCROLLBACK_LINES,
+        );
+        let session = PtySession::new(
+            term,
+            state.clone(),
+            event_rx,
+            SessionKind::Ssh,
+            SSH_RESIZE_POLICY,
+            SshSession {
+                listener: listener.clone(),
+                state,
+                sftp: Mutex::new(None),
+            },
+        );
+        (session, listener, cmd_rx)
+    }
+
+    /// DEC-0008: the constant every SSH session is built with. The macro that
+    /// used to carry it made it unnameable here (`US-0084` gap 2); `US-0091`
+    /// replaced the macro with `PtySession`, so the engine's own enum is the
+    /// one both the session and this assertion name.
+    #[test]
+    fn ssh_session_grow_policy_is_bottom_anchored() {
+        let (session, _listener, _cmd_rx) = detached_session();
+        assert_eq!(SSH_RESIZE_POLICY, ResizePolicy::BottomAnchor);
+        assert_eq!(session.resize_policy(), ResizePolicy::BottomAnchor);
+    }
+
+    /// DEC-0008: the policy an SSH session hands the engine is
+    /// `oneterm_vt::ResizePolicy::BottomAnchor`, because the remote PTY reflows
+    /// and repaints on its side. Asserted by its behaviour — a row grow pulls
+    /// rows out of scrollback into the top of the viewport and the cursor
+    /// follows them down, where `KeepViewportTop` would leave the cursor where
+    /// it is and add blank rows at the bottom. The constant itself is checked
+    /// by `ssh_session_grow_policy_is_bottom_anchored`.
+    #[test]
+    fn ssh_grow_resize_pulls_scrollback_into_the_viewport_top() {
+        use oneterm_terminal::{TerminalInput, TerminalPump, TerminalRender};
+
+        let (session, listener, _cmd_rx) = detached_session();
+        let mut pump = TerminalPump::new(listener);
+        let output: String = (0..40).map(|index| format!("line {index}\r\n")).collect();
+        pump.process_chunk(session.term(), output.as_bytes());
+
+        let before = session.query_state();
+        assert_eq!(before.rows, 24);
+        session.resize(30, 80).expect("a grow must be accepted");
+        let after = session.query_state();
+
+        assert_eq!(after.rows, 30);
+        assert_eq!(
+            after.cursor_row,
+            before.cursor_row + 6,
+            "the cursor did not follow the rows pulled out of history"
+        );
+        assert_eq!(
+            after.total_lines, before.total_lines,
+            "history was not moved into the viewport, it was added to"
+        );
+    }
+
+    #[test]
+    fn dead_session_rejects_input_without_touching_the_transport() {
+        use oneterm_terminal::{TerminalError, TerminalInput};
+
+        let (session, _listener, cmd_rx) = detached_session();
+        session.owner().state.set_alive(false);
+
+        assert_eq!(session.write(b"ignored"), Err(TerminalError::Closed));
+        assert!(cmd_rx.try_recv().is_err());
+    }
+
+    /// CORR-06: a session discarded without `close()` must still tell the task
+    /// to shut down (closing flag + `Cmd::Close`).
+    #[test]
+    fn dropping_an_unclosed_session_requests_close() {
+        let (session, listener, cmd_rx) = detached_session();
+        let transport = listener.transport().clone();
+        assert!(!transport.is_closing());
+
+        drop(session);
+
+        assert!(transport.is_closing());
+        assert!(matches!(cmd_rx.try_recv(), Ok(Cmd::Close)));
+    }
+
+    /// CORR-06: drop after an explicit `close()` does not enqueue a second close.
+    #[test]
+    fn dropping_a_closed_session_is_idempotent() {
+        use oneterm_terminal::TerminalLifecycle;
+
+        let (session, _listener, cmd_rx) = detached_session();
+        session.close().unwrap();
+        assert!(matches!(cmd_rx.try_recv(), Ok(Cmd::Close)));
+
+        drop(session);
+
+        assert!(cmd_rx.try_recv().is_err());
+    }
+
+    /// SEC-02: RSA keys never fall back to SHA-1 `ssh-rsa`.
+    /// A server that only accepts keyboard-interactive: `password` is rejected
+    /// while advertising keyboard-interactive, whose single prompt must be
+    /// answered with `secret`.
+    #[derive(Clone)]
+    struct KeyboardInteractiveServer;
+
+    impl russh::server::Server for KeyboardInteractiveServer {
+        type Handler = Self;
+
+        fn new_client(&mut self, _peer_addr: Option<std::net::SocketAddr>) -> Self::Handler {
+            self.clone()
+        }
+    }
+
+    impl russh::server::Handler for KeyboardInteractiveServer {
+        type Error = russh::Error;
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Reject {
+                proceed_with_methods: Some(MethodSet::from(&[MethodKind::KeyboardInteractive][..])),
+                partial_success: false,
+            })
+        }
+
+        async fn auth_keyboard_interactive(
+            &mut self,
+            _user: &str,
+            _submethods: &str,
+            response: Option<russh::server::Response<'_>>,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            let Some(mut response) = response else {
+                return Ok(russh::server::Auth::Partial {
+                    name: "".into(),
+                    instructions: "".into(),
+                    prompts: vec![("Password: ".into(), false)].into(),
+                });
+            };
+            let answered_correctly = response.next().as_deref() == Some(b"secret".as_slice());
+            if answered_correctly {
+                Ok(russh::server::Auth::Accept)
+            } else {
+                Ok(russh::server::Auth::reject())
+            }
+        }
+    }
+
+    async fn spawn_keyboard_interactive_server()
+    -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        spawn_server(KeyboardInteractiveServer).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn password_falls_back_to_keyboard_interactive() {
+        let (address, server_task) = spawn_keyboard_interactive_server().await;
+        let (mut handle, _known_hosts) = connect_trusting_loopback(address).await;
+
+        let result = authenticate_with_password(&mut handle, "user", "secret")
+            .await
+            .expect("keyboard-interactive fallback must not error");
+        assert!(matches!(result, AuthResult::Success), "{result:?}");
+
+        drop(handle);
+        server_task.abort();
+    }
+
+    /// BUG-0038: the shell channel must carry COLORTERM/TERM_PROGRAM env
+    /// requests before the shell starts so truecolor-aware remote CLIs render
+    /// correctly.
+    #[derive(Clone)]
+    struct EnvRecordingServer {
+        received: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    impl russh::server::Server for EnvRecordingServer {
+        type Handler = Self;
+
+        fn new_client(&mut self, _peer_addr: Option<std::net::SocketAddr>) -> Self::Handler {
+            self.clone()
+        }
+    }
+
+    impl russh::server::Handler for EnvRecordingServer {
+        type Error = russh::Error;
+
+        async fn channel_open_session(
+            &mut self,
+            _channel: russh::Channel<russh::server::Msg>,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
+        }
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn env_request(
+            &mut self,
+            _channel: russh::ChannelId,
+            variable_name: &str,
+            variable_value: &str,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            self.received
+                .lock()
+                .expect("env recorder")
+                .push((variable_name.to_owned(), variable_value.to_owned()));
+            Ok(())
+        }
+    }
+
+    async fn spawn_env_recording_server(
+        received: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        spawn_server(EnvRecordingServer { received }).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shell_channel_pushes_colorterm_and_term_program_env_requests() {
+        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (address, server_task) = spawn_env_recording_server(received.clone()).await;
+        let (mut handle, _known_hosts) = connect_trusting_loopback(address).await;
+
+        authenticate_with_password(&mut handle, "user", "secret")
+            .await
+            .expect("password auth must succeed");
+
+        let channel = handle
+            .channel_open_session()
+            .await
+            .expect("session channel must open");
+        request_remote_shell_env(&channel)
+            .await
+            .expect("env requests must send cleanly");
+
+        // want_reply = false means no reply ever comes; poll until the server
+        // task has processed both requests.
+        for _ in 0..100 {
+            if received.lock().expect("env recorder").len() >= REMOTE_SHELL_ENV.len() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let mut got = received.lock().expect("env recorder").clone();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("COLORTERM".to_owned(), "truecolor".to_owned()),
+                ("TERM_PROGRAM".to_owned(), "OneTerm".to_owned()),
+                (
+                    "TERM_PROGRAM_VERSION".to_owned(),
+                    env!("CARGO_PKG_VERSION").to_owned()
+                ),
+            ]
+        );
+
+        drop(channel);
+        drop(handle);
+        server_task.abort();
+    }
+
+    /// BUG-0038: servers whose sshd ignores env requests still get truecolor
+    /// through the bootstrap export, which must come first.
+    #[test]
+    fn shell_integration_bootstrap_exports_colorterm_first() {
+        assert!(
+            SHELL_INTEGRATION_BOOTSTRAP.starts_with("export COLORTERM=truecolor;"),
+            "{SHELL_INTEGRATION_BOOTSTRAP}"
+        );
+    }
+
+    /// `US-0136`: the bootstrap installs the whole OSC 133 set, and `D` carries
+    /// the exit code in the `133;D;<code>` form the engine parses.
+    #[test]
+    fn shell_integration_bootstrap_installs_the_full_mark_set() {
+        let s = SHELL_INTEGRATION_BOOTSTRAP;
+        // One helper, one ST (`ESC \`) — a doubled backslash would print.
+        assert!(
+            s.contains(r"__oneterm_mark() { printf '\033]133;%s\033\\' "),
+            "{s}"
+        );
+        assert!(s.contains(r#"__oneterm_mark "D;$__oneterm_status""#), "{s}");
+        assert!(s.contains("__oneterm_mark A;"), "{s}");
+        assert!(
+            s.contains("__oneterm_preexec() { __oneterm_mark C; }"),
+            "{s}"
+        );
+        assert!(s.contains("$(__oneterm_mark B)"), "{s}");
+        // `$?` survives the hook.
+        assert!(s.contains(r#"if [ -n "${__oneterm_seen-}" ]"#), "{s}");
+        assert!(s.contains("return $__oneterm_status;"), "{s}");
+        // `US-0136` MED-1: the closing call paints the first prompt's OSC 7 and
+        // `A` — and must then put the guard back. Without the reset it consumes
+        // the guard itself and the first prompt the user sees reports a `D` for
+        // a command they never ran.
+        assert!(
+            s.ends_with("__oneterm_precmd; __oneterm_seen=; stty echo 2>/dev/null"),
+            "{s}"
+        );
+        // One typed line: a newline would run half of it as its own command.
+        assert!(!s.contains('\n'), "{s}");
+    }
+
+    /// The remote shell decides the mechanism, and neither branch replaces what
+    /// the user already had.
+    #[test]
+    fn shell_integration_bootstrap_branches_on_the_remote_shell() {
+        let s = SHELL_INTEGRATION_BOOTSTRAP;
+        assert!(s.contains(r#"if [ -n "${ZSH_VERSION-}" ]"#), "{s}");
+        assert!(s.contains(r#"elif [ -n "${BASH_VERSION-}" ]"#), "{s}");
+        // zsh: precmd/preexec, appended to the user's arrays. The assignments
+        // live in an `eval` because a POSIX `sh` parses the whole line first and
+        // `name=(...)` is a syntax error there.
+        assert!(
+            s.contains("eval 'precmd_functions=(__oneterm_precmd $precmd_functions); preexec_functions=($preexec_functions __oneterm_preexec)'"),
+            "{s}"
+        );
+        assert!(s.contains(r#"PS1="$PS1%{$(__oneterm_mark B)%}""#), "{s}");
+        // bash: PROMPT_COMMAND kept, PS0 for C, PS1 extended with the `\[…\]`
+        // zero-width wrapper.
+        assert!(
+            s.contains(r#"PROMPT_COMMAND="__oneterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}""#),
+            "{s}"
+        );
+        assert!(s.contains(r#"PS0="$(__oneterm_mark C)""#), "{s}");
+        // `US-0136` MAJ-1 and NEW-MIN-1: bash's `B` goes into `PS1` as four raw
+        // bytes — `\001 ESC ]133;B BEL \002` — and no backslash, so neither end
+        // of the concatenation has anything prompt expansion can act on. `\001`
+        // and `\002` are what bash's `\[` and `\]` expand to. `printf` builds
+        // them because a POSIX `sh` must still *parse* this line and has no
+        // `$'…'`. Same four bytes as `oneterm_core`'s local `__ot_b`.
+        assert!(
+            s.contains(r#"PS1="$PS1$(printf '\001\033]133;B\007\002')""#),
+            "{s}"
+        );
+        assert!(!s.contains(r"\[$(__oneterm_mark B)\]"), "{s}");
+        assert!(!s.contains(r"'\[\e]133;B\a\]'"), "{s}");
+        // zsh is unaffected — it expands no backslashes in a prompt — so its
+        // group still carries the bytes.
+        assert!(s.contains(r#"PS1="$PS1%{$(__oneterm_mark B)%}""#), "{s}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wrong_password_reports_remaining_methods() {
+        let (address, server_task) = spawn_keyboard_interactive_server().await;
+        let (mut handle, _known_hosts) = connect_trusting_loopback(address).await;
+
+        let result = authenticate_with_password(&mut handle, "user", "wrong")
+            .await
+            .expect("a rejected password is a result, not an error");
+        let AuthResult::Failure {
+            remaining_methods, ..
+        } = result
+        else {
+            panic!("wrong password must be rejected");
+        };
+        assert!(remaining_methods.contains(&MethodKind::KeyboardInteractive));
+
+        drop(handle);
+        server_task.abort();
+    }
+
+    #[test]
+    fn authentication_failure_message_lists_remaining_methods() {
+        let none = MethodSet::empty();
+        assert_eq!(
+            authentication_failure_message(&none, false),
+            "rejected by the server"
+        );
+
+        let methods =
+            MethodSet::from(&[MethodKind::PublicKey, MethodKind::KeyboardInteractive][..]);
+        assert_eq!(
+            authentication_failure_message(&methods, false),
+            "rejected by the server; the server accepts: publickey, keyboard-interactive"
+        );
+        assert_eq!(
+            authentication_failure_message(&methods, true),
+            "rejected by the server (the server accepted this method but requires another one); the server accepts: publickey, keyboard-interactive"
+        );
+    }
+
+    #[test]
+    fn rsa_hash_prefers_server_choice_and_never_sha1() {
+        assert_eq!(
+            rsa_hash_alg(Some(Some(HashAlg::Sha256))),
+            Some(HashAlg::Sha256)
+        );
+        assert_eq!(rsa_hash_alg(None), Some(HashAlg::Sha512));
+        assert_eq!(rsa_hash_alg(Some(None)), Some(HashAlg::Sha512));
+    }
+
+    #[tokio::test]
+    async fn phase_wait_has_a_deadline() {
+        let phases = ConnectPhases::new(ConnectionCancellation::default());
+        let error = phases
+            .run_with_deadline(
+                ConnectPhase::ShellRequest,
+                async {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    Ok(())
+                },
+                Duration::from_millis(1),
+            )
+            .await
+            .expect_err("expired phase must fail");
+
+        assert!(
+            matches!(
+                error,
+                AppError::Connect {
+                    phase: ConnectPhase::ShellRequest,
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "SSH shell request failed: timed out after 0 s"
+        );
+        assert_eq!(phases.current(), ConnectPhase::ShellRequest);
+    }
+}
+
+// Key-file parsing lives in a sibling `keyfile_tests.rs` (see code-style.md).
+#[cfg(test)]
+#[path = "keyfile_tests.rs"]
+mod keyfile_tests;

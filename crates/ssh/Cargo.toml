@@ -1,36 +1,25 @@
 [package]
 name = "oneterm-ssh"
-description = "SSH + SFTP implementation for OneTerm (russh)."
+description = "OneTerm's SSH and SFTP: russh on a tokio runtime of its own, behind a blocking API (specs/oneterm, P2)"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
-repository.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
-
-[features]
-terminal-diagnostics = []
-# Function-level profiling sites (IN-0046). Off by default: without it every
-# `#[cfg_attr(feature = "hotpath-profiling", hotpath::measure)]` vanishes and
-# `hotpath` is not in the graph. Only `oneterm-app` turns measuring on.
-hotpath-profiling = ["dep:hotpath", "oneterm-terminal/hotpath-profiling"]
 
 [lints]
 workspace = true
 
+[features]
+# The test server and client (`testing`), for this crate's tests and the app's.
+testing = []
+
 [dependencies]
-oneterm-core.workspace = true
-oneterm-terminal.workspace = true
-async-channel.workspace = true
-russh.workspace = true
-tokio.workspace = true
-log.workspace = true
-thiserror.workspace = true
-russh-sftp.workspace = true
-tokio-util.workspace = true
-hotpath = { workspace = true, optional = true }
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa"] }
+russh-sftp = "3"
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync", "io-util"] }
+# A passphrase wiped once used (Quadra's specs/01, R15).
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
-oneterm-terminal = { workspace = true, features = ["test-support"] }
-rand.workspace = true
-futures.workspace = true
+oneterm-ssh = { path = ".", features = ["testing"] }

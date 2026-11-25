@@ -1,0 +1,40 @@
+# Build output
+target/
+target*/
+# Project-local cargo registry and temp files set by .claude/hooks/cargo-env.sh (US-0204)
+/.cargo-home/
+/.tmp/
+# Local research clone of GPUI Kit (docs/agents/dependencies.md §5)
+reference/
+# Release staging output of scripts/build-release.*
+dist/
+# Local runtime files a debug build writes next to the repo (release builds use ~/.OneTerm/)
+docks.json
+terminal.json
+# Raw upstream downloads for scripts/completion-catalog.py (generated JSON is committed)
+scripts/.cache/
+scripts/__pycache__/
+
+# Harness durable layer — each project instance generates its own data.
+harness.db*
+
+# Local tooling / scratch that must never be committed (HYG-20: no one-off entries — use
+# generic patterns).
+.pi/
+.claude/*
+!.claude/agents/
+!.claude/hooks/
+!.claude/settings.json
+.cargo/
+.exe/
+/*.exe
+/[Nn][Uu][Ll]
+
+# Harness durable layer — each project instance generates its own data.
+harness.db
+harness.db-wal
+harness.db-shm
+
+# `cargo run -p oneterm-tools --bin pty-throughput` writes its capture into the
+# current directory, which is usually the repository root.
+/firecap.bin

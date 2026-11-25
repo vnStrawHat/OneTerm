@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "name": "git",
+  "options": ["-C", "--version", "--help"],
+  "subcommands": [
+    { "name": "commit",   "options": [
+      { "flag": "-m", "description": "message" },
+      { "flag": "-a", "description": "all" },
+      "--amend", "--no-verify"
+    ] },
+    { "name": "checkout", "options": [
+      { "flag": "-b", "description": "new-branch" },
+      { "flag": "-B", "description": "new-branch" },
+      { "flag": "-f", "description": "force" },
+      { "flag": "-q", "description": "quiet" },
+      { "flag": "-d", "description": "detach" },
+      { "flag": "-t", "description": "track" },
+      { "flag": "-m", "description": "merge" },
+      "--track", "--force", "--quiet", "--detach", "--merge"
+    ] },
+    { "name": "clone",    "options": ["--depth", "--branch", "--recursive"] },
+    { "name": "config",   "options": ["--global", "--local", "--list"] },
+    { "name": "status",   "options": ["-s", "-b"] },
+    {
+      "name": "remote",
+      "options": ["-v"],
+      "subcommands": [
+        { "name": "add",    "options": ["-t", "-f", "--tags"] },
+        { "name": "remove", "options": [] }
+      ]
+    }
+  ]
+}

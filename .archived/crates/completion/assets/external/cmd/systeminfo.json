@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "generated": "2026-08-03",
+  "name": "systeminfo",
+  "options": [
+    "/FO",
+    "/LI",
+    "/NH",
+    "/P",
+    "/S",
+    "/U",
+    "/UL"
+  ]
+}

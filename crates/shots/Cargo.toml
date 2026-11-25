@@ -1,0 +1,28 @@
+[package]
+name = "oneterm-shots"
+description = "OneTerm's screens drawn without a window, to compare with its design (specs/oneterm)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "oneterm-shots"
+path = "src/main.rs"
+
+[dependencies]
+oneterm-app.workspace = true
+quadra.workspace = true
+quadra-app.workspace = true
+quadra-async.workspace = true
+quadra-design.workspace = true
+quadra-native-win.workspace = true
+quadra-platform.workspace = true
+quadra-prim.workspace = true
+quadra-term.workspace = true
+# The test servers on 127.0.0.1 that the Connect dialogs' scenes connect to.
+oneterm-ssh = { workspace = true, features = ["testing"] }

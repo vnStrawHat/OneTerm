@@ -1,262 +1,184 @@
-//! Catalog data model + loading.
-//!
-//! A catalog file is a recursive **command node** (`{ name, options,
-//! subcommands? }`); see docs/auto-completion/02 §5 and 10-subcommands.md §2.
-//! `build.rs` walks `assets/**/*.json` and generates `catalog_index.rs`, which
-//! defines `CATALOG_FILES` as `&[(name, source, category, json)]` where each
-//! `json` is an `include_str!` of the file (docs/auto-completion/07 §5); nodes
-//! are parsed lazily on first reference and cached (docs/auto-completion/02 §5.3).
+//! The catalogs: commands, their options and subcommands, read from JSON (specs/completion, "Catalogs").
 
-include!(concat!(env!("OUT_DIR"), "/catalog_index.rs"));
+use quadra_data::{Value, parse_json};
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
+use crate::Family;
 
-use crate::family::{CatalogCategory, ShellFamily};
-
-#[path = "catalog_schema.rs"]
-mod schema;
-#[cfg(test)]
-#[path = "catalog_tests.rs"]
-mod tests;
-
-use schema::parse_node;
-
-/// Where a catalog entry came from — drives manual-beats-external precedence
-/// (docs 02 §6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Source {
+/// Where a suggestion comes from; for a catalog file, `Manual` or `External`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Source {
+    /// Generated from the tools' help.
     External,
+    /// Written by hand: ranked above `External`.
     Manual,
+    /// The lines run this session: ranked above both.
+    History,
 }
 
-impl Source {
-    fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "external" => Some(Source::External),
-            "manual" => Some(Source::Manual),
-            _ => None,
-        }
-    }
+/// The shells a catalog file is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Group {
+    Windows,
+    Unix,
+    Common,
 }
 
-/// A single option flag, including its trigger prefix (`/A`, `--all`, `-a`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// An option of a command, with its hint (`-b` with `new-branch`).
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Flag {
     pub text: String,
-    /// Optional short hint shown after the flag (e.g. an argument placeholder
-    /// like `new-branch`, or a one-word description). Rendered italic in the UI.
     pub description: Option<String>,
 }
 
-/// A recursive command node: a name, its options, and optional subcommands.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CommandNode {
+/// A command or a subcommand.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Node {
     pub name: String,
     pub options: Vec<Flag>,
-    pub subcommands: Vec<CommandNode>,
+    pub subcommands: Vec<Node>,
 }
 
-impl CommandNode {
-    /// Find a direct child subcommand by name (family-aware case rules).
-    pub(crate) fn child(&self, name: &str, family: ShellFamily) -> Option<&CommandNode> {
-        self.subcommands
-            .iter()
-            .find(|c| names_eq(&c.name, name, family))
+impl Node {
+    /// The subcommand of this name, by the family's case rule.
+    pub(crate) fn child(&self, name: &str, family: Family) -> Option<&Node> {
+        self.subcommands.iter().find(|node| family.same(&node.name, name))
     }
 }
 
-/// Family-aware name equality (case-insensitive for cmd/powershell).
-pub(crate) fn names_eq(a: &str, b: &str, family: ShellFamily) -> bool {
-    if family.case_insensitive() {
-        a.eq_ignore_ascii_case(b)
-    } else {
-        a == b
-    }
+/// A command of a catalog, with where it is from.
+pub(crate) struct Entry {
+    pub source: Source,
+    pub group: Group,
+    pub node: Node,
 }
 
-// ── The catalog store ─────────────────────────────────────────────────────
-
-struct Entry {
-    name: &'static str,
-    source: Source,
-    category: CatalogCategory,
-    json: &'static str,
+/// The commands the engine knows.
+#[derive(Default)]
+pub struct Catalog {
+    pub(crate) entries: Vec<Entry>,
 }
 
-/// The bundled command catalog: an index over the embedded files plus a lazy
-/// parse cache. Lookups honor the shell's category search path and the
-/// manual-beats-external precedence rule (docs 02 §6).
-pub(crate) struct Catalog {
-    entries: Vec<Entry>,
-    cache: RefCell<HashMap<usize, Option<Rc<CommandNode>>>>,
+/// The newest catalog schema this build reads.
+const SCHEMA: u32 = 1;
+
+macro_rules! files {
+    ($source:literal, $group:literal: $($name:literal)*) => {
+        [$(include_str!(concat!("../assets/", $source, "/", $group, "/", $name, ".json"))),*]
+    };
+}
+
+/// The bundled files by source and group; `tests/catalog.rs` holds this list to `assets/`.
+fn bundled_files() -> [(Source, Group, &'static [&'static str]); 5] {
+    const EXTERNAL_WINDOWS: &[&str] = &files!("external", "windows":
+        "assoc" "attrib" "cd" "chkdsk" "copy" "date" "del" "dir" "echo" "erase" "exit" "fc" "find"
+        "findstr" "ftype" "ipconfig" "mklink" "more" "move" "netstat" "ping" "rd" "rmdir" "robocopy"
+        "setx" "shutdown" "sort" "start" "systeminfo" "taskkill" "tasklist" "time" "timeout" "tracert"
+        "tree" "type" "where" "whoami" "xcopy");
+    const EXTERNAL_UNIX: &[&str] = &files!("external", "unix":
+        "basename" "cat" "chmod" "chown" "cp" "cut" "date" "df" "dirname" "du" "echo" "env" "false"
+        "grep" "head" "id" "ln" "ls" "mkdir" "mv" "nl" "printf" "pwd" "readlink" "realpath" "rm"
+        "rmdir" "seq" "sleep" "sort" "split" "stat" "tac" "tail" "tee" "touch" "tr" "true" "uname"
+        "uniq" "wc" "who" "whoami" "yes");
+    const MANUAL_WINDOWS: &[&str] = &files!("manual", "windows": "ping");
+    const MANUAL_UNIX: &[&str] = &files!("manual", "unix": "ifconfig");
+    const MANUAL_COMMON: &[&str] = &files!("manual", "common": "cargo" "git");
+    [
+        (Source::External, Group::Windows, EXTERNAL_WINDOWS),
+        (Source::External, Group::Unix, EXTERNAL_UNIX),
+        (Source::Manual, Group::Windows, MANUAL_WINDOWS),
+        (Source::Manual, Group::Unix, MANUAL_UNIX),
+        (Source::Manual, Group::Common, MANUAL_COMMON),
+    ]
 }
 
 impl Catalog {
-    /// Build the catalog from the compile-time embedded index.
-    pub(crate) fn from_embedded() -> Self {
-        Self::from_raw(CATALOG_FILES)
+    /// A catalog with no commands.
+    pub fn new() -> Catalog {
+        Catalog::default()
     }
 
-    /// Build from an explicit `(name, source, category, json)` slice (tests).
-    pub(crate) fn from_raw(
-        raw: &[(&'static str, &'static str, &'static str, &'static str)],
-    ) -> Self {
-        let mut entries = Vec::new();
-        for (name, source, category, json) in raw {
-            let (Some(source), Some(category)) = (
-                Source::from_str(source),
-                CatalogCategory::from_str(category),
-            ) else {
-                log::warn!(
-                    "completion: skipping catalog entry {name} with unknown source/category"
-                );
-                continue;
-            };
-            entries.push(Entry {
-                name,
-                source,
-                category,
-                json,
-            });
-        }
-        Self {
-            entries,
-            cache: RefCell::new(HashMap::new()),
-        }
-    }
-
-    /// Parse (and cache) the node for entry `idx`. A malformed file is logged and
-    /// yields `None` without affecting sibling entries (fault isolation, docs 02 §3).
-    fn node_at(&self, idx: usize) -> Option<Rc<CommandNode>> {
-        if let Some(cached) = self.cache.borrow().get(&idx) {
-            return cached.clone();
-        }
-        let entry = &self.entries[idx];
-        let parsed = match parse_node(entry.json) {
-            Ok(node) => Some(Rc::new(node)),
-            Err(e) => {
-                log::warn!(
-                    "completion: skipping malformed catalog file {}: {e}",
-                    entry.name
-                );
-                None
-            }
-        };
-        self.cache.borrow_mut().insert(idx, parsed.clone());
-        parsed
-    }
-
-    /// The index of the highest-precedence entry whose name matches `name`
-    /// within the searched `categories`. Precedence: manual beats external
-    /// (docs 02 §6); within a source the earlier category in the search order wins.
-    fn best_entry(
-        &self,
-        name: &str,
-        categories: &[CatalogCategory],
-        family: ShellFamily,
-    ) -> Option<usize> {
-        let mut best: Option<(usize, usize, Source)> = None; // (idx, category_rank, source)
-        for (idx, entry) in self.entries.iter().enumerate() {
-            if !names_eq(entry.name, name, family) {
-                continue;
-            }
-            let Some(rank) = categories.iter().position(|c| *c == entry.category) else {
-                continue;
-            };
-            let better = match best {
-                None => true,
-                Some((_, best_rank, best_source)) => {
-                    // manual always beats external; else earlier category wins.
-                    match (entry.source, best_source) {
-                        (Source::Manual, Source::External) => true,
-                        (Source::External, Source::Manual) => false,
-                        _ => rank < best_rank,
-                    }
-                }
-            };
-            if better {
-                best = Some((idx, rank, entry.source));
+    /// The files bundled with the crate.
+    pub fn bundled() -> Catalog {
+        let mut catalog = Catalog::new();
+        for (source, group, files) in bundled_files() {
+            for json in files {
+                // A bundled file that does not read is a bug the tests catch: it is left out.
+                let _ = catalog.add(json, source, group);
             }
         }
-        best.map(|(idx, _, _)| idx)
+        catalog
     }
 
-    /// Look up a top-level command node by name, honoring the category search
-    /// path + precedence. Returns `None` for unknown commands.
+    /// Adds a command from its JSON; a malformed file or a newer schema is refused.
+    pub fn add(&mut self, json: &str, source: Source, group: Group) -> Result<(), String> {
+        let value = parse_json(json).map_err(|error| error.to_string())?;
+        if let Some(Value::Number(schema)) = value.get("schema") {
+            match schema.parse::<u32>() {
+                Ok(version) if version <= SCHEMA => {}
+                _ => return Err(format!("catalog schema {schema} is newer than {SCHEMA}")),
+            }
+        }
+        self.entries.push(Entry { source, group, node: node(&value)? });
+        Ok(())
+    }
+
+    /// How many commands the catalog has.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the catalog has no commands.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The command of this name in `groups` from a source `asks` lets: manual before external,
+    /// then the earlier group.
     pub(crate) fn lookup(
         &self,
         name: &str,
-        categories: &[CatalogCategory],
-        family: ShellFamily,
-    ) -> Option<Rc<CommandNode>> {
-        let idx = self.best_entry(name, categories, family)?;
-        self.node_at(idx)
+        groups: &[Group],
+        family: Family,
+        asks: impl Fn(Source) -> bool,
+    ) -> Option<&Entry> {
+        let rank = |entry: &Entry| groups.iter().position(|group| *group == entry.group);
+        self.entries
+            .iter()
+            .filter(|entry| asks(entry.source) && family.same(&entry.node.name, name))
+            .filter_map(|entry| Some((entry, rank(entry)?)))
+            .min_by_key(|(entry, rank)| (std::cmp::Reverse(entry.source), *rank))
+            .map(|(entry, _)| entry)
     }
+}
 
-    /// All distinct top-level command names available in the searched
-    /// `categories`, deduped by family case-rules keeping the highest-precedence
-    /// entry (same rule as [`Self::best_entry`]), in first-seen order. One pass
-    /// over the index (called per keystroke — PERF-24); never parses JSON.
-    pub(crate) fn command_names(
-        &self,
-        categories: &[CatalogCategory],
-        family: ShellFamily,
-    ) -> Vec<&'static str> {
-        // normalized name → (position in `order`, category rank, source)
-        let mut best: HashMap<String, (usize, usize, Source)> = HashMap::new();
-        let mut order: Vec<&'static str> = Vec::new();
-        for entry in &self.entries {
-            let Some(rank) = categories.iter().position(|c| *c == entry.category) else {
-                continue;
+fn node(value: &Value) -> Result<Node, String> {
+    let Some(Value::Text(name)) = value.get("name") else {
+        return Err("a command has no name".to_string());
+    };
+    let options = match value.get("options") {
+        Some(Value::List(items)) => items.iter().map(flag).collect::<Result<_, _>>()?,
+        _ => Vec::new(),
+    };
+    let subcommands = match value.get("subcommands") {
+        Some(Value::List(items)) => items.iter().map(node).collect::<Result<_, _>>()?,
+        _ => Vec::new(),
+    };
+    Ok(Node { name: name.clone(), options, subcommands })
+}
+
+fn flag(value: &Value) -> Result<Flag, String> {
+    match value {
+        Value::Text(text) => Ok(Flag { text: text.clone(), description: None }),
+        Value::Map(_) => {
+            let Some(Value::Text(text)) = value.get("flag") else {
+                return Err("an option has no flag".to_string());
             };
-            let key = if family.case_insensitive() {
-                entry.name.to_ascii_lowercase()
-            } else {
-                entry.name.to_string()
+            let description = match value.get("description") {
+                Some(Value::Text(hint)) if !hint.trim().is_empty() => Some(hint.clone()),
+                _ => None,
             };
-            match best.get_mut(&key) {
-                None => {
-                    best.insert(key, (order.len(), rank, entry.source));
-                    order.push(entry.name);
-                }
-                Some((position, best_rank, best_source)) => {
-                    let better = match (entry.source, *best_source) {
-                        (Source::Manual, Source::External) => true,
-                        (Source::External, Source::Manual) => false,
-                        _ => rank < *best_rank,
-                    };
-                    if better {
-                        *best_rank = rank;
-                        *best_source = entry.source;
-                        order[*position] = entry.name;
-                    }
-                }
-            }
+            Ok(Flag { text: text.clone(), description })
         }
-        order
-    }
-
-    /// The source of the highest-precedence entry for `name` within
-    /// `categories`, if any.
-    fn source_of(
-        &self,
-        name: &str,
-        categories: &[CatalogCategory],
-        family: ShellFamily,
-    ) -> Option<Source> {
-        self.best_entry(name, categories, family)
-            .map(|idx| self.entries[idx].source)
-    }
-
-    /// Whether the highest-precedence entry for `name` came from `manual`.
-    pub(crate) fn is_manual(
-        &self,
-        name: &str,
-        categories: &[CatalogCategory],
-        family: ShellFamily,
-    ) -> bool {
-        self.source_of(name, categories, family) == Some(Source::Manual)
+        _ => Err("an option is neither a string nor an object".to_string()),
     }
 }

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "vault_id": "3f9c0a4e8b1d4c27a6e2f0b9c1d2e3f4",
+  "kdf": {
+    "algorithm": "argon2id",
+    "version": 19,
+    "memory_kib": 19456,
+    "iterations": 2,
+    "parallelism": 1,
+    "salt": "ZGVmZ2hpamtsbW5vcHFycw=="
+  },
+  "wrapped_key": "otv1:P5wKTosdTCelpaWlpaWlpaWlpaUzyTFHXneCTy6+xl6CSv21I+nvOpS2v5BasAtrO8y3aUzVVxIC4l0LnfumEJMkr5c="
+}

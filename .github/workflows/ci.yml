@@ -1,5 +1,7 @@
-# OneTerm continuous integration checks.
-# Keep architecture policy verification independent from the platform build matrix.
+# OneTerm's checks: on a push to main and on a pull request that touches what is built.
+# Two jobs: on Windows, the one system OneTerm runs on, the gate (scripts/check.sh); and
+# the dependency policy of deny.toml by cargo-deny: licences, bans, advisories, sources.
+# Steps run in bash; the repository has no PowerShell.
 name: CI
 
 on:
@@ -8,406 +10,70 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
-      - ".rustfmt.toml"
-      - "README.md"
-      - "AGENTS.md"
-      - "LICENSE"
-      - "NOTICE"
-      - "THIRD-PARTY-NOTICES.md"
-      - "deny.toml"
       - "rust-toolchain.toml"
-      - ".gitattributes"
-      - "docs/**"
-      - "scripts/**"
+      - "rustfmt.toml"
+      - "deny.toml"
       - "crates/**"
+      - "scripts/**"
       - ".github/**"
   pull_request:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
-      - ".rustfmt.toml"
-      - "README.md"
-      - "AGENTS.md"
-      - "LICENSE"
-      - "NOTICE"
-      - "THIRD-PARTY-NOTICES.md"
-      - "deny.toml"
       - "rust-toolchain.toml"
-      - ".gitattributes"
-      - "docs/**"
-      - "scripts/**"
+      - "rustfmt.toml"
+      - "deny.toml"
       - "crates/**"
+      - "scripts/**"
       - ".github/**"
 
 permissions:
   contents: read
 
-# One run per ref: a newer push to the same branch/PR cancels the in-progress run
-# (BUILD-28). Release builds have their own group in release.yml.
+# One run per ref: a newer push to the same branch or pull request cancels the run in
+# progress. Releases have a group of their own (release.yml).
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  dependency-graph:
-    name: Verify dependency graph
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.11"
-      - name: Verify workspace policy and crate versions
-        run: python scripts/verify-dependency-graph.py
-      - name: Validate completion catalogs
-        run: python scripts/completion-catalog.py validate
-      - name: Verify secondary text contrast in the built-in themes
-        # `US-0111`: `muted.foreground`, `tab.foreground` and
-        # `table.head.foreground` must clear WCAG AA (4.5:1) on every surface
-        # they are drawn on, in every variant of every built-in theme.
-        run: python scripts/check-theme-contrast.py
-      - name: Verify architecture documentation paths
-        run: python scripts/check-doc-paths.py
-      - name: Verify THIRD-PARTY-NOTICES.md is current
-        # Offline: cargo metadata against Cargo.lock (no build). Also refuses a
-        # Cargo.lock that needs updating (--locked).
-        run: python scripts/third-party-notices.py --check
-      - name: Test contributor-facing text checker
-        run: python -m unittest scripts/test_check_english.py
-      - name: Test the ignored-test census
-        run: python -m unittest scripts/test_check_ignored_tests.py
-      - name: Verify contributor-facing text language
-        run: python scripts/check-english.py
-
   cargo-deny:
-    name: Licenses, bans, advisories (cargo-deny)
+    name: Licenses, bans, advisories, sources (cargo-deny)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: cargo deny check
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          command: check licenses bans advisories
+          command: check licenses bans advisories sources
 
-  workspace-quality:
-    name: Full workspace quality gate
-    runs-on: ubuntu-latest
+  quality:
+    name: The gate (format, lints, tests)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Set up Rust
-        uses: ./.github/actions/setup-rust
+
+      - name: Read the pinned toolchain
+        id: toolchain
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: rustfmt, clippy
-      - name: Install Linux system dependencies (GPUI)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libxkbcommon-x11-dev libxkbcommon-dev \
-            libx11-dev libxext-dev libxft-dev libxrandr-dev libxi-dev libxtst-dev \
-            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libwayland-dev libdbus-1-dev \
-            libgbm-dev libegl-dev \
-            libfontconfig1 libfontconfig-dev libfreetype6-dev
-      - name: Verify formatting
-        run: cargo fmt --all -- --check
-      - name: Lint workspace
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      # No separate `cargo build --workspace`: clippy --all-targets already
-      # type-checks every target and `cargo test` links them (BUILD-28).
-      #
-      # The `terminal-diagnostics` lint runs in the Windows job and the two
-      # `oneterm-vt` feature suites in `vt-package`, each exactly once: none of
-      # the three has a platform-conditional site, so a second copy here bought
-      # nothing (`US-0109`).
-      - name: Test workspace
-        run: cargo test --workspace
-      # The `#[ignore]`d elevation tests (`IN-0043` M1/M4). They flip a
-      # process-global switch so they cannot share a test process, which is why
-      # they are ignored -- and an ignored test runs in no gate unless something
-      # asks for it. These are the only automated proof of the M1 restore gate
-      # and three M4 guards, so the gate asks. Linux only: all five drive pure
-      # logic and gpui's `TestAppContext` with no `cfg(windows)` site in them.
-      #
-      # Per crate, not per test name: a new elevation test in one of these three
-      # is picked up for free, and the census step catches one that lands
-      # anywhere else.
-      - name: Test elevation guards (ignored tests, single-threaded)
-        run: |
-          cargo test -p oneterm-workspace --lib -- --ignored --test-threads=1
-          cargo test -p oneterm-session-ui --lib -- --ignored --test-threads=1
-          cargo test -p oneterm-settings-ui --lib -- --ignored --test-threads=1
-      # The census is the union across platforms: an entry `cfg`-gated to one
-      # OS is not collected on the other, so this asks that every ignored test
-      # collected HERE is recorded, and reports the rest as informational.
-      - name: Account for every ignored test
-        run: python scripts/check-ignored-tests.py
 
-  vt-package:
-    # `oneterm-vt` is not published (owner ruling 2026-09-15), but other projects
-    # depend on it by git, so what it packages, what it documents and what it
-    # exposes are still contracts with people outside this repository. This job
-    # is where they are gated.
-    name: Packaged crate (oneterm-vt)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Set up Rust
-        uses: ./.github/actions/setup-rust
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.11"
-      # The default feature set is `pty` (`US-0104`), so these two builds are
-      # different configurations, and `--examples` proves the example in the
-      # README still builds.
-      - name: Build the feature matrix
-        run: |
-          cargo build -p oneterm-vt --no-default-features --examples
-          # Building it is not running it: `tests/engine_without_pty.rs` is
-          # gated `#[cfg(not(feature = "pty"))]`, so this is the only step
-          # that executes the transport-free engine.
-          cargo test -p oneterm-vt --no-default-features
-          cargo build -p oneterm-vt --all-features --examples
-      # The two feature configurations that have their own test run rather than
-      # just a build. Both live here, not in a platform quality job: the code
-      # each one switches on is platform-free, so running them per platform
-      # duplicated work without adding coverage (`US-0109`).
-      #
-      # The VT engine's whole-history integrity walk (IN-0029 R-28). It is
-      # bounded to the rows an operation touched by default, because at a
-      # 100 000-row scrollback the full walk costs milliseconds per `feed`; CI
-      # is where the unbounded invariants are gated.
-      - name: Test the VT engine with the full integrity walk
-        run: cargo test -p oneterm-vt --features vt-paranoid
-      # `regex` gates a whole matcher, so the suite runs under it too: the
-      # literal half must answer identically with the feature on.
-      - name: Test the VT engine with regex search
-        run: cargo test -p oneterm-vt --features regex
-      # The README's six-dependency claim is a claim about
-      # `--no-default-features` specifically now that a default feature adds
-      # dependencies. This is what keeps it from being prose.
-      - name: The transport-free build is six leaf dependencies
-        run: |
-          set -euo pipefail
-          leaves="$(cargo tree -p oneterm-vt -e normal --no-default-features --prefix none |
-            awk 'NR > 1 {print $1}' | sort -u | paste -sd' ' -)"
-          expected='bitflags log memchr rustc-hash unicode-segmentation unicode-width'
-          if [ "$leaves" != "$expected" ]; then
-            echo "::error::oneterm-vt --no-default-features must be exactly six leaf dependencies, got: $leaves"
-            exit 1
-          fi
-      - name: Run the headless example
-        run: cargo run -p oneterm-vt --example headless
-      # `#![warn(missing_docs)]` plus denied rustdoc warnings: an undocumented
-      # public item or a broken intra-doc link fails here rather than on docs.rs.
-      # Both feature states: an intra-doc link to a cfg-gated item resolves under
-      # `--all-features` and is broken in a default build, which is the build
-      # most embedders get (`US-0101` verification note 4). `--all-features` runs
-      # **last** because the next step reads `target/doc` with `--no-doc` and the
-      # committed surface is the all-features one; swapping the two silently
-      # drops every gated item from the generated surface.
-      - name: Document with warnings denied
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: |
-          cargo doc -p oneterm-vt --no-deps
-          cargo doc -p oneterm-vt --no-deps --all-features
-      # This job runs on Linux, so `--check` compares `public-api.unix.txt`; the
-      # Windows job's surface lives in `public-api.windows.txt` (`US-0104`).
-      # `--diff-platforms` asserts the two differ only inside `oneterm_vt::pty`,
-      # and `--check-nameable` fails on a public signature naming a type an
-      # embedder cannot write (`BUG-0059`).
-      - name: Check the public API surface
-        run: |
-          python scripts/vt-public-api.py --check --no-doc
-          python scripts/vt-public-api.py --check-nameable --no-doc
-          python scripts/vt-public-api.py --diff-platforms
-      # The crate packages cleanly and carries what a consumer needs. Apache-2.0
-      # 4(a) and 4(d) are why `LICENSE` and `NOTICE` are in the required set: a
-      # git dependency is a distribution too.
-      - name: Package the crate
-        run: cargo package -p oneterm-vt
-      - name: Check what the package carries
-        # pipefail: without it the step reports python's status for a
-        # `cargo package` that failed.
-        run: |
-          set -o pipefail
-          cargo package -p oneterm-vt --list |
-            python scripts/verify-dependency-graph.py --package-list -
-      # Published rustdoc must read for somebody who does not have this
-      # repository: no work-packet, decision or intake citations in `///` or
-      # `//!` text, and no bare `crates/...` or `docs/...` path either -- a
-      # consumer's vendored copy has neither. A link to the public repository is
-      # the one allowed form.
-      - name: Published rustdoc must stand alone
-        run: |
-          if grep -rn '^[[:space:]]*//[/!].*\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|crates/\|docs/\)' \
-              crates/vt/src --include='*.rs' | grep -v 'https://github.com/'; then
-            echo "::error::published rustdoc cites a document only this repository has"
-            exit 1
-          fi
-      # The embedder's guide is `//!` text too: every chapter is `include_str!`d
-      # into an empty module. The chapters are Markdown, so there is no comment
-      # prefix to match on.
-      - name: The embedder guide must stand alone
-        run: |
-          if grep -rn '\(US-0[0-9]\{3\}\|BUG-0[0-9]\{3\}\|DEC-0[0-9]\{3\}\|IN-0[0-9]\{3\}\|crates/\|docs/\)' \
-              crates/vt/docs/guide --include='*.md' | grep -v 'https://github.com/'; then
-            echo "::error::the embedder guide cites a document only this repository has"
-            exit 1
-          fi
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
 
-  windows-quality:
-    # Windows is the primary platform, so lint and run the whole workspace
-    # (including the GPUI-based UI crates) there as well.
-    name: Windows workspace quality gate
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Set up Rust
-        uses: ./.github/actions/setup-rust
-        with:
-          components: clippy
-      - name: Lint workspace
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      # `terminal-diagnostics` guards ~200 lines of incident diagnostics that no
-      # other step compiles — 18 bare `#[cfg(feature = …)]` sites inside
-      # `crates/local-shell`'s read loop alone. Without this step they rot until
-      # the incident that wants them (`IN-0032` § 2.4, `US-0090`).
-      #
-      # It runs here and nowhere else (`US-0109`): its `#[cfg(feature = …)]`
-      # sites in `crates/local-shell`, `crates/ssh` and `crates/terminal-view`
-      # are all platform-free, so the primary platform is the one that needs to
-      # compile them.
-      - name: Lint workspace with terminal diagnostics
-        run: cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings
-      # This is also where `crates/vt/src/pty/windows.rs` is compiled and run.
-      # The engine's feature suites (`vt-paranoid`, `regex`) live in
-      # `vt-package` instead: neither feature switches on platform-conditional
-      # code, so there was nothing for a second platform to find (`US-0109`).
-      - name: Test workspace
-        run: cargo test --workspace
-
-  vt-bench:
-    # The VT engine benchmark (IN-0029). It RECORDS and never gates: at
-    # realistic shell and SSH rates the engine has two to three orders of
-    # magnitude of headroom, so a threshold here would be a flaky test
-    # measuring the runner. `continue-on-error` plus no assertions is the
-    # point — read the artifact, do not let it fail a pull request.
-    name: VT engine benchmark (recorded, never gated)
-    runs-on: windows-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Set up Rust
-        uses: ./.github/actions/setup-rust
-      - name: Run the five tiers
-        # A smaller byte budget than a local record run: a shared runner is not
-        # the machine the baseline in the packet was measured on, and this job
-        # exists to show a trend, not to replace that measurement.
-        run: >
-          cargo run -p oneterm-tools --release --bin vt-bench --
-          all --mib 25 --out vt-bench.md
-      - name: Publish the table
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: vt-bench-${{ github.sha }}
-          path: vt-bench.md
-
-  vt-esctest:
-    # The outside conformance harness (IN-0039 / US-0106). Like `vt-bench` it
-    # REPORTS and never gates, and for a stronger reason than a benchmark's:
-    # `esctest` tests a VT420-level terminal while this engine claims VT220 in
-    # `DA1` and has no left-right margins, so some groups are expected to fail
-    # for reasons that are deliberate design choices. A threshold here would
-    # turn a capability map into a quality score. `continue-on-error` plus no
-    # assertions is the point — read the artifact, do not let it fail a pull
-    # request. The standing rule is
-    # `docs/spec-intakes/IN-0029-vt-engine/low-level-design/testing-and-bench.md`
-    # section 6, "Conformance as a report, not a gate".
-    #
-    # Linux only: `crates/tools/src/bin/vt-esctest.rs` is a pty bridge and is a
-    # stub on every other host, so this job is the only place it is compiled in
-    # substance.
-    name: esctest conformance (recorded, never gated)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Set up Rust
-        uses: ./.github/actions/setup-rust
-      # Fetched, never vendored and never linked: `esctest` is GPL-2.0, and this
-      # job's relationship with it is the same one CI has with every other tool
-      # it runs. Pinned to a commit so a rewritten upstream test cannot silently
-      # change what this engine is scored against.
-      - name: Fetch esctest
-        run: |
-          set -euo pipefail
-          git clone --no-checkout https://github.com/ThomasDickey/esctest2.git esctest2
-          git -C esctest2 checkout "$ESCTEST_REF"
-        env:
-          # The head of `master` on 2026-09-13, resolved and pinned here on
-          # 2026-09-16. A branch name would let a rewritten upstream test
-          # silently change what this engine is scored against, which would make
-          # the artifact incomparable with the one beside it.
-          ESCTEST_REF: 2798f12149a19c3295e9b4853ab2da4b2eff1b2b
-      - name: Build the bridge
-        run: cargo build -p oneterm-tools --release --bin vt-esctest
-      # `--xterm-checksum 334` is load-bearing, not cosmetic: it is what makes
-      # `esc.py`'s `empty()` return a space rather than `NUL` and what stops
-      # `escutil.py` applying the pre-patch-279 negation. Together they are the
-      # only configuration matching the single checksum variant the engine
-      # implements (`checksumExtension: 7`). Any other value fails every
-      # rectangle assertion.
-      - name: Run esctest against the engine
-        run: >
-          ./target/release/vt-esctest
-          python3 esctest2/esctest/esctest.py
-          --expected-terminal xterm
-          --xterm-checksum 334
-          --max-vt-level 4
-          --logfile "$GITHUB_WORKSPACE/esctest.log"
-          2>&1 | tee esctest-bridge.log
-      - name: Summarise the run
-        if: always()
-        run: |
-          set -uo pipefail
-          {
-            echo '### esctest (report only, never gates)'
-            echo
-            echo '```'
-            tail -n 40 esctest.log 2>/dev/null || echo 'no esctest.log was written'
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-      - name: Publish the matrix
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: esctest-${{ github.sha }}
-          path: |
-            esctest.log
-            esctest-bridge.log
-          if-no-files-found: warn
-
-  # Linux and Windows already run `cargo test --workspace` in the two quality
-  # gates above; macOS is the only platform without that coverage.
-  #
-  # `oneterm-vt` is in the list so that macOS **runs the engine's own test
-  # targets** — `crates/vt/src/pty/unix.rs`'s `#[cfg(test)]` module, the
-  # `#[cfg(unix)]` arm of `pty/loopback_tests.rs`, and the rest of the suite.
-  # It was already *compiled* here, as a dependency of `oneterm-local-shell`
-  # (which takes `oneterm-vt` with `features = ["pty"]`), but compiling a crate
-  # as a dependency never builds its `#[cfg(test)]` modules, so none of that
-  # ran. `cfg(unix)` is two platforms, not one — `libc::sigset_t` is a `u32`
-  # alias here and a struct on glibc (`BUG-0063`) — and this is the job where
-  # the macOS one is exercised rather than merely built (`US-0109`).
-  macos-tests:
-    name: macOS backend tests
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Set up Rust
-        uses: ./.github/actions/setup-rust
-      - name: Test portable backend contracts
-        run: cargo test -p oneterm-core -p oneterm-terminal -p oneterm-local-shell -p oneterm-ssh -p oneterm-vt
+      # The gate a developer runs: no PowerShell, no long file, the design's ladders, the
+      # release notes script's cases, format, lints, tests with the lock file as committed.
+      - name: The gate
+        run: bash scripts/check.sh

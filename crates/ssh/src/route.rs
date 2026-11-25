@@ -1,220 +1,106 @@
-//! The connection route (IN-0023 / US-0058): TCP to the first hop, a
-//! direct-tcpip channel of the previous hop for every later one, and one
-//! authentication per hop. `connect` walks `SshConfig::jump_hops` then the
-//! target through [`connect_hop`]; the hop handles stay alive in
-//! [`JumpHandles`] inside `ssh_main_task` and drop after the target.
+//! The way to the target (specs/oneterm, "M10 in detail"): through each jump host's
+//! `direct-tcpip` channel, signed in at every hop.
 
-use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::Duration;
 
-use russh::client::{self, AuthResult, Handle};
-use russh::keys::PrivateKeyWithHashAlg;
+use russh::client::{self, Handle};
+use tokio::net::TcpStream;
 
-use oneterm_core::{AppError, ConnectPhase, SshAuthMethod, SshKeepaliveConfig};
+use crate::auth::CANCELLED;
+use crate::hostkey::Checker;
+use crate::prompt::{Ask, Event, Prompt};
+use crate::traffic::{Counted, Traffic};
+use crate::{Hop, Options};
 
-use crate::agent::authenticate_with_agent;
-use crate::handler::SshClientHandler;
-use crate::session::{
-    ConnectPhases, authenticate_with_password, authentication_failure_message, load_private_key,
-    phase_error, rsa_hash_alg,
-};
+const CONNECT: Duration = Duration::from_secs(20);
+/// The most jump hosts on a way.
+const HOPS: usize = 4;
 
-/// Authenticated jump-host handles, innermost last. Dropping the set closes
-/// the hops from the innermost outwards, so no hop's connection closes under
-/// a hop that still rides on it.
-#[derive(Default)]
-pub(crate) struct JumpHandles(Vec<Handle<SshClientHandler>>);
+pub(crate) type Link = Handle<Checker>;
 
-impl JumpHandles {
-    pub(crate) fn push(&mut self, handle: Handle<SshClientHandler>) {
-        self.0.push(handle);
-    }
-
-    /// The hop the next transport rides on (`None` for a direct TCP connection).
-    pub(crate) fn last(&self) -> Option<&Handle<SshClientHandler>> {
-        self.0.last()
-    }
+fn said(e: impl std::fmt::Display) -> String {
+    e.to_string()
 }
 
-impl Drop for JumpHandles {
-    fn drop(&mut self) {
-        while let Some(handle) = self.0.pop() {
-            drop(handle);
+/// Connects to the target through the jump hosts: the target's connection, and the jump
+/// hosts' in order, which must live as long as it.
+pub(crate) async fn reach(
+    options: &Options,
+    prompt: &Arc<Prompt>,
+    traffic: &Arc<Traffic>,
+) -> Result<(Link, Vec<Link>), String> {
+    let mut hops: Vec<Hop> = options.jumps.iter().take(HOPS).cloned().collect();
+    hops.push(Hop { target: options.target.clone(), auth: options.auth.clone() });
+    let last = hops.len() - 1;
+    let mut through: Vec<Link> = Vec::new();
+    for (at, hop) in hops.iter_mut().enumerate() {
+        // No user given: asked, the OS's filled in.
+        if hop.target.user.is_empty() {
+            let ask = Ask::User { host: hop.target.label(), user: crate::target::os_user() };
+            let user = prompt.ask(ask).await.ok_or(CANCELLED)?;
+            hop.target.user =
+                if user.trim().is_empty() { crate::target::os_user() } else { user.trim().into() };
         }
+        let hop = &*hop;
+        let named = |why: String| match at == last {
+            true => why,
+            false => format!("jump host {}: {why}", hop.target.label()),
+        };
+        prompt.tell(Event::Connecting(hop.target.label()));
+        let mut handle = open(hop, through.last(), options, prompt, traffic).await.map_err(named)?;
+        prompt.tell(Event::Authenticating(hop.target.label()));
+        crate::auth::authenticate(&mut handle, hop, options, prompt).await.map_err(named)?;
+        through.push(handle);
     }
+    let target = through.pop().ok_or("no target")?;
+    Ok((target, through))
 }
 
-/// The russh client config for one hop: keepalive policy plus the host-key
-/// algorithm preference derived from `known_hosts`.
-pub(crate) fn client_config(
-    handler: &SshClientHandler,
-    keepalive: SshKeepaliveConfig,
-) -> Arc<client::Config> {
-    let mut config = client::Config {
-        keepalive_interval: keepalive.interval(),
-        keepalive_max: keepalive.max(),
+/// The connection to one hop: by TCP for the first, else through the hop before.
+async fn open(
+    hop: &Hop,
+    before: Option<&Link>,
+    options: &Options,
+    prompt: &Arc<Prompt>,
+    traffic: &Arc<Traffic>,
+) -> Result<Link, String> {
+    let (host, port) = (hop.target.host.clone(), hop.target.port);
+    let config = Arc::new(client::Config {
+        keepalive_interval: options.keepalive,
+        keepalive_max: options.keepalive_max.max(1),
         ..Default::default()
+    });
+    let checker = Checker {
+        host: host.clone(),
+        port,
+        file: options.known_hosts.clone(),
+        prompt: prompt.clone(),
+        // Only the target is asked for remote forwards.
+        remotes: options.forwards.clone(),
     };
-    config.preferred.key = Cow::Owned(handler.preferred_key_algorithms());
-    Arc::new(config)
-}
-
-/// Open the SSH transport to `host:port`: over TCP when `carrier` is `None`,
-/// otherwise over a direct-tcpip channel of `carrier`.
-pub(crate) async fn open_transport(
-    carrier: Option<&Handle<SshClientHandler>>,
-    host: &str,
-    port: u16,
-    handler: SshClientHandler,
-    config: Arc<client::Config>,
-) -> oneterm_core::Result<Handle<SshClientHandler>> {
-    match carrier {
-        None => client::connect(config, format!("{host}:{port}"), handler)
-            .await
-            .map_err(|error| error.to_app_error()),
-        Some(carrier) => {
-            let channel = carrier
-                .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
-                .await
-                .map_err(|error| {
-                    phase_error(
-                        ConnectPhase::Transport,
-                        format!(
-                            "the jump host refused a direct-tcpip channel to {host}:{port}: {error}"
-                        ),
-                    )
-                })?;
-            client::connect_stream(config, channel.into_stream(), handler)
-                .await
-                .map_err(|error| error.to_app_error())
+    let refused = |e: russh::Error| match e {
+        russh::Error::UnknownKey => {
+            let why = prompt.why.lock().unwrap_or_else(|e| e.into_inner()).take();
+            why.unwrap_or_else(|| "host key verification failed".into())
         }
-    }
-}
-
-/// Authenticate `username` on `handle` with `auth`; a server rejection is an
-/// `Authentication` error naming the methods the server still accepts.
-pub(crate) async fn authenticate(
-    handle: &mut Handle<SshClientHandler>,
-    username: &str,
-    auth: SshAuthMethod,
-) -> oneterm_core::Result<()> {
-    let auth_error = |error: russh::Error| phase_error(ConnectPhase::Authentication, error);
-    let result = match auth {
-        SshAuthMethod::None => {
-            log::info!("SshSession: authenticating with none (no password)");
-            handle
-                .authenticate_none(username)
-                .await
-                .map_err(auth_error)?
-        }
-        SshAuthMethod::Password { password } => {
-            log::info!("SshSession: authenticating with password");
-            authenticate_with_password(handle, username, password.expose_secret()).await?
-        }
-        SshAuthMethod::PrivateKey {
-            key_path,
-            passphrase,
-        } => {
-            log::info!("SshSession: authenticating with key {}", key_path.display());
-            // Key files are read and decrypted on the blocking pool so the two
-            // SSH runtime workers keep serving other sessions (CORR-17).
-            let key = tokio::task::spawn_blocking(move || {
-                load_private_key(
-                    &key_path,
-                    passphrase.as_ref().map(|secret| secret.expose_secret()),
-                )
-            })
-            .await
-            .unwrap_or_else(|join_error| {
-                Err(phase_error(ConnectPhase::Authentication, join_error))
-            })?;
-            // RSA keys must not sign with the legacy SHA-1 `ssh-rsa` (OpenSSH
-            // >= 8.8 rejects it). Ask the server which `rsa-sha2-*` it
-            // supports (RFC 8308 `server-sig-algs`); when it does not say,
-            // prefer SHA-512.
-            let hash_alg = if key.algorithm().is_rsa() {
-                rsa_hash_alg(handle.best_supported_rsa_hash().await.map_err(auth_error)?)
-            } else {
-                None
+        e => e.to_string(),
+    };
+    match before {
+        None => {
+            let socket = match tokio::time::timeout(CONNECT, TcpStream::connect((host.as_str(), port))).await
+            {
+                Ok(socket) => socket.map_err(said)?,
+                Err(_) => return Err("timed out".into()),
             };
-            handle
-                .authenticate_publickey(
-                    username,
-                    PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg),
-                )
-                .await
-                .map_err(auth_error)?
+            let _ = socket.set_nodelay(true);
+            let socket = Counted { inner: socket, traffic: traffic.clone() };
+            client::connect_stream(config, socket, checker).await.map_err(refused)
         }
-        SshAuthMethod::Agent => {
-            log::info!("SshSession: authenticating with the local SSH agent");
-            authenticate_with_agent(handle, username).await?
+        Some(before) => {
+            let channel =
+                before.channel_open_direct_tcpip(host, port.into(), "127.0.0.1", 0).await.map_err(said)?;
+            client::connect_stream(config, channel.into_stream(), checker).await.map_err(refused)
         }
-    };
-    log::info!("SshSession: auth result = {result:?}");
-    match result {
-        AuthResult::Success => Ok(()),
-        AuthResult::Failure {
-            remaining_methods,
-            partial_success,
-        } => Err(AppError::Connect {
-            phase: ConnectPhase::Authentication,
-            message: authentication_failure_message(&remaining_methods, partial_success),
-        }),
     }
 }
-
-/// Open the transport to the hop (or target) `handler` describes and
-/// authenticate it, each step under its connect phase deadline. The caller
-/// builds the handler, so only the target's carries forwards and the agent
-/// bridge; a hop never serves server-opened channels.
-pub(crate) async fn connect_hop(
-    phases: &ConnectPhases,
-    carrier: Option<&Handle<SshClientHandler>>,
-    handler: SshClientHandler,
-    username: &str,
-    auth: SshAuthMethod,
-    keepalive: SshKeepaliveConfig,
-) -> oneterm_core::Result<Handle<SshClientHandler>> {
-    let host = handler.host().to_string();
-    let port = handler.port();
-    let config = client_config(&handler, keepalive);
-    let mut handle = phases
-        .run(
-            ConnectPhase::Transport,
-            open_transport(carrier, &host, port, handler, config),
-        )
-        .await?;
-    log::info!(
-        "SshSession: transport to {host}:{port} open{}",
-        if carrier.is_some() {
-            " (through the jump host)"
-        } else {
-            ""
-        }
-    );
-    phases
-        .run(
-            ConnectPhase::Authentication,
-            authenticate(&mut handle, username, auth),
-        )
-        .await?;
-    Ok(handle)
-}
-
-/// Attribute a hop failure to its hop. Host-key errors already carry the hop's
-/// host and port (the UI picks the hop from them), and a cancellation is not
-/// a hop's fault; every other connect error is prefixed with the hop label.
-pub(crate) fn hop_error(label: &str, error: AppError) -> AppError {
-    match error {
-        AppError::Connect { phase, message } => AppError::Connect {
-            phase,
-            message: format!("jump host {label}: {message}"),
-        },
-        other => other,
-    }
-}
-
-// Route tests against two in-process servers live in a sibling file (see code-style.md).
-#[cfg(test)]
-#[path = "route_tests.rs"]
-mod route_tests;
