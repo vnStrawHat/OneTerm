@@ -1,5 +1,6 @@
 //! The status bar (specs/oneterm, "Window"): 30 px on the chrome plane, 12 px, its groups parted by
-//! rules of 1×14: the rail's fold; the focused space's directory (a click copies it); git; a
+//! rules of 1×14: the rail's fold; the focused space's directory (a click copies it); git (a
+//! local space's); a
 //! red dot that blinks while it logs; at the right the progress, a remote space's network,
 //! OneTerm's processor and memory
 //! (details in a tooltip), the clock and the SFTP panel. Locked, only a lock and "Locked,
@@ -55,14 +56,18 @@ pub(crate) fn status_bar(model: &Model, clock: Signal<String>, now: Clock) -> im
         .variant(Variant::Link)
         .label(move || if folded.get() { "Expand tabs" } else { "Collapse tabs to icons" }.to_string())
         .on_click(move || folded.update(|on| *on = !*on));
-    let cwd_of = model.clone();
-    let cwd = move || {
-        let space = cwd_of.active_tab().and_then(|tab| tab.focused());
+    let focused = model.clone();
+    // The focused space's directory; `here`, only when it is one of this machine.
+    let dir = move |here: bool| {
+        let space = focused.active_tab().and_then(|tab| tab.focused());
+        let space = space.filter(|it| !here || it.remote.is_none());
         space.map(|space| space.session.cwd().get()).unwrap_or_default()
     };
-    let (clipboard, said, repo_of) = (use_context::<Rc<dyn Clipboard>>(), cwd.clone(), cwd.clone());
-    let placed = cwd.clone();
-    let repo = crate::git::follow(repo_of);
+    let (cwd, local) = (dir.clone(), dir);
+    let cwd = move || cwd(false);
+    let (clipboard, said, placed) = (use_context::<Rc<dyn Clipboard>>(), cwd.clone(), cwd.clone());
+    // A server's directory names no repository of this machine.
+    let repo = crate::git::follow(move || local(true));
     let place = part()
         .role(Role::Button)
         .label("Working directory")

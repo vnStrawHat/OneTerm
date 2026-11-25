@@ -63,6 +63,21 @@ fn a_known_host_goes_on_and_a_key_file_signs_in() {
 }
 
 #[test]
+fn shell_integration_types_its_line_unseen_once_the_shell_is_open() {
+    let ((port, seen), dir) = (serve(2), folder("integration"));
+    learn_known_hosts_path("127.0.0.1", port, key(2).public_key(), dir.join("known_hosts")).unwrap();
+    let file = dir.join("id");
+    std::fs::write(&file, key(9).to_openssh(LineEnding::LF).unwrap().as_bytes()).unwrap();
+    let mut o = options(port, &dir, Auth::Key(file));
+    o.integration = true;
+    let c = connect(o);
+    // The server of the tests says back what it is typed: the whole line, ended by Enter.
+    c.wait_for("stty echo 2>/dev/null\r");
+    assert!(c.text().contains("welcome\r\necho: export COLORTERM=truecolor; "), "{}", c.text());
+    assert_eq!(*seen.lock().unwrap(), ["pty xterm-256color 80x24 no echo"]);
+}
+
+#[test]
 fn a_changed_host_key_is_refused_without_asking() {
     let ((port, _), dir) = (serve(3), folder("changed"));
     learn_known_hosts_path("127.0.0.1", port, key(4).public_key(), dir.join("known_hosts")).unwrap();

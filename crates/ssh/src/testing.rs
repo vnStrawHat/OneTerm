@@ -101,10 +101,11 @@ impl server::Handler for Shell {
         rows: u32,
         _: u32,
         _: u32,
-        _: &[(russh::Pty, u32)],
+        modes: &[(russh::Pty, u32)],
         _: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.seen.lock().unwrap().push(format!("pty {term} {cols}x{rows}"));
+        let quiet = if modes.contains(&(russh::Pty::ECHO, 0)) { " no echo" } else { "" };
+        self.seen.lock().unwrap().push(format!("pty {term} {cols}x{rows}{quiet}"));
         Ok(())
     }
 

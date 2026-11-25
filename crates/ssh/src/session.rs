@@ -73,9 +73,17 @@ async fn shell(options: &Options, prompt: Arc<Prompt>, shared: &Arc<Shared>) -> 
     let channel = handle.channel_open_session().await.map_err(|e| e.to_string())?;
     let (rows, cols) = prompt.size();
     let fail = |e: russh::Error| e.to_string();
-    channel.request_pty(false, "xterm-256color", cols.into(), rows.into(), 0, 0, &[]).await.map_err(fail)?;
+    // Shell integration: its line is typed with echo off, and turns echo on again.
+    let modes = if options.integration { crate::integrate::QUIET } else { &[] };
+    channel
+        .request_pty(false, "xterm-256color", cols.into(), rows.into(), 0, 0, modes)
+        .await
+        .map_err(fail)?;
     channel.set_env(false, "COLORTERM", "truecolor").await.map_err(fail)?;
     channel.request_shell(false).await.map_err(fail)?;
+    if options.integration {
+        channel.data_bytes([crate::integrate::LINE, "\r"].concat()).await.map_err(fail)?;
+    }
     prompt.tell(Event::Open);
     let (mut read, write) = channel.split();
     // A ping every 5 s: how long the server takes to answer.

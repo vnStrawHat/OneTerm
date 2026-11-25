@@ -78,13 +78,16 @@ impl Saved {
 }
 
 /// A session running a host's shell; called with a launch that names one. The user's own
-/// SSH files and agent are used.
+/// SSH files and agent are used, and the shell is typed shell integration's line when the
+/// setting says so.
 pub fn remote_shell(launch: Launch) -> Session {
-    remote_shell_with(launch, Options::new)
+    let integration = launch.integration;
+    remote_shell_with(launch, move |target| Options { integration, ..Options::new(target) })
 }
 
 /// As [`remote_shell`], with the engine's options made from the target by `options` (a test
-/// gives its own files and no agent).
+/// gives its own files and no agent, and no shell integration: its server says back what it
+/// is typed).
 pub fn remote_shell_with(launch: Launch, options: impl FnOnce(oneterm_ssh::Target) -> Options) -> Session {
     let mut config = Config::default();
     (config.default_cursor_style, config.scrollback_limit) = (launch.cursor, launch.scrollback);

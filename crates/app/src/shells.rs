@@ -53,7 +53,8 @@ pub struct Launch {
     pub startup: Option<String>,
     /// A local shell gets `FORCE_HYPERLINK=1` (the setting Force links).
     pub force_links: bool,
-    /// A shell OneTerm found is started with shell integration (the setting of that name).
+    /// A shell OneTerm found, and a host's, is started with shell integration (the setting of
+    /// that name).
     pub integration: bool,
 }
 

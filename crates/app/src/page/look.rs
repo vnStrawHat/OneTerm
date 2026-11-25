@@ -197,7 +197,7 @@ pub(super) fn terminal(p: Prefs, d: Prefs) -> Vec<SettingsGroup> {
         .back(p.force_links, d.force_links)
         .row(
             "Shell integration",
-            "Start Command Prompt, PowerShell and bash so they report their folder and where each command begins and ends, and write UTF-8. New tabs, completion and highlighting use it.",
+            "Start Command Prompt, PowerShell and bash so they report their folder and where each command begins and ends, and write UTF-8; an SSH host's shell is set up the same way once it opens. New tabs, completion and highlighting use it.",
             switch(p.integration),
         )
         .back(p.integration, d.integration);

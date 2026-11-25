@@ -7,6 +7,7 @@ mod files;
 mod folders;
 mod forward;
 mod hostkey;
+mod integrate;
 mod prompt;
 mod route;
 mod session;
@@ -59,6 +60,10 @@ pub struct Options {
     /// many go unanswered before the connection is given up.
     pub keepalive: Option<Duration>,
     pub keepalive_max: usize,
+    /// Shell integration: once the shell is open it is typed a line, unseen, that makes it
+    /// say where it is and where its prompts and commands are (`integrate.rs`). Off unless
+    /// asked for.
+    pub integration: bool,
 }
 
 /// A host on the way, and how to sign in to it.
@@ -141,6 +146,7 @@ impl Options {
             forwards: Vec::new(),
             keepalive: Some(Duration::from_secs(30)),
             keepalive_max: 3,
+            integration: false,
         }
     }
 }
