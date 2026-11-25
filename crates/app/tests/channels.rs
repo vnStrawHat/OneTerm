@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use oneterm::{NewSession, OneTerm, keymap};
+use oneterm::{Model, NewSession, OneTerm, keymap};
 use quadra::{Key, Mods, MouseButton, Point, Role};
 use quadra_term::vt::ResizePolicy;
 use quadra_term::{Link, Session};
@@ -19,6 +19,7 @@ type Made = (Session, Rc<RefCell<Vec<u8>>>);
 struct App {
     h: Harness,
     made: Rc<RefCell<Vec<Made>>>,
+    model: Model,
 }
 
 fn app() -> App {
@@ -34,9 +35,16 @@ fn app() -> App {
         kept.borrow_mut().push((s.clone(), wrote));
         s
     });
-    h.mount(move || OneTerm::new(sessions).view());
+    let built = Rc::new(RefCell::new(None));
+    let tell = built.clone();
+    h.mount(move || {
+        let app = OneTerm::new(sessions);
+        *tell.borrow_mut() = Some(app.model.clone());
+        app.view()
+    });
     h.settle();
-    App { h, made }
+    let model = built.borrow_mut().take().expect("the window made its model");
+    App { h, made, model }
 }
 
 impl App {
@@ -151,4 +159,33 @@ fn a_split_is_in_no_channel_and_a_closed_member_gets_nothing() {
     a.h.type_text("z");
     a.h.settle();
     assert_eq!(a.written(), ["z", ""]);
+}
+
+#[test]
+fn a_tab_of_one_space_shows_its_channel_however_the_tabs_are_laid_out() {
+    let mut a = app();
+    a.key(Key::T, Mods::CTRL);
+    a.key(Key::T, Mods::CTRL);
+    // Three tabs of one space each; the first and the last join A.
+    let tabs = a.model.tabs().get_untracked();
+    let space = |n: usize| tabs[n].spaces.get_untracked()[0].clone();
+    assert_eq!(tabs.len(), 3);
+    space(0).channel.set(Some(0));
+    space(2).channel.set(Some(0));
+    a.h.settle();
+    // No space has a header to show a chip; the two tabs do, in the rail,
+    assert_eq!((a.chips("Channel A"), a.chips("Tab in channel A")), (0, 2), "{}", a.h.semantics());
+    // folded to icons,
+    a.model.prefs().rail_folded.set(true);
+    a.h.settle();
+    assert_eq!(a.chips("Tab in channel A"), 2, "folded: {}", a.h.semantics());
+    // and in a strip.
+    a.model.vertical().set(false);
+    a.h.settle();
+    assert_eq!(a.chips("Tab in channel A"), 2, "a strip: {}", a.h.semantics());
+    // Another channel is another chip; one that leaves has none.
+    space(2).channel.set(Some(1));
+    space(0).channel.set(None);
+    a.h.settle();
+    assert_eq!((a.chips("Tab in channel A"), a.chips("Tab in channel B")), (0, 1));
 }

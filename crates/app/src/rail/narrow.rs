@@ -117,7 +117,8 @@ fn face(model: &Model, tab: Tab) -> impl View + use<> {
             })
             .child(fill)
             .child(marks::tab_icon(tab, 16.0, on, token::TEXT_2))
-            .child(state_line(tab)),
+            .child(state_line(tab))
+            .child(crate::channels::tab_dots(tab)),
     )
     .side(Side::Right)
     .meta(second)

@@ -88,6 +88,7 @@ fn tab_button(model: &Model, tab: Tab) -> impl View + use<> {
         .child(active_fill(on, 0.0, true))
         .child(crate::marks::tab_icon(tab, 14.0, on, quadra_design::token::TEXT_3))
         .child(div().min_width(0.0).child(title(model, tab)))
+        .child(crate::channels::tab_chips(tab))
         .child(crate::marks::tab_mark(tab))
         .child(close_button(model, tab, on))
         .child(crate::marks::progress_bar(tab, 0.0));

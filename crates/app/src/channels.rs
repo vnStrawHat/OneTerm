@@ -1,8 +1,9 @@
 //! Input channels (specs/oneterm, "Spaces"): five, A to E. What is typed in a space of a channel
 //! goes to the other members, in any tab; the space's menu joins and leaves, its header shows
-//! a chip of the channel's colour.
+//! a chip of the channel's colour, and so does its tab, however the tabs are laid out: a
+//! tab of one space has no header to show one.
 
-use quadra::{Align, AnyView, Justify, Role, Signal, View, div, dynamic, row, text};
+use quadra::{Align, AnyView, Display, Justify, Role, Signal, View, div, dynamic, row, text};
 use quadra_design::{MenuItem, token};
 use quadra_term::Session;
 
@@ -89,24 +90,62 @@ pub(crate) fn menu(tabs: Signal<Vec<Tab>>, space: &Space) -> MenuItem {
     MenuItem::new("Input channel").disabled(ended).submenu(items)
 }
 
-/// A member's chip in its header: the channel's letter on its colour.
+/// A chip: the channel's letter on its colour, in a square of 14 px, read as `named`.
+fn square(c: u8, named: String) -> quadra::Div {
+    row()
+        .size(14.0, 14.0)
+        .radius(token::RADIUS_SM)
+        .shrink(0.0)
+        .align_items(Align::Center)
+        .justify(Justify::Center)
+        .bg(colour(c))
+        .text_color(token::TEXT_ON_STATUS)
+        .text_size(10.0)
+        .font_weight(600)
+        .role(Role::Image)
+        .label(named)
+        .child(text(letter(c).to_string()))
+}
+
+/// A member's chip in its header.
 pub(crate) fn chip(channel: Signal<Option<u8>>) -> impl View {
     dynamic(move || match channel.try_get().flatten() {
         None => AnyView::new(div()),
-        Some(c) => AnyView::new(
-            row()
-                .size(14.0, 14.0)
-                .radius(token::RADIUS_SM)
-                .shrink(0.0)
-                .align_items(Align::Center)
-                .justify(Justify::Center)
-                .bg(colour(c))
-                .text_color(token::TEXT_ON_STATUS)
-                .text_size(10.0)
-                .font_weight(600)
-                .role(Role::Image)
-                .label(format!("Channel {}", letter(c)))
-                .child(text(letter(c).to_string())),
-        ),
+        Some(c) => AnyView::new(square(c, format!("Channel {}", letter(c)))),
     })
+}
+
+/// The channels a tab's spaces are in, each once, A first.
+fn of_tab(tab: Tab) -> Vec<u8> {
+    let spaces = tab.spaces.try_with(|all| all.iter().map(|it| it.channel).collect::<Vec<_>>());
+    let mut all: Vec<u8> =
+        spaces.unwrap_or_default().into_iter().filter_map(|it| it.try_get().flatten()).collect();
+    all.sort_unstable();
+    all.dedup();
+    all
+}
+
+/// A tab's chips, in the rail's row and the strip's tab: one for each channel its spaces
+/// are in, read as "Tab in channel A"; out of the row while it is in none.
+pub(crate) fn tab_chips(tab: Tab) -> impl View {
+    let there = move || if of_tab(tab).is_empty() { Display::None } else { Display::Flex };
+    dynamic(move || {
+        let named = |c: u8| format!("Tab in channel {}", letter(c));
+        AnyView::new(
+            of_tab(tab).into_iter().fold(row().gap(token::SPACE_XS), |row, c| row.child(square(c, named(c)))),
+        )
+    })
+    .container(row().shrink(0.0).display(there))
+}
+
+/// A folded tab's dots, at the top right of its box: 6 px of each channel's colour.
+pub(crate) fn tab_dots(tab: Tab) -> impl View {
+    dynamic(move || {
+        let dot = |c: u8| {
+            let dot = div().size(6.0, 6.0).radius(token::RADIUS_XS).bg(colour(c));
+            dot.role(Role::Image).label(format!("Tab in channel {}", letter(c)))
+        };
+        AnyView::new(of_tab(tab).into_iter().fold(row().gap(token::SPACE_XXS), |row, c| row.child(dot(c))))
+    })
+    .container(div().absolute().top(4.0).right(4.0))
 }
