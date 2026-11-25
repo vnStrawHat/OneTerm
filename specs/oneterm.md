@@ -867,12 +867,12 @@ thread never waits on the network.
   selects a row (the press fill and a 2 px accent bar at its left, a file's icon in the
   accent); two on a folder (or on `..`) open it, two on a file download it to
   the user's Downloads folder (`name (1).ext` when the name is taken). The other button gives
-  a remote row's menu (Open or Download; for a file Edit…: downloaded to `sftp-edit` in the app's data
+  a remote row's menu (Open or Download; for a folder Open in terminal; for a file Edit…: downloaded to `sftp-edit` in the app's data
   folder, then as the setting Editor says: OneTerm's editor (the default; "Editing in OneTerm" below), or
   opened in the system's app for it or the program the settings name with its arguments
   (`Opener::open_with`), sent back each time it is saved, a card saying so; above the size set, 1 MB,
   asked first; Rename…, Copy path, Properties…, Delete…) and, where no row is, the
-  list's (New folder…, Refresh), in the dock and the expanded view's Remote pane alike; a local
+  list's (New folder…, Open in terminal, Refresh), in the dock and the expanded view's Remote pane alike; a local
   row's menu there has Open or Upload, Copy path, Refresh. New folder and Rename ask the name in a
   dialog (not empty, `.`, `..` or with a `/`); Delete asks first (a folder only when empty).
   Properties… asks the server for the entry again and shows a dialog, Properties, with a
@@ -880,7 +880,26 @@ thread never waits on the network.
   bytes)`, `-` for a folder), Modified, Accessed (`2026-10-28 10:52` where the user is), Permissions
   in mono (`-rw-r--r-- (0644)`: the kind, rwx with `s`/`S` and `t`/`T` for the special bits, the
   octal), Owner and Group (`name (id)`, the id alone without a name, `-` without either), Path (in
-  mono, with a copy button), and Close. It shows; it does not change the mode. A failed ask is a card.
+  mono, with a copy button). Under Permissions, three rows of boxes to tick (the user's request,
+  2026-11-25: boxes, not a number to type): Owner can, Group can, Others can, each Read, Write,
+  Execute; the line Permissions reads them as they are ticked. The special bits (setuid, setgid,
+  sticky) stay as the entry has them. Close, and Apply, which is
+  enabled while what is ticked is not the entry's: it sets the permission bits
+  (`Files::chmod`: SFTP's setstat with those bits alone) and lists the folder again; a refusal is a
+  card. A failed ask is a card.
+  **More than one row** (the user's request, 2026-11-25; `sftp/picked.rs`): a click chooses a row
+  alone; with Ctrl it adds the row or takes it out; with Shift it chooses from the row clicked last
+  to this one, in the order shown. The remote list does (the dock's and the Remote pane's are one
+  choice) and the Local pane's. The menu of a row among several chosen is the choice's: Download n
+  items and Delete n items… (asked once, `Delete 3 entries from the server?`; each removed in turn,
+  those that could not be said in one card), or in the Local pane Upload n items; a row not among
+  them has its own menu. Upload selected and Download selected send every row chosen. A folder
+  listed again chooses nothing.
+  **Open in terminal**, in a remote folder's menu and in the list's for the folder shown: types
+  `cd -- '<path>'` and Enter into the focused space's shell (the path in single quotes, one in it
+  written `'\''`).
+  Sync CWD and Show hidden files are kept as they were left (`sftp.sync_cwd`, `sftp.show_hidden`,
+  both off at first).
   Files and folders dropped from the OS upload to the folder shown; a folder's Download and a
   local folder's Upload carry the whole tree. An upload onto a name the folder shown
   already has asks first (Replace, 360 wide: `notes.md is already in /srv/www. Replace it on

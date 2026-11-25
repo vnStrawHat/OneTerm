@@ -49,6 +49,9 @@ story, with its tests and pictures, is in that repository's `docs/progress.md` a
 - 2026-11-25: the SFTP paths are underlined fields (the dock's and both panes'). In a
   space two clicks select a word, three the line, and Shift and a click reaches from the
   selection there is (Quadra's fix; `tests/select.rs`).
+- 2026-11-25: SFTP: more than one row chosen (Ctrl and Shift with a click) to download,
+  upload or delete together; Open in terminal types `cd` to a folder into the shell; a
+  mode is set from Properties (`Files::chmod`); Sync CWD and Show hidden files are kept.
 - 2026-11-25: shell integration for a host's shell (a line typed unseen once it is open), so
   a remote space says its directory: the status bar, the space's header, Sync CWD. Git shows for a local space alone.
 
