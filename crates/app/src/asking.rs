@@ -1,6 +1,7 @@
 //! The Connect dialogs (specs/oneterm, "M7 in detail"): the focused space's connection while it is
 //! made, one dialog for each phase (connecting, an unknown host, signing in, a failure),
-//! swapped as the phase moves. Giving one up is its Cancel or Close.
+//! swapped as the phase moves, and one for a connection lost later: Reconnect connects
+//! again in the same space. Giving one up is its Cancel or Close.
 
 use std::rc::Rc;
 
@@ -15,6 +16,7 @@ const CONNECTING: usize = 0;
 const HOST_KEY: usize = 1;
 const SIGN_IN: usize = 2;
 const FAILED: usize = 3;
+const LOST: usize = 4;
 
 /// The dialog of a phase; a saved host's Connect dialog shows each phase itself.
 fn which(phase: &Phase, opening: bool) -> Option<usize> {
@@ -24,6 +26,7 @@ fn which(phase: &Phase, opening: bool) -> Option<usize> {
         Phase::Connecting => Some(CONNECTING),
         Phase::Ask(Ask::HostKey { .. }) => Some(HOST_KEY),
         Phase::Ask(Ask::Failed { .. }) => Some(FAILED),
+        Phase::Ask(Ask::Lost { .. }) => Some(LOST),
         Phase::Ask(_) => Some(SIGN_IN),
     }
 }
@@ -37,7 +40,7 @@ pub(crate) fn dialogs(model: &Model) -> impl View + use<> {
         Some(space) => space.session.kept::<Conn>(),
         None => model.active_tab()?.focused()?.session.kept::<Conn>(),
     });
-    let opens: [Signal<bool>; 4] = std::array::from_fn(|_| signal(false));
+    let opens: [Signal<bool>; 5] = std::array::from_fn(|_| signal(false));
     // What the Sign in dialog's field holds: nothing kept after it is answered.
     let typed = signal(String::new());
     let following = shown.clone();
@@ -110,6 +113,11 @@ pub(crate) fn dialogs(model: &Model) -> impl View + use<> {
         matches!(phase, Some(Phase::Ask(Ask::Failed { reason })) if oneterm_ssh::key_changed(&reason))
     };
     let (other, retry) = (changed.clone(), answers(Rc::new(|| Some(String::new()))));
+    // A connection lost: what the space showed stays, and Reconnect connects again in it.
+    let (was, reconnect) = (asked.clone(), retry.clone());
+    let lost = quadra_design::dialog(opens[LOST], "Connection lost", move || failure(was()))
+        .action("Close", Variant::Secondary, || {})
+        .action("Reconnect", Variant::Primary, reconnect);
     let (again, wrong, still) = (retry.clone(), changed.clone(), changed.clone());
     let failed = quadra_design::dialog(opens[FAILED], "Could not connect", move || failure(asked()))
         .action("Close", Variant::Secondary, || {})
@@ -120,7 +128,7 @@ pub(crate) fn dialogs(model: &Model) -> impl View + use<> {
         .shown(still)
         .action("Close", Variant::Primary, || {})
         .shown(changed);
-    div().child(connecting).child(host_key).child(sign_in).child(failed)
+    div().child(connecting).child(host_key).child(sign_in).child(failed).child(lost)
 }
 
 /// A fingerprint: mono, 12 px, on one line.
@@ -173,8 +181,16 @@ fn sign_in(
 }
 
 fn failure(asked: Option<(Phase, String)>) -> quadra::Div {
-    let Some((Phase::Ask(Ask::Failed { reason }), label)) = asked else { return column() };
-    quadra_design::vstack().child(text(format!("Could not connect to {label}."))).child(quadra_design::alert(
+    let (said, reason) = match asked {
+        Some((Phase::Ask(Ask::Failed { reason }), label)) => {
+            (format!("Could not connect to {label}."), reason)
+        }
+        Some((Phase::Ask(Ask::Lost { reason }), label)) => {
+            (format!("The connection to {label} was lost. Its space stays as it was."), reason)
+        }
+        _ => return column(),
+    };
+    quadra_design::vstack().child(text(said)).child(quadra_design::alert(
         quadra_design::Tone::Danger,
         "",
         &sentence(&reason),

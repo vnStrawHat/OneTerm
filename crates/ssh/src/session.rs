@@ -27,16 +27,29 @@ pub(crate) async fn run(
     shared: Arc<Shared>,
 ) {
     let prompt = Arc::new(Prompt::new(out, told, input, options.rows, options.cols));
-    // A connection that fails before its shell is asked about: again, or given up.
+    // A connection that fails is asked about: again, or given up. One lost once its shell
+    // was open says so in the space first, where what it showed stays.
     let code = loop {
         let why = match shell(&options, prompt.clone(), &shared).await {
             Ok(code) => break code,
             Err(why) => why,
         };
-        if prompt.opened() || prompt.ask(Ask::Failed { reason: why.clone() }).await.is_none() {
-            prompt.say(&format!("\n[connection closed: {why}]\n"));
+        let closed = format!("\n[connection closed: {why}]\n");
+        let lost = prompt.opened();
+        let ask = match lost {
+            true => {
+                prompt.say(&closed);
+                Ask::Lost { reason: why }
+            }
+            false => Ask::Failed { reason: why },
+        };
+        if prompt.ask(ask).await.is_none() {
+            if !lost {
+                prompt.say(&closed);
+            }
             break 255;
         }
+        prompt.again();
         // A cancel that came after the failure is not the new attempt's.
         let mut stale = pin!(shared.cancel.notified());
         let _ = stale.as_mut().poll(&mut Context::from_waker(Waker::noop()));

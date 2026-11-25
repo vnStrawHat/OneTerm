@@ -92,7 +92,7 @@ fn a_changed_host_key_is_refused_without_asking() {
 }
 
 #[test]
-fn wrong_passwords_and_a_dropped_connection_end_with_255() {
+fn wrong_passwords_end_with_255_and_a_connection_lost_is_asked_about() {
     let ((port, _), dir) = (serve(5), folder("denied"));
     learn_known_hosts_path("127.0.0.1", port, key(5).public_key(), dir.join("known_hosts")).unwrap();
     let c = connect(options(port, &dir, Auth::Auto));
@@ -113,9 +113,25 @@ fn wrong_passwords_and_a_dropped_connection_end_with_255() {
     c.ask();
     c.answer(Some("secret"));
     c.wait_for("welcome");
+    // A connection lost says so, and is asked about: an answer connects again from the
+    // start, in the same space; none ends it.
     c.ssh.write(b"drop");
-    assert_eq!(c.code(), 255);
+    assert!(matches!(c.ask(), Ask::Lost { .. }));
     c.wait_for("[connection closed:");
+    c.answer(Some(""));
+    assert!(matches!(c.ask(), Ask::Password { again: false, .. }));
+    c.answer(Some("secret"));
+    let end = Instant::now() + Duration::from_secs(20);
+    while c.text().matches("welcome").count() < 2 {
+        assert!(Instant::now() < end, "no second shell: {}", c.text());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(c.told.lock().unwrap().iter().filter(|it| **it == Event::Open).count(), 2);
+    c.ssh.write(b"drop");
+    assert!(matches!(c.ask(), Ask::Lost { .. }));
+    c.answer(None);
+    assert_eq!(c.code(), 255);
+    assert_eq!(c.text().matches("[connection closed:").count(), 2, "{}", c.text());
 }
 
 #[test]

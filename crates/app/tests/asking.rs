@@ -99,7 +99,7 @@ impl App {
     }
 
     fn no_dialog(&self) -> bool {
-        ["Connecting to", "Password for", "can't be established", "Could not connect"]
+        ["Connecting to", "Password for", "can't be established", "Could not connect", "was lost"]
             .iter()
             .all(|it| !self.shows(it))
     }
@@ -234,5 +234,26 @@ fn nobody_listening_is_said() {
     drop(listener);
     a.connect(&format!("nobody@127.0.0.1:{port}"));
     a.wait_for(&format!("Could not connect to nobody@127.0.0.1:{port}."));
+    a.close_failure("");
+}
+
+#[test]
+fn a_connection_lost_is_asked_about_and_reconnect_connects_again_in_the_space() {
+    let mut a = app("ask-lost");
+    let (port, _) = serve(35);
+    trust(port, 35, &a.dir.join("known_hosts"));
+    write_user_key(&a.dir.join("keys/id_ed25519"));
+    a.connect(&format!("tester@127.0.0.1:{port}"));
+    a.wait(|a| a.screen().contains("welcome") && a.no_dialog(), "the shell");
+    let session = a.sessions.borrow().last().unwrap().clone();
+    // The server drops the connection: the space says so and stays, and the dialog asks.
+    session.write(b"drop");
+    a.wait_for(&format!("The connection to tester@127.0.0.1:{port} was lost."));
+    assert!(a.screen().contains("[connection closed:") && session.exited().get_untracked().is_none());
+    a.press("Reconnect");
+    a.wait(|a| a.screen().matches("welcome").count() == 2 && a.no_dialog(), "the shell again, in the space");
+    // Lost again and closed: the space ends as one that could not connect does.
+    session.write(b"drop");
+    a.wait_for("was lost.");
     a.close_failure("");
 }

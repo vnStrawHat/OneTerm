@@ -35,9 +35,11 @@ pub(crate) struct Conn {
 }
 
 impl Conn {
-    /// Answers the question asked; `None` gives it up, and a failure given up is done.
+    /// Answers the question asked; `None` gives it up, and a failure or a connection lost
+    /// given up is done.
     pub fn answer(&self, answer: Option<String>) {
-        let failed = self.phase.with_untracked(|it| matches!(it, Phase::Ask(Ask::Failed { .. })));
+        let failed =
+            self.phase.with_untracked(|it| matches!(it, Phase::Ask(Ask::Failed { .. } | Ask::Lost { .. })));
         self.phase.set(if failed && answer.is_none() { Phase::Done } else { Phase::Connecting });
         self.ssh.answer(answer);
     }

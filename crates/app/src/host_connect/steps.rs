@@ -112,7 +112,7 @@ fn question(ask: Ask, typed: Signal<String>, name: &str, answer: Rc<dyn Fn()>) -
         Ask::User { .. } => ("Username", false, false),
         Ask::Password { again, .. } => ("Password", true, again),
         Ask::Passphrase { again, .. } => ("Passphrase", true, again),
-        Ask::Failed { .. } => return column(),
+        Ask::Failed { .. } | Ask::Lost { .. } => return column(),
     };
     let mut entry = input(typed).test_id("connect-answer").on_submit(move |_| answer());
     if secret {

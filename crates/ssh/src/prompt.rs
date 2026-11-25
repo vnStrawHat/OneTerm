@@ -35,6 +35,9 @@ pub enum Ask {
     /// The connection ended before its shell opened: any answer connects again from the
     /// start, `None` gives up.
     Failed { reason: String },
+    /// The connection ended after its shell had opened, and not by the shell's own exit:
+    /// any answer connects again from the start, `None` ends the space.
+    Lost { reason: String },
 }
 
 /// What the app sends the engine.
@@ -93,6 +96,11 @@ impl Prompt {
 
     pub(crate) fn opened(&self) -> bool {
         self.opened.load(Ordering::Relaxed)
+    }
+
+    /// Connecting again: no shell is open.
+    pub(crate) fn again(&self) {
+        self.opened.store(false, Ordering::Relaxed);
     }
 
     pub(crate) fn closed(&self) -> bool {
