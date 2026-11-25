@@ -2,6 +2,7 @@
 //! rules of 1×14: the rail's fold; the focused space's directory (a click copies it); git (a
 //! local space's); a
 //! red dot that blinks while it logs; at the right the progress, a remote space's network,
+//! the focused space's columns and rows,
 //! OneTerm's processor and memory
 //! (details in a tooltip), the clock and the SFTP panel. Locked, only a lock and "Locked,
 //! details hidden", the progress and the clock show.
@@ -117,6 +118,7 @@ pub(crate) fn status_bar(model: &Model, clock: Signal<String>, now: Clock) -> im
         .child(icon(icons::LOCK).size(14.0).color(token::HUE_PURPLE))
         .child(text("Locked, details hidden"));
     let shows = move || prefs.show_usage.get() || prefs.show_fps.get();
+    let (sized, size) = (grid(model), grid(model));
     let (meter, metered) = meter(model, open);
     let rec = logging(model);
     let left_side = groups(
@@ -134,6 +136,10 @@ pub(crate) fn status_bar(model: &Model, clock: Signal<String>, now: Clock) -> im
         vec![
             (metered, meter),
             (remote_shown(model, open), part().label("Network").child(value(traffic(model)))),
+            (
+                when(move || open() && prefs.show_size.get() && !sized().is_empty()),
+                part().label("Terminal size").child(value(size)),
+            ),
             (when(move || open() && shows()), using),
             (when(move || prefs.show_clock.get()), time),
             (when(open), part().child(sftp(model))),
@@ -156,6 +162,17 @@ fn sftp(model: &Model) -> impl View + use<> {
             true => expanded.set(false),
             false => dock.update(|on| *on = !*on),
         })
+}
+
+/// The focused space's grid, columns by rows (`120 × 32`), as its view last sized it; nothing
+/// with no space.
+fn grid(model: &Model) -> impl Fn() -> String + 'static {
+    let model = model.clone();
+    move || {
+        let space = model.active_tab().and_then(|tab| tab.focused());
+        let size = space.map(|it| it.session.grid().get());
+        size.map(|it| format!("{} \u{d7} {}", it.cols, it.rows)).unwrap_or_default()
+    }
 }
 
 /// Whether the network shows: unlocked, a remote space focused.

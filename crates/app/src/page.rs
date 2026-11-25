@@ -146,6 +146,8 @@ fn groups(p: Prefs, d: Prefs, model: &Model) -> Vec<Vec<SettingsGroup>> {
     let status = SettingsGroup::new("Status bar")
         .row("Git", "The branch and how many files changed.", switch(p.show_git))
         .back(p.show_git, d.show_git)
+        .row("Terminal size", "The columns and rows of the space you are in.", switch(p.show_size))
+        .back(p.show_size, d.show_size)
         .row("CPU and memory", "How much OneTerm itself uses.", switch(p.show_usage))
         .back(p.show_usage, d.show_usage)
         .row("Clock", "The local time.", switch(p.show_clock))

@@ -91,7 +91,9 @@ the user's canvas "OneTerm" as revised on 2026-11-16 (the Quadra design language
   each half second while the focused space logs; then right the OSC 9;4 meter
   (M3: `build`, a 56 px line, the percentage), a remote space's network (P2; a local one shows
   nothing there, nor one not connected yet): what came and went in the last second, `↓ 12 KB/s ↑ 1.1 KB/s`, counted on
-  the connection's socket, jump hosts' traffic in it; CPU and memory (M4), the `2026-11-16 20:45:07` (24 h, the local time, again each second; in mono, so only its
+  the connection's socket, jump hosts' traffic in it; the focused space's grid, columns by
+  rows in mono (`120 × 32`; `Session::grid`, so it follows the window, a split, the dock, the
+  font's size and the focus; none with no space); CPU and memory (M4), the `2026-11-16 20:45:07` (24 h, the local time, again each second; in mono, so only its
   text is painted again), and last Toggle SFTP panel. Labels are the secondary colour, values
   the text colour, numbers in mono. The icons have the kit's roles (the canvas leaves them in
   the label colour): the folder `warn`, the branch `ok`, the server `info`, the lock
@@ -390,7 +392,8 @@ Appearance (and the UI's text size, 75 to 200 %, the terminals' with it: the app
 shortened to its name, or "Terminal" and the host), SSH & hosts (the count of saved hosts with Add SSH host,
 the recent targets with Forget; Keys, below; Connections: the keepalive, on, every 30 s from 5 to 3600, given up
 after 3 unanswered from 1 to 20), SFTP (the downloads folder), Notifications & signals, Status bar
-(and frames a second, on: `window().frames()` counted each second), and whether the SFTP dock is
+(Git, Terminal size (`status_bar.size`, on: the focused space's columns and rows), CPU and memory, Clock,
+and frames a second, on: `window().frames()` counted each second), and whether the SFTP dock is
 open is kept for each kind of tab that shows (a local shell's, closed at first; an SSH space's,
 open): it follows the tab, and opening or closing it is remembered for the kind,
 Security & lock (Lock now while a password is set; and whether programs may read the clipboard by OSC 52, off), Terminal's

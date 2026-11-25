@@ -185,6 +185,26 @@ fn a_group_with_nothing_to_say_is_not_in_the_status_bar() {
 }
 
 #[test]
+fn the_terminal_s_size_stands_before_cpu_follows_a_resize_and_a_setting_hides_it() {
+    let mut a = app(true);
+    let shell = a.model.active_tab().unwrap().focused().unwrap().session;
+    let said = |s: &quadra_term::Session| format!("{} \u{d7} {}", s.size().cols, s.size().rows);
+    let first = said(&shell);
+    assert_ne!(first, "80 \u{d7} 24", "a view sized it");
+    let size = a.h.get_by_text(&first).node();
+    let cpu = a.h.get_by_text("CPU").node();
+    assert!(a.h.tree.window_rect(size).right() <= a.h.tree.window_rect(cpu).x, "before CPU");
+    // A smaller window: fewer columns and rows, and the bar says them.
+    a.h.size = quadra::Size::new(900.0, 500.0);
+    a.h.frame();
+    a.h.settle();
+    assert!(said(&shell) != first && a.h.has_text(&said(&shell)), "{}", a.h.semantics());
+    a.model.prefs().show_size.set(false);
+    a.h.settle();
+    assert!(!a.h.has_text(&said(&shell)), "off: {}", a.h.semantics());
+}
+
+#[test]
 fn git_says_the_changed_files_and_the_lines_added_and_removed() {
     // A repository of the test's own: a commit, then a line changed, a line added, a new file.
     let root = std::path::absolute(".tmp/bars-git").unwrap();
