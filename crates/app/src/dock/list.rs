@@ -4,7 +4,7 @@
 
 use oneterm_ssh::Entry;
 use quadra::{
-    AnyView, Length, Paint, Role, Signal, State, View, by_text, column, div, dynamic, signal, text,
+    AnyView, Length, Paint, Position, Role, Signal, State, View, by_text, column, div, dynamic, signal, text,
 };
 use quadra_design::{context_menu, icon, icons, token};
 
@@ -34,8 +34,8 @@ pub(super) fn header(model: &Model, d: Dock) -> impl View + use<> {
         .padding_right(token::SPACE_LG)
         .height(by_text(24.0))
         .shrink(0.0)
-        .border_left(2.0)
-        .border_color(token::ACCENT.alpha(0.0))
+        .border_bottom(1.0)
+        .border_color(token::LINE)
         .text_size(12.0)
         .text_color(token::TEXT_2)
         .display(shown(move || !d.dir.with(String::is_empty) && d.said.with(String::is_empty)))
@@ -94,13 +94,13 @@ pub(super) fn entries(model: &Model, d: Dock) -> impl View + use<> {
     context_menu(quadra::scroll(signal(0.0), list).container(area), menus::remote_area(&model_of, d))
 }
 
-/// A row of 26 px: its icon, its name, then its size, when it changed and its permissions,
-/// each under its heading; a row chosen has the press fill and a bar of the accent at its
-/// left, a file's icon in the accent.
+/// A row of 24 px with a line under it: its icon, its name, then its size, when it changed
+/// and its permissions, each under its heading; a row chosen has the accent's tint and a bar
+/// of the accent at its left, a file's icon in the accent.
 fn line(entry: &Entry, d: Dock, width: Signal<f64>) -> quadra::Div {
     let (file, named) = (!entry.dir, entry.name.clone());
     let picked = move || d.selected.with(|it| it.as_deref() == Some(named.as_str()));
-    let (tints, quiets) = (picked.clone(), picked.clone());
+    let (tints, quiets, marks) = (picked.clone(), picked.clone(), picked.clone());
     let tint = move || -> Paint {
         match (file, tints()) {
             (false, _) => token::HUE_BLUE.into(),
@@ -112,18 +112,23 @@ fn line(entry: &Entry, d: Dock, width: Signal<f64>) -> quadra::Div {
     let shape = if entry.dir { icons::FOLDER } else { icons::FILE };
     let size = if file { size(entry.size) } else { String::new() };
     let said = |words: String, width: f32| cell(words, width).text_color(quiet.clone());
+    // The bar of the row chosen, over its left edge: the row's border is the line under it.
+    let mark = move || -> Paint { if marks() { token::ACCENT.into() } else { token::ACCENT.alpha(0.0) } };
+    let bar = div().position(Position::Absolute).left(Length::Px(0.0)).top(Length::Px(0.0));
+    let bar = bar.bottom(Length::Px(0.0)).width(2.0).bg(mark);
     quadra_design::hstack()
         .padding_left(token::SPACE_LG)
         .padding_right(token::SPACE_LG)
         .height(by_text(24.0))
         .shrink(0.0)
-        .border_left(2.0)
-        .border_color(token::ACCENT.alpha(0.0))
+        .border_bottom(1.0)
+        .border_color(token::LINE)
         .hover(|s| s.bg(token::PANEL_HOVER))
         .selected(picked)
-        .when(State::SELECTED, |s| s.bg(token::ACCENT_TINT).border_color(token::ACCENT))
+        .when(State::SELECTED, |s| s.bg(token::ACCENT_TINT))
         .role(Role::Button)
         .label(entry.name.clone())
+        .child(bar)
         .child(div().text_color(tint).child(icon(shape).size(14.0)))
         .child(div().grow(1.0).min_width(Length::Px(0.0)).child(text(entry.name.clone()).ellipsis()))
         .child(said(size, SIZE))

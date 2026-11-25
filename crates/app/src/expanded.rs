@@ -5,10 +5,8 @@
 use std::path::PathBuf;
 
 use oneterm_ssh::Entry;
-use quadra::{
-    Align, AnyView, Length, Role, Signal, View, by_text, column, div, dynamic, effect, row, signal, text,
-};
-use quadra_design::{Variant, checkbox, context_menu, icon_button, icons, token, tooltip};
+use quadra::{Align, AnyView, Length, Role, Signal, View, by_text, column, div, dynamic, row, signal, text};
+use quadra_design::{Variant, context_menu, icon_button, icons, token, tooltip};
 
 use crate::model::Model;
 use crate::panes::{Sort, compared, sorted, visible};
@@ -41,19 +39,15 @@ fn said_row(said: String) -> AnyView {
 }
 
 pub(crate) fn view(model: &Model, d: Dock) -> impl View + use<> {
-    let (follow, compare) = (signal(false), signal(false));
+    let compare = signal(false);
     // The Remote pane is in the dock's order, and the dock in its.
     let (local_sort, remote_sort): (Signal<Sort>, Signal<Sort>) = (signal(Sort::default()), d.sort);
-    follow_cwd(model, d, follow);
     let (host_of, refreshes, goes, gets, collapse) =
         (model.clone(), model.clone(), model.clone(), model.clone(), d.expanded);
     let host = move || {
         let space = host_of.active_tab().and_then(|tab| tab.focused());
         space.and_then(|it| it.remote).map(|it| host_of.host_name(&it)).unwrap_or_default()
     };
-    let hidden = icon_button(icons::EYE, "Show hidden files")
-        .toggled(move || d.hidden.get())
-        .on_click(move || d.hidden.update(|on| *on = !*on));
     let out = icon_button(icons::MINIMIZE_2, "Zoom out")
         .variant(Variant::Link)
         .on_click(move || collapse.set(false));
@@ -76,8 +70,6 @@ pub(crate) fn view(model: &Model, d: Dock) -> impl View + use<> {
                 .text_color(token::TEXT_3)
                 .child(text("ssh session keeps running").ellipsis()),
         )
-        .child(div().text_color(token::TEXT).child(checkbox(follow).label("Sync cwd with terminal")))
-        .child(tooltip("Show hidden files", hidden))
         .child(tooltip("Zoom out: back to the SFTP side panel", out));
     let (local, locals_of) = (d.local, model.clone());
     let local_rows = dynamic(move || {
@@ -147,6 +139,7 @@ pub(crate) fn view(model: &Model, d: Dock) -> impl View + use<> {
             }
         },
         move || local.refresh(),
+        crate::dock::more("Local options", d, false),
         local_sort,
         local_rows,
     );
@@ -159,6 +152,7 @@ pub(crate) fn view(model: &Model, d: Dock) -> impl View + use<> {
             }
         },
         move || d.refresh(&refreshes),
+        crate::dock::more("Remote options", d, true),
         remote_sort,
         context_menu(remote_rows, crate::dock::remote_area(model, d)),
     );
@@ -206,24 +200,4 @@ pub(crate) fn view(model: &Model, d: Dock) -> impl View + use<> {
         .child(head)
         .child(row().grow(1.0).min_height(0.0).child(local_pane).child(middle).child(remote_pane))
         .child(transfers(d))
-}
-
-/// The remote pane follows the focused space's directory while Sync is on, when it is a path
-/// of the server (`/..`, or a `file://` URL of one).
-fn follow_cwd(model: &Model, d: Dock, follow: Signal<bool>) {
-    let model = model.clone();
-    effect(move || {
-        let Some(space) = model.active_tab().and_then(|tab| tab.focused()) else { return };
-        let cwd = space.session.cwd().get();
-        if !follow.get() || space.remote.is_none() {
-            return;
-        }
-        let path = cwd
-            .strip_prefix("file://")
-            .map_or(cwd.as_str(), |rest| rest.find('/').map_or("", |at| &rest[at..]));
-        if path.starts_with('/') && quadra::untrack(|| d.dir.get()) != path {
-            let (model, path) = (model.clone(), path.to_string());
-            quadra::untrack(move || d.load(&model, Some(path)));
-        }
-    });
 }

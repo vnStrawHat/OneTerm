@@ -1,12 +1,14 @@
 //! The SFTP dock (specs/oneterm, "M9 in detail"): 460 px at the workspace's right, the folder of
-//! the focused space's connection in a field, its entries under a header of columns
-//! (`list.rs`), the transfers; files dropped on it upload.
+//! the focused space's connection in a field with Go, Refresh and its options, its entries
+//! under a header of columns (`list.rs`), the transfers; files dropped on it upload.
 
 use quadra::{
-    Align, AnyView, DroppedFiles, Length, Role, View, by_text, column, div, dynamic, effect, memo, row,
-    signal, text,
+    Align, AnyView, DroppedFiles, Length, Role, Signal, View, by_text, column, div, dynamic, effect, memo,
+    row, signal, text,
 };
-use quadra_design::{Variant, button, icon, icon_button, icons, input, token, tooltip};
+use quadra_design::{
+    MenuButton, MenuItem, Variant, button, icon, icon_button, icons, input, menu_icon_button, token, tooltip,
+};
 
 use crate::locked::shown;
 use crate::model::Model;
@@ -19,6 +21,10 @@ mod transfers;
 use list::{entries, header};
 pub(crate) use menus::{Ask, local as local_menu, remote as remote_menu, remote_area};
 use transfers::transfers;
+
+/// Three dots one over the other: what opens a bar's options.
+const MORE: &str =
+    r#"<circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/>"#;
 
 /// How many entries the list shows; a longer folder says how many more.
 const SHOWN: usize = 2000;
@@ -50,6 +56,7 @@ pub(crate) fn dock(model: &Model) -> impl View + use<> {
     let (open, expanded) = (model.ui().dock, model.ui().expanded);
     let d = Dock::new(model, open);
     follow_kind(model, open);
+    follow_cwd(model, d, open);
     // Each space's dock, again whenever another space has the focus (the expanded view too).
     let follows = model.clone();
     let focused = memo(move || follows.active_tab().and_then(|tab| tab.focused()).map(|it| it.files_of()));
@@ -93,6 +100,8 @@ fn panel(model: &Model, d: Dock) -> impl View + use<> {
         .text_size(12.0)
         .font_weight(600)
         .text_color(token::TEXT_2)
+        .border_bottom(1.0)
+        .border_color(token::LINE)
         .child(text("SFTP"))
         .child(
             div()
@@ -124,7 +133,40 @@ fn panel(model: &Model, d: Dock) -> impl View + use<> {
         .child(grip::grip(width))
 }
 
-/// The folder in a field: Enter or the arrow goes to what is typed.
+/// The options after a path's Refresh: Sync CWD (a remote folder's) and Show hidden files,
+/// each checked while on.
+pub(crate) fn more(name: &'static str, d: Dock, remote: bool) -> MenuButton {
+    menu_icon_button(MORE, name, move || {
+        let item = |label: &str, on: Signal<bool>| {
+            MenuItem::new(label).checked(on.get_untracked()).on_select(move || on.update(|on| *on = !*on))
+        };
+        let sync = remote.then(|| item("Sync CWD", d.follow));
+        sync.into_iter().chain([item("Show hidden files", d.hidden)]).collect()
+    })
+}
+
+/// Sync CWD: while it is on and the dock is open, the remote folder follows the focused
+/// space's directory, when that is a path of the server (`/..`, or a `file://` URL of one).
+fn follow_cwd(model: &Model, d: Dock, open: Signal<bool>) {
+    let model = model.clone();
+    effect(move || {
+        let Some(space) = model.active_tab().and_then(|tab| tab.focused()) else { return };
+        let cwd = space.session.cwd().get();
+        if !d.follow.get() || !open.get() || space.remote.is_none() {
+            return;
+        }
+        let path = cwd
+            .strip_prefix("file://")
+            .map_or(cwd.as_str(), |rest| rest.find('/').map_or("", |at| &rest[at..]));
+        if path.starts_with('/') && quadra::untrack(|| d.dir.get()) != path {
+            let (model, path) = (model.clone(), path.to_string());
+            quadra::untrack(move || d.load(&model, Some(path)));
+        }
+    });
+}
+
+/// The folder in a field: Enter or the arrow goes to what is typed; then Refresh and the
+/// options, as a pane of the expanded view has them.
 fn path(model: &Model, d: Dock) -> impl View + use<> {
     let typed = signal(String::new());
     effect(move || {
@@ -139,17 +181,18 @@ fn path(model: &Model, d: Dock) -> impl View + use<> {
             d.load(model, Some(to));
         }
     };
-    let (submits, goes) = (model.clone(), model.clone());
-    let field = input(typed).mono().small().fill().label("Remote path").test_id("sftp-path");
-    row()
-        .align_items(Align::Center)
-        .gap(token::SPACE_XS)
-        .padding_left(token::SPACE_MD)
+    let (submits, goes, again) = (model.clone(), model.clone(), model.clone());
+    let field = input(typed).mono().small().height(22.0).fill().label("Remote path").test_id("sftp-path");
+    quadra_design::hstack()
+        .padding_left(token::SPACE_LG)
         .padding_right(token::SPACE_SM)
-        .padding_bottom(token::SPACE_SM)
+        .height(by_text(28.0))
+        .shrink(0.0)
         .display(shown(move || !d.dir.with(String::is_empty)))
         .child(field.on_submit(move |_| go(&submits)))
         .child(icon_button(icons::ARROW_RIGHT, "Go to the typed path").on_click(move || go(&goes)))
+        .child(icon_button(icons::REFRESH_CW, "Refresh remote").on_click(move || d.refresh(&again)))
+        .child(more("Remote options", d, true))
 }
 
 /// What the dock shows for a local space: why it is empty, and a button that shows the

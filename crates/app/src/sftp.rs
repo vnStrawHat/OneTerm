@@ -39,6 +39,8 @@ pub(crate) struct Dock {
     pub selected: Signal<Option<String>>,
     /// Whether names that start with `.` show.
     pub hidden: Signal<bool>,
+    /// Sync CWD: the remote folder goes where the focused space's shell is.
+    pub follow: Signal<bool>,
     /// The column the remote entries are sorted by, in the dock and in the expanded view.
     pub sort: Signal<crate::panes::Sort>,
     /// The expanded view, whose Local pane downloads go to.
@@ -67,6 +69,7 @@ impl Dock {
             tick: signal(0),
             selected: signal(None),
             hidden: signal(false),
+            follow: signal(false),
             sort: signal(crate::panes::Sort::default()),
             expanded: model.ui().expanded,
             local: Local::new(downloads(model)),

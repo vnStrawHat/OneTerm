@@ -1,5 +1,5 @@
-//! A pane of the expanded SFTP view: a bar with its label, its folder in a field, Go and
-//! Refresh; a header row; its rows.
+//! A pane of the expanded SFTP view: a bar with its label, its folder in a field, Go, Refresh
+//! and its options; a header row; its rows.
 
 use quadra::{Align, Length, Role, Signal, View, by_text, column, div, effect, row, signal, text};
 use quadra_design::{icon_button, icons, input, token};
@@ -36,6 +36,7 @@ pub(super) fn pane(
     path: impl Fn() -> String + 'static,
     go: impl Fn(String) + Clone + 'static,
     again: impl FnMut() + 'static,
+    more: impl View + 'static,
     sort: Signal<Sort>,
     rows: impl View + 'static,
 ) -> impl View {
@@ -68,7 +69,8 @@ pub(super) fn pane(
             icon_button(icons::ARROW_RIGHT, side.go_name)
                 .on_click(move || goes(typed.get_untracked().trim().to_string())),
         )
-        .child(icon_button(icons::REFRESH_CW, side.again_name).on_click(again));
+        .child(icon_button(icons::REFRESH_CW, side.again_name).on_click(again))
+        .child(more);
     let header = row()
         .gap(token::SPACE_LG)
         .padding_x(token::SPACE_LG)

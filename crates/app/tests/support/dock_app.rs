@@ -20,6 +20,7 @@ pub struct App {
     /// The app's folders, and what stands for the system's opener.
     pub data: PathBuf,
     pub shell: Rc<quadra_shell::FakeShell>,
+    pub model: oneterm::Model,
 }
 
 /// The app with one tab connected to a test server by a key, its dock open as an SSH tab's is.
@@ -45,6 +46,8 @@ pub fn app(name: &str) -> App {
         Some(_) => remote_shell_with(launch, |_| options(port, &base, Auth::Auto)),
         None => echo(),
     });
+    let made = Rc::new(std::cell::RefCell::new(None));
+    let kept = made.clone();
     let mut h = Harness::new();
     h.size = quadra::Size::new(1400.0, 800.0);
     h.tree.set_keymap(Rc::new(keymap()));
@@ -55,11 +58,13 @@ pub fn app(name: &str) -> App {
         let app = OneTerm::new(sessions);
         let target = oneterm_ssh::Target { user: "tester".into(), host: "127.0.0.1".into(), port };
         app.model.connect_to(Remote::new(target, Auth::Key(key_file.clone())), false);
+        *kept.borrow_mut() = Some(app.model.clone());
         app.view()
     });
     h.settle();
     // An SSH tab shows its dock by itself.
-    App { h, served, downloads, data, shell }
+    let model = made.borrow_mut().take().expect("the window made its model");
+    App { h, served, downloads, data, shell, model }
 }
 
 impl App {
