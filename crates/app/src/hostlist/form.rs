@@ -23,6 +23,8 @@ pub(super) struct Form {
     pub(super) jump: Signal<usize>,
     pub(super) forwards: Signal<String>,
     pub(super) startup: Signal<String>,
+    /// Shell integration for this host's shell.
+    pub(super) integration: Signal<bool>,
     /// What the colour picker holds: `#rrggbb`, or empty for the group's.
     pub(super) tag: Signal<String>,
     /// The password or passphrase to save, and the master password that seals it while the
@@ -48,6 +50,7 @@ pub(crate) fn add_dialog(model: &Model) -> impl View + use<> {
         forwards: s(),
         tag: s(),
         startup: s(),
+        integration: signal(true),
         secret: s(),
         master: s(),
         again: s(),
@@ -138,6 +141,7 @@ fn fill(model: &Model, form: Form, host: &Host) {
     form.jump.set(jump.unwrap_or(0));
     form.tag.set(model.saved_tag(&host.name).map_or_else(String::new, |(word, _)| picked(&word)));
     form.startup.set(model.startup_name(&host.name).unwrap_or_default());
+    form.integration.set(model.integrates(&host.name));
 }
 
 /// Saves the form as a host, in place of `was` (the one edited) when it had another name.
@@ -192,6 +196,7 @@ fn save(model: &Model, form: Form, was: Option<String>) {
     model.set_host_tag(&name, tag.as_deref());
     super::secret::save(model, form, &name, &bound, kept);
     model.set_startup(&name, Some(form.startup.get_untracked()));
+    model.set_integrates(&name, form.integration.get_untracked());
     for field in [
         form.name,
         form.group,
@@ -209,4 +214,5 @@ fn save(model: &Model, form: Form, was: Option<String>) {
         crate::vault::wipe(field);
     }
     form.jump.set(0);
+    form.integration.set(true);
 }

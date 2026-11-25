@@ -64,6 +64,8 @@ pub struct Prefs {
     pub rail_width: Signal<f64>,
     pub rail_folded: Signal<bool>,
     /// Whether the SFTP dock is open while a local tab shows, and while an SSH tab does.
+    /// The saved hosts whose shell is typed no shell integration, by name.
+    pub plain_hosts: Signal<Vec<String>>,
     pub dock_local: Signal<bool>,
     pub dock_ssh: Signal<bool>,
     /// The dock's Sync CWD and Show hidden files, kept as they were left.
@@ -158,6 +160,7 @@ impl Prefs {
             vertical: s.value("tabs.vertical", true),
             rail_width: s.value("tabs.rail_width", 270.0),
             rail_folded: s.value("tabs.rail_folded", false),
+            plain_hosts: s.value("ssh.hosts_without_shell_integration", Vec::new()),
             dock_local: s.value("sftp.dock_open_local", false),
             dock_ssh: s.value("sftp.dock_open_ssh", true),
             dock_follow: s.value("sftp.sync_cwd", false),

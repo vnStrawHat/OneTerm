@@ -37,11 +37,13 @@ pub(super) fn connect(model: &Model, name: &str, form: Form) {
             None => Secret::new(String::new()),
         },
     };
+    let base = model.launch(None);
     let launch = crate::shells::Launch {
         ssh: Some(remote),
         secret: Some(secret),
         startup: model.startup(name),
-        ..model.launch(None)
+        integration: base.integration && model.integrates(name),
+        ..base
     };
     let space = model.space(launch);
     match space.session.kept::<Conn>() {

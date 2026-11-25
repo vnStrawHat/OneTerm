@@ -1,9 +1,10 @@
 //! What the host editor shows (specs/oneterm, "M8 in detail"), two fields to a row: name; group and
 //! colour tag; address and port; username and jump host; auth and its password or passphrase,
-//! the key file; the master password when one is needed; startup command and forwards.
+//! the key file; the master password when one is needed; startup command, shell integration
+//! and forwards.
 
 use quadra::{AnyView, Color, Div, Paint, Signal, Track, View, column, div, dynamic, row, text};
-use quadra_design::{Tone, alert, field, input, select, size, token};
+use quadra_design::{Tone, alert, field, input, select, size, switch, token};
 
 use super::AUTHS;
 use super::form::Form;
@@ -84,6 +85,10 @@ pub(super) fn body(
             field("Startup command", crate::startup::picker(model, form.startup, "host-startup"))
                 .help("Written once the shell is open. The commands are kept in Settings, SSH & hosts."),
         )
+        .child(field("Shell integration", switch(form.integration).test_id("host-integration")).help(
+            "Types a line into the shell once it opens, so it reports its folder and its prompts. \
+                 Turn it off for a shell that is not bash, zsh or another POSIX shell.",
+        ))
         .child(field(
             "Forwards",
             text_field(form.forwards, "8080:localhost:80 R9000:localhost:3000 D1080", "host-forwards"),

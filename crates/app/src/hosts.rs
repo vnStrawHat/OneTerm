@@ -120,6 +120,23 @@ impl Model {
         self.prefs().hosts.update(|rows| rows.retain(|it| it.first().map(String::as_str) != Some(name)));
         self.set_sealed(name, None);
         self.set_startup(name, None);
+        self.set_integrates(name, true);
+    }
+
+    /// Whether a saved host's shell is typed shell integration's line: the host's own switch
+    /// (the setting of that name has to be on too).
+    pub(crate) fn integrates(&self, name: &str) -> bool {
+        !self.prefs().plain_hosts.with_untracked(|all| all.iter().any(|it| it == name))
+    }
+
+    pub(crate) fn set_integrates(&self, name: &str, on: bool) {
+        let listed = !self.integrates(name);
+        if listed == on {
+            self.prefs().plain_hosts.update(|all| match on {
+                true => all.retain(|it| it != name),
+                false => all.push(name.to_string()),
+            });
+        }
     }
 
     /// What is written once a host's shell is open: the command it chose, as the list has it
@@ -145,13 +162,14 @@ impl Model {
         });
     }
 
-    /// A space connected to `remote`: with the saved host's startup command, and its saved
-    /// secret when the data key is in memory.
+    /// A space connected to `remote`: with the saved host's startup command and its switch of
+    /// shell integration, and its saved secret when the data key is in memory.
     pub(crate) fn launch_to(&self, remote: Remote) -> Launch {
         let host = self.hosts().into_iter().find(|it| it.remote.target == remote.target);
-        let startup = host.and_then(|it| self.startup(&it.name));
-        let secret = self.saved_secret(&remote);
-        Launch { ssh: Some(remote), secret, startup, ..self.launch(None) }
+        let startup = host.as_ref().and_then(|it| self.startup(&it.name));
+        let (secret, base) = (self.saved_secret(&remote), self.launch(None));
+        let integration = base.integration && host.is_none_or(|it| self.integrates(&it.name));
+        Launch { ssh: Some(remote), secret, startup, integration, ..base }
     }
 
     /// Opens a tab connected to a host, or a space beside the focused one; it is recent.

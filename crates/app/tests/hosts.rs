@@ -177,11 +177,19 @@ fn a_host_is_edited_in_its_dialog_and_a_new_name_takes_its_place() {
     );
     a.h.get_by_test_id("host-name").set_value("db-main");
     a.h.get_by_test_id("host-target").set_value("trung@10.0.0.10");
+    // Its own switch of shell integration, on until it is turned off.
+    a.h.get_by_test_id("host-integration").click();
     a.h.settle();
     a.h.get_by_role(Role::Button, "Save").click();
     a.h.settle();
     assert_eq!(a.rows(), [["db-main", "Staging", "trung@10.0.0.10", "Auto", "", "", ""]]);
     assert!(!a.h.has_text("Edit SSH host"), "the dialog closed");
+    let plain = a.settings.value("ssh.hosts_without_shell_integration", Vec::<String>::new()).get();
+    assert_eq!(plain, ["db-main"]);
+    a.click_host("db-main", 1);
+    a.connect();
+    let launches = a.made.borrow();
+    assert!(launches[0].integration && !launches.last().unwrap().integration, "off for this host alone");
 }
 
 #[test]
