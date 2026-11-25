@@ -147,7 +147,7 @@ impl Prefs {
             shell_program: s.value("terminal.shell_program", String::new()),
             last_dir: s.value("terminal.last_dir", String::new()),
             shell_args: s.value("terminal.shell_args", String::new()),
-            start: s.choice("terminal.start_in", &STARTS),
+            start: s.choice_or("terminal.start_in", &STARTS, 1),
             force_links: s.value("terminal.force_hyperlink", true),
             integration: s.value("terminal.shell_integration", true),
             update_check: s.value("updates.check_at_start", true),

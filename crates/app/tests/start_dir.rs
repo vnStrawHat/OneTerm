@@ -30,6 +30,9 @@ fn the_last_directory_used_is_where_a_new_tab_starts_and_home_once_it_is_gone() 
     });
     h.settle();
     let model: Model = built.borrow_mut().take().unwrap();
+    // Unless the settings say otherwise a space starts in the home folder.
+    let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    assert_eq!((model.prefs().start.get_untracked(), starts.borrow()[0].clone()), (1, home));
     model.prefs().start.set(2);
     let here = std::path::absolute(".").unwrap();
     let said = format!("\x1b]9;9;{}\x07", here.display());
