@@ -579,7 +579,8 @@ Only with a master password (Security & lock: set, change, remove; nothing of it
 it is the password that opens the vault). Locks after the idle time (10 min default, 1-480)
 or at once with `Ctrl+Shift+L` and the title bar's button. Locked: the workspace blurred and
 dimmed behind, the title bar usable and saying "Locked", a card where dialogs hang (the
-dialog's look: level 2, 440 wide, 80 px from the window top, centred): a 16 px lock in the
+dialog's look: level 2, 440 wide, in the middle of the workspace it covers, across and down:
+the user's decision, 2026-11-26; it hung 80 px from the window's top): a 16 px lock in the
 accent and "OneTerm is locked" (16 px), "Locked after N minutes idle. Your sessions are still
 running." in the secondary colour, the field labelled Password (32 px) with Show password at
 its end, then in 12 px `n sessions connected` after a green dot and `n new while locked` after

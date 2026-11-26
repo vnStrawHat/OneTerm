@@ -78,6 +78,15 @@ impl App {
         let field = self.h.get_by_test_id("unlock").node();
         let field = self.h.tree.window_rect(self.h.tree.parent(field).expect("its frame"));
         assert_eq!(field.width, 414.0);
+        // The card is in the middle of what it covers, across and down.
+        let mut card = self.h.get_by_test_id("unlock").node();
+        while self.h.tree.window_rect(card).width != 440.0 {
+            card = self.h.tree.parent(card).expect("the card");
+        }
+        let over = self.h.tree.window_rect(self.h.tree.parent(card).expect("what it covers"));
+        let (at, middle) = (self.h.tree.window_rect(card).center(), over.center());
+        assert!((at.x - middle.x).abs() <= 1.0 && (at.y - middle.y).abs() <= 1.0, "{at:?} {middle:?}");
+        assert!(over.height > 400.0, "it covers the workspace: {over:?}");
         self.h.get_by_test_id("unlock").set_value(password);
         self.h.settle();
         self.h.get_by_role(Role::Button, "Unlock").click();
