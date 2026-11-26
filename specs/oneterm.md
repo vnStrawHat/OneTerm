@@ -809,9 +809,8 @@ thread never waits on the network.
     settings by name, None first ("Startup commands", below).
   - **Forwards**: a list in the place of a field of ssh's words (`8080:localhost:80
     R9000:localhost:3000 D1080`), which is still what is saved. A row a rule: Type (the kit's
-    select of Local, Remote and Dynamic; its menu is to say each one's way beside it,
-    `this computer → host`, `host → this computer`, `SOCKS proxy`, once the kit's select
-    can say more of an option), Listen port (mono, 72 px), an arrow, Destination (mono,
+    select of Local, Remote and Dynamic; its menu says each one's way beside its name,
+    `this computer → host`, `host → this computer`, `SOCKS proxy`), Listen port (mono, 72 px), an arrow, Destination (mono,
     `host:port`, the room left), Remove forward (a bin). A
     Dynamic rule has no arrow and no Destination. Under each row a sentence in 12 px and the
     secondary colour says what the rule does, and follows what is typed: `Port 8080 on this

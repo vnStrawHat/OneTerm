@@ -76,6 +76,9 @@ fn a_rule_says_what_it_does_and_one_that_is_no_forward_is_not_saved() {
     for (row, kind) in [(1, "Remote"), (2, "Dynamic")] {
         assert!(a.h.tree.act(types[row], &quadra_tree::SemanticAction::Click));
         a.h.settle();
+        // The menu says each one's way.
+        let menu = a.h.semantics();
+        assert!(menu.contains("host \u{2192} this computer") && menu.contains("SOCKS proxy"), "{menu}");
         a.h.get_by_role(Role::MenuItem, kind).click();
         a.h.settle();
     }

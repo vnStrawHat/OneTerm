@@ -10,6 +10,8 @@ use crate::locked::shown;
 
 /// The types: Local opens a port here, Remote on the host, Dynamic a SOCKS proxy here.
 const WAYS: [&str; 3] = ["Local", "Remote", "Dynamic"];
+/// The way each one's connections go, said beside its name in the menu.
+const GOES: [&str; 3] = ["this computer \u{2192} host", "host \u{2192} this computer", "SOCKS proxy"];
 const DYNAMIC: usize = 2;
 
 /// A rule as its row holds it: the type's place in `WAYS`, and what is typed.
@@ -97,7 +99,7 @@ pub(super) fn list(rules: Signal<Vec<Rule>>) -> quadra_design::Form {
             let goes = move || rule.way.get() != DYNAMIC;
             let field = |value, hint: &str, name: &'static str| input(value).placeholder(hint).label(name);
             let line = columns()
-                .child(select(WAYS, rule.way).label("Type"))
+                .child(select(WAYS, rule.way).details(GOES).label("Type"))
                 .child(field(rule.listen, "8080", "Listen port").mono())
                 // A Dynamic rule keeps the two places, empty: Remove stays at the row's end.
                 .child(

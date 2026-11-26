@@ -49,6 +49,8 @@ story, with its tests and pictures, is in that repository's `docs/progress.md` a
 - 2026-11-25: the SFTP paths are underlined fields (the dock's and both panes'). In a
   space two clicks select a word, three the line, and Shift and a click reaches from the
   selection there is (Quadra's fix; `tests/select.rs`).
+- 2026-11-26: the menu of a forward's type says each one's way (Quadra's select has a detail
+  for each option).
 - 2026-11-26: the host editor has three tabs, Connection, Shell and Forwards; its forwards
   are a list of rules, each said in a sentence, in the place of a field of ssh's words.
 - 2026-11-26: the lock card stands in the middle of the workspace, across and down.
