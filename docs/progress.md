@@ -49,6 +49,8 @@ story, with its tests and pictures, is in that repository's `docs/progress.md` a
 - 2026-11-25: the SFTP paths are underlined fields (the dock's and both panes'). In a
   space two clicks select a word, three the line, and Shift and a click reaches from the
   selection there is (Quadra's fix; `tests/select.rs`).
+- 2026-11-26: a select's value stays on one line, cut with an ellipsis (Quadra's fix): a
+  key with a long path no longer spills out of its field in the host dialogs.
 - 2026-11-26: a saved host's row in the `+` menu (under Recent too) and in the palette opens
   its Connect dialog, as its row in the rail does; the `+` menu's hosts of no group are under
   `SSH hosts`, not under Recent; the host editor has Shell integration beside Auth method,

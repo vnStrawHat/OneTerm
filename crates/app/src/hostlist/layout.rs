@@ -62,10 +62,11 @@ pub(super) fn body(
             _ => "The password is optional. Left empty, OneTerm asks for it when you connect.",
         }));
     let integration = switch(form.integration).test_id("host-integration");
-    let about = div().text_size(size::TEXT_SM.size).text_color(token::TEXT_2).child(text(
-        "Shell integration types a line into the shell once it opens, so it reports its folder and \
-         its prompts. Turn it off for a shell that is not bash, zsh or another POSIX shell.",
-    ));
+    // One line: what it does is said in the settings.
+    let about = div()
+        .text_size(size::TEXT_SM.size)
+        .text_color(token::TEXT_2)
+        .child(text("Shell integration works with bash, zsh and other POSIX shells."));
     let how = pair(field("Auth method", select(AUTHS, auth)), field("Shell integration", integration));
     // The key beside its passphrase; the password alone, under the auth.
     let key = field("Key file", crate::sshkeys::picker(model, form.key, "host-key"));

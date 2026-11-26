@@ -796,7 +796,8 @@ thread never waits on the network.
   Name; Group beside Colour tag; Address (mono; a whole `user@host:port` is taken too) beside
   Port (88 px); Username (`Ask when connecting`, Optional.) beside Jump host; Auth method
   beside Shell integration (a switch; "M7 in detail"), then a line of what the auth does and
-  one of what shell integration does and when to turn it off; for Key file its key (a select of the Keys as in the Connect
+  one of the shells shell integration works with (`Shell integration works with bash, zsh and
+  other POSIX shells.`: one line, what it does is said in the settings); for Key file its key (a select of the Keys as in the Connect
   dialog) beside its Passphrase, for Password the Password under Auth method (each with the
   eye; for Auto and SSH agent neither); the master password when one is
   needed (Saved passwords); Startup command, a select of the commands of the settings by
