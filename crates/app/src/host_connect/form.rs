@@ -1,7 +1,7 @@
 //! The Connect dialog's form (specs/oneterm, "The rail"): what the host is (its address, jump host
 //! and host key), then the fields to change for this connection, two to a row.
 
-use quadra::{AnyView, Div, Signal, Track, View, column, div, dynamic, row, text};
+use quadra::{AnyView, Display, Div, Signal, Track, View, column, div, dynamic, row, text};
 use quadra_design::{Tone, alert, checkbox, field, fonts, icon, icons, input, select, size, token};
 
 use super::{AUTHS, Form, Go, KEY, PASSWORD, USER};
@@ -125,7 +125,8 @@ pub(super) fn body(
         .child(summary(host, key_known))
         .child(pair(focused(column().child(user), USER), how));
     body = body
-        .child(column().display(shown(move || auth.get() == 2)).child(keys))
+        // The two columns themselves, shown by the auth: a child of the form, as wide as it.
+        .child(keys.display(move || if auth.get() == 2 { Display::Grid } else { Display::None }))
         .child(focused(
             column().node_ref(secret_at).display(shown(move || matches!(auth.get(), 0 | 3))).child(password),
             PASSWORD,

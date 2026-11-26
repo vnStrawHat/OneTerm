@@ -793,16 +793,37 @@ thread never waits on the network.
   fields, pickers and selects are all 28 px high. Quick connect has
   "Save as host".
 - **The host editor** (Add SSH host, or `Edit <name>` from a row's Edit… or the Connect
-  dialog's `Edit host…`), 440 wide: its head the colour tag the host will have and the title;
-  Name; Group beside Colour tag; Address (mono; a whole `user@host:port` is taken too) beside
-  Port (88 px); Username (`Ask when connecting`, Optional.) beside Jump host; Auth method
-  beside Shell integration (a switch; "M7 in detail"), then a line of what the auth does and
-  one of the shells shell integration works with (`Shell integration works with bash, zsh and
-  other POSIX shells.`: one line, what it does is said in the settings); for Key file its key (a select of the Keys as in the Connect
-  dialog) beside its Passphrase, for Password the Password under Auth method (each with the
-  eye; for Auto and SSH agent neither); the master password when one is
-  needed (Saved passwords); Startup command, a select of the commands of the settings by
-  name, None first ("Startup commands", below); Forwards. The Username and Port filled take the
+  dialog's `Edit host…`), 560 wide (the kit's wide dialog: a forward's destination is long):
+  its head the colour tag the host will have and the title;
+  then three tabs (the kit's, underlined; the user's decision, 2026-11-26: the form had grown
+  too long), Connection first whenever it opens:
+  - **Connection**: Name; Group beside Colour tag; Address (mono; a whole `user@host:port` is
+    taken too) beside Port (88 px); Username (`Ask when connecting`, Optional.) beside Auth
+    method with a line of what the auth does under it, as the Connect dialog has them; for
+    Key file its key (a select of the Keys as in the Connect dialog) beside its Passphrase,
+    for Password the Password as wide as the form (each with the eye; for Auto and SSH agent
+    neither); the master password when one is needed (Saved passwords); Jump host.
+  - **Shell**: a row each. Shell integration ("M7 in detail"): its name at the left and its
+    switch at the right, on one line, with what it does and when to turn it off under them; Startup command, a select of the commands of the
+    settings by name, None first ("Startup commands", below).
+  - **Forwards**: a list in the place of a field of ssh's words (`8080:localhost:80
+    R9000:localhost:3000 D1080`), which is still what is saved. A row a rule: Type (the kit's
+    select of Local, Remote and Dynamic; its menu is to say each one's way beside it,
+    `this computer → host`, `host → this computer`, `SOCKS proxy`, once the kit's select
+    can say more of an option), Listen port (mono, 72 px), an arrow, Destination (mono,
+    `host:port`, the room left), Remove forward (a bin). A
+    Dynamic rule has no arrow and no Destination. Under each row a sentence in 12 px and the
+    secondary colour says what the rule does, and follows what is typed: `Port 8080 on this
+    computer opens localhost:80 as seen from the host.`, `Port 9000 on the host opens
+    localhost:3000 as seen from this computer.`, `Port 1080 on this computer is a SOCKS proxy
+    through the host.`; while the port or the destination is not one yet, it asks for it
+    (`Give the port to listen on, 1 to 65535.`, `Give the destination as host:port, such as
+    localhost:80.`). With no rule the list says `No forwards.`; `Add forward` adds an empty
+    row, Local. A row left empty is not saved; one that is no forward keeps the dialog open
+    on Forwards and a notice says which (`Not a forward: …`), as an address that is no
+    target keeps it open (`Not a target: …`): the dialog closes once the host is saved.
+
+  The Username and Port filled take the
   place of what the Address says. The foot: `Delete host…` at its left in the danger colour (Edit only), Cancel and
   Save or Add host (Enter); `Delete host…` asks once more (`Delete <name>?` at the form's end,
   Keep and Delete in the danger colour), and deleting forgets its saved password and startup

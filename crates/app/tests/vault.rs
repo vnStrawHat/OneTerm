@@ -213,6 +213,8 @@ fn a_startup_command_is_written_once_the_shell_opens() {
     commands.set(vec![vec!["Attach".to_string(), "tmux attach".to_string()]]);
     let choose = |a: &mut App, name: &str| {
         a.menu("tmuxed", "Edit\u{2026}");
+        a.h.get_by_role(Role::Tab, "Shell").click();
+        a.h.settle();
         a.h.get_by_test_id("host-startup").click();
         a.h.settle();
         a.h.get_by_role(Role::MenuItem, name).click();

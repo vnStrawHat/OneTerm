@@ -10,6 +10,9 @@ use crate::hosts::{Host, auth_of};
 use crate::model::Model;
 use crate::shells::Remote;
 
+/// The kit's wide dialog: a rule of a forward holds a destination, which is long.
+const WIDE: f32 = 560.0;
+
 #[derive(Clone, Copy)]
 pub(super) struct Form {
     pub(super) name: Signal<String>,
@@ -21,7 +24,9 @@ pub(super) struct Form {
     pub(super) auth: Signal<usize>,
     pub(super) key: Signal<String>,
     pub(super) jump: Signal<usize>,
-    pub(super) forwards: Signal<String>,
+    /// The rules of the Forwards tab, and the tab that shows.
+    pub(super) forwards: Signal<Vec<super::forwards::Rule>>,
+    pub(super) tab: Signal<usize>,
     pub(super) startup: Signal<String>,
     /// Shell integration for this host's shell.
     pub(super) integration: Signal<bool>,
@@ -47,7 +52,8 @@ pub(crate) fn add_dialog(model: &Model) -> impl View + use<> {
         auth: signal(0),
         key: s(),
         jump: signal(0),
-        forwards: s(),
+        forwards: signal(Vec::new()),
+        tab: signal(0),
         tag: s(),
         startup: s(),
         integration: signal(true),
@@ -56,6 +62,12 @@ pub(crate) fn add_dialog(model: &Model) -> impl View + use<> {
         again: s(),
     };
     let (saves, changes, fills, gone) = (model.clone(), model.clone(), model.clone(), model.clone());
+    // A new host starts on Connection.
+    effect(move || {
+        if open.get() {
+            form.tab.set(0);
+        }
+    });
     let confirming = signal(false);
     // Asked to edit a host, the form says what it is; closed, it is no longer being edited.
     effect(move || match editing.get() {
@@ -87,15 +99,23 @@ pub(crate) fn add_dialog(model: &Model) -> impl View + use<> {
     let adds = quadra_design::dialog(open, "Add SSH host", move || {
         super::layout::body(&adds_body, form, None, confirming)
     })
+    .width(WIDE)
     .head(move || super::layout::head(form, "Add SSH host".into()))
     .action("Cancel", Variant::Secondary, || {})
-    .action("Add host", Variant::Primary, move || save(&saves, form, None))
-    .shortcut("Enter");
+    // Open until the host is saved: what is no target or no forward is said, and mended here.
+    .action("Add host", Variant::Primary, move || {
+        if save(&saves, form, None) {
+            open.set(false);
+        }
+    })
+    .shortcut("Enter")
+    .stays_open();
     let back = model.ui().opening.back;
     let not = move || !confirming.get();
     let edits = quadra_design::dialog(changing, "Edit SSH host", move || {
         super::layout::body(&edits_body, form, editing.get_untracked(), confirming)
     })
+    .width(WIDE)
     .head(move || super::layout::head(form, format!("Edit {}", editing.get_untracked().unwrap_or_default())))
     .aside("Delete host\u{2026}", move || confirming.set(true))
     .danger()
@@ -103,8 +123,13 @@ pub(crate) fn add_dialog(model: &Model) -> impl View + use<> {
     .shown(not)
     .action("Cancel", Variant::Secondary, || {})
     .shown(not)
-    .action("Save", Variant::Primary, move || save(&changes, form, editing.get_untracked()))
+    .action("Save", Variant::Primary, move || {
+        if save(&changes, form, editing.get_untracked()) {
+            changing.set(false);
+        }
+    })
     .shortcut("Enter")
+    .stays_open()
     .shown(not)
     .action("Keep", Variant::Secondary, move || confirming.set(false))
     .stays_open()
@@ -128,7 +153,6 @@ fn fill(model: &Model, form: Form, host: &Host) {
         oneterm_ssh::Auth::Password => (3, String::new()),
         oneterm_ssh::Auth::Auto => (0, String::new()),
     };
-    let forwards: Vec<String> = host.remote.forwards.iter().map(oneterm_ssh::Forward::label).collect();
     let jump = model.jump_choices().iter().position(|it| *it == host.jump && !host.jump.is_empty());
     form.name.set(host.name.clone());
     form.group.set(host.group.clone());
@@ -138,19 +162,22 @@ fn fill(model: &Model, form: Form, host: &Host) {
     form.user.set(target.user.clone());
     form.auth.set(auth);
     form.key.set(key);
-    form.forwards.set(forwards.join(" "));
+    let rules = host.remote.forwards.iter().map(super::forwards::Rule::of).collect();
+    form.forwards.update(|it| *it = rules);
+    form.tab.set(0);
     form.jump.set(jump.unwrap_or(0));
     form.tag.set(model.saved_tag(&host.name).map_or_else(String::new, |(word, _)| picked(&word)));
     form.startup.set(model.startup_name(&host.name).unwrap_or_default());
     form.integration.set(model.integrates(&host.name));
 }
 
-/// Saves the form as a host, in place of `was` (the one edited) when it had another name.
-fn save(model: &Model, form: Form, was: Option<String>) {
+/// Saves the form as a host, in place of `was` (the one edited) when it had another name;
+/// false when it says no host, and a notice says why.
+fn save(model: &Model, form: Form, was: Option<String>) -> bool {
     let typed = form.target.get_untracked();
     let Some(mut target) = Target::parse(typed.trim()) else {
         model.notify(Notice::new("Add SSH host").body(format!("Not a target: {typed}")).tone(Tone::Warning));
-        return;
+        return false;
     };
     // The username and port fields, when filled, take the place of what the address says.
     let user = form.user.get_untracked();
@@ -163,14 +190,15 @@ fn save(model: &Model, form: Form, was: Option<String>) {
     let name = form.name.get_untracked().trim().to_string();
     let name = if name.is_empty() { target.host.clone() } else { name };
     let mut remote = Remote::new(target, auth_of(form.auth.get_untracked(), form.key.get_untracked()));
-    for word in form.forwards.get_untracked().split_whitespace() {
-        let Some(forward) = oneterm_ssh::Forward::parse(word) else {
-            model.notify(
-                Notice::new("Add SSH host").body(format!("Not a forward: {word}")).tone(Tone::Warning),
-            );
-            return;
-        };
-        remote.forwards.push(forward);
+    match super::forwards::read(form.forwards) {
+        Ok(forwards) => remote.forwards = forwards,
+        // On its tab, where the row that is no forward says what it lacks.
+        Err(word) => {
+            form.tab.set(2);
+            let notice = Notice::new("Add SSH host").body(format!("Not a forward: {word}"));
+            model.notify(notice.tone(Tone::Warning));
+            return false;
+        }
     }
     let jump = model.jump_host(form.jump.get_untracked()).map_or(String::new(), |it| it.name);
     // The secret saved for the host edited stays unless another is typed, with the target
@@ -205,7 +233,6 @@ fn save(model: &Model, form: Form, was: Option<String>) {
         form.port,
         form.user,
         form.key,
-        form.forwards,
         form.tag,
         form.secret,
         form.master,
@@ -216,4 +243,7 @@ fn save(model: &Model, form: Form, was: Option<String>) {
     }
     form.jump.set(0);
     form.integration.set(true);
+    form.forwards.update(Vec::clear);
+    form.tab.set(0);
+    true
 }

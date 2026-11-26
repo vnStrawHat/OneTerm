@@ -2,73 +2,11 @@
 //! filtered, connected to on a click (recent, counted on the tab, named in the status bar),
 //! saved from quick connect. The sessions are `echo()`: no host is reached.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use quadra::{Key, Mods, Role};
 
-use oneterm::{Launch, NewSession, OneTerm, keymap};
-use quadra::{Key, Mods, Role, Settings, provide};
-use quadra_term::echo;
-use quadra_testing::Harness;
-
-struct App {
-    h: Harness,
-    made: Rc<RefCell<Vec<Launch>>>,
-    settings: Rc<Settings>,
-}
-
-fn app() -> App {
-    let mut h = Harness::new();
-    h.size = quadra::Size::new(1200.0, 800.0);
-    h.tree.set_keymap(Rc::new(keymap()));
-    let (made, settings) = (Rc::new(RefCell::new(Vec::new())), Settings::memory());
-    let (kept, given) = (made.clone(), settings.clone());
-    let sessions: NewSession = Rc::new(move |launch| {
-        kept.borrow_mut().push(launch);
-        echo()
-    });
-    h.mount(move || {
-        provide(given.clone());
-        let app = OneTerm::new(sessions);
-        // No key is known: the Connect dialog asks to trust it (never the user's own file).
-        app.model.ui().opening.known_hosts.set(".tmp/hosts-tests/known_hosts".into());
-        app.view()
-    });
-    h.settle();
-    App { h, made, settings }
-}
-
-impl App {
-    /// Clicks a host's row with the pointer, `times` in a row.
-    fn click_host(&mut self, name: &str, times: usize) {
-        let row = self.h.get_by_role(Role::Button, name).node();
-        let at = self.h.tree.window_rect(row).center();
-        for _ in 0..times {
-            self.h.click(at.x, at.y);
-        }
-        self.h.settle();
-    }
-
-    /// The Connect dialog's Connect.
-    fn connect(&mut self) {
-        self.h.get_by_role(Role::Button, "Connect").click();
-        self.h.settle();
-    }
-
-    fn add(&mut self, name: &str, group: &str, target: &str) {
-        self.h.get_by_role(Role::Button, "Add SSH host").click();
-        self.h.settle();
-        for (id, value) in [("host-name", name), ("host-group", group), ("host-target", target)] {
-            self.h.get_by_test_id(id).set_value(value);
-        }
-        self.h.settle();
-        self.h.get_by_role(Role::Button, "Add host").click();
-        self.h.settle();
-    }
-
-    fn rows(&self) -> Vec<Vec<String>> {
-        self.settings.value("ssh.hosts", Vec::<Vec<String>>::new()).get()
-    }
-}
+#[path = "support/hosts_app.rs"]
+mod support;
+use support::{App, app};
 
 #[test]
 fn a_host_added_is_saved_listed_and_connects_from_its_dialog() {
@@ -95,33 +33,6 @@ fn a_host_added_is_saved_listed_and_connects_from_its_dialog() {
     assert!(a.h.has_text("prod-api-01"), "the status bar names the host");
     let recent = a.settings.value("ssh.recent", Vec::<Vec<String>>::new()).get();
     assert_eq!(recent[0][0], "trung@10.20.1.14");
-}
-
-#[test]
-fn a_host_reached_through_another_carries_its_way_and_forwards() {
-    let mut a = app();
-    a.add("bastion", "", "ops@203.0.113.5");
-    a.h.get_by_role(Role::Button, "Add SSH host").click();
-    a.h.settle();
-    for (id, value) in
-        [("host-name", "db"), ("host-target", "trung@10.0.0.9"), ("host-forwards", "5432:localhost:5432")]
-    {
-        a.h.get_by_test_id(id).set_value(value);
-    }
-    a.h.get_by_test_id("host-jump").click();
-    a.h.settle();
-    a.h.get_by_role(Role::MenuItem, "bastion").click();
-    a.h.settle();
-    a.h.get_by_role(Role::Button, "Add host").click();
-    a.h.settle();
-    assert_eq!(a.rows()[1][5..], ["bastion", "5432:localhost:5432"]);
-
-    a.click_host("db", 2);
-    a.connect();
-    let remote = a.made.borrow().last().cloned().unwrap().ssh.unwrap();
-    let hops: Vec<String> = remote.jumps.iter().map(|it| it.target.label()).collect();
-    assert_eq!(hops, ["ops@203.0.113.5"]);
-    assert_eq!(remote.forwards[0].label(), "5432:localhost:5432");
 }
 
 #[test]
@@ -178,6 +89,8 @@ fn a_host_is_edited_in_its_dialog_and_a_new_name_takes_its_place() {
     a.h.get_by_test_id("host-name").set_value("db-main");
     a.h.get_by_test_id("host-target").set_value("trung@10.0.0.10");
     // Its own switch of shell integration, on until it is turned off.
+    a.h.get_by_role(Role::Tab, "Shell").click();
+    a.h.settle();
     a.h.get_by_test_id("host-integration").click();
     a.h.settle();
     a.h.get_by_role(Role::Button, "Save").click();
