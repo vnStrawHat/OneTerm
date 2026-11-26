@@ -52,7 +52,7 @@ pub(crate) fn palette(model: &Model) -> impl View + use<> {
         }
         for host in model.hosts() {
             let (goes, remote) = (model.clone(), host.remote.clone());
-            let row = Row::new(host.name.clone(), move || goes.connect_to(remote.clone(), false));
+            let row = Row::new(host.name.clone(), move || goes.dial(remote.clone()));
             rows.push(row.detail(host.address()).group("Connect to"));
         }
         let (theme, vertical) = (model.prefs().theme, model.vertical());

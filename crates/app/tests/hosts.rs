@@ -280,3 +280,20 @@ fn a_colour_tag_is_any_colour_and_a_tag_saved_by_name_still_reads() {
     assert_eq!(a.rows()[2][7], "#336699");
     assert!(a.h.has_text("Colour tag: #336699"));
 }
+
+#[test]
+fn the_new_menus_row_of_a_saved_host_opens_its_connect_dialog() {
+    let mut a = app();
+    a.add("bastion", "", "ops@203.0.113.5");
+    let (tabs, headings) = (a.made.borrow().len(), a.h.semantics().matches("SSH hosts").count());
+    a.h.get_by_role(Role::Button, "New terminal").click();
+    a.h.settle();
+    let now = a.h.semantics().matches("SSH hosts").count();
+    assert!(now > headings, "a host of no group is under SSH hosts, not under Recent");
+    a.h.get_by_role(Role::MenuItem, "bastion").click();
+    a.h.settle();
+    assert!(a.h.has_text("Connect to bastion"), "{}", a.h.semantics());
+    assert_eq!(a.made.borrow().len(), tabs, "nothing before Connect");
+    a.connect();
+    assert_eq!(a.made.borrow().len(), tabs + 1);
+}

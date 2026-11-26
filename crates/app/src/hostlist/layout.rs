@@ -1,7 +1,7 @@
 //! What the host editor shows (specs/oneterm, "M8 in detail"), two fields to a row: name; group and
-//! colour tag; address and port; username and jump host; auth and its password or passphrase,
-//! the key file; the master password when one is needed; startup command, shell integration
-//! and forwards.
+//! colour tag; address and port; username and jump host; auth and shell integration; the key
+//! file and its passphrase, or the password; the master password when one is needed; startup
+//! command and forwards.
 
 use quadra::{AnyView, Color, Div, Paint, Signal, Track, View, column, div, dynamic, row, text};
 use quadra_design::{Tone, alert, field, input, select, size, switch, token};
@@ -54,7 +54,6 @@ pub(super) fn body(
         let entry = input(form.secret).password().reveal().placeholder(if saved { "Saved" } else { "" });
         AnyView::new(field(label, entry.test_id("host-secret").height(H)))
     });
-    let secret = div().display(shown(move || matches!(auth.get(), 2 | 3))).child(secret);
     let hint =
         div().text_size(size::TEXT_SM.size).text_color(token::TEXT_2).child(text(move || match auth.get() {
             0 => "Tries the keys in ssh-agent and ~/.ssh, then asks for a password.",
@@ -62,7 +61,13 @@ pub(super) fn body(
             2 => "The passphrase is optional. Left empty, OneTerm asks for it when you connect.",
             _ => "The password is optional. Left empty, OneTerm asks for it when you connect.",
         }));
-    let how = pair(field("Auth method", select(AUTHS, auth)), secret);
+    // Off for a shell that is not bash, zsh or another POSIX shell ("M7 in detail").
+    let integration = switch(form.integration).label("POSIX shells only").test_id("host-integration");
+    let how = pair(field("Auth method", select(AUTHS, auth)), field("Shell integration", integration));
+    // The key beside its passphrase; the password alone, under the auth.
+    let key = field("Key file", crate::sshkeys::picker(model, form.key, "host-key"));
+    let key = div().display(shown(move || auth.get() == 2)).child(key);
+    let signs = pair(key, secret).display(shown(move || matches!(auth.get(), 2 | 3)));
     let name = editing.clone().unwrap_or_default();
     let question =
         alert(Tone::Danger, &format!("Delete {name}?"), "Its saved password and startup command go too.");
@@ -75,20 +80,12 @@ pub(super) fn body(
         .child(address)
         .child(pair(user, jump))
         .child(column().gap(token::SPACE_XS).child(how).child(hint))
-        .child(
-            div()
-                .display(shown(move || auth.get() == 2))
-                .child(field("Key file", crate::sshkeys::picker(model, form.key, "host-key"))),
-        )
+        .child(signs)
         .child(super::secret::fields(model, form))
         .child(
             field("Startup command", crate::startup::picker(model, form.startup, "host-startup"))
                 .help("Written once the shell is open. The commands are kept in Settings, SSH & hosts."),
         )
-        .child(field("Shell integration", switch(form.integration).test_id("host-integration")).help(
-            "Types a line into the shell once it opens, so it reports its folder and its prompts. \
-                 Turn it off for a shell that is not bash, zsh or another POSIX shell.",
-        ))
         .child(field(
             "Forwards",
             text_field(form.forwards, "8080:localhost:80 R9000:localhost:3000 D1080", "host-forwards"),

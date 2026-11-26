@@ -57,8 +57,9 @@ pub(crate) fn new_menu(model: &Model, typed: &str) -> Vec<MenuItem> {
     items
 }
 
-/// The recent targets (how long ago), then the hosts by group (their addresses), those whose
-/// name or address `holds` takes; each with its colour tag.
+/// The recent targets (how long ago), then the hosts by group (their addresses; those of no
+/// group under `SSH hosts`), those whose name or address `holds` takes; each with its colour
+/// tag. A saved host's row opens its Connect dialog.
 fn found_hosts(model: &Model, holds: &dyn Fn(&str) -> bool) -> Vec<MenuItem> {
     let mut items = vec![MenuItem::separator()];
     let recent: Vec<_> = model
@@ -72,15 +73,15 @@ fn found_hosts(model: &Model, holds: &dyn Fn(&str) -> bool) -> Vec<MenuItem> {
     for (remote, at) in recent.into_iter().take(3) {
         let (goes, name) = (model.clone(), model.host_name(&remote));
         let item = MenuItem::new(name).swatch(model.target_tag(&remote.target)).keys(crate::hosts::ago(at));
-        items.push(item.on_select(move || goes.connect_to(remote.clone(), false)));
+        items.push(item.on_select(move || goes.dial(remote.clone())));
     }
     let hosts = model.hosts().into_iter().filter(|it| holds(&it.name) || holds(&it.address()));
     let mut group = None;
     for host in hosts {
         if group.as_ref() != Some(&host.group) {
-            if !host.group.is_empty() {
-                items.push(MenuItem::heading(host.group.clone()));
-            }
+            // Those of no group are not Recent's.
+            let named = if host.group.is_empty() { "SSH hosts".into() } else { host.group.clone() };
+            items.push(MenuItem::heading(named));
             group = Some(host.group.clone());
         }
         let (goes, remote) = (model.clone(), host.remote.clone());
@@ -93,7 +94,7 @@ fn found_hosts(model: &Model, holds: &dyn Fn(&str) -> bool) -> Vec<MenuItem> {
                 .swatch(model.host_tag(&host).1)
                 .keys(address)
                 .mono()
-                .on_select(move || goes.connect_to(remote.clone(), false)),
+                .on_select(move || goes.dial(remote.clone())),
         );
     }
     // No separator before nothing.

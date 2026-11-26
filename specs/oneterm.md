@@ -322,9 +322,11 @@ menu: Local shell (`Ctrl-T`), Other shells (a submenu of the local shells found,
 Windows PowerShell, PowerShell 7, Git Bash, WSL, Nushell, MSYS2, Cygwin; the canvas shows one shell), from P2
 Quick connect… (a bolt, `Ctrl-Shift-K`), Split current space (`Ctrl-D`, Split space); a line,
 Recent (up to 3, how long ago: `2 min ago`, `yesterday`), the saved hosts under their groups'
-headings (the address in mono: the host, its port when not 22, `· jump` for a host reached
-through another); a line, Add SSH host…. A host's row has the 10 px square of its colour tag in
-the icon's place. It has a field over it ("Search hosts, or type user@host…", 360 wide; M4 in
+headings, those of no group under `SSH hosts` (the address in mono: the host, its port when
+not 22, `· jump` for a host reached through another); a line, Add SSH host…. A host's row has
+the 10 px square of its colour tag in the icon's place. A saved host's row, under Recent too,
+opens its Connect dialog (the user's decision, 2026-11-26: a saved host has one dialog,
+wherever it is taken); a recent target that is no saved host connects at once. It has a field over it ("Search hosts, or type user@host…", 360 wide; M4 in
 detail), the focus in it as it opens.
 
 ## M4 in detail
@@ -370,7 +372,7 @@ detail), the focus in it as it opens.
   space, next and previous space, duplicate the tab, quick connect, the SFTP dock, select all,
   clear the scrollback, the text's size, lock, settings; each with the keys it is bound to now),
   Go to tab (a row a tab, by its title), Connect to (a row a saved host, its address beside it:
-  a tab of its own, as the `+` menu's row), and Look (Theme: System, Dark, Light; the tabs in a
+  its Connect dialog, as the `+` menu's row), and Look (Theme: System, Dark, Light; the tabs in a
   strip or in a rail). Locked, the keys do not open it.
 - **The `+` menu** has a search field wherever it opens, the rail's New terminal (expanded
   or folded) or the strip's `+` (`searched_menu`): what is typed keeps the shells, recent targets and hosts whose
@@ -657,8 +659,8 @@ thread never waits on the network.
   the window shows the focused space's, one dialog for each phase, swapped as the phase moves;
   a space whose connection is done or local shows none. Giving a dialog up (its cross, Escape,
   a press outside) is its Cancel or Close. They start with the connection, whichever way it
-  is started: Quick connect, a host or a recent target in the `+` menu; none for a saved host's
-  Connect dialog (below), which shows each phase itself.
+  is started: Quick connect, a target typed or a recent one that is no saved host in the `+`
+  menu; none for a saved host's Connect dialog (below), which shows each phase itself.
   - **Connecting** (`Connecting to user@host…`): Cancel (`Ssh::cancel`). It closes by itself
     when the shell opens, and the focus is the space's.
   - **Unknown host**: `The authenticity of host 'host' can't be established.`, `ssh-ed25519
@@ -793,9 +795,10 @@ thread never waits on the network.
   dialog's `Edit host…`), 440 wide: its head the colour tag the host will have and the title;
   Name; Group beside Colour tag; Address (mono; a whole `user@host:port` is taken too) beside
   Port (88 px); Username (`Ask when connecting`, Optional.) beside Jump host; Auth method
-  beside its Password or Passphrase (with the eye; for Auto and SSH agent none), then a line of
-  what the auth does; the key of Key file, a select of the Keys as in the Connect dialog; the
-  master password when one is
+  beside Shell integration (a switch, `POSIX shells only` beside it; "M7 in detail"), then a
+  line of what the auth does; for Key file its key (a select of the Keys as in the Connect
+  dialog) beside its Passphrase, for Password the Password under Auth method (each with the
+  eye; for Auto and SSH agent neither); the master password when one is
   needed (Saved passwords); Startup command, a select of the commands of the settings by
   name, None first ("Startup commands", below); Forwards. The Username and Port filled take the
   place of what the Address says. The foot: `Delete host…` at its left (Edit only), Cancel and

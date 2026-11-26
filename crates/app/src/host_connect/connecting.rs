@@ -115,6 +115,14 @@ fn keep(model: &Model, name: &str, form: Form) {
 }
 
 impl Model {
+    /// A remote taken from a menu: a saved host's Connect dialog, another connected at once.
+    pub(crate) fn dial(&self, remote: crate::shells::Remote) {
+        match self.hosts().into_iter().find(|it| it.remote.target == remote.target) {
+            Some(host) => self.ui().opening.host.set(Some((host.name, false))),
+            None => self.connect_to(remote, false),
+        }
+    }
+
     /// A space connected: in a tab of its own, or beside the focused one; its target recent.
     pub(crate) fn place(&self, space: Space, here: bool) {
         let label = space.remote.as_ref().map(|it| it.target.label());
