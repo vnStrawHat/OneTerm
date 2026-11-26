@@ -98,6 +98,7 @@ pub(crate) fn add_dialog(model: &Model) -> impl View + use<> {
     })
     .head(move || super::layout::head(form, format!("Edit {}", editing.get_untracked().unwrap_or_default())))
     .aside("Delete host\u{2026}", move || confirming.set(true))
+    .danger()
     .stays_open()
     .shown(not)
     .action("Cancel", Variant::Secondary, || {})

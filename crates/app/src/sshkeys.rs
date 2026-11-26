@@ -28,7 +28,7 @@ pub(crate) fn picker(model: &Model, key: Signal<String>, id: &'static str) -> im
     }
     let chosen = signal(keys.iter().position(|it| *it == had).unwrap_or(usize::MAX));
     let names: Vec<String> = keys.iter().map(|it| shown(it)).collect();
-    let none = if keys.is_empty() { "No keys: add one in Settings" } else { "Choose a key" };
+    let none = if keys.is_empty() { "Add a key in Settings" } else { "Choose a key" };
     effect(move || {
         if let Some(path) = keys.get(chosen.get()).filter(|it| **it != key.get_untracked()) {
             key.set(path.clone());

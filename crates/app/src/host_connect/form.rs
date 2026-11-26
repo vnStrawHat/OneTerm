@@ -111,7 +111,7 @@ pub(super) fn body(
         passphrase.placeholder(if saved { "Saved" } else { "Empty if the key has none" }),
     );
     let passphrase = if saved { passphrase.help("Saved for this host.") } else { passphrase };
-    let keys = pair(focused(div().child(field("Key file", key)), KEY), passphrase);
+    let keys = pair(focused(column().child(field("Key file", key)), KEY), passphrase);
     let password = entry(form.password, "connect-password").password().reveal().placeholder(saved_hint);
     let password = field("Password", password);
     let password = if saved { password.help("Saved for this host.") } else { password };
@@ -123,11 +123,11 @@ pub(super) fn body(
     let mut body = quadra_design::form()
         .child(failure)
         .child(summary(host, key_known))
-        .child(pair(focused(div().child(user), USER), how));
+        .child(pair(focused(column().child(user), USER), how));
     body = body
-        .child(div().display(shown(move || auth.get() == 2)).child(keys))
+        .child(column().display(shown(move || auth.get() == 2)).child(keys))
         .child(focused(
-            div().node_ref(secret_at).display(shown(move || matches!(auth.get(), 0 | 3))).child(password),
+            column().node_ref(secret_at).display(shown(move || matches!(auth.get(), 0 | 3))).child(password),
             PASSWORD,
         ))
         .child(

@@ -795,13 +795,13 @@ thread never waits on the network.
   dialog's `Edit host…`), 440 wide: its head the colour tag the host will have and the title;
   Name; Group beside Colour tag; Address (mono; a whole `user@host:port` is taken too) beside
   Port (88 px); Username (`Ask when connecting`, Optional.) beside Jump host; Auth method
-  beside Shell integration (a switch, `POSIX shells only` beside it; "M7 in detail"), then a
-  line of what the auth does; for Key file its key (a select of the Keys as in the Connect
+  beside Shell integration (a switch; "M7 in detail"), then a line of what the auth does and
+  one of what shell integration does and when to turn it off; for Key file its key (a select of the Keys as in the Connect
   dialog) beside its Passphrase, for Password the Password under Auth method (each with the
   eye; for Auto and SSH agent neither); the master password when one is
   needed (Saved passwords); Startup command, a select of the commands of the settings by
   name, None first ("Startup commands", below); Forwards. The Username and Port filled take the
-  place of what the Address says. The foot: `Delete host…` at its left (Edit only), Cancel and
+  place of what the Address says. The foot: `Delete host…` at its left in the danger colour (Edit only), Cancel and
   Save or Add host (Enter); `Delete host…` asks once more (`Delete <name>?` at the form's end,
   Keep and Delete in the danger colour), and deleting forgets its saved password and startup
   command.

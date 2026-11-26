@@ -195,7 +195,9 @@ fn shown(model: &Model, host: Host, here: bool, open: Signal<bool>, form: Form) 
             None => {
                 let missing = if untrack(|| form.refused.get()) { PASSWORD } else { missing };
                 untrack(|| form.refused.set(false));
-                AnyView::new(form::body(&model, &host, form, missing, &known, go.clone(), &secret_at))
+                let fields = form::body(&model, &host, form, missing, &known, go.clone(), &secret_at);
+                // As wide as the dialog, whatever the fields hold.
+                AnyView::new(quadra::column().width(quadra::Length::Fill).child(fields))
             }
         })
     };

@@ -235,3 +235,35 @@ fn a_new_host_key_is_trusted_where_its_fingerprint_shows() {
     a.wait(|a| a.tabs() == tabs + 1 && a.welcomed(), "connected");
     assert!(has(other), "trusted by Continue");
 }
+
+#[test]
+fn the_fields_are_two_columns_of_one_width_whatever_the_auth() {
+    // The host's key is known, so no notice widens the dialog: its fields do not shrink to
+    // their words.
+    let mut a = app("connect-widths");
+    for (name, auth, pairs) in [
+        ("agent", Auth::Agent, &[("connect-user", "connect-auth")][..]),
+        (
+            "key",
+            Auth::Key("C:/none".into()),
+            &[("connect-user", "connect-auth"), ("connect-key", "connect-passphrase")],
+        ),
+    ] {
+        let remote = Remote::new(Target::parse(&format!("ops@127.0.0.1:{}", a.port)).unwrap(), auth);
+        a.model.save_host(Host { name: name.into(), group: String::new(), remote, jump: String::new() });
+        a.h.settle();
+        a.click(name);
+        let width = |a: &mut App, id: &str| {
+            let node = a.h.get_by_test_id(id).node();
+            a.h.tree.window_rect(node).width
+        };
+        for (left, right) in pairs {
+            let (l, r) = (width(&mut a, left), width(&mut a, right));
+            // A select is its column; a field's text is its column less its frame and its eye.
+            let select = if right.ends_with("auth") { r } else { l };
+            assert!(select > 190.0 && l.min(r) > 140.0, "{name}: {left} {l}, {right} {r}");
+        }
+        a.h.key(Key::Escape, Mods::NONE);
+        a.h.settle();
+    }
+}

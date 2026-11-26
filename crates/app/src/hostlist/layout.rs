@@ -61,13 +61,17 @@ pub(super) fn body(
             2 => "The passphrase is optional. Left empty, OneTerm asks for it when you connect.",
             _ => "The password is optional. Left empty, OneTerm asks for it when you connect.",
         }));
-    // Off for a shell that is not bash, zsh or another POSIX shell ("M7 in detail").
-    let integration = switch(form.integration).label("POSIX shells only").test_id("host-integration");
+    let integration = switch(form.integration).test_id("host-integration");
+    let about = div().text_size(size::TEXT_SM.size).text_color(token::TEXT_2).child(text(
+        "Shell integration types a line into the shell once it opens, so it reports its folder and \
+         its prompts. Turn it off for a shell that is not bash, zsh or another POSIX shell.",
+    ));
     let how = pair(field("Auth method", select(AUTHS, auth)), field("Shell integration", integration));
     // The key beside its passphrase; the password alone, under the auth.
     let key = field("Key file", crate::sshkeys::picker(model, form.key, "host-key"));
-    let key = div().display(shown(move || auth.get() == 2)).child(key);
-    let signs = pair(key, secret).display(shown(move || matches!(auth.get(), 2 | 3)));
+    let key = column().display(shown(move || auth.get() == 2)).child(key);
+    // A column around the two: shown or not, they stay two columns of one width.
+    let signs = column().display(shown(move || matches!(auth.get(), 2 | 3))).child(pair(key, secret));
     let name = editing.clone().unwrap_or_default();
     let question =
         alert(Tone::Danger, &format!("Delete {name}?"), "Its saved password and startup command go too.");
@@ -79,7 +83,7 @@ pub(super) fn body(
         ))
         .child(address)
         .child(pair(user, jump))
-        .child(column().gap(token::SPACE_XS).child(how).child(hint))
+        .child(column().gap(token::SPACE_XS).child(how).child(hint).child(about))
         .child(signs)
         .child(super::secret::fields(model, form))
         .child(

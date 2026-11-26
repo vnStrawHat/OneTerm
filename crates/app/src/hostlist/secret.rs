@@ -21,7 +21,8 @@ pub(super) fn fields(model: &Model, form: Form) -> impl View + use<> {
     let master = |id: &'static str, value| input(value).password().test_id(id);
     column()
         .gap(token::SPACE_LG)
-        .display(shown(move || matches!(form.auth.get(), 2 | 3)))
+        // Nothing of it, no room for it: an empty column would still stand apart.
+        .display(shown(move || matches!(form.auth.get(), 2 | 3) && (opens() || sets())))
         .child(
             div().display(shown(opens)).child(field("Master password", master("host-master", form.master))),
         )

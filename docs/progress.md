@@ -52,7 +52,9 @@ story, with its tests and pictures, is in that repository's `docs/progress.md` a
 - 2026-11-26: a saved host's row in the `+` menu (under Recent too) and in the palette opens
   its Connect dialog, as its row in the rail does; the `+` menu's hosts of no group are under
   `SSH hosts`, not under Recent; the host editor has Shell integration beside Auth method,
-  and a key beside its passphrase.
+  and a key beside its passphrase. The Connect dialog's fields are as wide as the dialog
+  whatever the auth (they were as wide as their words once the host's key was known), and
+  `Delete host…` is in the danger colour.
 - 2026-11-25: SFTP: more than one row chosen (Ctrl and Shift with a click) to download,
   upload or delete together; Open in terminal types `cd` to a folder into the shell; a
   mode is set from Properties (`Files::chmod`); Sync CWD and Show hidden files are kept.
