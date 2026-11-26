@@ -10,9 +10,6 @@ use crate::hosts::{Host, auth_of};
 use crate::model::Model;
 use crate::shells::Remote;
 
-/// The kit's wide dialog: a rule of a forward holds a destination, which is long.
-const WIDE: f32 = 560.0;
-
 #[derive(Clone, Copy)]
 pub(super) struct Form {
     pub(super) name: Signal<String>,
@@ -99,7 +96,6 @@ pub(crate) fn add_dialog(model: &Model) -> impl View + use<> {
     let adds = quadra_design::dialog(open, "Add SSH host", move || {
         super::layout::body(&adds_body, form, None, confirming)
     })
-    .width(WIDE)
     .head(move || super::layout::head(form, "Add SSH host".into()))
     .action("Cancel", Variant::Secondary, || {})
     // Open until the host is saved: what is no target or no forward is said, and mended here.
@@ -115,7 +111,6 @@ pub(crate) fn add_dialog(model: &Model) -> impl View + use<> {
     let edits = quadra_design::dialog(changing, "Edit SSH host", move || {
         super::layout::body(&edits_body, form, editing.get_untracked(), confirming)
     })
-    .width(WIDE)
     .head(move || super::layout::head(form, format!("Edit {}", editing.get_untracked().unwrap_or_default())))
     .aside("Delete host\u{2026}", move || confirming.set(true))
     .danger()

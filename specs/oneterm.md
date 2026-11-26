@@ -793,8 +793,9 @@ thread never waits on the network.
   fields, pickers and selects are all 28 px high. Quick connect has
   "Save as host".
 - **The host editor** (Add SSH host, or `Edit <name>` from a row's Edit… or the Connect
-  dialog's `Edit host…`), 560 wide (the kit's wide dialog: a forward's destination is long):
-  its head the colour tag the host will have and the title;
+  dialog's `Edit host…`), 440 wide, as the Connect dialog is (the user's decision,
+  2026-11-26: 560 was tried for a forward's destination, and was too wide beside it): its
+  head the colour tag the host will have and the title;
   then three tabs (the kit's, underlined; the user's decision, 2026-11-26: the form had grown
   too long), Connection first whenever it opens:
   - **Connection**: Name; Group beside Colour tag; Address (mono; a whole `user@host:port` is
