@@ -136,12 +136,17 @@ one that shows is on the pressed editor colour, a pixel wider, with a short acce
 floating at its left, 8 px from its top and bottom; `panel_hover` at half under the pointer.
 New terminal is a `+` in a box of 40 px, a line over and under it. The title and signal are its name
 and tooltip (`neo-gateway deploy, blocked, needs permission`). The tooltip shows at the tab's
-right, in two lines, the focused space's (its title and signal are the tab's name): its
-working directory (`D:\quadra`; while the shell has said none, the program it was started
-as, `cmd.exe`), then, smaller and muted, the shell's program and the command it runs, the newest
+right, in two lines, the focused space's (its title and signal are the tab's name). A local
+space's: its working directory (`D:\quadra`; while the shell has said none, the program it was
+started as, `cmd.exe`), then, smaller and muted, the shell's program and the command it runs, the newest
 process the shell started, as its command line (`pwsh.exe · npm run dev`), or with none
-running the shell's full path (`C:\Program Files\PowerShell\7\pwsh.exe`; `ssh
-deploy@staging-db-01` for a remote space). The command is read from the OS when the tooltip
+running the shell's full path (`C:\Program Files\PowerShell\7\pwsh.exe`). A remote space's
+(the user's request, 2026-11-27): `user@host:port` as the connection was answered, a long
+one by its end (below), then its working directory once its shell said one (`/root`).
+**A long target**: a `user@host:port` of more than 26 characters (a user that is a token)
+is said by its end, `…` and its last 25 characters, which is what a row of the `+` menu
+holds on one line, since the host and the port tell one target from another (`tab::tail`): in this tooltip, in the `+` menu's Recent and in the
+dock's header. The command is read from the OS when the tooltip
 shows (`quadra_shell::shell_process`, Quadra's specs/16), never while it does not. Then New terminal: a row of 40
 under a strong line, in it, 4 px from its seams and 6 from its sides, the expanded rail's box
 of a dashed 1 px strong line (radius 6, the hover fill inside it) around the `+`; the `+` menu
@@ -197,7 +202,7 @@ The terminal has 10 px of room above and below and 12 at its sides. The focused 
 the active space (Split space: a new local shell in its cwd, after it, with the focus),
 `Ctrl+Shift+Right`, `Left`, `Up`, `Down` split it to that side, `Ctrl+W` closes it (the tab with its last
 space), `Ctrl+Alt+Left/Right` moves the focus; a press anywhere in a space makes it the focused one. A space whose program ended shows
-`[process exited N]` and closes on a key. The other button opens a space's menu (when the
+`[process exited N]`, once however often its tab is shown again, and closes on a key. The other button opens a space's menu (when the
 setting has it, the default): Open link and Copy link first when the press was on a link, Copy
 (with a selection), Paste, Select all, Clear scrollback, then Start logging (Stop logging while
 a log is open), then Split right, Split left, Split up, Split down, Input channel, and Close space, the groups split by lines, no
@@ -286,7 +291,7 @@ all on but where it says. A change applies at once (`Engine::set_config`).
 
 | Signal | Tab | Space header | Bar | Else |
 |---|---|---|---|---|
-| OSC 7501 status | the state's icon at the end, each state its own shape, outlined in its colour (14 px): blocked a `?` in a circle (warn, `Blocked, needs permission`), done a check in a circle (ok, `Done, result not yet seen`), error a cross in a circle (error), working a spinner arc (accent; a progress shows in its place); else nothing: OSC 7501 shows only what a program sent, and idle shows none | the state's icon and a label in its colour: the record's id and the state (`deploy blocked`, `Session::status_name`) | | |
+| OSC 7501 status | the state's icon at the end, each state its own shape, outlined in its colour (14 px): blocked a `?` in a circle (warn, `Blocked, needs permission`), done a check in a circle (ok, `Done`), error a cross in a circle (error), working a spinner arc (accent; a progress shows in its place); else nothing: OSC 7501 shows only what a program sent, and idle shows none | the state's icon and a label in its colour: the record's id and the state (`deploy blocked`, `Session::status_name`) | | |
 | OSC 9;4 progress | the percentage in mono and the accent at the end, a 2 px accent bar along the row's lower seam | the percentage | `build`, a 56 px line and the percentage | |
 | BEL in an unfocused space | a bell icon in the error colour at the end (`Bell rang`) | | the title bar's count | |
 | OSC 9, 777, 99 notification | | | the title bar's count | a card at the window's bottom right above the status bar (the title, the text, the tab and the sequence: `OSC 9`, `OSC 777` or `OSC 99`), 6 s or until dismissed (setting) |
@@ -313,7 +318,9 @@ name of its own plays the system's): a card in the window is no desktop notifica
 shell's notification after each command stays quiet. A notification that shows no card
 (dropped, the cards silent, the window locked) plays nothing.
 
-Seen clears: selecting the tab clears its bell and a "done" seen state.
+Seen clears: selecting the tab clears its bell. A state stays as the program last said it,
+a "done" too, until the program says another or clears it (the user's decision,
+2026-11-27; before, a "done" went once its tab was shown).
 
 ## The `+` menu
 
@@ -321,7 +328,8 @@ At the right of "New terminal" (over the rail's edge by 8 px; under the strip's 
 menu: Local shell (`Ctrl-T`), Other shells (a submenu of the local shells found, each with its icon: Command Prompt,
 Windows PowerShell, PowerShell 7, Git Bash, WSL, Nushell, MSYS2, Cygwin; the canvas shows one shell), from P2
 Quick connect… (a bolt, `Ctrl-Shift-K`), Split current space (`Ctrl-D`, Split space); a line,
-Recent (up to 3, how long ago: `2 min ago`, `yesterday`), the saved hosts under their groups'
+Recent (up to 3, how long ago: `2 min ago`, `yesterday`; a long target by its end, as the
+folded tab's tooltip says it), the saved hosts under their groups'
 headings, those of no group under `SSH hosts` (the address in mono: the host, its port when
 not 22, `· jump` for a host reached through another); a line, Add SSH host…. A host's row has
 the 10 px square of its colour tag in the icon's place. A saved host's row, under Recent too,
@@ -893,7 +901,12 @@ thread never waits on the network.
   target and renames it once whole, so a target is never half written; a cancelled or failed
   one removes its part. A remote name that would leave its folder as a local path (`/`, `\`,
   `:`, `..`, a control character) is refused.
-- **The dock**: at the workspace's right on the panel plane, 460 px at first (300 until
+- **The dock**: at the workspace's right, its header, its path and its columns' names on
+  the panel plane and its entries on the canvas, as the expanded view's panes are, so that
+  what is over the list reads as its header (the user's request, 2026-11-27; before, all of
+  it was on the panel plane); the columns' names on the theme's table head
+  (`table_head_bg`, `table_head_fg`: the panel and the secondary colour where a theme sets
+  none); 460 px at first (300 until
   2026-11-24, when it gained the columns below); its left edge is
   a seam (a 1 px line under a 6 px strip with the resize cursor) dragged to make it 220 to 800
   px wide, kept in the settings (`sftp.dock_width`). Opened and closed by the
@@ -904,7 +917,7 @@ thread never waits on the network.
   its home folder. A local space: the
   header says `local space · n/a`, the body why it is empty and a button that shows the first
   tab with a remote space (`Show prod-api-01`). Its header (28 px, 12 px semibold in the
-  secondary colour): `SFTP`, the host in the third colour, and Zoom SFTP (an icon button: the
+  secondary colour): `SFTP`, the host in the third colour (a long target by its end), and Zoom SFTP (an icon button: the
   expanded view), a line under it. Under it a bar of 28 px: the folder in a mono field of 22 px
   (12 px), underlined (the kit's second look of an input: a line under the text and no
   box, so the bar is not a box in a box), then Go to the typed path (Enter goes too), Refresh remote and Remote options (three

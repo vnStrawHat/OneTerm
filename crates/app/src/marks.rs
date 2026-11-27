@@ -83,34 +83,32 @@ pub(crate) fn tab_said(tab: Tab) -> String {
     format!("{}, {signal}", tab.title())
 }
 
-/// The first line of a folded tab's tooltip: the focused space's working directory, empty
-/// while its shell said none.
-pub(crate) fn tab_dir(tab: Tab) -> String {
-    tab.focused().map(|space| space.session.cwd().get()).unwrap_or_default()
-}
-
-/// The program the focused space's shell was started as (`cmd.exe`), `ssh deploy@db` for a
-/// remote one: the first line of a folded tab's tooltip while there is no directory.
-pub(crate) fn tab_program(tab: Tab) -> String {
+/// The first line of a folded tab's tooltip, the focused space's: a remote one's
+/// `user@host:port` as the connection was answered (a long one by its end); a local one's
+/// working directory, or while its shell said none the program it was started as (`cmd.exe`).
+pub(crate) fn tab_place(tab: Tab) -> String {
     let Some(space) = tab.focused() else { return String::new() };
     match (&space.remote, &space.edit) {
-        (_, Some(_)) => None,
-        (Some(remote), None) => Some(format!("ssh {}", remote.target.label())),
-        (None, None) => crate::complete::program(&space.session),
+        (Some(remote), None) => {
+            let conn = space.session.kept::<crate::remote::Conn>();
+            crate::tab::tail(&conn.map_or_else(|| remote.target.label(), |it| it.label.get()))
+        }
+        (None, None) if space.session.cwd().with(String::is_empty) => {
+            crate::complete::program(&space.session).unwrap_or_default()
+        }
+        _ => space.session.cwd().get(),
     }
-    .unwrap_or_default()
 }
 
-/// The second line of a folded tab's tooltip, read when it shows: what the focused space's
-/// shell runs (`pwsh.exe · npm run dev`), or its full path; `ssh deploy@db` for a remote one.
+/// The second line of a folded tab's tooltip, read when it shows: what a local space's shell
+/// runs (`pwsh.exe · npm run dev`), or its full path; a remote space's working directory.
 pub(crate) fn tab_runs(tab: Tab) -> String {
     let Some(space) = tab.focused() else { return String::new() };
     match (&space.remote, &space.edit) {
-        (_, Some(_)) => None,
-        (Some(remote), None) => Some(format!("ssh {}", remote.target.label())),
-        (None, None) => crate::complete::running(&space.session),
+        (_, Some(_)) => String::new(),
+        (Some(_), None) => space.session.cwd().get(),
+        (None, None) => crate::complete::running(&space.session).unwrap_or_default(),
     }
-    .unwrap_or_default()
 }
 
 /// The tab's icon of `px`: a server for a tab with a remote space, a terminal else; in the

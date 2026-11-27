@@ -75,8 +75,8 @@ fn boxed() -> quadra::Div {
 /// A tab as its icon in a box of 40 px, no line between it and the next, as in the open
 /// rail, with its signal as a line of 22 by 4 under it, the one
 /// that shows on the pressed editor colour with a short accent bar; its title and signal are
-/// its name. Its tooltip is two lines: where its shell is, and what it runs (read when it
-/// shows).
+/// its name. Its tooltip is two lines: where its shell is and what it runs (read when it
+/// shows), or who a remote one is and where.
 fn face(model: &Model, tab: Tab) -> impl View + use<> {
     let (active, shows, closes) = (model.active(), model.clone(), model.clone());
     let on = move || active.get() == tab.id;
@@ -86,12 +86,7 @@ fn face(model: &Model, tab: Tab) -> impl View + use<> {
         .gap(token::SPACE_SM)
         .align_items(Align::Center)
         .justify(quadra::Justify::Center);
-    // While the shell has said no directory, the program it was started as.
-    let first = move || match marks::tab_dir(tab) {
-        dir if dir.is_empty() => marks::tab_program(tab),
-        dir => dir,
-    };
-    let second = move || marks::tab_runs(tab);
+    let (first, second) = (move || marks::tab_place(tab), move || marks::tab_runs(tab));
     // The one that shows: the pressed colour a pixel past the rail's line, the bar floating.
     let fill = div()
         .absolute()

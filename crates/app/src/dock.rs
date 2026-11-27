@@ -1,4 +1,5 @@
-//! The SFTP dock (specs/oneterm, "M9 in detail"): 460 px at the workspace's right, the folder of
+//! The SFTP dock (specs/oneterm, "M9 in detail"): 460 px at the workspace's right, its header on
+//! the panel plane and its entries on the canvas, the folder of
 //! the focused space's connection in a field with Go, Refresh and its options, its entries
 //! under a header of columns (`list.rs`), the transfers; files dropped on it upload.
 
@@ -88,7 +89,8 @@ fn panel(model: &Model, d: Dock) -> impl View + use<> {
     let host = move || {
         let space = host_of.active_tab().and_then(|tab| tab.focused());
         let remote = space.and_then(|it| it.remote);
-        remote.map(|it| host_of.host_name(&it)).unwrap_or_else(|| "local space \u{B7} n/a".into())
+        let name = remote.map(|it| crate::tab::tail(&host_of.host_name(&it)));
+        name.unwrap_or_else(|| "local space \u{B7} n/a".into())
     };
     let zoom = icon_button(icons::MAXIMIZE_2, "Zoom SFTP").on_click(move || d.expanded.set(true));
     let head = row()

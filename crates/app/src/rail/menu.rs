@@ -57,7 +57,7 @@ pub(crate) fn new_menu(model: &Model, typed: &str) -> Vec<MenuItem> {
     items
 }
 
-/// The recent targets (how long ago), then the hosts by group (their addresses; those of no
+/// The recent targets (how long ago; a long one by its end), then the hosts by group (their addresses; those of no
 /// group under `SSH hosts`), those whose name or address `holds` takes; each with its colour
 /// tag. A saved host's row opens its Connect dialog.
 fn found_hosts(model: &Model, holds: &dyn Fn(&str) -> bool) -> Vec<MenuItem> {
@@ -71,7 +71,7 @@ fn found_hosts(model: &Model, holds: &dyn Fn(&str) -> bool) -> Vec<MenuItem> {
         items.push(MenuItem::heading("Recent"));
     }
     for (remote, at) in recent.into_iter().take(3) {
-        let (goes, name) = (model.clone(), model.host_name(&remote));
+        let (goes, name) = (model.clone(), crate::tab::tail(&model.host_name(&remote)));
         let item = MenuItem::new(name).swatch(model.target_tag(&remote.target)).keys(crate::hosts::ago(at));
         items.push(item.on_select(move || goes.dial(remote.clone())));
     }
