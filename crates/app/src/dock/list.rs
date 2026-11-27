@@ -40,7 +40,8 @@ pub(super) fn header(model: &Model, d: Dock) -> impl View + use<> {
         .border_bottom(1.0)
         .border_color(token::LINE)
         .text_size(12.0)
-        .text_color(token::TEXT_2)
+        .bg(token::TABLE_HEAD_BG)
+        .text_color(token::TABLE_HEAD_FG)
         .display(shown(move || !d.dir.with(String::is_empty) && d.said.with(String::is_empty)))
         .role(Role::Group)
         .label("Columns")
@@ -95,7 +96,8 @@ pub(super) fn entries(model: &Model, d: Dock) -> impl View + use<> {
         }
         AnyView::new(list)
     });
-    let area = column().grow(1.0).min_height(0.0);
+    // The entries on the canvas: what is over them, on the panel plane, is their header.
+    let area = column().grow(1.0).min_height(0.0).bg(token::CANVAS);
     context_menu(quadra::scroll(signal(0.0), list).container(area), menus::remote_area(&model_of, d))
 }
 
