@@ -3,7 +3,7 @@ name = "oneterm-app"
 description = "OneTerm: a terminal app of local shells, in tabs and spaces side by side (specs/oneterm)"
 # OneTerm's versions go on from those of the app it replaces (specs/oneterm, "Updates"): this is
 # the version last released, and the release workflow bumps it, to 0.7.0 the first time.
-version = "0.7.1"
+version = "0.7.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
