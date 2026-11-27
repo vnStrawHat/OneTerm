@@ -87,11 +87,11 @@ pub(crate) fn short(title: &str) -> String {
     rest.map_or_else(|| program.to_string(), |rest| format!("{program} - {rest}"))
 }
 
-/// A `user@host:port` too long for a line, by its end: `…` and its last 25 characters, which is what a row of the `+` menu
-/// holds on one line. The
-/// host and the port tell one target from another, and a user may be a token of 64 letters.
+/// A `user@host:port` too long for a line of a tooltip (its bubble is 288 px at most, and
+/// wraps), by its end: `…` and its last 29 characters. The host and the port tell one target
+/// from another, and a user may be a token of 64 letters.
 pub(crate) fn tail(who: &str) -> String {
-    const MOST: usize = 26;
+    const MOST: usize = 30;
     let count = who.chars().count();
     match count > MOST {
         true => format!("\u{2026}{}", who.chars().skip(count + 1 - MOST).collect::<String>()),
@@ -104,8 +104,8 @@ pub(crate) fn tail(who: &str) -> String {
 fn a_long_target_is_said_by_its_end() {
     assert_eq!(tail("deploy@staging-db-01:2222"), "deploy@staging-db-01:2222");
     let long = format!("{}@pam.example.com:4422", "0123456789abcdef".repeat(4));
-    assert_eq!(tail(&long), "\u{2026}cdef@pam.example.com:4422");
-    assert_eq!(tail(&long).chars().count(), 26);
+    assert_eq!(tail(&long), "\u{2026}89abcdef@pam.example.com:4422");
+    assert_eq!(tail(&long).chars().count(), 30);
 }
 
 #[cfg(test)]

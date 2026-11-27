@@ -49,11 +49,11 @@ story, with its tests and pictures, is in that repository's `docs/progress.md` a
 - 2026-11-25: the SFTP paths are underlined fields (the dock's and both panes'). In a
   space two clicks select a word, three the line, and Shift and a click reaches from the
   selection there is (Quadra's fix; `tests/select.rs`).
-- 2026-11-27: a long target (a user that is a token) is said by its end, `…` and its last 25
-  characters, in the `+` menu's Recent, the folded tab's tooltip and the dock's header: it
-  wrapped over the rows beside it (`tests/long_target.rs`; a count of characters is a guess at
-  a width, and the kit's menu row still wraps a long name: `.tmp/quadra-issue-menu-row.md`,
-  not filed by me). A folded tab's tooltip of a remote space is `user@host:port` over its
+- 2026-11-27: a long target (a user that is a token) is said by its end in the `+` menu's
+  Recent, the folded tab's tooltip and the dock's header: it wrapped over the rows beside
+  it (`tests/long_target.rs`). The menu's row and the header are cut by the kit, at their
+  start, to the room there is (Quadra's fix: a menu's row is one line, a text may lose its
+  start); the tooltip, which the kit wraps, says `…` and the last 29 characters. A folded tab's tooltip of a remote space is `user@host:port` over its
   working directory. The dock's entries are on the canvas under a header on the panel plane,
   as the expanded view's. `[process exited N]` is said once (it was written again each time
   the tab was shown). A state a program gave (OSC 7501) stays once its tab is shown, a

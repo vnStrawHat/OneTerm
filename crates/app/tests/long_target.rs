@@ -1,6 +1,6 @@
 //! A target whose user is a token (specs/oneterm, "Rail": a long target): the `+` menu's Recent
-//! and the folded tab's tooltip say it by its end, each on one line; a remote space's tooltip
-//! is who it is over where it is.
+//! and the dock's header say it on one line, cut by the kit, and the folded tab's tooltip by
+//! its end; a remote space's tooltip is who it is over where it is.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -53,21 +53,26 @@ impl App {
 #[test]
 fn a_long_target_is_one_line_in_the_menu_and_a_remote_tabs_tooltip_is_who_over_where() {
     let mut a = app();
-    let cut = "\u{2026}4567@pam.example.com:4422";
-    assert_eq!(cut.chars().count(), 26);
+    let (whole, cut) = (format!("{USER}@pam.example.com:4422"), "\u{2026}01234567@pam.example.com:4422");
+    assert_eq!(cut.chars().count(), 30);
     a.h.get_by_role(Role::Button, "New terminal").click();
     a.h.settle();
-    let row = a.h.get_by_role(Role::MenuItem, cut).node();
-    let (row, words) = (a.h.tree.window_rect(row), a.words(cut));
+    // To a reader the row is the whole target; its words are cut to the row.
+    let row = a.h.get_by_role(Role::MenuItem, &whole).node();
+    let (row, words) = (a.h.tree.window_rect(row), a.words(&whole));
     assert!(words.height < row.height, "the row's words are one line: {words:?} in {row:?}");
     assert!(words.right() < row.right(), "and end before the row does: {words:?} in {row:?}");
 
     // No saved host: it connects at once. Its shell says where it is.
-    a.h.get_by_role(Role::MenuItem, cut).click();
+    a.h.get_by_role(Role::MenuItem, &whole).click();
     a.h.settle();
     let s = a.made.borrow()[1].clone();
     s.feeder().feed(b"\x1b]9;9;/root\x07", Instant::now());
     a.h.settle();
+    // The dock's header says it too, in the dock.
+    let dock = a.h.query(|n| n.semantics.role == Role::Group && n.semantics.name == "SFTP");
+    let (dock, head) = (a.h.tree.window_rect(dock[0]), a.words(&whole));
+    assert!(head.height < 24.0 && head.right() < dock.right(), "{head:?} in {dock:?}");
     let tabs = a.h.query(|n| n.semantics.role == Role::Tab);
     let at = a.h.tree.window_rect(tabs[1]).center();
     a.h.pointer(quadra_tree::PointerInput::Move, at.x, at.y);

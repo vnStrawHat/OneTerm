@@ -143,10 +143,12 @@ process the shell started, as its command line (`pwsh.exe · npm run dev`), or w
 running the shell's full path (`C:\Program Files\PowerShell\7\pwsh.exe`). A remote space's
 (the user's request, 2026-11-27): `user@host:port` as the connection was answered, a long
 one by its end (below), then its working directory once its shell said one (`/root`).
-**A long target**: a `user@host:port` of more than 26 characters (a user that is a token)
-is said by its end, `…` and its last 25 characters, which is what a row of the `+` menu
-holds on one line, since the host and the port tell one target from another (`tab::tail`): in this tooltip, in the `+` menu's Recent and in the
-dock's header. The command is read from the OS when the tooltip
+**A long target** (a user that is a token) is said by its end, since the host and the
+port tell one target from another: the `+` menu's Recent and the dock's header give the
+kit the whole of it, cut at its start to the room there is (`ellipsis_start`, Quadra's
+fix of 2026-11-27; a saved host's name is cut at its end, as any row's); this tooltip,
+whose bubble is 288 px at most and wraps, says one of more than 30 characters as `…` and
+its last 29 (`tab::tail`). The command is read from the OS when the tooltip
 shows (`quadra_shell::shell_process`, Quadra's specs/16), never while it does not. Then New terminal: a row of 40
 under a strong line, in it, 4 px from its seams and 6 from its sides, the expanded rail's box
 of a dashed 1 px strong line (radius 6, the hover fill inside it) around the `+`; the `+` menu
