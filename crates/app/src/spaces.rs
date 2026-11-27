@@ -1,8 +1,6 @@
 //! The workspace (specs/oneterm, "Spaces"): the spaces of the tab that shows, where its pane tree
 //! puts them, each with its header of 18 px; the focused one has an accent ring (in the colour
-//! of its input channel). A space whose program ended says so, and a key then closes it.
-
-use std::time::Instant;
+//! of its input channel). A space whose program ended says so (`signals.rs`).
 
 use std::rc::Rc;
 
@@ -11,7 +9,7 @@ use quadra::{
     text, untrack, use_context,
 };
 use quadra_design::{MenuItem, context_menu, fonts, token};
-use quadra_term::{Link, Session};
+use quadra_term::Session;
 
 use crate::links::Links;
 use crate::model::{Model, Side, Space, Tab};
@@ -129,16 +127,6 @@ fn space_view(model: &Model, tab: Tab, space: Space) -> quadra::Div {
     let index = move || tab.spaces.with(|spaces| spaces.iter().position(|it| it.id == space.id).unwrap_or(0));
     let on = focused(tab, space.id);
     let (title, cwd, exited) = (s.title(), s.cwd(), s.exited());
-    // Once the program ended it says so, and the next key closes the space.
-    let (said, closes, gone) = (s.clone(), model.clone(), space.id);
-    effect(move || {
-        if let Some(code) = exited.get() {
-            let words = format!("\r\n[process exited {code}]\r\n");
-            said.feeder().feed(words.as_bytes(), Instant::now());
-            let closes = closes.clone();
-            said.connect(Link::new(move |_| _ = closes.close_space(gone)));
-        }
-    });
     // Where it is: the directory (else the title), after a remote space's user and host.
     let (named, remote, conn) = (model.clone(), space.remote.clone(), s.kept::<crate::remote::Conn>());
     let place = move || {

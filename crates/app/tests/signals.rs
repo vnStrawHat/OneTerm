@@ -50,7 +50,7 @@ impl App {
 }
 
 #[test]
-fn a_status_shows_on_the_tab_and_the_header_and_done_is_seen_when_the_tab_shows() {
+fn a_status_shows_on_the_tab_and_the_header_and_stays_once_its_tab_was_shown() {
     let mut a = app();
     a.key(Key::D, Mods::CTRL);
     a.feed(0, b"\x1b]7501;state=working:id=build\x07");
@@ -60,13 +60,31 @@ fn a_status_shows_on_the_tab_and_the_header_and_done_is_seen_when_the_tab_shows(
     assert_eq!(a.h.query(turning).len(), 2, "the tab's spinner and the header's, the kit's that turns");
     assert!(a.says("build working"), "the header's label: the record's id and its state");
     a.feed(0, b"\x1b]7501;state=done:id=build\x07");
-    assert!(a.says("Done, result not yet seen"));
+    assert!(a.says("Done") && a.says("build done"));
     a.key(Key::T, Mods::CTRL);
     a.feed(2, b"\x1b]0;other\x07");
-    assert!(a.says("Done, result not yet seen"), "a tab that does not show keeps its done");
     a.h.get_by_role(Role::Tab, "Terminal").click();
     a.h.settle();
-    assert!(!a.says("Done, result not yet seen"), "seen once the tab shows");
+    assert!(a.says("Done") && a.says("build done"), "the state stays as the program last said it");
+    a.feed(0, b"\x1b]7501;state=clear\x07");
+    assert!(!a.says("build done"), "until the program clears it");
+}
+
+#[test]
+fn a_program_that_ended_says_so_once_however_often_its_tab_is_shown() {
+    let mut a = app();
+    a.key(Key::T, Mods::CTRL);
+    a.made.borrow()[0].feeder().exited(0);
+    a.h.settle();
+    for _ in 0..3 {
+        for tab in [0, 1] {
+            let tabs = a.h.query(|n| n.semantics.role == Role::Tab);
+            a.h.tree.act(tabs[tab], &quadra::SemanticAction::Click);
+            a.h.settle();
+        }
+    }
+    let said = a.made.borrow()[0].screen_text();
+    assert_eq!(said.iter().filter(|row| *row == "[process exited 0]").count(), 1, "{said:?}");
 }
 
 #[test]

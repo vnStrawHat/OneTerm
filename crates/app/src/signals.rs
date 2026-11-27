@@ -1,15 +1,15 @@
 //! What programs signal (specs/oneterm, "Signals"): OSC 7501 status, OSC 9;4 progress, the bell in
 //! a space that is not looked at, OSC 9 notifications. A tab sums its spaces; seeing a tab
-//! clears its bells and the "done" it showed.
+//! clears its bells, and a state stays until its program says another.
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use quadra::{Scope, Signal, effect, signal, timeout, untrack};
 use quadra_design::Notice;
 use quadra_term::vt::Progress;
-use quadra_term::{ProgramState, Session};
+use quadra_term::{Link, ProgramState, Session};
 
 use crate::model::{Model, Tab};
 
@@ -107,6 +107,16 @@ impl Model {
                 }
             });
         }
+        // Once the program ended it says so, and the next key closes the space. Here and not
+        // in the space's view, which is built again each time its tab shows.
+        let (exited, said, closes) = (session.exited(), session.clone(), self.clone());
+        effect(move || {
+            if let Some(code) = exited.get() {
+                said.feeder().feed(format!("\r\n[process exited {code}]\r\n").as_bytes(), Instant::now());
+                let closes = closes.clone();
+                said.connect(Link::new(move |_| _ = closes.close_space(id)));
+            }
+        });
         self.follow_notices(id, session);
     }
 
@@ -149,12 +159,9 @@ impl Model {
     }
 }
 
-/// What a space signalled is seen: its bells, and a "done".
+/// What a space signalled is seen: its bells. Its state stays as its program last said it.
 pub(crate) fn seen(session: &Session) {
     session.bells().set(0);
-    if session.status().get_untracked() == ProgramState::Done {
-        session.status().set(ProgramState::Idle);
-    }
 }
 
 /// The count of what is not seen yet, for the title bar: bells everywhere.

@@ -13,7 +13,7 @@ use crate::signals::{percent, state_word};
 fn state_look(state: ProgramState) -> Option<(&'static str, quadra::Token, &'static str)> {
     match state {
         ProgramState::Blocked => Some((icons::CIRCLE_HELP, token::WARN, "Blocked, needs permission")),
-        ProgramState::Done => Some((icons::CIRCLE_CHECK, token::OK, "Done, result not yet seen")),
+        ProgramState::Done => Some((icons::CIRCLE_CHECK, token::OK, "Done")),
         ProgramState::Error => Some((icons::CIRCLE_X, token::ERROR, "Error")),
         ProgramState::Working => Some((icons::LOADER_CIRCLE, token::ACCENT, "Working")),
         ProgramState::Idle => None,
